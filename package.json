@@ -3,7 +3,13 @@
   "version": "0.2.0",
   "private": true,
   "description": "A general-purpose multi-agent operating system for software projects.",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "LicenseRef-FLL-1.2",
+  "licenses": [
+    {
+      "type": "LicenseRef-FLL-1.2",
+      "url": "https://fllicense.org"
+    }
+  ],
   "scripts": {
     "dev": "pnpm --filter @guildhall/runtime dev",
     "build": "pnpm -r build",
