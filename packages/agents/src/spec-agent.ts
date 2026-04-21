@@ -8,6 +8,7 @@ import {
   appendExploringTranscriptTool,
   readExploringTranscriptTool,
   updateProductBriefTool,
+  updateDesignSystemTool,
 } from '@guildhall/tools'
 import { GuildhallAgent } from './guildhall-agent.js'
 import type { AgentLLM } from './llm.js'
@@ -40,6 +41,13 @@ quality gate in the system.
    - rolloutPlan: staging / flagging / migration notes, if applicable
    Pure-infrastructure tasks (build config, internal refactor with no product
    visibility) may skip the brief — prefer authoring one if in doubt.
+6. If the project has no design system yet (check memory/design-system.yaml)
+   AND this task is the first one that produces product surface area, propose
+   a starter design system via update-design-system (tokens, 2–3 primitives,
+   a11y baseline, copy voice). Keep it deliberately small — the human will
+   iterate. If a design system already exists, do NOT modify it unless the
+   task explicitly asks you to; implementers are bound by the approved
+   revision.
 
 ## Rules
 
@@ -87,6 +95,7 @@ export function createSpecAgent(
       readTasksTool,
       updateTaskTool,
       updateProductBriefTool,
+      updateDesignSystemTool,
       logProgressTool,
       raiseEscalationTool,
       appendExploringTranscriptTool,

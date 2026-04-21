@@ -1,7 +1,9 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
+import { summarizeDesignSystem } from '@guildhall/core'
 import { loadGoalForTask } from './business-envelope.js'
+import { loadDesignSystem } from './design-system-store.js'
 
 // ---------------------------------------------------------------------------
 // Just-in-time context builder
@@ -46,6 +48,12 @@ export interface BuiltContext {
    * makes the authoritative call via `evaluateEnvelope`.
    */
   envelope: string
+  /**
+   * Approved (or draft) design-system summary — tokens, primitives, copy
+   * voice, a11y baseline. Empty when memory/design-system.yaml is absent so
+   * pure-infra projects pay nothing.
+   */
+  designSystem: string
   /** Concatenated string ready to prepend to an agent message */
   formatted: string
 }
@@ -112,7 +120,7 @@ export async function buildContext(
     }
   }
 
-  const [memory, progress, decisions, exploring, goal] = await Promise.all([
+  const [memory, progress, decisions, exploring, goal, ds] = await Promise.all([
     readSafe('MEMORY.md'),
     readSafe('PROGRESS.md'),
     readSafe('DECISIONS.md'),
@@ -123,6 +131,7 @@ export async function buildContext(
     // FR-23: resolve the task's parent goal. Missing-goal cases become
     // `undefined` — the summary renderer omits the envelope block.
     loadGoalForTask(memoryDir, task).catch(() => undefined),
+    loadDesignSystem(memoryDir).catch(() => undefined),
   ])
 
   const projectMemory = extractRelevantMemorySections(memory, task)
@@ -147,6 +156,7 @@ export async function buildContext(
         .filter(Boolean)
         .join('\n')
     : ''
+  const designSystem = ds ? summarizeDesignSystem(ds) : ''
 
   const taskSummary = [
     `## Current Task: ${task.id}`,
@@ -176,6 +186,8 @@ export async function buildContext(
     '',
     envelope ? `## Business Envelope (FR-23)\n${envelope}` : '',
     '',
+    designSystem ? `## Design System\n${designSystem}` : '',
+    '',
     projectMemory ? `## Relevant Project Memory\n${projectMemory}` : '',
     '',
     recentProgress ? `## Recent Progress\n${recentProgress}` : '',
@@ -196,6 +208,7 @@ export async function buildContext(
     recentDecisions,
     exploringTranscript,
     envelope,
+    designSystem,
     formatted,
   }
 }

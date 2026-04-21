@@ -15,9 +15,11 @@ import {
 } from '@guildhall/config'
 import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
 import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
-import { resolveEscalation } from '@guildhall/tools'
+import { resolveEscalation, updateDesignSystem } from '@guildhall/tools'
+import { DesignSystem, summarizeDesignSystem } from '@guildhall/core'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
 import { createExploringTask, approveSpec, resumeExploring } from './intake.js'
+import { loadDesignSystem, saveDesignSystem } from './design-system-store.js'
 import {
   approveMetaIntake,
   createMetaIntakeTask,
@@ -58,6 +60,9 @@ import {
 //   GET    /api/project/events        → SSE feed of orchestrator events
 //   GET    /api/config                → project-local config (secrets redacted)
 //   GET    /api/config/levers         → lever positions for Settings UI
+//   GET    /api/project/design-system → current design system (or null)
+//   POST   /api/project/design-system → author/revise the design system
+//   POST   /api/project/design-system/approve → mark current DS as human-approved
 //   GET    /api/setup/providers       → detect installed providers
 //   POST   /api/setup/providers/config → save chosen provider/API key
 // ---------------------------------------------------------------------------
@@ -585,6 +590,67 @@ export function buildServeApp(opts: ServeOptions = {}): {
   })
 
   // -------------------------------------------------------------------------
+  // API: design system
+  //
+  // Project-scoped; lives at memory/design-system.yaml. The spec agent
+  // drafts it; a human approves. Agents consume the approved revision via
+  // context-builder's summary block — read the full file for richer surface.
+  // -------------------------------------------------------------------------
+  app.get('/api/project/design-system', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ initializationNeeded: true })
+      const memoryDir = join(project.path, 'memory')
+      const ds = await loadDesignSystem(memoryDir)
+      if (!ds) return c.json({ designSystem: null })
+      return c.json({ designSystem: ds, summary: summarizeDesignSystem(ds) })
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/design-system', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const memoryDir = join(project.path, 'memory')
+      const body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+      const authoredBy = typeof body.authoredBy === 'string' ? body.authoredBy : 'human'
+      const result = await updateDesignSystem({
+        memoryDir,
+        tokens: (body.tokens as never) ?? undefined,
+        primitives: (body.primitives as never) ?? undefined,
+        interactions: (body.interactions as never) ?? undefined,
+        a11y: (body.a11y as never) ?? undefined,
+        copyVoice: (body.copyVoice as never) ?? undefined,
+        notes: typeof body.notes === 'string' ? body.notes : undefined,
+        authoredBy,
+      })
+      if (!result.success) return c.json({ error: result.error ?? 'update failed' }, 400)
+      return c.json({ ok: true, revision: result.revision })
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/design-system/approve', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const memoryDir = join(project.path, 'memory')
+      const ds = await loadDesignSystem(memoryDir)
+      if (!ds) return c.json({ error: 'no design system drafted yet' }, 400)
+      const now = new Date().toISOString()
+      const approved: DesignSystem = DesignSystem.parse({
+        ...ds,
+        approvedBy: 'human',
+        approvedAt: now,
+      })
+      await saveDesignSystem(memoryDir, approved)
+      return c.json({ ok: true, approvedAt: now })
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  // -------------------------------------------------------------------------
   // API: setup wizard
   // -------------------------------------------------------------------------
   app.get('/api/setup/status', c => {
@@ -887,6 +953,11 @@ function dashboardCss(): string {
     .pill.running { background: rgba(78,204,163,0.15); color: var(--accent2); }
     .pill.stopped { background: rgba(136,136,153,0.12); color: var(--muted); }
     .pill.error { background: rgba(224,82,82,0.15); color: var(--danger); }
+    .pill.ok { background: rgba(78,204,163,0.15); color: var(--accent2); }
+    .pill.warn { background: rgba(212,162,60,0.15); color: var(--warn); }
+    .ds-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 18px; font-size: 13px; margin-bottom: 8px; }
+    .ds-primitives { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+    .ds-primitives li { margin: 2px 0; }
     .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; flex-shrink: 0; }
     .status-dot.running { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); animation: pulse 1.4s ease-in-out infinite; }
     .status-dot.idle { background: var(--muted); }
@@ -2131,6 +2202,12 @@ function dashboardJs(): string {
               <p class="muted" style="margin-bottom:14px">Every policy is a named lever with an explicit position. Stored with provenance in <code class="inline">memory/agent-settings.yaml</code> — read-only here for now.</p>
               <div id="lever-list-readonly"><span class="muted">Loading…</span></div>
             </div>
+
+            <div class="card">
+              <h2>Design system</h2>
+              <p class="muted" style="margin-bottom:14px">Tokens, primitives, interactions, a11y, and copy voice. Drafted by the spec agent or a human; stored in <code class="inline">memory/design-system.yaml</code>. Implementers see a summary of the approved revision in every context.</p>
+              <div id="design-system-card"><span class="muted">Loading…</span></div>
+            </div>
           </div>
         </div>
       \`
@@ -2144,6 +2221,9 @@ function dashboardJs(): string {
         if (j?.error) return renderLeversError(j.error)
         renderLeversReadonly(j.levers ?? [])
       }).catch(err => renderLeversError(String(err)))
+      fetch('/api/project/design-system').then(r => r.json()).then(j => {
+        renderDesignSystemCard(j?.designSystem ?? null)
+      }).catch(() => renderDesignSystemCard(null))
 
       const nameInput = document.getElementById('settings-name')
       const idInput = document.getElementById('settings-id')
@@ -2256,6 +2336,56 @@ function dashboardJs(): string {
       const host = document.getElementById('lever-list-readonly')
       if (!host) return
       host.innerHTML = '<div class="muted" style="color:var(--bad)">Could not load levers: ' + escapeHtml(String(msg)) + '</div>'
+    }
+
+    function renderDesignSystemCard(ds) {
+      const host = document.getElementById('design-system-card')
+      if (!host) return
+      if (!ds) {
+        host.innerHTML = '<div class="muted">No design system drafted yet. The spec agent will propose one during exploring; you can also author or edit <code class="inline">memory/design-system.yaml</code> directly.</div>'
+        return
+      }
+      const tokenCount =
+        (ds.tokens?.color?.length ?? 0)
+        + (ds.tokens?.spacing?.length ?? 0)
+        + (ds.tokens?.typography?.length ?? 0)
+        + (ds.tokens?.radius?.length ?? 0)
+        + (ds.tokens?.shadow?.length ?? 0)
+      const approved = Boolean(ds.approvedAt)
+      const statusPill = approved
+        ? '<span class="pill ok">✓ approved</span>'
+        : '<span class="pill warn">DRAFT</span>'
+      const primList = (ds.primitives ?? []).map(p =>
+        '<li><strong>' + escapeHtml(p.name) + '</strong> — <span class="muted">' + escapeHtml(p.usage) + '</span></li>'
+      ).join('')
+      host.innerHTML = \`
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px">
+          <strong>Revision \${ds.revision ?? 0}</strong>
+          \${statusPill}
+          <span class="muted" style="font-size:12px">by \${escapeHtml(ds.authoredBy ?? 'unknown')}\${ds.authoredAt ? ' · ' + escapeHtml(ds.authoredAt.slice(0, 10)) : ''}</span>
+        </div>
+        <div class="ds-facts">
+          <div><span class="muted">Tokens:</span> \${tokenCount}</div>
+          <div><span class="muted">Primitives:</span> \${(ds.primitives ?? []).length}</div>
+          <div><span class="muted">Tone:</span> \${escapeHtml(ds.copyVoice?.tone ?? 'plain')}</div>
+          <div><span class="muted">Min contrast:</span> \${ds.a11y?.minContrastRatio ?? '—'}</div>
+        </div>
+        \${primList ? '<ul class="ds-primitives">' + primList + '</ul>' : ''}
+        \${approved
+          ? '<div class="muted" style="font-size:12px; margin-top:8px">Approved ' + escapeHtml((ds.approvedAt || '').slice(0, 10)) + ' by ' + escapeHtml(ds.approvedBy || 'human') + '</div>'
+          : '<div style="margin-top:10px"><button id="btn-approve-ds">Approve current draft</button></div>'
+        }
+      \`
+      if (!approved) {
+        document.getElementById('btn-approve-ds')?.addEventListener('click', async () => {
+          const r = await fetch('/api/project/design-system/approve', { method: 'POST' })
+          const j = await r.json()
+          if (j.error) { alert('Approve failed: ' + j.error); return }
+          fetch('/api/project/design-system').then(r => r.json()).then(j2 => {
+            renderDesignSystemCard(j2?.designSystem ?? null)
+          })
+        })
+      }
     }
 
     function firstDetected(providers) {

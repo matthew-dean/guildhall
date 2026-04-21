@@ -117,6 +117,11 @@ export type { InitOptions } from './init.js'
 export { runServe } from './serve.js'
 export type { ServeOptions } from './serve.js'
 export {
+  loadDesignSystem,
+  saveDesignSystem,
+  designSystemPath,
+} from './design-system-store.js'
+export {
   createExploringTask,
   approveSpec,
   resumeExploring,
