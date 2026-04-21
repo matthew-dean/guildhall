@@ -23,6 +23,8 @@ export {
 } from './auth/codex-credentials.js'
 
 export {
+  AnthropicApiClient,
+  type AnthropicApiClientOptions,
   ClaudeApiError,
   ClaudeAuthError,
   ClaudeOauthClient,

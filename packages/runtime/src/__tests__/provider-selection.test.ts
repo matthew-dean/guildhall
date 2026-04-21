@@ -8,25 +8,31 @@ import { selectApiClient } from '../provider-selection.js'
 let tmpDir: string
 let claudeCredPath: string
 let codexCredPath: string
-let savedLlamaUrl: string | undefined
-let savedForcedProvider: string | undefined
+const CLEAN_ENV_KEYS = [
+  'LLAMA_CPP_URL',
+  'LM_STUDIO_BASE_URL',
+  'GUILDHALL_PROVIDER',
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+] as const
+const savedEnv: Record<string, string | undefined> = {}
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-provider-'))
   claudeCredPath = path.join(tmpDir, 'claude.json')
   codexCredPath = path.join(tmpDir, 'codex.json')
-  savedLlamaUrl = process.env.LLAMA_CPP_URL
-  savedForcedProvider = process.env.GUILDHALL_PROVIDER
-  delete process.env.LLAMA_CPP_URL
-  delete process.env.GUILDHALL_PROVIDER
+  for (const k of CLEAN_ENV_KEYS) {
+    savedEnv[k] = process.env[k]
+    delete process.env[k]
+  }
 })
 
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true })
-  if (savedLlamaUrl === undefined) delete process.env.LLAMA_CPP_URL
-  else process.env.LLAMA_CPP_URL = savedLlamaUrl
-  if (savedForcedProvider === undefined) delete process.env.GUILDHALL_PROVIDER
-  else process.env.GUILDHALL_PROVIDER = savedForcedProvider
+  for (const k of CLEAN_ENV_KEYS) {
+    if (savedEnv[k] === undefined) delete process.env[k]
+    else process.env[k] = savedEnv[k]
+  }
 })
 
 function writeClaudeCred(): Promise<void> {
@@ -196,6 +202,101 @@ describe('selectApiClient', () => {
     })
     expect(result.providerName).toBe('none')
     expect(result.reason).toMatch(/LLAMA_CPP_URL/)
+  })
+
+  // ---------- API-key providers ----------
+
+  it('selects anthropic-api when an Anthropic API key is provided', async () => {
+    const result = await selectApiClient({
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+      anthropicApiKey: 'sk-ant-test',
+    })
+    expect(result.providerName).toBe('anthropic-api')
+    expect(result.reason).toMatch(/Anthropic API key/)
+  })
+
+  it('selects openai-api when an OpenAI API key is provided and no higher-priority provider is configured', async () => {
+    const result = await selectApiClient({
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+      openaiApiKey: 'sk-openai-test',
+    })
+    expect(result.providerName).toBe('openai-api')
+    expect(result.reason).toMatch(/OpenAI API key/)
+  })
+
+  it('reads ANTHROPIC_API_KEY from the environment', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-env'
+    const result = await selectApiClient({
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+    })
+    expect(result.providerName).toBe('anthropic-api')
+  })
+
+  it('prefers Claude OAuth over a pasted Anthropic API key when both exist', async () => {
+    await writeClaudeCred()
+    const result = await selectApiClient({
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+      anthropicApiKey: 'sk-ant-test',
+    })
+    expect(result.providerName).toBe('claude-oauth')
+  })
+
+  it('forced anthropic-api without a key fails with a clear reason', async () => {
+    const result = await selectApiClient({
+      provider: 'anthropic-api',
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+    })
+    expect(result.providerName).toBe('none')
+    expect(result.reason).toMatch(/anthropic-api forced/i)
+    expect(result.reason).toMatch(/ANTHROPIC_API_KEY|dashboard/)
+  })
+
+  it('reads LM_STUDIO_BASE_URL as an alias for LLAMA_CPP_URL', async () => {
+    process.env.LM_STUDIO_BASE_URL = 'http://127.0.0.1:1234/v1'
+    const result = await selectApiClient({
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+    })
+    expect(result.providerName).toBe('llama-cpp')
+  })
+
+  // ---------- preferredProvider (non-forcing) ----------
+
+  it('honors preferredProvider when reachable (maps wire key "codex" → codex-oauth)', async () => {
+    await writeClaudeCred()
+    await writeCodexCred()
+    const result = await selectApiClient({
+      preferredProvider: 'codex',
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+    })
+    expect(result.providerName).toBe('codex-oauth')
+  })
+
+  it('falls through to the normal chain when preferredProvider is unreachable', async () => {
+    await writeClaudeCred()
+    const result = await selectApiClient({
+      preferredProvider: 'llama-cpp',
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+    })
+    expect(result.providerName).toBe('claude-oauth')
+  })
+
+  it('preferredProvider=openai-api with key picks openai-api even when llama is also reachable', async () => {
+    const result = await selectApiClient({
+      preferredProvider: 'openai-api',
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+      openaiApiKey: 'sk-openai-test',
+      llamaCppUrl: 'http://localhost:1234/v1',
+    })
+    expect(result.providerName).toBe('openai-api')
   })
 
   // ---------- Error propagation ----------

@@ -348,3 +348,98 @@ async function* consumeAnthropicSse(
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
+
+// -----------------------------------------------------------------------------
+// AnthropicApiClient — same /v1/messages SSE path, but authed via x-api-key
+// instead of an OAuth bearer token. Used when the user pastes an Anthropic
+// API key into the setup wizard.
+// -----------------------------------------------------------------------------
+
+export interface AnthropicApiClientOptions {
+  apiKey: string
+  apiUrl?: string
+  fetch?: typeof fetch
+  sessionId?: string
+  clientVersion?: string
+  maxRetries?: number
+}
+
+export class AnthropicApiClient implements SupportsStreamingMessages {
+  private readonly apiKey: string
+  private readonly apiUrl: string
+  private readonly fetchImpl: typeof fetch
+  private readonly sessionId: string
+  private readonly clientVersion: string
+  private readonly maxRetries: number
+
+  constructor(opts: AnthropicApiClientOptions) {
+    if (!opts.apiKey || opts.apiKey.length === 0) {
+      throw new ClaudeAuthError('AnthropicApiClient requires an apiKey.')
+    }
+    this.apiKey = opts.apiKey
+    this.apiUrl = opts.apiUrl ?? CLAUDE_API_URL
+    this.fetchImpl = opts.fetch ?? fetch
+    this.sessionId = opts.sessionId ?? crypto.randomUUID()
+    this.clientVersion = opts.clientVersion ?? CLAUDE_CODE_VERSION
+    this.maxRetries = opts.maxRetries ?? MAX_RETRIES
+  }
+
+  async *streamMessage(request: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
+    for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
+      try {
+        yield* this.streamOnce(request)
+        return
+      } catch (err) {
+        const isLast = attempt === this.maxRetries
+        if (isLast || !(err instanceof ClaudeApiError) || !err.retryable) throw err
+        const delay = Math.min(MAX_RETRY_DELAY_MS, BASE_RETRY_DELAY_MS * 2 ** attempt)
+        yield {
+          type: 'retry',
+          message: err.message,
+          attempt: attempt + 1,
+          max_attempts: this.maxRetries + 1,
+          delay_seconds: delay / 1000,
+        }
+        await sleep(delay)
+      }
+    }
+  }
+
+  private async *streamOnce(request: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
+    const body = buildRequestBody(request, {
+      sessionId: this.sessionId,
+      clientVersion: this.clientVersion,
+    })
+
+    const res = await this.fetchImpl(this.apiUrl, {
+      method: 'POST',
+      headers: {
+        'x-api-key': this.apiKey,
+        'content-type': 'application/json',
+        accept: 'text/event-stream',
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': CLAUDE_COMMON_BETAS.join(','),
+        'user-agent': `guildhall/${this.clientVersion} (anthropic-api)`,
+      },
+      body: JSON.stringify(body),
+    })
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      const retryable = RETRYABLE_STATUS.has(res.status)
+      if (res.status === 401 || res.status === 403) {
+        throw new ClaudeAuthError(`Anthropic API rejected key (${res.status}): ${text}`)
+      }
+      throw new ClaudeApiError(
+        `Anthropic API HTTP ${res.status}: ${text || res.statusText}`,
+        res.status,
+        retryable,
+      )
+    }
+    if (res.body == null) {
+      throw new ClaudeApiError('Anthropic API returned no response body', null, false)
+    }
+
+    yield* consumeAnthropicSse(res.body, { clientId: 'anthropic-api' })
+  }
+}

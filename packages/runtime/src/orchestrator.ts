@@ -18,7 +18,7 @@ import {
   type CoordinatorDomain,
   type ProgressEntry,
 } from '@guildhall/core'
-import type { ResolvedConfig } from '@guildhall/config'
+import { readProjectConfig, type ResolvedConfig } from '@guildhall/config'
 import { PermissionMode, HookEvent, type HookExecutor } from '@guildhall/engine'
 import { loadSkillRegistry } from '@guildhall/skills'
 import {
@@ -1379,14 +1379,22 @@ export async function runOrchestrator(
     stopSignal?: { stopRequested: boolean }
   } = {},
 ): Promise<void> {
-  // M1 providers: Claude OAuth is the single supported concrete provider.
-  // When none is configured we log the reason and fall back to the stub so
-  // wiring tests (and agent-less inspection) still work.
-  const selection = await selectApiClient()
+  // Provider selection reads project-local config (`.guildhall/config.yaml`)
+  // so the setup wizard's choices (preferredProvider, pasted API keys, LM
+  // Studio URL) actually take effect at orchestrator boot. Keys in env vars
+  // still win as ambient defaults; values from disk override them when set.
+  const projectCfg = readProjectConfig(config.projectPath)
+  const selection = await selectApiClient({
+    ...(projectCfg.preferredProvider ? { preferredProvider: projectCfg.preferredProvider } : {}),
+    ...(projectCfg.anthropicApiKey ? { anthropicApiKey: projectCfg.anthropicApiKey } : {}),
+    ...(projectCfg.openaiApiKey ? { openaiApiKey: projectCfg.openaiApiKey } : {}),
+    ...(projectCfg.lmStudioUrl ? { llamaCppUrl: projectCfg.lmStudioUrl } : {}),
+  })
   if (selection.providerName === 'none') {
     console.warn(`[guildhall] ${selection.reason}`)
   } else {
-    console.log(`[guildhall] Provider: ${selection.providerName}`)
+    const detail = selection.reason ? ` (${selection.reason})` : ''
+    console.log(`[guildhall] Provider: ${selection.providerName}${detail}`)
   }
   const apiClient = selection.apiClient
   const models = buildModelSet(config.models, apiClient)

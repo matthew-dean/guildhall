@@ -63,14 +63,20 @@ function getFlag(flag: string): string | undefined {
   return idx !== -1 ? args[idx + 1] : undefined
 }
 
-// Positional arg extraction: returns args that are not flags or flag values
+// Positional arg extraction: returns args that are not flags or flag values.
+// We skip a flag's "value" only if the next arg does not itself look like
+// another flag — otherwise boolean flags like `--no-browser` would eat the
+// following positional by mistake.
 function positionals(): string[] {
   const result: string[] = []
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
     if (a === undefined) continue
     if (a.startsWith('--')) {
-      i++ // skip the flag value
+      const next = args[i + 1]
+      if (next !== undefined && !next.startsWith('--')) {
+        i++ // consume the value
+      }
       continue
     }
     result.push(a)

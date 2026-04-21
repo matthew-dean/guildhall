@@ -18,7 +18,7 @@
   ],
   "scripts": {
     "build": "node ./build.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "echo 'guildhall: no TS sources — upstream packages are typechecked separately'",
     "clean": "rm -rf dist",
     "dev": "node ./build.mjs --watch"
   },

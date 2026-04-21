@@ -21,6 +21,7 @@
 
 import type { SupportsStreamingMessages } from '@guildhall/engine'
 import {
+  AnthropicApiClient,
   ClaudeCredentialMissingError,
   ClaudeOauthClient,
   CodexClient,
@@ -31,7 +32,31 @@ import {
 } from '@guildhall/providers'
 import { notImplementedApiClient } from '@guildhall/agents'
 
-export type ProviderName = 'claude-oauth' | 'codex-oauth' | 'llama-cpp' | 'none'
+export type ProviderName =
+  | 'claude-oauth'
+  | 'codex-oauth'
+  | 'llama-cpp'
+  | 'anthropic-api'
+  | 'openai-api'
+  | 'none'
+
+/**
+ * Canonical provider keys used on the wire (project config, settings UI).
+ * We accept the shorter `'codex'` there and map it to the internal
+ * `'codex-oauth'` ProviderName.
+ */
+export type PreferredProviderKey =
+  | 'claude-oauth'
+  | 'codex'
+  | 'codex-oauth'
+  | 'llama-cpp'
+  | 'anthropic-api'
+  | 'openai-api'
+
+function normalizePreferred(key: PreferredProviderKey): ProviderName {
+  if (key === 'codex') return 'codex-oauth'
+  return key
+}
 
 export interface SelectApiClientResult {
   apiClient: SupportsStreamingMessages
@@ -52,6 +77,13 @@ export interface SelectApiClientOptions {
    */
   provider?: ProviderName
   /**
+   * Non-forcing preference (from `.guildhall/config.yaml`). If the named
+   * provider is reachable we use it; otherwise we fall back through the
+   * normal resolution chain. Accepts the wire-key `'codex'` (mapped to
+   * `'codex-oauth'`) for convenience.
+   */
+  preferredProvider?: PreferredProviderKey
+  /**
    * Override the Claude credential path. Primarily used by tests. When
    * omitted we defer to the provider's default (env → ~/.claude/.credentials.json).
    */
@@ -62,10 +94,19 @@ export interface SelectApiClientOptions {
    */
   codexCredentialPath?: string
   /**
-   * llama.cpp base URL. When omitted we read `LLAMA_CPP_URL` from the
-   * environment. If still unset, llama.cpp is skipped (we do not probe).
+   * llama.cpp / LM Studio base URL. When omitted we read `LLAMA_CPP_URL` /
+   * `LM_STUDIO_BASE_URL` from the environment. If still unset, llama.cpp
+   * is skipped (we do not probe).
    */
   llamaCppUrl?: string
+  /**
+   * Anthropic API key. Falls back to `ANTHROPIC_API_KEY`. Empty → skip.
+   */
+  anthropicApiKey?: string
+  /**
+   * OpenAI API key. Falls back to `OPENAI_API_KEY`. Empty → skip.
+   */
+  openaiApiKey?: string
 }
 
 export async function selectApiClient(
@@ -76,22 +117,55 @@ export async function selectApiClient(
     return selectForced(forced, opts)
   }
 
+  // A non-forcing preference (from the setup wizard) gets first crack. If
+  // unreachable we fall through to the normal detection order so the user is
+  // not blocked by a stale preference when their environment changes.
+  if (opts.preferredProvider) {
+    const preferred = normalizePreferred(opts.preferredProvider)
+    const probe = await tryProvider(preferred, opts)
+    if (probe.ok) return probe.result
+  }
+
   const claude = await tryClaude(opts)
   if (claude.ok) return claude.result
 
   const codex = await tryCodex(opts)
   if (codex.ok) return codex.result
 
+  const anthropic = tryAnthropicApi(opts)
+  if (anthropic.ok) return anthropic.result
+
+  const openai = tryOpenAiApi(opts)
+  if (openai.ok) return openai.result
+
   const llama = tryLlama(opts)
   if (llama.ok) return llama.result
 
   const reason =
     'No provider configured. Run `claude login` for Claude OAuth, `codex auth login` ' +
-    'for Codex OAuth, or set LLAMA_CPP_URL to point at a running llama.cpp server.'
+    'for Codex OAuth, paste an Anthropic or OpenAI API key in the dashboard, or set ' +
+    'LLAMA_CPP_URL to point at a running llama.cpp / LM Studio server.'
   return {
     apiClient: notImplementedApiClient(reason),
     providerName: 'none',
     reason,
+  }
+}
+
+async function tryProvider(name: ProviderName, opts: SelectApiClientOptions): Promise<Probe> {
+  switch (name) {
+    case 'claude-oauth':
+      return tryClaude(opts)
+    case 'codex-oauth':
+      return tryCodex(opts)
+    case 'anthropic-api':
+      return tryAnthropicApi(opts)
+    case 'openai-api':
+      return tryOpenAiApi(opts)
+    case 'llama-cpp':
+      return tryLlama(opts)
+    default:
+      return { ok: false }
   }
 }
 
@@ -133,7 +207,12 @@ async function tryCodex(opts: SelectApiClientOptions): Promise<Probe> {
 }
 
 function tryLlama(opts: SelectApiClientOptions): Probe {
-  const url = (opts.llamaCppUrl ?? process.env.LLAMA_CPP_URL ?? '').trim()
+  const url = (
+    opts.llamaCppUrl ??
+    process.env.LLAMA_CPP_URL ??
+    process.env.LM_STUDIO_BASE_URL ??
+    ''
+  ).trim()
   if (url.length === 0) return { ok: false }
   const apiClient = new OpenAICompatibleClient({ baseUrl: url })
   return {
@@ -141,7 +220,38 @@ function tryLlama(opts: SelectApiClientOptions): Probe {
     result: {
       apiClient,
       providerName: 'llama-cpp',
-      reason: `llama.cpp at ${url}`,
+      reason: `llama.cpp/LM Studio at ${url}`,
+    },
+  }
+}
+
+function tryAnthropicApi(opts: SelectApiClientOptions): Probe {
+  const key = (opts.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY ?? '').trim()
+  if (key.length === 0) return { ok: false }
+  const apiClient = new AnthropicApiClient({ apiKey: key })
+  return {
+    ok: true,
+    result: {
+      apiClient,
+      providerName: 'anthropic-api',
+      reason: 'Anthropic API key',
+    },
+  }
+}
+
+function tryOpenAiApi(opts: SelectApiClientOptions): Probe {
+  const key = (opts.openaiApiKey ?? process.env.OPENAI_API_KEY ?? '').trim()
+  if (key.length === 0) return { ok: false }
+  const apiClient = new OpenAICompatibleClient({
+    baseUrl: 'https://api.openai.com/v1',
+    apiKey: key,
+  })
+  return {
+    ok: true,
+    result: {
+      apiClient,
+      providerName: 'openai-api',
+      reason: 'OpenAI API key',
     },
   }
 }
@@ -159,6 +269,22 @@ async function selectForced(
     const probe = await tryCodex(opts)
     if (probe.ok) return probe.result
     return failForced('codex-oauth', 'Codex OAuth credential missing. Run `codex auth login`.')
+  }
+  if (forced === 'anthropic-api') {
+    const probe = tryAnthropicApi(opts)
+    if (probe.ok) return probe.result
+    return failForced(
+      'anthropic-api',
+      'Anthropic API key missing. Paste one in the dashboard or set ANTHROPIC_API_KEY.',
+    )
+  }
+  if (forced === 'openai-api') {
+    const probe = tryOpenAiApi(opts)
+    if (probe.ok) return probe.result
+    return failForced(
+      'openai-api',
+      'OpenAI API key missing. Paste one in the dashboard or set OPENAI_API_KEY.',
+    )
   }
   if (forced === 'llama-cpp') {
     const probe = tryLlama(opts)
