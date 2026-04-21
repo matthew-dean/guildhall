@@ -15,6 +15,7 @@ import {
 } from '@guildhall/config'
 import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
 import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
+import { resolveEscalation } from '@guildhall/tools'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
 import { createExploringTask, approveSpec, resumeExploring } from './intake.js'
 import {
@@ -45,10 +46,12 @@ import {
 //   POST   /api/project/meta-intake/approve → merge the draft into guildhall.yaml
 //   GET    /api/project/needs-meta-intake
 //   GET    /api/project/task/:id      → full task + recent events for drawer
-//   POST   /api/project/task/:id/pause        → human override → blocked
-//   POST   /api/project/task/:id/shelve       → human override → shelved
-//   POST   /api/project/task/:id/approve-spec → exploring → spec_review (human approves the draft)
-//   POST   /api/project/task/:id/resume       → append a human follow-up to the exploring transcript
+//   POST   /api/project/task/:id/pause              → human override → blocked
+//   POST   /api/project/task/:id/shelve             → human override → shelved
+//   POST   /api/project/task/:id/unshelve           → shelved → proposed (clear shelveReason)
+//   POST   /api/project/task/:id/approve-spec       → exploring → spec_review
+//   POST   /api/project/task/:id/resume             → append follow-up to exploring transcript
+//   POST   /api/project/task/:id/resolve-escalation → close an open escalation; unblocks when none remain
 //   GET    /api/project/activity      → summary for persistent agent chip
 //   GET    /api/project/progress      → tail of memory/PROGRESS.md
 //   GET    /api/project/events        → SSE feed of orchestrator events
@@ -310,17 +313,27 @@ export function buildServeApp(opts: ServeOptions = {}): {
   })
 
   // POST /api/project/task/:id/:action — human overrides on a task.
-  //   pause         → blocked    (any non-terminal task)
-  //   shelve        → shelved    (any non-done task)
-  //   approve-spec  → spec_review (exploring task with a drafted spec; body: {approvalNote?})
-  //   resume        → append a follow-up message to an exploring transcript
-  //                    and resolve optional escalation (body: {message?, resolveEscalationId?, resolution?})
+  //   pause              → blocked      (any non-terminal task)
+  //   shelve             → shelved      (any non-done task)
+  //   unshelve           → proposed     (shelved task only; clears shelveReason)
+  //   approve-spec       → spec_review  (exploring task with a drafted spec; body: {approvalNote?})
+  //   resume             → append a follow-up message to an exploring transcript
+  //                        (body: {message?, resolveEscalationId?, resolution?})
+  //   resolve-escalation → close a named escalation; unblocks when none remain
+  //                        (body: {escalationId, resolution, nextStatus?})
   app.post('/api/project/task/:id/:action', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const id = c.req.param('id')
       const action = c.req.param('action')
-      const KNOWN_ACTIONS = ['pause', 'shelve', 'approve-spec', 'resume'] as const
+      const KNOWN_ACTIONS = [
+        'pause',
+        'shelve',
+        'approve-spec',
+        'resume',
+        'unshelve',
+        'resolve-escalation',
+      ] as const
       if (!(KNOWN_ACTIONS as readonly string[]).includes(action)) {
         return c.json({ error: 'unknown action' }, 400)
       }
@@ -360,7 +373,30 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ ok: true })
       }
 
-      // pause / shelve: in-place mutation of TASKS.json.
+      if (action === 'resolve-escalation') {
+        const body = await c.req.json().catch(() => ({})) as {
+          escalationId?: string
+          resolution?: string
+          nextStatus?: 'exploring' | 'spec_review' | 'ready' | 'in_progress' | 'review' | 'gate_check'
+        }
+        if (!body.escalationId) return c.json({ error: 'Missing escalationId' }, 400)
+        if (!body.resolution || !body.resolution.trim()) {
+          return c.json({ error: 'Missing resolution' }, 400)
+        }
+        const result = await resolveEscalation({
+          tasksPath: join(memoryDir, 'TASKS.json'),
+          progressPath: join(memoryDir, 'PROGRESS.md'),
+          taskId: id,
+          escalationId: body.escalationId,
+          resolution: body.resolution.trim(),
+          resolvedBy: 'human',
+          nextStatus: body.nextStatus ?? 'ready',
+        })
+        if (!result.success) return c.json({ error: result.error ?? 'resolve failed' }, 400)
+        return c.json({ ok: true })
+      }
+
+      // pause / shelve / unshelve: in-place mutation of TASKS.json.
       const tasksPath = join(memoryDir, 'TASKS.json')
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
@@ -380,6 +416,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.status = 'blocked'
         task.blockReason = 'Paused by human from dashboard'
         notes.push({ agentId: 'system:human', role: 'human', content: 'Task paused via dashboard', timestamp: now })
+      } else if (action === 'unshelve') {
+        if (task.status !== 'shelved') {
+          return c.json({ error: `task is ${task.status}, not shelved` }, 400)
+        }
+        task.status = 'proposed'
+        delete (task as Record<string, unknown>).shelveReason
+        notes.push({ agentId: 'system:human', role: 'human', content: 'Task unshelved via dashboard', timestamp: now })
       } else {
         if (task.status === 'done') return c.json({ error: 'task is done' }, 400)
         task.status = 'shelved'
@@ -1450,10 +1493,14 @@ function dashboardJs(): string {
         const bs = document.getElementById('btn-shelve')
         const ba = document.getElementById('btn-approve-spec')
         const bm = document.getElementById('btn-send-msg')
+        const bu = document.getElementById('btn-unshelve')
+        const be = document.getElementById('btn-resolve-esc')
         if (bp) bp.addEventListener('click', () => taskAction(t.id, 'pause'))
         if (bs) bs.addEventListener('click', () => taskAction(t.id, 'shelve'))
         if (ba) ba.addEventListener('click', () => approveSpec(t.id))
         if (bm) bm.addEventListener('click', () => sendFollowUp(t.id))
+        if (bu) bu.addEventListener('click', () => taskAction(t.id, 'unshelve'))
+        if (be) be.addEventListener('click', () => resolveEsc(t.id, be.dataset.esc))
       } else if (drawerTab === 'transcript') {
         const notes = Array.isArray(t.notes) ? t.notes : []
         body.innerHTML = notes.length === 0
@@ -1526,6 +1573,7 @@ function dashboardJs(): string {
 
     function renderWhyStuck(t) {
       const escs = (t.escalations || []).filter(e => !e.resolvedAt)
+      const firstEsc = escs[0]
       return \`
         <div class="why-stuck">
           <h4>Why is this stuck?</h4>
@@ -1542,17 +1590,41 @@ function dashboardJs(): string {
               <dt>Raised by</dt><dd>\${escapeHtml(escs[0].agentId || '')}</dd>
             </dl>
           \` : ''}
+          <div class="drawer-actions" style="margin-top:10px">
+            \${t.status === 'shelved' ? \`<button id="btn-unshelve">Unshelve</button>\` : ''}
+            \${firstEsc ? \`<button id="btn-resolve-esc" data-esc="\${escapeHtml(firstEsc.id || '')}">Resolve escalation</button>\` : ''}
+          </div>
         </div>
       \`
     }
 
     async function taskAction(id, action) {
-      if (!confirm(\`\${action === 'pause' ? 'Pause' : 'Shelve'} task \${id}?\`)) return
+      const label = { pause: 'Pause', shelve: 'Shelve', unshelve: 'Unshelve' }[action] || action
+      if (!confirm(\`\${label} task \${id}?\`)) return
       const r = await fetch(\`/api/project/task/\${encodeURIComponent(id)}/\${action}\`, { method: 'POST' })
       const j = await r.json()
       if (j.error) { alert(j.error); return }
-      closeDrawer()
-      renderProject()
+      if (action === 'unshelve') {
+        await openTaskDrawer(id)
+      } else {
+        closeDrawer()
+        renderProject()
+      }
+    }
+
+    async function resolveEsc(id, escalationId) {
+      const resolution = prompt('How should the agent resolve this escalation? (This note is fed back into the coordinator.)')
+      if (!resolution || !resolution.trim()) return
+      const nextStatus = prompt('Next status after resolving (ready | in_progress | exploring | spec_review | review | gate_check)', 'ready')
+      if (!nextStatus) return
+      const r = await fetch(\`/api/project/task/\${encodeURIComponent(id)}/resolve-escalation\`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ escalationId, resolution: resolution.trim(), nextStatus: nextStatus.trim() }),
+      })
+      const j = await r.json()
+      if (j.error) { alert('Resolve failed: ' + j.error); return }
+      await openTaskDrawer(id)
     }
 
     async function approveSpec(id) {

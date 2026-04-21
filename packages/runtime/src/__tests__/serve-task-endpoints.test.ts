@@ -219,6 +219,113 @@ describe('POST /api/project/task/:id/resume', () => {
   })
 })
 
+describe('POST /api/project/task/:id/unshelve', () => {
+  it('clears shelveReason and returns a shelved task to proposed', async () => {
+    await seedTask('task-1', {
+      status: 'shelved',
+      shelveReason: {
+        code: 'not_viable',
+        detail: 'was shelved by a worker',
+        rejectedBy: 'agent:worker-1',
+        rejectedAt: new Date().toISOString(),
+        source: 'worker_pre_rejection',
+        policyApplied: true,
+        requeueCount: 0,
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/unshelve', { method: 'POST' }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.ok).toBe(true)
+    expect(body.status).toBe('proposed')
+
+    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const q = JSON.parse(raw)
+    expect(q.tasks[0].status).toBe('proposed')
+    expect(q.tasks[0].shelveReason).toBeUndefined()
+    expect(q.tasks[0].notes?.at(-1)?.content).toMatch(/unshelved/i)
+  })
+
+  it('rejects unshelve on a non-shelved task', async () => {
+    await seedTask('task-1', { status: 'in_progress' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/unshelve', { method: 'POST' }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.error).toMatch(/not shelved/i)
+  })
+})
+
+describe('POST /api/project/task/:id/resolve-escalation', () => {
+  it('resolves an open escalation and unblocks the task', async () => {
+    await seedTask('task-1', {
+      status: 'blocked',
+      blockReason: 'Escalation raised',
+      escalations: [
+        {
+          id: 'esc-1',
+          taskId: 'task-1',
+          reason: 'scope_boundary',
+          summary: 'Unclear if this should touch the auth layer',
+          details: 'The proposed change crosses into the auth package',
+          agentId: 'agent:worker-1',
+          raisedAt: new Date().toISOString(),
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/resolve-escalation', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          escalationId: 'esc-1',
+          resolution: 'Proceed — auth layer is in scope',
+          nextStatus: 'in_progress',
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.ok).toBe(true)
+
+    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const q = JSON.parse(raw)
+    const task = q.tasks[0]
+    expect(task.status).toBe('in_progress')
+    expect(task.escalations[0].resolvedAt).toBeTruthy()
+    expect(task.escalations[0].resolution).toMatch(/Proceed/)
+    expect(task.blockReason).toBeUndefined()
+  })
+
+  it('requires both escalationId and resolution', async () => {
+    await seedTask('task-1', { status: 'blocked' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const resNoId = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/resolve-escalation', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ resolution: 'fine' }),
+      }),
+    )
+    expect(resNoId.status).toBe(400)
+
+    const resNoReason = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/resolve-escalation', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ escalationId: 'esc-1' }),
+      }),
+    )
+    expect(resNoReason.status).toBe(400)
+  })
+})
+
 describe('GET /api/project/activity', () => {
   it('summarizes counts and in-flight tasks', async () => {
     const tasksPath = path.join(memoryDir, 'TASKS.json')
