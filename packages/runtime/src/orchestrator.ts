@@ -47,6 +47,11 @@ import {
 } from './pre-rejection-policy.js'
 import { LivenessTracker, type StallFlag } from './liveness.js'
 import {
+  tickOutcomeToBackendEvent,
+  agentIssueToBackendEvent,
+} from './wire-events.js'
+import type { BackendEvent } from '@guildhall/backend-host'
+import {
   authorizeAction,
   buildRemediationContext,
   recordRemediationDecision,
@@ -209,6 +214,23 @@ export interface OrchestratorOptions {
    * the current lever position so `scanStalls()` / `liveness` still work.
    */
   liveness?: LivenessTracker
+  /**
+   * Optional subscriber called once per emitted backend event (tick outcomes
+   * translated via `tickOutcomeToBackendEvent`, agent-issues translated via
+   * `agentIssueToBackendEvent`). The serve layer wires this into a per-
+   * workspace SSE stream so the dashboard can watch ticks in real time.
+   *
+   * Exceptions from the subscriber are caught and logged — they must not
+   * break the run loop.
+   */
+  onBackendEvent?: (event: BackendEvent) => void | Promise<void>
+  /**
+   * Optional flag the serve layer flips to request a graceful stop between
+   * ticks. The orchestrator polls it after each tick's event drain and
+   * exits before the next `sleep(tickDelayMs)`. Useful because the
+   * supervisor doesn't want to cancel an in-flight `generate()` call.
+   */
+  stopSignal?: { stopRequested: boolean }
 }
 
 const DEFAULT_IDLE_SHUTDOWN = 10
@@ -562,6 +584,19 @@ export class Orchestrator {
         )
       }
 
+      if (this.opts.onBackendEvent) {
+        const tickEvent = tickOutcomeToBackendEvent(outcome)
+        if (tickEvent) {
+          try {
+            await this.opts.onBackendEvent(tickEvent)
+          } catch (err) {
+            console.warn(
+              `[guildhall] onBackendEvent threw (tick): ${err instanceof Error ? err.message : String(err)}`,
+            )
+          }
+        }
+      }
+
       // FR-31: after each tick, surface any agent issues the just-completed
       // agent run raised via `report_issue`. These are informational — they
       // do not change task status — but they need to reach subscribers and
@@ -572,6 +607,20 @@ export class Orchestrator {
           `[guildhall] tick ${tick}: agent-issue ${issue.id} on ${issue.taskId} ` +
             `[${issue.severity}/${issue.code}] — ${issue.detail}`,
         )
+        if (this.opts.onBackendEvent) {
+          try {
+            await this.opts.onBackendEvent(agentIssueToBackendEvent(issue))
+          } catch (err) {
+            console.warn(
+              `[guildhall] onBackendEvent threw (issue): ${err instanceof Error ? err.message : String(err)}`,
+            )
+          }
+        }
+      }
+
+      if (this.opts.stopSignal?.stopRequested) {
+        console.log(`[guildhall] Stop requested after tick ${tick}. Shutting down.`)
+        break
       }
 
       await sleep(tickDelayMs)
@@ -1322,7 +1371,13 @@ function toCoordinatorDomain(
  */
 export async function runOrchestrator(
   config: ResolvedConfig,
-  opts: { maxTicks?: number; tickDelayMs?: number; domainFilter?: string } = {},
+  opts: {
+    maxTicks?: number
+    tickDelayMs?: number
+    domainFilter?: string
+    onBackendEvent?: (event: BackendEvent) => void | Promise<void>
+    stopSignal?: { stopRequested: boolean }
+  } = {},
 ): Promise<void> {
   // M1 providers: Claude OAuth is the single supported concrete provider.
   // When none is configured we log the reason and fall back to the stub so
@@ -1435,6 +1490,8 @@ export async function runOrchestrator(
     agents,
     ...(opts.domainFilter ? { domainFilter: opts.domainFilter } : {}),
     ...(hookExecutor ? { hookExecutor } : {}),
+    ...(opts.onBackendEvent ? { onBackendEvent: opts.onBackendEvent } : {}),
+    ...(opts.stopSignal ? { stopSignal: opts.stopSignal } : {}),
   })
 
   await orchestrator.run({
