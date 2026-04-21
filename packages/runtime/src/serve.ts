@@ -780,14 +780,9 @@ function dashboardJs(): string {
       if (detail.error) { app.innerHTML = \`<div class="muted">Error: \${detail.error}</div>\`; return }
 
       if (detail.initializationNeeded) {
-        projectName.textContent = ''
-        app.innerHTML = \`
-          <div class="empty">
-            <h2>Project not initialized</h2>
-            <p class="muted" style="margin:14px 0">\${detail.path}</p>
-            <button onclick="location.href='/setup'">Start setup wizard →</button>
-          </div>
-        \`
+        // Auto-forward to the setup wizard — the intermediate empty state
+        // was a dead end for first-time users landing on /.
+        nav('/setup')
         return
       }
 
@@ -839,7 +834,9 @@ function dashboardJs(): string {
             <div class="card">
               <h2>Tasks (\${detail.tasks.length})</h2>
               \${detail.tasks.length === 0
-                ? '<div class="muted">No tasks yet. Click "+ New Task" or let the meta-intake agent bootstrap them.</div>'
+                ? (needsMeta
+                    ? '<div class="muted">No tasks yet. Click <strong>Bootstrap project</strong> above first — coordinators are required before you can add tasks.</div>'
+                    : '<div class="muted">No tasks yet. Click <strong>+ New Task</strong> above to describe what you want an agent to do.</div>')
                 : '<table><thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Domain</th></tr></thead><tbody>' +
                   detail.tasks.map(t => \`
                     <tr>
@@ -926,7 +923,12 @@ function dashboardJs(): string {
       const feed = document.getElementById('feed')
       if (feed) {
         feed.innerHTML = ''
-        ;(detail.recentEvents || []).forEach(renderEvent)
+        const recent = detail.recentEvents || []
+        if (recent.length === 0 && runStatus !== 'running') {
+          feed.innerHTML = \`<div class="muted">Agents aren't running yet. Click <strong>▶ Start</strong> above to begin processing tasks — events will stream here.</div>\`
+        } else {
+          recent.forEach(renderEvent)
+        }
       }
       connectStream()
     }
@@ -1495,8 +1497,11 @@ function dashboardJs(): string {
       if (currentES) currentES.close()
       const es = new EventSource('/api/project/events')
       currentES = es
-      es.onopen = () => { sseStatus.textContent = '● live' }
-      es.onerror = () => { sseStatus.textContent = '● reconnecting…' }
+      es.onopen = () => { sseStatus.textContent = '● live'; sseStatus.title = '' }
+      es.onerror = () => {
+        sseStatus.textContent = '● reconnecting…'
+        sseStatus.title = 'Server unreachable — retrying automatically'
+      }
       es.onmessage = e => {
         try {
           const data = JSON.parse(e.data)
