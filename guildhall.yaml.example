@@ -1,0 +1,139 @@
+# forge.yaml — Forge workspace configuration
+#
+# This file defines a Forge workspace. It lives in the workspace root directory
+# alongside the memory/ subdirectory.
+#
+# Run "forge init" to generate this file interactively, then edit as needed.
+# Run "forge config" to re-run the wizard on an existing workspace.
+
+# Human-readable name shown in the dashboard and progress logs
+name: Looma + Knit
+
+# Unique ID used in the CLI ("forge run looma-knit") and ~/.forge/registry.yaml
+id: looma-knit
+
+# Absolute path to the project root this workspace tracks.
+# Defaults to the directory containing this file.
+projectPath: /Users/matthew/git/oss
+
+# ---------------------------------------------------------------------------
+# Model assignment
+#
+# See "forge list-models" for all available model IDs and their capabilities.
+#
+# Recommended configurations:
+#
+#   All local (single GPU):
+#     spec/coordinator/worker: qwen2.5-coder-32b-instruct
+#     reviewer/gateChecker:    qwen2.5-coder-7b-instruct
+#
+#   Mixed (cloud reasoning + local coding):
+#     spec/coordinator: claude-sonnet-4-6
+#     worker:           qwen2.5-coder-32b-instruct
+#     reviewer:         qwen2.5-coder-7b-instruct
+#     gateChecker:      qwen2.5-coder-7b-instruct
+# ---------------------------------------------------------------------------
+models:
+  spec: qwen2.5-coder-32b-instruct
+  coordinator: qwen2.5-coder-32b-instruct
+  worker: qwen2.5-coder-32b-instruct
+  reviewer: qwen2.5-coder-14b-instruct
+  gateChecker: qwen2.5-coder-7b-instruct
+
+# ---------------------------------------------------------------------------
+# Coordinator domains
+#
+# Each coordinator watches a domain of the project and routes tasks.
+# The "domain" field matches task.domain in TASKS.json.
+# ---------------------------------------------------------------------------
+coordinators:
+  - id: looma
+    name: Looma Coordinator
+    domain: looma
+    path: looma  # relative to projectPath
+    mandate: |
+      Looma is a stack-agnostic UI library built on web standards. It must stay
+      general-purpose: no Knit-specific vocabulary in component APIs, no app
+      business logic, no tight coupling to any single consumer. Every component
+      shipped in Looma must be usable in a context completely unrelated to Knit.
+      Accessibility and progressive enhancement are non-negotiable.
+    concerns:
+      - id: api-genericity
+        description: Component APIs must be domain-neutral — no workspace, page, or collection vocabulary.
+        reviewQuestions:
+          - Does this component name or API surface reference any Knit-specific concepts?
+          - Could this component be used in an app completely unrelated to Knit?
+          - Are prop/event names generic enough to be meaningful outside this context?
+      - id: accessibility
+        description: All components must meet WCAG 2.1 AA. Keyboard navigation and ARIA are mandatory.
+        reviewQuestions:
+          - Is this component keyboard-navigable?
+          - Are appropriate ARIA roles and attributes present?
+          - Has focus management been considered for overlay components?
+      - id: documentation
+        description: Every shipped component needs a contract README, API metadata, a docs page, and a story.
+        reviewQuestions:
+          - Is there a contract README in the component directory?
+          - Is there a Storybook story?
+    autonomousDecisions:
+      - Approve or reject component promotion candidates from Knit
+      - Decide API naming for new primitives
+      - Approve minor spec revisions that do not change scope
+    escalationTriggers:
+      - Any change to the @looma/tokens public API surface
+      - Adding a new package to the monorepo
+      - Any decision that would break existing Knit consumers
+
+  - id: knit
+    name: Knit Coordinator
+    domain: knit
+    path: knit  # relative to projectPath
+    mandate: |
+      Knit is a wiki app for small teams. It uses Looma as its design system and
+      must migrate progressively toward Looma primitives. Its primary obligation
+      is product quality for real users. The Knit coordinator advocates for
+      features and UX quality, negotiates with the Looma coordinator for the
+      primitives it needs, and ensures that migration work does not regress the product.
+    concerns:
+      - id: product-quality
+        description: The app must work correctly for users. Regressions are unacceptable.
+        reviewQuestions:
+          - Does this change affect any user-facing flow?
+          - Has the relevant user flow been manually or automatically verified?
+          - Are there any regressions vs the current V1 feature set?
+      - id: looma-migration
+        description: Knit should progressively migrate to Looma primitives per the migration inventory.
+        reviewQuestions:
+          - Does this task advance or at least not regress the Looma migration inventory?
+          - Are Looma primitives being used where they are available and appropriate?
+    autonomousDecisions:
+      - Prioritize tasks within the V1 polish scope
+      - Approve minor migration steps already in the migration inventory
+    escalationTriggers:
+      - Any new V2 feature request
+      - Any change to the Supabase schema
+      - Any change that requires a Looma API that does not yet exist
+
+# ---------------------------------------------------------------------------
+# Orchestrator behaviour
+# ---------------------------------------------------------------------------
+
+# Max revision cycles before a task is marked as blocked
+maxRevisions: 3
+
+# Task transitions between heartbeat progress log entries
+heartbeatInterval: 5
+
+# Paths to ignore when agents scan the project
+ignore:
+  - node_modules
+  - dist
+  - .git
+  - coverage
+  - .turbo
+
+# Optional tags for grouping workspaces in the dashboard
+tags:
+  - ui-library
+  - wiki-app
+  - typescript

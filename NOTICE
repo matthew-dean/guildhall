@@ -1,0 +1,21 @@
+Guildhall — multi-agent orchestration for software projects
+Copyright (c) 2026 Matthew Dean
+
+This product includes code ported from OpenHarness
+(https://github.com/HKUDS/OpenHarness), a Python port of Anthropic's
+Claude Code. Both projects are MIT-licensed.
+
+OpenHarness — MIT License
+  Copyright (c) 2025 HKUDS and contributors
+  https://github.com/HKUDS/OpenHarness
+
+Anthropic Claude Code — the original CLI agent harness whose architecture
+OpenHarness faithfully adapted into Python, and whose conventions (OHJSON:
+wire protocol, permission modes, skills, hooks, compaction phases) carry
+through into this TypeScript port.
+  https://www.anthropic.com
+
+Each file that was ported retains a header at the top of the file pointing
+back to the upstream source, the upstream commit SHA at the time of the
+port, and an enumeration of any deliberate deviations. See
+PORT-MAPPING.md for the module-by-module translation plan.

@@ -1,0 +1,300 @@
+{
+  "version": 1,
+  "lastUpdated": "2026-04-11T00:00:00Z",
+  "tasks": [
+    {
+      "id": "looma-001",
+      "title": "Complete Button/Input/FormField primitive normalization in Knit",
+      "description": "Finish Stage 1 of the Knit primitive replacement wave. The remaining high-use Knit flows in SidebarContent and settings still need to adopt Looma Button, Input, Select, and FormField primitives. This is listed as 'in progress' in the migration inventory.",
+      "domain": "looma",
+      "projectPath": "../looma",
+      "status": "pending",
+      "priority": "high",
+      "dependsOn": [],
+      "outOfScope": [
+        "Any Knit domain-specific component logic",
+        "New Looma components not already shipped",
+        "Stage 2 editor integration"
+      ],
+      "acceptanceCriteria": [
+        {
+          "id": "ac-1",
+          "description": "SidebarContent.vue uses Looma Button, Input, Select, FormField in all dialog-heavy flows",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-2",
+          "description": "settings.vue uses Looma primitives for all form controls",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-3",
+          "description": "pnpm typecheck passes in Knit",
+          "verifiedBy": "automated",
+          "command": "pnpm typecheck",
+          "met": false
+        },
+        {
+          "id": "ac-4",
+          "description": "pnpm build passes in Knit",
+          "verifiedBy": "automated",
+          "command": "pnpm build",
+          "met": false
+        },
+        {
+          "id": "ac-5",
+          "description": "looma-migration-inventory.md updated to reflect completed status for affected surfaces",
+          "verifiedBy": "review",
+          "met": false
+        }
+      ],
+      "notes": [],
+      "gateResults": [],
+      "revisionCount": 0,
+      "createdAt": "2026-04-11T00:00:00Z",
+      "updatedAt": "2026-04-11T00:00:00Z"
+    },
+    {
+      "id": "looma-002",
+      "title": "Promote AvatarGroup from Knit to Looma",
+      "description": "Extract the AvatarGroup/AvatarStack pattern from Knit's atoms/AvatarGroup.vue into a generic Looma component. Presence-specific data binding must stay in Knit; only the generic presentation layer moves to Looma. Per the migration inventory this is a B-category promotion candidate.",
+      "domain": "looma",
+      "projectPath": "../looma",
+      "status": "pending",
+      "priority": "normal",
+      "dependsOn": ["looma-001"],
+      "outOfScope": [
+        "Presence/realtime data binding (stays in Knit)",
+        "Any Knit-specific avatar naming or workspace vocabulary in the API"
+      ],
+      "acceptanceCriteria": [
+        {
+          "id": "ac-1",
+          "description": "Generic ui-avatar-group component ships in @looma/core with domain-neutral API (no workspace/presence vocabulary)",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-2",
+          "description": "React and Vue adapter exports exist for AvatarGroup",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-3",
+          "description": "Contract README, Docusaurus page, and Storybook story all ship in the same change",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-4",
+          "description": "pnpm generate:api && pnpm check:docs-sync pass",
+          "verifiedBy": "automated",
+          "command": "pnpm generate:api && pnpm check:docs-sync",
+          "met": false
+        },
+        {
+          "id": "ac-5",
+          "description": "Knit's AvatarGroup.vue is updated to consume the new Looma primitive",
+          "verifiedBy": "review",
+          "met": false
+        }
+      ],
+      "notes": [],
+      "gateResults": [],
+      "revisionCount": 0,
+      "createdAt": "2026-04-11T00:00:00Z",
+      "updatedAt": "2026-04-11T00:00:00Z"
+    },
+    {
+      "id": "looma-003",
+      "title": "Fix open editor bugs blocking Knit dogfooding",
+      "description": "There are open shared editor defects found through Knit dogfooding documented in looma/docs/editor-bugs.md. These are blocking broader editor UI migration. Read editor-bugs.md and fix the listed defects in @looma/editor.",
+      "domain": "looma",
+      "projectPath": "../looma",
+      "status": "pending",
+      "priority": "high",
+      "dependsOn": [],
+      "outOfScope": [
+        "New editor features not in editor-roadmap.md",
+        "Knit-side editor wiring (separate task)"
+      ],
+      "acceptanceCriteria": [
+        {
+          "id": "ac-1",
+          "description": "Each bug listed in docs/editor-bugs.md is either fixed or explicitly deferred with rationale",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-2",
+          "description": "pnpm --filter @looma/editor typecheck passes",
+          "verifiedBy": "automated",
+          "command": "pnpm --filter @looma/editor typecheck",
+          "met": false
+        },
+        {
+          "id": "ac-3",
+          "description": "pnpm --filter @looma/editor build passes",
+          "verifiedBy": "automated",
+          "command": "pnpm --filter @looma/editor build",
+          "met": false
+        },
+        {
+          "id": "ac-4",
+          "description": "docs/editor-bugs.md updated with fix status for each item",
+          "verifiedBy": "review",
+          "met": false
+        }
+      ],
+      "notes": [],
+      "gateResults": [],
+      "revisionCount": 0,
+      "createdAt": "2026-04-11T00:00:00Z",
+      "updatedAt": "2026-04-11T00:00:00Z"
+    },
+    {
+      "id": "knit-001",
+      "title": "Implement inline comments — schema exists, API + UI to do",
+      "description": "The comments table already exists in the Supabase schema. This task implements the API endpoints and UI for inline/page comments: select text → add comment, thread replies, show comments on page. This is item #5 in the Knit feature roadmap parity list.",
+      "domain": "knit",
+      "projectPath": "../knit",
+      "status": "pending",
+      "priority": "normal",
+      "dependsOn": ["looma-001"],
+      "outOfScope": [
+        "Resolve comments (separate follow-up task)",
+        "Comment notifications",
+        "Any changes to the comments table schema"
+      ],
+      "acceptanceCriteria": [
+        {
+          "id": "ac-1",
+          "description": "User can select text in the editor and add a comment",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-2",
+          "description": "Comments appear in a sidebar or inline indicator on the page",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-3",
+          "description": "Thread replies work (add reply, display thread)",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-4",
+          "description": "server/api routes for comment CRUD exist and are protected by workspace membership",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-5",
+          "description": "pnpm typecheck passes",
+          "verifiedBy": "automated",
+          "command": "pnpm typecheck",
+          "met": false
+        }
+      ],
+      "notes": [],
+      "gateResults": [],
+      "revisionCount": 0,
+      "createdAt": "2026-04-11T00:00:00Z",
+      "updatedAt": "2026-04-11T00:00:00Z"
+    },
+    {
+      "id": "knit-002",
+      "title": "Add unit tests for use-collections, use-presence, and subdomain utils",
+      "description": "V1 polish item from PROJECT_STATE.md. These three composables/utils have no unit tests. Write vitest tests covering the main behaviours: collection tree reactivity, presence channel lifecycle, and subdomain slug extraction/construction.",
+      "domain": "knit",
+      "projectPath": "../knit",
+      "status": "pending",
+      "priority": "high",
+      "dependsOn": [],
+      "outOfScope": [
+        "E2E tests (separate task)",
+        "Testing server API routes",
+        "New feature work"
+      ],
+      "acceptanceCriteria": [
+        {
+          "id": "ac-1",
+          "description": "use-collections has tests covering: initial load, create, optimistic reorder, and revert on error",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-2",
+          "description": "subdomain utils has tests covering: extractWorkspaceSlug and workspaceHost for valid, invalid, and edge-case inputs",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-3",
+          "description": "use-presence has tests covering: channel join, presence sync, and leave",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-4",
+          "description": "pnpm test passes",
+          "verifiedBy": "automated",
+          "command": "pnpm test",
+          "met": false
+        }
+      ],
+      "notes": [],
+      "gateResults": [],
+      "revisionCount": 0,
+      "createdAt": "2026-04-11T00:00:00Z",
+      "updatedAt": "2026-04-11T00:00:00Z"
+    },
+    {
+      "id": "knit-003",
+      "title": "Generate TypeScript types from Supabase schema",
+      "description": "Run pnpm db:types to generate proper TypeScript types from the Supabase schema and wire them into the codebase. Currently Knit uses ad-hoc types. This is a V1 polish item and will improve type safety across all server API routes and composables.",
+      "domain": "knit",
+      "projectPath": "../knit",
+      "status": "pending",
+      "priority": "normal",
+      "dependsOn": [],
+      "outOfScope": [
+        "Schema changes",
+        "Migrating all files to use generated types in one pass (incremental adoption is fine)"
+      ],
+      "acceptanceCriteria": [
+        {
+          "id": "ac-1",
+          "description": "Generated types file exists at the expected output path after running pnpm db:types",
+          "verifiedBy": "automated",
+          "command": "pnpm db:types",
+          "met": false
+        },
+        {
+          "id": "ac-2",
+          "description": "At least the server/api and composables directories import from generated types where the types overlap with existing ad-hoc types",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-3",
+          "description": "pnpm typecheck passes after adoption",
+          "verifiedBy": "automated",
+          "command": "pnpm typecheck",
+          "met": false
+        }
+      ],
+      "notes": [],
+      "gateResults": [],
+      "revisionCount": 0,
+      "createdAt": "2026-04-11T00:00:00Z",
+      "updatedAt": "2026-04-11T00:00:00Z"
+    }
+  ]
+}

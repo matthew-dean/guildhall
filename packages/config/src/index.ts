@@ -1,0 +1,54 @@
+// Schemas & types
+export {
+  WorkspaceYamlConfig,
+  GlobalConfig,
+  WorkspaceRegistryEntry,
+  WorkspaceRegistry,
+  AgentSettings,
+  AgentCoordinatorOverride,
+  AgentSettingEntry,
+  AGENT_SETTINGS_FILENAME,
+  ResolvedConfig,
+  slugify,
+  mergeModels,
+} from './schemas.js'
+
+// Global config (~/.guildhall/config.yaml)
+export {
+  forgeHomeDir,
+  globalConfigPath,
+  registryPath,
+  readGlobalConfig,
+  writeGlobalConfig,
+  updateGlobalConfig,
+  ensureForgeHome,
+} from './global-config.js'
+
+// Workspace registry (~/.guildhall/registry.yaml)
+export {
+  readRegistry,
+  listWorkspaces,
+  findWorkspace,
+  registerWorkspace,
+  updateWorkspace,
+  unregisterWorkspace,
+  touchWorkspace,
+} from './registry.js'
+
+// Per-workspace config (guildhall.yaml) + agent-settings
+export {
+  FORGE_YAML_FILENAME,
+  MEMORY_DIR_NAME,
+  findWorkspaceRoot,
+  readWorkspaceConfig,
+  writeWorkspaceConfig,
+  bootstrapWorkspace,
+  resolveMemoryDir,
+  readAgentSettings,
+  writeAgentSettings,
+  updateAgentSettings,
+} from './workspace-config.js'
+
+// Config resolution (merged result)
+export { resolveConfig } from './resolve.js'
+export type { ResolveOptions } from './resolve.js'
