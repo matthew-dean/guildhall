@@ -16,7 +16,13 @@ import {
 import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
 import { createExploringTask } from './intake.js'
-import { createMetaIntakeTask, workspaceNeedsMetaIntake } from './meta-intake.js'
+import {
+  approveMetaIntake,
+  createMetaIntakeTask,
+  META_INTAKE_TASK_ID,
+  parseCoordinatorDraft,
+  workspaceNeedsMetaIntake,
+} from './meta-intake.js'
 
 // ---------------------------------------------------------------------------
 // guildhall serve — single-project dashboard
@@ -34,6 +40,8 @@ import { createMetaIntakeTask, workspaceNeedsMetaIntake } from './meta-intake.js
 //   POST   /api/project/stop          → graceful stop
 //   POST   /api/project/intake        → create an exploring task
 //   POST   /api/project/meta-intake   → create the bootstrap task
+//   GET    /api/project/meta-intake/draft → current task spec + parsed coordinator draft preview
+//   POST   /api/project/meta-intake/approve → merge the draft into guildhall.yaml
 //   GET    /api/project/needs-meta-intake
 //   GET    /api/project/progress      → tail of memory/PROGRESS.md
 //   GET    /api/project/events        → SSE feed of orchestrator events
@@ -68,11 +76,18 @@ function resolveProject(projectPath: string): ResolvedProject {
   return { path: projectPath, id, config, initializationNeeded: false }
 }
 
-export async function runServe(opts: ServeOptions = {}): Promise<void> {
+/**
+ * Build the Hono app for a project without binding to a port. Exposed for
+ * integration tests that want to call `app.fetch(new Request(...))` directly;
+ * `runServe` wraps this with @hono/node-server.
+ */
+export function buildServeApp(opts: ServeOptions = {}): {
+  app: Hono
+  supervisor: OrchestratorSupervisor
+  projectPath: string
+} {
   const projectPath = resolve(opts.projectPath ?? process.cwd())
   let project = resolveProject(projectPath)
-  const cfg = readProjectConfig(projectPath)
-  const port = opts.port ?? cfg.servePort
 
   const supervisor = new OrchestratorSupervisor()
   const app = new Hono()
@@ -193,6 +208,67 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
     try {
       if (project.initializationNeeded) return c.json({ needsMetaIntake: true })
       return c.json({ needsMetaIntake: workspaceNeedsMetaIntake(project.path) })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/meta-intake/draft', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ status: 'uninitialized', taskExists: false, specReady: false, drafts: [] })
+      }
+      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+      if (!existsSync(tasksPath)) {
+        return c.json({ status: 'no-task', taskExists: false, specReady: false, drafts: [] })
+      }
+      const raw = await fsp.readFile(tasksPath, 'utf-8')
+      const parsed = JSON.parse(raw) as { tasks?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>
+      const tasks = Array.isArray(parsed) ? parsed : parsed.tasks ?? []
+      const task = tasks.find(t => (t as { id?: string }).id === META_INTAKE_TASK_ID) as
+        | { spec?: string; status?: string }
+        | undefined
+      if (!task) {
+        return c.json({ status: 'no-task', taskExists: false, specReady: false, drafts: [] })
+      }
+      const spec = typeof task.spec === 'string' ? task.spec : ''
+      if (spec.trim().length === 0) {
+        return c.json({
+          status: task.status === 'done' ? 'approved' : 'in-progress',
+          taskExists: true,
+          specReady: false,
+          taskStatus: task.status ?? null,
+          drafts: [],
+        })
+      }
+      const drafts = parseCoordinatorDraft(spec) ?? []
+      return c.json({
+        status: task.status === 'done' ? 'approved' : drafts.length > 0 ? 'draft-ready' : 'spec-but-no-fence',
+        taskExists: true,
+        specReady: drafts.length > 0,
+        taskStatus: task.status ?? null,
+        drafts,
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/meta-intake/approve', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const result = await approveMetaIntake({
+        workspacePath: project.path,
+        memoryDir: join(project.path, 'memory'),
+      })
+      if (!result.success) {
+        return c.json({ error: result.error ?? 'Approval failed' }, 400)
+      }
+      // Re-resolve so subsequent GETs reflect the newly-added coordinators.
+      project = resolveProject(project.path)
+      return c.json({ ok: true, coordinatorsAdded: result.coordinatorsAdded ?? 0 })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -418,9 +494,15 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   // -------------------------------------------------------------------------
   app.get('*', c => c.html(dashboardHtml()))
 
-  // -------------------------------------------------------------------------
-  // Start server
-  // -------------------------------------------------------------------------
+  return { app, supervisor, projectPath }
+}
+
+export async function runServe(opts: ServeOptions = {}): Promise<void> {
+  const { app, projectPath } = buildServeApp(opts)
+  const project = resolveProject(projectPath)
+  const cfg = readProjectConfig(projectPath)
+  const port = opts.port ?? cfg.servePort
+
   console.log(`[guildhall serve] Project: ${project.path}`)
   console.log(`[guildhall serve] ${project.initializationNeeded ? '⚠ Not initialized — wizard at /setup' : `✓ ${project.config?.name ?? project.id}`}`)
   console.log(`[guildhall serve] Dashboard: http://localhost:${port}`)
@@ -603,8 +685,15 @@ function dashboardCss(): string {
     .nav-link:hover, .nav-link.active { color: var(--text); background: var(--surface-2); }
     .settings-grid { display: grid; gap: 14px; }
     .save-status { font-size: 12px; color: var(--accent2); opacity: 0; transition: opacity 0.3s; margin-right: 10px; }
-    .save-status.visible { opacity: 1; }
+    .save-status.visible, .save-status.ok, .save-status.error { opacity: 1; }
     .save-status.error { color: var(--danger); }
+    .save-status.ok { color: var(--accent2); }
+    .coord-list { display: grid; gap: 8px; }
+    .coord-preview { padding: 10px 12px; background: var(--surface-2); border-radius: 6px; }
+    .coord-title { font-weight: 600; font-size: 13px; }
+    .bootstrap-log { max-height: 260px; overflow-y: auto; background: var(--surface-2); border-radius: 6px; padding: 10px; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.5; }
+    .bootstrap-log-line { padding: 2px 0; color: var(--muted); }
+    .bootstrap-log-line.highlight { color: var(--text); }
   `
 }
 
@@ -661,6 +750,11 @@ function dashboardJs(): string {
       const coordinators = detail.config?.coordinators ?? []
       const needsMeta = coordinators.length === 0
 
+      // Fire-and-forget: fetch the current meta-intake draft state so we can
+      // show the approval card or the "in progress" hint without blocking the
+      // first paint. Result lands in window.__metaDraft for later renders.
+      const draftPromise = fetch('/api/project/meta-intake/draft').then(r => r.json()).catch(() => null)
+
       app.innerHTML = \`
         <div class="detail-header">
           <h2>\${escapeHtml(detail.name)}</h2>
@@ -672,13 +766,15 @@ function dashboardJs(): string {
         </div>
 
         \${needsMeta ? \`
-          <div class="meta-intake-banner">
-            <div class="text">
-              <strong>Project not yet bootstrapped.</strong> No coordinators are configured — click
-              Bootstrap and the meta-intake agent will interview you about the codebase and draft a
-              guildhall.yaml with coordinators for each domain it finds.
+          <div id="meta-intake-zone">
+            <div class="meta-intake-banner">
+              <div class="text">
+                <strong>Project not yet bootstrapped.</strong> No coordinators are configured — click
+                Bootstrap and the meta-intake agent will interview you about the codebase and draft a
+                guildhall.yaml with coordinators for each domain it finds.
+              </div>
+              <button id="btn-bootstrap">Bootstrap project</button>
             </div>
-            <button id="btn-bootstrap">Bootstrap project</button>
           </div>
         \` : ''}
 
@@ -748,6 +844,31 @@ function dashboardJs(): string {
           }
           await fetch('/api/project/start', { method: 'POST' })
           setTimeout(renderProject, 400)
+        })
+      }
+
+      // Swap the bootstrap banner for an approval card when a coordinator
+      // draft is ready. This lets users finish the whole flow in-browser
+      // instead of dropping to the guildhall approve-meta-intake CLI command.
+      if (needsMeta) {
+        draftPromise.then(draft => {
+          if (!draft || !draft.taskExists) return
+          const zone = document.getElementById('meta-intake-zone')
+          if (!zone) return
+          if (draft.status === 'draft-ready' && draft.drafts.length > 0) {
+            renderMetaIntakeApproval(zone, draft.drafts)
+          } else if (draft.status === 'in-progress' || draft.status === 'spec-but-no-fence') {
+            zone.innerHTML = \`
+              <div class="meta-intake-banner">
+                <div class="text">
+                  <strong>Meta-intake agent is working…</strong>
+                  \${draft.status === 'spec-but-no-fence'
+                    ? ' The spec is partially drafted but does not yet include a coordinators YAML block.'
+                    : ' Watch the live activity feed for progress.'}
+                </div>
+              </div>
+            \`
+          }
         })
       }
 
@@ -938,6 +1059,7 @@ function dashboardJs(): string {
               <button id="btn-skip-to-dashboard" class="secondary">Skip to dashboard</button>
             </div>
           </div>
+          <div id="bootstrap-live" style="margin-top:14px; display:none"></div>
         </div>
       \`
       document.getElementById('btn-skip-to-dashboard').addEventListener('click', () => {
@@ -956,10 +1078,77 @@ function dashboardJs(): string {
           return
         }
         await fetch('/api/project/start', { method: 'POST' })
-        wizardDefaults = null
-        wizardIdentity = null
-        setTimeout(() => nav('/'), 400)
+        btn.textContent = 'Bootstrap running…'
+        renderBootstrapLive()
       })
+    }
+
+    // Keep the user on step 3 after "Start" and show a live activity feed +
+    // poll for the coordinator draft. When the draft arrives, swap to an
+    // inline approval card so the whole bootstrap → merge flow finishes in
+    // the same view without a mystery navigate.
+    function renderBootstrapLive() {
+      const zone = document.getElementById('bootstrap-live')
+      if (!zone) return
+      zone.style.display = 'block'
+      zone.innerHTML = \`
+        <div class="card">
+          <h2>Meta-intake agent is working</h2>
+          <p class="muted" style="margin:6px 0 10px">The orchestrator is running. Watch events below; when a coordinator draft is ready, you can approve it without leaving this page.</p>
+          <div class="bootstrap-log" id="bootstrap-log"><div class="bootstrap-log-line">connecting…</div></div>
+          <div id="bootstrap-approval" style="margin-top:12px"></div>
+        </div>
+      \`
+      const log = document.getElementById('bootstrap-log')
+      const appendLog = (text, highlight = false) => {
+        if (!log) return
+        const line = document.createElement('div')
+        line.className = 'bootstrap-log-line' + (highlight ? ' highlight' : '')
+        line.textContent = text
+        log.appendChild(line)
+        log.scrollTop = log.scrollHeight
+      }
+      log.innerHTML = ''
+      appendLog('Connecting to event stream…')
+
+      const es = new EventSource('/api/project/events')
+      es.onmessage = (ev) => {
+        try {
+          const payload = JSON.parse(ev.data)
+          const label = payload.type || 'event'
+          const extra = payload.taskId ? ' · ' + payload.taskId : ''
+          appendLog(label + extra, label === 'spec_update' || label === 'task_status_changed')
+        } catch {
+          appendLog('event')
+        }
+      }
+      es.onerror = () => { appendLog('stream disconnected', true) }
+
+      let stopped = false
+      const poll = async () => {
+        if (stopped) return
+        try {
+          const r = await fetch('/api/project/meta-intake/draft')
+          const j = await r.json()
+          if (j.status === 'draft-ready' && j.drafts?.length > 0) {
+            const slot = document.getElementById('bootstrap-approval')
+            if (slot) renderMetaIntakeApproval(slot, j.drafts)
+            stopped = true
+            es.close()
+            return
+          }
+          if (j.status === 'approved') {
+            stopped = true
+            es.close()
+            setTimeout(() => nav('/'), 400)
+            return
+          }
+        } catch {
+          // ignore; next tick retries
+        }
+        setTimeout(poll, 2500)
+      }
+      setTimeout(poll, 1500)
     }
 
     function slugifyClient(s) {
@@ -1203,6 +1392,46 @@ function dashboardJs(): string {
 
     function escapeHtml(s) {
       return String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
+    }
+
+    function renderMetaIntakeApproval(container, drafts) {
+      const body = drafts.map(d => \`
+        <div class="coord-preview">
+          <div class="coord-title">\${escapeHtml(d.name)} <span class="muted" style="font-weight:400">— \${escapeHtml(d.domain)}\${d.path ? ' · ' + escapeHtml(d.path) : ''}</span></div>
+          <div class="muted" style="font-size:12px; margin-top:4px; white-space:pre-wrap">\${escapeHtml((d.mandate || '').trim())}</div>
+          \${(d.concerns || []).length > 0 ? '<div style="margin-top:6px; font-size:12px"><strong>Concerns:</strong> ' + d.concerns.map(c => escapeHtml(c.id)).join(', ') + '</div>' : ''}
+        </div>
+      \`).join('')
+      container.innerHTML = \`
+        <div class="meta-intake-banner" style="flex-direction:column; align-items:stretch">
+          <div class="text" style="margin-bottom:10px">
+            <strong>Draft coordinators are ready for review.</strong>
+            The meta-intake agent produced \${drafts.length} coordinator\${drafts.length === 1 ? '' : 's'}
+            based on your codebase. Approve to merge into <code class="inline">guildhall.yaml</code>.
+          </div>
+          <div class="coord-list">\${body}</div>
+          <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:12px">
+            <span id="approve-status" class="save-status"></span>
+            <button id="btn-approve-meta" style="min-width:180px">Approve and merge</button>
+          </div>
+        </div>
+      \`
+      const btn = document.getElementById('btn-approve-meta')
+      const statusEl = document.getElementById('approve-status')
+      btn.addEventListener('click', async () => {
+        btn.disabled = true; btn.textContent = 'Merging…'
+        const r = await fetch('/api/project/meta-intake/approve', { method: 'POST' })
+        const j = await r.json()
+        if (j.error) {
+          btn.disabled = false; btn.textContent = 'Approve and merge'
+          statusEl.textContent = 'Failed: ' + j.error
+          statusEl.className = 'save-status error'
+          return
+        }
+        statusEl.textContent = 'Merged ' + (j.coordinatorsAdded ?? 0) + ' coordinator(s).'
+        statusEl.className = 'save-status ok'
+        setTimeout(renderProject, 600)
+      })
     }
 
     function showIntakeModal(coordinators) {
