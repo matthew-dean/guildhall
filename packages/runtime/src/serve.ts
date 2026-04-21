@@ -44,9 +44,14 @@ import {
 //   GET    /api/project/meta-intake/draft → current task spec + parsed coordinator draft preview
 //   POST   /api/project/meta-intake/approve → merge the draft into guildhall.yaml
 //   GET    /api/project/needs-meta-intake
+//   GET    /api/project/task/:id      → full task + recent events for drawer
+//   POST   /api/project/task/:id/pause  → human override → blocked
+//   POST   /api/project/task/:id/shelve → human override → shelved
+//   GET    /api/project/activity      → summary for persistent agent chip
 //   GET    /api/project/progress      → tail of memory/PROGRESS.md
 //   GET    /api/project/events        → SSE feed of orchestrator events
 //   GET    /api/config                → project-local config (secrets redacted)
+//   GET    /api/config/levers         → lever positions for Settings UI
 //   GET    /api/setup/providers       → detect installed providers
 //   POST   /api/setup/providers/config → save chosen provider/API key
 // ---------------------------------------------------------------------------
@@ -270,6 +275,127 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // Re-resolve so subsequent GETs reflect the newly-added coordinators.
       project = resolveProject(project.path)
       return c.json({ ok: true, coordinatorsAdded: result.coordinatorsAdded ?? 0 })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // Per-task detail — powers the drawer. Returns the full Task plus a tiny
+  // slice of related context (recent events touching this task) so the UI
+  // can show "what's happening right now" without a second round-trip.
+  // -------------------------------------------------------------------------
+  app.get('/api/project/task/:id', c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        | { tasks?: Array<Record<string, unknown>> }
+        | Array<Record<string, unknown>>
+      const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
+      const id = c.req.param('id')
+      const task = tasks.find(t => (t as { id?: string }).id === id)
+      if (!task) return c.json({ error: 'task not found' }, 404)
+      const recent = supervisor.recent(project.id).filter(ev => {
+        const taskId = (ev as { event?: { taskId?: string } }).event?.taskId
+        return taskId === id
+      })
+      return c.json({ task, recentEvents: recent })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // POST /api/project/task/:id/pause  and  /shelve
+  // Human overrides that match the remediation_autonomy lever surface. Both
+  // mutate the task in TASKS.json and add a note so the provenance trail is
+  // intact. These only act on non-terminal tasks.
+  app.post('/api/project/task/:id/:action', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const id = c.req.param('id')
+      const action = c.req.param('action')
+      if (action !== 'pause' && action !== 'shelve') {
+        return c.json({ error: 'unknown action' }, 400)
+      }
+      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+        | Array<Record<string, unknown>>
+      const queue = Array.isArray(parsed)
+        ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+        : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+      const task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+      if (!task) return c.json({ error: 'task not found' }, 404)
+      const now = new Date().toISOString()
+      const notes = Array.isArray(task.notes) ? [...(task.notes as unknown[])] : []
+      if (action === 'pause') {
+        if (task.status === 'done' || task.status === 'shelved') {
+          return c.json({ error: `task is ${task.status}` }, 400)
+        }
+        task.status = 'blocked'
+        task.blockReason = 'Paused by human from dashboard'
+        notes.push({ agentId: 'system:human', role: 'human', content: 'Task paused via dashboard', timestamp: now })
+      } else {
+        if (task.status === 'done') return c.json({ error: 'task is done' }, 400)
+        task.status = 'shelved'
+        task.shelveReason = {
+          code: 'not_viable',
+          detail: 'Shelved by human from dashboard',
+          rejectedBy: 'system:human',
+          rejectedAt: now,
+          source: 'proposal_policy',
+          policyApplied: true,
+          requeueCount: 0,
+        }
+        notes.push({ agentId: 'system:human', role: 'human', content: 'Task shelved via dashboard', timestamp: now })
+      }
+      task.notes = notes
+      task.updatedAt = now
+      queue.lastUpdated = now
+      await fsp.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+      return c.json({ ok: true, status: task.status })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // GET /api/project/activity — counts + in-flight tasks for the always-on
+  // agent-activity chip. Cheap enough to poll every few seconds from any
+  // view (not just the project page).
+  app.get('/api/project/activity', c => {
+    try {
+      if (project.initializationNeeded) return c.json({ running: false, counts: {}, inFlight: [] })
+      const run = supervisor.get(project.id)
+      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+      const empty = { running: run?.status === 'running', counts: {}, inFlight: [] as unknown[] }
+      if (!existsSync(tasksPath)) return c.json(empty)
+      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        | { tasks?: Array<Record<string, unknown>> }
+        | Array<Record<string, unknown>>
+      const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
+      const counts: Record<string, number> = {}
+      const inFlight: Array<{ id: string; title: string; status: string; domain: string }> = []
+      for (const t of tasks) {
+        const st = String((t as { status?: string }).status ?? 'unknown')
+        counts[st] = (counts[st] ?? 0) + 1
+        if (['in_progress', 'review', 'gate_check', 'spec_review', 'exploring'].includes(st)) {
+          inFlight.push({
+            id: String((t as { id?: string }).id ?? ''),
+            title: String((t as { title?: string }).title ?? ''),
+            status: st,
+            domain: String((t as { domain?: string }).domain ?? ''),
+          })
+        }
+      }
+      return c.json({
+        running: run?.status === 'running',
+        runStatus: run?.status ?? 'stopped',
+        counts,
+        inFlight: inFlight.slice(0, 5),
+      })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -575,9 +701,28 @@ function dashboardHtml(): string {
     <h1 onclick="location.href='/'" style="cursor:pointer">⚔ Guildhall</h1>
     <span id="project-name" class="badge"></span>
     <span style="flex:1"></span>
+    <div id="activity-chip" class="activity-chip" style="display:none" title="Jump to Work view">
+      <span class="chip-dot"></span>
+      <span class="chip-summary">No agents running</span>
+    </div>
     <a href="/settings" class="nav-link" id="nav-settings">Settings</a>
     <span id="sse-status" class="muted">● connecting…</span>
   </header>
+  <div id="drawer-backdrop" class="drawer-backdrop"></div>
+  <aside id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <h3 id="drawer-title">Task</h3>
+      <button id="drawer-close" class="secondary" style="padding:4px 10px">✕</button>
+    </div>
+    <div class="drawer-tabs">
+      <button class="drawer-tab active" data-tab="spec">Spec</button>
+      <button class="drawer-tab" data-tab="transcript">Transcript</button>
+      <button class="drawer-tab" data-tab="history">History</button>
+      <button class="drawer-tab" data-tab="provenance">Provenance</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+  <div id="drawer-kbd-hint" class="drawer-kbd-hint"></div>
 
   <main id="app">
     <div class="muted" style="padding:40px">Loading…</div>
@@ -740,6 +885,116 @@ function dashboardCss(): string {
     .bootstrap-log { max-height: 260px; overflow-y: auto; background: var(--surface-2); border-radius: 6px; padding: 10px; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.5; }
     .bootstrap-log-line { padding: 2px 0; color: var(--muted); }
     .bootstrap-log-line.highlight { color: var(--text); }
+
+    /* ---- View tabs (Work / Planner / Coordinators / Timeline) ---- */
+    .view-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+    .view-tab {
+      padding: 8px 14px; background: transparent; border: none; color: var(--muted);
+      cursor: pointer; font-size: 12px; font-weight: 600; border-bottom: 2px solid transparent;
+      border-radius: 0; margin-bottom: -1px; transition: color 0.12s, border-color 0.12s;
+    }
+    .view-tab:hover { color: var(--text); }
+    .view-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+    /* ---- Persistent agent-activity chip (header) ---- */
+    .activity-chip {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 4px 10px; border-radius: 12px; background: var(--surface-2);
+      font-size: 11.5px; color: var(--muted); cursor: pointer; max-width: 420px;
+      border: 1px solid var(--border); transition: border-color 0.12s, background 0.12s;
+    }
+    .activity-chip:hover { border-color: var(--accent); background: var(--surface); }
+    .activity-chip.running { color: var(--text); }
+    .activity-chip .chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+    .activity-chip.running .chip-dot { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); animation: pulse 1.4s infinite; }
+    .activity-chip .chip-summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* ---- Task mini-card grid ---- */
+    .task-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+    .task-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      cursor: pointer;
+      transition: border-color 0.12s, transform 0.08s;
+      display: flex; flex-direction: column; gap: 6px;
+      position: relative;
+    }
+    .task-card:hover { border-color: var(--accent); }
+    .task-card:active { transform: scale(0.995); }
+    .task-card.focused { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(124,109,240,0.18); }
+    .task-card .tc-head { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--muted); }
+    .task-card .tc-id { font-family: 'SF Mono', monospace; }
+    .task-card .tc-title { font-size: 13px; font-weight: 600; line-height: 1.35; }
+    .task-card .tc-meta { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .task-card .tc-spin {
+      display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+      border: 1.5px solid var(--muted); border-top-color: var(--accent2);
+      animation: tc-spin 0.9s linear infinite;
+    }
+    @keyframes tc-spin { from { transform: rotate(0) } to { transform: rotate(360deg) } }
+    .task-card .tc-status {
+      font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+      padding: 2px 7px; border-radius: 10px; background: var(--surface-2); color: var(--muted);
+    }
+    .task-card.st-active .tc-status, .task-card.st-in_progress .tc-status, .task-card.st-review .tc-status, .task-card.st-gate_check .tc-status, .task-card.st-exploring .tc-status, .task-card.st-spec_review .tc-status {
+      background: rgba(124,109,240,0.14); color: var(--accent);
+    }
+    .task-card.st-ready .tc-status, .task-card.st-proposed .tc-status {
+      background: rgba(212,162,60,0.12); color: var(--warn);
+    }
+    .task-card.st-done .tc-status { background: rgba(78,204,163,0.14); color: var(--success); }
+    .task-card.st-blocked .tc-status, .task-card.st-shelved .tc-status {
+      background: rgba(224,82,82,0.14); color: var(--danger);
+    }
+    .task-card.st-active { border-left: 3px solid var(--accent); }
+    .task-card .tc-rev { background: var(--surface-2); padding: 1px 6px; border-radius: 8px; font-size: 10px; }
+
+    /* ---- Planner (kanban) ---- */
+    .planner-board { display: grid; grid-template-columns: repeat(5, minmax(200px, 1fr)); gap: 10px; overflow-x: auto; }
+    .planner-col { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-height: 180px; }
+    .planner-col-head { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 700; display: flex; justify-content: space-between; }
+    .planner-col .task-card { background: var(--bg); }
+
+    /* ---- Coordinator view ---- */
+    .coord-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+    .coord-col { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+    .coord-col-head { font-weight: 600; font-size: 13px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+    .coord-col-head .mini-count { font-size: 10px; color: var(--muted); font-weight: 500; }
+    .coord-col .spark { font-family: 'SF Mono', monospace; font-size: 10px; color: var(--muted); margin-bottom: 6px; letter-spacing: -0.5px; }
+
+    /* ---- Drawer ---- */
+    .drawer-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 90; opacity: 0; transition: opacity 0.15s; pointer-events: none; }
+    .drawer-backdrop.open { opacity: 1; pointer-events: auto; }
+    .drawer {
+      position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 92vw);
+      background: var(--surface); border-left: 1px solid var(--border);
+      box-shadow: -10px 0 40px rgba(0,0,0,0.4); z-index: 95;
+      transform: translateX(100%); transition: transform 0.18s ease-out;
+      display: flex; flex-direction: column;
+    }
+    .drawer.open { transform: translateX(0); }
+    .drawer-head { padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+    .drawer-head h3 { font-size: 14px; font-weight: 600; flex: 1; }
+    .drawer-body { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 18px; }
+    .drawer-tabs { display: flex; gap: 2px; padding: 0 18px; border-bottom: 1px solid var(--border); }
+    .drawer-tab { padding: 8px 12px; background: transparent; border: none; color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; border-radius: 0; margin-bottom: -1px; }
+    .drawer-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+    .drawer-section { }
+    .drawer-section-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 700; margin-bottom: 6px; }
+    .drawer-spec { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: 'SF Mono', monospace; font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; }
+    .drawer-note { background: var(--surface-2); border-radius: 5px; padding: 8px 10px; margin-bottom: 6px; font-size: 12px; }
+    .drawer-note .note-role { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .drawer-actions { display: flex; gap: 8px; }
+    .drawer-kbd-hint { position: fixed; bottom: 12px; right: 16px; font-size: 10px; color: var(--muted); opacity: 0.6; z-index: 96; }
+
+    /* ---- Why-stuck panel ---- */
+    .why-stuck { background: rgba(224,82,82,0.06); border: 1px solid rgba(224,82,82,0.3); border-radius: 6px; padding: 12px; }
+    .why-stuck h4 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--danger); margin-bottom: 6px; font-weight: 700; }
+    .why-stuck .reason { font-size: 13px; margin-bottom: 8px; }
+    .why-stuck dl { font-size: 12px; color: var(--muted); }
+    .why-stuck dt { font-weight: 600; color: var(--text); margin-top: 4px; }
   `
 }
 
@@ -758,6 +1013,13 @@ function dashboardJs(): string {
       // Leaving wizard routes — reset wizard state so returning later starts fresh.
       wizardDefaults = null
       wizardIdentity = null
+      // /task/:id — render project, then open the drawer once the view is ready.
+      const taskMatch = path.match(/^\\/task\\/(.+)$/)
+      if (taskMatch) {
+        const pendingId = decodeURIComponent(taskMatch[1])
+        renderProject().then(() => openTaskDrawer(pendingId))
+        return
+      }
       return renderProject()
     }
     window.addEventListener('popstate', route)
@@ -774,6 +1036,10 @@ function dashboardJs(): string {
     })
 
     // ---- Project (root) view ----------------------------------------------
+    let currentView = 'work'  // work | planner | coordinators | timeline
+    let currentDetail = null  // latest /api/project response, reused across view switches
+    let focusedIdx = 0        // keyboard j/k highlight index over visible cards
+
     async function renderProject() {
       app.innerHTML = '<div class="muted">Loading project…</div>'
       const detail = await fetch('/api/project').then(r => r.json())
@@ -786,14 +1052,12 @@ function dashboardJs(): string {
         return
       }
 
+      currentDetail = detail
       projectName.textContent = detail.name
       const runStatus = detail.run?.status ?? 'stopped'
       const coordinators = detail.config?.coordinators ?? []
       const needsMeta = coordinators.length === 0
 
-      // Fire-and-forget: fetch the current meta-intake draft state so we can
-      // show the approval card or the "in progress" hint without blocking the
-      // first paint. Result lands in window.__metaDraft for later renders.
       const draftPromise = fetch('/api/project/meta-intake/draft').then(r => r.json()).catch(() => null)
 
       app.innerHTML = \`
@@ -819,46 +1083,22 @@ function dashboardJs(): string {
           </div>
         \` : ''}
 
-        <div class="two-col">
-          <div>
-            <div class="card">
-              <h2>Live activity</h2>
-              <div class="feed" id="feed"><div class="muted">Connecting…</div></div>
-            </div>
-            <div class="card">
-              <h2>Recent PROGRESS.md</h2>
-              <pre class="progress" id="progress">Loading…</pre>
-            </div>
-          </div>
-          <div>
-            <div class="card">
-              <h2>Tasks (\${detail.tasks.length})</h2>
-              \${detail.tasks.length === 0
-                ? (needsMeta
-                    ? '<div class="muted">No tasks yet. Click <strong>Bootstrap project</strong> above first — coordinators are required before you can add tasks.</div>'
-                    : '<div class="muted">No tasks yet. Click <strong>+ New Task</strong> above to describe what you want an agent to do.</div>')
-                : '<table><thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Domain</th></tr></thead><tbody>' +
-                  detail.tasks.map(t => \`
-                    <tr>
-                      <td><code class="inline">\${escapeHtml(t.id ?? '')}</code></td>
-                      <td>\${escapeHtml(t.title ?? '')}</td>
-                      <td>\${escapeHtml(t.status ?? '')}</td>
-                      <td>\${escapeHtml(t.domain ?? '')}</td>
-                    </tr>
-                  \`).join('') + '</tbody></table>'}
-            </div>
-            <div class="card">
-              <h2>Coordinators</h2>
-              \${coordinators.map(c => \`
-                <div style="margin-bottom:10px">
-                  <div style="font-weight:600">\${escapeHtml(c.name)} <span class="muted" style="font-weight:400">— \${escapeHtml(c.domain)}</span></div>
-                  <div class="muted" style="font-size:12px">\${escapeHtml(c.mandate?.slice(0, 180) ?? '')}\${(c.mandate?.length ?? 0) > 180 ? '…' : ''}</div>
-                </div>
-              \`).join('') || '<div class="muted">No coordinators configured.</div>'}
-            </div>
-          </div>
+        <div class="view-tabs" id="view-tabs">
+          <button class="view-tab \${currentView === 'work' ? 'active' : ''}" data-view="work">Work</button>
+          <button class="view-tab \${currentView === 'planner' ? 'active' : ''}" data-view="planner">Planner</button>
+          <button class="view-tab \${currentView === 'coordinators' ? 'active' : ''}" data-view="coordinators">Coordinators</button>
+          <button class="view-tab \${currentView === 'timeline' ? 'active' : ''}" data-view="timeline">Timeline</button>
         </div>
+
+        <div id="view-body"></div>
       \`
+
+      document.getElementById('view-tabs').addEventListener('click', e => {
+        const btn = e.target.closest('.view-tab')
+        if (!btn) return
+        currentView = btn.dataset.view
+        renderCurrentView()
+      })
 
       document.getElementById('btn-start').addEventListener('click', async () => {
         await fetch('/api/project/start', { method: 'POST' })
@@ -890,9 +1130,6 @@ function dashboardJs(): string {
         })
       }
 
-      // Swap the bootstrap banner for an approval card when a coordinator
-      // draft is ready. This lets users finish the whole flow in-browser
-      // instead of dropping to the guildhall approve-meta-intake CLI command.
       if (needsMeta) {
         draftPromise.then(draft => {
           if (!draft || !draft.taskExists) return
@@ -915,11 +1152,56 @@ function dashboardJs(): string {
         })
       }
 
+      renderCurrentView()
+      connectStream()
+    }
+
+    function renderCurrentView() {
+      const body = document.getElementById('view-body')
+      if (!body) return
+      focusedIdx = 0
+      if (currentView === 'work') renderWorkView(body, currentDetail)
+      else if (currentView === 'planner') renderPlannerView(body, currentDetail)
+      else if (currentView === 'coordinators') renderCoordinatorView(body, currentDetail)
+      else if (currentView === 'timeline') renderTimelineView(body, currentDetail)
+      document.querySelectorAll('.view-tab').forEach(b => b.classList.toggle('active', b.dataset.view === currentView))
+    }
+
+    // -------- Work view: live activity + mini-card grid + progress ----------
+    function renderWorkView(host, detail) {
+      const coordinators = detail.config?.coordinators ?? []
+      const needsMeta = coordinators.length === 0
+      const runStatus = detail.run?.status ?? 'stopped'
+      const tasks = detail.tasks || []
+      host.innerHTML = \`
+        <div class="two-col">
+          <div>
+            <div class="card">
+              <h2>Live activity</h2>
+              <div class="feed" id="feed"><div class="muted">Connecting…</div></div>
+            </div>
+            <div class="card">
+              <h2>Recent PROGRESS.md</h2>
+              <pre class="progress" id="progress">Loading…</pre>
+            </div>
+          </div>
+          <div>
+            <div class="card">
+              <h2>Tasks (\${tasks.length})</h2>
+              \${tasks.length === 0
+                ? (needsMeta
+                    ? '<div class="muted">No tasks yet. Click <strong>Bootstrap project</strong> above first — coordinators are required before you can add tasks.</div>'
+                    : '<div class="muted">No tasks yet. Click <strong>+ New Task</strong> above to describe what you want an agent to do.</div>')
+                : '<div class="task-grid" id="task-grid">' + tasks.map(t => renderTaskCard(t)).join('') + '</div>'}
+            </div>
+          </div>
+        </div>
+      \`
+      wireTaskCards(host)
       fetch('/api/project/progress').then(r => r.json()).then(j => {
         const el = document.getElementById('progress')
         if (el) el.textContent = j.progress || '(empty)'
       })
-
       const feed = document.getElementById('feed')
       if (feed) {
         feed.innerHTML = ''
@@ -930,8 +1212,358 @@ function dashboardJs(): string {
           recent.forEach(renderEvent)
         }
       }
-      connectStream()
     }
+
+    // -------- Planner view: kanban columns by lifecycle stage ---------------
+    const PLANNER_STAGES = [
+      { key: 'backlog', label: 'Backlog', statuses: ['proposed'] },
+      { key: 'spec', label: 'Specing', statuses: ['exploring', 'spec_review'] },
+      { key: 'work', label: 'Working', statuses: ['ready', 'in_progress'] },
+      { key: 'review', label: 'Review & gates', statuses: ['review', 'gate_check'] },
+      { key: 'done', label: 'Done / terminal', statuses: ['done', 'shelved', 'blocked'] },
+    ]
+    function renderPlannerView(host, detail) {
+      const tasks = detail.tasks || []
+      host.innerHTML = '<div class="planner-board">' + PLANNER_STAGES.map(stage => {
+        const cards = tasks.filter(t => stage.statuses.includes(t.status))
+        return \`
+          <div class="planner-col">
+            <div class="planner-col-head"><span>\${escapeHtml(stage.label)}</span><span>\${cards.length}</span></div>
+            \${cards.length === 0
+              ? '<div class="muted" style="font-size:11px">empty</div>'
+              : cards.map(t => renderTaskCard(t)).join('')}
+          </div>
+        \`
+      }).join('') + '</div>'
+      wireTaskCards(host)
+    }
+
+    // -------- Coordinator view: one column per coordinator + sparkline ------
+    function renderCoordinatorView(host, detail) {
+      const coordinators = detail.config?.coordinators ?? []
+      const tasks = detail.tasks || []
+      if (coordinators.length === 0) {
+        host.innerHTML = '<div class="muted">No coordinators yet. Bootstrap the project first.</div>'
+        return
+      }
+      host.innerHTML = '<div class="coord-board">' + coordinators.map(c => {
+        const domainTasks = tasks.filter(t => t.domain === c.domain)
+        const active = domainTasks.filter(t => ['in_progress','review','gate_check','exploring','spec_review'].includes(t.status)).length
+        const done = domainTasks.filter(t => t.status === 'done').length
+        const spark = sparklineForDomain(domainTasks)
+        return \`
+          <div class="coord-col">
+            <div class="coord-col-head">
+              <span>\${escapeHtml(c.name || c.id)}</span>
+              <span class="mini-count">\${active} active · \${done} done · \${domainTasks.length} total</span>
+            </div>
+            <div class="spark">\${spark}</div>
+            <div class="muted" style="font-size:12px; margin-bottom:8px">\${escapeHtml(c.mandate?.slice(0,140) ?? '')}\${(c.mandate?.length ?? 0) > 140 ? '…' : ''}</div>
+            \${domainTasks.length === 0
+              ? '<div class="muted" style="font-size:11px">no tasks in this domain</div>'
+              : '<div style="display:flex; flex-direction:column; gap:6px">' + domainTasks.map(t => renderTaskCard(t)).join('') + '</div>'}
+          </div>
+        \`
+      }).join('') + '</div>'
+      wireTaskCards(host)
+    }
+
+    function sparklineForDomain(tasks) {
+      // Textual sparkline of task statuses. Fast, readable, no chart lib.
+      if (tasks.length === 0) return '(empty)'
+      const glyph = {
+        done: '■', in_progress: '◉', review: '◎', gate_check: '◎',
+        spec_review: '◐', exploring: '◐', ready: '○', proposed: '·',
+        blocked: '✕', shelved: '–',
+      }
+      return tasks.slice(-24).map(t => glyph[t.status] || '?').join('')
+    }
+
+    // -------- Timeline view: SSE event log, newest first --------------------
+    function renderTimelineView(host, detail) {
+      host.innerHTML = '<div class="card"><h2>Orchestrator timeline</h2><div class="feed" id="tl-feed"><div class="muted">Loading…</div></div></div>'
+      const feed = document.getElementById('tl-feed')
+      feed.innerHTML = ''
+      const recent = (detail.recentEvents || []).slice().reverse()
+      if (recent.length === 0) {
+        feed.innerHTML = '<div class="muted">No events recorded yet. Start the orchestrator to populate the timeline.</div>'
+      } else {
+        recent.forEach(ev => renderEvent(ev, feed))
+      }
+    }
+
+    // -------- Shared: render a task mini-card HTML --------------------------
+    const ACTIVE_STATUSES = ['in_progress', 'review', 'gate_check', 'exploring', 'spec_review']
+    function renderTaskCard(t) {
+      const status = t.status || 'unknown'
+      const isActive = ACTIVE_STATUSES.includes(status)
+      const prio = t.priority && t.priority !== 'normal' ? t.priority : ''
+      const hasEscalations = Array.isArray(t.escalations) && t.escalations.some(e => !e.resolvedAt)
+      return \`
+        <div class="task-card st-\${escapeHtml(status)} \${isActive ? 'st-active' : ''}" data-id="\${escapeHtml(t.id || '')}" tabindex="0">
+          <div class="tc-head">
+            <span class="tc-status">\${escapeHtml(status)}</span>
+            \${isActive ? '<span class="tc-spin"></span>' : ''}
+            \${hasEscalations ? '<span style="color:var(--warn)">⚑</span>' : ''}
+            <span style="flex:1"></span>
+            <span class="tc-id">\${escapeHtml(t.id || '')}</span>
+          </div>
+          <div class="tc-title">\${escapeHtml(t.title || '(untitled)')}</div>
+          <div class="tc-meta">
+            <span>\${escapeHtml(t.domain || '')}</span>
+            \${prio ? \`<span>· \${escapeHtml(prio)}</span>\` : ''}
+            \${(t.revisionCount || 0) > 0 ? \`<span class="tc-rev">r\${t.revisionCount}</span>\` : ''}
+          </div>
+        </div>
+      \`
+    }
+
+    function wireTaskCards(host) {
+      host.querySelectorAll('.task-card').forEach((el, i) => {
+        el.addEventListener('click', () => openTaskDrawer(el.dataset.id))
+      })
+    }
+
+    // -------- Drawer: per-task detail panel ---------------------------------
+    let drawerTask = null
+    let drawerTab = 'spec'
+    async function openTaskDrawer(id) {
+      if (!id) return
+      history.pushState({}, '', '/task/' + encodeURIComponent(id))
+      const r = await fetch('/api/project/task/' + encodeURIComponent(id))
+      const j = await r.json()
+      if (j.error) {
+        alert('Could not load task: ' + j.error)
+        closeDrawer()
+        return
+      }
+      drawerTask = j.task
+      drawerTab = 'spec'
+      document.getElementById('drawer-title').textContent = drawerTask.title || drawerTask.id
+      document.getElementById('drawer-backdrop').classList.add('open')
+      const d = document.getElementById('drawer')
+      d.classList.add('open')
+      d.setAttribute('aria-hidden', 'false')
+      renderDrawerBody()
+    }
+    function closeDrawer() {
+      drawerTask = null
+      document.getElementById('drawer-backdrop').classList.remove('open')
+      const d = document.getElementById('drawer')
+      d.classList.remove('open')
+      d.setAttribute('aria-hidden', 'true')
+      if (location.pathname.startsWith('/task/')) history.pushState({}, '', '/')
+    }
+    function renderDrawerBody() {
+      document.querySelectorAll('.drawer-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === drawerTab))
+      const body = document.getElementById('drawer-body')
+      if (!drawerTask) { body.innerHTML = ''; return }
+      const t = drawerTask
+      if (drawerTab === 'spec') {
+        const stuck = t.status === 'blocked' || t.status === 'shelved' || (Array.isArray(t.escalations) && t.escalations.some(e => !e.resolvedAt))
+        body.innerHTML = \`
+          \${stuck ? renderWhyStuck(t) : ''}
+          <div class="drawer-section">
+            <div class="drawer-section-title">About</div>
+            <div style="font-size:13px">\${escapeHtml(t.description || '(no description)')}</div>
+            <div class="tc-meta" style="margin-top:8px">
+              <span class="tc-status st-\${escapeHtml(t.status)}">\${escapeHtml(t.status)}</span>
+              <span>\${escapeHtml(t.domain || '')}</span>
+              \${t.priority ? \`<span>priority: \${escapeHtml(t.priority)}</span>\` : ''}
+              \${(t.revisionCount || 0) > 0 ? \`<span>revisions: \${t.revisionCount}</span>\` : ''}
+              \${t.assignedTo ? \`<span>assigned: \${escapeHtml(t.assignedTo)}</span>\` : ''}
+            </div>
+          </div>
+          <div class="drawer-section">
+            <div class="drawer-section-title">Spec</div>
+            <div class="drawer-spec">\${escapeHtml(t.spec || '(no spec drafted yet)')}</div>
+          </div>
+          \${Array.isArray(t.acceptanceCriteria) && t.acceptanceCriteria.length > 0 ? \`
+            <div class="drawer-section">
+              <div class="drawer-section-title">Acceptance criteria</div>
+              <ul style="font-size:12.5px; padding-left:18px">\${t.acceptanceCriteria.map(a => \`<li>\${escapeHtml(a.description || a.text || JSON.stringify(a))}</li>\`).join('')}</ul>
+            </div>
+          \` : ''}
+          <div class="drawer-section">
+            <div class="drawer-section-title">Actions</div>
+            <div class="drawer-actions">
+              \${t.status !== 'done' && t.status !== 'shelved' ? \`<button class="secondary" id="btn-pause">Pause</button>\` : ''}
+              \${t.status !== 'done' ? \`<button class="danger" id="btn-shelve">Shelve</button>\` : ''}
+              <a href="/task/\${encodeURIComponent(t.id)}" style="color:var(--muted); font-size:12px; align-self:center; margin-left:auto">copy link</a>
+            </div>
+          </div>
+        \`
+        const bp = document.getElementById('btn-pause')
+        const bs = document.getElementById('btn-shelve')
+        if (bp) bp.addEventListener('click', () => taskAction(t.id, 'pause'))
+        if (bs) bs.addEventListener('click', () => taskAction(t.id, 'shelve'))
+      } else if (drawerTab === 'transcript') {
+        const notes = Array.isArray(t.notes) ? t.notes : []
+        body.innerHTML = notes.length === 0
+          ? '<div class="muted">No agent notes yet.</div>'
+          : notes.map(n => \`
+              <div class="drawer-note">
+                <div class="note-role">\${escapeHtml(n.role || n.agentId || '')} · \${escapeHtml(n.timestamp || '')}</div>
+                <div>\${escapeHtml(n.content || '')}</div>
+              </div>
+            \`).join('')
+      } else if (drawerTab === 'history') {
+        const gr = Array.isArray(t.gateResults) ? t.gateResults : []
+        const esc = Array.isArray(t.escalations) ? t.escalations : []
+        body.innerHTML = \`
+          <div class="drawer-section">
+            <div class="drawer-section-title">Revisions</div>
+            <div style="font-size:12.5px">Revision count: <strong>\${t.revisionCount || 0}</strong>\${(t.remediationAttempts || 0) > 0 ? \` · Remediation attempts: <strong>\${t.remediationAttempts}</strong>\` : ''}</div>
+          </div>
+          <div class="drawer-section">
+            <div class="drawer-section-title">Gate results (\${gr.length})</div>
+            \${gr.length === 0 ? '<div class="muted">No gate runs yet.</div>' : gr.map(g => \`
+              <div class="drawer-note">
+                <div class="note-role">\${escapeHtml(g.gateId || '')} (\${escapeHtml(g.type || '')}) · \${g.passed ? '✓ pass' : '✕ fail'} · \${escapeHtml(g.checkedAt || '')}</div>
+                \${g.output ? \`<div style="font-family:'SF Mono',monospace; font-size:11px; white-space:pre-wrap">\${escapeHtml(g.output)}</div>\` : ''}
+              </div>
+            \`).join('')}
+          </div>
+          <div class="drawer-section">
+            <div class="drawer-section-title">Escalations (\${esc.length})</div>
+            \${esc.length === 0 ? '<div class="muted">No escalations.</div>' : esc.map(e => \`
+              <div class="drawer-note">
+                <div class="note-role">\${escapeHtml(e.reason || '')} \${e.resolvedAt ? '✓ resolved' : '◐ open'}</div>
+                <div>\${escapeHtml(e.summary || '')}</div>
+                \${e.details ? \`<div class="muted" style="font-size:11.5px; margin-top:4px">\${escapeHtml(e.details)}</div>\` : ''}
+              </div>
+            \`).join('')}
+          </div>
+        \`
+      } else if (drawerTab === 'provenance') {
+        const lines = [
+          ['Origination', t.origination || 'human'],
+          ...(t.proposedBy ? [['Proposed by', t.proposedBy]] : []),
+          ...(t.proposalRationale ? [['Proposal rationale', t.proposalRationale]] : []),
+          ['Created at', t.createdAt || ''],
+          ['Updated at', t.updatedAt || ''],
+          ...(t.completedAt ? [['Completed at', t.completedAt]] : []),
+          ...(t.parentGoalId ? [['Parent goal', t.parentGoalId]] : []),
+          ...(t.permissionMode ? [['Permission mode', t.permissionMode]] : []),
+          ...(Array.isArray(t.dependsOn) && t.dependsOn.length ? [['Depends on', t.dependsOn.join(', ')]] : []),
+        ]
+        body.innerHTML = \`
+          <div class="drawer-section">
+            <div class="drawer-section-title">Provenance trail</div>
+            <dl class="why-stuck" style="background:var(--surface-2); border-color:var(--border)">
+              \${lines.map(([k, v]) => \`<dt>\${escapeHtml(k)}</dt><dd style="margin-bottom:6px">\${escapeHtml(String(v))}</dd>\`).join('')}
+            </dl>
+          </div>
+          \${t.shelveReason ? \`
+            <div class="drawer-section">
+              <div class="drawer-section-title">Shelve reason</div>
+              <div class="drawer-note">
+                <div class="note-role">\${escapeHtml(t.shelveReason.code || '')} · by \${escapeHtml(t.shelveReason.rejectedBy || '')} · \${escapeHtml(t.shelveReason.rejectedAt || '')}</div>
+                <div>\${escapeHtml(t.shelveReason.detail || '')}</div>
+              </div>
+            </div>
+          \` : ''}
+        \`
+      }
+    }
+
+    function renderWhyStuck(t) {
+      const escs = (t.escalations || []).filter(e => !e.resolvedAt)
+      return \`
+        <div class="why-stuck">
+          <h4>Why is this stuck?</h4>
+          <div class="reason">
+            \${t.status === 'blocked' ? (t.blockReason ? escapeHtml(t.blockReason) : 'Blocked — waiting on human action.')
+            : t.status === 'shelved' ? (t.shelveReason?.detail ? escapeHtml(t.shelveReason.detail) : 'Shelved by policy or pre-rejection.')
+            : escs.length ? escapeHtml(escs[0].summary || '')
+            : 'An escalation is open.'}
+          </div>
+          \${escs.length ? \`
+            <dl>
+              <dt>Reason</dt><dd>\${escapeHtml(escs[0].reason || '')}</dd>
+              \${escs[0].details ? \`<dt>Details</dt><dd>\${escapeHtml(escs[0].details)}</dd>\` : ''}
+              <dt>Raised by</dt><dd>\${escapeHtml(escs[0].agentId || '')}</dd>
+            </dl>
+          \` : ''}
+        </div>
+      \`
+    }
+
+    async function taskAction(id, action) {
+      if (!confirm(\`\${action === 'pause' ? 'Pause' : 'Shelve'} task \${id}?\`)) return
+      const r = await fetch(\`/api/project/task/\${encodeURIComponent(id)}/\${action}\`, { method: 'POST' })
+      const j = await r.json()
+      if (j.error) { alert(j.error); return }
+      closeDrawer()
+      renderProject()
+    }
+
+    // Drawer wiring (once per page load)
+    document.getElementById('drawer-close').addEventListener('click', closeDrawer)
+    document.getElementById('drawer-backdrop').addEventListener('click', closeDrawer)
+    document.querySelectorAll('.drawer-tab').forEach(b => {
+      b.addEventListener('click', () => { drawerTab = b.dataset.tab; renderDrawerBody() })
+    })
+
+    // Keyboard: j/k move focus, enter opens, esc closes
+    document.addEventListener('keydown', e => {
+      if (document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return
+      if (e.key === 'Escape') {
+        const drawer = document.getElementById('drawer')
+        if (drawer.classList.contains('open')) { e.preventDefault(); closeDrawer() }
+        return
+      }
+      if (e.key === '?') {
+        const hint = document.getElementById('drawer-kbd-hint')
+        hint.textContent = 'j/k move · enter open · esc close · 1–4 views'
+        setTimeout(() => { hint.textContent = '' }, 3500)
+        return
+      }
+      if (e.key >= '1' && e.key <= '4') {
+        const map = { '1': 'work', '2': 'planner', '3': 'coordinators', '4': 'timeline' }
+        if (map[e.key]) { currentView = map[e.key]; renderCurrentView() }
+        return
+      }
+      const cards = Array.from(document.querySelectorAll('.task-card'))
+      if (cards.length === 0) return
+      if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); focusedIdx = Math.min(cards.length - 1, focusedIdx + 1) }
+      else if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); focusedIdx = Math.max(0, focusedIdx - 1) }
+      else if (e.key === 'Enter') { e.preventDefault(); const id = cards[focusedIdx]?.dataset?.id; if (id) openTaskDrawer(id); return }
+      else return
+      cards.forEach((c, i) => c.classList.toggle('focused', i === focusedIdx))
+      cards[focusedIdx]?.scrollIntoView({ block: 'nearest' })
+    })
+
+    // Activity chip: poll every 3s regardless of current view
+    async function refreshActivityChip() {
+      try {
+        const r = await fetch('/api/project/activity')
+        const j = await r.json()
+        if (j.error) return
+        const chip = document.getElementById('activity-chip')
+        const summary = chip.querySelector('.chip-summary')
+        const running = Boolean(j.running)
+        chip.classList.toggle('running', running)
+        chip.style.display = 'inline-flex'
+        const inflight = Array.isArray(j.inFlight) ? j.inFlight : []
+        if (!running && inflight.length === 0) {
+          summary.textContent = 'Agents idle'
+        } else if (inflight.length === 0) {
+          summary.textContent = 'Orchestrator running · no tasks in flight'
+        } else {
+          const heads = inflight.slice(0, 2).map(t => \`\${t.id} \${t.status.replace('_', ' ')}\`)
+          const more = inflight.length > heads.length ? \` +\${inflight.length - heads.length}\` : ''
+          summary.textContent = \`\${inflight.length} in flight · \${heads.join(' · ')}\${more}\`
+        }
+      } catch {}
+    }
+    document.getElementById('activity-chip').addEventListener('click', () => {
+      if (location.pathname !== '/') nav('/')
+      currentView = 'work'
+      if (currentDetail) renderCurrentView()
+    })
+    setInterval(refreshActivityChip, 3000)
+    refreshActivityChip()
 
     // ---- Setup wizard ------------------------------------------------------
     let wizardStep = 1
@@ -1449,8 +2081,8 @@ function dashboardJs(): string {
     }
 
     // ---- Event feed --------------------------------------------------------
-    function renderEvent(ev) {
-      const feed = document.getElementById('feed')
+    function renderEvent(ev, targetFeed) {
+      const feed = targetFeed || document.getElementById('feed') || document.getElementById('tl-feed')
       if (!feed) return
       const inner = ev.event ?? ev
       const type = inner.type || ''
@@ -1465,7 +2097,12 @@ function dashboardJs(): string {
       if (!summary) return
       const row = document.createElement('div')
       row.className = 'ev ' + cls
-      row.innerHTML = '<span class="ts">' + ts.slice(11, 19) + '</span>' + escapeHtml(summary)
+      const tid = inner.task_id || inner.taskId
+      const clickable = tid ? ' style="cursor:pointer"' : ''
+      row.innerHTML = '<span class="ts">' + ts.slice(11, 19) + '</span>' + '<span' + clickable + '>' + escapeHtml(summary) + '</span>'
+      if (tid) {
+        row.addEventListener('click', () => openTaskDrawer(tid))
+      }
       feed.appendChild(row)
       feed.scrollTop = feed.scrollHeight
     }
