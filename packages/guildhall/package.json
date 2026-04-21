@@ -1,6 +1,6 @@
 {
   "name": "guildhall",
-  "version": "0.1.0",
+  "version": "0.2.0-dev",
   "description": "A general-purpose multi-agent operating system for software projects.",
   "license": "LicenseRef-FLL-1.2",
   "licenses": [
