@@ -450,6 +450,7 @@ function dashboardHtml(): string {
     <h1 onclick="location.href='/'" style="cursor:pointer">⚔ Guildhall</h1>
     <span id="project-name" class="badge"></span>
     <span style="flex:1"></span>
+    <a href="/settings" class="nav-link" id="nav-settings">Settings</a>
     <span id="sse-status" class="muted">● connecting…</span>
   </header>
 
@@ -598,6 +599,12 @@ function dashboardCss(): string {
     .provider-row .detail { color: var(--muted); font-size: 12px; margin-top: 3px; }
     .provider-row .radio { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border); flex-shrink: 0; }
     .provider-row.selected .radio { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 40%, transparent 45%); }
+    .nav-link { color: var(--muted); text-decoration: none; font-size: 12px; padding: 4px 10px; border-radius: 5px; }
+    .nav-link:hover, .nav-link.active { color: var(--text); background: var(--surface-2); }
+    .settings-grid { display: grid; gap: 14px; }
+    .save-status { font-size: 12px; color: var(--accent2); opacity: 0; transition: opacity 0.3s; margin-right: 10px; }
+    .save-status.visible { opacity: 1; }
+    .save-status.error { color: var(--danger); }
   `
 }
 
@@ -609,14 +616,27 @@ function dashboardJs(): string {
 
     function route() {
       const path = location.pathname
+      const navSettings = document.getElementById('nav-settings')
+      if (navSettings) navSettings.classList.toggle('active', path === '/settings')
       if (path === '/setup') return renderSetup()
-      // Leaving /setup — reset wizard state so returning later starts fresh.
+      if (path === '/settings') return renderSettings()
+      // Leaving wizard routes — reset wizard state so returning later starts fresh.
       wizardDefaults = null
       wizardIdentity = null
       return renderProject()
     }
     window.addEventListener('popstate', route)
     function nav(href) { history.pushState({}, '', href); route() }
+
+    // Intercept in-app anchor clicks so they don't full-page reload.
+    document.addEventListener('click', e => {
+      const a = e.target.closest?.('a[href^="/"]')
+      if (!a || a.target === '_blank' || e.metaKey || e.ctrlKey) return
+      const href = a.getAttribute('href')
+      if (!href) return
+      e.preventDefault()
+      nav(href)
+    })
 
     // ---- Project (root) view ----------------------------------------------
     async function renderProject() {
@@ -764,6 +784,7 @@ function dashboardJs(): string {
         wizardIdentity = {
           name: status.name || defaults.suggestedName,
           id: status.id || defaults.suggestedId,
+          path: status.path,
           initialized: status.initialized,
           providerConfigured: status.providerConfigured,
         }
@@ -798,7 +819,7 @@ function dashboardJs(): string {
           \${wizardHeader()}
           <div class="card">
             <h2>Name this project</h2>
-            <p class="muted" style="margin-bottom:14px">Guildhall writes <code class="inline">guildhall.yaml</code> at <code class="inline">\${escapeHtml(wizardDefaults?.suggestedName ? (wizardIdentity.path || '') : '')}\${escapeHtml(location.pathname)}</code>. These are just labels — change them any time by editing <code class="inline">guildhall.yaml</code>.</p>
+            <p class="muted" style="margin-bottom:14px">Guildhall will write <code class="inline">guildhall.yaml</code> at <code class="inline">\${escapeHtml(wizardIdentity.path || '')}</code>. These are just labels — you can change them later from Settings or by editing the file.</p>
             <label>Workspace name</label>
             <input id="identity-name" type="text" value="\${escapeHtml(wizardIdentity.name || '')}" />
             <label>Workspace ID (slug)</label>
@@ -946,6 +967,117 @@ function dashboardJs(): string {
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-+|-+$/g, '')
         .slice(0, 40)
+    }
+
+    // ---- Settings page (post-setup editable config) -----------------------
+    async function renderSettings() {
+      projectName.textContent = 'Settings'
+      app.innerHTML = '<div class="muted">Loading settings…</div>'
+      const [status, providers, defaults] = await Promise.all([
+        fetch('/api/setup/status').then(r => r.json()),
+        fetch('/api/setup/providers').then(r => r.json()),
+        fetch('/api/setup/defaults').then(r => r.json()),
+      ])
+      if (!status.initialized) {
+        app.innerHTML = \`
+          <div class="empty">
+            <h2>Project not initialized yet</h2>
+            <p class="muted" style="margin:14px 0">Complete the setup wizard first.</p>
+            <button onclick="nav('/setup')">Open setup wizard →</button>
+          </div>
+        \`
+        // Hack: nav isn't exposed globally; wire the handler directly.
+        app.querySelector('button')?.addEventListener('click', () => nav('/setup'))
+        return
+      }
+      selectedProvider = providers.preferredProvider ?? selectedProvider ?? firstDetected(providers.providers)
+
+      app.innerHTML = \`
+        <div style="max-width:720px; margin:0 auto">
+          <h2 style="margin-bottom:16px">Settings</h2>
+
+          <div class="settings-grid">
+            <div class="card">
+              <h2>Workspace identity</h2>
+              <p class="muted" style="margin-bottom:14px">Stored in <code class="inline">guildhall.yaml</code>. Renaming the ID doesn't rewrite existing memory logs — prefer to set it once.</p>
+              <label>Workspace name</label>
+              <input id="settings-name" type="text" value="\${escapeHtml(status.name ?? '')}" />
+              <label>Workspace ID (slug)</label>
+              <input id="settings-id" type="text" value="\${escapeHtml(status.id ?? '')}" />
+              <div style="display:flex; align-items:center; justify-content:flex-end; margin-top:4px">
+                <span id="identity-save-status" class="save-status"></span>
+                <button id="btn-save-identity">Save identity</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <h2>Agent provider</h2>
+              <p class="muted" style="margin-bottom:14px">Pick how Guildhall agents should call an LLM. Stored in <code class="inline">.guildhall/config.yaml</code> (gitignored).</p>
+              <div class="provider-list" id="provider-list"></div>
+              <div id="api-key-form" style="margin-top:16px"></div>
+              <div style="display:flex; align-items:center; justify-content:flex-end; margin-top:4px">
+                <span id="provider-save-status" class="save-status"></span>
+                <button id="btn-save-provider-settings">Save provider</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      \`
+
+      const nameInput = document.getElementById('settings-name')
+      const idInput = document.getElementById('settings-id')
+      document.getElementById('btn-save-identity').addEventListener('click', async () => {
+        const name = nameInput.value.trim()
+        const id = idInput.value.trim()
+        const statusEl = document.getElementById('identity-save-status')
+        if (!name) return flashSaveStatus(statusEl, 'Name is required', true)
+        if (!/^[a-z0-9-]+$/.test(id)) return flashSaveStatus(statusEl, 'Invalid ID', true)
+        const r = await fetch('/api/setup/identity', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name, id }),
+        })
+        const j = await r.json()
+        if (j.error) return flashSaveStatus(statusEl, j.error, true)
+        flashSaveStatus(statusEl, 'Saved ✓', false)
+        // Update header badge to reflect new name.
+        projectName.textContent = 'Settings'
+      })
+
+      renderProviderList(providers.providers)
+      document.getElementById('btn-save-provider-settings').addEventListener('click', async () => {
+        const statusEl = document.getElementById('provider-save-status')
+        if (!selectedProvider) return flashSaveStatus(statusEl, 'Pick a provider first', true)
+        const body = { preferredProvider: selectedProvider }
+        if (selectedProvider === 'anthropic-api') {
+          const k = document.getElementById('api-key-input')?.value?.trim()
+          if (k) body.anthropicApiKey = k
+        }
+        if (selectedProvider === 'openai-api') {
+          const k = document.getElementById('api-key-input')?.value?.trim()
+          if (k) body.openaiApiKey = k
+        }
+        if (selectedProvider === 'llama-cpp') {
+          const u = document.getElementById('llama-url-input')?.value?.trim()
+          if (u) body.lmStudioUrl = u
+        }
+        const r = await fetch('/api/setup/providers/config', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        const j = await r.json()
+        if (j.error) return flashSaveStatus(statusEl, j.error, true)
+        flashSaveStatus(statusEl, 'Saved ✓', false)
+      })
+    }
+
+    function flashSaveStatus(el, message, isError) {
+      if (!el) return
+      el.textContent = message
+      el.classList.toggle('error', Boolean(isError))
+      el.classList.add('visible')
+      setTimeout(() => el.classList.remove('visible'), 2500)
     }
 
     function firstDetected(providers) {
