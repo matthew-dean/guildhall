@@ -1,8 +1,8 @@
 {
-  "name": "guildhall-monorepo",
+  "name": "guildhall-repo",
   "version": "0.2.0",
   "private": true,
-  "description": "Monorepo root for Guildhall. The publishable package lives at packages/guildhall/.",
+  "description": "Source repo for Guildhall. The publishable npm package lives at packages/guildhall/.",
   "license": "LicenseRef-FLL-1.2",
   "licenses": [
     {
