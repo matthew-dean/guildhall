@@ -155,6 +155,9 @@ export async function buildContext(
     `**Status:** ${task.status}`,
     `**Priority:** ${task.priority}`,
     task.spec ? `\n### Spec\n${task.spec}` : '',
+    task.productBrief
+      ? `\n### Product Brief${task.productBrief.approvedAt ? ' (human-approved)' : ' (DRAFT — not yet approved)'}\n**User job:** ${task.productBrief.userJob}\n**Success metric:** ${task.productBrief.successMetric}${task.productBrief.antiPatterns.length > 0 ? `\n**Anti-patterns (must NOT do):**\n${task.productBrief.antiPatterns.map(a => `- ${a}`).join('\n')}` : ''}${task.productBrief.rolloutPlan ? `\n**Rollout plan:** ${task.productBrief.rolloutPlan}` : ''}`
+      : '',
     task.acceptanceCriteria.length > 0
       ? `\n### Acceptance Criteria\n${task.acceptanceCriteria.map((c, i) => `${i + 1}. ${c.description}`).join('\n')}`
       : '',

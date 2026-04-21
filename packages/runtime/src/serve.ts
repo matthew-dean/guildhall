@@ -50,6 +50,7 @@ import {
 //   POST   /api/project/task/:id/shelve             → human override → shelved
 //   POST   /api/project/task/:id/unshelve           → shelved → proposed (clear shelveReason)
 //   POST   /api/project/task/:id/approve-spec       → exploring → spec_review
+//   POST   /api/project/task/:id/approve-brief      → mark the product brief as human-approved
 //   POST   /api/project/task/:id/resume             → append follow-up to exploring transcript
 //   POST   /api/project/task/:id/resolve-escalation → close an open escalation; unblocks when none remain
 //   GET    /api/project/activity      → summary for persistent agent chip
@@ -317,6 +318,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   //   shelve             → shelved      (any non-done task)
   //   unshelve           → proposed     (shelved task only; clears shelveReason)
   //   approve-spec       → spec_review  (exploring task with a drafted spec; body: {approvalNote?})
+  //   approve-brief      → mark productBrief.approvedBy/approvedAt = human
   //   resume             → append a follow-up message to an exploring transcript
   //                        (body: {message?, resolveEscalationId?, resolution?})
   //   resolve-escalation → close a named escalation; unblocks when none remain
@@ -330,6 +332,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         'pause',
         'shelve',
         'approve-spec',
+        'approve-brief',
         'resume',
         'unshelve',
         'resolve-escalation',
@@ -370,6 +373,34 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ...(body.resolution ? { resolution: body.resolution } : {}),
         })
         if (!result.success) return c.json({ error: result.error ?? 'resume failed' }, 400)
+        return c.json({ ok: true })
+      }
+
+      if (action === 'approve-brief') {
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        const brief = task.productBrief as Record<string, unknown> | undefined
+        if (!brief || typeof brief !== 'object') {
+          return c.json({ error: 'no product brief drafted yet' }, 400)
+        }
+        if (!brief.userJob || !brief.successMetric) {
+          return c.json({ error: 'brief is incomplete — needs userJob and successMetric' }, 400)
+        }
+        const now = new Date().toISOString()
+        brief.approvedBy = 'human'
+        brief.approvedAt = now
+        task.productBrief = brief
+        task.updatedAt = now
+        queue.lastUpdated = now
+        await fsp.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
         return c.json({ ok: true })
       }
 
@@ -1459,6 +1490,33 @@ function dashboardJs(): string {
               \${t.assignedTo ? \`<span>assigned: \${escapeHtml(t.assignedTo)}</span>\` : ''}
             </div>
           </div>
+          \${t.productBrief ? \`
+            <div class="drawer-section">
+              <div class="drawer-section-title">
+                Product brief
+                \${t.productBrief.approvedAt
+                  ? \`<span style="color:var(--ok); font-weight:normal; margin-left:6px">✓ approved</span>\`
+                  : \`<span style="color:var(--muted); font-weight:normal; margin-left:6px">draft</span>\`}
+              </div>
+              <dl class="why-stuck" style="background:var(--surface-2); border-color:var(--border); margin:0">
+                <dt>User job</dt><dd>\${escapeHtml(t.productBrief.userJob || '')}</dd>
+                <dt>Success metric</dt><dd>\${escapeHtml(t.productBrief.successMetric || '')}</dd>
+                \${Array.isArray(t.productBrief.antiPatterns) && t.productBrief.antiPatterns.length > 0 ? \`<dt>Anti-patterns</dt><dd><ul style="margin:0; padding-left:18px">\${t.productBrief.antiPatterns.map(p => \`<li>\${escapeHtml(p)}</li>\`).join('')}</ul></dd>\` : ''}
+                \${t.productBrief.rolloutPlan ? \`<dt>Rollout</dt><dd>\${escapeHtml(t.productBrief.rolloutPlan)}</dd>\` : ''}
+              </dl>
+              \${!t.productBrief.approvedAt ? \`
+                <div class="drawer-actions" style="margin-top:8px">
+                  <button id="btn-approve-brief">Approve brief</button>
+                  <span class="muted" style="font-size:11.5px; align-self:center">Authored by \${escapeHtml(t.productBrief.authoredBy || '?')}</span>
+                </div>
+              \` : \`<div class="muted" style="font-size:11.5px; margin-top:6px">Approved by \${escapeHtml(t.productBrief.approvedBy || '?')} · \${escapeHtml(t.productBrief.approvedAt)}</div>\`}
+            </div>
+          \` : (t.status === 'exploring' ? \`
+            <div class="drawer-section">
+              <div class="drawer-section-title">Product brief <span class="muted" style="font-weight:normal; font-size:11.5px">(not yet drafted)</span></div>
+              <div class="muted" style="font-size:12.5px">The spec agent will draft a brief if this task touches product surface area (UI, copy, public API). Infra-only tasks may skip it.</div>
+            </div>
+          \` : '')}
           <div class="drawer-section">
             <div class="drawer-section-title">Spec</div>
             <div class="drawer-spec">\${escapeHtml(t.spec || '(no spec drafted yet)')}</div>
@@ -1495,12 +1553,14 @@ function dashboardJs(): string {
         const bm = document.getElementById('btn-send-msg')
         const bu = document.getElementById('btn-unshelve')
         const be = document.getElementById('btn-resolve-esc')
+        const bb = document.getElementById('btn-approve-brief')
         if (bp) bp.addEventListener('click', () => taskAction(t.id, 'pause'))
         if (bs) bs.addEventListener('click', () => taskAction(t.id, 'shelve'))
         if (ba) ba.addEventListener('click', () => approveSpec(t.id))
         if (bm) bm.addEventListener('click', () => sendFollowUp(t.id))
         if (bu) bu.addEventListener('click', () => taskAction(t.id, 'unshelve'))
         if (be) be.addEventListener('click', () => resolveEsc(t.id, be.dataset.esc))
+        if (bb) bb.addEventListener('click', () => approveBrief(t.id))
       } else if (drawerTab === 'transcript') {
         const notes = Array.isArray(t.notes) ? t.notes : []
         body.innerHTML = notes.length === 0
@@ -1624,6 +1684,13 @@ function dashboardJs(): string {
       })
       const j = await r.json()
       if (j.error) { alert('Resolve failed: ' + j.error); return }
+      await openTaskDrawer(id)
+    }
+
+    async function approveBrief(id) {
+      const r = await fetch(\`/api/project/task/\${encodeURIComponent(id)}/approve-brief\`, { method: 'POST' })
+      const j = await r.json()
+      if (j.error) { alert('Approve failed: ' + j.error); return }
       await openTaskDrawer(id)
     }
 

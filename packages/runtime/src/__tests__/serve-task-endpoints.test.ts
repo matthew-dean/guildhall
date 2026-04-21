@@ -219,6 +219,65 @@ describe('POST /api/project/task/:id/resume', () => {
   })
 })
 
+describe('POST /api/project/task/:id/approve-brief', () => {
+  it('marks a drafted product brief as approved and records approvedBy/At', async () => {
+    await seedTask('task-1', {
+      status: 'exploring',
+      productBrief: {
+        userJob: 'As a new user I want to X so Y',
+        successMetric: 'Time-to-first-success drops below 60s',
+        antiPatterns: ['no dark patterns', 'no jargon in first 3 screens'],
+        authoredBy: 'agent:spec-agent',
+        authoredAt: new Date().toISOString(),
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/approve-brief', { method: 'POST' }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.ok).toBe(true)
+
+    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const q = JSON.parse(raw)
+    expect(q.tasks[0].productBrief.approvedBy).toBe('human')
+    expect(q.tasks[0].productBrief.approvedAt).toMatch(/\d{4}-\d{2}-\d{2}T/)
+    // User job + success metric are unchanged by approval.
+    expect(q.tasks[0].productBrief.userJob).toMatch(/new user/)
+  })
+
+  it('rejects approve-brief when no brief is drafted', async () => {
+    await seedTask('task-1', { status: 'exploring' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/approve-brief', { method: 'POST' }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.error).toMatch(/no product brief/i)
+  })
+
+  it('rejects approve-brief on an incomplete brief (missing successMetric)', async () => {
+    await seedTask('task-1', {
+      status: 'exploring',
+      productBrief: {
+        userJob: 'a job',
+        successMetric: '',
+        antiPatterns: [],
+        authoredBy: 'agent:spec-agent',
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/approve-brief', { method: 'POST' }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.error).toMatch(/incomplete/i)
+  })
+})
+
 describe('POST /api/project/task/:id/unshelve', () => {
   it('clears shelveReason and returns a shelved task to proposed', async () => {
     await seedTask('task-1', {

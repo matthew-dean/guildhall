@@ -7,6 +7,7 @@ import {
   raiseEscalationTool,
   appendExploringTranscriptTool,
   readExploringTranscriptTool,
+  updateProductBriefTool,
 } from '@guildhall/tools'
 import { GuildhallAgent } from './guildhall-agent.js'
 import type { AgentLLM } from './llm.js'
@@ -30,6 +31,15 @@ quality gate in the system.
    - Numbered acceptance criteria, each phrased as "Given X, when Y, then Z" or similar
    - An explicit out-of-scope list (what this task will NOT do)
    - Any open questions that require human judgment before implementation can start
+5. When the task touches product surface area (a UI, a user-facing flow, a public
+   API, copy, brand), ALSO author a product brief via update-product-brief:
+   - userJob: who this is for and what job it does for them
+   - successMetric: how we'll know it worked — observable, not vague
+   - antiPatterns: things this task must NOT do (brand/ux/product prohibitions,
+     not technical boundaries — those go in Out of Scope)
+   - rolloutPlan: staging / flagging / migration notes, if applicable
+   Pure-infrastructure tasks (build config, internal refactor with no product
+   visibility) may skip the brief — prefer authoring one if in doubt.
 
 ## Rules
 
@@ -76,6 +86,7 @@ export function createSpecAgent(
       writeFileTool,
       readTasksTool,
       updateTaskTool,
+      updateProductBriefTool,
       logProgressTool,
       raiseEscalationTool,
       appendExploringTranscriptTool,

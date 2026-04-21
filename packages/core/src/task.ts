@@ -102,6 +102,24 @@ export const Escalation = z.object({
 })
 export type Escalation = z.infer<typeof Escalation>
 
+// Product brief: the *why*-and-*for-whom* layer on a task, authored by the
+// Spec Agent (or a human) alongside the technical spec. Tech spec answers
+// "what will we build?"; brief answers "who is this for, how do we know it
+// worked, and what should we NOT do?" Brief approval is orthogonal to spec
+// approval — a task may have an approved brief before its spec is final, or
+// may skip the brief entirely for purely infrastructural work.
+export const ProductBrief = z.object({
+  userJob: z.string(),                            // The user's job-to-be-done this task serves
+  successMetric: z.string(),                      // How we'll know it worked
+  antiPatterns: z.array(z.string()).default([]),  // Things the task must NOT do (brand / ux / product-level)
+  rolloutPlan: z.string().optional(),             // Staging / flagging / migration notes
+  authoredBy: z.string().optional(),              // agent id or 'human'
+  authoredAt: z.string().optional(),
+  approvedBy: z.string().optional(),
+  approvedAt: z.string().optional(),
+})
+export type ProductBrief = z.infer<typeof ProductBrief>
+
 // FR-31: structured agent-issue channel. Agents emit issues via the
 // `report_issue` tool at any point during execution. Issues are NOT terminal
 // — the agent continues working. The coordinator's remediation loop (FR-32)
@@ -214,6 +232,11 @@ export const Task = z.object({
   // Set by Spec Agent before implementation begins
   spec: z.string().optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).default([]),
+
+  // Product brief: the *why* layer of a task — user job, success metric,
+  // anti-patterns, rollout plan. Authored by the Spec Agent alongside the
+  // technical spec; approved by the human independently of spec approval.
+  productBrief: ProductBrief.optional(),
 
   // Scope boundaries — what this task explicitly will NOT do
   outOfScope: z.array(z.string()).default([]),
