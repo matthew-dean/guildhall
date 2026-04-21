@@ -1,124 +1,106 @@
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, promises as fsp } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { homedir } from 'node:os'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
 import {
-  listWorkspaces,
-  readRegistry,
-  registerWorkspace,
-  ensureGuildhallHome,
-  readGlobalConfig,
   readWorkspaceConfig,
+  readProjectConfig,
+  updateProjectConfig,
+  FORGE_YAML_FILENAME,
+  slugify,
 } from '@guildhall/config'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
 import { createExploringTask } from './intake.js'
 import { createMetaIntakeTask, workspaceNeedsMetaIntake } from './meta-intake.js'
 
 // ---------------------------------------------------------------------------
-// guildhall serve — web dashboard
+// guildhall serve — single-project dashboard
 //
-// Read/write control plane for all registered workspaces. The frontend is a
-// Preact+htm SPA (no build step) served inline. All orchestrator lifecycle
-// runs in-process via `OrchestratorSupervisor`; each orchestrator pushes
-// `BackendEvent`s into the supervisor's event bus, which the SSE handler
-// fans out to connected dashboards.
+// One `guildhall serve` instance corresponds to one project directory. The
+// project path is resolved on boot (defaults to cwd) and drives every
+// endpoint; there is no cross-project registry here. Cross-project
+// aggregation is guild-pro's job.
 //
 // Routes:
-//   GET    /                              → SPA (grid + detail, client-routed)
-//   GET    /api/workspaces                → List registered workspaces + run state
-//   POST   /api/workspaces                → Register a workspace (body: { path })
-//   GET    /api/workspaces/:id            → Single workspace detail (config + tasks + run state)
-//   DELETE /api/workspaces/:id            → Unregister (stops the run if active)
-//   POST   /api/workspaces/:id/start      → Boot an orchestrator for this workspace
-//   POST   /api/workspaces/:id/stop       → Graceful stop
-//   GET    /api/workspaces/:id/progress   → Tail of PROGRESS.md (last ~80 lines)
-//   GET    /api/workspaces/:id/events     → SSE stream filtered to this workspace
-//   GET    /api/config                    → Global ~/.guildhall/config.yaml
-//   GET    /api/events                    → SSE stream for ALL workspaces
+//   GET    /                          → SPA (root = project detail or setup)
+//   GET    /setup                     → SPA setup wizard route
+//   GET    /api/project               → project detail (config + tasks + run state)
+//   POST   /api/project/start         → boot the orchestrator for this project
+//   POST   /api/project/stop          → graceful stop
+//   POST   /api/project/intake        → create an exploring task
+//   POST   /api/project/meta-intake   → create the bootstrap task
+//   GET    /api/project/needs-meta-intake
+//   GET    /api/project/progress      → tail of memory/PROGRESS.md
+//   GET    /api/project/events        → SSE feed of orchestrator events
+//   GET    /api/config                → project-local config (secrets redacted)
+//   GET    /api/setup/providers       → detect installed providers
+//   POST   /api/setup/providers/config → save chosen provider/API key
 // ---------------------------------------------------------------------------
 
 export interface ServeOptions {
   port?: number
+  /** Absolute path to the project root. Defaults to process.cwd(). */
+  projectPath?: string
+}
+
+interface ResolvedProject {
+  path: string
+  id: string
+  /** Null if guildhall.yaml is missing — wizard handles this case. */
+  config: ReturnType<typeof readWorkspaceConfig> | null
+  initializationNeeded: boolean
+}
+
+function resolveProject(projectPath: string): ResolvedProject {
+  const yamlPath = join(projectPath, FORGE_YAML_FILENAME)
+  if (!existsSync(yamlPath)) {
+    // Fall back to directory name as an id; wizard will fix up later.
+    const id = slugify(projectPath.split('/').pop() ?? 'project')
+    return { path: projectPath, id, config: null, initializationNeeded: true }
+  }
+  const config = readWorkspaceConfig(projectPath)
+  const id = config.id ?? slugify(config.name)
+  return { path: projectPath, id, config, initializationNeeded: false }
 }
 
 export async function runServe(opts: ServeOptions = {}): Promise<void> {
-  ensureGuildhallHome()
-
-  const globalConfig = readGlobalConfig()
-  const port = opts.port ?? globalConfig.servePort
+  const projectPath = resolve(opts.projectPath ?? process.cwd())
+  const project = resolveProject(projectPath)
+  const cfg = readProjectConfig(projectPath)
+  const port = opts.port ?? cfg.servePort
 
   const supervisor = new OrchestratorSupervisor()
   const app = new Hono()
 
   // -------------------------------------------------------------------------
-  // API: workspaces (list / detail / register / unregister)
+  // API: project
   // -------------------------------------------------------------------------
-  app.get('/api/workspaces', c => {
+  app.get('/api/project', c => {
     try {
-      const runs = supervisor.list()
-      const workspaces = listWorkspaces().map(ws => {
-        let config = null
-        try { config = readWorkspaceConfig(ws.path) } catch { /* workspace may have moved */ }
-        const run = runs.find(r => r.workspaceId === ws.id)
-        return {
-          ...ws,
-          valid: config !== null,
-          coordinators: config?.coordinators?.length ?? 0,
-          running: run?.status === 'running' || run?.status === 'stopping',
-          runStatus: run?.status ?? 'stopped',
-        }
-      })
-      return c.json({ workspaces })
-    } catch (err) {
-      return c.json({ error: String(err) }, 500)
-    }
-  })
-
-  app.post('/api/workspaces', async c => {
-    try {
-      const body = await c.req.json().catch(() => ({})) as { path?: string }
-      const abs = body.path ? resolve(body.path) : ''
-      if (!abs) return c.json({ error: 'Missing "path" in request body' }, 400)
-      const config = readWorkspaceConfig(abs) // throws if invalid
-      const id = config.id ?? ((config.name ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'workspace')
-      const entry = registerWorkspace({
-        id,
-        path: abs,
-        name: config.name,
-        tags: config.tags ?? [],
-      })
-      return c.json({ entry })
-    } catch (err) {
-      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
-    }
-  })
-
-  app.get('/api/workspaces/:id', c => {
-    try {
-      const { id } = c.req.param()
-      const registry = readRegistry()
-      const entry = registry.workspaces.find(w => w.id === id)
-      if (!entry) return c.json({ error: `Workspace "${id}" not found` }, 404)
-
-      let config = null
+      if (project.initializationNeeded) {
+        return c.json({
+          initializationNeeded: true,
+          path: project.path,
+          setupUrl: '/setup',
+        })
+      }
+      const tasksPath = join(project.path, 'memory', 'TASKS.json')
       let tasks: unknown[] = []
-      try {
-        config = readWorkspaceConfig(entry.path)
-        const tasksPath = join(entry.path, 'memory', 'TASKS.json')
-        if (existsSync(tasksPath)) {
-          const raw = JSON.parse(readFileSync(tasksPath, 'utf8'))
-          // TASKS.json may be either a bare array (legacy) or `{ tasks: [...] }`
-          tasks = Array.isArray(raw) ? raw : Array.isArray(raw?.tasks) ? raw.tasks : []
-        }
-      } catch { /* best-effort */ }
-
-      const run = supervisor.get(id)
-      const recent = supervisor.recent(id)
-
+      if (existsSync(tasksPath)) {
+        const raw = JSON.parse(readFileSync(tasksPath, 'utf8'))
+        tasks = Array.isArray(raw) ? raw : Array.isArray(raw?.tasks) ? raw.tasks : []
+      }
+      const run = supervisor.get(project.id)
+      const recent = supervisor.recent(project.id)
       return c.json({
-        entry,
-        config,
+        initializationNeeded: false,
+        id: project.id,
+        path: project.path,
+        name: project.config?.name ?? project.id,
+        tags: project.config?.tags ?? [],
+        config: project.config,
         tasks,
         run: run
           ? {
@@ -131,27 +113,37 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
         recentEvents: recent,
       })
     } catch (err) {
-      return c.json({ error: String(err) }, 500)
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })
 
-  app.post('/api/workspaces/:id/start', c => {
+  app.post('/api/project/start', c => {
     try {
-      const { id } = c.req.param()
-      const entry = readRegistry().workspaces.find(w => w.id === id)
-      if (!entry) return c.json({ error: `Workspace "${id}" not found` }, 404)
-      const run = supervisor.start({ workspaceId: id, workspacePath: entry.path })
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const run = supervisor.start({ workspaceId: project.id, workspacePath: project.path })
       return c.json({ status: run.status, startedAt: run.startedAt })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })
 
-  app.post('/api/workspaces/:id/intake', async c => {
+  app.post('/api/project/stop', async c => {
     try {
-      const { id } = c.req.param()
-      const entry = readRegistry().workspaces.find(w => w.id === id)
-      if (!entry) return c.json({ error: `Workspace "${id}" not found` }, 404)
+      const stopped = await supervisor.stop(project.id)
+      if (!stopped) return c.json({ error: 'stop timed out' }, 504)
+      return c.json({ ok: true })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/intake', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
       const body = await c.req.json().catch(() => ({})) as {
         ask?: string
         domain?: string
@@ -160,17 +152,17 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
       if (!body.ask || body.ask.trim().length === 0) {
         return c.json({ error: 'Missing "ask" in request body' }, 400)
       }
-      const wsConfig = readWorkspaceConfig(entry.path)
-      const defaultDomain = wsConfig.coordinators[0]?.domain
+      const coordinators = project.config?.coordinators ?? []
+      const defaultDomain = coordinators[0]?.domain
       const domain = body.domain ?? defaultDomain
       if (!domain) {
-        return c.json({ error: 'Workspace has no coordinators — run meta-intake first' }, 400)
+        return c.json({ error: 'Project has no coordinators — run meta-intake first' }, 400)
       }
       const result = await createExploringTask({
-        memoryDir: join(entry.path, 'memory'),
+        memoryDir: join(project.path, 'memory'),
         ask: body.ask,
         domain,
-        projectPath: entry.path,
+        projectPath: project.path,
         ...(body.title ? { title: body.title } : {}),
       })
       return c.json(result)
@@ -179,14 +171,14 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
     }
   })
 
-  app.post('/api/workspaces/:id/meta-intake', async c => {
+  app.post('/api/project/meta-intake', async c => {
     try {
-      const { id } = c.req.param()
-      const entry = readRegistry().workspaces.find(w => w.id === id)
-      if (!entry) return c.json({ error: `Workspace "${id}" not found` }, 404)
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
       const result = await createMetaIntakeTask({
-        memoryDir: join(entry.path, 'memory'),
-        projectPath: entry.path,
+        memoryDir: join(project.path, 'memory'),
+        projectPath: project.path,
       })
       return c.json(result)
     } catch (err) {
@@ -194,38 +186,22 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
     }
   })
 
-  app.get('/api/workspaces/:id/needs-meta-intake', c => {
+  app.get('/api/project/needs-meta-intake', c => {
     try {
-      const { id } = c.req.param()
-      const entry = readRegistry().workspaces.find(w => w.id === id)
-      if (!entry) return c.json({ error: `Workspace "${id}" not found` }, 404)
-      return c.json({ needsMetaIntake: workspaceNeedsMetaIntake(entry.path) })
+      if (project.initializationNeeded) return c.json({ needsMetaIntake: true })
+      return c.json({ needsMetaIntake: workspaceNeedsMetaIntake(project.path) })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })
 
-  app.post('/api/workspaces/:id/stop', async c => {
+  app.get('/api/project/progress', c => {
     try {
-      const { id } = c.req.param()
-      const stopped = await supervisor.stop(id)
-      if (!stopped) return c.json({ error: 'stop timed out' }, 504)
-      return c.json({ ok: true })
-    } catch (err) {
-      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
-    }
-  })
-
-  app.get('/api/workspaces/:id/progress', c => {
-    try {
-      const { id } = c.req.param()
-      const entry = readRegistry().workspaces.find(w => w.id === id)
-      if (!entry) return c.json({ error: `Workspace "${id}" not found` }, 404)
-      const progressPath = join(entry.path, 'memory', 'PROGRESS.md')
+      if (project.initializationNeeded) return c.json({ progress: '' })
+      const progressPath = join(project.path, 'memory', 'PROGRESS.md')
       if (!existsSync(progressPath)) return c.json({ progress: '' })
       const raw = readFileSync(progressPath, 'utf8')
-      const lines = raw.split('\n')
-      const tail = lines.slice(-120).join('\n')
+      const tail = raw.split('\n').slice(-120).join('\n')
       return c.json({ progress: tail })
     } catch (err) {
       return c.json({ error: String(err) }, 500)
@@ -234,33 +210,124 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
 
   app.get('/api/config', c => {
     try {
-      return c.json(readGlobalConfig())
+      const project = readProjectConfig(projectPath)
+      const redacted: Record<string, unknown> = { ...project }
+      if (redacted.anthropicApiKey) redacted.anthropicApiKey = '•••'
+      if (redacted.openaiApiKey) redacted.openaiApiKey = '•••'
+      return c.json(redacted)
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
   })
 
   // -------------------------------------------------------------------------
-  // SSE: workspace-scoped stream
+  // API: setup wizard
   // -------------------------------------------------------------------------
-  app.get('/api/workspaces/:id/events', c => {
-    const { id } = c.req.param()
-    return streamSSE(c, async stream => {
-      await stream.writeSSE({ data: JSON.stringify({ type: 'connected', workspaceId: id }) })
+  app.get('/api/setup/providers', async c => {
+    try {
+      const stored = readProjectConfig(projectPath)
+      const claudeCredPath = join(homedir(), '.claude', '.credentials.json')
+      const codexCredPath = join(homedir(), '.codex', 'auth.json')
 
-      // Replay recent events on (re)connect so the dashboard isn't blank.
-      for (const ev of supervisor.recent(id)) {
+      const claudeInstalled = existsSync(claudeCredPath)
+      const codexInstalled = existsSync(codexCredPath)
+
+      let lmStudioReachable = false
+      try {
+        const res = await fetch(stored.lmStudioUrl + '/models', { signal: AbortSignal.timeout(800) })
+        lmStudioReachable = res.ok
+      } catch { /* unreachable — expected */ }
+
+      return c.json({
+        preferredProvider: stored.preferredProvider ?? null,
+        providers: {
+          'claude-oauth': {
+            label: 'Claude Pro/Max (via Claude Code CLI)',
+            detected: claudeInstalled,
+            detail: claudeInstalled
+              ? `Credentials detected at ${claudeCredPath}`
+              : 'Install Claude Code (`brew install anthropic/claude/claude`) and run `claude auth login`.',
+          },
+          'codex': {
+            label: 'Codex (via Codex CLI)',
+            detected: codexInstalled,
+            detail: codexInstalled
+              ? `Credentials detected at ${codexCredPath}`
+              : 'Install the Codex CLI and run `codex auth login`.',
+          },
+          'llama-cpp': {
+            label: 'Local llama.cpp / LM Studio',
+            detected: lmStudioReachable,
+            detail: lmStudioReachable
+              ? `Reachable at ${stored.lmStudioUrl}`
+              : `Not reachable at ${stored.lmStudioUrl}. Start LM Studio or llama.cpp and click refresh.`,
+            url: stored.lmStudioUrl,
+          },
+          'anthropic-api': {
+            label: 'Anthropic API key',
+            detected: Boolean(stored.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY),
+            detail: stored.anthropicApiKey
+              ? 'Stored in .guildhall/config.yaml'
+              : (process.env.ANTHROPIC_API_KEY ? 'Picked up from $ANTHROPIC_API_KEY' : 'Paste an API key to enable.'),
+          },
+          'openai-api': {
+            label: 'OpenAI API key',
+            detected: Boolean(stored.openaiApiKey ?? process.env.OPENAI_API_KEY),
+            detail: stored.openaiApiKey
+              ? 'Stored in .guildhall/config.yaml'
+              : (process.env.OPENAI_API_KEY ? 'Picked up from $OPENAI_API_KEY' : 'Paste an API key to enable.'),
+          },
+        },
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/setup/providers/config', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        preferredProvider?: string
+        anthropicApiKey?: string
+        openaiApiKey?: string
+        lmStudioUrl?: string
+      }
+      const allowed = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api'] as const
+      const patch: Parameters<typeof updateProjectConfig>[1] = {}
+      if (body.preferredProvider) {
+        if (!(allowed as readonly string[]).includes(body.preferredProvider)) {
+          return c.json({ error: `Unknown provider "${body.preferredProvider}"` }, 400)
+        }
+        patch.preferredProvider = body.preferredProvider as typeof allowed[number]
+      }
+      if (typeof body.anthropicApiKey === 'string') patch.anthropicApiKey = body.anthropicApiKey
+      if (typeof body.openaiApiKey === 'string') patch.openaiApiKey = body.openaiApiKey
+      if (typeof body.lmStudioUrl === 'string') patch.lmStudioUrl = body.lmStudioUrl
+      const saved = updateProjectConfig(projectPath, patch)
+      const redacted: Record<string, unknown> = { ...saved }
+      if (redacted.anthropicApiKey) redacted.anthropicApiKey = '•••'
+      if (redacted.openaiApiKey) redacted.openaiApiKey = '•••'
+      return c.json(redacted)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // SSE stream
+  // -------------------------------------------------------------------------
+  app.get('/api/project/events', c => {
+    return streamSSE(c, async stream => {
+      await stream.writeSSE({ data: JSON.stringify({ type: 'connected', projectId: project.id }) })
+      for (const ev of supervisor.recent(project.id)) {
         await stream.writeSSE({ data: JSON.stringify(ev) })
       }
-
       const unsubscribe = supervisor.subscribe(ev => {
-        if (ev.workspaceId !== id) return
+        if (ev.workspaceId !== project.id) return
         void stream.writeSSE({ data: JSON.stringify(ev) })
       })
-
       let running = true
       stream.onAbort(() => { running = false; unsubscribe() })
-
       while (running) {
         await stream.sleep(15_000)
         if (!running) break
@@ -272,44 +339,16 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   })
 
   // -------------------------------------------------------------------------
-  // SSE: all workspaces
-  // -------------------------------------------------------------------------
-  app.get('/api/events', c => {
-    return streamSSE(c, async stream => {
-      await stream.writeSSE({ data: JSON.stringify({ type: 'connected' }) })
-
-      const unsubscribe = supervisor.subscribe(ev => {
-        void stream.writeSSE({ data: JSON.stringify(ev) })
-      })
-
-      let running = true
-      stream.onAbort(() => { running = false; unsubscribe() })
-
-      while (running) {
-        await stream.sleep(15_000)
-        if (!running) break
-        const registry = readRegistry()
-        await stream.writeSSE({
-          data: JSON.stringify({
-            type: 'heartbeat',
-            workspaceCount: registry.workspaces.length,
-            timestamp: new Date().toISOString(),
-          }),
-        })
-      }
-    })
-  })
-
-  // -------------------------------------------------------------------------
-  // SPA: Dashboard (catch-all, client-routed)
+  // SPA (catch-all)
   // -------------------------------------------------------------------------
   app.get('*', c => c.html(dashboardHtml()))
 
   // -------------------------------------------------------------------------
   // Start server
   // -------------------------------------------------------------------------
-  console.log(`[guildhall serve] Starting dashboard on http://localhost:${port}`)
-  console.log(`[guildhall serve] Registered workspaces: ${listWorkspaces().length}`)
+  console.log(`[guildhall serve] Project: ${project.path}`)
+  console.log(`[guildhall serve] ${project.initializationNeeded ? '⚠ Not initialized — wizard at /setup' : `✓ ${project.config?.name ?? project.id}`}`)
+  console.log(`[guildhall serve] Dashboard: http://localhost:${port}`)
   console.log(`[guildhall serve] Press Ctrl+C to stop.`)
   console.log()
 
@@ -320,10 +359,6 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
 
 // ---------------------------------------------------------------------------
 // Inline dashboard SPA
-//
-// Preact + htm (no build step). All logic runs client-side. The SPA reads
-// `location.pathname` and renders either the workspace grid (`/`) or a
-// workspace detail page (`/workspace/:id`).
 // ---------------------------------------------------------------------------
 
 function dashboardHtml(): string {
@@ -332,14 +367,13 @@ function dashboardHtml(): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Guildhall Dashboard</title>
+  <title>Guildhall</title>
   <style>${dashboardCss()}</style>
 </head>
 <body>
   <header>
     <h1 onclick="location.href='/'" style="cursor:pointer">⚔ Guildhall</h1>
-    <span class="badge" id="ws-count"></span>
-    <span id="breadcrumb" class="breadcrumb"></span>
+    <span id="project-name" class="badge"></span>
     <span style="flex:1"></span>
     <span id="sse-status" class="muted">● connecting…</span>
   </header>
@@ -383,26 +417,10 @@ function dashboardCss(): string {
     }
     header h1 { font-size: 16px; font-weight: 600; letter-spacing: -0.3px; }
     .badge { font-size: 11px; color: var(--accent2); background: rgba(78,204,163,0.12); padding: 2px 8px; border-radius: 12px; }
-    .breadcrumb { color: var(--muted); font-size: 13px; }
     .muted { color: var(--muted); font-size: 13px; }
     main { padding: 24px; max-width: 1200px; margin: 0 auto; }
     h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; letter-spacing: -0.2px; }
     .section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 24px 0 10px; }
-    .workspace-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
-    .ws-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 18px;
-      cursor: pointer;
-      transition: border-color 0.12s, transform 0.12s;
-    }
-    .ws-card:hover { border-color: var(--accent); transform: translateY(-1px); }
-    .ws-card h3 { font-size: 14px; font-weight: 600; margin-bottom: 4px; display:flex; align-items:center; }
-    .ws-id { font-size: 11px; color: var(--muted); font-family: 'SF Mono', monospace; }
-    .ws-path { font-size: 11px; color: var(--muted); margin-top: 8px; word-break: break-all; font-family: 'SF Mono', monospace; }
-    .ws-meta { display: flex; gap: 10px; margin-top: 10px; font-size: 11px; color: var(--muted); flex-wrap: wrap; align-items:center; }
-    .tag { background: rgba(124,109,240,0.12); color: var(--accent); border-radius: 3px; padding: 1px 6px; font-size: 11px; }
     .pill { border-radius: 10px; padding: 1px 8px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
     .pill.running { background: rgba(78,204,163,0.15); color: var(--accent2); }
     .pill.stopped { background: rgba(136,136,153,0.12); color: var(--muted); }
@@ -481,94 +499,76 @@ function dashboardCss(): string {
     }
     .meta-intake-banner .text { flex: 1; font-size: 13px; }
     .meta-intake-banner strong { color: var(--warn); }
+    .wizard { max-width: 720px; margin: 0 auto; }
+    .wizard .step-header { display: flex; gap: 8px; align-items: center; margin-bottom: 18px; color: var(--muted); font-size: 12px; }
+    .wizard .step-dot { width: 22px; height: 22px; border-radius: 50%; background: var(--surface-2); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 11px; }
+    .wizard .step-dot.active { background: var(--accent); color: white; }
+    .wizard .step-dot.done { background: var(--accent2); color: var(--bg); }
+    .provider-list { display: flex; flex-direction: column; gap: 10px; }
+    .provider-row {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 16px;
+      display: flex; gap: 14px; align-items: center;
+      cursor: pointer;
+      transition: border-color 0.12s;
+    }
+    .provider-row:hover { border-color: var(--accent); }
+    .provider-row.selected { border-color: var(--accent); background: rgba(124,109,240,0.08); }
+    .provider-row .status-chip { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 10px; }
+    .provider-row .status-chip.ok { background: rgba(78,204,163,0.15); color: var(--accent2); }
+    .provider-row .status-chip.missing { background: rgba(136,136,153,0.12); color: var(--muted); }
+    .provider-row .label { font-weight: 600; font-size: 14px; }
+    .provider-row .detail { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .provider-row .radio { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border); flex-shrink: 0; }
+    .provider-row.selected .radio { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 40%, transparent 45%); }
   `
 }
 
 function dashboardJs(): string {
   return `
     const app = document.getElementById('app')
-    const wsCount = document.getElementById('ws-count')
-    const breadcrumb = document.getElementById('breadcrumb')
+    const projectName = document.getElementById('project-name')
     const sseStatus = document.getElementById('sse-status')
 
-    // ---- Routing -----------------------------------------------------------
     function route() {
       const path = location.pathname
-      const m = path.match(/^\\/workspace\\/([a-z0-9-]+)\\/?$/)
-      if (m) return renderDetail(m[1])
-      return renderGrid()
+      if (path === '/setup') return renderSetup()
+      return renderProject()
     }
-
     window.addEventListener('popstate', route)
+    function nav(href) { history.pushState({}, '', href); route() }
 
-    function nav(href) {
-      history.pushState({}, '', href)
-      route()
-    }
+    // ---- Project (root) view ----------------------------------------------
+    async function renderProject() {
+      app.innerHTML = '<div class="muted">Loading project…</div>'
+      const detail = await fetch('/api/project').then(r => r.json())
+      if (detail.error) { app.innerHTML = \`<div class="muted">Error: \${detail.error}</div>\`; return }
 
-    // ---- Grid view ---------------------------------------------------------
-    async function renderGrid() {
-      breadcrumb.textContent = ''
-      const res = await fetch('/api/workspaces')
-      const { workspaces, error } = await res.json()
-      if (error) { app.innerHTML = \`<div class="muted">Error: \${error}</div>\`; return }
-
-      wsCount.textContent = workspaces.length + ' workspace' + (workspaces.length !== 1 ? 's' : '')
-
-      if (workspaces.length === 0) {
+      if (detail.initializationNeeded) {
+        projectName.textContent = ''
         app.innerHTML = \`
           <div class="empty">
-            <h2>No workspaces registered</h2>
-            <p>Run the CLI to create your first:</p>
-            <code>guildhall init ~/path/to/project</code>
-            <p class="muted" style="margin-top:16px">or POST the path to /api/workspaces</p>
+            <h2>Project not initialized</h2>
+            <p class="muted" style="margin:14px 0">\${detail.path}</p>
+            <button onclick="location.href='/setup'">Start setup wizard →</button>
           </div>
         \`
         return
       }
 
-      app.innerHTML = '<div class="section-title">Workspaces</div><div class="workspace-grid" id="grid"></div>'
-      const grid = document.getElementById('grid')
-      grid.innerHTML = workspaces.map(ws => \`
-        <div class="ws-card" data-id="\${ws.id}">
-          <h3>
-            <span class="status-dot \${ws.running ? 'running' : (ws.runStatus === 'error' ? 'error' : 'idle')}"></span>
-            <span style="flex:1">\${escapeHtml(ws.name)}</span>
-            <span class="pill \${ws.running ? 'running' : (ws.runStatus === 'error' ? 'error' : 'stopped')}">\${ws.runStatus}</span>
-          </h3>
-          <div class="ws-id">\${ws.id}</div>
-          <div class="ws-path">\${ws.path}</div>
-          <div class="ws-meta">
-            <span>\${ws.coordinators} coordinator\${ws.coordinators !== 1 ? 's' : ''}</span>
-            \${(ws.tags || []).map(t => \`<span class="tag">\${escapeHtml(t)}</span>\`).join('')}
-            \${ws.valid ? '' : '<span style="color:var(--danger)">⚠ guildhall.yaml not found</span>'}
-          </div>
-        </div>
-      \`).join('')
-      grid.querySelectorAll('.ws-card').forEach(card => {
-        card.addEventListener('click', () => nav('/workspace/' + card.dataset.id))
-      })
-    }
-
-    // ---- Detail view -------------------------------------------------------
-    async function renderDetail(id) {
-      breadcrumb.textContent = '› ' + id
-      app.innerHTML = '<div class="muted">Loading workspace…</div>'
-
-      const detail = await fetch('/api/workspaces/' + id).then(r => r.json())
-      if (detail.error) { app.innerHTML = \`<div class="muted">Error: \${detail.error}</div>\`; return }
-
-      wsCount.textContent = detail.entry.name
-
+      projectName.textContent = detail.name
       const runStatus = detail.run?.status ?? 'stopped'
       const coordinators = detail.config?.coordinators ?? []
       const needsMeta = coordinators.length === 0
+
       app.innerHTML = \`
         <div class="detail-header">
-          <h2>\${escapeHtml(detail.entry.name)}</h2>
+          <h2>\${escapeHtml(detail.name)}</h2>
           <span class="pill \${runStatus === 'running' ? 'running' : runStatus === 'error' ? 'error' : 'stopped'}">\${runStatus}</span>
           <span style="flex:1"></span>
-          <button id="btn-new-task" class="secondary" \${needsMeta ? 'disabled title="Bootstrap the workspace first"' : ''}>+ New Task</button>
+          <button id="btn-new-task" class="secondary" \${needsMeta ? 'disabled title="Bootstrap the project first"' : ''}>+ New Task</button>
           <button id="btn-start" \${runStatus === 'running' || runStatus === 'stopping' ? 'disabled' : ''}>▶ Start</button>
           <button id="btn-stop" class="danger" \${runStatus !== 'running' ? 'disabled' : ''}>■ Stop</button>
         </div>
@@ -576,11 +576,11 @@ function dashboardJs(): string {
         \${needsMeta ? \`
           <div class="meta-intake-banner">
             <div class="text">
-              <strong>Workspace not yet bootstrapped.</strong> No coordinators are configured — click
-              Bootstrap and the meta-intake agent will interview you about the project and draft a
+              <strong>Project not yet bootstrapped.</strong> No coordinators are configured — click
+              Bootstrap and the meta-intake agent will interview you about the codebase and draft a
               guildhall.yaml with coordinators for each domain it finds.
             </div>
-            <button id="btn-bootstrap">Bootstrap workspace</button>
+            <button id="btn-bootstrap">Bootstrap project</button>
           </div>
         \` : ''}
 
@@ -599,7 +599,7 @@ function dashboardJs(): string {
             <div class="card">
               <h2>Tasks (\${detail.tasks.length})</h2>
               \${detail.tasks.length === 0
-                ? '<div class="muted">No tasks yet. Add to memory/TASKS.json or let the meta-intake agent bootstrap them.</div>'
+                ? '<div class="muted">No tasks yet. Click "+ New Task" or let the meta-intake agent bootstrap them.</div>'
                 : '<table><thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Domain</th></tr></thead><tbody>' +
                   detail.tasks.map(t => \`
                     <tr>
@@ -612,7 +612,7 @@ function dashboardJs(): string {
             </div>
             <div class="card">
               <h2>Coordinators</h2>
-              \${(detail.config?.coordinators ?? []).map(c => \`
+              \${coordinators.map(c => \`
                 <div style="margin-bottom:10px">
                   <div style="font-weight:600">\${escapeHtml(c.name)} <span class="muted" style="font-weight:400">— \${escapeHtml(c.domain)}</span></div>
                   <div class="muted" style="font-size:12px">\${escapeHtml(c.mandate?.slice(0, 180) ?? '')}\${(c.mandate?.length ?? 0) > 180 ? '…' : ''}</div>
@@ -624,49 +624,164 @@ function dashboardJs(): string {
       \`
 
       document.getElementById('btn-start').addEventListener('click', async () => {
-        await fetch('/api/workspaces/' + id + '/start', { method: 'POST' })
-        setTimeout(() => renderDetail(id), 300)
+        await fetch('/api/project/start', { method: 'POST' })
+        setTimeout(renderProject, 300)
       })
       document.getElementById('btn-stop').addEventListener('click', async () => {
-        await fetch('/api/workspaces/' + id + '/stop', { method: 'POST' })
-        setTimeout(() => renderDetail(id), 300)
+        await fetch('/api/project/stop', { method: 'POST' })
+        setTimeout(renderProject, 300)
       })
       const btnNew = document.getElementById('btn-new-task')
       if (btnNew && !btnNew.disabled) {
-        btnNew.addEventListener('click', () => showIntakeModal(id, coordinators))
+        btnNew.addEventListener('click', () => showIntakeModal(coordinators))
       }
       const btnBootstrap = document.getElementById('btn-bootstrap')
       if (btnBootstrap) {
         btnBootstrap.addEventListener('click', async () => {
           btnBootstrap.disabled = true
           btnBootstrap.textContent = 'Creating…'
-          const r = await fetch('/api/workspaces/' + id + '/meta-intake', { method: 'POST' })
+          const r = await fetch('/api/project/meta-intake', { method: 'POST' })
           const j = await r.json()
           if (j.error) {
             alert('Bootstrap failed: ' + j.error)
             btnBootstrap.disabled = false
-            btnBootstrap.textContent = 'Bootstrap workspace'
+            btnBootstrap.textContent = 'Bootstrap project'
             return
           }
-          // Auto-start the orchestrator so the meta-intake agent can begin.
-          await fetch('/api/workspaces/' + id + '/start', { method: 'POST' })
-          setTimeout(() => renderDetail(id), 400)
+          await fetch('/api/project/start', { method: 'POST' })
+          setTimeout(renderProject, 400)
         })
       }
 
-      // Progress tail
-      fetch('/api/workspaces/' + id + '/progress').then(r => r.json()).then(j => {
-        document.getElementById('progress').textContent = j.progress || '(empty)'
+      fetch('/api/project/progress').then(r => r.json()).then(j => {
+        const el = document.getElementById('progress')
+        if (el) el.textContent = j.progress || '(empty)'
       })
 
-      // Seed + subscribe to feed
       const feed = document.getElementById('feed')
-      feed.innerHTML = ''
-      ;(detail.recentEvents || []).forEach(renderEvent)
-
-      connectWorkspaceStream(id)
+      if (feed) {
+        feed.innerHTML = ''
+        ;(detail.recentEvents || []).forEach(renderEvent)
+      }
+      connectStream()
     }
 
+    // ---- Setup wizard ------------------------------------------------------
+    let wizardStep = 1
+    let selectedProvider = null
+    async function renderSetup() {
+      projectName.textContent = 'Setup'
+      app.innerHTML = '<div class="muted">Detecting providers…</div>'
+      const data = await fetch('/api/setup/providers').then(r => r.json())
+      if (data.error) { app.innerHTML = \`<div class="muted">Error: \${data.error}</div>\`; return }
+      selectedProvider = selectedProvider || data.preferredProvider || firstDetected(data.providers)
+
+      app.innerHTML = \`
+        <div class="wizard">
+          <div class="step-header">
+            <span class="step-dot active">1</span>
+            <span>Pick an agent provider</span>
+          </div>
+          <div class="card">
+            <h2>How should agents call an LLM?</h2>
+            <p class="muted" style="margin-bottom:14px">Guildhall reads credentials installed by Anthropic's / OpenAI's official CLIs. If none are installed, paste an API key below and Guildhall will store it in <code class="inline">.guildhall/config.yaml</code> (gitignored).</p>
+            <div class="provider-list" id="provider-list"></div>
+            <div id="api-key-form" style="margin-top:16px"></div>
+          </div>
+          <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:14px">
+            <button class="secondary" onclick="location.href='/'">Cancel</button>
+            <button id="btn-save-provider">Save and continue →</button>
+          </div>
+        </div>
+      \`
+      renderProviderList(data.providers)
+
+      document.getElementById('btn-save-provider').addEventListener('click', async () => {
+        if (!selectedProvider) { alert('Pick a provider first'); return }
+        const body = { preferredProvider: selectedProvider }
+        if (selectedProvider === 'anthropic-api') {
+          const k = document.getElementById('api-key-input')?.value?.trim()
+          if (k) body.anthropicApiKey = k
+        }
+        if (selectedProvider === 'openai-api') {
+          const k = document.getElementById('api-key-input')?.value?.trim()
+          if (k) body.openaiApiKey = k
+        }
+        if (selectedProvider === 'llama-cpp') {
+          const u = document.getElementById('llama-url-input')?.value?.trim()
+          if (u) body.lmStudioUrl = u
+        }
+        const btn = document.getElementById('btn-save-provider')
+        btn.disabled = true; btn.textContent = 'Saving…'
+        const r = await fetch('/api/setup/providers/config', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        const j = await r.json()
+        if (j.error) {
+          alert('Save failed: ' + j.error)
+          btn.disabled = false; btn.textContent = 'Save and continue →'
+          return
+        }
+        // Step 2 (doc-scan / agent interview) is next — for now, hand off to main.
+        nav('/')
+      })
+    }
+
+    function firstDetected(providers) {
+      const order = ['claude-oauth', 'codex', 'anthropic-api', 'openai-api', 'llama-cpp']
+      for (const k of order) if (providers[k]?.detected) return k
+      return null
+    }
+
+    function renderProviderList(providers) {
+      const list = document.getElementById('provider-list')
+      const order = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api']
+      list.innerHTML = order.map(key => {
+        const p = providers[key]
+        if (!p) return ''
+        const isSel = key === selectedProvider
+        return \`
+          <div class="provider-row \${isSel ? 'selected' : ''}" data-key="\${key}">
+            <div class="radio"></div>
+            <div style="flex:1">
+              <div class="label">\${escapeHtml(p.label)}</div>
+              <div class="detail">\${escapeHtml(p.detail)}</div>
+            </div>
+            <span class="status-chip \${p.detected ? 'ok' : 'missing'}">\${p.detected ? 'ready' : 'not found'}</span>
+          </div>
+        \`
+      }).join('')
+      list.querySelectorAll('.provider-row').forEach(row => {
+        row.addEventListener('click', () => {
+          selectedProvider = row.dataset.key
+          renderProviderList(providers)
+          renderApiKeyForm(providers)
+        })
+      })
+      renderApiKeyForm(providers)
+    }
+
+    function renderApiKeyForm(providers) {
+      const form = document.getElementById('api-key-form')
+      if (!form) return
+      if (selectedProvider === 'anthropic-api' || selectedProvider === 'openai-api') {
+        form.innerHTML = \`
+          <label>API key (stored in .guildhall/config.yaml, gitignored)</label>
+          <input id="api-key-input" type="password" placeholder="sk-..." />
+        \`
+      } else if (selectedProvider === 'llama-cpp') {
+        form.innerHTML = \`
+          <label>llama.cpp / LM Studio base URL</label>
+          <input id="llama-url-input" type="text" value="\${escapeHtml(providers['llama-cpp']?.url ?? 'http://localhost:1234/v1')}" />
+        \`
+      } else {
+        form.innerHTML = ''
+      }
+    }
+
+    // ---- Event feed --------------------------------------------------------
     function renderEvent(ev) {
       const feed = document.getElementById('feed')
       if (!feed) return
@@ -677,10 +792,10 @@ function dashboardJs(): string {
         type === 'escalation_raised' ? 'escalation' :
         type === 'error' ? 'error' :
         type === 'agent_issue' ? 'issue' :
-        type.startsWith('supervisor_') ? 'supervisor' :
-        ''
+        type.startsWith('supervisor_') ? 'supervisor' : ''
       const ts = ev.at || new Date().toISOString()
       const summary = summarizeEvent(inner)
+      if (!summary) return
       const row = document.createElement('div')
       row.className = 'ev ' + cls
       row.innerHTML = '<span class="ts">' + ts.slice(11, 19) + '</span>' + escapeHtml(summary)
@@ -701,8 +816,9 @@ function dashboardJs(): string {
         case 'supervisor_started':
         case 'supervisor_stopped':
         case 'supervisor_error':
-          return (inner.type.replace('supervisor_', '')) + (inner.message ? ': ' + inner.message : '')
+          return inner.type.replace('supervisor_', '') + (inner.message ? ': ' + inner.message : '')
         case 'heartbeat':
+        case 'connected':
           return ''
         default:
           return inner.type + ' ' + JSON.stringify(inner).slice(0, 200)
@@ -710,9 +826,9 @@ function dashboardJs(): string {
     }
 
     let currentES = null
-    function connectWorkspaceStream(id) {
-      if (currentES) { currentES.close() }
-      const es = new EventSource('/api/workspaces/' + id + '/events')
+    function connectStream() {
+      if (currentES) currentES.close()
+      const es = new EventSource('/api/project/events')
       currentES = es
       es.onopen = () => { sseStatus.textContent = '● live' }
       es.onerror = () => { sseStatus.textContent = '● reconnecting…' }
@@ -721,9 +837,8 @@ function dashboardJs(): string {
           const data = JSON.parse(e.data)
           if (data.type === 'connected' || data.type === 'heartbeat') return
           renderEvent(data)
-          // If the status changed, refetch metadata chip (lightweight).
           if (data.event?.type?.startsWith('supervisor_')) {
-            fetch('/api/workspaces/' + id).then(r => r.json()).then(d => {
+            fetch('/api/project').then(r => r.json()).then(d => {
               const pill = document.querySelector('.detail-header .pill')
               if (pill && d.run) {
                 pill.textContent = d.run.status
@@ -735,24 +850,11 @@ function dashboardJs(): string {
       }
     }
 
-    // Global grid stream (reloads list on any supervisor_started/stopped)
-    function connectGlobalStream() {
-      const es = new EventSource('/api/events')
-      es.onmessage = e => {
-        try {
-          const data = JSON.parse(e.data)
-          if (data.event?.type?.startsWith('supervisor_')) {
-            if (location.pathname === '/') renderGrid()
-          }
-        } catch {}
-      }
-    }
-
     function escapeHtml(s) {
       return String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
     }
 
-    function showIntakeModal(workspaceId, coordinators) {
+    function showIntakeModal(coordinators) {
       const backdrop = document.createElement('div')
       backdrop.className = 'modal-backdrop'
       const domainOptions = coordinators.map(c => \`<option value="\${escapeHtml(c.domain)}">\${escapeHtml(c.name)} (\${escapeHtml(c.domain)})</option>\`).join('')
@@ -760,9 +862,7 @@ function dashboardJs(): string {
         <div class="modal">
           <h2>New Task</h2>
           <label for="intake-ask">What should the agents work on?</label>
-          <textarea id="intake-ask" placeholder="Describe the task in plain language. The spec agent will ask follow-ups before a coordinator assigns work.
-
-Example: \\"Add keyboard navigation to the Looma Combobox component — arrow keys move focus, Enter selects, Escape closes the popup.\\""></textarea>
+          <textarea id="intake-ask" placeholder="Describe the task in plain language. The spec agent will ask follow-ups before a coordinator assigns work."></textarea>
           <label for="intake-domain">Domain (routes to a coordinator)</label>
           <select id="intake-domain">\${domainOptions}</select>
           <label for="intake-title">Title (optional — auto-generated from the ask)</label>
@@ -785,25 +885,26 @@ Example: \\"Add keyboard navigation to the Looma Combobox component — arrow ke
         if (!ask) { alert('Please describe the task.'); return }
         const btn = document.getElementById('intake-submit')
         btn.disabled = true; btn.textContent = 'Creating…'
-        const res = await fetch('/api/workspaces/' + workspaceId + '/intake', {
+        const res = await fetch('/api/project/intake', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ ask, domain, ...(title ? { title } : {}) }),
         })
         const j = await res.json()
-        if (j.error) { alert('Intake failed: ' + j.error); btn.disabled = false; btn.textContent = 'Create task'; return }
-        close()
-        // If the orchestrator isn't running yet, auto-start it so the spec
-        // agent picks up the new exploring task on the next tick.
-        const detail = await fetch('/api/workspaces/' + workspaceId).then(r => r.json())
-        if (!detail.run || detail.run.status !== 'running') {
-          await fetch('/api/workspaces/' + workspaceId + '/start', { method: 'POST' })
+        if (j.error) {
+          alert('Intake failed: ' + j.error)
+          btn.disabled = false; btn.textContent = 'Create task'
+          return
         }
-        setTimeout(() => renderDetail(workspaceId), 400)
+        close()
+        const detail = await fetch('/api/project').then(r => r.json())
+        if (!detail.run || detail.run.status !== 'running') {
+          await fetch('/api/project/start', { method: 'POST' })
+        }
+        setTimeout(renderProject, 400)
       })
     }
 
     route()
-    connectGlobalStream()
   `
 }

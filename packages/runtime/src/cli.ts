@@ -20,10 +20,20 @@ import {
   findWorkspace,
   registerWorkspace,
   unregisterWorkspace,
-  ensureGuildhallHome,
   readWorkspaceConfig,
   slugify,
 } from '@guildhall/config'
+import { exec } from 'node:child_process'
+import { platform } from 'node:os'
+
+function openBrowser(url: string): void {
+  const cmd = platform() === 'darwin' ? `open "${url}"`
+    : platform() === 'win32' ? `start "" "${url}"`
+    : `xdg-open "${url}"`
+  exec(cmd, err => {
+    if (err) console.log(`[guildhall] Open this URL in your browser: ${url}`)
+  })
+}
 
 /** Expand leading ~ to home directory */
 function expandPath(p: string): string {
@@ -126,7 +136,13 @@ Examples:
 async function cmdInit() {
   const pos = positionals()
   const targetDir = pos[0] ?? process.cwd()
+  const noServe = process.argv.includes('--no-serve')
+  const absPath = resolve(expandPath(targetDir))
   await runInit({ targetDir })
+  if (noServe) return
+  console.log('\n[guildhall] Launching dashboard…\n')
+  await runServe({ projectPath: absPath })
+  setTimeout(() => openBrowser('http://localhost:7842'), 400)
 }
 
 async function cmdRegister() {
@@ -137,7 +153,6 @@ async function cmdRegister() {
     process.exit(1)
   }
 
-  ensureGuildhallHome()
   const absPath = resolve(expandPath(targetDir))
 
   // Read the guildhall.yaml to get name and id
@@ -183,7 +198,6 @@ async function cmdUnregister() {
 }
 
 function cmdList() {
-  ensureGuildhallHome()
   const workspaces = listWorkspaces()
 
   if (workspaces.length === 0) {
@@ -233,8 +247,16 @@ async function cmdRun() {
 }
 
 async function cmdServe() {
+  const pos = positionals()
+  const pathArg = pos[0]
   const portArg = getFlag('--port')
-  await runServe(portArg ? { port: Number(portArg) } : {})
+  const noOpen = process.argv.includes('--no-open')
+  const projectPath = pathArg ? resolve(expandPath(pathArg)) : process.cwd()
+  const opts: Parameters<typeof runServe>[0] = { projectPath }
+  if (portArg) opts.port = Number(portArg)
+  const port = opts.port ?? 7842
+  await runServe(opts)
+  if (!noOpen) setTimeout(() => openBrowser(`http://localhost:${port}`), 400)
 }
 
 function loadWorkspaceByFlagOrCwd(flag?: string) {

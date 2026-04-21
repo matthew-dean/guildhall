@@ -3,10 +3,6 @@ import { existsSync } from 'node:fs'
 import { input, select, confirm } from '@inquirer/prompts'
 import {
   bootstrapWorkspace,
-  ensureGuildhallHome,
-  registerWorkspace,
-  findWorkspace,
-  updateWorkspace,
   slugify,
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -290,23 +286,11 @@ export async function runInit(opts: InitOptions): Promise<void> {
     writeWorkspaceConfig(absPath, config as any)
   }
 
-  // Register / update in ~/.guildhall/
-  ensureGuildhallHome()
-  const existingEntry = findWorkspace(id) ?? findWorkspace(absPath)
-  if (existingEntry) {
-    updateWorkspace(existingEntry.id, { name, path: absPath, tags: config.tags })
-    console.log(`\n[guildhall] ✓ Updated registry entry for "${name}"`)
-  } else {
-    registerWorkspace({ id, path: absPath, name, tags: config.tags })
-    console.log(`\n[guildhall] ✓ Registered in ~/.guildhall/registry.yaml`)
-  }
-
-  console.log(`[guildhall] ✓ guildhall.yaml → ${absPath}`)
+  console.log(`\n[guildhall] ✓ guildhall.yaml → ${absPath}`)
   console.log(`[guildhall] ✓ memory/ directory ready`)
   console.log()
-  console.log('Next steps:')
-  console.log(`  • Edit ${join(absPath, 'memory', 'TASKS.json')} to add tasks`)
-  console.log(`  • Run "guildhall run ${id}" to start the orchestrator`)
-  console.log(`  • Run "guildhall serve" to open the dashboard`)
+  console.log('Next step:')
+  console.log(`  • The dashboard will now launch at http://localhost:7842`)
+  console.log(`  • Use the setup wizard to pick an agent provider, then add tasks`)
   console.log()
 }
