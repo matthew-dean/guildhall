@@ -20,7 +20,7 @@ import type { CoordinatorDomain } from './coordinator.js'
 //       memory/
 //
 //   Workspace inside a project:
-//     ~/git/my-project/.forge/
+//     ~/git/my-project/.guildhall/
 //       guildhall.workspace.ts
 //       memory/
 //

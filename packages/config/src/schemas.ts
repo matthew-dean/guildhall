@@ -3,7 +3,7 @@ import { ModelAssignmentConfig, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhal
 
 // ---------------------------------------------------------------------------
 // guildhall.yaml — per-workspace configuration
-// Lives next to the project's code (or in a .forge/ subdir).
+// Lives next to the project's code (or in a .guildhall/ subdir).
 // ---------------------------------------------------------------------------
 
 export const WorkspaceYamlConfig = z.object({

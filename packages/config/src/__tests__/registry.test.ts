@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 // ---------------------------------------------------------------------------
 
 const TMP_HOME = join(tmpdir(), `forge-test-${process.pid}`)
-const TMP_FORGE = join(TMP_HOME, '.forge')
+const TMP_GUILDHALL = join(TMP_HOME, '.guildhall')
 
 vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:os')>()
@@ -21,12 +21,12 @@ const { readRegistry, registerWorkspace, findWorkspace, unregisterWorkspace, tou
 
 describe('registry', () => {
   beforeEach(() => {
-    mkdirSync(TMP_FORGE, { recursive: true })
+    mkdirSync(TMP_GUILDHALL, { recursive: true })
   })
 
   afterEach(() => {
-    if (existsSync(TMP_FORGE)) {
-      rmSync(TMP_FORGE, { recursive: true, force: true })
+    if (existsSync(TMP_GUILDHALL)) {
+      rmSync(TMP_GUILDHALL, { recursive: true, force: true })
     }
   })
 

@@ -7,7 +7,7 @@ import {
   listWorkspaces,
   readRegistry,
   registerWorkspace,
-  ensureForgeHome,
+  ensureGuildhallHome,
   readGlobalConfig,
   readWorkspaceConfig,
 } from '@guildhall/config'
@@ -43,7 +43,7 @@ export interface ServeOptions {
 }
 
 export async function runServe(opts: ServeOptions = {}): Promise<void> {
-  ensureForgeHome()
+  ensureGuildhallHome()
 
   const globalConfig = readGlobalConfig()
   const port = opts.port ?? globalConfig.servePort

@@ -20,7 +20,7 @@ import {
   findWorkspace,
   registerWorkspace,
   unregisterWorkspace,
-  ensureForgeHome,
+  ensureGuildhallHome,
   readWorkspaceConfig,
   slugify,
 } from '@guildhall/config'
@@ -137,7 +137,7 @@ async function cmdRegister() {
     process.exit(1)
   }
 
-  ensureForgeHome()
+  ensureGuildhallHome()
   const absPath = resolve(expandPath(targetDir))
 
   // Read the guildhall.yaml to get name and id
@@ -183,7 +183,7 @@ async function cmdUnregister() {
 }
 
 function cmdList() {
-  ensureForgeHome()
+  ensureGuildhallHome()
   const workspaces = listWorkspaces()
 
   if (workspaces.length === 0) {

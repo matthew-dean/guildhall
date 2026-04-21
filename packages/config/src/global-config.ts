@@ -1,4 +1,13 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  renameSync,
+  cpSync,
+  rmSync,
+  readdirSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
@@ -13,16 +22,16 @@ import type { ZodError } from 'zod'
 //     registry.yaml    — workspace registry
 // ---------------------------------------------------------------------------
 
-export function forgeHomeDir(): string {
-  return join(homedir(), '.forge')
+export function guildhallHomeDir(): string {
+  return join(homedir(), '.guildhall')
 }
 
 export function globalConfigPath(): string {
-  return join(forgeHomeDir(), 'config.yaml')
+  return join(guildhallHomeDir(), 'config.yaml')
 }
 
 export function registryPath(): string {
-  return join(forgeHomeDir(), 'registry.yaml')
+  return join(guildhallHomeDir(), 'registry.yaml')
 }
 
 // ---------------------------------------------------------------------------
@@ -68,7 +77,7 @@ export function readGlobalConfig(): GlobalConfig {
  * Creates ~/.guildhall/ if it does not exist.
  */
 export function writeGlobalConfig(config: GlobalConfig): void {
-  const homeDir = forgeHomeDir()
+  const homeDir = guildhallHomeDir()
   if (!existsSync(homeDir)) {
     mkdirSync(homeDir, { recursive: true })
   }
@@ -91,9 +100,32 @@ export function updateGlobalConfig(patch: Partial<GlobalConfig>): GlobalConfig {
 /**
  * Ensure ~/.guildhall/ exists with a default config.yaml if missing.
  * Safe to call multiple times (idempotent).
+ *
+ * Also performs a one-time migration from the pre-rename ~/.forge/ directory:
+ * if ~/.guildhall/ does not exist but ~/.forge/ does, rename it.
  */
-export function ensureForgeHome(): void {
-  const homeDir = forgeHomeDir()
+export function ensureGuildhallHome(): void {
+  const homeDir = guildhallHomeDir()
+  const legacyHomeDir = join(homedir(), '.forge')
+
+  if (existsSync(legacyHomeDir)) {
+    if (!existsSync(homeDir)) {
+      renameSync(legacyHomeDir, homeDir)
+      console.log(`[guildhall] migrated ${legacyHomeDir} → ${homeDir}`)
+    } else {
+      // Both dirs exist (older install of a dev build probably created ~/.guildhall
+      // before this rename landed). Copy any files the legacy dir has that the new
+      // one is missing, then remove the legacy dir.
+      for (const name of readdirSync(legacyHomeDir)) {
+        const src = join(legacyHomeDir, name)
+        const dest = join(homeDir, name)
+        if (!existsSync(dest)) cpSync(src, dest, { recursive: true })
+      }
+      rmSync(legacyHomeDir, { recursive: true, force: true })
+      console.log(`[guildhall] merged ${legacyHomeDir} into ${homeDir} and removed the legacy dir`)
+    }
+  }
+
   if (!existsSync(homeDir)) {
     mkdirSync(homeDir, { recursive: true })
   }

@@ -15,13 +15,13 @@ export {
 
 // Global config (~/.guildhall/config.yaml)
 export {
-  forgeHomeDir,
+  guildhallHomeDir,
   globalConfigPath,
   registryPath,
   readGlobalConfig,
   writeGlobalConfig,
   updateGlobalConfig,
-  ensureForgeHome,
+  ensureGuildhallHome,
 } from './global-config.js'
 
 // Workspace registry (~/.guildhall/registry.yaml)

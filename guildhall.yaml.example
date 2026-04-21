@@ -1,15 +1,15 @@
-# forge.yaml — Forge workspace configuration
+# guildhall.yaml — Guildhall workspace configuration
 #
-# This file defines a Forge workspace. It lives in the workspace root directory
-# alongside the memory/ subdirectory.
+# This file defines a Guildhall workspace. It lives in the workspace root
+# directory alongside the memory/ subdirectory.
 #
-# Run "forge init" to generate this file interactively, then edit as needed.
-# Run "forge config" to re-run the wizard on an existing workspace.
+# Run "guildhall init" to generate this file interactively, then edit as needed.
+# Run "guildhall config" to re-run the wizard on an existing workspace.
 
 # Human-readable name shown in the dashboard and progress logs
 name: Looma + Knit
 
-# Unique ID used in the CLI ("forge run looma-knit") and ~/.forge/registry.yaml
+# Unique ID used in the CLI ("guildhall run looma-knit") and ~/.guildhall/registry.yaml
 id: looma-knit
 
 # Absolute path to the project root this workspace tracks.

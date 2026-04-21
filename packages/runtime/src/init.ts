@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { input, select, confirm } from '@inquirer/prompts'
 import {
   bootstrapWorkspace,
-  ensureForgeHome,
+  ensureGuildhallHome,
   registerWorkspace,
   findWorkspace,
   updateWorkspace,
@@ -291,7 +291,7 @@ export async function runInit(opts: InitOptions): Promise<void> {
   }
 
   // Register / update in ~/.guildhall/
-  ensureForgeHome()
+  ensureGuildhallHome()
   const existingEntry = findWorkspace(id) ?? findWorkspace(absPath)
   if (existingEntry) {
     updateWorkspace(existingEntry.id, { name, path: absPath, tags: config.tags })

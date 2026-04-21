@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
 import { WorkspaceRegistry, WorkspaceRegistryEntry } from './schemas.js'
-import { registryPath, forgeHomeDir } from './global-config.js'
+import { registryPath, guildhallHomeDir } from './global-config.js'
 import type { ZodError } from 'zod'
 
 // ---------------------------------------------------------------------------
@@ -41,7 +41,7 @@ export function readRegistry(): WorkspaceRegistry {
 // ---------------------------------------------------------------------------
 
 function writeRegistry(registry: WorkspaceRegistry): void {
-  const homeDir = forgeHomeDir()
+  const homeDir = guildhallHomeDir()
   if (!existsSync(homeDir)) {
     mkdirSync(homeDir, { recursive: true })
   }
