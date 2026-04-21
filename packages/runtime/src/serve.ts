@@ -6,11 +6,14 @@ import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
 import {
   readWorkspaceConfig,
+  writeWorkspaceConfig,
+  bootstrapWorkspace,
   readProjectConfig,
   updateProjectConfig,
   FORGE_YAML_FILENAME,
   slugify,
 } from '@guildhall/config'
+import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
 import { createExploringTask } from './intake.js'
 import { createMetaIntakeTask, workspaceNeedsMetaIntake } from './meta-intake.js'
@@ -67,7 +70,7 @@ function resolveProject(projectPath: string): ResolvedProject {
 
 export async function runServe(opts: ServeOptions = {}): Promise<void> {
   const projectPath = resolve(opts.projectPath ?? process.cwd())
-  const project = resolveProject(projectPath)
+  let project = resolveProject(projectPath)
   const cfg = readProjectConfig(projectPath)
   const port = opts.port ?? cfg.servePort
 
@@ -223,6 +226,78 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   // -------------------------------------------------------------------------
   // API: setup wizard
   // -------------------------------------------------------------------------
+  app.get('/api/setup/status', c => {
+    const stored = readProjectConfig(projectPath)
+    return c.json({
+      path: project.path,
+      initialized: !project.initializationNeeded,
+      providerConfigured: Boolean(stored.preferredProvider),
+      name: project.config?.name ?? null,
+      id: project.config?.id ?? null,
+      coordinatorCount: project.config?.coordinators?.length ?? 0,
+    })
+  })
+
+  app.get('/api/setup/defaults', c => {
+    const basename = project.path.split('/').pop() ?? 'project'
+    const suggestedName = project.config?.name ?? basename
+    const suggestedId = project.config?.id ?? slugify(suggestedName)
+    const localModels = MODEL_CATALOG
+      .filter(m => m.provider === 'lm-studio')
+      .map(m => ({ id: m.id, notes: m.notes ?? '' }))
+    const cloudModels = MODEL_CATALOG
+      .filter(m => m.provider !== 'lm-studio')
+      .map(m => ({ id: m.id, provider: m.provider, notes: m.notes ?? '' }))
+    return c.json({
+      suggestedName,
+      suggestedId,
+      defaultLocalAssignment: DEFAULT_LOCAL_MODEL_ASSIGNMENT,
+      localModels,
+      cloudModels,
+    })
+  })
+
+  app.post('/api/setup/identity', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        name?: string
+        id?: string
+        projectPath?: string
+        tags?: string[]
+      }
+      const name = body.name?.trim()
+      if (!name) return c.json({ error: 'Missing "name"' }, 400)
+      const id = (body.id?.trim() || slugify(name))
+      if (!/^[a-z0-9-]+$/.test(id)) {
+        return c.json({ error: 'ID must be lowercase letters, numbers, dashes only' }, 400)
+      }
+      const subProjectPath = body.projectPath?.trim() || undefined
+
+      const existing = project.initializationNeeded ? null : readWorkspaceConfig(project.path)
+      const nextConfig = {
+        name,
+        id,
+        ...(subProjectPath ? { projectPath: subProjectPath } : existing?.projectPath ? { projectPath: existing.projectPath } : {}),
+        models: existing?.models ?? { ...DEFAULT_LOCAL_MODEL_ASSIGNMENT },
+        coordinators: existing?.coordinators ?? [],
+        maxRevisions: existing?.maxRevisions ?? 3,
+        heartbeatInterval: existing?.heartbeatInterval ?? 5,
+        ignore: existing?.ignore ?? ['node_modules', 'dist', '.git', 'coverage'],
+        tags: body.tags ?? existing?.tags ?? [],
+      }
+
+      if (project.initializationNeeded) {
+        bootstrapWorkspace(project.path, { name, ...(subProjectPath ? { projectPath: subProjectPath } : {}) })
+      }
+      writeWorkspaceConfig(project.path, nextConfig as Parameters<typeof writeWorkspaceConfig>[1])
+
+      project = resolveProject(project.path)
+      return c.json({ ok: true, id: project.id, name, path: project.path })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
   app.get('/api/setup/providers', async c => {
     try {
       const stored = readProjectConfig(projectPath)
@@ -535,6 +610,9 @@ function dashboardJs(): string {
     function route() {
       const path = location.pathname
       if (path === '/setup') return renderSetup()
+      // Leaving /setup — reset wizard state so returning later starts fresh.
+      wizardDefaults = null
+      wizardIdentity = null
       return renderProject()
     }
     window.addEventListener('popstate', route)
@@ -668,9 +746,104 @@ function dashboardJs(): string {
 
     // ---- Setup wizard ------------------------------------------------------
     let wizardStep = 1
+    let wizardIdentity = null
+    let wizardDefaults = null
     let selectedProvider = null
+
     async function renderSetup() {
       projectName.textContent = 'Setup'
+      const params = new URLSearchParams(location.search)
+      const requested = Number(params.get('step') || '1')
+
+      if (!wizardDefaults) {
+        const [defaults, status] = await Promise.all([
+          fetch('/api/setup/defaults').then(r => r.json()),
+          fetch('/api/setup/status').then(r => r.json()),
+        ])
+        wizardDefaults = defaults
+        wizardIdentity = {
+          name: status.name || defaults.suggestedName,
+          id: status.id || defaults.suggestedId,
+          initialized: status.initialized,
+          providerConfigured: status.providerConfigured,
+        }
+      }
+
+      // Auto-advance to the furthest incomplete step unless the URL forced a specific one
+      if (!params.get('step')) {
+        if (!wizardIdentity.initialized) wizardStep = 1
+        else if (!wizardIdentity.providerConfigured) wizardStep = 2
+        else wizardStep = 3
+      } else {
+        wizardStep = Math.max(1, Math.min(3, requested))
+      }
+
+      if (wizardStep === 1) return renderIdentityStep()
+      if (wizardStep === 2) return renderProviderStep()
+      return renderReadyStep()
+    }
+
+    function wizardHeader() {
+      const labels = ['1 · Identity', '2 · Provider', '3 · Launch']
+      return \`<div class="step-header">\${labels.map((lbl, i) => {
+        const n = i + 1
+        const cls = n < wizardStep ? 'done' : n === wizardStep ? 'active' : ''
+        return \`<span class="step-dot \${cls}">\${n < wizardStep ? '✓' : n}</span><span style="margin-right:14px">\${escapeHtml(lbl.slice(4))}</span>\`
+      }).join('')}</div>\`
+    }
+
+    function renderIdentityStep() {
+      app.innerHTML = \`
+        <div class="wizard">
+          \${wizardHeader()}
+          <div class="card">
+            <h2>Name this project</h2>
+            <p class="muted" style="margin-bottom:14px">Guildhall writes <code class="inline">guildhall.yaml</code> at <code class="inline">\${escapeHtml(wizardDefaults?.suggestedName ? (wizardIdentity.path || '') : '')}\${escapeHtml(location.pathname)}</code>. These are just labels — change them any time by editing <code class="inline">guildhall.yaml</code>.</p>
+            <label>Workspace name</label>
+            <input id="identity-name" type="text" value="\${escapeHtml(wizardIdentity.name || '')}" />
+            <label>Workspace ID (slug)</label>
+            <input id="identity-id" type="text" value="\${escapeHtml(wizardIdentity.id || '')}" />
+            <div class="muted" style="font-size:11px; margin-top:-6px; margin-bottom:14px">Lowercase letters, numbers, and dashes only. Used in the CLI and in progress logs.</div>
+          </div>
+          <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:14px">
+            <button class="secondary" onclick="location.href='/'">Cancel</button>
+            <button id="btn-identity-next">Save and continue →</button>
+          </div>
+        </div>
+      \`
+      const nameInput = document.getElementById('identity-name')
+      const idInput = document.getElementById('identity-id')
+      let idEdited = Boolean(wizardIdentity.initialized)
+      nameInput.addEventListener('input', () => {
+        if (!idEdited) idInput.value = slugifyClient(nameInput.value)
+      })
+      idInput.addEventListener('input', () => { idEdited = true })
+
+      document.getElementById('btn-identity-next').addEventListener('click', async () => {
+        const name = nameInput.value.trim()
+        const id = idInput.value.trim()
+        if (!name) { alert('Workspace name is required'); return }
+        if (!/^[a-z0-9-]+$/.test(id)) { alert('ID must be lowercase letters, numbers, and dashes only'); return }
+        const btn = document.getElementById('btn-identity-next')
+        btn.disabled = true; btn.textContent = 'Saving…'
+        const r = await fetch('/api/setup/identity', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name, id }),
+        })
+        const j = await r.json()
+        if (j.error) {
+          alert('Save failed: ' + j.error)
+          btn.disabled = false; btn.textContent = 'Save and continue →'
+          return
+        }
+        wizardIdentity = { ...wizardIdentity, name, id, initialized: true }
+        wizardStep = 2
+        nav('/setup?step=2')
+      })
+    }
+
+    async function renderProviderStep() {
       app.innerHTML = '<div class="muted">Detecting providers…</div>'
       const data = await fetch('/api/setup/providers').then(r => r.json())
       if (data.error) { app.innerHTML = \`<div class="muted">Error: \${data.error}</div>\`; return }
@@ -678,23 +851,25 @@ function dashboardJs(): string {
 
       app.innerHTML = \`
         <div class="wizard">
-          <div class="step-header">
-            <span class="step-dot active">1</span>
-            <span>Pick an agent provider</span>
-          </div>
+          \${wizardHeader()}
           <div class="card">
             <h2>How should agents call an LLM?</h2>
-            <p class="muted" style="margin-bottom:14px">Guildhall reads credentials installed by Anthropic's / OpenAI's official CLIs. If none are installed, paste an API key below and Guildhall will store it in <code class="inline">.guildhall/config.yaml</code> (gitignored).</p>
+            <p class="muted" style="margin-bottom:14px">Guildhall reads credentials from Anthropic's / OpenAI's official CLIs, or falls back to a paste-in API key stored in <code class="inline">.guildhall/config.yaml</code> (gitignored).</p>
             <div class="provider-list" id="provider-list"></div>
             <div id="api-key-form" style="margin-top:16px"></div>
           </div>
           <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:14px">
-            <button class="secondary" onclick="location.href='/'">Cancel</button>
+            <button class="secondary" id="btn-provider-back">← Back</button>
             <button id="btn-save-provider">Save and continue →</button>
           </div>
         </div>
       \`
       renderProviderList(data.providers)
+
+      document.getElementById('btn-provider-back').addEventListener('click', () => {
+        wizardStep = 1
+        nav('/setup?step=1')
+      })
 
       document.getElementById('btn-save-provider').addEventListener('click', async () => {
         if (!selectedProvider) { alert('Pick a provider first'); return }
@@ -724,9 +899,53 @@ function dashboardJs(): string {
           btn.disabled = false; btn.textContent = 'Save and continue →'
           return
         }
-        // Step 2 (doc-scan / agent interview) is next — for now, hand off to main.
+        wizardIdentity.providerConfigured = true
+        wizardStep = 3
+        nav('/setup?step=3')
+      })
+    }
+
+    function renderReadyStep() {
+      app.innerHTML = \`
+        <div class="wizard">
+          \${wizardHeader()}
+          <div class="card">
+            <h2>You're ready to bootstrap.</h2>
+            <p class="muted" style="margin:14px 0">Guildhall has saved your identity and chosen provider. Next, the coordinator agent will interview you about the codebase and draft a set of coordinators plus an initial task list. (You can also skip ahead and add coordinators manually in <code class="inline">guildhall.yaml</code>.)</p>
+            <div style="display:flex; gap:10px; margin-top:20px">
+              <button id="btn-bootstrap-agent">Start agent-guided bootstrap</button>
+              <button id="btn-skip-to-dashboard" class="secondary">Skip to dashboard</button>
+            </div>
+          </div>
+        </div>
+      \`
+      document.getElementById('btn-skip-to-dashboard').addEventListener('click', () => {
+        wizardDefaults = null
+        wizardIdentity = null
         nav('/')
       })
+      document.getElementById('btn-bootstrap-agent').addEventListener('click', async () => {
+        const btn = document.getElementById('btn-bootstrap-agent')
+        btn.disabled = true; btn.textContent = 'Seeding meta-intake task…'
+        const r = await fetch('/api/project/meta-intake', { method: 'POST' })
+        const j = await r.json()
+        if (j.error) {
+          alert('Bootstrap failed: ' + j.error)
+          btn.disabled = false; btn.textContent = 'Start agent-guided bootstrap'
+          return
+        }
+        await fetch('/api/project/start', { method: 'POST' })
+        wizardDefaults = null
+        wizardIdentity = null
+        setTimeout(() => nav('/'), 400)
+      })
+    }
+
+    function slugifyClient(s) {
+      return String(s || '').toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 40)
     }
 
     function firstDetected(providers) {

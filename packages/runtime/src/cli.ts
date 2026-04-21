@@ -83,7 +83,11 @@ function printHelp() {
 Forge — multi-agent operating system for software projects
 
 Usage:
-  guildhall init [path]              Interactive setup: creates guildhall.yaml + registers workspace
+  guildhall init [path]              Launch dashboard + browser-based setup wizard
+    --port <n>                   Override dashboard port (default: 7842)
+    --no-browser                 Don't open a browser window
+    --no-serve                   Write guildhall.yaml only (requires --cli-wizard)
+    --cli-wizard                 Legacy: run the terminal setup wizard instead
   guildhall register <path>          Register an existing workspace (must contain guildhall.yaml)
   forge unregister <id|path>     Remove a workspace from the registry
   guildhall list                     Show all registered workspaces
@@ -136,13 +140,26 @@ Examples:
 async function cmdInit() {
   const pos = positionals()
   const targetDir = pos[0] ?? process.cwd()
-  const noServe = process.argv.includes('--no-serve')
   const absPath = resolve(expandPath(targetDir))
-  await runInit({ targetDir })
-  if (noServe) return
-  console.log('\n[guildhall] Launching dashboard…\n')
-  await runServe({ projectPath: absPath })
-  setTimeout(() => openBrowser('http://localhost:7842'), 400)
+  const portArg = getFlag('--port')
+  const port = portArg ? Number(portArg) : 7842
+  const useCliWizard = process.argv.includes('--cli-wizard')
+  const noOpen = process.argv.includes('--no-open') || process.argv.includes('--no-browser')
+  const noServe = process.argv.includes('--no-serve')
+
+  if (useCliWizard) {
+    await runInit({ targetDir })
+    if (noServe) return
+  }
+
+  // Default path: open the browser and let the web wizard do the rest.
+  console.log(`[guildhall] Project directory: ${absPath}`)
+  console.log(`[guildhall] Launching dashboard…`)
+  console.log(`[guildhall] The setup wizard will open at http://localhost:${port}/setup`)
+  console.log()
+  const opts: Parameters<typeof runServe>[0] = { projectPath: absPath, port }
+  await runServe(opts)
+  if (!noOpen) setTimeout(() => openBrowser(`http://localhost:${port}/setup`), 400)
 }
 
 async function cmdRegister() {
