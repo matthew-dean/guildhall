@@ -63,6 +63,7 @@ import {
 //   GET    /api/project/design-system → current design system (or null)
 //   POST   /api/project/design-system → author/revise the design system
 //   POST   /api/project/design-system/approve → mark current DS as human-approved
+//   GET    /api/project/release-readiness → aggregated release-readiness readout
 //   GET    /api/setup/providers       → detect installed providers
 //   POST   /api/setup/providers/config → save chosen provider/API key
 // ---------------------------------------------------------------------------
@@ -651,6 +652,99 @@ export function buildServeApp(opts: ServeOptions = {}): {
   })
 
   // -------------------------------------------------------------------------
+  // API: release readiness
+  //
+  // Aggregates the signals that decide "is this project ready to ship its
+  // next milestone?" into a single readout. Intentionally shallow — it
+  // summarizes, it doesn't gate. The Release view renders the sections
+  // and links back into drawers / Settings for fix-its.
+  // -------------------------------------------------------------------------
+  app.get('/api/project/release-readiness', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ initializationNeeded: true })
+      const memoryDir = join(project.path, 'memory')
+      const tasksPath = join(memoryDir, 'TASKS.json')
+      const tasks: Array<Record<string, unknown>> = (() => {
+        if (!existsSync(tasksPath)) return []
+        const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>> }
+          | Array<Record<string, unknown>>
+        return Array.isArray(raw) ? raw : raw.tasks ?? []
+      })()
+      const ds = await loadDesignSystem(memoryDir).catch(() => undefined)
+
+      const statusCounts: Record<string, number> = {}
+      const openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }> = []
+      const unapprovedBriefs: Array<{ id: string; title: string }> = []
+      const unapprovedSpecs: Array<{ id: string; title: string }> = []
+      const shelvedUnclaimed: Array<{ id: string; title: string; detail?: string }> = []
+      const blockedByAgent: Array<{ id: string; title: string; reason?: string }> = []
+
+      for (const t of tasks) {
+        const status = String((t as { status?: string }).status ?? 'unknown')
+        statusCounts[status] = (statusCounts[status] ?? 0) + 1
+        const id = String((t as { id?: string }).id ?? '')
+        const title = String((t as { title?: string }).title ?? id)
+        const brief = (t as { productBrief?: { approvedAt?: string } }).productBrief
+        if (brief && !brief.approvedAt) unapprovedBriefs.push({ id, title })
+        if (status === 'spec_review') unapprovedSpecs.push({ id, title })
+        if (status === 'shelved') {
+          const reason = (t as { shelveReason?: { detail?: string } }).shelveReason
+          shelvedUnclaimed.push({ id, title, ...(reason?.detail ? { detail: reason.detail } : {}) })
+        }
+        if (status === 'blocked') {
+          const br = (t as { blockReason?: string }).blockReason
+          blockedByAgent.push({ id, title, ...(br ? { reason: br } : {}) })
+        }
+        const escs = (t as { escalations?: Array<{ id: string; reason: string; summary: string; resolvedAt?: string }> }).escalations ?? []
+        for (const e of escs) {
+          if (!e.resolvedAt) openEscalations.push({
+            taskId: id,
+            taskTitle: title,
+            escalationId: e.id,
+            reason: e.reason,
+            summary: e.summary,
+          })
+        }
+      }
+
+      const designSystemApproved = Boolean(ds?.approvedAt)
+      const designSystemDrafted = Boolean(ds)
+
+      // "Blocking" = something a human almost certainly needs to act on.
+      // Everything else is informational.
+      const blockingCount =
+        openEscalations.length
+        + unapprovedBriefs.length
+        + unapprovedSpecs.length
+        + shelvedUnclaimed.length
+        + blockedByAgent.length
+
+      return c.json({
+        ready: blockingCount === 0 && statusCounts['exploring'] === undefined && statusCounts['in_progress'] === undefined && statusCounts['review'] === undefined && statusCounts['gate_check'] === undefined,
+        statusCounts,
+        openEscalations,
+        unapprovedBriefs,
+        unapprovedSpecs,
+        shelvedUnclaimed,
+        blockedByAgent,
+        designSystem: {
+          drafted: designSystemDrafted,
+          approved: designSystemApproved,
+          revision: ds?.revision ?? 0,
+        },
+        totals: {
+          tasks: tasks.length,
+          blockingCount,
+          done: statusCounts['done'] ?? 0,
+        },
+      })
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  // -------------------------------------------------------------------------
   // API: setup wizard
   // -------------------------------------------------------------------------
   app.get('/api/setup/status', c => {
@@ -887,6 +981,7 @@ function dashboardHtml(): string {
       <span class="chip-dot"></span>
       <span class="chip-summary">No agents running</span>
     </div>
+    <a href="/release" class="nav-link" id="nav-release">Release</a>
     <a href="/settings" class="nav-link" id="nav-settings">Settings</a>
     <span id="sse-status" class="muted">● connecting…</span>
   </header>
@@ -958,6 +1053,17 @@ function dashboardCss(): string {
     .ds-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 18px; font-size: 13px; margin-bottom: 8px; }
     .ds-primitives { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
     .ds-primitives li { margin: 2px 0; }
+    .release-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+    .release-card h3 { margin: 0; font-size: 15px; }
+    .release-list { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
+    .release-list li { margin: 3px 0; }
+    .release-list a { color: var(--fg); text-decoration: underline dotted var(--muted); }
+    .release-banner { padding: 16px 20px; }
+    .release-banner.ok { border-left: 3px solid var(--accent2); }
+    .release-banner.warn { border-left: 3px solid var(--warn); }
+    .status-table { width: 100%; font-size: 13px; }
+    .status-table td { padding: 3px 0; }
+    @media (max-width: 720px) { .release-grid { grid-template-columns: 1fr; } }
     .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; flex-shrink: 0; }
     .status-dot.running { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); animation: pulse 1.4s ease-in-out infinite; }
     .status-dot.idle { background: var(--muted); }
@@ -1195,8 +1301,11 @@ function dashboardJs(): string {
       const path = location.pathname
       const navSettings = document.getElementById('nav-settings')
       if (navSettings) navSettings.classList.toggle('active', path === '/settings')
+      const navRelease = document.getElementById('nav-release')
+      if (navRelease) navRelease.classList.toggle('active', path === '/release')
       if (path === '/setup') return renderSetup()
       if (path === '/settings') return renderSettings()
+      if (path === '/release') return renderRelease()
       // Leaving wizard routes — reset wizard state so returning later starts fresh.
       wizardDefaults = null
       wizardIdentity = null
@@ -1865,6 +1974,106 @@ function dashboardJs(): string {
     })
     setInterval(refreshActivityChip, 3000)
     refreshActivityChip()
+
+    // ---- Release readiness -------------------------------------------------
+    async function renderRelease() {
+      projectName.textContent = 'Release'
+      app.innerHTML = '<div class="muted">Loading release readiness…</div>'
+      const r = await fetch('/api/project/release-readiness')
+      const j = await r.json()
+      if (j?.initializationNeeded) {
+        app.innerHTML = \`
+          <div class="empty">
+            <h2>Project not initialized yet</h2>
+            <p class="muted" style="margin:14px 0">Complete the setup wizard before you can assess release readiness.</p>
+            <button onclick="nav('/setup')">Open setup wizard →</button>
+          </div>
+        \`
+        return
+      }
+      if (j?.error) {
+        app.innerHTML = '<div class="empty"><h2>Could not load</h2><p class="muted">' + escapeHtml(j.error) + '</p></div>'
+        return
+      }
+
+      const section = (title, subtitle, items, empty) => {
+        const body = items.length === 0
+          ? '<div class="muted" style="font-size:13px">' + empty + '</div>'
+          : '<ul class="release-list">' + items.map(renderItem).join('') + '</ul>'
+        return \`
+          <div class="card release-card">
+            <div style="display:flex; justify-content:space-between; align-items:baseline">
+              <h3>\${escapeHtml(title)}</h3>
+              <span class="pill \${items.length === 0 ? 'ok' : 'warn'}">\${items.length === 0 ? 'clear' : items.length + ' open'}</span>
+            </div>
+            \${subtitle ? '<p class="muted" style="font-size:13px; margin:4px 0 10px">' + escapeHtml(subtitle) + '</p>' : ''}
+            \${body}
+          </div>
+        \`
+      }
+      const renderItem = it => {
+        const id = it.id ?? it.taskId
+        const title = it.title ?? it.taskTitle ?? id
+        const extra = it.reason ? ' · <span class="muted">' + escapeHtml(it.reason) + '</span>'
+          : it.detail ? ' · <span class="muted">' + escapeHtml(it.detail) + '</span>'
+          : it.summary ? ' · <span class="muted">' + escapeHtml(it.summary) + '</span>'
+          : ''
+        return '<li><a href="#" data-task-id="' + escapeHtml(id) + '">' + escapeHtml(title) + '</a>' + extra + '</li>'
+      }
+
+      const statusRows = Object.entries(j.statusCounts ?? {})
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => '<tr><td><code class="inline">' + escapeHtml(k) + '</code></td><td>' + v + '</td></tr>')
+        .join('')
+
+      const dsLine = j.designSystem.drafted
+        ? (j.designSystem.approved
+          ? '<span class="pill ok">✓ approved</span> <span class="muted">revision ' + j.designSystem.revision + '</span>'
+          : '<span class="pill warn">draft</span> <span class="muted">revision ' + j.designSystem.revision + ' — needs human approval</span>')
+        : '<span class="pill warn">not drafted</span>'
+
+      const banner = j.totals.blockingCount === 0
+        ? '<div class="card release-banner ok"><h2>✓ No human blockers</h2><p class="muted">Every task that needed you is cleared. Agents can keep moving.</p></div>'
+        : '<div class="card release-banner warn"><h2>' + j.totals.blockingCount + ' item' + (j.totals.blockingCount === 1 ? '' : 's') + ' waiting on you</h2><p class="muted">Resolve these before the next release candidate.</p></div>'
+
+      app.innerHTML = \`
+        <div style="max-width:860px; margin:0 auto">
+          <h2 style="margin-bottom:16px">Release readiness</h2>
+          \${banner}
+          <div class="release-grid">
+            \${section('Open escalations', 'Agents have paused on these and need a human call (FR-10).', j.openEscalations, 'No open escalations.')}
+            \${section('Unapproved briefs', 'Tasks that authored a product brief but have not been approved yet.', j.unapprovedBriefs, 'Every drafted brief has an approval.')}
+            \${section('Specs awaiting approval', 'Tasks in spec_review — approve to let an implementer pick them up.', j.unapprovedSpecs, 'Nothing in spec_review.')}
+            \${section('Shelved tasks', 'Set aside and likely need a human decision about whether to revive.', j.shelvedUnclaimed, 'No shelved tasks.')}
+            \${section('Agent-blocked tasks', 'Orchestrator paused these; a human review may help.', j.blockedByAgent, 'No agent-blocked tasks.')}
+
+            <div class="card release-card">
+              <div style="display:flex; justify-content:space-between; align-items:baseline">
+                <h3>Design system</h3>
+                <span></span>
+              </div>
+              <p class="muted" style="font-size:13px; margin:4px 0 10px">Approve the current revision so implementers are bound by it.</p>
+              <div>\${dsLine}</div>
+            </div>
+
+            <div class="card release-card">
+              <div style="display:flex; justify-content:space-between; align-items:baseline">
+                <h3>Task-state tally</h3>
+                <span class="muted" style="font-size:13px">\${j.totals.done}/\${j.totals.tasks} done</span>
+              </div>
+              <table class="status-table">\${statusRows || '<tr><td class="muted" colspan="2">No tasks yet.</td></tr>'}</table>
+            </div>
+          </div>
+        </div>
+      \`
+      app.querySelectorAll('[data-task-id]').forEach(el => {
+        el.addEventListener('click', (ev) => {
+          ev.preventDefault()
+          const id = el.getAttribute('data-task-id')
+          if (id) nav('/task/' + encodeURIComponent(id))
+        })
+      })
+    }
 
     // ---- Setup wizard ------------------------------------------------------
     let wizardStep = 1
