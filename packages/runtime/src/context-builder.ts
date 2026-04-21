@@ -1,7 +1,11 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
-import { summarizeDesignSystem } from '@guildhall/core'
+import {
+  summarizeDesignSystem,
+  selectApplicableReviewRubrics,
+  renderRubricSelection,
+} from '@guildhall/core'
 import { loadGoalForTask } from './business-envelope.js'
 import { loadDesignSystem } from './design-system-store.js'
 
@@ -54,6 +58,13 @@ export interface BuiltContext {
    * pure-infra projects pay nothing.
    */
   designSystem: string
+  /**
+   * Review rubric selection rendered as markdown. Reviewer agents use it to
+   * structure their verdict; worker agents read it as a pre-flight checklist.
+   * Always includes the code-review rubric; design/copy/a11y/product lenses
+   * attach only when the task's surface warrants it.
+   */
+  reviewRubrics: string
   /** Concatenated string ready to prepend to an agent message */
   formatted: string
 }
@@ -157,6 +168,8 @@ export async function buildContext(
         .join('\n')
     : ''
   const designSystem = ds ? summarizeDesignSystem(ds) : ''
+  const rubricSelection = selectApplicableReviewRubrics(task, ds)
+  const reviewRubrics = renderRubricSelection(rubricSelection)
 
   const taskSummary = [
     `## Current Task: ${task.id}`,
@@ -188,6 +201,8 @@ export async function buildContext(
     '',
     designSystem ? `## Design System\n${designSystem}` : '',
     '',
+    reviewRubrics ? `## Review Rubrics (selected for this task)\n${reviewRubrics}` : '',
+    '',
     projectMemory ? `## Relevant Project Memory\n${projectMemory}` : '',
     '',
     recentProgress ? `## Recent Progress\n${recentProgress}` : '',
@@ -209,6 +224,7 @@ export async function buildContext(
     exploringTranscript,
     envelope,
     designSystem,
+    reviewRubrics,
     formatted,
   }
 }
