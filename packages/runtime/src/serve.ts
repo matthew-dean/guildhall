@@ -14,6 +14,7 @@ import {
   slugify,
 } from '@guildhall/config'
 import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
+import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
 import { createExploringTask } from './intake.js'
 import {
@@ -294,6 +295,48 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (redacted.anthropicApiKey) redacted.anthropicApiKey = '•••'
       if (redacted.openaiApiKey) redacted.openaiApiKey = '•••'
       return c.json(redacted)
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  // GET /api/config/levers — flatten project + default-domain lever positions
+  // into a shape the settings UI can render without knowing the schema details.
+  // Read-only for now; editing arrives once we wire lever writes to an audited
+  // setBy: 'user-direct' path.
+  app.get('/api/config/levers', async c => {
+    try {
+      const settings = await loadLeverSettings({
+        path: defaultAgentSettingsPath(projectPath),
+      })
+      const renderPos = (pos: unknown): string => {
+        if (typeof pos === 'string' || typeof pos === 'number') return String(pos)
+        if (pos && typeof pos === 'object' && 'kind' in pos) {
+          const k = (pos as { kind: string }).kind
+          const parts: string[] = [k]
+          for (const [key, val] of Object.entries(pos as Record<string, unknown>)) {
+            if (key === 'kind') continue
+            parts.push(`${key}=${String(val)}`)
+          }
+          return parts.join(' ')
+        }
+        return JSON.stringify(pos)
+      }
+      const project = Object.entries(settings.project).map(([name, entry]) => ({
+        scope: 'project' as const,
+        name,
+        position: renderPos(entry.position),
+        rationale: entry.rationale,
+        setBy: entry.setBy,
+      }))
+      const domain = Object.entries(settings.domains.default).map(([name, entry]) => ({
+        scope: 'domain:default' as const,
+        name,
+        position: renderPos(entry.position),
+        rationale: entry.rationale,
+        setBy: entry.setBy,
+      }))
+      return c.json({ levers: [...project, ...domain] })
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
@@ -691,6 +734,9 @@ function dashboardCss(): string {
     .coord-list { display: grid; gap: 8px; }
     .coord-preview { padding: 10px 12px; background: var(--surface-2); border-radius: 6px; }
     .coord-title { font-weight: 600; font-size: 13px; }
+    .lever-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .lever-table td { padding: 4px 8px 4px 0; vertical-align: top; }
+    .lever-table tr.lever-rationale td { padding-top: 0; }
     .bootstrap-log { max-height: 260px; overflow-y: auto; background: var(--surface-2); border-radius: 6px; padding: 10px; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.5; }
     .bootstrap-log-line { padding: 2px 0; color: var(--muted); }
     .bootstrap-log-line.highlight { color: var(--text); }
@@ -1209,9 +1255,31 @@ function dashboardJs(): string {
                 <button id="btn-save-provider-settings">Save provider</button>
               </div>
             </div>
+
+            <div class="card">
+              <h2>Coordinators</h2>
+              <p class="muted" style="margin-bottom:14px">Defined in <code class="inline">guildhall.yaml</code>. Edit the file directly to add, rename, or adjust concerns; reload this page to see changes.</p>
+              <div id="coord-list-readonly"><span class="muted">Loading…</span></div>
+            </div>
+
+            <div class="card">
+              <h2>Levers</h2>
+              <p class="muted" style="margin-bottom:14px">Every policy is a named lever with an explicit position. Stored with provenance in <code class="inline">memory/agent-settings.yaml</code> — read-only here for now.</p>
+              <div id="lever-list-readonly"><span class="muted">Loading…</span></div>
+            </div>
           </div>
         </div>
       \`
+
+      // Async side-loads for the read-only cards. Failures render inline so a
+      // broken levers file doesn't block the identity/provider cards above.
+      fetch('/api/project').then(r => r.json()).then(p => {
+        renderCoordinatorsReadonly(p?.config?.coordinators ?? [])
+      }).catch(() => renderCoordinatorsReadonly([]))
+      fetch('/api/config/levers').then(r => r.json()).then(j => {
+        if (j?.error) return renderLeversError(j.error)
+        renderLeversReadonly(j.levers ?? [])
+      }).catch(err => renderLeversError(String(err)))
 
       const nameInput = document.getElementById('settings-name')
       const idInput = document.getElementById('settings-id')
@@ -1267,6 +1335,63 @@ function dashboardJs(): string {
       el.classList.toggle('error', Boolean(isError))
       el.classList.add('visible')
       setTimeout(() => el.classList.remove('visible'), 2500)
+    }
+
+    function renderCoordinatorsReadonly(coords) {
+      const host = document.getElementById('coord-list-readonly')
+      if (!host) return
+      if (!coords || coords.length === 0) {
+        host.innerHTML = '<div class="muted">No coordinators defined yet. Run meta-intake from the project page to bootstrap them.</div>'
+        return
+      }
+      host.innerHTML = '<div class="coord-list">' + coords.map(c => \`
+        <div class="coord-preview">
+          <div class="coord-title">\${escapeHtml(c.name || c.id)} <span class="muted" style="font-weight:normal">· \${escapeHtml(c.domain || '')}</span></div>
+          \${c.path ? \`<div class="muted" style="font-size:12px">path: <code class="inline">\${escapeHtml(c.path)}</code></div>\` : ''}
+          \${c.mandate ? \`<div style="margin-top:6px">\${escapeHtml(c.mandate)}</div>\` : ''}
+          \${Array.isArray(c.concerns) && c.concerns.length ? \`<div class="muted" style="margin-top:6px; font-size:12px">\${c.concerns.length} concern\${c.concerns.length === 1 ? '' : 's'}</div>\` : ''}
+        </div>
+      \`).join('') + '</div>'
+    }
+
+    function renderLeversReadonly(levers) {
+      const host = document.getElementById('lever-list-readonly')
+      if (!host) return
+      if (!levers || levers.length === 0) {
+        host.innerHTML = '<div class="muted">No levers configured.</div>'
+        return
+      }
+      const byScope = new Map()
+      for (const l of levers) {
+        const key = l.scope
+        if (!byScope.has(key)) byScope.set(key, [])
+        byScope.get(key).push(l)
+      }
+      const sections = []
+      for (const [scope, entries] of byScope) {
+        sections.push(\`
+          <div style="margin-top:8px; margin-bottom:6px; font-size:12px; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted)">\${escapeHtml(scope)}</div>
+          <table class="lever-table">
+            \${entries.map(l => \`
+              <tr>
+                <td><code class="inline">\${escapeHtml(l.name)}</code></td>
+                <td><strong>\${escapeHtml(l.position)}</strong></td>
+                <td class="muted" style="font-size:12px">\${escapeHtml(l.setBy)}</td>
+              </tr>
+              <tr class="lever-rationale">
+                <td colspan="3" class="muted" style="font-size:12px; padding-bottom:10px">\${escapeHtml(l.rationale)}</td>
+              </tr>
+            \`).join('')}
+          </table>
+        \`)
+      }
+      host.innerHTML = sections.join('')
+    }
+
+    function renderLeversError(msg) {
+      const host = document.getElementById('lever-list-readonly')
+      if (!host) return
+      host.innerHTML = '<div class="muted" style="color:var(--bad)">Could not load levers: ' + escapeHtml(String(msg)) + '</div>'
     }
 
     function firstDetected(providers) {
