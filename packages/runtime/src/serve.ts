@@ -12,6 +12,8 @@ import {
   readWorkspaceConfig,
 } from '@guildhall/config'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
+import { createExploringTask } from './intake.js'
+import { createMetaIntakeTask, workspaceNeedsMetaIntake } from './meta-intake.js'
 
 // ---------------------------------------------------------------------------
 // guildhall serve — web dashboard
@@ -140,6 +142,64 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
       if (!entry) return c.json({ error: `Workspace "${id}" not found` }, 404)
       const run = supervisor.start({ workspaceId: id, workspacePath: entry.path })
       return c.json({ status: run.status, startedAt: run.startedAt })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/workspaces/:id/intake', async c => {
+    try {
+      const { id } = c.req.param()
+      const entry = readRegistry().workspaces.find(w => w.id === id)
+      if (!entry) return c.json({ error: `Workspace "${id}" not found` }, 404)
+      const body = await c.req.json().catch(() => ({})) as {
+        ask?: string
+        domain?: string
+        title?: string
+      }
+      if (!body.ask || body.ask.trim().length === 0) {
+        return c.json({ error: 'Missing "ask" in request body' }, 400)
+      }
+      const wsConfig = readWorkspaceConfig(entry.path)
+      const defaultDomain = wsConfig.coordinators[0]?.domain
+      const domain = body.domain ?? defaultDomain
+      if (!domain) {
+        return c.json({ error: 'Workspace has no coordinators — run meta-intake first' }, 400)
+      }
+      const result = await createExploringTask({
+        memoryDir: join(entry.path, 'memory'),
+        ask: body.ask,
+        domain,
+        projectPath: entry.path,
+        ...(body.title ? { title: body.title } : {}),
+      })
+      return c.json(result)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/workspaces/:id/meta-intake', async c => {
+    try {
+      const { id } = c.req.param()
+      const entry = readRegistry().workspaces.find(w => w.id === id)
+      if (!entry) return c.json({ error: `Workspace "${id}" not found` }, 404)
+      const result = await createMetaIntakeTask({
+        memoryDir: join(entry.path, 'memory'),
+        projectPath: entry.path,
+      })
+      return c.json(result)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/workspaces/:id/needs-meta-intake', c => {
+    try {
+      const { id } = c.req.param()
+      const entry = readRegistry().workspaces.find(w => w.id === id)
+      if (!entry) return c.json({ error: `Workspace "${id}" not found` }, 404)
+      return c.json({ needsMetaIntake: workspaceNeedsMetaIntake(entry.path) })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -386,6 +446,41 @@ function dashboardCss(): string {
     .empty { text-align: center; padding: 48px 16px; color: var(--muted); }
     .empty code { background: var(--surface); border: 1px solid var(--border); padding: 10px 16px; border-radius: 5px; display: inline-block; margin-top: 14px; font-size: 13px; font-family: 'SF Mono', monospace; }
     code.inline { background: var(--surface-2); padding: 1px 6px; border-radius: 3px; font-size: 11px; font-family: 'SF Mono', monospace; }
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+      width: min(560px, 92vw);
+      box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    }
+    .modal h2 { margin-bottom: 14px; }
+    .modal label { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; font-weight: 700; }
+    .modal textarea, .modal input, .modal select {
+      width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 10px 12px;
+      font-family: inherit;
+      font-size: 13px;
+      margin-bottom: 14px;
+    }
+    .modal textarea { min-height: 120px; resize: vertical; font-family: 'SF Mono', monospace; line-height: 1.5; }
+    .modal textarea:focus, .modal input:focus, .modal select:focus { border-color: var(--accent); outline: none; }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
+    .meta-intake-banner {
+      background: rgba(212,162,60,0.08);
+      border: 1px solid rgba(212,162,60,0.4);
+      border-radius: 6px;
+      padding: 14px 18px;
+      margin-bottom: 16px;
+      display: flex; gap: 16px; align-items: center;
+    }
+    .meta-intake-banner .text { flex: 1; font-size: 13px; }
+    .meta-intake-banner strong { color: var(--warn); }
   `
 }
 
@@ -466,14 +561,28 @@ function dashboardJs(): string {
       wsCount.textContent = detail.entry.name
 
       const runStatus = detail.run?.status ?? 'stopped'
+      const coordinators = detail.config?.coordinators ?? []
+      const needsMeta = coordinators.length === 0
       app.innerHTML = \`
         <div class="detail-header">
           <h2>\${escapeHtml(detail.entry.name)}</h2>
           <span class="pill \${runStatus === 'running' ? 'running' : runStatus === 'error' ? 'error' : 'stopped'}">\${runStatus}</span>
           <span style="flex:1"></span>
+          <button id="btn-new-task" class="secondary" \${needsMeta ? 'disabled title="Bootstrap the workspace first"' : ''}>+ New Task</button>
           <button id="btn-start" \${runStatus === 'running' || runStatus === 'stopping' ? 'disabled' : ''}>▶ Start</button>
           <button id="btn-stop" class="danger" \${runStatus !== 'running' ? 'disabled' : ''}>■ Stop</button>
         </div>
+
+        \${needsMeta ? \`
+          <div class="meta-intake-banner">
+            <div class="text">
+              <strong>Workspace not yet bootstrapped.</strong> No coordinators are configured — click
+              Bootstrap and the meta-intake agent will interview you about the project and draft a
+              guildhall.yaml with coordinators for each domain it finds.
+            </div>
+            <button id="btn-bootstrap">Bootstrap workspace</button>
+          </div>
+        \` : ''}
 
         <div class="two-col">
           <div>
@@ -522,6 +631,28 @@ function dashboardJs(): string {
         await fetch('/api/workspaces/' + id + '/stop', { method: 'POST' })
         setTimeout(() => renderDetail(id), 300)
       })
+      const btnNew = document.getElementById('btn-new-task')
+      if (btnNew && !btnNew.disabled) {
+        btnNew.addEventListener('click', () => showIntakeModal(id, coordinators))
+      }
+      const btnBootstrap = document.getElementById('btn-bootstrap')
+      if (btnBootstrap) {
+        btnBootstrap.addEventListener('click', async () => {
+          btnBootstrap.disabled = true
+          btnBootstrap.textContent = 'Creating…'
+          const r = await fetch('/api/workspaces/' + id + '/meta-intake', { method: 'POST' })
+          const j = await r.json()
+          if (j.error) {
+            alert('Bootstrap failed: ' + j.error)
+            btnBootstrap.disabled = false
+            btnBootstrap.textContent = 'Bootstrap workspace'
+            return
+          }
+          // Auto-start the orchestrator so the meta-intake agent can begin.
+          await fetch('/api/workspaces/' + id + '/start', { method: 'POST' })
+          setTimeout(() => renderDetail(id), 400)
+        })
+      }
 
       // Progress tail
       fetch('/api/workspaces/' + id + '/progress').then(r => r.json()).then(j => {
@@ -619,6 +750,57 @@ function dashboardJs(): string {
 
     function escapeHtml(s) {
       return String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
+    }
+
+    function showIntakeModal(workspaceId, coordinators) {
+      const backdrop = document.createElement('div')
+      backdrop.className = 'modal-backdrop'
+      const domainOptions = coordinators.map(c => \`<option value="\${escapeHtml(c.domain)}">\${escapeHtml(c.name)} (\${escapeHtml(c.domain)})</option>\`).join('')
+      backdrop.innerHTML = \`
+        <div class="modal">
+          <h2>New Task</h2>
+          <label for="intake-ask">What should the agents work on?</label>
+          <textarea id="intake-ask" placeholder="Describe the task in plain language. The spec agent will ask follow-ups before a coordinator assigns work.
+
+Example: \\"Add keyboard navigation to the Looma Combobox component — arrow keys move focus, Enter selects, Escape closes the popup.\\""></textarea>
+          <label for="intake-domain">Domain (routes to a coordinator)</label>
+          <select id="intake-domain">\${domainOptions}</select>
+          <label for="intake-title">Title (optional — auto-generated from the ask)</label>
+          <input id="intake-title" placeholder="Short descriptive title" />
+          <div class="modal-actions">
+            <button class="secondary" id="intake-cancel">Cancel</button>
+            <button id="intake-submit">Create task</button>
+          </div>
+        </div>
+      \`
+      document.body.appendChild(backdrop)
+      const close = () => document.body.removeChild(backdrop)
+      backdrop.addEventListener('click', e => { if (e.target === backdrop) close() })
+      document.getElementById('intake-cancel').addEventListener('click', close)
+      document.getElementById('intake-ask').focus()
+      document.getElementById('intake-submit').addEventListener('click', async () => {
+        const ask = document.getElementById('intake-ask').value.trim()
+        const domain = document.getElementById('intake-domain').value
+        const title = document.getElementById('intake-title').value.trim()
+        if (!ask) { alert('Please describe the task.'); return }
+        const btn = document.getElementById('intake-submit')
+        btn.disabled = true; btn.textContent = 'Creating…'
+        const res = await fetch('/api/workspaces/' + workspaceId + '/intake', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ask, domain, ...(title ? { title } : {}) }),
+        })
+        const j = await res.json()
+        if (j.error) { alert('Intake failed: ' + j.error); btn.disabled = false; btn.textContent = 'Create task'; return }
+        close()
+        // If the orchestrator isn't running yet, auto-start it so the spec
+        // agent picks up the new exploring task on the next tick.
+        const detail = await fetch('/api/workspaces/' + workspaceId).then(r => r.json())
+        if (!detail.run || detail.run.status !== 'running') {
+          await fetch('/api/workspaces/' + workspaceId + '/start', { method: 'POST' })
+        }
+        setTimeout(() => renderDetail(workspaceId), 400)
+      })
     }
 
     route()
