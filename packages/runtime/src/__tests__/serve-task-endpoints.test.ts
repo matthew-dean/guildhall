@@ -122,6 +122,103 @@ describe('POST /api/project/task/:id/pause|shelve', () => {
   })
 })
 
+describe('POST /api/project/task/:id/approve-spec', () => {
+  it('transitions an exploring task with a spec to spec_review and records the approvalNote', async () => {
+    await seedTask('task-1', { status: 'exploring', spec: 'drafted spec body' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/approve-spec', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ approvalNote: 'Looks great, ship it' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.ok).toBe(true)
+    expect(body.status).toBe('spec_review')
+
+    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const q = JSON.parse(raw)
+    expect(q.tasks[0].status).toBe('spec_review')
+    expect(q.tasks[0].notes?.at(-1)?.content).toMatch(/ship it/i)
+  })
+
+  it('rejects approve-spec when the task has no drafted spec yet', async () => {
+    await seedTask('task-1', { status: 'exploring' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/approve-spec', { method: 'POST' }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.error).toMatch(/spec/i)
+  })
+
+  it('rejects approve-spec on a task that is not in exploring', async () => {
+    await seedTask('task-1', { status: 'in_progress', spec: 'irrelevant' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/approve-spec', { method: 'POST' }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.error).toMatch(/exploring/i)
+  })
+})
+
+describe('POST /api/project/task/:id/resume', () => {
+  it('appends a human follow-up message to the exploring transcript', async () => {
+    await seedTask('task-1', { status: 'exploring' })
+    // The transcript file is created on first append; resumeExploring does
+    // the write, we just verify the end state.
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/resume', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message: 'One more requirement: respect DOM ordering.' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.ok).toBe(true)
+    const transcript = await fs.readFile(
+      path.join(memoryDir, 'exploring', 'task-1.md'),
+      'utf8',
+    )
+    expect(transcript).toMatch(/respect DOM ordering/)
+  })
+
+  it('rejects resume with neither a message nor an escalation resolution', async () => {
+    await seedTask('task-1', { status: 'exploring' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/resume', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.error).toMatch(/message|escalation/i)
+  })
+
+  it('rejects resume on an unknown task', async () => {
+    await seedTask('task-1', { status: 'exploring' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/missing/resume', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message: 'hi' }),
+      }),
+    )
+    expect(res.status).toBe(400)
+  })
+})
+
 describe('GET /api/project/activity', () => {
   it('summarizes counts and in-flight tasks', async () => {
     const tasksPath = path.join(memoryDir, 'TASKS.json')

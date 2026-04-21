@@ -16,7 +16,7 @@ import {
 import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
 import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
-import { createExploringTask } from './intake.js'
+import { createExploringTask, approveSpec, resumeExploring } from './intake.js'
 import {
   approveMetaIntake,
   createMetaIntakeTask,
@@ -45,8 +45,10 @@ import {
 //   POST   /api/project/meta-intake/approve → merge the draft into guildhall.yaml
 //   GET    /api/project/needs-meta-intake
 //   GET    /api/project/task/:id      → full task + recent events for drawer
-//   POST   /api/project/task/:id/pause  → human override → blocked
-//   POST   /api/project/task/:id/shelve → human override → shelved
+//   POST   /api/project/task/:id/pause        → human override → blocked
+//   POST   /api/project/task/:id/shelve       → human override → shelved
+//   POST   /api/project/task/:id/approve-spec → exploring → spec_review (human approves the draft)
+//   POST   /api/project/task/:id/resume       → append a human follow-up to the exploring transcript
 //   GET    /api/project/activity      → summary for persistent agent chip
 //   GET    /api/project/progress      → tail of memory/PROGRESS.md
 //   GET    /api/project/events        → SSE feed of orchestrator events
@@ -307,19 +309,59 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
-  // POST /api/project/task/:id/pause  and  /shelve
-  // Human overrides that match the remediation_autonomy lever surface. Both
-  // mutate the task in TASKS.json and add a note so the provenance trail is
-  // intact. These only act on non-terminal tasks.
+  // POST /api/project/task/:id/:action — human overrides on a task.
+  //   pause         → blocked    (any non-terminal task)
+  //   shelve        → shelved    (any non-done task)
+  //   approve-spec  → spec_review (exploring task with a drafted spec; body: {approvalNote?})
+  //   resume        → append a follow-up message to an exploring transcript
+  //                    and resolve optional escalation (body: {message?, resolveEscalationId?, resolution?})
   app.post('/api/project/task/:id/:action', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const id = c.req.param('id')
       const action = c.req.param('action')
-      if (action !== 'pause' && action !== 'shelve') {
+      const KNOWN_ACTIONS = ['pause', 'shelve', 'approve-spec', 'resume'] as const
+      if (!(KNOWN_ACTIONS as readonly string[]).includes(action)) {
         return c.json({ error: 'unknown action' }, 400)
       }
-      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+
+      const memoryDir = join(project.path, 'memory')
+
+      // approve-spec and resume have their own persistence (intake.ts owns the
+      // write). Delegate to them so the exploring-transcript stays in sync.
+      if (action === 'approve-spec') {
+        const body = await c.req.json().catch(() => ({})) as { approvalNote?: string }
+        const result = await approveSpec({
+          memoryDir,
+          taskId: id,
+          ...(body.approvalNote ? { approvalNote: body.approvalNote } : {}),
+        })
+        if (!result.success) return c.json({ error: result.error ?? 'approve failed' }, 400)
+        return c.json({ ok: true, status: result.newStatus })
+      }
+
+      if (action === 'resume') {
+        const body = await c.req.json().catch(() => ({})) as {
+          message?: string
+          resolveEscalationId?: string
+          resolution?: string
+        }
+        if (!body.message && !body.resolveEscalationId) {
+          return c.json({ error: 'Provide a message or an escalation to resolve' }, 400)
+        }
+        const result = await resumeExploring({
+          memoryDir,
+          taskId: id,
+          ...(body.message ? { message: body.message } : {}),
+          ...(body.resolveEscalationId ? { resolveEscalationId: body.resolveEscalationId } : {}),
+          ...(body.resolution ? { resolution: body.resolution } : {}),
+        })
+        if (!result.success) return c.json({ error: result.error ?? 'resume failed' }, 400)
+        return c.json({ ok: true })
+      }
+
+      // pause / shelve: in-place mutation of TASKS.json.
+      const tasksPath = join(memoryDir, 'TASKS.json')
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
@@ -1387,16 +1429,31 @@ function dashboardJs(): string {
           <div class="drawer-section">
             <div class="drawer-section-title">Actions</div>
             <div class="drawer-actions">
+              \${t.status === 'exploring' && (t.spec || '').trim() ? \`<button id="btn-approve-spec">Approve spec</button>\` : ''}
               \${t.status !== 'done' && t.status !== 'shelved' ? \`<button class="secondary" id="btn-pause">Pause</button>\` : ''}
               \${t.status !== 'done' ? \`<button class="danger" id="btn-shelve">Shelve</button>\` : ''}
               <a href="/task/\${encodeURIComponent(t.id)}" style="color:var(--muted); font-size:12px; align-self:center; margin-left:auto">copy link</a>
             </div>
           </div>
+          \${t.status === 'exploring' ? \`
+            <div class="drawer-section">
+              <div class="drawer-section-title">Send a follow-up to the spec agent</div>
+              <textarea id="exploring-message" placeholder="Answer a question, add a requirement, correct a misunderstanding…" style="width:100%; min-height:80px; padding:8px; border:1px solid var(--border); border-radius:4px; background:var(--surface-2); color:var(--text); font-family:inherit; font-size:13px; resize:vertical"></textarea>
+              <div class="drawer-actions" style="margin-top:8px">
+                <button id="btn-send-msg">Send follow-up</button>
+                <span class="muted" style="font-size:11.5px; align-self:center">Appends to memory/exploring/\${escapeHtml(t.id)}.md</span>
+              </div>
+            </div>
+          \` : ''}
         \`
         const bp = document.getElementById('btn-pause')
         const bs = document.getElementById('btn-shelve')
+        const ba = document.getElementById('btn-approve-spec')
+        const bm = document.getElementById('btn-send-msg')
         if (bp) bp.addEventListener('click', () => taskAction(t.id, 'pause'))
         if (bs) bs.addEventListener('click', () => taskAction(t.id, 'shelve'))
+        if (ba) ba.addEventListener('click', () => approveSpec(t.id))
+        if (bm) bm.addEventListener('click', () => sendFollowUp(t.id))
       } else if (drawerTab === 'transcript') {
         const notes = Array.isArray(t.notes) ? t.notes : []
         body.innerHTML = notes.length === 0
@@ -1496,6 +1553,40 @@ function dashboardJs(): string {
       if (j.error) { alert(j.error); return }
       closeDrawer()
       renderProject()
+    }
+
+    async function approveSpec(id) {
+      const note = prompt('Optional approval note for the coordinator (leave blank to just approve):') ?? ''
+      const r = await fetch(\`/api/project/task/\${encodeURIComponent(id)}/approve-spec\`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(note.trim() ? { approvalNote: note.trim() } : {}),
+      })
+      const j = await r.json()
+      if (j.error) { alert('Approve failed: ' + j.error); return }
+      await openTaskDrawer(id)
+    }
+
+    async function sendFollowUp(id) {
+      const ta = document.getElementById('exploring-message')
+      const msg = (ta && ta.value || '').trim()
+      if (!msg) { alert('Type a message first.'); return }
+      const btn = document.getElementById('btn-send-msg')
+      if (btn) { btn.disabled = true; btn.textContent = 'Sending…' }
+      const r = await fetch(\`/api/project/task/\${encodeURIComponent(id)}/resume\`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message: msg }),
+      })
+      const j = await r.json()
+      if (j.error) {
+        alert('Send failed: ' + j.error)
+        if (btn) { btn.disabled = false; btn.textContent = 'Send follow-up' }
+        return
+      }
+      if (ta) ta.value = ''
+      // Reload drawer to pick up any spec update the agent will make after this.
+      await openTaskDrawer(id)
     }
 
     // Drawer wiring (once per page load)
