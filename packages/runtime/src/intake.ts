@@ -184,6 +184,100 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
   return { success: true, newStatus: 'spec_review' }
 }
 
+// ---------------------------------------------------------------------------
+// Maintenance intake: a human-filed bug report becomes a `proposed` task.
+//
+// Distinct from createExploringTask: the reporter already knows what's broken,
+// so we skip the conversational intake and drop the task straight into the
+// queue as `proposed` with priority 'high'. The coordinator picks it up on the
+// next tick and routes it like any other proposed work.
+// ---------------------------------------------------------------------------
+
+export interface BugReportInput {
+  memoryDir: string
+  projectPath: string
+  title: string
+  body: string
+  stackTrace?: string
+  env?: Record<string, string>
+  domain: string
+  /** Default 'high'. Set to 'normal' for minor bugs, 'critical' for outages. */
+  priority?: 'low' | 'normal' | 'high' | 'critical'
+}
+
+export interface BugReportResult {
+  taskId: string
+}
+
+/**
+ * Extract the first file path from a stack trace. Matches the common Node/JS
+ * frame formats: `at fn (/path/to/file.ts:12:3)` and `at /path/to/file.ts:12:3`.
+ * Returns undefined when nothing file-shaped appears.
+ */
+export function parseStackTraceTopFile(stack: string): string | undefined {
+  const lines = stack.split(/\r?\n/)
+  for (const line of lines) {
+    const paren = line.match(/\(([^()]+?):\d+(?::\d+)?\)/)
+    if (paren) return paren[1]
+    const bare = line.match(/\bat\s+([^\s()]+?):\d+(?::\d+)?/)
+    if (bare) return bare[1]
+  }
+  return undefined
+}
+
+export async function createBugReportTask(input: BugReportInput): Promise<BugReportResult> {
+  const queue = await readQueue(input.memoryDir)
+  const id = nextTaskId(queue)
+  const now = new Date().toISOString()
+
+  const title = `Bug: ${truncateTitle(input.title).replace(/^Bug:\s*/i, '')}`
+
+  const description = [
+    input.body.trim(),
+    input.stackTrace
+      ? `\n**Stack trace:**\n\n\`\`\`\n${input.stackTrace.trim()}\n\`\`\``
+      : '',
+    input.env && Object.keys(input.env).length > 0
+      ? `\n**Environment:**\n${Object.entries(input.env).map(([k, v]) => `- ${k}: ${v}`).join('\n')}`
+      : '',
+  ].filter(Boolean).join('\n')
+
+  const task: Task = {
+    id,
+    title,
+    description,
+    domain: input.domain,
+    projectPath: input.projectPath,
+    status: 'proposed',
+    priority: input.priority ?? 'high',
+    dependsOn: [],
+    outOfScope: [],
+    acceptanceCriteria: [],
+    notes: [
+      {
+        agentId: 'human',
+        role: 'reporter',
+        content: 'Filed via bug-report intake.',
+        timestamp: now,
+      },
+    ],
+    gateResults: [],
+    escalations: [],
+    agentIssues: [],
+    revisionCount: 0,
+    remediationAttempts: 0,
+    origination: 'human',
+    createdAt: now,
+    updatedAt: now,
+  }
+
+  queue.tasks.push(task)
+  queue.lastUpdated = now
+  await writeQueue(input.memoryDir, queue)
+
+  return { taskId: id }
+}
+
 export interface ResumeExploringInput {
   memoryDir: string
   taskId: string

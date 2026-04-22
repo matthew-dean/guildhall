@@ -18,7 +18,13 @@ import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
 import { resolveEscalation, updateDesignSystem } from '@guildhall/tools'
 import { DesignSystem, summarizeDesignSystem } from '@guildhall/core'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
-import { createExploringTask, approveSpec, resumeExploring } from './intake.js'
+import {
+  createExploringTask,
+  approveSpec,
+  resumeExploring,
+  createBugReportTask,
+  parseStackTraceTopFile,
+} from './intake.js'
 import { loadDesignSystem, saveDesignSystem } from './design-system-store.js'
 import {
   approveMetaIntake,
@@ -200,6 +206,57 @@ export function buildServeApp(opts: ServeOptions = {}): {
         domain,
         projectPath: project.path,
         ...(body.title ? { title: body.title } : {}),
+      })
+      return c.json(result)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/bug-report', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const body = await c.req.json().catch(() => ({})) as {
+        title?: string
+        body?: string
+        stackTrace?: string
+        env?: Record<string, string>
+        domain?: string
+        priority?: 'low' | 'normal' | 'high' | 'critical'
+      }
+      if (!body.title || body.title.trim().length === 0) {
+        return c.json({ error: 'Missing "title" in request body' }, 400)
+      }
+      if (!body.body || body.body.trim().length === 0) {
+        return c.json({ error: 'Missing "body" in request body' }, 400)
+      }
+      const coordinators = project.config?.coordinators ?? []
+      if (coordinators.length === 0) {
+        return c.json({ error: 'Project has no coordinators — run meta-intake first' }, 400)
+      }
+      // Route by stack-trace top file when the reporter didn't pick a domain:
+      // match the first frame's file path against each coordinator's `path`,
+      // falling through to the first coordinator if nothing hits.
+      let domain = body.domain
+      if (!domain && body.stackTrace) {
+        const topFile = parseStackTraceTopFile(body.stackTrace)
+        if (topFile) {
+          const match = coordinators.find(c => c.path && topFile.includes(c.path))
+          if (match) domain = match.domain
+        }
+      }
+      domain = domain ?? coordinators[0]!.domain
+      const result = await createBugReportTask({
+        memoryDir: join(project.path, 'memory'),
+        projectPath: project.path,
+        title: body.title,
+        body: body.body,
+        ...(body.stackTrace ? { stackTrace: body.stackTrace } : {}),
+        ...(body.env ? { env: body.env } : {}),
+        domain,
+        ...(body.priority ? { priority: body.priority } : {}),
       })
       return c.json(result)
     } catch (err) {
@@ -1362,6 +1419,7 @@ function dashboardJs(): string {
           <span class="pill \${runStatus === 'running' ? 'running' : runStatus === 'error' ? 'error' : 'stopped'}">\${runStatus}</span>
           <span style="flex:1"></span>
           <button id="btn-new-task" class="secondary" \${needsMeta ? 'disabled title="Bootstrap the project first"' : ''}>+ New Task</button>
+          <button id="btn-report-bug" class="secondary" \${needsMeta ? 'disabled title="Bootstrap the project first"' : ''}>⚠ Report a bug</button>
           <button id="btn-start" \${runStatus === 'running' || runStatus === 'stopping' ? 'disabled' : ''}>▶ Start</button>
           <button id="btn-stop" class="danger" \${runStatus !== 'running' ? 'disabled' : ''}>■ Stop</button>
         </div>
@@ -1407,6 +1465,10 @@ function dashboardJs(): string {
       const btnNew = document.getElementById('btn-new-task')
       if (btnNew && !btnNew.disabled) {
         btnNew.addEventListener('click', () => showIntakeModal(coordinators))
+      }
+      const btnReportBug = document.getElementById('btn-report-bug')
+      if (btnReportBug && !btnReportBug.disabled) {
+        btnReportBug.addEventListener('click', () => showBugReportModal(coordinators))
       }
       const btnBootstrap = document.getElementById('btn-bootstrap')
       if (btnBootstrap) {
@@ -2817,6 +2879,71 @@ function dashboardJs(): string {
         if (!detail.run || detail.run.status !== 'running') {
           await fetch('/api/project/start', { method: 'POST' })
         }
+        setTimeout(renderProject, 400)
+      })
+    }
+
+    function showBugReportModal(coordinators) {
+      const backdrop = document.createElement('div')
+      backdrop.className = 'modal-backdrop'
+      const domainOptions = [
+        '<option value="">(auto — from stack trace, or first coordinator)</option>',
+        ...coordinators.map(c => \`<option value="\${escapeHtml(c.domain)}">\${escapeHtml(c.name)} (\${escapeHtml(c.domain)})</option>\`),
+      ].join('')
+      backdrop.innerHTML = \`
+        <div class="modal">
+          <h2>Report a bug</h2>
+          <label for="bug-title">Summary</label>
+          <input id="bug-title" placeholder="What went wrong? (one line)" />
+          <label for="bug-body">Details</label>
+          <textarea id="bug-body" placeholder="What were you doing, what happened, and what did you expect?"></textarea>
+          <label for="bug-stack">Stack trace (optional — used for domain routing)</label>
+          <textarea id="bug-stack" placeholder="Paste the error's stack trace here if you have one"></textarea>
+          <label for="bug-domain">Domain</label>
+          <select id="bug-domain">\${domainOptions}</select>
+          <label for="bug-priority">Priority</label>
+          <select id="bug-priority">
+            <option value="high" selected>High (default)</option>
+            <option value="critical">Critical (outage)</option>
+            <option value="normal">Normal</option>
+            <option value="low">Low</option>
+          </select>
+          <div class="modal-actions">
+            <button class="secondary" id="bug-cancel">Cancel</button>
+            <button id="bug-submit">File bug</button>
+          </div>
+        </div>
+      \`
+      document.body.appendChild(backdrop)
+      const close = () => document.body.removeChild(backdrop)
+      backdrop.addEventListener('click', e => { if (e.target === backdrop) close() })
+      document.getElementById('bug-cancel').addEventListener('click', close)
+      document.getElementById('bug-title').focus()
+      document.getElementById('bug-submit').addEventListener('click', async () => {
+        const title = document.getElementById('bug-title').value.trim()
+        const body = document.getElementById('bug-body').value.trim()
+        const stack = document.getElementById('bug-stack').value.trim()
+        const domain = document.getElementById('bug-domain').value
+        const priority = document.getElementById('bug-priority').value
+        if (!title) { alert('Please add a summary.'); return }
+        if (!body) { alert('Please describe what happened.'); return }
+        const btn = document.getElementById('bug-submit')
+        btn.disabled = true; btn.textContent = 'Filing…'
+        const payload = { title, body, priority }
+        if (stack) payload.stackTrace = stack
+        if (domain) payload.domain = domain
+        const res = await fetch('/api/project/bug-report', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        const j = await res.json()
+        if (j.error) {
+          alert('Bug report failed: ' + j.error)
+          btn.disabled = false; btn.textContent = 'File bug'
+          return
+        }
+        close()
         setTimeout(renderProject, 400)
       })
     }

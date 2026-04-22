@@ -118,11 +118,15 @@ describe('GET /api/project/release-readiness', () => {
           detail: 'out of scope',
           rejectedBy: 'system:human',
           rejectedAt: now,
+          source: 'proposal_policy',
+          policyApplied: false,
+          requeueCount: 0,
         },
       }),
     ])
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const body = await app.fetch(new Request('http://localhost/api/project/release-readiness')).then(r => r.json()) as any
+    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    const body = await res.json() as any
     expect(body.openEscalations).toHaveLength(1)
     expect(body.openEscalations[0]).toMatchObject({
       taskId: 'task-1',
@@ -149,13 +153,15 @@ describe('GET /api/project/release-readiness', () => {
         authoredBy: 'human',
       }),
     }))
-    let body = await app.fetch(new Request('http://localhost/api/project/release-readiness')).then(r => r.json()) as any
+    let res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    let body = await res.json() as any
     expect(body.designSystem.drafted).toBe(true)
     expect(body.designSystem.approved).toBe(false)
     expect(body.designSystem.revision).toBe(1)
 
     await app.fetch(new Request('http://localhost/api/project/design-system/approve', { method: 'POST' }))
-    body = await app.fetch(new Request('http://localhost/api/project/release-readiness')).then(r => r.json()) as any
+    res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    body = await res.json() as any
     expect(body.designSystem.approved).toBe(true)
   })
 })

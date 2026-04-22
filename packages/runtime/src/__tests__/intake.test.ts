@@ -6,6 +6,8 @@ import {
   createExploringTask,
   approveSpec,
   resumeExploring,
+  createBugReportTask,
+  parseStackTraceTopFile,
 } from '../intake.js'
 import { TaskQueue } from '@guildhall/core'
 import { raiseEscalation } from '@guildhall/tools'
@@ -221,6 +223,107 @@ describe('approveSpec', () => {
     const result = await approveSpec({ memoryDir, taskId: 'nope' })
     expect(result.success).toBe(false)
     expect(result.error).toContain('nope')
+  })
+})
+
+describe('parseStackTraceTopFile', () => {
+  it('extracts the file path from a parenthesised frame', () => {
+    const stack = [
+      'Error: something',
+      '    at foo (/src/app/server.ts:42:7)',
+      '    at bar (/src/app/other.ts:10:1)',
+    ].join('\n')
+    expect(parseStackTraceTopFile(stack)).toBe('/src/app/server.ts')
+  })
+
+  it('extracts the file path from a bare "at file:line:col" frame', () => {
+    const stack = [
+      'Error: other',
+      '    at /src/worker.ts:99:3',
+    ].join('\n')
+    expect(parseStackTraceTopFile(stack)).toBe('/src/worker.ts')
+  })
+
+  it('returns undefined when nothing file-shaped is present', () => {
+    expect(parseStackTraceTopFile('Error: no frames here')).toBeUndefined()
+  })
+})
+
+describe('createBugReportTask', () => {
+  it('creates a proposed task with "Bug:" prefix and high priority by default', async () => {
+    const result = await createBugReportTask({
+      memoryDir,
+      projectPath: '/projects/looma',
+      title: 'Ghost button crashes on hover',
+      body: 'Clicking ghost button in the sidebar throws.',
+      domain: 'looma',
+    })
+    expect(result.taskId).toBe('task-001')
+    const queue = await readQueue()
+    expect(queue.tasks).toHaveLength(1)
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('proposed')
+    expect(task.priority).toBe('high')
+    expect(task.title.startsWith('Bug: ')).toBe(true)
+    expect(task.title).toContain('Ghost button')
+    expect(task.origination).toBe('human')
+    expect(task.description).toContain('Clicking ghost button')
+    expect(task.notes).toHaveLength(1)
+    expect(task.notes[0]!.role).toBe('reporter')
+  })
+
+  it('does not double-prefix when the user already wrote "Bug:" in the title', async () => {
+    await createBugReportTask({
+      memoryDir,
+      projectPath: '/x',
+      title: 'Bug: API 500 on login',
+      body: 'body',
+      domain: 'api',
+    })
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.title).toBe('Bug: API 500 on login')
+  })
+
+  it('includes the stack trace as a fenced block in the description', async () => {
+    await createBugReportTask({
+      memoryDir,
+      projectPath: '/x',
+      title: 'boom',
+      body: 'It crashed.',
+      stackTrace: 'Error: x\n    at foo (/src/x.ts:1:1)',
+      domain: 'api',
+    })
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.description).toContain('```')
+    expect(queue.tasks[0]!.description).toContain('at foo (/src/x.ts:1:1)')
+  })
+
+  it('appends the environment block when provided', async () => {
+    await createBugReportTask({
+      memoryDir,
+      projectPath: '/x',
+      title: 'env repro',
+      body: 'Happens only on macOS.',
+      env: { os: 'darwin 25.3.0', node: 'v22.7.0' },
+      domain: 'api',
+    })
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.description).toContain('**Environment:**')
+    expect(queue.tasks[0]!.description).toContain('os: darwin 25.3.0')
+    expect(queue.tasks[0]!.description).toContain('node: v22.7.0')
+  })
+
+  it('accepts an explicit priority override', async () => {
+    await createBugReportTask({
+      memoryDir,
+      projectPath: '/x',
+      title: 'minor',
+      body: 'cosmetic',
+      domain: 'looma',
+      priority: 'low',
+    })
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.priority).toBe('low')
   })
 })
 
