@@ -28,7 +28,11 @@ import {
 import type { SupportsStreamingMessages } from './client.js'
 import type { HookExecutor } from './hooks.js'
 import { HookEvent } from './hooks.js'
-import type { PermissionChecker } from './permissions.js'
+import {
+  PermissionChecker,
+  PermissionMode,
+  defaultPermissionSettings,
+} from './permissions.js'
 import { runQuery, type Compactor, type QueryContext } from './run-query.js'
 import { rememberUserGoal } from './tool-carryover.js'
 import type { ToolRegistry } from './tools.js'
@@ -91,6 +95,13 @@ export class QueryEngine {
     this.hookExecutor = options.hookExecutor
     this.compactor = options.compactor
     this.toolMetadata = options.toolMetadata ?? {}
+    // Plan-mode tools call this callback to swap the engine's permission
+    // checker. Effect is "next turn onward" — mid-turn evaluations continue
+    // to use the checker captured by the current buildContext(). Matches
+    // upstream's load-on-next-turn semantics.
+    this.toolMetadata['set_permission_mode'] = (mode: PermissionMode): void => {
+      this.permissionChecker = new PermissionChecker(defaultPermissionSettings(mode))
+    }
   }
 
   get messages(): ConversationMessage[] {

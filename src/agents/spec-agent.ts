@@ -17,6 +17,8 @@ import {
   webFetchTool,
   webSearchTool,
   skillTool,
+  enterPlanModeTool,
+  exitPlanModeTool,
 } from '@guildhall/tools'
 import { GuildhallAgent } from './guildhall-agent.js'
 import type { AgentLLM } from './llm.js'
@@ -118,6 +120,8 @@ export function createSpecAgent(
       webFetchTool,
       webSearchTool,
       skillTool,
+      enterPlanModeTool,
+      exitPlanModeTool,
       ...(opts.extraTools ?? []),
     ],
     ...(opts.skills ? { skills: opts.skills } : {}),
