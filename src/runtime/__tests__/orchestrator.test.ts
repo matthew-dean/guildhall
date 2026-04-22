@@ -2409,12 +2409,19 @@ describe('Orchestrator — FR-24 slot allocation / runtime isolation', () => {
     const gate = new Promise<void>((r) => {
       resolveGate = r
     })
+    let signalEntered: (() => void) | null = null
+    const entered = new Promise<void>((r) => {
+      signalEntered = r
+    })
     const worker = stubAgent('worker-agent', async () => {
       // Do not resolve the gate inside generate — we want the tick in flight.
     })
     // Override generate to wait on gate so the slot is held during probing.
+    // Signal `entered` on first line so the test waits on a real event,
+    // not a wall-clock timeout (which is flaky under load).
     worker.generate = async (prompt: string) => {
       worker.calls.push({ prompt })
+      signalEntered!()
       await gate
       return { text: 'ok' }
     }
@@ -2424,8 +2431,7 @@ describe('Orchestrator — FR-24 slot allocation / runtime isolation', () => {
       agents: agentSet({ worker }),
     })
     const tickPromise = orch.tick()
-    // Yield so the orchestrator reaches the `await agent.generate(...)` point.
-    await new Promise((r) => setTimeout(r, 10))
+    await entered
 
     const task = mkTask({ id: 't-1', status: 'in_progress' })
     const env = orch.slotEnvFor(task, { PATH: '/usr/bin' })
