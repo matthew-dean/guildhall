@@ -140,7 +140,7 @@ pnpm test
 pnpm lint:deps   # module-boundary check
 ```
 
-Current gate: **1047 tests, 73 test files, all passing.** The `runtime/` module alone has 475 tests covering the orchestrator, fanout dispatch, worktree lifecycle, session resume, and the full lever matrix.
+Current gate: **1067 tests, 73 test files, all passing** (plus 2 skipped integration tests requiring a live LM Studio endpoint). The `runtime/` module alone has 486 tests covering the orchestrator, fanout dispatch, worktree lifecycle, session resume, and the full lever matrix.
 
 ## Publishing
 
