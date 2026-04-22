@@ -1,6 +1,7 @@
 import {
   readFileTool,
   writeFileTool,
+  editFileTool,
   readTasksTool,
   updateTaskTool,
   logProgressTool,
@@ -94,6 +95,7 @@ export function createSpecAgent(
     tools: [
       readFileTool,
       writeFileTool,
+      editFileTool,
       readTasksTool,
       updateTaskTool,
       updateProductBriefTool,

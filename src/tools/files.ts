@@ -1,3 +1,22 @@
+/**
+ * File read / write / edit / list tools.
+ *
+ * editFileTool is ported from
+ *   openharness/src/openharness/tools/file_edit_tool.py
+ * Upstream: https://github.com/HKUDS/OpenHarness (MIT)
+ * Upstream SHA at port time: 559ba76f237db957a1a21453170df8500479dc7d
+ *
+ * Changes from upstream:
+ *   - Sandbox path-validation branch is deferred — Guildhall does not yet
+ *     ship a Docker sandbox adapter. When that lands, a context-threaded
+ *     validator plugs in here.
+ *   - String.replace with a plain string only replaces the first occurrence
+ *     in JS, so the single-replacement path uses a manual slice + concat
+ *     to avoid regex-escape pitfalls with `replaceAll`-style behavior.
+ *   - Parameter casing follows the rest of the Guildhall tool set
+ *     (`filePath` / `oldString` / `newString`), not Python snake_case.
+ */
+
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
@@ -85,6 +104,130 @@ export const writeFileTool = defineTool({
     const result = await writeFile(input)
     return {
       output: result.success ? `Wrote ${input.filePath}` : `Error writing ${input.filePath}: ${result.error ?? 'unknown'}`,
+      is_error: !result.success,
+      metadata: result as unknown as Record<string, unknown>,
+    }
+  },
+})
+
+const editFileInputSchema = z.object({
+  filePath: z.string().describe('Absolute path to the file'),
+  oldString: z
+    .string()
+    .describe(
+      'Existing text to replace. Must appear exactly once in the file unless replaceAll is true.',
+    ),
+  newString: z.string().describe('Replacement text.'),
+  replaceAll: z
+    .boolean()
+    .optional()
+    .describe(
+      'If true, replace every occurrence; otherwise require a unique match and replace once.',
+    ),
+})
+
+export type EditFileInput = z.input<typeof editFileInputSchema>
+export interface EditFileResult {
+  success: boolean
+  replacements: number
+  error?: string
+}
+
+/**
+ * Replace text inside an existing file.
+ *
+ * Defaults to single-replacement, and errors out if `oldString` matches more
+ * than once (which would make the edit ambiguous). Callers that genuinely
+ * want to rewrite every occurrence can opt in with `replaceAll: true`.
+ */
+export async function editFile(input: EditFileInput): Promise<EditFileResult> {
+  let original: string
+  try {
+    original = await fs.readFile(input.filePath, 'utf-8')
+  } catch {
+    return { success: false, replacements: 0, error: `File not found: ${input.filePath}` }
+  }
+
+  if (input.oldString.length === 0) {
+    return { success: false, replacements: 0, error: 'oldString must not be empty' }
+  }
+
+  // Count occurrences up front so we can reject ambiguous single-edit calls
+  // and report exactly how many replacements happened for structured callers.
+  let count = 0
+  let idx = original.indexOf(input.oldString)
+  while (idx !== -1) {
+    count += 1
+    idx = original.indexOf(input.oldString, idx + input.oldString.length)
+  }
+  if (count === 0) {
+    return {
+      success: false,
+      replacements: 0,
+      error: 'oldString was not found in the file',
+    }
+  }
+  if (!input.replaceAll && count > 1) {
+    return {
+      success: false,
+      replacements: 0,
+      error: `oldString matches ${count} times; make it unique or set replaceAll: true`,
+    }
+  }
+
+  let updated: string
+  let replacements: number
+  if (input.replaceAll) {
+    updated = original.split(input.oldString).join(input.newString)
+    replacements = count
+  } else {
+    const hit = original.indexOf(input.oldString)
+    updated =
+      original.slice(0, hit) +
+      input.newString +
+      original.slice(hit + input.oldString.length)
+    replacements = 1
+  }
+
+  try {
+    await fs.writeFile(input.filePath, updated, 'utf-8')
+  } catch (err) {
+    return { success: false, replacements: 0, error: String(err) }
+  }
+  return { success: true, replacements }
+}
+
+export const editFileTool = defineTool({
+  name: 'edit-file',
+  description:
+    'Replace text inside an existing file. By default the match must be unique; pass replaceAll to rewrite every occurrence. Prefer this over write-file for targeted edits so unrelated content stays byte-identical.',
+  inputSchema: editFileInputSchema,
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      filePath: { type: 'string', description: 'Absolute path to the file' },
+      oldString: {
+        type: 'string',
+        description:
+          'Existing text to replace. Must appear exactly once in the file unless replaceAll is true.',
+      },
+      newString: { type: 'string', description: 'Replacement text.' },
+      replaceAll: {
+        type: 'boolean',
+        description:
+          'If true, replace every occurrence; otherwise require a unique match and replace once.',
+      },
+    },
+    required: ['filePath', 'oldString', 'newString'],
+  },
+  isReadOnly: () => false,
+  execute: async (input) => {
+    const result = await editFile(input)
+    const output = result.success
+      ? `Edited ${input.filePath} (${result.replacements} replacement${result.replacements === 1 ? '' : 's'})`
+      : `Error editing ${input.filePath}: ${result.error ?? 'unknown'}`
+    return {
+      output,
       is_error: !result.success,
       metadata: result as unknown as Record<string, unknown>,
     }

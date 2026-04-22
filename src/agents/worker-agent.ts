@@ -1,6 +1,7 @@
 import {
   readFileTool,
   writeFileTool,
+  editFileTool,
   listFilesTool,
   shellTool,
   readTasksTool,
@@ -24,6 +25,9 @@ You are a Worker Agent in the Guildhall multi-agent system. You implement tasks.
 
 ## While working
 - Make the smallest change that satisfies the acceptance criteria.
+- Prefer edit-file (targeted string replacement) over write-file when
+  modifying existing source. Rewriting a whole file with write-file risks
+  clobbering unrelated content and makes the diff harder to review.
 - Do not refactor, rename, or improve things outside the task scope.
 - If you encounter an ambiguity not addressed by the spec, add a note to the task
   and continue with the most conservative interpretation. Do NOT block on ambiguity
@@ -70,6 +74,7 @@ export function createWorkerAgent(
     tools: [
       readFileTool,
       writeFileTool,
+      editFileTool,
       listFilesTool,
       shellTool,
       readTasksTool,
