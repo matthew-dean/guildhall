@@ -11,7 +11,7 @@
   ],
   "type": "module",
   "bin": {
-    "guildhall": "./dist/cli.js"
+    "guildhall": "dist/cli.js"
   },
   "files": [
     "dist",
