@@ -494,7 +494,10 @@ describe('runQuery — reactive compaction', () => {
           systemPrompt: '',
           maxTokens: 256,
           maxTurns: 4,
-          compactor: async (msgs) => {
+          compactor: async (msgs, reason) => {
+            // Ignore the proactive 'auto' ping each turn; only count reactive
+            // retries triggered by the scripted prompt-too-long failure.
+            if (reason === 'auto') return null
             compactCalls += 1
             return msgs.slice(-1)
           },
@@ -567,5 +570,171 @@ describe('runQuery — stream errors', () => {
     const err = events[0]!
     expect(err.type).toBe('error')
     if (err.type === 'error') expect(err.message).toContain('Network error')
+  })
+})
+
+describe('runQuery — proactive auto-compact', () => {
+  it("invokes the compactor with reason='auto' before each model turn", async () => {
+    // Two scripted turns: the first emits a tool use so the loop rolls into a
+    // second turn. The compactor should be called once before each API call
+    // (so twice in total for this scenario) with reason='auto'.
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool<{ value: string }>({
+        name: 'echo',
+        description: 'echoes',
+        inputSchema: z.object({ value: z.string() }),
+        jsonSchema: {
+          type: 'object',
+          properties: { value: { type: 'string' } },
+          required: ['value'],
+        },
+        execute: async ({ value }) => ({ output: value, is_error: false }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse('echo', { value: 'hi' }),
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      {
+        message: assistantText('done'),
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+    const autoCalls: number[] = []
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/tmp',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          compactor: async (msgs, reason) => {
+            if (reason === 'auto') autoCalls.push(msgs.length)
+            return null
+          },
+        },
+        messages,
+      ),
+    )
+    // One 'auto' call per turn; two turns fired because the first was a tool call.
+    expect(autoCalls.length).toBe(2)
+  })
+
+  it("replaces the in-memory history when proactive compaction returns a shorter list", async () => {
+    const client = new ScriptedApiClient([
+      {
+        message: assistantText('ok'),
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'old-1' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'old-A' }] },
+      { role: 'user', content: [{ type: 'text', text: 'old-2' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'old-B' }] },
+      { role: 'user', content: [{ type: 'text', text: 'current' }] },
+    ]
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: new ToolRegistry(),
+          permissionChecker: autoChecker(),
+          cwd: '/tmp',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          compactor: async (msgs, reason) => {
+            if (reason !== 'auto') return null
+            // Drop everything but the most recent user turn to simulate a
+            // successful auto-compact. The engine should splice this in-place.
+            return msgs.slice(-1)
+          },
+        },
+        messages,
+      ),
+    )
+    // The caller-owned array should now reflect the compacted history plus
+    // the new assistant turn appended by the loop.
+    expect(messages.length).toBe(2)
+    expect(messages[0]!.role).toBe('user')
+    const firstBlock = messages[0]!.content[0]!
+    if (firstBlock.type === 'text') expect(firstBlock.text).toBe('current')
+    expect(messages[1]!.role).toBe('assistant')
+  })
+
+  it("does nothing when the compactor returns null on 'auto'", async () => {
+    const client = new ScriptedApiClient([
+      {
+        message: assistantText('ok'),
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    ])
+    const beforeLen = 3
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'a' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'A' }] },
+      { role: 'user', content: [{ type: 'text', text: 'b' }] },
+    ]
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: new ToolRegistry(),
+          permissionChecker: autoChecker(),
+          cwd: '/tmp',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          compactor: async () => null,
+        },
+        messages,
+      ),
+    )
+    // History preserved (+ 1 for the newly appended assistant reply).
+    expect(messages.length).toBe(beforeLen + 1)
+  })
+
+  it("ignores a proactive compaction result that isn't strictly shorter", async () => {
+    const client = new ScriptedApiClient([
+      {
+        message: assistantText('ok'),
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'a' }] },
+      { role: 'user', content: [{ type: 'text', text: 'b' }] },
+    ]
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: new ToolRegistry(),
+          permissionChecker: autoChecker(),
+          cwd: '/tmp',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          // Returns an array of the same length — should be ignored.
+          compactor: async (msgs) => [...msgs],
+        },
+        messages,
+      ),
+    )
+    // Original 2 user messages plus the appended assistant reply.
+    expect(messages.length).toBe(3)
   })
 })

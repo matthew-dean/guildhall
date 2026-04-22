@@ -67,4 +67,44 @@ describe('buildDefaultCompactor', () => {
     const result = await compactor(input, 'prompt_too_long')
     expect(result).toBeNull()
   })
+
+  it("returns null for reason='auto' when the threshold is not hit", async () => {
+    // A short conversation never trips the model's auto-compact threshold, so
+    // the proactive path should short-circuit without calling the LLM.
+    let streamCalls = 0
+    const client: SupportsStreamingMessages = {
+      async *streamMessage(_req: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
+        streamCalls += 1
+        yield {
+          type: 'message_complete',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'x' }] },
+          usage: { input_tokens: 1, output_tokens: 1 },
+          stop_reason: 'end_turn',
+        }
+      },
+    }
+    const compactor = buildDefaultCompactor({
+      apiClient: client,
+      model: 'claude-sonnet-4-6',
+    })
+    const input = makeConversation(4)
+    const result = await compactor(input, 'auto')
+    expect(result).toBeNull()
+    expect(streamCalls).toBe(0)
+  })
+
+  it("compacts on reason='auto' when an explicit low threshold is hit", async () => {
+    const compactor = buildDefaultCompactor({
+      apiClient: makeStubClient('auto summary'),
+      model: 'claude-sonnet-4-6',
+      preserveRecent: 2,
+      // Force the threshold to fire even on a small conversation.
+      autoCompactThresholdTokens: 10,
+      contextWindowTokens: 100,
+    })
+    const input = makeConversation(20)
+    const result = await compactor(input, 'auto')
+    expect(result).not.toBeNull()
+    expect(result!.length).toBeLessThan(input.length)
+  })
 })

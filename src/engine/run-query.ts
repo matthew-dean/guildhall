@@ -56,7 +56,7 @@ const PROMPT_TOO_LONG_SIGNATURES = [
 
 export type Compactor = (
   messages: ConversationMessage[],
-  reason: 'prompt_too_long',
+  reason: 'prompt_too_long' | 'auto',
 ) => Promise<ConversationMessage[] | null>
 
 export interface QueryContext {
@@ -125,7 +125,19 @@ export async function* runQuery(
   while (context.maxTurns == null || turnCount < context.maxTurns) {
     turnCount += 1
 
-    // TODO(compaction): auto-compact check before calling the model.
+    // Proactive auto-compact check before calling the model. Upstream
+    // (query.py:519-523) creates a per-run AutoCompactState and calls
+    // auto_compact_if_needed on every turn; the callback-shaped port here
+    // delegates the threshold/state bookkeeping to whoever built the
+    // compactor (see runtime/compactor-builder.ts). When the callback
+    // returns a strictly shorter history we replace `messages` in place so
+    // the next API call sees the compacted conversation.
+    if (context.compactor != null) {
+      const compacted = await context.compactor(messages, 'auto')
+      if (compacted !== null && compacted.length < messages.length) {
+        messages.splice(0, messages.length, ...compacted)
+      }
+    }
 
     let finalMessage: ConversationMessage | null = null
     let usage: UsageSnapshot = { ...emptyUsage }

@@ -184,8 +184,11 @@ describe('QueryEngine reactive compaction (FR-19)', () => {
       model: 'test',
       systemPrompt: '',
       compactor: async (messages, reason) => {
+        // Each turn receives a proactive 'auto' invocation before the model
+        // call; we only care about the reactive retry triggered by the
+        // prompt-too-long failure, so pass 'auto' through unchanged.
+        if (reason === 'auto') return null
         compactorCalls += 1
-        expect(reason).toBe('prompt_too_long')
         // Return a strictly shorter history so the engine retries the turn.
         return messages.slice(1)
       },
@@ -220,7 +223,11 @@ describe('QueryEngine reactive compaction (FR-19)', () => {
       cwd: '/tmp',
       model: 'test',
       systemPrompt: '',
-      compactor: async () => {
+      compactor: async (_msgs, reason) => {
+        // Only count reactive (prompt_too_long) invocations; the engine
+        // pings proactively with 'auto' before each turn and we don't care
+        // about those for this assertion.
+        if (reason === 'auto') return null
         compactorCalls += 1
         return null
       },
