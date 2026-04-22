@@ -5,6 +5,10 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import {
   McpClientManager,
   McpServerNotConnectedError,
+  createListMcpResourcesTool,
+  createMcpToolAdapter,
+  createMcpTools,
+  createReadMcpResourceTool,
   loadMcpServerConfigs,
   mcpJsonConfigSchema,
   mcpServerConfigSchema,
@@ -432,6 +436,152 @@ describe('McpClientManager', () => {
     expect(statuses.map((s) => ({ name: s.name, auth: s.auth_configured }))).toEqual([
       { name: 'a', auth: true },
       { name: 'b', auth: true },
+    ])
+  })
+})
+
+// ---------------------------------------------------------------------
+// Adapter / built-in tools
+// ---------------------------------------------------------------------
+
+async function connectedManager(script: ConstructorParameters<typeof FakeSession>[0] = {}):
+  Promise<{ mgr: McpClientManager; session: FakeSession }> {
+  const session = new FakeSession(script)
+  const mgr = new McpClientManager(
+    { fs: { type: 'stdio', command: 'x', args: [] } },
+    {
+      clientFactory: () => session,
+      transportFactory: () => fakeTransport(),
+    },
+  )
+  await mgr.connectAll()
+  return { mgr, session }
+}
+
+const dummyCtx = { cwd: '/tmp', metadata: {} }
+
+describe('createMcpToolAdapter', () => {
+  it('produces an mcp__<server>__<tool> tool that calls the manager', async () => {
+    const { mgr, session } = await connectedManager({
+      tools: [
+        {
+          name: 'echo',
+          description: 'echo it',
+          inputSchema: {
+            type: 'object',
+            properties: { text: { type: 'string' } },
+            required: ['text'],
+          },
+        },
+      ],
+      callTool: () => ({ content: [{ type: 'text', text: 'hello back' }] }),
+    })
+    const [tool] = mgr.listTools()
+    const adapter = createMcpToolAdapter(mgr, tool!)
+    expect(adapter.name).toBe('mcp__fs__echo')
+    expect(adapter.description).toBe('echo it')
+    const result = await adapter.execute({ text: 'hello' }, dummyCtx)
+    expect(result).toEqual({ output: 'hello back', is_error: false })
+    expect(session.toolCalls).toEqual([
+      { name: 'echo', arguments: { text: 'hello' } },
+    ])
+  })
+
+  it('returns is_error=true when the server is not connected', async () => {
+    const mgr = new McpClientManager(
+      { offline: { type: 'stdio', command: 'x', args: [] } },
+      {
+        clientFactory: () =>
+          new FakeSession({
+            connectError: 'nope',
+          }),
+        transportFactory: () => fakeTransport(),
+      },
+    )
+    await mgr.connectAll()
+    const adapter = createMcpToolAdapter(mgr, {
+      server_name: 'offline',
+      name: 'whatever',
+      description: '',
+      input_schema: { type: 'object', properties: {} },
+    })
+    const result = await adapter.execute({}, dummyCtx)
+    expect(result.is_error).toBe(true)
+    expect(result.output).toMatch(/not connected/i)
+  })
+
+  it('sanitizes non-identifier characters in names', () => {
+    const mgr = new McpClientManager({}, {})
+    const adapter = createMcpToolAdapter(mgr, {
+      server_name: 'my.server',
+      name: '123-do/it',
+      description: '',
+      input_schema: { type: 'object', properties: {} },
+    })
+    expect(adapter.name).toBe('mcp__my_server__mcp_123-do_it')
+  })
+})
+
+describe('createListMcpResourcesTool', () => {
+  it('lists resources from the manager, one per line', async () => {
+    const { mgr } = await connectedManager({
+      resources: [
+        { name: 'readme', uri: 'mcp://readme', description: 'README' },
+        { name: 'changelog', uri: 'mcp://changelog', description: '' },
+      ],
+    })
+    const tool = createListMcpResourcesTool(mgr)
+    const result = await tool.execute({}, dummyCtx)
+    expect(result.is_error).toBe(false)
+    expect(result.output).toBe(
+      'fs:mcp://readme README\nfs:mcp://changelog',
+    )
+  })
+
+  it('reports (no MCP resources) when none are registered', async () => {
+    const mgr = new McpClientManager({}, {})
+    const tool = createListMcpResourcesTool(mgr)
+    const result = await tool.execute({}, dummyCtx)
+    expect(result.output).toBe('(no MCP resources)')
+  })
+})
+
+describe('createReadMcpResourceTool', () => {
+  it('returns the resource body', async () => {
+    const { mgr } = await connectedManager({
+      resources: [{ name: 'r', uri: 'mcp://r', description: '' }],
+      readResource: (uri) => ({ contents: [{ text: `body of ${uri}` }] }),
+    })
+    const tool = createReadMcpResourceTool(mgr)
+    const result = await tool.execute({ server: 'fs', uri: 'mcp://r' }, dummyCtx)
+    expect(result).toEqual({ output: 'body of mcp://r', is_error: false })
+  })
+
+  it('returns is_error on unknown server', async () => {
+    const { mgr } = await connectedManager({})
+    const tool = createReadMcpResourceTool(mgr)
+    // unused McpServerNotConnectedError import keeps tree-shake honest
+    expect(McpServerNotConnectedError.name).toBe('McpServerNotConnectedError')
+    const result = await tool.execute({ server: 'ghost', uri: 'mcp://x' }, dummyCtx)
+    expect(result.is_error).toBe(true)
+    expect(result.output).toMatch(/not connected/i)
+  })
+})
+
+describe('createMcpTools', () => {
+  it('bundles list/read + one adapter per discovered tool', async () => {
+    const { mgr } = await connectedManager({
+      tools: [
+        { name: 'a', inputSchema: { type: 'object', properties: {} } },
+        { name: 'b', inputSchema: { type: 'object', properties: {} } },
+      ],
+    })
+    const tools = createMcpTools(mgr)
+    expect(tools.map((t) => t.name)).toEqual([
+      'list_mcp_resources',
+      'read_mcp_resource',
+      'mcp__fs__a',
+      'mcp__fs__b',
     ])
   })
 })

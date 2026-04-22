@@ -18,6 +18,13 @@ export {
 } from './config.js'
 
 export {
+  createListMcpResourcesTool,
+  createMcpToolAdapter,
+  createMcpTools,
+  createReadMcpResourceTool,
+} from './adapter.js'
+
+export {
   mcpHttpServerConfigSchema,
   mcpJsonConfigSchema,
   mcpServerConfigSchema,
