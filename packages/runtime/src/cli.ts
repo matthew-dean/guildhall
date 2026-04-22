@@ -455,6 +455,21 @@ async function cmdApproveMetaIntake() {
     process.exit(1)
   }
   console.log(`[guildhall] ✓ Meta-intake approved. Added ${result.coordinatorsAdded ?? 0} coordinator(s) to guildhall.yaml.`)
+  if (result.leversSet) {
+    const { project, domainDefault, overrides, rejected } = result.leversSet
+    const parts: string[] = []
+    if (project.length > 0) parts.push(`project: ${project.join(', ')}`)
+    if (domainDefault.length > 0) parts.push(`domain-default: ${domainDefault.join(', ')}`)
+    for (const [d, names] of Object.entries(overrides)) {
+      parts.push(`override[${d}]: ${names.join(', ')}`)
+    }
+    if (parts.length > 0) {
+      console.log(`[guildhall] ✓ Inferred levers written to memory/agent-settings.yaml — ${parts.join(' | ')}`)
+    }
+    for (const r of rejected) {
+      console.warn(`[guildhall] ⚠ Skipped inferred lever ${r.scope}.${r.lever}: ${r.reason}`)
+    }
+  }
 }
 
 async function cmdConfig() {

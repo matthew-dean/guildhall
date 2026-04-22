@@ -69,6 +69,23 @@ export async function loadLeverSettings(opts: LoadOptions): Promise<LeverSetting
   return result.output
 }
 
+/**
+ * Re-validate an in-memory LeverSettings object against the schema. Used by
+ * callers (e.g. Spec Agent lever-inference merge) that mutate the object
+ * after loading and want to fail fast if the mutations produced an invalid
+ * shape.
+ */
+export function validateLeverSettings(settings: LeverSettings): LeverSettings {
+  const parsed = v.safeParse(leverSettingsSchema, settings)
+  if (!parsed.success) {
+    const detail = parsed.issues
+      .map((i) => `${i.path?.map((p) => p.key).join('.') ?? '<root>'}: ${i.message}`)
+      .join('; ')
+    throw new LeverSettingsCorruptError('<in-memory>', detail)
+  }
+  return parsed.output
+}
+
 export interface SaveOptions {
   path: string
   settings: LeverSettings

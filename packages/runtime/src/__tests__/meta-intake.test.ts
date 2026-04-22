@@ -11,11 +11,19 @@ import {
   createMetaIntakeTask,
   approveMetaIntake,
   parseCoordinatorDraft,
+  parseLeverInferences,
+  mergeLeverInferences,
   workspaceNeedsMetaIntake,
   META_INTAKE_TASK_ID,
   META_INTAKE_DOMAIN,
 } from '../meta-intake.js'
 import { TaskQueue } from '@guildhall/core'
+import {
+  AGENT_SETTINGS_FILENAME,
+  loadLeverSettings,
+  makeDefaultSettings,
+  saveLeverSettings,
+} from '@guildhall/levers'
 
 // ---------------------------------------------------------------------------
 // FR-14 coordinator bootstrapping via meta-intake
@@ -363,5 +371,341 @@ coordinators:
     const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
     expect(result.success).toBe(false)
     expect(result.error).toContain('no spec')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// AC-14: the Spec Agent infers lever positions during meta-intake and records
+// rationales. No direct meta-questions — the positions come from
+// project-guidance answers, and every lever write includes its source.
+// ---------------------------------------------------------------------------
+
+describe('parseLeverInferences', () => {
+  it('extracts project + domain + override levers from a ```yaml levers: fence', () => {
+    const spec = `Some narrative.
+
+\`\`\`yaml
+levers:
+  project:
+    business_envelope_strictness:
+      position: strict
+      rationale: user described production SOC2 workload
+    remediation_autonomy:
+      position: confirm_destructive
+      rationale: small team but regulated data
+  domains:
+    default:
+      completion_approval:
+        position: human_required
+        rationale: regulated compliance requires human sign-off
+    overrides:
+      looma:
+        reviewer_mode:
+          position: llm_only
+          rationale: UI polish benefits from LLM critique
+\`\`\`
+`
+    const inferences = parseLeverInferences(spec)
+    expect(inferences).not.toBeNull()
+    expect(inferences!.project.business_envelope_strictness).toEqual({
+      position: 'strict',
+      rationale: 'user described production SOC2 workload',
+    })
+    expect(inferences!.project.remediation_autonomy!.position).toBe('confirm_destructive')
+    expect(inferences!.domains.default.completion_approval!.rationale).toContain(
+      'regulated',
+    )
+    expect(inferences!.domains.overrides.looma!.reviewer_mode).toEqual({
+      position: 'llm_only',
+      rationale: 'UI polish benefits from LLM critique',
+    })
+  })
+
+  it('returns null when no levers fence is present', () => {
+    expect(parseLeverInferences('```yaml\ncoordinators: []\n```')).toBeNull()
+    expect(parseLeverInferences('no fence at all')).toBeNull()
+  })
+
+  it('skips entries missing a rationale', () => {
+    const spec = `\`\`\`yaml
+levers:
+  project:
+    business_envelope_strictness:
+      position: strict
+      rationale: ""
+    agent_health_strictness:
+      position: strict
+      rationale: local LLM is fast and reliable
+\`\`\``
+    const inf = parseLeverInferences(spec)
+    expect(inf).not.toBeNull()
+    expect(Object.keys(inf!.project)).toEqual(['agent_health_strictness'])
+  })
+
+  it('accepts parameterized positions (fanout-n, soft_penalty-after)', () => {
+    const spec = `\`\`\`yaml
+levers:
+  project:
+    concurrent_task_dispatch:
+      position:
+        kind: fanout
+        n: 3
+      rationale: multi-CPU box and independent tasks
+    rejection_dampening:
+      position:
+        kind: soft_penalty
+        after: 2
+      rationale: reject repeats after two tries
+\`\`\``
+    const inf = parseLeverInferences(spec)
+    expect(inf!.project.concurrent_task_dispatch!.position).toEqual({
+      kind: 'fanout',
+      n: 3,
+    })
+    expect(inf!.project.rejection_dampening!.position).toEqual({
+      kind: 'soft_penalty',
+      after: 2,
+    })
+  })
+})
+
+describe('mergeLeverInferences', () => {
+  it('writes inferred positions with setBy=spec-agent-intake and the supplied rationale', async () => {
+    // Seed default settings.
+    const settingsPath = path.join(memoryDir, AGENT_SETTINGS_FILENAME)
+    await fs.mkdir(memoryDir, { recursive: true })
+    await saveLeverSettings({ path: settingsPath, settings: makeDefaultSettings() })
+
+    const now = '2026-04-21T00:00:00.000Z'
+    const result = await mergeLeverInferences(
+      memoryDir,
+      {
+        project: {
+          business_envelope_strictness: {
+            position: 'strict',
+            rationale: 'prod SOC2 workload',
+          },
+        },
+        domains: {
+          default: {
+            completion_approval: {
+              position: 'human_required',
+              rationale: 'regulated — humans sign off',
+            },
+          },
+          overrides: {
+            looma: {
+              reviewer_mode: {
+                position: 'llm_only',
+                rationale: 'UI critique benefits from LLM judgment',
+              },
+            },
+          },
+        },
+      },
+      now,
+    )
+
+    expect(result.projectSet).toEqual(['business_envelope_strictness'])
+    expect(result.domainDefaultSet).toEqual(['completion_approval'])
+    expect(result.overridesSet.looma).toEqual(['reviewer_mode'])
+    expect(result.rejected).toEqual([])
+
+    const reloaded = await loadLeverSettings({ path: settingsPath })
+    expect(reloaded.project.business_envelope_strictness).toEqual({
+      position: 'strict',
+      rationale: 'prod SOC2 workload',
+      setAt: now,
+      setBy: 'spec-agent-intake',
+    })
+    expect(reloaded.domains.default.completion_approval).toEqual({
+      position: 'human_required',
+      rationale: 'regulated — humans sign off',
+      setAt: now,
+      setBy: 'spec-agent-intake',
+    })
+    expect(reloaded.domains.overrides!.looma!.reviewer_mode).toEqual({
+      position: 'llm_only',
+      rationale: 'UI critique benefits from LLM judgment',
+      setAt: now,
+      setBy: 'spec-agent-intake',
+    })
+  })
+
+  it('rejects unknown lever names without crashing', async () => {
+    const settingsPath = path.join(memoryDir, AGENT_SETTINGS_FILENAME)
+    await fs.mkdir(memoryDir, { recursive: true })
+    await saveLeverSettings({ path: settingsPath, settings: makeDefaultSettings() })
+    const result = await mergeLeverInferences(memoryDir, {
+      project: {
+        fake_project_lever: { position: 'x', rationale: 'r' },
+      },
+      domains: {
+        default: {
+          fake_domain_lever: { position: 'x', rationale: 'r' },
+        },
+        overrides: {},
+      },
+    })
+    expect(result.projectSet).toEqual([])
+    expect(result.domainDefaultSet).toEqual([])
+    expect(result.rejected).toHaveLength(2)
+    expect(result.rejected.map((r) => r.scope).sort()).toEqual([
+      'domain:default',
+      'project',
+    ])
+  })
+
+  it('throws when an inferred position fails schema validation (bad picklist value)', async () => {
+    const settingsPath = path.join(memoryDir, AGENT_SETTINGS_FILENAME)
+    await fs.mkdir(memoryDir, { recursive: true })
+    await saveLeverSettings({ path: settingsPath, settings: makeDefaultSettings() })
+    await expect(
+      mergeLeverInferences(memoryDir, {
+        project: {
+          business_envelope_strictness: {
+            position: 'not_a_real_position',
+            rationale: 'typo',
+          },
+        },
+        domains: { default: {}, overrides: {} },
+      }),
+    ).rejects.toThrow(/business_envelope_strictness/)
+  })
+})
+
+describe('approveMetaIntake + lever inferences (AC-14 e2e)', () => {
+  it('parses both coordinators and levers fences, merges both, and records rationale per lever', async () => {
+    await createMetaIntakeTask({ memoryDir, projectPath: tmpDir })
+    // Seed default lever settings so the merge has something to load.
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings: makeDefaultSettings(),
+    })
+
+    const spec = `## Draft
+
+\`\`\`yaml
+coordinators:
+  - id: looma
+    name: Looma
+    domain: looma
+    mandate: UI quality
+    concerns: []
+    autonomousDecisions: []
+    escalationTriggers: []
+\`\`\`
+
+\`\`\`yaml
+levers:
+  project:
+    business_envelope_strictness:
+      position: strict
+      rationale: user said "we ship to paying customers"
+  domains:
+    default:
+      completion_approval:
+        position: human_required
+        rationale: compliance requires human sign-off
+    overrides:
+      looma:
+        reviewer_mode:
+          position: llm_only
+          rationale: UI work benefits from LLM judgment
+\`\`\`
+`
+    const queue = await readQueue()
+    queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)!.spec = spec
+    await fs.writeFile(
+      path.join(memoryDir, 'TASKS.json'),
+      JSON.stringify(queue, null, 2),
+      'utf-8',
+    )
+
+    const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
+    expect(result.success).toBe(true)
+    expect(result.coordinatorsAdded).toBe(1)
+    expect(result.leversSet).toBeDefined()
+    expect(result.leversSet!.project).toEqual(['business_envelope_strictness'])
+    expect(result.leversSet!.domainDefault).toEqual(['completion_approval'])
+    expect(result.leversSet!.overrides.looma).toEqual(['reviewer_mode'])
+
+    const settings = await loadLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+    })
+    expect(settings.project.business_envelope_strictness).toMatchObject({
+      position: 'strict',
+      setBy: 'spec-agent-intake',
+      rationale: expect.stringContaining('paying customers'),
+    })
+    expect(settings.domains.default.completion_approval).toMatchObject({
+      position: 'human_required',
+      setBy: 'spec-agent-intake',
+      rationale: expect.stringContaining('compliance'),
+    })
+    expect(settings.domains.overrides!.looma!.reviewer_mode).toMatchObject({
+      position: 'llm_only',
+      setBy: 'spec-agent-intake',
+      rationale: expect.stringContaining('LLM'),
+    })
+  })
+
+  it('still succeeds when only coordinators are present (no levers fence)', async () => {
+    await createMetaIntakeTask({ memoryDir, projectPath: tmpDir })
+    const queue = await readQueue()
+    queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)!.spec = `\`\`\`yaml
+coordinators:
+  - id: a
+    name: A
+    domain: a
+    mandate: m
+    concerns: []
+    autonomousDecisions: []
+    escalationTriggers: []
+\`\`\``
+    await fs.writeFile(
+      path.join(memoryDir, 'TASKS.json'),
+      JSON.stringify(queue, null, 2),
+      'utf-8',
+    )
+    const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
+    expect(result.success).toBe(true)
+    expect(result.leversSet).toBeUndefined()
+  })
+
+  it('returns an error (and does not close the task) when an inferred lever is schema-invalid', async () => {
+    await createMetaIntakeTask({ memoryDir, projectPath: tmpDir })
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings: makeDefaultSettings(),
+    })
+    const queue = await readQueue()
+    queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)!.spec = `\`\`\`yaml
+coordinators:
+  - id: a
+    name: A
+    domain: a
+    mandate: m
+    concerns: []
+    autonomousDecisions: []
+    escalationTriggers: []
+\`\`\`
+
+\`\`\`yaml
+levers:
+  project:
+    business_envelope_strictness:
+      position: bogus_value
+      rationale: typo from the spec agent
+\`\`\``
+    await fs.writeFile(
+      path.join(memoryDir, 'TASKS.json'),
+      JSON.stringify(queue, null, 2),
+      'utf-8',
+    )
+
+    const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Failed to merge inferred levers')
   })
 })

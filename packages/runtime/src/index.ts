@@ -175,6 +175,8 @@ export {
   createMetaIntakeTask,
   approveMetaIntake,
   parseCoordinatorDraft,
+  parseLeverInferences,
+  mergeLeverInferences,
   workspaceNeedsMetaIntake,
   META_INTAKE_TASK_ID,
   META_INTAKE_DOMAIN,
@@ -185,4 +187,7 @@ export type {
   ApproveMetaIntakeInput,
   ApproveMetaIntakeResult,
   DraftCoordinator,
+  LeverInference,
+  LeverInferences,
+  MergeLeverInferencesResult,
 } from './meta-intake.js'

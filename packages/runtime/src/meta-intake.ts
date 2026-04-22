@@ -4,6 +4,14 @@ import { load as yamlLoad } from 'js-yaml'
 import { TaskQueue, type Task } from '@guildhall/core'
 import { readWorkspaceConfig, writeWorkspaceConfig } from '@guildhall/config'
 import { appendExploringTranscript } from '@guildhall/tools'
+import {
+  AGENT_SETTINGS_FILENAME,
+  loadLeverSettings,
+  saveLeverSettings,
+  validateLeverSettings,
+  PROJECT_LEVER_NAMES,
+  DOMAIN_LEVER_NAMES,
+} from '@guildhall/levers'
 
 // ---------------------------------------------------------------------------
 // FR-14: coordinator bootstrapping via meta-intake.
@@ -40,9 +48,9 @@ async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
   await fs.writeFile(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2), 'utf-8')
 }
 
-const META_INTAKE_SEED = `You are bootstrapping a new Guildhall workspace. Your job in this conversation is to produce a DRAFT list of coordinator definitions for this codebase.
+const META_INTAKE_SEED = `You are bootstrapping a new Guildhall workspace. Your job in this conversation is to produce a DRAFT list of coordinator definitions for this codebase AND infer initial lever positions from the user's project-guidance answers.
 
-Interview the user with short, focused questions. Work toward answers for:
+Interview the user with short, focused PROJECT questions. Work toward answers for:
 
 1. What are the major *zones of concern* in this codebase (e.g. UI layer, data/API layer, infra, docs, release/ops)? Each zone becomes one coordinator.
 2. For each zone: one-paragraph mandate — what outcomes does it protect?
@@ -51,7 +59,23 @@ Interview the user with short, focused questions. Work toward answers for:
 5. For each zone: what MUST be escalated to a human (escalationTriggers)?
 6. Optional sub-path inside the project that scopes this coordinator (blank if workspace root).
 
-When you have enough to produce a first draft, emit a YAML codefence containing ONLY the \`coordinators:\` list, using the exact shape below. Put that fence into the task spec (via the update-task tool).
+Lever inference — CRITICAL
+=========================
+
+While you interview, INFER lever positions from the user's answers. Do NOT ask direct meta-questions like "how autonomous do you want agents to be?" or "what is your risk tolerance?". Instead, infer from natural project-guidance signals:
+
+- User describes a production/customer-facing system with strict compliance → tighten \`business_envelope_strictness: strict\`, \`completion_approval: human_required\`.
+- User says things like "just try it and see" or describes an experimental prototype → loosen \`business_envelope_strictness: advisory\` or \`off\`, \`task_origination: agent_autonomous\`.
+- User mentions CI gating by tests / CI required to merge → \`completion_approval: gates_sufficient\` is fair once all hard gates exist.
+- User has a small or solo team, wants minimal friction → \`remediation_autonomy: auto\`, \`task_origination: agent_proposed_coordinator_approved\`.
+- User mentions no local LLM / cost concerns → leave \`reviewer_mode: llm_with_deterministic_fallback\` (cheapest default) or tighten to \`deterministic_only\`.
+
+Emit inferred lever positions in a SECOND YAML codefence, alongside the coordinators fence. Every inferred lever MUST include a short \`rationale\` that cites the conversational signal (e.g. "user said the codebase ships to paying customers"). Omit levers you could not infer — they will stay at system default.
+
+Output format
+=============
+
+Put both fences into the task spec (via the update-task tool):
 
 \`\`\`yaml
 coordinators:
@@ -72,7 +96,25 @@ coordinators:
       - <condition that requires human escalation>
 \`\`\`
 
-When the user approves the draft, run the \`guildhall approve-meta-intake\` CLI command — the runtime will parse the codefence, write the coordinators into \`guildhall.yaml\`, and mark this task done.`
+\`\`\`yaml
+levers:
+  project:
+    <lever_name>:
+      position: <value or {kind, n/after} for parameterized levers>
+      rationale: <short phrase citing the user signal that informed this>
+  domains:
+    default:
+      <lever_name>:
+        position: <value>
+        rationale: <short phrase>
+    overrides:
+      <domain_slug>:
+        <lever_name>:
+          position: <value>
+          rationale: <short phrase>
+\`\`\`
+
+When the user approves the draft, run the \`guildhall approve-meta-intake\` CLI command — the runtime will parse both fences, merge coordinators into \`guildhall.yaml\`, record lever positions in \`memory/agent-settings.yaml\` with \`setBy: 'spec-agent-intake'\`, and mark this task done.`
 
 export interface CreateMetaIntakeInput {
   memoryDir: string
@@ -254,6 +296,192 @@ function normalizeConcerns(value: unknown): DraftCoordinator['concerns'] {
   return out
 }
 
+// ---------------------------------------------------------------------------
+// Lever-inference draft: a second YAML codefence the Spec Agent emits during
+// meta-intake, with positions + rationales inferred from the user's
+// project-guidance answers. Merged into memory/agent-settings.yaml on approval.
+// ---------------------------------------------------------------------------
+
+export interface LeverInference {
+  position: unknown
+  rationale: string
+}
+
+export interface LeverInferences {
+  project: Record<string, LeverInference>
+  domains: {
+    default: Record<string, LeverInference>
+    overrides: Record<string, Record<string, LeverInference>>
+  }
+}
+
+function normalizeInferenceObject(value: unknown): Record<string, LeverInference> {
+  if (!value || typeof value !== 'object') return {}
+  const out: Record<string, LeverInference> = {}
+  for (const [k, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!raw || typeof raw !== 'object') continue
+    const entry = raw as Record<string, unknown>
+    const rationale = typeof entry['rationale'] === 'string' ? entry['rationale'].trim() : ''
+    if (!rationale) continue
+    if (!('position' in entry)) continue
+    out[k] = { position: entry['position'], rationale }
+  }
+  return out
+}
+
+/**
+ * Extract the `levers:` YAML codefence from a meta-intake spec. Returns null
+ * when no valid levers fence is present — safe to call unconditionally. The
+ * shape is intentionally permissive here; `mergeLeverInferences` is the real
+ * validator since individual positions must pass the lever schema.
+ */
+export function parseLeverInferences(spec: string): LeverInferences | null {
+  const fence = /```ya?ml\s*\n([\s\S]*?)```/gi
+  let match: RegExpExecArray | null
+  while ((match = fence.exec(spec)) !== null) {
+    const body = match[1] ?? ''
+    let parsed: unknown
+    try {
+      parsed = yamlLoad(body)
+    } catch {
+      continue
+    }
+    if (!parsed || typeof parsed !== 'object') continue
+    const obj = parsed as Record<string, unknown>
+    if (!('levers' in obj)) continue
+    const levers = obj['levers']
+    if (!levers || typeof levers !== 'object') continue
+    const l = levers as Record<string, unknown>
+    const project = normalizeInferenceObject(l['project'])
+
+    const domains = l['domains'] && typeof l['domains'] === 'object'
+      ? (l['domains'] as Record<string, unknown>)
+      : {}
+    const defaultDomain = normalizeInferenceObject(domains['default'])
+    const overridesRaw = domains['overrides']
+    const overrides: Record<string, Record<string, LeverInference>> = {}
+    if (overridesRaw && typeof overridesRaw === 'object') {
+      for (const [dName, inner] of Object.entries(overridesRaw as Record<string, unknown>)) {
+        const norm = normalizeInferenceObject(inner)
+        if (Object.keys(norm).length > 0) overrides[dName] = norm
+      }
+    }
+
+    const hasAny =
+      Object.keys(project).length > 0 ||
+      Object.keys(defaultDomain).length > 0 ||
+      Object.keys(overrides).length > 0
+    if (!hasAny) continue
+
+    return {
+      project,
+      domains: { default: defaultDomain, overrides },
+    }
+  }
+  return null
+}
+
+export interface MergeLeverInferencesResult {
+  projectSet: string[]
+  domainDefaultSet: string[]
+  overridesSet: Record<string, string[]>
+  rejected: Array<{ scope: string; lever: string; reason: string }>
+}
+
+/**
+ * Apply a parsed LeverInferences block to `memory/agent-settings.yaml`. Each
+ * successful write marks the entry with `setBy: 'spec-agent-intake'` and the
+ * Spec Agent's supplied rationale. Positions that don't match the lever
+ * schema are skipped (not fatal — they're reported as `rejected` so the CLI
+ * can surface them).
+ */
+export async function mergeLeverInferences(
+  memoryDir: string,
+  inferences: LeverInferences,
+  now: string = new Date().toISOString(),
+): Promise<MergeLeverInferencesResult> {
+  const settingsPath = path.join(memoryDir, AGENT_SETTINGS_FILENAME)
+  const settings = await loadLeverSettings({ path: settingsPath })
+
+  const result: MergeLeverInferencesResult = {
+    projectSet: [],
+    domainDefaultSet: [],
+    overridesSet: {},
+    rejected: [],
+  }
+
+  const projectNames = new Set<string>(PROJECT_LEVER_NAMES)
+  const domainNames = new Set<string>(DOMAIN_LEVER_NAMES)
+
+  // Mutate via a loose-typed facade. `validateLeverSettings` at the end
+  // re-checks the whole shape, so any position that's the wrong shape
+  // surfaces as a clear error path there rather than a type cast lie here.
+  const projectBag = settings.project as unknown as Record<string, unknown>
+  for (const [name, inf] of Object.entries(inferences.project)) {
+    if (!projectNames.has(name)) {
+      result.rejected.push({ scope: 'project', lever: name, reason: 'unknown project lever' })
+      continue
+    }
+    projectBag[name] = {
+      position: inf.position,
+      rationale: inf.rationale,
+      setAt: now,
+      setBy: 'spec-agent-intake',
+    }
+    result.projectSet.push(name)
+  }
+
+  const defaultBag = settings.domains.default as unknown as Record<string, unknown>
+  for (const [name, inf] of Object.entries(inferences.domains.default)) {
+    if (!domainNames.has(name)) {
+      result.rejected.push({ scope: 'domain:default', lever: name, reason: 'unknown domain lever' })
+      continue
+    }
+    defaultBag[name] = {
+      position: inf.position,
+      rationale: inf.rationale,
+      setAt: now,
+      setBy: 'spec-agent-intake',
+    }
+    result.domainDefaultSet.push(name)
+  }
+
+  const existingOverrides = settings.domains.overrides ?? {}
+  for (const [domainName, entries] of Object.entries(inferences.domains.overrides)) {
+    const existing = (existingOverrides[domainName] as Record<string, unknown>) ?? {}
+    const merged: Record<string, unknown> = { ...existing }
+    const applied: string[] = []
+    for (const [name, inf] of Object.entries(entries)) {
+      if (!domainNames.has(name)) {
+        result.rejected.push({
+          scope: `domain:${domainName}`,
+          lever: name,
+          reason: 'unknown domain lever',
+        })
+        continue
+      }
+      merged[name] = {
+        position: inf.position,
+        rationale: inf.rationale,
+        setAt: now,
+        setBy: 'spec-agent-intake',
+      }
+      applied.push(name)
+    }
+    existingOverrides[domainName] = merged
+    if (applied.length > 0) result.overridesSet[domainName] = applied
+  }
+  settings.domains.overrides = existingOverrides
+
+  // Validate the whole thing before writing — catches malformed positions
+  // (e.g. the Spec Agent emitted `fanout` without `n`) and throws
+  // LeverSettingsCorruptError with a precise path.
+  const validated = validateLeverSettings(settings)
+  await saveLeverSettings({ path: settingsPath, settings: validated })
+
+  return result
+}
+
 export interface ApproveMetaIntakeInput {
   workspacePath: string
   memoryDir: string
@@ -262,6 +490,12 @@ export interface ApproveMetaIntakeInput {
 export interface ApproveMetaIntakeResult {
   success: boolean
   coordinatorsAdded?: number
+  leversSet?: {
+    project: string[]
+    domainDefault: string[]
+    overrides: Record<string, string[]>
+    rejected: Array<{ scope: string; lever: string; reason: string }>
+  }
   error?: string
 }
 
@@ -306,18 +540,52 @@ export async function approveMetaIntake(
   writeWorkspaceConfig(input.workspacePath, { ...config, coordinators: merged })
 
   const now = new Date().toISOString()
+
+  // Optional second fence: lever inferences. Absence is fine — levers just
+  // stay at system-default. A parseable-but-invalid position surfaces as an
+  // error (caller's call what to do with it).
+  const inferences = parseLeverInferences(task.spec)
+  let leverMerge: MergeLeverInferencesResult | undefined
+  if (inferences) {
+    try {
+      leverMerge = await mergeLeverInferences(input.memoryDir, inferences, now)
+    } catch (err) {
+      return {
+        success: false,
+        error: `Failed to merge inferred levers: ${(err as Error).message}`,
+      }
+    }
+  }
+
   task.status = 'done'
   task.updatedAt = now
   task.completedAt = now
   queue.lastUpdated = now
   await writeQueue(input.memoryDir, queue)
 
+  const transcriptSummary = leverMerge
+    ? `Meta-intake approved. Added ${added} coordinator(s) to guildhall.yaml. Levers set: project=${leverMerge.projectSet.length}, domain-default=${leverMerge.domainDefaultSet.length}, overrides=${Object.keys(leverMerge.overridesSet).length}.`
+    : `Meta-intake approved. Added ${added} coordinator(s) to guildhall.yaml.`
+
   await appendExploringTranscript({
     memoryDir: input.memoryDir,
     taskId: META_INTAKE_TASK_ID,
     role: 'system',
-    content: `Meta-intake approved. Added ${added} coordinator(s) to guildhall.yaml.`,
+    content: transcriptSummary,
   })
 
-  return { success: true, coordinatorsAdded: added }
+  return {
+    success: true,
+    coordinatorsAdded: added,
+    ...(leverMerge
+      ? {
+          leversSet: {
+            project: leverMerge.projectSet,
+            domainDefault: leverMerge.domainDefaultSet,
+            overrides: leverMerge.overridesSet,
+            rejected: leverMerge.rejected,
+          },
+        }
+      : {}),
+  }
 }
