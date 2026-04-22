@@ -84,7 +84,7 @@ how agents behave in future runs. Good examples:
 - A directory keeps appearing in diffs that should be ignored → add an ignore pattern
 - You realise a certain decision type is always safe → add it to autonomous decisions
 Only call this for durable behavioral changes, not routine observations.
-Every save is logged to DECISIONS.md and written to memory/agent-settings.yaml.
+Every save is logged to DECISIONS.md and written to memory/agent-overrides.yaml.
 
 ## Escalation protocol (FR-10)
 When you need a human decision, use the **raise-escalation** tool — this is

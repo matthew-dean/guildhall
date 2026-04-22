@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
-import { WorkspaceYamlConfig, AgentSettings, AGENT_SETTINGS_FILENAME, slugify } from './schemas.js'
+import { WorkspaceYamlConfig, AgentSettings, AGENT_OVERRIDES_FILENAME, slugify } from './schemas.js'
 import type { ZodError } from 'zod'
 
 // ---------------------------------------------------------------------------
@@ -161,19 +161,19 @@ export function resolveMemoryDir(workspacePath: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Agent settings (memory/agent-settings.yaml)
+// Agent overrides (memory/agent-overrides.yaml)
 // ---------------------------------------------------------------------------
 
-function agentSettingsPath(workspacePath: string): string {
-  return join(resolve(workspacePath), MEMORY_DIR_NAME, AGENT_SETTINGS_FILENAME)
+function agentOverridesPath(workspacePath: string): string {
+  return join(resolve(workspacePath), MEMORY_DIR_NAME, AGENT_OVERRIDES_FILENAME)
 }
 
 /**
- * Read memory/agent-settings.yaml for a workspace.
+ * Read memory/agent-overrides.yaml for a workspace.
  * Returns an empty AgentSettings if the file does not exist.
  */
 export function readAgentSettings(workspacePath: string): AgentSettings {
-  const filePath = agentSettingsPath(workspacePath)
+  const filePath = agentOverridesPath(workspacePath)
 
   if (!existsSync(filePath)) {
     return AgentSettings.parse({})
@@ -183,7 +183,7 @@ export function readAgentSettings(workspacePath: string): AgentSettings {
   try {
     raw = yamlLoad(readFileSync(filePath, 'utf8'))
   } catch (err) {
-    throw new Error(`Failed to parse memory/agent-settings.yaml: ${String(err)}`)
+    throw new Error(`Failed to parse memory/agent-overrides.yaml: ${String(err)}`)
   }
 
   try {
@@ -191,12 +191,12 @@ export function readAgentSettings(workspacePath: string): AgentSettings {
   } catch (err) {
     const zodErr = err as ZodError
     const issues = zodErr.issues?.map(i => `  ${i.path.join('.')}: ${i.message}`).join('\n') ?? String(err)
-    throw new Error(`Invalid memory/agent-settings.yaml:\n${issues}`)
+    throw new Error(`Invalid memory/agent-overrides.yaml:\n${issues}`)
   }
 }
 
 /**
- * Write memory/agent-settings.yaml for a workspace.
+ * Write memory/agent-overrides.yaml for a workspace.
  * Creates the memory/ directory if needed.
  */
 export function writeAgentSettings(workspacePath: string, settings: AgentSettings): void {
@@ -206,11 +206,11 @@ export function writeAgentSettings(workspacePath: string, settings: AgentSetting
   }
   const validated = AgentSettings.parse(settings)
   const yaml = yamlDump(validated, { lineWidth: 120, noRefs: true })
-  writeFileSync(agentSettingsPath(workspacePath), yaml, 'utf8')
+  writeFileSync(agentOverridesPath(workspacePath), yaml, 'utf8')
 }
 
 /**
- * Apply a partial update to agent-settings.yaml.
+ * Apply a partial update to agent-overrides.yaml.
  * Merges coordinator overrides (append-only for concerns, decisions, triggers)
  * and records the change in the history trail.
  */

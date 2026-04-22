@@ -14,7 +14,7 @@
 import { promises as fs } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
-import * as v from 'valibot'
+import type { ZodIssue } from 'zod'
 
 import { makeDefaultSettings } from './defaults.js'
 import {
@@ -41,6 +41,12 @@ export class LeverSettingsCorruptError extends Error {
   }
 }
 
+function formatIssues(issues: readonly ZodIssue[]): string {
+  return issues
+    .map((i) => `${i.path.length > 0 ? i.path.join('.') : '<root>'}: ${i.message}`)
+    .join('; ')
+}
+
 export async function loadLeverSettings(opts: LoadOptions): Promise<LeverSettings> {
   let raw: string
   try {
@@ -59,14 +65,11 @@ export async function loadLeverSettings(opts: LoadOptions): Promise<LeverSetting
   } catch (err) {
     throw new LeverSettingsCorruptError(opts.path, (err as Error).message)
   }
-  const result = v.safeParse(leverSettingsSchema, parsed)
+  const result = leverSettingsSchema.safeParse(parsed)
   if (!result.success) {
-    throw new LeverSettingsCorruptError(
-      opts.path,
-      result.issues.map((i) => `${i.path?.map((p) => p.key).join('.') ?? '<root>'}: ${i.message}`).join('; '),
-    )
+    throw new LeverSettingsCorruptError(opts.path, formatIssues(result.error.issues))
   }
-  return result.output
+  return result.data
 }
 
 /**
@@ -76,14 +79,11 @@ export async function loadLeverSettings(opts: LoadOptions): Promise<LeverSetting
  * shape.
  */
 export function validateLeverSettings(settings: LeverSettings): LeverSettings {
-  const parsed = v.safeParse(leverSettingsSchema, settings)
+  const parsed = leverSettingsSchema.safeParse(settings)
   if (!parsed.success) {
-    const detail = parsed.issues
-      .map((i) => `${i.path?.map((p) => p.key).join('.') ?? '<root>'}: ${i.message}`)
-      .join('; ')
-    throw new LeverSettingsCorruptError('<in-memory>', detail)
+    throw new LeverSettingsCorruptError('<in-memory>', formatIssues(parsed.error.issues))
   }
-  return parsed.output
+  return parsed.data
 }
 
 export interface SaveOptions {
@@ -120,14 +120,14 @@ export function resolveDomainLevers(
   const override = settings.domains.overrides?.[domainName]
   if (!override) return base
   const merged = { ...base, ...override }
-  const result = v.safeParse(domainLeversSchema, merged)
+  const result = domainLeversSchema.safeParse(merged)
   if (!result.success) {
     throw new LeverSettingsCorruptError(
       `<overrides.${domainName}>`,
-      result.issues.map((i) => `${i.path?.map((p) => p.key).join('.') ?? '<root>'}: ${i.message}`).join('; '),
+      formatIssues(result.error.issues),
     )
   }
-  return result.output
+  return result.data
 }
 
 /**

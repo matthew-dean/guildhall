@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest'
-import * as v from 'valibot'
 
 import {
   concurrentDispatchPositionSchema,
@@ -12,48 +11,48 @@ import { makeDefaultSettings } from '../defaults.js'
 
 describe('concurrentDispatchPositionSchema', () => {
   it('accepts {kind: serial}', () => {
-    expect(v.safeParse(concurrentDispatchPositionSchema, { kind: 'serial' }).success).toBe(true)
+    expect(concurrentDispatchPositionSchema.safeParse({ kind: 'serial' }).success).toBe(true)
   })
 
   it('accepts fanout with n>=2', () => {
     expect(
-      v.safeParse(concurrentDispatchPositionSchema, { kind: 'fanout', n: 3 }).success,
+      concurrentDispatchPositionSchema.safeParse({ kind: 'fanout', n: 3 }).success,
     ).toBe(true)
   })
 
   it('rejects fanout with n=1 (use serial instead)', () => {
     expect(
-      v.safeParse(concurrentDispatchPositionSchema, { kind: 'fanout', n: 1 }).success,
+      concurrentDispatchPositionSchema.safeParse({ kind: 'fanout', n: 1 }).success,
     ).toBe(false)
   })
 
   it('rejects non-integer n', () => {
     expect(
-      v.safeParse(concurrentDispatchPositionSchema, { kind: 'fanout', n: 2.5 }).success,
+      concurrentDispatchPositionSchema.safeParse({ kind: 'fanout', n: 2.5 }).success,
     ).toBe(false)
   })
 })
 
 describe('rejectionDampeningPositionSchema', () => {
   it('accepts off', () => {
-    expect(v.safeParse(rejectionDampeningPositionSchema, { kind: 'off' }).success).toBe(true)
+    expect(rejectionDampeningPositionSchema.safeParse({ kind: 'off' }).success).toBe(true)
   })
 
   it('accepts soft_penalty with after>=1', () => {
     expect(
-      v.safeParse(rejectionDampeningPositionSchema, { kind: 'soft_penalty', after: 2 }).success,
+      rejectionDampeningPositionSchema.safeParse({ kind: 'soft_penalty', after: 2 }).success,
     ).toBe(true)
   })
 
   it('accepts hard_suppress with after>=1', () => {
     expect(
-      v.safeParse(rejectionDampeningPositionSchema, { kind: 'hard_suppress', after: 1 }).success,
+      rejectionDampeningPositionSchema.safeParse({ kind: 'hard_suppress', after: 1 }).success,
     ).toBe(true)
   })
 
   it('rejects after=0', () => {
     expect(
-      v.safeParse(rejectionDampeningPositionSchema, { kind: 'soft_penalty', after: 0 }).success,
+      rejectionDampeningPositionSchema.safeParse({ kind: 'soft_penalty', after: 0 }).success,
     ).toBe(false)
   })
 })
@@ -61,10 +60,10 @@ describe('rejectionDampeningPositionSchema', () => {
 describe('default LeverSettings', () => {
   it('validates against the schema', () => {
     const settings = makeDefaultSettings()
-    const result = v.safeParse(leverSettingsSchema, settings)
+    const result = leverSettingsSchema.safeParse(settings)
     if (!result.success) {
       // Surface issues in the error for easier debugging.
-      throw new Error(JSON.stringify(result.issues, null, 2))
+      throw new Error(JSON.stringify(result.error.issues, null, 2))
     }
     expect(result.success).toBe(true)
   })
@@ -116,7 +115,7 @@ describe('parameterized lever positions round-trip', () => {
       setAt: new Date().toISOString(),
       setBy: 'spec-agent-intake',
     }
-    const result = v.safeParse(leverSettingsSchema, settings)
+    const result = leverSettingsSchema.safeParse(settings)
     expect(result.success).toBe(true)
   })
 
@@ -128,7 +127,7 @@ describe('parameterized lever positions round-trip', () => {
       setAt: new Date().toISOString(),
       setBy: 'coordinator:design',
     }
-    const result = v.safeParse(leverSettingsSchema, settings)
+    const result = leverSettingsSchema.safeParse(settings)
     expect(result.success).toBe(true)
   })
 
@@ -140,7 +139,7 @@ describe('parameterized lever positions round-trip', () => {
       setAt: new Date().toISOString(),
       setBy: 'coordinator:release',
     }
-    const result = v.safeParse(leverSettingsSchema, settings)
+    const result = leverSettingsSchema.safeParse(settings)
     expect(result.success).toBe(true)
   })
 
@@ -148,7 +147,7 @@ describe('parameterized lever positions round-trip', () => {
     const settings = makeDefaultSettings()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(settings.project.merge_policy as any).setBy = 'some-random-agent'
-    const result = v.safeParse(leverSettingsSchema, settings)
+    const result = leverSettingsSchema.safeParse(settings)
     expect(result.success).toBe(false)
   })
 })

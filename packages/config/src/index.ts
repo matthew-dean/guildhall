@@ -7,7 +7,7 @@ export {
   AgentSettings,
   AgentCoordinatorOverride,
   AgentSettingEntry,
-  AGENT_SETTINGS_FILENAME,
+  AGENT_OVERRIDES_FILENAME,
   ResolvedConfig,
   slugify,
   mergeModels,

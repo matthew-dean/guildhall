@@ -149,7 +149,7 @@ export const WorkspaceRegistry = z.object({
 export type WorkspaceRegistry = z.infer<typeof WorkspaceRegistry>
 
 // ---------------------------------------------------------------------------
-// memory/agent-settings.yaml — agent-accumulated configuration
+// memory/agent-overrides.yaml — agent-accumulated configuration
 //
 // Written by agents at runtime via the saveAgentSetting tool.
 // Merged on top of guildhall.yaml during config resolution, so it is the highest-
@@ -217,7 +217,16 @@ export const AgentSettings = z.object({
 })
 export type AgentSettings = z.infer<typeof AgentSettings>
 
-export const AGENT_SETTINGS_FILENAME = 'agent-settings.yaml'
+/**
+ * Config-layer overrides filename.
+ *
+ * Historical name collision: `agent-settings.yaml` is the SPEC-mandated file
+ * for levers (see `@guildhall/levers`). The config package's `AgentSettings`
+ * schema — model overrides, coordinator customizations, learned preferences —
+ * lives alongside it in a separate file to avoid silent strip-unknowns data
+ * loss when the two schemas coexisted on one file.
+ */
+export const AGENT_OVERRIDES_FILENAME = 'agent-overrides.yaml'
 
 // ---------------------------------------------------------------------------
 // ResolvedConfig — the merged result passed to the orchestrator

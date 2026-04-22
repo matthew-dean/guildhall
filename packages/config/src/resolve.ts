@@ -9,7 +9,7 @@ import type { WorkspaceYamlConfig, AgentSettings } from './schemas.js'
 //
 // Priority (highest → lowest):
 //   1. Environment variables (LM_STUDIO_BASE_URL, etc.)
-//   2. memory/agent-settings.yaml  ← agents write here at runtime
+//   2. memory/agent-overrides.yaml ← agents write here at runtime
 //   3. guildhall.yaml                  ← human intent
 //   4. ~/.guildhall/config.yaml        ← global defaults
 //   5. Built-in defaults           ← Zod schema defaults
@@ -95,7 +95,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
   // Layer 2: workspace config (guildhall.yaml)
   const workspaceRaw = readWorkspaceConfig(workspacePath)
 
-  // Layer 3: agent-accumulated settings (memory/agent-settings.yaml)
+  // Layer 3: agent-accumulated overrides (memory/agent-overrides.yaml)
   const agentSettings = readAgentSettings(workspacePath)
 
   // Apply agent settings on top of guildhall.yaml
