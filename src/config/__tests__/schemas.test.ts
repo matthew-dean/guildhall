@@ -96,6 +96,21 @@ describe('WorkspaceYamlConfig', () => {
     expect(config.coordinators[0]?.concerns).toEqual([])
     expect(config.coordinators[0]?.autonomousDecisions).toEqual([])
   })
+
+  it('parses an mcp.servers block with stdio + http transports', () => {
+    const config = WorkspaceYamlConfig.parse({
+      name: 'Test',
+      mcp: {
+        servers: {
+          filesystem: { type: 'stdio', command: 'npx', args: ['-y', 'mcp-fs'] },
+          jira: { type: 'http', url: 'https://mcp.example/v1', headers: { 'X-Auth': 'token' } },
+        },
+      },
+    })
+    expect(Object.keys(config.mcp?.servers ?? {})).toEqual(['filesystem', 'jira'])
+    expect(config.mcp?.servers.filesystem).toMatchObject({ type: 'stdio', command: 'npx' })
+    expect(config.mcp?.servers.jira).toMatchObject({ type: 'http', url: 'https://mcp.example/v1' })
+  })
 })
 
 // ---------------------------------------------------------------------------

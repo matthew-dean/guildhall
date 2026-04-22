@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { ModelAssignmentConfig, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
+import { mcpServerConfigSchema } from '@guildhall/mcp'
 
 // ---------------------------------------------------------------------------
 // guildhall.yaml — per-workspace configuration
@@ -84,6 +85,15 @@ export const WorkspaceYamlConfig = z.object({
   // when building the HookExecutor. Keeping validation at the edge avoids a
   // dep cycle with @guildhall/hooks → @guildhall/engine.
   hooks: z.record(z.string(), z.array(z.unknown())).optional(),
+
+  // MCP servers exposed to every agent as tools. Keyed by server name; the
+  // resulting `mcp__<server>__<tool>` adapters are injected into each agent's
+  // tool registry alongside the built-in `list_mcp_resources` / `read_mcp_resource`
+  // helpers. Failed connections are surfaced via McpConnectionStatus; the
+  // workspace still boots.
+  mcp: z.object({
+    servers: z.record(z.string(), mcpServerConfigSchema).default({}),
+  }).optional(),
 })
 export type WorkspaceYamlConfig = z.infer<typeof WorkspaceYamlConfig>
 
@@ -288,6 +298,12 @@ export const ResolvedConfig = z.object({
   // WorkspaceYamlConfig.hooks for the shape — this is the merged view the
   // orchestrator feeds into the HookExecutor at startup.
   hooks: z.record(z.string(), z.array(z.unknown())).optional(),
+
+  // MCP servers the orchestrator connects to at startup. See
+  // WorkspaceYamlConfig.mcp.
+  mcp: z.object({
+    servers: z.record(z.string(), mcpServerConfigSchema).default({}),
+  }).optional(),
 })
 export type ResolvedConfig = z.infer<typeof ResolvedConfig>
 

@@ -145,6 +145,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
     servePort,
     ...(workspace.runtime ? { runtime: workspace.runtime } : {}),
     ...(workspace.hooks ? { hooks: workspace.hooks } : {}),
+    ...(workspace.mcp ? { mcp: workspace.mcp } : {}),
   })
 
   return resolved
