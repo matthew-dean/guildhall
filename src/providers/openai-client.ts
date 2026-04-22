@@ -9,11 +9,11 @@
  *   - Model-specific `max_completion_tokens` swap for gpt-5/o1/o3/o4 stays
  *   - `<think>…</think>` stripping is preserved since llama.cpp can be
  *     fronting any model including ones that emit inline reasoning
- *   - Reasoning-content carryover for thinking models (the `_reasoning`
- *     attribute upstream stashes on the assistant message) is dropped; we
- *     don't have a WeakMap binding in place for it yet. Local LLM users who
- *     want thinking-model support can add it later; drop-in llama.cpp
- *     chat doesn't need it.
+ *   - Reasoning-content carryover: upstream stashes raw reasoning on
+ *     `msg._reasoning` and replays it as `reasoning_content` on the next
+ *     request. We materialize it as a first-class `reasoning` content
+ *     block (see protocol/messages.ts) so it survives session save/restore
+ *     instead of living in out-of-band attribute state.
  */
 
 import {
@@ -145,6 +145,7 @@ interface OpenAIMessage {
     type: 'function'
     function: { name: string; arguments: string }
   }>
+  reasoning_content?: string
 }
 
 function convertMessagesToOpenAI(
@@ -210,10 +211,23 @@ function convertAssistantMessage(msg: ConversationMessage): OpenAIMessage {
   const textParts = msg.content
     .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
     .map((b) => b.text)
+  const reasoningParts = msg.content
+    .filter((b): b is Extract<ContentBlock, { type: 'reasoning' }> => b.type === 'reasoning')
+    .map((b) => b.text)
   const toolUses = msg.content.filter((b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use')
   const content = textParts.join('')
+  const reasoning = reasoningParts.join('')
 
   const out: OpenAIMessage = { role: 'assistant', content: content.length > 0 ? content : null }
+  // Thinking models (Qwen3, o1/o3, Kimi k2.5) require reasoning_content to be
+  // replayed so they can continue thinking coherently; Kimi in particular
+  // requires an empty string on tool-call messages even when no reasoning
+  // was captured.
+  if (reasoning.length > 0) {
+    out.reasoning_content = reasoning
+  } else if (toolUses.length > 0) {
+    out.reasoning_content = ''
+  }
   if (toolUses.length > 0) {
     out.tool_calls = toolUses.map((tu) => ({
       id: tu.id,
@@ -276,6 +290,7 @@ async function* consumeOpenAiSse(
   body: ReadableStream<Uint8Array>,
 ): AsyncIterable<ApiStreamEvent> {
   let collectedContent = ''
+  let collectedReasoning = ''
   const toolCalls: Map<number, ToolCallAccumulator> = new Map()
   let finishReason: string | null = null
   const usage: UsageSnapshot = { ...emptyUsage }
@@ -287,6 +302,7 @@ async function* consumeOpenAiSse(
       choices?: Array<{
         delta?: {
           content?: string
+          reasoning_content?: string
           tool_calls?: Array<{
             index: number
             id?: string
@@ -316,6 +332,10 @@ async function* consumeOpenAiSse(
     const delta = choice.delta
     if (!delta) continue
 
+    if (delta.reasoning_content) {
+      collectedReasoning += delta.reasoning_content
+    }
+
     if (delta.content) {
       thinkBuf += delta.content
       const [visible, leftover] = stripThinkBlocks(thinkBuf)
@@ -342,6 +362,11 @@ async function* consumeOpenAiSse(
   }
 
   const content: ContentBlock[] = []
+  // Reasoning comes first so replayed messages present thinking → text → tool_use
+  // in the same order the model emitted it.
+  if (collectedReasoning.length > 0) {
+    content.push({ type: 'reasoning', text: collectedReasoning })
+  }
   if (collectedContent.length > 0) content.push({ type: 'text', text: collectedContent })
   for (const idx of [...toolCalls.keys()].sort((a, b) => a - b)) {
     const tc = toolCalls.get(idx)!

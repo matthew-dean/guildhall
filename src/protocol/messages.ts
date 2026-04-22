@@ -10,6 +10,10 @@
  *   - `assistant_message_from_api` dropped; it's provider-SDK-specific and belongs in the engine package
  *   - `to_api_param` method → serializeContentBlock / toApiParam free functions (keeps the schema file pure)
  *   - `field_validator` that normalized null content → Zod preprocess on the ConversationMessage schema
+ *   - Added explicit `reasoning` content block (not in upstream). Upstream
+ *     stashes `msg._reasoning` as an out-of-band attribute; we materialize
+ *     it as a first-class content block so it survives session save/restore
+ *     and is visible in the protocol rather than hidden state.
  */
 
 import { z } from 'zod'
@@ -46,11 +50,22 @@ export const toolResultBlockSchema = z.object({
 })
 export type ToolResultBlock = z.infer<typeof toolResultBlockSchema>
 
+// Reasoning content produced by thinking models (Qwen3, o1/o3, Kimi, etc.)
+// via OpenAI-compatible `reasoning_content` deltas. Not shown to the user,
+// but replayed on subsequent requests so the model can continue thinking
+// coherently. Persists across session restore unlike an out-of-band stash.
+export const reasoningBlockSchema = z.object({
+  type: z.literal('reasoning'),
+  text: z.string(),
+})
+export type ReasoningBlock = z.infer<typeof reasoningBlockSchema>
+
 export const contentBlockSchema = z.discriminatedUnion('type', [
   textBlockSchema,
   imageBlockSchema,
   toolUseBlockSchema,
   toolResultBlockSchema,
+  reasoningBlockSchema,
 ])
 export type ContentBlock = z.infer<typeof contentBlockSchema>
 
@@ -87,10 +102,17 @@ export function messageToolUses(message: ConversationMessage): ToolUseBlock[] {
   return message.content.filter((b): b is ToolUseBlock => b.type === 'tool_use')
 }
 
+export function messageReasoning(message: ConversationMessage): string {
+  return message.content
+    .filter((b): b is ReasoningBlock => b.type === 'reasoning')
+    .map((b) => b.text)
+    .join('')
+}
+
 export function isEffectivelyEmpty(message: ConversationMessage): boolean {
   if (message.content.length === 0) return true
   for (const block of message.content) {
-    if (block.type === 'text') {
+    if (block.type === 'text' || block.type === 'reasoning') {
       if (block.text.trim().length > 0) return false
     } else {
       return false
@@ -119,6 +141,8 @@ export function serializeContentBlock(block: ContentBlock): Record<string, unkno
         content: block.content,
         is_error: block.is_error,
       }
+    case 'reasoning':
+      return { type: 'reasoning', text: block.text }
   }
 }
 

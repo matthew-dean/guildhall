@@ -27,6 +27,7 @@ export function estimateMessageTokens(messages: ConversationMessage[]): number {
   for (const msg of messages) {
     for (const block of msg.content) {
       if (block.type === 'text') total += estimateTokens(block.text)
+      else if (block.type === 'reasoning') total += estimateTokens(block.text)
       else if (block.type === 'tool_result') total += estimateTokens(String(block.content ?? ''))
       else if (block.type === 'tool_use') {
         total += estimateTokens(block.name)

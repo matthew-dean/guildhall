@@ -113,6 +113,109 @@ describe('OpenAICompatibleClient', () => {
     })
   })
 
+  it('accumulates reasoning_content deltas into a reasoning block', async () => {
+    const frames = [
+      dataFrame({
+        choices: [{ delta: { reasoning_content: 'think ' }, finish_reason: null }],
+      }),
+      dataFrame({
+        choices: [{ delta: { reasoning_content: 'harder' }, finish_reason: null }],
+      }),
+      dataFrame({ choices: [{ delta: { content: 'answer' }, finish_reason: 'stop' }] }),
+      'data: [DONE]\n\n',
+    ]
+    const fakeFetch = (async () => sseResponse(frames)) as unknown as typeof fetch
+    const client = new OpenAICompatibleClient({ fetch: fakeFetch })
+    const events = await collect(
+      client.streamMessage({
+        model: 'qwen3-thinker',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'think about it' }] }],
+        max_tokens: 64,
+        tools: [],
+      }),
+    )
+    const terminal = events.at(-1)!
+    if (terminal.type !== 'message_complete') throw new Error('expected terminal')
+    expect(terminal.message.content).toEqual([
+      { type: 'reasoning', text: 'think harder' },
+      { type: 'text', text: 'answer' },
+    ])
+    // reasoning must not be streamed to the user as text_delta
+    const deltas = events.filter((e) => e.type === 'text_delta')
+    expect(deltas.map((e) => (e as { text: string }).text).join('')).toBe('answer')
+  })
+
+  it('replays reasoning_content on the next request', async () => {
+    const frames = [
+      dataFrame({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }),
+      'data: [DONE]\n\n',
+    ]
+    let body: Record<string, unknown> | undefined
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      body = JSON.parse((init?.body as string) ?? '{}') as Record<string, unknown>
+      return sseResponse(frames)
+    }) as unknown as typeof fetch
+    const client = new OpenAICompatibleClient({ fetch: fakeFetch })
+    await collect(
+      client.streamMessage({
+        model: 'qwen3-thinker',
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+          {
+            role: 'assistant',
+            content: [
+              { type: 'reasoning', text: 'prior reasoning' },
+              { type: 'text', text: 'prior answer' },
+            ],
+          },
+          { role: 'user', content: [{ type: 'text', text: 'again' }] },
+        ],
+        max_tokens: 64,
+        tools: [],
+      }),
+    )
+    const messages = body?.messages as Array<Record<string, unknown>>
+    const assistant = messages.find((m) => m.role === 'assistant')!
+    expect(assistant.reasoning_content).toBe('prior reasoning')
+    expect(assistant.content).toBe('prior answer')
+  })
+
+  it('emits reasoning_content="" on tool-call messages even without reasoning (Kimi quirk)', async () => {
+    const frames = [
+      dataFrame({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }),
+      'data: [DONE]\n\n',
+    ]
+    let body: Record<string, unknown> | undefined
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      body = JSON.parse((init?.body as string) ?? '{}') as Record<string, unknown>
+      return sseResponse(frames)
+    }) as unknown as typeof fetch
+    const client = new OpenAICompatibleClient({ fetch: fakeFetch })
+    await collect(
+      client.streamMessage({
+        model: 'kimi-k2.5',
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'do it' }] },
+          {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 'call_1', name: 'bash', input: { command: 'ls' } }],
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'tool_result', tool_use_id: 'call_1', content: 'out', is_error: false },
+            ],
+          },
+        ],
+        max_tokens: 32,
+        tools: [{ name: 'bash', description: '', input_schema: {} }],
+      }),
+    )
+    const messages = body?.messages as Array<Record<string, unknown>>
+    const assistant = messages.find((m) => m.role === 'assistant')!
+    expect(assistant.reasoning_content).toBe('')
+  })
+
   it('uses max_completion_tokens for gpt-5/o1/o3/o4 models', async () => {
     const frames = [
       dataFrame({ choices: [{ delta: { content: 'x' }, finish_reason: 'stop' }] }),
