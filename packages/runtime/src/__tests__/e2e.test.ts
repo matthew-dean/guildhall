@@ -22,7 +22,17 @@ import {
   META_INTAKE_TASK_ID,
 } from '../meta-intake.js'
 import { TaskQueue, type Task, type TaskStatus } from '@guildhall/core'
-import { raiseEscalation } from '@guildhall/tools'
+import {
+  raiseEscalation,
+  reportIssue,
+  writeCheckpoint,
+  readCheckpoint,
+} from '@guildhall/tools'
+import {
+  AGENT_SETTINGS_FILENAME,
+  makeDefaultSettings,
+  saveLeverSettings,
+} from '@guildhall/levers'
 import { PermissionMode } from '@guildhall/engine'
 
 // ---------------------------------------------------------------------------
@@ -376,5 +386,458 @@ describe('E2E: FR-15 per-task permission mode clamp propagates through the orche
 
     await orch.tick()
     expect(spec.modeCalls).toEqual([PermissionMode.PLAN])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// AC-22 end-to-end:
+//   Agent calls `report_issue` → task.agentIssues is populated → orchestrator
+//   sees it on the next-tick inbox via collectRemediationTriggers → coordinator
+//   chooses an action and the authorization matches the `remediation_autonomy`
+//   lever.
+//
+// Walk: create in_progress task, call reportIssue (the real tool), seed a
+// lever position, run collectRemediationTriggers, build context, authorize
+// a non-destructive action, then flip the lever to `confirm_all` and verify
+// the same action now requires confirmation. Both branches record to
+// DECISIONS.md via recordRemediation.
+// ---------------------------------------------------------------------------
+describe('E2E AC-22: report_issue → coordinator remediation inbox', () => {
+  it('routes report_issue through the FR-32 remediation loop with lever-gated authorization', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'guildhall.yaml'),
+      `name: E2E Workspace\nid: e2e-workspace\ncoordinators:\n  - id: looma\n    name: Looma\n    domain: looma\n    mandate: UI\n`,
+      'utf-8',
+    )
+
+    // Pre-seed an in_progress task with a worker assigned.
+    const settings = makeDefaultSettings(new Date('2026-04-20T00:00:00Z'))
+    settings.project.remediation_autonomy = {
+      position: 'confirm_destructive',
+      rationale: 'test',
+      setAt: '2026-04-20T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    const now = '2026-04-20T00:00:00Z'
+    const queue: TaskQueue = {
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'task-001',
+          title: 'Hook up the build',
+          description: 'Details',
+          domain: 'looma',
+          projectPath: tmpDir,
+          status: 'in_progress',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          assignedTo: 'worker-agent',
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    // Step 1: worker calls report_issue (the real tool). No status change.
+    const reported = await reportIssue({
+      tasksPath,
+      progressPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      code: 'stuck',
+      severity: 'warn',
+      detail: 'spec says X but the API only supports Y',
+      suggestedAction: 'rescope to Y or raise escalation',
+    })
+    expect(reported.success).toBe(true)
+    expect(reported.issueId).toMatch(/^iss-task-001-/)
+
+    const afterReport = await readQueue()
+    const taskAfter = afterReport.tasks[0]!
+    expect(taskAfter.status).toBe('in_progress')
+    expect(taskAfter.agentIssues).toHaveLength(1)
+    expect(taskAfter.agentIssues[0]!.broadcast).toBe(false)
+    expect(taskAfter.agentIssues[0]!.detail).toContain('spec says X')
+
+    const progress = await fs.readFile(progressPath, 'utf-8')
+    expect(progress).toContain('ISSUE [warn/stuck]')
+
+    // Step 2: orchestrator next tick inbox sees the issue as a trigger.
+    const config = resolveBootstrapped()
+    const orch = new Orchestrator({
+      config,
+      agents: {
+        spec: stubAgent('spec-agent'),
+        worker: stubAgent('worker-agent'),
+        reviewer: stubAgent('reviewer-agent'),
+        gateChecker: stubAgent('gate-checker-agent'),
+        coordinators: {
+          looma: stubAgent('looma-coordinator'),
+        },
+      },
+      idleShutdownAfterTicks: 2,
+    })
+    orch.liveness.register('worker-agent', 'task-001')
+
+    const triggers = await orch.collectRemediationTriggers()
+    const issueTriggers = triggers.filter((t) => t.kind === 'issue')
+    expect(issueTriggers).toHaveLength(1)
+    expect(issueTriggers[0]!.taskId).toBe('task-001')
+
+    // Step 3: coordinator chooses a non-destructive action; authorization
+    // under `confirm_destructive` returns autonomous.
+    const ctx = await orch.buildRemediationContextFor(issueTriggers[0]!)
+    expect(ctx.leverState.remediationAutonomy).toBe('confirm_destructive')
+    const nonDestructive = {
+      kind: 'replace_with_different_agent' as const,
+      rationale: 'rescope needs a spec-agent pass',
+      replacementAgent: 'spec-agent',
+    }
+    const auth1 = orch.authorizeRemediation(nonDestructive, ctx)
+    expect(auth1).toEqual({ kind: 'autonomous' })
+    await orch.recordRemediation({
+      context: ctx,
+      action: nonDestructive,
+      authorization: auth1,
+      decidedBy: 'looma',
+    })
+
+    const decisions1 = await fs.readFile(
+      path.join(memoryDir, 'DECISIONS.md'),
+      'utf-8',
+    )
+    expect(decisions1).toMatch(/Remediation: replace_with_different_agent \(issue trigger\)/)
+    expect(decisions1).toMatch(/spec-agent/)
+    expect(decisions1).toMatch(/remediation_autonomy=confirm_destructive/)
+    expect(decisions1).toMatch(/autonomous — executed immediately/)
+
+    // Step 4: flip the lever to confirm_all → same action now requires
+    // human confirmation. Verifies AC-22's "consistent with lever
+    // `remediation_autonomy`" requirement.
+    settings.project.remediation_autonomy = {
+      position: 'confirm_all',
+      rationale: 'tightening',
+      setAt: '2026-04-20T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    const ctx2 = await orch.buildRemediationContextFor(issueTriggers[0]!)
+    expect(ctx2.leverState.remediationAutonomy).toBe('confirm_all')
+    const auth2 = orch.authorizeRemediation(nonDestructive, ctx2)
+    expect(auth2.kind).toBe('requires_confirm')
+    await orch.recordRemediation({
+      context: ctx2,
+      action: nonDestructive,
+      authorization: auth2,
+      decidedBy: 'looma',
+    })
+
+    const decisions2 = await fs.readFile(
+      path.join(memoryDir, 'DECISIONS.md'),
+      'utf-8',
+    )
+    expect(decisions2).toMatch(/requires human confirmation/)
+    // remediationAttempts was bumped twice.
+    const finalQueue = await readQueue()
+    expect(finalQueue.tasks[0]!.remediationAttempts).toBe(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// AC-23 end-to-end:
+//   Worker writes a checkpoint and then "crashes" (never flushes liveness).
+//   On orchestrator scan, the task surfaces as a reclaim candidate, the
+//   coordinator selects restart_from_checkpoint, and the checkpoint rehydrates
+//   cleanly with the correct `next_planned_action`.
+// ---------------------------------------------------------------------------
+describe('E2E AC-23: crash → checkpoint → reclaim → restart_from_checkpoint', () => {
+  it('treats a task with a live checkpoint but dead worker as a reclaim candidate and restores next_planned_action', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'guildhall.yaml'),
+      `name: E2E Workspace\nid: e2e-workspace\ncoordinators:\n  - id: looma\n    name: Looma\n    domain: looma\n    mandate: UI\n`,
+      'utf-8',
+    )
+
+    const settings = makeDefaultSettings(new Date('2026-04-20T00:00:00Z'))
+    settings.project.remediation_autonomy = {
+      position: 'auto',
+      rationale: 'test',
+      setAt: '2026-04-20T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    settings.domains.default.crash_recovery_default = {
+      position: 'prefer_resume',
+      rationale: 'test',
+      setAt: '2026-04-20T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    const now = '2026-04-20T00:00:00Z'
+    const queue: TaskQueue = {
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'task-001',
+          title: 'Run the migration',
+          description: 'Details',
+          domain: 'looma',
+          projectPath: tmpDir,
+          status: 'in_progress',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          assignedTo: 'worker-dead',
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    // Step 1: worker writes a checkpoint mid-task.
+    const cp = await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'task-001',
+      agentId: 'worker-dead',
+      intent: 'running step 3 of migration',
+      nextPlannedAction: 'apply the backfill DDL and verify row count',
+      filesTouched: ['migrations/0042_backfill.sql'],
+    })
+    expect(cp.success).toBe(true)
+    expect(cp.step).toBe(1)
+
+    const onDisk = await readCheckpoint(memoryDir, 'task-001')
+    expect(onDisk?.nextPlannedAction).toBe(
+      'apply the backfill DDL and verify row count',
+    )
+
+    // Step 2: simulate a restart — fresh orchestrator, worker-dead is NOT
+    // registered in the liveness tracker. scanReclaimCandidates surfaces it.
+    const config = resolveBootstrapped()
+    const orch = new Orchestrator({
+      config,
+      agents: {
+        spec: stubAgent('spec-agent'),
+        worker: stubAgent('worker-agent'),
+        reviewer: stubAgent('reviewer-agent'),
+        gateChecker: stubAgent('gate-checker-agent'),
+        coordinators: {
+          looma: stubAgent('looma-coordinator'),
+        },
+      },
+      idleShutdownAfterTicks: 2,
+    })
+    // Deliberately do NOT call orch.liveness.register('worker-dead', ...).
+
+    const candidates = await orch.scanReclaimCandidates()
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]!.task.id).toBe('task-001')
+    expect(candidates[0]!.checkpoint?.nextPlannedAction).toBe(
+      'apply the backfill DDL and verify row count',
+    )
+    expect(candidates[0]!.autoEscalate).toBe(false)
+
+    // Step 3: collectRemediationTriggers → includes a `crash` trigger that
+    // carries the checkpoint. buildRemediationContextFor attaches it to the
+    // context so the coordinator (and DECISIONS.md) reflect the checkpoint.
+    const triggers = await orch.collectRemediationTriggers()
+    const crash = triggers.find((t) => t.kind === 'crash')
+    expect(crash).toBeDefined()
+    if (crash?.kind !== 'crash') throw new Error('type narrow')
+
+    const ctx = await orch.buildRemediationContextFor(crash)
+    expect(ctx.trigger.kind).toBe('crash')
+    expect(ctx.checkpoint?.nextPlannedAction).toBe(
+      'apply the backfill DDL and verify row count',
+    )
+    expect(ctx.checkpoint?.step).toBe(1)
+    expect(ctx.leverState.crashRecoveryDefault).toBe('prefer_resume')
+
+    // Step 4: coordinator chooses restart_from_checkpoint. Under
+    // remediation_autonomy=auto + a fresh checkpoint (<24h), this runs
+    // autonomously.
+    const action = {
+      kind: 'restart_from_checkpoint' as const,
+      rationale:
+        'prefer_resume + fresh checkpoint — resume from next_planned_action',
+    }
+    const auth = orch.authorizeRemediation(action, ctx)
+    expect(auth).toEqual({ kind: 'autonomous' })
+
+    await orch.recordRemediation({
+      context: ctx,
+      action,
+      authorization: auth,
+      decidedBy: 'looma',
+    })
+
+    const decisions = await fs.readFile(
+      path.join(memoryDir, 'DECISIONS.md'),
+      'utf-8',
+    )
+    expect(decisions).toMatch(/Remediation: restart_from_checkpoint \(crash trigger\)/)
+    expect(decisions).toMatch(/checkpoint=step 1/)
+    expect(decisions).toMatch(/prior_attempts=0/)
+    expect(decisions).toMatch(/crash_recovery_default=prefer_resume/)
+    expect(decisions).toMatch(/autonomous — executed immediately/)
+
+    // Step 5: after the remediation is recorded, the queue reflects the
+    // attempt and the checkpoint is still readable for the next agent to
+    // rehydrate from next_planned_action (FR-20 session rehydrate).
+    const finalQueue = await readQueue()
+    expect(finalQueue.tasks[0]!.remediationAttempts).toBe(1)
+
+    const rehydrateSource = await readCheckpoint(memoryDir, 'task-001')
+    expect(rehydrateSource?.nextPlannedAction).toBe(
+      'apply the backfill DDL and verify row count',
+    )
+    expect(rehydrateSource?.filesTouched).toEqual([
+      'migrations/0042_backfill.sql',
+    ])
+  })
+
+  it('flags a checkpoint older than 24h as autoEscalate and requires confirmation even under auto', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'guildhall.yaml'),
+      `name: E2E Workspace\nid: e2e-workspace\ncoordinators:\n  - id: looma\n    name: Looma\n    domain: looma\n    mandate: UI\n`,
+      'utf-8',
+    )
+
+    const settings = makeDefaultSettings(new Date('2026-04-20T00:00:00Z'))
+    settings.project.remediation_autonomy = {
+      position: 'auto',
+      rationale: 'test',
+      setAt: '2026-04-20T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    const now = '2026-04-18T00:00:00Z' // >24h before the reclaim scan
+    const queue: TaskQueue = {
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'task-old',
+          title: 'Stale migration',
+          description: 'Details',
+          domain: 'looma',
+          projectPath: tmpDir,
+          status: 'in_progress',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          assignedTo: 'worker-ancient',
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'task-old',
+      agentId: 'worker-ancient',
+      intent: 'started the migration two days ago',
+      nextPlannedAction: 'verify row count',
+      filesTouched: [],
+    })
+
+    // Manually backdate the checkpoint's writtenAt so the age calculation
+    // exceeds 24h. writeCheckpoint stamps `new Date().toISOString()` — we
+    // rewrite the file to control the timestamp.
+    const cpPath = path.join(
+      memoryDir,
+      'tasks',
+      'task-old',
+      'checkpoint.json',
+    )
+    const raw = JSON.parse(await fs.readFile(cpPath, 'utf-8'))
+    raw.writtenAt = '2026-04-19T00:00:00Z'
+    await fs.writeFile(cpPath, JSON.stringify(raw, null, 2), 'utf-8')
+
+    const config = resolveBootstrapped()
+    const orch = new Orchestrator({
+      config,
+      agents: {
+        spec: stubAgent('spec-agent'),
+        worker: stubAgent('worker-agent'),
+        reviewer: stubAgent('reviewer-agent'),
+        gateChecker: stubAgent('gate-checker-agent'),
+        coordinators: {
+          looma: stubAgent('looma-coordinator'),
+        },
+      },
+      idleShutdownAfterTicks: 2,
+    })
+
+    // Now = 2026-04-20T00:00:00Z → checkpoint is ~24h old.
+    const nowMs = Date.parse('2026-04-20T00:00:00Z')
+    const candidates = await orch.scanReclaimCandidates(nowMs)
+    expect(candidates[0]!.autoEscalate).toBe(true)
+
+    const triggers = await orch.collectRemediationTriggers(nowMs)
+    const crash = triggers.find((t) => t.kind === 'crash')
+    if (crash?.kind !== 'crash') throw new Error('expected crash trigger')
+
+    const ctx = await orch.buildRemediationContextFor(crash)
+    const auth = orch.authorizeRemediation(
+      { kind: 'restart_from_checkpoint', rationale: 'resume' },
+      ctx,
+    )
+    expect(auth.kind).toBe('requires_confirm')
+    if (auth.kind === 'requires_confirm') {
+      expect(auth.reason).toMatch(/24h/)
+    }
   })
 })
