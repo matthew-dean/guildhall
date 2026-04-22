@@ -11,6 +11,8 @@ import {
   updateTaskTool,
   logProgressTool,
   raiseEscalationTool,
+  webFetchTool,
+  webSearchTool,
 } from '@guildhall/tools'
 import { GuildhallAgent } from './guildhall-agent.js'
 import type { AgentLLM } from './llm.js'
@@ -87,6 +89,8 @@ export function createWorkerAgent(
       updateTaskTool,
       logProgressTool,
       raiseEscalationTool,
+      webFetchTool,
+      webSearchTool,
       ...(opts.extraTools ?? []),
     ],
     ...(opts.skills ? { skills: opts.skills } : {}),
