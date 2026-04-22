@@ -117,6 +117,31 @@ export type { InitOptions } from './init.js'
 export { runServe } from './serve.js'
 export type { ServeOptions } from './serve.js'
 export {
+  STOP_REQUESTED_FILENAME,
+  stopRequestedPath,
+  isStopRequested,
+  writeStopRequested,
+  clearStopRequested,
+  ProcessRegistry,
+} from './stop-requested.js'
+export type {
+  StopMarkerDetail,
+  RegisteredProcess,
+} from './stop-requested.js'
+export {
+  LOCAL_ONLY_FILENAME,
+  localOnlyPath,
+  isLocalOnly,
+  readLocalOnlyState,
+  enterLocalOnlyMode,
+  exitLocalOnlyMode,
+  attemptRemoteSync,
+} from './local-only-mode.js'
+export type {
+  LocalOnlyState,
+  RemoteSyncResult,
+} from './local-only-mode.js'
+export {
   loadDesignSystem,
   saveDesignSystem,
   designSystemPath,

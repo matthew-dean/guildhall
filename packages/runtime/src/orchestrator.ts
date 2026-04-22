@@ -68,6 +68,7 @@ import {
   type Slot,
   type RuntimeIsolationConfig,
 } from './slot-allocator.js'
+import { isStopRequested } from './stop-requested.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -620,6 +621,15 @@ export class Orchestrator {
 
       if (this.opts.stopSignal?.stopRequested) {
         console.log(`[guildhall] Stop requested after tick ${tick}. Shutting down.`)
+        break
+      }
+
+      // FR-28: an external tool (systemd, remote operator, another guildhall
+      // process) may write the marker file directly. Treat it the same as an
+      // in-memory stopSignal flip so operators don't need signal delivery.
+      if (isStopRequested(path.join(this.opts.config.projectPath, 'memory'))) {
+        console.log(`[guildhall] Stop marker detected after tick ${tick}. Shutting down.`)
+        if (this.opts.stopSignal) this.opts.stopSignal.stopRequested = true
         break
       }
 

@@ -1000,7 +1000,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 }
 
 export async function runServe(opts: ServeOptions = {}): Promise<void> {
-  const { app, projectPath } = buildServeApp(opts)
+  const { app, supervisor, projectPath } = buildServeApp(opts)
   const project = resolveProject(projectPath)
   const cfg = readProjectConfig(projectPath)
   const port = opts.port ?? cfg.servePort
@@ -1011,9 +1011,32 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   console.log(`[guildhall serve] Press Ctrl+C to stop.`)
   console.log()
 
-  serve({ fetch: app.fetch, port }, info => {
+  const server = serve({ fetch: app.fetch, port }, info => {
     console.log(`[guildhall serve] ✓ Running at http://localhost:${info.port}`)
   })
+
+  // FR-28 / AC-19: cooperative shutdown. SIGINT (Ctrl+C) and SIGTERM both
+  // drive the same path: stop every running supervisor (which writes the
+  // stop marker, flips stopSignal, waits for in-flight ticks to drain,
+  // and cleans up registered children), then close the HTTP server, then
+  // exit 0. Handlers are idempotent — the shuttingDown flag avoids the
+  // "Ctrl+C twice" hard-exit being interpreted as a regression.
+  let shuttingDown = false
+  const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+    if (shuttingDown) return
+    shuttingDown = true
+    console.log(`\n[guildhall serve] ${signal} received — draining…`)
+    try {
+      await supervisor.stopAll({ reason: `signal:${signal}` })
+    } catch (err) {
+      console.warn(`[guildhall serve] stopAll error: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    console.log('[guildhall serve] shutdown complete')
+    process.exit(0)
+  }
+  process.on('SIGINT', () => { void shutdown('SIGINT') })
+  process.on('SIGTERM', () => { void shutdown('SIGTERM') })
 }
 
 // ---------------------------------------------------------------------------

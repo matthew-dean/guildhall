@@ -653,6 +653,46 @@ describe('Orchestrator.run — full loops', () => {
     expect(completed).toBe(true)
     expect(Date.now() - start).toBeLessThan(500)
   })
+
+  it('FR-28 / AC-19: honors an external memory/stop-requested marker between ticks', async () => {
+    // An always-active task keeps the loop running — the marker is what
+    // should cut it short, not task exhaustion.
+    await writeQueue([mkTask({ id: 'a', status: 'in_progress', domain: 'looma' })])
+
+    let ticks = 0
+    const markerPath = path.join(memoryDir, 'stop-requested')
+    const stopSignal = { stopRequested: false }
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent', async () => {}),
+      worker: {
+        name: 'worker-agent',
+        calls: [] as { prompt: string }[],
+        async generate() {
+          ticks++
+          if (ticks === 2) {
+            // Simulate an external operator writing the marker — no SIGINT
+            // delivery, no dashboard stop button.
+            await fs.writeFile(markerPath, '{"requestedBy":"external"}', 'utf-8')
+          }
+          return { text: 'ok' }
+        },
+      } as unknown as OrchestratorAgentSet['worker'],
+      reviewer: stubAgent('reviewer-agent', async () => {}),
+      gateChecker: stubAgent('gate-checker-agent', async () => {}),
+      coordinators: {
+        looma: stubAgent('looma-coordinator', async () => {}),
+      },
+    }
+
+    const orch = new Orchestrator({ config: baseConfig(), agents, stopSignal })
+    await orch.run({ maxTicks: 20, tickDelayMs: 0 })
+
+    expect(stopSignal.stopRequested).toBe(true)
+    // Should have exited within a couple of ticks of the marker appearing,
+    // not run to the maxTicks=20 ceiling.
+    expect(ticks).toBeLessThan(10)
+  })
 })
 
 // ---------------------------------------------------------------------------

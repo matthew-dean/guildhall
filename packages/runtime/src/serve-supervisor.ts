@@ -1,7 +1,13 @@
 import { EventEmitter } from 'node:events'
+import path from 'node:path'
 import type { BackendEvent } from '@guildhall/backend-host'
 import { resolveConfig } from '@guildhall/config'
 import { runOrchestrator } from './orchestrator.js'
+import {
+  ProcessRegistry,
+  writeStopRequested,
+  clearStopRequested,
+} from './stop-requested.js'
 
 // ---------------------------------------------------------------------------
 // Serve-side orchestrator supervisor
@@ -28,6 +34,13 @@ export interface WorkspaceRun {
   stopSignal: { stopRequested: boolean }
   /** The run() promise — resolves when the orchestrator loop exits. */
   runPromise: Promise<void>
+  /**
+   * FR-28: child processes this orchestrator owns (future out-of-process
+   * workers per FR-24, hook subprocesses, etc.). Cleaned up on stop.
+   */
+  processRegistry: ProcessRegistry
+  /** Absolute path to the workspace — so `stop()` can write the marker. */
+  workspacePath: string
 }
 
 export interface SupervisorEvent {
@@ -109,7 +122,13 @@ export class OrchestratorSupervisor {
       recentEvents: [],
       stopSignal,
       runPromise: Promise.resolve(),
+      processRegistry: new ProcessRegistry(),
+      workspacePath: opts.workspacePath,
     }
+    // Clear any stale marker from a previous run so a brand-new orchestrator
+    // doesn't stop on its first tick.
+    const memoryDir = path.join(opts.workspacePath, 'memory')
+    void clearStopRequested(memoryDir)
 
     const recordAndEmit = (event: BackendEvent | SupervisorLifecycleEvent): void => {
       const supervisorEv: SupervisorEvent = {
@@ -153,13 +172,26 @@ export class OrchestratorSupervisor {
    * Request a graceful stop. Sets the stop signal; the orchestrator loop
    * honors it between ticks. Resolves when the run has fully stopped.
    */
-  async stop(workspaceId: string, waitMs = 30_000): Promise<boolean> {
+  async stop(
+    workspaceId: string,
+    opts: { waitMs?: number; reason?: string } = {},
+  ): Promise<boolean> {
+    const waitMs = opts.waitMs ?? 30_000
     const run = this.runs.get(workspaceId)
     if (!run) return false
     if (run.status !== 'running') return true
 
     run.status = 'stopping'
     run.stopSignal.stopRequested = true
+
+    // FR-28: also write the on-disk marker so external observers (a sibling
+    // CLI process, a container orchestrator) see the stop request even if
+    // they missed the in-memory flag flip.
+    void writeStopRequested(path.join(run.workspacePath, 'memory'), {
+      requestedAt: new Date().toISOString(),
+      requestedBy: 'supervisor',
+      ...(opts.reason ? { reason: opts.reason } : {}),
+    })
 
     const isTerminated = (): boolean => {
       const s: WorkspaceRun['status'] = run.status
@@ -171,6 +203,25 @@ export class OrchestratorSupervisor {
       if (isTerminated()) return true
       await new Promise(r => setTimeout(r, 250))
     }
+
+    // Tick drained (or timed out); either way, tear down registered children.
+    await run.processRegistry.shutdownAll()
+
+    // Clear the marker on clean exit so the next start() doesn't see it.
+    if (isTerminated()) {
+      await clearStopRequested(path.join(run.workspacePath, 'memory'))
+    }
+
     return isTerminated()
+  }
+
+  /**
+   * Stop every running workspace and tear down child processes. Used by
+   * the SIGINT/SIGTERM handler in `runServe` — the host is shutting down,
+   * so we don't care about leaving individual supervisors runnable.
+   */
+  async stopAll(opts: { waitMs?: number; reason?: string } = {}): Promise<void> {
+    const ids = Array.from(this.runs.keys())
+    await Promise.all(ids.map((id) => this.stop(id, opts)))
   }
 }
