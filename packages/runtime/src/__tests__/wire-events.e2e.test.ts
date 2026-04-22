@@ -12,6 +12,13 @@ import {
 import type { ResolvedConfig } from '@guildhall/config'
 import type { Task, TaskQueue } from '@guildhall/core'
 
+import {
+  AGENT_SETTINGS_FILENAME,
+  makeDefaultSettings,
+  saveLeverSettings,
+} from '@guildhall/levers'
+
+import { InMemoryGitDriver } from '../git-driver.js'
 import { Orchestrator, type OrchestratorAgentSet } from '../orchestrator.js'
 import { tickOutcomeToBackendEvent } from '../wire-events.js'
 
@@ -184,6 +191,77 @@ describe('FR-16 end-to-end: orchestrator → OHJSON stream', () => {
       to_status: 'done',
       agent_name: 'gate-checker-agent',
     })
+  })
+
+  it('flattens a fanout batch outcome into one backend event per sub-outcome via run()', async () => {
+    // Configure fanout_2 + per_task worktrees so tick() returns a batch.
+    const settings = makeDefaultSettings(new Date('2026-04-22T00:00:00Z'))
+    settings.project.concurrent_task_dispatch = {
+      position: { kind: 'fanout', n: 2 },
+      rationale: 'fanout-wire test',
+      setAt: '2026-04-22T00:00:00.000Z',
+      setBy: 'system-default',
+    }
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'fanout-wire test',
+      setAt: '2026-04-22T00:00:00.000Z',
+      setBy: 'system-default',
+    }
+    settings.project.merge_policy = {
+      position: 'ff_only_local',
+      rationale: 'fanout-wire test',
+      setAt: '2026-04-22T00:00:00.000Z',
+      setBy: 'system-default',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    await writeQueue([
+      mkTask({ id: 'task-a', status: 'in_progress' }),
+      mkTask({ id: 'task-b', status: 'in_progress' }),
+    ])
+
+    let orchRef: Orchestrator | null = null
+    const worker = {
+      name: 'worker-agent',
+      async generate(prompt: string): Promise<{ text: string }> {
+        const m = prompt.match(/## Current Task:\s+(\S+)/)
+        const id = m?.[1]
+        if (id && orchRef) {
+          await orchRef.updateQueueAtomically((queue) => {
+            const t = queue.tasks.find((x) => x.id === id)
+            if (t && t.status === 'in_progress') t.status = 'done'
+          })
+        }
+        return { text: 'ok' }
+      },
+    }
+
+    const events: BackendEvent[] = []
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ currentBranch: 'main' }),
+      onBackendEvent: async (evt) => {
+        events.push(evt)
+      },
+    })
+    orchRef = orch
+
+    await orch.run({ maxTicks: 1, tickDelayMs: 0 })
+
+    const transitions = events.filter((e) => e.type === 'task_transition')
+    expect(transitions).toHaveLength(2)
+    const ids = transitions.map((e) => e.task_id).sort()
+    expect(ids).toEqual(['task-a', 'task-b'])
+    for (const t of transitions) {
+      expect(t.from_status).toBe('in_progress')
+      expect(t.to_status).toBe('done')
+      expect(t.agent_name).toBe('worker-agent')
+    }
   })
 
   it('encodes each event as a single OHJSON-prefixed line so a subscriber can parse line-by-line', async () => {
