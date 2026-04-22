@@ -1,5 +1,6 @@
 export * from './shell.js'
 export * from './files.js'
+export * from './search.js'
 export * from './task-queue.js'
 export * from './memory-tools.js'
 export * from './agent-settings-tool.js'
