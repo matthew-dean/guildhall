@@ -91,6 +91,12 @@ export function tickOutcomeToBackendEvent(outcome: TickOutcome): BackendEvent | 
           `${outcome.actionKind} (pre_rejection_policy=${String(outcome.domainLeverPosition)}, ` +
           `requeueCount=${outcome.requeueCount})`,
       }
+
+    case 'batch':
+      // FR-24: fanout outcomes are flattened in the run-loop before reaching
+      // this mapper. A raw batch here means a caller passed us the envelope
+      // itself — return null rather than emit a synthetic event.
+      return null
   }
 }
 

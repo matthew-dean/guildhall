@@ -23,6 +23,7 @@ export const TaskStatus = z.enum([
   'in_progress',   // Assigned to a worker agent
   'review',        // Worker done, awaiting reviewer agent
   'gate_check',    // Reviewer approved, running hard gates
+  'pending_pr',    // FR-25 manual_pr: approved & pushed; awaiting external PR merge
   'done',          // All gates passed — terminal
   'shelved',       // FR-22: worker pre-rejected (no_op/not_viable/low_value/duplicate/spec_wrong) — terminal
   'blocked',       // Cannot proceed — escalation required — terminal
@@ -359,6 +360,36 @@ export const Task = z.object({
         .default('worker_pre_rejection'),
       policyApplied: z.boolean().default(false),
       requeueCount: z.number().int().nonnegative().default(0),
+    })
+    .optional(),
+
+  // FR-24: set when `worktree_isolation != none` on dispatch. Persisted so
+  // subsequent ticks (retries, revisions) can reuse (per_task) or rebuild
+  // (per_attempt). Absent when isolation is off.
+  worktreePath: z.string().optional(),
+  branchName: z.string().optional(),
+  baseBranch: z.string().optional(),
+
+  // FR-25: set after the merge dispatcher runs on `done`. Records the strategy
+  // taken, outcome, and any PR URL so the audit trail is complete. Exactly one
+  // record per terminal merge attempt.
+  mergeRecord: z
+    .object({
+      fromBranch: z.string(),
+      toBranch: z.string(),
+      strategy: z.enum(['ff_only_local', 'ff_only_with_push', 'manual_pr']),
+      result: z.enum([
+        'merged',
+        'pushed',
+        'push_failed_degraded',
+        'pending_pr',
+        'conflict',
+        'skipped',
+      ]),
+      commitSha: z.string().optional(),
+      prUrl: z.string().optional(),
+      mergedAt: z.string(),
+      detail: z.string().optional(),
     })
     .optional(),
 

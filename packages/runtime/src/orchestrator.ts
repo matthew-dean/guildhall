@@ -24,12 +24,12 @@ import { loadSkillRegistry } from '@guildhall/skills'
 import {
   logProgress,
   raiseEscalation,
-  hasOpenEscalation,
   findReclaimTasks,
   loadReclaimCandidates,
   readCheckpoint,
   type ReclaimCandidate,
 } from '@guildhall/tools'
+import { pickNextTask, needsPreRejectionPolicy } from './orchestrator-picker.js'
 import {
   AGENT_SETTINGS_FILENAME,
   loadLeverSettings,
@@ -68,6 +68,27 @@ import {
   type Slot,
   type RuntimeIsolationConfig,
 } from './slot-allocator.js'
+import {
+  NodeGitDriver,
+  type GitDriver,
+} from './git-driver.js'
+import {
+  ensureWorktreeForDispatch,
+  cleanupWorktreeForTerminal,
+  resolveWorktreeMode,
+  type WorktreeMode,
+} from './worktree-manager.js'
+import {
+  dispatchMerge,
+  appendFixupTask,
+  resolveMergePolicy,
+  type MergePolicy,
+} from './merge-dispatcher.js'
+import {
+  pickNextTasks,
+  resolveFanoutCapacity,
+  type FanoutCapacity,
+} from './fanout-dispatcher.js'
 import { isStopRequested } from './stop-requested.js'
 import {
   deterministicReview,
@@ -85,21 +106,6 @@ import path from 'node:path'
  */
 const PROPOSAL_PROMOTER_AGENT_ID = 'proposal-promoter'
 const PRE_REJECTION_POLICY_AGENT_ID = 'pre-rejection-policy'
-
-/**
- * A worker-shelved task is "fresh" (needs `pre_rejection_policy` applied)
- * when its shelveReason records a worker pre-rejection the orchestrator
- * has not yet consulted the levers for.
- */
-function needsPreRejectionPolicy(task: Task): boolean {
-  const r = task.shelveReason
-  return (
-    task.status === 'shelved' &&
-    r != null &&
-    r.source === 'worker_pre_rejection' &&
-    !r.policyApplied
-  )
-}
 
 // ---------------------------------------------------------------------------
 // Forge Orchestrator
@@ -190,6 +196,13 @@ export type TickOutcome =
       newStatus: TaskStatus
       requeueCount: number
     }
+  /**
+   * FR-24: `concurrent_task_dispatch: fanout_N` ran multiple tasks in one
+   * tick. Each sub-outcome is a regular `TickOutcome` (never another batch).
+   * The serve layer fans these out to its SSE stream as if they were emitted
+   * one-per-tick.
+   */
+  | { kind: 'batch'; outcomes: TickOutcome[] }
 
 export interface OrchestratorOptions {
   config: ResolvedConfig
@@ -238,6 +251,13 @@ export interface OrchestratorOptions {
    * supervisor doesn't want to cancel an in-flight `generate()` call.
    */
   stopSignal?: { stopRequested: boolean }
+  /**
+   * FR-24 / FR-25: git driver used for worktree + merge operations. Defaults
+   * to `NodeGitDriver` (shells out to `git` + `gh`). Tests inject
+   * `InMemoryGitDriver` so the tick loop can be exercised without touching a
+   * real repo.
+   */
+  gitDriver?: GitDriver
 }
 
 const DEFAULT_IDLE_SHUTDOWN = 10
@@ -260,11 +280,24 @@ export class Orchestrator {
    * levers and pick a mode.
    */
   private slotAllocator: SlotAllocator | null | undefined = undefined
+  /**
+   * FR-24/25: injected git driver. Default `NodeGitDriver` for real runs;
+   * tests pass `InMemoryGitDriver` through options.
+   */
+  private readonly gitDriver: GitDriver
+  /**
+   * FR-24/25: serialize the read-modify-write cycle for TASKS.json when
+   * multiple fanout dispatches finish in the same tick. Kept as a single
+   * tail promise so writes are FIFO and no dispatchOne clobbers another's
+   * edits.
+   */
+  private queueWriteChain: Promise<void> = Promise.resolve()
 
   constructor(opts: OrchestratorOptions) {
     this.opts = opts
     this.livenessTracker =
       opts.liveness ?? new LivenessTracker({ strictness: 'standard' })
+    this.gitDriver = opts.gitDriver ?? new NodeGitDriver()
   }
 
   get config(): ResolvedConfig {
@@ -304,14 +337,24 @@ export class Orchestrator {
   }
 
   /**
-   * Single orchestrator step. Reads the queue, routes one task to one agent,
-   * detects transitions, enforces revision limits, and appends a progress entry.
+   * Single orchestrator step. Reads the queue, picks 1..N actionable tasks
+   * per the `concurrent_task_dispatch` lever, and dispatches each through
+   * `dispatchOne`. Returns one `TickOutcome` for the serial path, or a
+   * `batch` outcome wrapping the N sub-outcomes for fanout.
+   *
+   * Agents run concurrently in fanout; queue writes are serialized via
+   * `withQueueWriteLock` so concurrent dispatches never clobber one another.
    */
   async tick(): Promise<TickOutcome> {
     const queueBefore = await this.readQueue()
-    const task = pickNextTask(queueBefore, this.opts.domainFilter)
+    const capacity = await this.resolveCapacity()
+    const picks = pickNextTasks({
+      queue: queueBefore,
+      capacity,
+      ...(this.opts.domainFilter ? { domainFilter: this.opts.domainFilter } : {}),
+    })
 
-    if (!task) {
+    if (picks.length === 0) {
       this.consecutiveIdleTicks++
       const allDone = queueBefore.tasks.every((t) =>
         (TERMINAL_TASK_STATUSES as readonly TaskStatus[]).includes(t.status),
@@ -324,16 +367,37 @@ export class Orchestrator {
     }
     this.consecutiveIdleTicks = 0
 
+    if (picks.length === 1) {
+      return await this.dispatchOne(picks[0]!, queueBefore)
+    }
+
+    // Fanout path: run each pick concurrently. `dispatchOne` catches its own
+    // agent errors, so Promise.all is sufficient — any rejection here is a
+    // true bug and should surface as a throw on the tick caller.
+    const outcomes = await Promise.all(
+      picks.map((t) => this.dispatchOne(t, queueBefore)),
+    )
+    return { kind: 'batch', outcomes }
+  }
+
+  /**
+   * Dispatch a single task. Handles pre-policy (proposed, shelved) paths,
+   * agent dispatch (with worktree setup + slot allocation), reviewer-mode
+   * routing, merge dispatch on `done` transitions, worktree cleanup on
+   * terminal transitions, revision counting, and progress logging.
+   *
+   * Queue mutations after `agent.generate()` go through `withQueueWriteLock`
+   * so concurrent fanout dispatches serialize on the final write step.
+   */
+  async dispatchOne(task: Task, queueBefore: TaskQueue): Promise<TickOutcome> {
     // FR-21: proposals are decided by policy (the `task_origination` lever),
-    // not by an LLM agent. Handle the transition inline and skip agent
-    // dispatch entirely.
+    // not by an LLM agent. Handle the transition inline.
     if (task.status === 'proposed') {
       return await this.decideProposal(task, queueBefore)
     }
 
     // FR-22: worker-shelved tasks pending pre_rejection_policy get resolved
-    // via the same pure-policy path. The picker surfaces them to us only
-    // while `shelveReason.policyApplied` is false.
+    // via the same pure-policy path.
     if (needsPreRejectionPolicy(task)) {
       return await this.applyPreRejectionPolicy(task, queueBefore)
     }
@@ -347,17 +411,11 @@ export class Orchestrator {
 
     const { agent, promptSuffix } = selection
 
-    // FR-27 / AC-18: reviewer dispatch. For `review` tasks, the per-domain
-    // `reviewer_mode` lever decides whether the LLM reviewer runs, the
-    // deterministic reviewer runs, or the LLM is tried with deterministic
-    // fallback on outage. We resolve the mode once per tick so failures to
-    // load levers fall back to `llm_only` (the safest default — any other
-    // choice would silently skip real review).
+    // FR-27 / AC-18: resolve reviewer mode once per dispatch so failures to
+    // load levers fall back to `llm_only` (safest default).
     const reviewerMode: ReviewerMode =
       beforeStatus === 'review' ? await this.resolveReviewerMode(task.domain) : 'llm_only'
 
-    // `deterministic_only` short-circuits: no LLM call, no prompt-building,
-    // no slot allocation. Apply the verdict straight to the queue and return.
     if (beforeStatus === 'review' && reviewerMode === 'deterministic_only') {
       return await this.applyReviewVerdictInline({
         task,
@@ -366,13 +424,69 @@ export class Orchestrator {
       })
     }
 
+    // FR-24: if worktree_isolation is active, ensure a worktree exists before
+    // the agent runs. On first creation, persist the path/branch/base on the
+    // task so subsequent ticks reuse them. Skipped when mode is `none`.
+    const worktreeMode = await this.resolveWorktreeModeSafe()
+    let activeWorktreePath = this.opts.config.projectPath
+    if (worktreeMode !== 'none') {
+      const baseBranch = await this.resolveBaseBranch()
+      try {
+        const ensured = await ensureWorktreeForDispatch({
+          task,
+          mode: worktreeMode,
+          projectPath: this.opts.config.projectPath,
+          baseBranch,
+          gitDriver: this.gitDriver,
+        })
+        activeWorktreePath = ensured.worktreePath
+        // Persist metadata if we just minted a new worktree (or if the task
+        // is missing any of the fields, e.g. legacy rows pre-FR-24).
+        if (
+          ensured.created ||
+          task.worktreePath !== ensured.worktreePath ||
+          task.branchName !== ensured.branchName ||
+          task.baseBranch !== ensured.baseBranch
+        ) {
+          await this.withQueueWriteLock(async () => {
+            const queue = await this.readQueue()
+            const t = queue.tasks.find((x) => x.id === task.id)
+            if (!t) return
+            t.worktreePath = ensured.worktreePath
+            t.branchName = ensured.branchName
+            t.baseBranch = ensured.baseBranch
+            t.updatedAt = this.now()
+            queue.lastUpdated = this.now()
+            await this.writeQueue(queue)
+          })
+          task.worktreePath = ensured.worktreePath
+          task.branchName = ensured.branchName
+          task.baseBranch = ensured.baseBranch
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        await this.logTickProgress({
+          task,
+          agent: agent.name,
+          beforeStatus,
+          afterStatus: beforeStatus,
+          transitioned: false,
+          note: `error: worktree setup failed — ${message}`,
+        })
+        return {
+          kind: 'agent-error',
+          taskId: task.id,
+          agent: agent.name,
+          error: `worktree setup failed: ${message}`,
+        }
+      }
+    }
+
     const ctx = await buildContext(task, this.opts.config.memoryDir)
     const tasksPath = this.tasksPath()
 
-    // FR-24: if runtime_isolation: slot_allocation is active, claim a slot
-    // for this task before dispatch. The allocation shapes the prompt (so the
-    // agent knows its slot rules) and the env handed to the worker process.
-    // Slot is released after the agent returns (or throws).
+    // FR-24: slot allocation shapes the prompt + env for the worker. Slot is
+    // released after the agent returns (or throws).
     const slot = await this.allocateSlotForTask(task)
     const slotPromptRule = slot ? slotSystemPromptRule(slot) : null
 
@@ -381,16 +495,16 @@ export class Orchestrator {
       '',
       `**Tasks file (for tool calls):** ${tasksPath}`,
       `**Memory dir (for tool calls):** ${this.opts.config.memoryDir}`,
+      ...(activeWorktreePath !== this.opts.config.projectPath
+        ? [`**Worktree (for code edits):** ${activeWorktreePath}`]
+        : []),
       ...(slotPromptRule ? ['', slotPromptRule] : []),
       '',
       promptSuffix,
     ].join('\n')
 
-    // FR-15: per-task permission mode override. Always re-apply before each
-    // tick so a narrowed mode from a previous tick doesn't stick on the same
-    // long-lived agent. When a task has no override we ask for FULL_AUTO; the
-    // agent clamps against its own baseline so this can only widen back up to
-    // where it started, never past it.
+    // FR-15: per-task permission mode override; re-applied every dispatch so
+    // narrowed modes don't stick on long-lived agents.
     if (typeof agent.setPermissionMode === 'function') {
       const requested = task.permissionMode
         ? taskModeToPermissionMode(task.permissionMode)
@@ -399,9 +513,7 @@ export class Orchestrator {
     }
 
     // FR-30: register the agent with the liveness tracker for the duration
-    // of this generate() call. The watchdog that decides a generate() has
-    // stalled runs off-loop (serve layer, FR-24 supervisor); we just make
-    // sure registration bounds match the actual agent work.
+    // of this generate() call.
     this.livenessTracker.register(agent.name, task.id)
 
     try {
@@ -411,10 +523,6 @@ export class Orchestrator {
       if (slot) this.slotAllocator?.release(task.id)
       const message = err instanceof Error ? err.message : String(err)
 
-      // FR-27 / AC-18: `llm_with_deterministic_fallback` catches LLM
-      // unavailability at the reviewer stage and applies the deterministic
-      // verdict instead of surfacing an agent-error. The verdict record
-      // carries `llmError` so the audit trail still shows the outage.
       if (
         beforeStatus === 'review' &&
         reviewerMode === 'llm_with_deterministic_fallback'
@@ -442,114 +550,141 @@ export class Orchestrator {
       }
     }
 
-    // FR-30: clean generate() return is an implicit EOF on the event
-    // stream — the agent exited cleanly, so unregister.
     this.livenessTracker.unregister(agent.name)
-    // FR-24: release the slot regardless of transition outcome. Subsequent
-    // ticks that touch the same task re-allocate (idempotent if same
-    // allocator instance still holds it; transparent otherwise).
     if (slot) this.slotAllocator?.release(task.id)
 
-    const queueAfter = await this.readQueue()
-    const taskAfter = queueAfter.tasks.find((t) => t.id === task.id) ?? task
-    const afterStatus = taskAfter.status
-    const transitioned = beforeStatus !== afterStatus
+    // Post-generate queue work is serialized across concurrent dispatches so
+    // no two fanout workers clobber each other's writes.
+    return await this.withQueueWriteLock(async () => {
+      const queueAfter = await this.readQueue()
+      const taskAfter = queueAfter.tasks.find((t) => t.id === task.id) ?? task
+      let afterStatus = taskAfter.status
+      let transitioned = beforeStatus !== afterStatus
 
-    // FR-27 / AC-18: when the LLM reviewer ran successfully, append a verdict
-    // record with `reviewerPath: 'llm'` so the audit trail shows which path
-    // produced the decision. The verdict is inferred from the status diff
-    // (→ gate_check = approve, anything else = revise).
-    if (beforeStatus === 'review') {
-      const llmVerdict = recordLlmVerdict({
-        queue: queueAfter,
-        taskId: task.id,
-        beforeStatus,
-        afterStatus,
-        now: this.now(),
-      })
-      if (llmVerdict) {
-        taskAfter.updatedAt = this.now()
-        queueAfter.lastUpdated = this.now()
-        await this.writeQueue(queueAfter)
-      }
-    }
-
-    // FR-10: if the agent raised a new escalation, surface a dedicated
-    // `escalated` outcome. The progress entry for escalations is written by
-    // the raise-escalation tool itself, so we skip the tick-level heartbeat.
-    if (taskAfter.escalations.length > task.escalations.length) {
-      const newest = taskAfter.escalations[taskAfter.escalations.length - 1]!
-      return {
-        kind: 'escalated',
-        taskId: task.id,
-        agent: agent.name,
-        reason: newest.reason,
-        escalationId: newest.id,
-      }
-    }
-
-    // Revision counting: review/gate_check bouncing back to in_progress is a
-    // revision cycle. Increment the counter and enforce maxRevisions.
-    const revisionTrigger =
-      (beforeStatus === 'review' || beforeStatus === 'gate_check') &&
-      afterStatus === 'in_progress'
-
-    let revisionCount = taskAfter.revisionCount
-    if (revisionTrigger) {
-      revisionCount = taskAfter.revisionCount + 1
-      taskAfter.revisionCount = revisionCount
-      taskAfter.updatedAt = this.now()
-      queueAfter.lastUpdated = this.now()
-
-      if (revisionCount > this.opts.config.maxRevisions) {
-        // Persist the revision count bump first so the escalation tool reads
-        // the up-to-date task.
-        await this.writeQueue(queueAfter)
-
-        // FR-10: route automated max-revisions block through the structured
-        // escalation protocol rather than just setting blockReason.
-        await raiseEscalation({
-          tasksPath: this.tasksPath(),
-          progressPath: this.progressPath(),
+      // FR-27 / AC-18: record LLM verdict when a review actually ran.
+      if (beforeStatus === 'review') {
+        const llmVerdict = recordLlmVerdict({
+          queue: queueAfter,
           taskId: task.id,
-          agentId: agent.name,
-          reason: 'max_revisions_exceeded',
-          summary:
-            `Exceeded maxRevisions (${this.opts.config.maxRevisions}). ` +
-            `Requires human judgment.`,
-          details:
-            `Task bounced between ${beforeStatus} and in_progress ${revisionCount} times. ` +
-            `Last agent: ${agent.name}.`,
+          beforeStatus,
+          afterStatus,
+          now: this.now(),
         })
-
-        return {
-          kind: 'blocked-max-revisions',
-          taskId: task.id,
-          revisionCount,
+        if (llmVerdict) {
+          taskAfter.updatedAt = this.now()
+          queueAfter.lastUpdated = this.now()
+          await this.writeQueue(queueAfter)
         }
       }
 
-      await this.writeQueue(queueAfter)
-    }
+      // FR-10: new escalation → halt.
+      if (taskAfter.escalations.length > task.escalations.length) {
+        const newest = taskAfter.escalations[taskAfter.escalations.length - 1]!
+        return {
+          kind: 'escalated',
+          taskId: task.id,
+          agent: agent.name,
+          reason: newest.reason,
+          escalationId: newest.id,
+        }
+      }
 
-    await this.logTickProgress({
-      task: taskAfter,
-      agent: agent.name,
-      beforeStatus,
-      afterStatus,
-      transitioned,
-      ...(transitioned ? {} : { note: 'no transition' }),
+      // FR-25: on `done` transition, run the merge dispatcher. Merge result
+      // may move the task to `pending_pr` (manual_pr path) or `blocked` (with
+      // a fixup task queued) — `afterStatus` is updated so the post-merge
+      // cleanup / progress logging see the final state.
+      if (
+        afterStatus === 'done' &&
+        beforeStatus !== 'done' &&
+        worktreeMode !== 'none' &&
+        taskAfter.branchName &&
+        taskAfter.baseBranch
+      ) {
+        const mergePolicy = await this.resolveMergePolicySafe()
+        const mergeOutcome = await dispatchMerge({
+          task: taskAfter,
+          policy: mergePolicy,
+          projectPath: this.opts.config.projectPath,
+          memoryDir: this.opts.config.memoryDir,
+          gitDriver: this.gitDriver,
+          now: this.now(),
+        })
+        taskAfter.mergeRecord = mergeOutcome.record
+        taskAfter.status = mergeOutcome.newStatus
+        taskAfter.updatedAt = this.now()
+        queueAfter.lastUpdated = this.now()
+        if (mergeOutcome.fixupTask) {
+          appendFixupTask(queueAfter, mergeOutcome.fixupTask, this.now())
+        }
+        await this.writeQueue(queueAfter)
+        afterStatus = mergeOutcome.newStatus
+        transitioned = beforeStatus !== afterStatus
+      }
+
+      // Revision counting: review/gate_check → in_progress is a revise cycle.
+      const revisionTrigger =
+        (beforeStatus === 'review' || beforeStatus === 'gate_check') &&
+        afterStatus === 'in_progress'
+
+      let revisionCount = taskAfter.revisionCount
+      if (revisionTrigger) {
+        revisionCount = taskAfter.revisionCount + 1
+        taskAfter.revisionCount = revisionCount
+        taskAfter.updatedAt = this.now()
+        queueAfter.lastUpdated = this.now()
+
+        if (revisionCount > this.opts.config.maxRevisions) {
+          await this.writeQueue(queueAfter)
+
+          await raiseEscalation({
+            tasksPath: this.tasksPath(),
+            progressPath: this.progressPath(),
+            taskId: task.id,
+            agentId: agent.name,
+            reason: 'max_revisions_exceeded',
+            summary:
+              `Exceeded maxRevisions (${this.opts.config.maxRevisions}). ` +
+              `Requires human judgment.`,
+            details:
+              `Task bounced between ${beforeStatus} and in_progress ${revisionCount} times. ` +
+              `Last agent: ${agent.name}.`,
+          })
+
+          await this.maybeCleanupWorktree(taskAfter, worktreeMode)
+
+          return {
+            kind: 'blocked-max-revisions',
+            taskId: task.id,
+            revisionCount,
+          }
+        }
+
+        await this.writeQueue(queueAfter)
+      }
+
+      await this.logTickProgress({
+        task: taskAfter,
+        agent: agent.name,
+        beforeStatus,
+        afterStatus,
+        transitioned,
+        ...(transitioned ? {} : { note: 'no transition' }),
+      })
+
+      // FR-24: teardown on terminal transitions. `pending_pr` is preserved —
+      // the human still needs the branch alive to merge the PR externally.
+      await this.maybeCleanupWorktree(taskAfter, worktreeMode)
+
+      return {
+        kind: 'processed',
+        taskId: task.id,
+        agent: agent.name,
+        beforeStatus,
+        afterStatus,
+        transitioned,
+        revisionCount,
+      }
     })
-
-    return {
-      kind: 'processed',
-      taskId: task.id,
-      agent: agent.name,
-      beforeStatus,
-      afterStatus,
-      transitioned,
-      revisionCount,
-    }
   }
 
   /**
@@ -603,66 +738,78 @@ export class Orchestrator {
     let tick = 0
     while (tick < maxTicks) {
       tick++
-      const outcome = await this.tick()
+      const raw = await this.tick()
 
-      if (outcome.kind === 'idle') {
-        if (outcome.allDone) {
-          console.log('[guildhall] All tasks complete or blocked. Shutting down.')
-          break
-        }
-        if (outcome.consecutiveIdleTicks > idleLimit) {
-          console.log(
-            `[guildhall] No actionable tasks for ${idleLimit} ticks. Shutting down.`,
-          )
-          break
-        }
-      } else if (outcome.kind === 'processed') {
-        console.log(
-          `[guildhall] tick ${tick}: ${outcome.taskId} ${outcome.beforeStatus} → ${outcome.afterStatus} via ${outcome.agent}${outcome.transitioned ? '' : ' (no change)'}`,
-        )
-      } else if (outcome.kind === 'blocked-max-revisions') {
-        console.log(
-          `[guildhall] tick ${tick}: ${outcome.taskId} blocked after ${outcome.revisionCount} revisions.`,
-        )
-      } else if (outcome.kind === 'no-coordinator') {
-        console.warn(
-          `[guildhall] tick ${tick}: ${outcome.taskId} skipped — no coordinator for domain "${outcome.domain}".`,
-        )
-      } else if (outcome.kind === 'agent-error') {
-        console.error(
-          `[guildhall] tick ${tick}: ${outcome.agent} failed on ${outcome.taskId}: ${outcome.error}`,
-        )
-      } else if (outcome.kind === 'escalated') {
-        console.warn(
-          `[guildhall] tick ${tick}: ${outcome.taskId} escalated by ${outcome.agent} — ${outcome.reason} (${outcome.escalationId}).`,
-        )
-      } else if (outcome.kind === 'proposal-decided') {
-        console.log(
-          `[guildhall] tick ${tick}: proposal ${outcome.taskId} → ${outcome.newStatus} (${outcome.actionKind}, lever=${String(outcome.leverPosition)}).`,
-        )
-      } else if (outcome.kind === 'pre-rejection-applied') {
-        console.log(
-          `[guildhall] tick ${tick}: ${outcome.taskId} pre-rejection ${outcome.actionKind} → ${outcome.newStatus} (policy=${String(outcome.domainLeverPosition)}, count=${outcome.requeueCount}).`,
-        )
-      }
+      // FR-24: flatten batch outcomes from fanout dispatch so the logging /
+      // backend-event paths keep their one-entry-per-task shape.
+      const allOutcomes: TickOutcome[] =
+        raw.kind === 'batch' ? raw.outcomes : [raw]
 
-      if (this.opts.onBackendEvent) {
-        const tickEvent = tickOutcomeToBackendEvent(outcome)
-        if (tickEvent) {
-          try {
-            await this.opts.onBackendEvent(tickEvent)
-          } catch (err) {
-            console.warn(
-              `[guildhall] onBackendEvent threw (tick): ${err instanceof Error ? err.message : String(err)}`,
+      let shouldStop = false
+      for (const outcome of allOutcomes) {
+        if (outcome.kind === 'idle') {
+          if (outcome.allDone) {
+            console.log('[guildhall] All tasks complete or blocked. Shutting down.')
+            shouldStop = true
+            break
+          }
+          if (outcome.consecutiveIdleTicks > idleLimit) {
+            console.log(
+              `[guildhall] No actionable tasks for ${idleLimit} ticks. Shutting down.`,
             )
+            shouldStop = true
+            break
+          }
+        } else if (outcome.kind === 'processed') {
+          console.log(
+            `[guildhall] tick ${tick}: ${outcome.taskId} ${outcome.beforeStatus} → ${outcome.afterStatus} via ${outcome.agent}${outcome.transitioned ? '' : ' (no change)'}`,
+          )
+        } else if (outcome.kind === 'blocked-max-revisions') {
+          console.log(
+            `[guildhall] tick ${tick}: ${outcome.taskId} blocked after ${outcome.revisionCount} revisions.`,
+          )
+        } else if (outcome.kind === 'no-coordinator') {
+          console.warn(
+            `[guildhall] tick ${tick}: ${outcome.taskId} skipped — no coordinator for domain "${outcome.domain}".`,
+          )
+        } else if (outcome.kind === 'agent-error') {
+          console.error(
+            `[guildhall] tick ${tick}: ${outcome.agent} failed on ${outcome.taskId}: ${outcome.error}`,
+          )
+        } else if (outcome.kind === 'escalated') {
+          console.warn(
+            `[guildhall] tick ${tick}: ${outcome.taskId} escalated by ${outcome.agent} — ${outcome.reason} (${outcome.escalationId}).`,
+          )
+        } else if (outcome.kind === 'proposal-decided') {
+          console.log(
+            `[guildhall] tick ${tick}: proposal ${outcome.taskId} → ${outcome.newStatus} (${outcome.actionKind}, lever=${String(outcome.leverPosition)}).`,
+          )
+        } else if (outcome.kind === 'pre-rejection-applied') {
+          console.log(
+            `[guildhall] tick ${tick}: ${outcome.taskId} pre-rejection ${outcome.actionKind} → ${outcome.newStatus} (policy=${String(outcome.domainLeverPosition)}, count=${outcome.requeueCount}).`,
+          )
+        }
+
+        if (this.opts.onBackendEvent) {
+          const tickEvent = tickOutcomeToBackendEvent(outcome)
+          if (tickEvent) {
+            try {
+              await this.opts.onBackendEvent(tickEvent)
+            } catch (err) {
+              console.warn(
+                `[guildhall] onBackendEvent threw (tick): ${err instanceof Error ? err.message : String(err)}`,
+              )
+            }
           }
         }
       }
 
-      // FR-31: after each tick, surface any agent issues the just-completed
-      // agent run raised via `report_issue`. These are informational — they
-      // do not change task status — but they need to reach subscribers and
-      // the coordinator's remediation inbox (FR-32).
+      if (shouldStop) break
+
+      // FR-31: drain agent issues once per tick (shared across fanout outcomes
+      // since the drain walks the whole queue). Issues do not alter task
+      // status, so surfacing them outside the per-outcome loop keeps the wire
+      // events deduplicated.
       const issues = await this.drainPendingIssues()
       for (const issue of issues) {
         console.log(
@@ -1382,6 +1529,113 @@ export class Orchestrator {
   }
 
   /**
+   * FR-24: read the `concurrent_task_dispatch` lever. Falls back to serial
+   * (capacity 1) on any read error — starting a fanout dispatch with stale
+   * lever state would be strictly worse than running one task.
+   */
+  private async resolveCapacity(): Promise<FanoutCapacity> {
+    try {
+      const settings = await this.readLeverSettings()
+      return resolveFanoutCapacity(settings.project)
+    } catch {
+      return 1
+    }
+  }
+
+  /**
+   * FR-24: read the `worktree_isolation` lever. Falls back to `'none'` on
+   * error so a malformed lever file doesn't block progress.
+   */
+  private async resolveWorktreeModeSafe(): Promise<WorktreeMode> {
+    try {
+      const settings = await this.readLeverSettings()
+      return resolveWorktreeMode(settings.project)
+    } catch {
+      return 'none'
+    }
+  }
+
+  /**
+   * FR-25: read the `merge_policy` lever. Falls back to `ff_only_local` so
+   * a lever outage never pushes or opens a PR unexpectedly.
+   */
+  private async resolveMergePolicySafe(): Promise<MergePolicy> {
+    try {
+      const settings = await this.readLeverSettings()
+      return resolveMergePolicy(settings.project)
+    } catch {
+      return 'ff_only_local'
+    }
+  }
+
+  /**
+   * FR-24: the base branch used when minting fresh per-task worktrees.
+   * Cached after the first lookup — the default branch of a repo does not
+   * change during an orchestrator run.
+   */
+  private cachedBaseBranch: string | undefined
+  private async resolveBaseBranch(): Promise<string> {
+    if (this.cachedBaseBranch) return this.cachedBaseBranch
+    try {
+      this.cachedBaseBranch = await this.gitDriver.currentBranch(
+        this.opts.config.projectPath,
+      )
+    } catch {
+      // Best-effort default — InMemoryGitDriver in tests defaults to 'main'.
+      this.cachedBaseBranch = 'main'
+    }
+    return this.cachedBaseBranch
+  }
+
+  /**
+   * FR-24: teardown helper. Called on terminal transitions (incl. merge
+   * conflict → blocked, max-revisions block). Preserves the worktree for
+   * `pending_pr` tasks until the human merges the PR.
+   */
+  private async maybeCleanupWorktree(
+    task: Task,
+    mode: WorktreeMode,
+  ): Promise<void> {
+    const isTerminal =
+      task.status === 'done' ||
+      task.status === 'shelved' ||
+      task.status === 'blocked'
+    const preservingForPr = task.status === 'pending_pr'
+    if (!isTerminal && !preservingForPr) return
+    try {
+      await cleanupWorktreeForTerminal({
+        task,
+        mode,
+        projectPath: this.opts.config.projectPath,
+        gitDriver: this.gitDriver,
+        preserveForPendingPr: preservingForPr,
+      })
+    } catch (err) {
+      // Cleanup failures are non-fatal — the tick already succeeded and a
+      // stale worktree directory is an annoyance, not a correctness problem.
+      console.warn(
+        `[guildhall] worktree cleanup failed for ${task.id}: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
+
+  /**
+   * FR-24: serialize queue-write critical sections across concurrent fanout
+   * dispatches. Each call appends `fn` to a tail promise so writes happen
+   * strictly in FIFO order. Errors from `fn` propagate to the caller but do
+   * not break the chain for subsequent callers.
+   */
+  private withQueueWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = this.queueWriteChain
+    const current = prev.then(fn, fn)
+    this.queueWriteChain = current.then(
+      () => undefined,
+      () => undefined,
+    )
+    return current
+  }
+
+  /**
    * FR-24: merge orchestrator env with the slot env. Pure; used by the
    * serve layer when spawning out-of-process workers. The in-process
    * dispatch path relies on system-prompt injection instead.
@@ -1390,6 +1644,23 @@ export class Orchestrator {
     const slot = this.slotAllocator?.getByTask(task.id)
     if (!slot) return base
     return { ...base, ...buildSlotEnv(slot, this.runtimeConfig()) }
+  }
+
+  /**
+   * FR-24: read-modify-write helper that serializes against concurrent fanout
+   * dispatches. The mutator receives the parsed queue, mutates it (in place
+   * or by returning a replacement), and the helper persists it atomically.
+   * Used by tests and by out-of-process worker shims that need to update
+   * TASKS.json without racing the orchestrator's own post-dispatch writes.
+   */
+  updateQueueAtomically(
+    mutator: (queue: TaskQueue) => Promise<TaskQueue | void> | TaskQueue | void,
+  ): Promise<void> {
+    return this.withQueueWriteLock(async () => {
+      const queue = await this.readQueue()
+      const next = await mutator(queue)
+      await this.writeQueue(next ?? queue)
+    })
   }
 
   private async readQueue(): Promise<TaskQueue> {
@@ -1469,53 +1740,9 @@ export class Orchestrator {
   }
 }
 
-/** Highest-priority actionable task. Status order defines the routing priority. */
-export function pickNextTask(queue: TaskQueue, domain?: string): Task | undefined {
-  const priority = ['critical', 'high', 'normal', 'low'] as const
-
-  // FR-22: worker-shelved tasks pending `pre_rejection_policy` are serviced
-  // first — they're cheap (no LLM) and keeping the board clear of unresolved
-  // policy decisions beats adding work before deciding whether to drop the
-  // prior one.
-  for (const p of priority) {
-    const task = queue.tasks.find(
-      (t) =>
-        needsPreRejectionPolicy(t) &&
-        t.priority === p &&
-        (!domain || t.domain === domain) &&
-        !hasOpenEscalation(t),
-    )
-    if (task) return task
-  }
-
-  const statuses: TaskStatus[] = [
-    // FR-21: proposals are cheapest to service (pure lever decision, no LLM)
-    // so they run first — keeps the board clear of unresolved proposals
-    // before exploratory or in-flight work consumes a tick.
-    'proposed',
-    'exploring',
-    'spec_review',
-    'ready',
-    'in_progress',
-    'review',
-    'gate_check',
-  ]
-
-  for (const status of statuses) {
-    for (const p of priority) {
-      const task = queue.tasks.find(
-        (t) =>
-          t.status === status &&
-          t.priority === p &&
-          (!domain || t.domain === domain) &&
-          // FR-10: halt any task with an unresolved escalation regardless of status
-          !hasOpenEscalation(t),
-      )
-      if (task) return task
-    }
-  }
-  return undefined
-}
+// `pickNextTask` / `needsPreRejectionPolicy` live in `./orchestrator-picker.ts`
+// so the fanout dispatcher (FR-24) can share the same priority/status order.
+export { pickNextTask, needsPreRejectionPolicy } from './orchestrator-picker.js'
 
 /**
  * Map a ResolvedConfig coordinator entry to the full CoordinatorDomain
