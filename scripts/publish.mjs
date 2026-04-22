@@ -2,26 +2,25 @@
 /**
  * Publish the `guildhall` package to npm.
  *
- * Only `packages/guildhall/` is published — every workspace package is marked
- * `"private": true` because their source is inlined into the shipped
- * `dist/cli.js` by `packages/guildhall/build.mjs`. See README for the full
- * shape of what actually reaches npm.
+ * The repo is flat — one package at the root. There is no monorepo and
+ * nothing pretends to be a package that isn't. The `dist/` bundle
+ * inlines every internal module (src/*) via esbuild, so `npm install
+ * guildhall` is the complete install story.
  *
  * What this script does, in order:
  *   1. Parse the target version (explicit semver or `patch`/`minor`/`major`).
  *   2. Refuse to run on a dirty worktree or when not on `main` (override with
  *      `--allow-dirty` / `--allow-branch`).
- *   3. Bump every packages/<name>/package.json + root package.json to the new
- *      version so workspace manifests stay in lockstep.
- *   4. `pnpm -r typecheck && pnpm -r test` as a pre-publish gate.
- *   5. Rebuild `packages/guildhall/dist/` fresh.
- *   6. `npm publish` from `packages/guildhall/` with `--access=public`.
+ *   3. Bump the root `package.json` to the new version.
+ *   4. Typecheck + tests + dep-cruise as the pre-publish gate.
+ *   5. Rebuild `dist/` fresh.
+ *   6. `npm publish` with `--access=public`.
  *   7. Commit the version bump and tag `v<version>`.
  *
  * Flags:
  *   --dry-run             Print each step; run everything except `npm publish`
  *                         (uses `npm publish --dry-run`) and skip the commit/tag.
- *   --skip-tests          Skip steps 4 (tests + typecheck). Build still runs.
+ *   --skip-tests          Skip step 4. Build still runs.
  *   --allow-dirty         Allow a dirty git tree (e.g. mid-release fix-up).
  *   --allow-branch        Allow publishing from a branch other than `main`.
  *   --tag <dist-tag>      npm dist-tag (defaults to `latest`; use `next` for
@@ -34,13 +33,12 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const PACKAGES_DIR = join(ROOT, 'packages')
-const PUBLISHABLE_DIR = join(PACKAGES_DIR, 'guildhall')
+const MANIFEST = join(ROOT, 'package.json')
 
 // ---------------------------------------------------------------------------
 // Args
@@ -66,7 +64,7 @@ if (!versionArg) die('Missing version argument. Pass a semver or `patch`/`minor`
 // 1. Resolve target version
 // ---------------------------------------------------------------------------
 
-const currentVersion = readJson(join(PUBLISHABLE_DIR, 'package.json')).version
+const currentVersion = readJson(MANIFEST).version
 const nextVersion = resolveNextVersion(currentVersion, versionArg)
 log(`Current version: ${currentVersion}`)
 log(`Target version:  ${nextVersion}`)
@@ -78,30 +76,33 @@ log(`Target version:  ${nextVersion}`)
 preflightGit()
 
 // ---------------------------------------------------------------------------
-// 3. Bump all workspace manifests
+// 3. Bump the manifest
 // ---------------------------------------------------------------------------
 
-const manifestsBumped = bumpAllManifests(nextVersion)
-log(`Bumped ${manifestsBumped.length} manifests to ${nextVersion}.`)
+const manifest = readJson(MANIFEST)
+manifest.version = nextVersion
+writeJson(MANIFEST, manifest)
+log(`Bumped package.json to ${nextVersion}.`)
 
 // ---------------------------------------------------------------------------
 // 4. Pre-publish gate
 // ---------------------------------------------------------------------------
 
 if (!flags.skipTests) {
-  log('Running typecheck + tests…')
-  run('pnpm', ['-r', 'typecheck'])
-  run('pnpm', ['-r', 'test'])
+  log('Running typecheck, lint:deps, and tests…')
+  run('pnpm', ['typecheck'])
+  run('pnpm', ['lint:deps'])
+  run('pnpm', ['test'])
 } else {
-  warn('Skipping typecheck + tests (--skip-tests).')
+  warn('Skipping gate (--skip-tests). Build still runs.')
 }
 
 // ---------------------------------------------------------------------------
-// 5. Build the publishable bundle
+// 5. Build the bundle
 // ---------------------------------------------------------------------------
 
-log('Building packages/guildhall/dist/…')
-run('pnpm', ['--filter', 'guildhall', 'build'])
+log('Building dist/…')
+run('pnpm', ['build'])
 
 // ---------------------------------------------------------------------------
 // 6. Publish
@@ -111,19 +112,19 @@ const publishArgs = ['publish', '--access=public', '--tag', flags.tag]
 if (flags.dryRun) publishArgs.push('--dry-run')
 
 log(`Publishing guildhall@${nextVersion} (tag: ${flags.tag})${flags.dryRun ? ' [dry-run]' : ''}…`)
-run('npm', publishArgs, { cwd: PUBLISHABLE_DIR })
+run('npm', publishArgs)
 
 // ---------------------------------------------------------------------------
 // 7. Commit + tag
 // ---------------------------------------------------------------------------
 
 if (flags.dryRun) {
-  warn('Dry-run: skipping git commit + tag. Your manifests are still bumped — revert with `git checkout -- .` if needed.')
+  warn('Dry-run: skipping git commit + tag. package.json is still bumped — revert with `git checkout -- package.json` if needed.')
   process.exit(0)
 }
 
 log('Committing version bump + tagging…')
-run('git', ['add', 'package.json', 'packages'])
+run('git', ['add', 'package.json'])
 run('git', ['commit', '-m', `chore(release): guildhall@${nextVersion}`])
 run('git', ['tag', `v${nextVersion}`])
 
@@ -142,7 +143,7 @@ Arguments:
 
 Flags:
   --dry-run          Do everything except the real publish and the git commit/tag.
-  --skip-tests       Skip typecheck + tests. Use sparingly.
+  --skip-tests       Skip the pre-publish gate. Build still runs. Use sparingly.
   --allow-dirty      Permit a dirty worktree.
   --allow-branch     Publish from a branch other than main.
   --tag <dist-tag>   npm dist-tag (default: latest; use 'next' for pre-releases).
@@ -176,10 +177,10 @@ function writeJson(path, obj) {
   writeFileSync(path, JSON.stringify(obj, null, 2) + '\n')
 }
 
-function run(cmd, argv, opts = {}) {
+function run(cmd, argv) {
   try {
-    execFileSync(cmd, argv, { stdio: 'inherit', cwd: opts.cwd ?? ROOT })
-  } catch (err) {
+    execFileSync(cmd, argv, { stdio: 'inherit', cwd: ROOT })
+  } catch {
     die(`Command failed: ${cmd} ${argv.join(' ')}`)
   }
 }
@@ -215,29 +216,4 @@ function preflightGit() {
   if (status && !flags.allowDirty) {
     die('Working tree is dirty. Commit or stash first, or pass --allow-dirty.')
   }
-}
-
-function bumpAllManifests(version) {
-  const touched = []
-
-  const rootPath = join(ROOT, 'package.json')
-  const rootJson = readJson(rootPath)
-  rootJson.version = version
-  writeJson(rootPath, rootJson)
-  touched.push(rootPath)
-
-  for (const entry of readdirSync(PACKAGES_DIR)) {
-    const pkgPath = join(PACKAGES_DIR, entry, 'package.json')
-    if (!safeStat(pkgPath)) continue
-    const pkg = readJson(pkgPath)
-    if (pkg.version === version) continue
-    pkg.version = version
-    writeJson(pkgPath, pkg)
-    touched.push(pkgPath)
-  }
-  return touched
-}
-
-function safeStat(path) {
-  try { return statSync(path) } catch { return null }
 }

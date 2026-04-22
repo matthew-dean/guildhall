@@ -1,8 +1,7 @@
 {
-  "name": "guildhall-repo",
-  "version": "0.2.0",
-  "private": true,
-  "description": "Source repo for Guildhall. The publishable npm package lives at packages/guildhall/.",
+  "name": "guildhall",
+  "version": "0.2.0-dev",
+  "description": "A general-purpose multi-agent operating system for software projects.",
   "license": "LicenseRef-FLL-1.2",
   "licenses": [
     {
@@ -10,24 +9,53 @@
       "url": "https://fllicense.org"
     }
   ],
+  "type": "module",
+  "bin": {
+    "guildhall": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
   "scripts": {
-    "dev": "pnpm --filter @guildhall/runtime dev",
-    "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
-    "test:coverage": "pnpm -r test:coverage",
-    "lint": "pnpm -r lint",
-    "clean": "pnpm -r clean",
+    "build": "node ./build.mjs",
+    "dev": "node ./build.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "lint:deps": "depcruise src",
+    "clean": "rm -rf dist",
     "release": "node scripts/publish.mjs",
     "release:dry": "node scripts/publish.mjs --dry-run"
   },
+  "dependencies": {
+    "@hono/node-server": "^1.14.1",
+    "@inquirer/prompts": "^7.4.0",
+    "@modelcontextprotocol/sdk": "^1.19.0",
+    "hono": "^4.7.7",
+    "js-yaml": "^4.1.0",
+    "yaml": "^2.6.1",
+    "zod": "^3.24.1"
+  },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.10.7",
+    "@vitest/coverage-v8": "^3.1.1",
+    "dependency-cruiser": "^16.8.0",
+    "esbuild": "^0.24.0",
     "typescript": "^5.7.3",
     "vitest": "^3.1.1"
   },
   "engines": {
-    "node": ">=20",
-    "pnpm": ">=8"
-  }
+    "node": ">=20"
+  },
+  "keywords": [
+    "agents",
+    "multi-agent",
+    "orchestration",
+    "llm",
+    "ai"
+  ]
 }

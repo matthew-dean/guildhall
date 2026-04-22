@@ -1,7 +1,7 @@
 import type { BackendEvent } from '@guildhall/backend-host'
 import type { AgentIssue } from '@guildhall/core'
 
-import type { TickOutcome } from './orchestrator.js'
+import type { TickOutcome } from './tick-outcome.js'
 
 /**
  * FR-16: map an orchestrator TickOutcome to an OHJSON backend event.

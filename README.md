@@ -108,11 +108,10 @@ guildhall help                     Full command list
 
 ## Repo layout
 
-GuildHall ships as a single npm package (`guildhall`), but the source is split into a pnpm workspace. Only `packages/guildhall/` is published — the rest are bundled into `dist/cli.js` at build time.
+GuildHall is a single npm package (`guildhall`) with a flat source tree. `src/` is split into modules, each one reachable from the others only through its `index.ts` — the `@guildhall/<module>` path alias. A per-module dep-cruiser rule forbids relative imports that cross a module boundary, so the internal API surface stays explicit without the overhead of a workspace.
 
 ```
-packages/
-├── guildhall/          ← the only public package; builds the CLI bundle
+src/
 ├── core/               ← task/queue/status types, Zod schemas
 ├── protocol/           ← provider-agnostic message & event shapes
 ├── engine/             ← the inner loop: tools, tool_result plumbing, resume
@@ -131,23 +130,26 @@ packages/
 └── runtime-bundle/     ← assembles engine + agents + providers into one artifact
 ```
 
+Boundaries are enforced by [`.dependency-cruiser.cjs`](./.dependency-cruiser.cjs) (`pnpm lint:deps`) rather than by splitting into publishable packages.
+
 ## Tests <a id="tests"></a>
 
 ```
-pnpm -r typecheck
-pnpm -r test
+pnpm typecheck
+pnpm test
+pnpm lint:deps   # module-boundary check
 ```
 
-Current gate: **1047 tests, 31 test files, all passing.** The runtime package alone has 475 tests covering the orchestrator, fanout dispatch, worktree lifecycle, session resume, and the full lever matrix.
+Current gate: **1047 tests, 73 test files, all passing.** The `runtime/` module alone has 475 tests covering the orchestrator, fanout dispatch, worktree lifecycle, session resume, and the full lever matrix.
 
 ## Publishing
 
 ```bash
-# Dry-run the whole pipeline (bumps manifests, runs gates, packs the tarball, reverts):
+# Dry-run the whole pipeline (bumps the manifest, runs gates, packs the tarball, reverts):
 pnpm release:dry 0.3.0
 
-# Actual release: bumps all workspace manifests in lockstep, runs gates, publishes
-# only `guildhall` to npm, commits, tags v0.3.0.
+# Actual release: bumps package.json, runs typecheck + lint:deps + tests, builds,
+# publishes guildhall to npm, commits, tags v0.3.0.
 pnpm release 0.3.0
 ```
 
