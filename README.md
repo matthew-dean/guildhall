@@ -9,7 +9,7 @@ One or more LLM agents work a codebase for hours at a stretch — writing specs,
 [![npm](https://img.shields.io/npm/v/guildhall.svg)](https://www.npmjs.com/package/guildhall)
 [![node](https://img.shields.io/node/v/guildhall.svg)](https://nodejs.org)
 [![license](https://img.shields.io/badge/license-FLL%20v1.2-blue.svg)](./LICENSE)
-[![tests](https://img.shields.io/badge/tests-1096%20passing-brightgreen.svg)](#tests)
+[![tests](https://img.shields.io/badge/tests-1107%20passing-brightgreen.svg)](#tests)
 
 </div>
 
@@ -140,7 +140,7 @@ pnpm test
 pnpm lint:deps   # module-boundary check
 ```
 
-Current gate: **1096 tests, 75 test files, all passing** (plus 2 skipped integration tests requiring a live LM Studio endpoint). The `runtime/` module alone has 486 tests covering the orchestrator, fanout dispatch, worktree lifecycle, session resume, and the full lever matrix.
+Current gate: **1107 tests, 76 test files, all passing** (plus 2 skipped integration tests requiring a live LM Studio endpoint). The `runtime/` module alone has 486 tests covering the orchestrator, fanout dispatch, worktree lifecycle, session resume, and the full lever matrix.
 
 ## Publishing
 
