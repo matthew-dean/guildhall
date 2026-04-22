@@ -29,6 +29,7 @@ const baseTask: Task = {
   ],
   notes: [],
   gateResults: [],
+  reviewVerdicts: [],
   escalations: [],
   agentIssues: [],
   revisionCount: 0,

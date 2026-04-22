@@ -20,6 +20,7 @@ const baseTask: Task = {
   dependsOn: [],
   notes: [],
   gateResults: [],
+  reviewVerdicts: [],
   escalations: [],
   agentIssues: [],
   revisionCount: 0,

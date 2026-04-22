@@ -142,6 +142,19 @@ export type {
   RemoteSyncResult,
 } from './local-only-mode.js'
 export {
+  deterministicReview,
+  applyDeterministicVerdict,
+  recordLlmVerdict,
+  SOFT_GATE_RUBRIC,
+  DETERMINISTIC_PASS_THRESHOLD,
+} from './reviewer-dispatch.js'
+export type {
+  ReviewerMode,
+  DeterministicVerdict,
+  ApplyDeterministicVerdictInput,
+  ApplyDeterministicVerdictResult,
+} from './reviewer-dispatch.js'
+export {
   loadDesignSystem,
   saveDesignSystem,
   designSystemPath,

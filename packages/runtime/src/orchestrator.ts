@@ -69,6 +69,12 @@ import {
   type RuntimeIsolationConfig,
 } from './slot-allocator.js'
 import { isStopRequested } from './stop-requested.js'
+import {
+  deterministicReview,
+  applyDeterministicVerdict,
+  recordLlmVerdict,
+  type ReviewerMode,
+} from './reviewer-dispatch.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -340,6 +346,26 @@ export class Orchestrator {
     }
 
     const { agent, promptSuffix } = selection
+
+    // FR-27 / AC-18: reviewer dispatch. For `review` tasks, the per-domain
+    // `reviewer_mode` lever decides whether the LLM reviewer runs, the
+    // deterministic reviewer runs, or the LLM is tried with deterministic
+    // fallback on outage. We resolve the mode once per tick so failures to
+    // load levers fall back to `llm_only` (the safest default — any other
+    // choice would silently skip real review).
+    const reviewerMode: ReviewerMode =
+      beforeStatus === 'review' ? await this.resolveReviewerMode(task.domain) : 'llm_only'
+
+    // `deterministic_only` short-circuits: no LLM call, no prompt-building,
+    // no slot allocation. Apply the verdict straight to the queue and return.
+    if (beforeStatus === 'review' && reviewerMode === 'deterministic_only') {
+      return await this.applyReviewVerdictInline({
+        task,
+        queue: queueBefore,
+        llmError: undefined,
+      })
+    }
+
     const ctx = await buildContext(task, this.opts.config.memoryDir)
     const tasksPath = this.tasksPath()
 
@@ -384,6 +410,22 @@ export class Orchestrator {
       this.livenessTracker.unregister(agent.name)
       if (slot) this.slotAllocator?.release(task.id)
       const message = err instanceof Error ? err.message : String(err)
+
+      // FR-27 / AC-18: `llm_with_deterministic_fallback` catches LLM
+      // unavailability at the reviewer stage and applies the deterministic
+      // verdict instead of surfacing an agent-error. The verdict record
+      // carries `llmError` so the audit trail still shows the outage.
+      if (
+        beforeStatus === 'review' &&
+        reviewerMode === 'llm_with_deterministic_fallback'
+      ) {
+        return await this.applyReviewVerdictInline({
+          task,
+          queue: queueBefore,
+          llmError: message,
+        })
+      }
+
       await this.logTickProgress({
         task,
         agent: agent.name,
@@ -412,6 +454,25 @@ export class Orchestrator {
     const taskAfter = queueAfter.tasks.find((t) => t.id === task.id) ?? task
     const afterStatus = taskAfter.status
     const transitioned = beforeStatus !== afterStatus
+
+    // FR-27 / AC-18: when the LLM reviewer ran successfully, append a verdict
+    // record with `reviewerPath: 'llm'` so the audit trail shows which path
+    // produced the decision. The verdict is inferred from the status diff
+    // (→ gate_check = approve, anything else = revise).
+    if (beforeStatus === 'review') {
+      const llmVerdict = recordLlmVerdict({
+        queue: queueAfter,
+        taskId: task.id,
+        beforeStatus,
+        afterStatus,
+        now: this.now(),
+      })
+      if (llmVerdict) {
+        taskAfter.updatedAt = this.now()
+        queueAfter.lastUpdated = this.now()
+        await this.writeQueue(queueAfter)
+      }
+    }
 
     // FR-10: if the agent raised a new escalation, surface a dedicated
     // `escalated` outcome. The progress entry for escalations is written by
@@ -1160,6 +1221,109 @@ export class Orchestrator {
       AGENT_SETTINGS_FILENAME,
     )
     return await loadLeverSettings({ path: settingsPath })
+  }
+
+  /**
+   * FR-27 / AC-18: resolve the `reviewer_mode` for a domain. Any read error
+   * (missing file, malformed YAML, unknown domain) falls back to `llm_only`
+   * — the conservative default: a silent switch to `deterministic_only`
+   * would skip real LLM review, which is strictly worse than falling back
+   * to the existing LLM path.
+   */
+  private async resolveReviewerMode(domain: string): Promise<ReviewerMode> {
+    try {
+      const settings = await this.readLeverSettings()
+      const domainLevers = resolveDomainLevers(settings, domain)
+      return domainLevers.reviewer_mode.position as ReviewerMode
+    } catch {
+      return 'llm_only'
+    }
+  }
+
+  /**
+   * FR-27 / AC-18: apply a deterministic reviewer verdict directly to the
+   * queue. Used by the `deterministic_only` mode and by the
+   * `llm_with_deterministic_fallback` mode after an LLM outage. Writes the
+   * queue, logs a PROGRESS entry, and returns a `processed` TickOutcome.
+   *
+   * Revision-count bookkeeping is preserved: a `revise` verdict that bounces
+   * the task back to `in_progress` bumps `revisionCount` just like the LLM
+   * path does, and we enforce `maxRevisions` the same way.
+   */
+  private async applyReviewVerdictInline(opts: {
+    task: Task
+    queue: TaskQueue
+    llmError: string | undefined
+  }): Promise<TickOutcome> {
+    const { task, queue, llmError } = opts
+    const beforeStatus = task.status
+    const verdict = deterministicReview(task)
+    const { newStatus } = applyDeterministicVerdict({
+      queue,
+      taskId: task.id,
+      verdict,
+      now: this.now(),
+      ...(llmError !== undefined ? { llmError } : {}),
+    })
+
+    const taskAfter = queue.tasks.find((t) => t.id === task.id)!
+    const transitioned = beforeStatus !== newStatus
+    const agentId = llmError
+      ? 'reviewer-deterministic-fallback'
+      : 'reviewer-deterministic'
+
+    // Revision counting mirrors the LLM path: review → in_progress is a revise.
+    let revisionCount = taskAfter.revisionCount
+    if (newStatus === 'in_progress') {
+      revisionCount = taskAfter.revisionCount + 1
+      taskAfter.revisionCount = revisionCount
+      taskAfter.updatedAt = this.now()
+      queue.lastUpdated = this.now()
+
+      if (revisionCount > this.opts.config.maxRevisions) {
+        await this.writeQueue(queue)
+        await raiseEscalation({
+          tasksPath: this.tasksPath(),
+          progressPath: this.progressPath(),
+          taskId: task.id,
+          agentId,
+          reason: 'max_revisions_exceeded',
+          summary:
+            `Exceeded maxRevisions (${this.opts.config.maxRevisions}). ` +
+            `Requires human judgment.`,
+          details:
+            `Deterministic reviewer bounced the task to in_progress ` +
+            `${revisionCount} times. Last reason: ${verdict.reason}.`,
+        })
+        return {
+          kind: 'blocked-max-revisions',
+          taskId: task.id,
+          revisionCount,
+        }
+      }
+    }
+
+    await this.writeQueue(queue)
+    await this.logTickProgress({
+      task: taskAfter,
+      agent: agentId,
+      beforeStatus,
+      afterStatus: newStatus,
+      transitioned,
+      note: llmError
+        ? `deterministic fallback (LLM error: ${llmError}) → ${verdict.verdict}`
+        : `deterministic review → ${verdict.verdict}`,
+    })
+
+    return {
+      kind: 'processed',
+      taskId: task.id,
+      agent: agentId,
+      beforeStatus,
+      afterStatus: newStatus,
+      transitioned,
+      revisionCount,
+    }
   }
 
   /**

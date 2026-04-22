@@ -79,6 +79,7 @@ function mkTask(overrides: Partial<Task> = {}): Task {
     dependsOn: [],
     notes: [],
     gateResults: [],
+    reviewVerdicts: [],
     escalations: [],
     agentIssues: [],
     revisionCount: 0,
@@ -2449,4 +2450,207 @@ describe('Orchestrator — FR-24 slot allocation / runtime isolation', () => {
     expect(s2).toBe(s1)
     expect(allocator.inUse).toBe(1)
   })
+})
+
+// ---------------------------------------------------------------------------
+// FR-27 / AC-18 \u2014 reviewer_mode dispatch with deterministic fallback.
+// Exercises the three modes end-to-end through the orchestrator tick:
+// verifies that (a) the LLM is skipped when the mode says so, (b) the
+// deterministic reviewer fires on LLM outage under `llm_with_deterministic_fallback`,
+// and (c) the verdict record carries `reviewerPath` so the audit trail
+// shows which code path produced the decision.
+// ---------------------------------------------------------------------------
+describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
+  async function writeReviewerMode(
+    mode: DomainLevers['reviewer_mode']['position'],
+  ): Promise<void> {
+    const settings: LeverSettings = makeDefaultSettings(
+      new Date('2026-04-21T00:00:00Z'),
+    )
+    settings.domains.default.reviewer_mode = {
+      position: mode,
+      rationale: 'test override',
+      setAt: '2026-04-21T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+  }
+
+  /** A review-ready task with ACs met and a passing hard gate, so the
+   *  deterministic rubric clears the 0.8 threshold and returns approve. */
+  function reviewReadyTask(overrides: Partial<Task> = {}): Task {
+    return mkTask({
+      id: 't-review',
+      status: 'review',
+      acceptanceCriteria: [
+        { id: 'ac-1', description: 'ghost button renders', verifiedBy: 'review', met: true },
+        { id: 'ac-2', description: 'build passes', verifiedBy: 'automated', command: 'pnpm build', met: true },
+      ],
+      gateResults: [
+        { gateId: 'typecheck', type: 'hard', passed: true, checkedAt: '2026-04-21T00:00:00Z' },
+        { gateId: 'test', type: 'hard', passed: true, checkedAt: '2026-04-21T00:00:00Z' },
+      ],
+      ...overrides,
+    })
+  }
+
+  it(
+    'llm_with_deterministic_fallback: simulated LLM outage runs deterministic reviewer and records reviewerPath on the verdict',
+    async () => {
+      await writeReviewerMode('llm_with_deterministic_fallback')
+      await writeQueue([reviewReadyTask()])
+
+      // Reviewer throws every call \u2014 simulates provider outage / timeout.
+      const throwingReviewer: StubAgent = {
+        name: 'reviewer-agent',
+        calls: [],
+        async generate(prompt: string) {
+          this.calls.push({ prompt })
+          throw new Error('provider timeout')
+        },
+      }
+
+      const orch = new Orchestrator({
+        config: baseConfig(),
+        agents: agentSet({ reviewer: throwingReviewer }),
+      })
+      const out = await orch.tick()
+
+      // The orchestrator must NOT surface agent-error \u2014 the fallback absorbs
+      // the outage and produces a real verdict.
+      expect(out.kind).toBe('processed')
+      if (out.kind === 'processed') {
+        expect(out.beforeStatus).toBe('review')
+        expect(out.afterStatus).toBe('gate_check')
+        expect(out.agent).toBe('reviewer-deterministic-fallback')
+      }
+
+      const q = await readQueue()
+      const t = q.tasks[0]!
+      expect(t.status).toBe('gate_check')
+      expect(t.reviewVerdicts).toHaveLength(1)
+      const verdict = t.reviewVerdicts[0]!
+      expect(verdict.reviewerPath).toBe('deterministic')
+      expect(verdict.verdict).toBe('approve')
+      expect(verdict.llmError).toContain('provider timeout')
+      expect(verdict.score).toBeGreaterThanOrEqual(0.8)
+    },
+  )
+
+  it(
+    'llm_with_deterministic_fallback: when the LLM reviewer succeeds, the verdict is recorded as reviewerPath=llm',
+    async () => {
+      await writeReviewerMode('llm_with_deterministic_fallback')
+      await writeQueue([reviewReadyTask()])
+
+      // LLM reviewer approves via a tool call (simulated here by mutating
+      // the task on disk) and returns cleanly.
+      const approvingReviewer = stubAgent('reviewer-agent', async () => {
+        await mutateTask('t-review', { status: 'gate_check' })
+      })
+      const orch = new Orchestrator({
+        config: baseConfig(),
+        agents: agentSet({ reviewer: approvingReviewer }),
+      })
+      const out = await orch.tick()
+
+      expect(out.kind).toBe('processed')
+      if (out.kind === 'processed') {
+        expect(out.afterStatus).toBe('gate_check')
+        expect(out.agent).toBe('reviewer-agent')
+      }
+      const t = (await readQueue()).tasks[0]!
+      expect(t.reviewVerdicts).toHaveLength(1)
+      expect(t.reviewVerdicts[0]!.reviewerPath).toBe('llm')
+      expect(t.reviewVerdicts[0]!.verdict).toBe('approve')
+      expect(t.reviewVerdicts[0]!.llmError).toBeUndefined()
+    },
+  )
+
+  it('deterministic_only: skips the LLM reviewer entirely', async () => {
+    await writeReviewerMode('deterministic_only')
+    await writeQueue([reviewReadyTask()])
+
+    const reviewer = stubAgent('reviewer-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer }),
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('reviewer-deterministic')
+      expect(out.afterStatus).toBe('gate_check')
+    }
+    expect(reviewer.calls).toHaveLength(0) // LLM never called
+    const t = (await readQueue()).tasks[0]!
+    expect(t.reviewVerdicts[0]!.reviewerPath).toBe('deterministic')
+    expect(t.reviewVerdicts[0]!.llmError).toBeUndefined()
+  })
+
+  it('llm_only: LLM outage still surfaces as an agent-error (no fallback)', async () => {
+    await writeReviewerMode('llm_only')
+    await writeQueue([reviewReadyTask()])
+
+    const throwingReviewer: StubAgent = {
+      name: 'reviewer-agent',
+      calls: [],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        throw new Error('provider timeout')
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer: throwingReviewer }),
+    })
+    const out = await orch.tick()
+    expect(out.kind).toBe('agent-error')
+
+    const t = (await readQueue()).tasks[0]!
+    expect(t.status).toBe('review') // unchanged
+    expect(t.reviewVerdicts).toHaveLength(0) // no verdict recorded
+  })
+
+  it(
+    'llm_with_deterministic_fallback: deterministic revise bounces to in_progress and bumps revisionCount',
+    async () => {
+      await writeReviewerMode('llm_with_deterministic_fallback')
+      // ACs NOT met \u2192 deterministic rubric scores below threshold \u2192 revise.
+      await writeQueue([
+        reviewReadyTask({
+          id: 't-bad',
+          acceptanceCriteria: [
+            { id: 'ac-1', description: 'ghost renders', verifiedBy: 'review', met: false },
+          ],
+          gateResults: [],
+        }),
+      ])
+
+      const throwingReviewer: StubAgent = {
+        name: 'reviewer-agent',
+        calls: [],
+        async generate() { throw new Error('provider outage') },
+      }
+      const orch = new Orchestrator({
+        config: baseConfig(),
+        agents: agentSet({ reviewer: throwingReviewer }),
+      })
+      const out = await orch.tick()
+      expect(out.kind).toBe('processed')
+      if (out.kind === 'processed') {
+        expect(out.afterStatus).toBe('in_progress')
+        expect(out.revisionCount).toBe(1)
+      }
+      const t = (await readQueue()).tasks[0]!
+      expect(t.status).toBe('in_progress')
+      expect(t.revisionCount).toBe(1)
+      expect(t.reviewVerdicts[0]!.verdict).toBe('revise')
+      expect(t.reviewVerdicts[0]!.reviewerPath).toBe('deterministic')
+    },
+  )
 })

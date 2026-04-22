@@ -43,6 +43,7 @@ function mkTask(overrides: Partial<Task> = {}): Task {
     acceptanceCriteria: [],
     notes: [],
     gateResults: [],
+    reviewVerdicts: [],
     escalations: [],
     agentIssues: [],
     revisionCount: 0,

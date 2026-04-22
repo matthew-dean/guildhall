@@ -75,6 +75,26 @@ export const AgentNote = z.object({
 })
 export type AgentNote = z.infer<typeof AgentNote>
 
+// FR-26 / FR-27 / AC-18: every reviewer verdict is persisted on the task so
+// the audit trail shows what was decided, by which path, when, and against
+// which policy version. `reviewerPath` distinguishes LLM-run reviews from
+// deterministic fallbacks — the load-bearing field for AC-18.
+export const ReviewVerdict = z.object({
+  verdict: z.enum(['approve', 'revise']),
+  reviewerPath: z.enum(['llm', 'deterministic']),
+  reason: z.string(),
+  // Deterministic path populates these; LLM path leaves them undefined.
+  score: z.number().optional(),
+  failingSignals: z.array(z.string()).default([]),
+  // Populated when the deterministic path ran as a fallback after an LLM
+  // outage — records the LLM error so the human auditing the trail can tell
+  // a fallback from a deterministic-only run.
+  llmError: z.string().optional(),
+  recordedAt: z.string(), // ISO timestamp
+  policyVersion: z.string().optional(),
+})
+export type ReviewVerdict = z.infer<typeof ReviewVerdict>
+
 // FR-10: Structured escalation events. An escalation halts a task until a human
 // (or an automated resolver) records a resolution. The orchestrator treats a
 // task with any open escalation as blocked and refuses to route it further.
@@ -252,6 +272,11 @@ export const Task = z.object({
 
   // Gate results accumulated during gate_check phase
   gateResults: z.array(GateResult).default([]),
+
+  // FR-26 / FR-27: append-only audit trail of reviewer verdicts. Every pass
+  // through the `review` status appends one entry — `reviewerPath` records
+  // whether the LLM reviewer ran or the deterministic fallback (AC-18).
+  reviewVerdicts: z.array(ReviewVerdict).default([]),
 
   // How many times this task has been sent back for revision
   revisionCount: z.number().default(0),

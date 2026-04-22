@@ -36,6 +36,7 @@ const seedQueue = {
       acceptanceCriteria: [],
       notes: [],
       gateResults: [],
+      reviewVerdicts: [],
       escalations: [],
       revisionCount: 0,
       createdAt: new Date().toISOString(),

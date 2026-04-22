@@ -76,6 +76,7 @@ function mkTask(overrides: Partial<Task> = {}): Task {
     dependsOn: [],
     notes: [],
     gateResults: [],
+    reviewVerdicts: [],
     escalations: [],
     agentIssues: [],
     revisionCount: 0,
