@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { ApiStreamEvent } from '@guildhall/engine'
 
-import { OpenAICompatibleClient, stripThinkBlocks } from '../openai-client.js'
+import { OpenAIApiError, OpenAICompatibleClient, stripThinkBlocks } from '../openai-client.js'
 
 function sseResponse(frames: string[]): Response {
   const encoder = new TextEncoder()
@@ -134,6 +134,111 @@ describe('OpenAICompatibleClient', () => {
     )
     expect(body).toHaveProperty('max_completion_tokens', 128)
     expect(body).not.toHaveProperty('max_tokens')
+  })
+})
+
+describe('OpenAICompatibleClient retry behavior', () => {
+  // Override global setTimeout so retry backoff resolves on the next tick
+  // instead of waiting real seconds. We restore it in afterEach so only the
+  // retry tests in this describe block are affected.
+  const realSetTimeout = globalThis.setTimeout
+  beforeEach(() => {
+    globalThis.setTimeout = ((fn: () => void, _delay?: number) => {
+      return realSetTimeout(fn, 0)
+    }) as unknown as typeof globalThis.setTimeout
+  })
+  afterEach(() => {
+    globalThis.setTimeout = realSetTimeout
+  })
+
+  function statusResponse(status: number, statusText = ''): Response {
+    return new Response('upstream said no', { status, statusText })
+  }
+
+  it('retries on 429 and succeeds on the next attempt', async () => {
+    let call = 0
+    const fakeFetch = (async () => {
+      call += 1
+      if (call === 1) return statusResponse(429, 'Too Many Requests')
+      return sseResponse([
+        dataFrame({ choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] }),
+        'data: [DONE]\n\n',
+      ])
+    }) as unknown as typeof fetch
+
+    const client = new OpenAICompatibleClient({ fetch: fakeFetch, maxRetries: 2 })
+    const events = await collect(
+      client.streamMessage({
+        model: 'm',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+        max_tokens: 8,
+        tools: [],
+      }),
+    )
+
+    const retryEvent = events.find((e) => e.type === 'retry')
+    expect(retryEvent).toBeDefined()
+    if (retryEvent?.type === 'retry') {
+      expect(retryEvent.attempt).toBe(1)
+      expect(retryEvent.max_attempts).toBe(3)
+    }
+    expect(call).toBe(2)
+    const terminal = events.at(-1)
+    expect(terminal?.type).toBe('message_complete')
+  })
+
+  it('does not retry on a non-retryable 400', async () => {
+    let call = 0
+    const fakeFetch = (async () => {
+      call += 1
+      return statusResponse(400, 'Bad Request')
+    }) as unknown as typeof fetch
+    const client = new OpenAICompatibleClient({ fetch: fakeFetch, maxRetries: 3 })
+
+    let caught: unknown = null
+    try {
+      await collect(
+        client.streamMessage({
+          model: 'm',
+          messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+          max_tokens: 8,
+          tools: [],
+        }),
+      )
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toBeInstanceOf(OpenAIApiError)
+    if (caught instanceof OpenAIApiError) expect(caught.status).toBe(400)
+    expect(call).toBe(1)
+  })
+
+  it('exhausts all retries and throws the last error', async () => {
+    let call = 0
+    const fakeFetch = (async () => {
+      call += 1
+      return statusResponse(503, 'Service Unavailable')
+    }) as unknown as typeof fetch
+    const client = new OpenAICompatibleClient({ fetch: fakeFetch, maxRetries: 2 })
+
+    const events: ApiStreamEvent[] = []
+    let caught: unknown = null
+    try {
+      for await (const ev of client.streamMessage({
+        model: 'm',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+        max_tokens: 8,
+        tools: [],
+      })) {
+        events.push(ev)
+      }
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toBeInstanceOf(OpenAIApiError)
+    if (caught instanceof OpenAIApiError) expect(caught.status).toBe(503)
+    expect(call).toBe(3)
+    expect(events.filter((e) => e.type === 'retry')).toHaveLength(2)
   })
 })
 
