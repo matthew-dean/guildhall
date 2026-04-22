@@ -82,7 +82,22 @@ export type AgentNote = z.infer<typeof AgentNote>
 export const ReviewVerdict = z.object({
   verdict: z.enum(['approve', 'revise']),
   reviewerPath: z.enum(['llm', 'deterministic']),
+  /**
+   * One-line headline — what was decided and at a high level why. Suitable
+   * for CLI / PROGRESS.md summaries.
+   */
   reason: z.string(),
+  /**
+   * Full reasoning trace — for LLM reviews this is the per-AC + per-rubric
+   * walk-through the reviewer agent wrote; for deterministic reviews it's
+   * the signal-by-signal score breakdown. Optional because very old verdict
+   * records (pre-reasoning field) won't have it.
+   *
+   * This is the load-bearing field for "reasoning is part of validation":
+   * a coordinator auditing `reviewVerdicts` can reconstruct the *why*
+   * without having to re-read scattered notes.
+   */
+  reasoning: z.string().optional(),
   // Deterministic path populates these; LLM path leaves them undefined.
   score: z.number().optional(),
   failingSignals: z.array(z.string()).default([]),

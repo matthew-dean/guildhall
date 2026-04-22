@@ -4,6 +4,7 @@ import {
   deterministicReview,
   applyDeterministicVerdict,
   recordLlmVerdict,
+  extractLlmReviewerReasoning,
   SOFT_GATE_RUBRIC,
   DETERMINISTIC_PASS_THRESHOLD,
 } from '../reviewer-dispatch.js'
@@ -232,5 +233,204 @@ describe('recordLlmVerdict', () => {
     })
     expect(record).toBeUndefined()
     expect(q.tasks[0]!.reviewVerdicts).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Reasoning is a first-class part of validation: every persisted verdict
+// must carry the "why" so a coordinator auditing reviewVerdicts alone (no
+// need to trawl notes) can reconstruct the decision.
+// ---------------------------------------------------------------------------
+
+describe('deterministicReview — reasoning trace', () => {
+  it('includes a signal-by-signal rubric walkthrough in the reasoning field', () => {
+    const task = mkTask({
+      acceptanceCriteria: [
+        { id: 'ac-1', description: 'x', verifiedBy: 'review', met: true },
+      ],
+      gateResults: [
+        { gateId: 'typecheck', type: 'hard', passed: true, checkedAt: 'now' },
+        { gateId: 'lint', type: 'hard', passed: true, checkedAt: 'now' },
+      ],
+    })
+    const v = deterministicReview(task)
+    expect(v.reasoning).toContain('Rubric walkthrough')
+    expect(v.reasoning).toContain('acceptance-criteria-met: +1.0')
+    expect(v.reasoning).toContain('no-regressions: +1.0')
+    expect(v.reasoning).toContain('conventions-followed: +0.7 (lint gate passed)')
+    expect(v.reasoning).toMatch(/Total: /)
+    expect(v.reasoning).toContain('APPROVE')
+  })
+
+  it('documents which ACs were unmet when ACs fail', () => {
+    const task = mkTask({
+      acceptanceCriteria: [
+        { id: 'ac-1', description: 'x', verifiedBy: 'review', met: true },
+        { id: 'ac-2', description: 'y', verifiedBy: 'review', met: false },
+      ],
+      gateResults: [
+        { gateId: 'typecheck', type: 'hard', passed: true, checkedAt: 'now' },
+      ],
+    })
+    const v = deterministicReview(task)
+    expect(v.reasoning).toContain('unmet: ac-2')
+    expect(v.reasoning).toMatch(/REVISE/)
+  })
+
+  it('explains why conventions-followed was credited when no lint gate ran', () => {
+    const task = mkTask({
+      acceptanceCriteria: [
+        { id: 'ac-1', description: 'x', verifiedBy: 'review', met: true },
+      ],
+      gateResults: [
+        { gateId: 'typecheck', type: 'hard', passed: true, checkedAt: 'now' },
+      ],
+    })
+    const v = deterministicReview(task)
+    expect(v.reasoning).toContain('no lint gate registered — credited')
+  })
+})
+
+describe('applyDeterministicVerdict — reasoning persistence', () => {
+  it('carries DeterministicVerdict.reasoning through to the persisted ReviewVerdict', () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'x',
+      tasks: [
+        mkTask({
+          acceptanceCriteria: [
+            { id: 'ac-1', description: 'x', verifiedBy: 'review', met: true },
+          ],
+          gateResults: [
+            { gateId: 'typecheck', type: 'hard', passed: true, checkedAt: 'now' },
+          ],
+        }),
+      ],
+    }
+    const v = deterministicReview(q.tasks[0]!)
+    applyDeterministicVerdict({
+      queue: q,
+      taskId: 'task-001',
+      verdict: v,
+      now: '2026-04-21T00:00:00Z',
+    })
+    const record = q.tasks[0]!.reviewVerdicts[0]!
+    expect(record.reasoning).toBeDefined()
+    expect(record.reasoning).toContain('Rubric walkthrough')
+    expect(record.reasoning).toContain('Total:')
+  })
+})
+
+describe('extractLlmReviewerReasoning', () => {
+  it('pulls the most recent reviewer-agent note', () => {
+    const task = mkTask({
+      notes: [
+        { agentId: 'worker-agent', role: 'worker', content: 'early work', timestamp: 't1' },
+        {
+          agentId: 'reviewer-agent',
+          role: 'reviewer',
+          content: '**Review:** ac-1: Met\n**Verdict:** Approved\n**Reasoning:** AC demonstrably met by new tests at foo.test.ts:42',
+          timestamp: 't2',
+        },
+      ],
+    })
+    const reasoning = extractLlmReviewerReasoning(task)
+    expect(reasoning).toContain('**Verdict:** Approved')
+    expect(reasoning).toContain('foo.test.ts:42')
+  })
+
+  it('prefers the last reviewer note when there are multiple passes', () => {
+    const task = mkTask({
+      notes: [
+        { agentId: 'reviewer-agent', role: 'reviewer', content: 'first pass — needs revision', timestamp: 't1' },
+        { agentId: 'worker-agent', role: 'worker', content: 'revision', timestamp: 't2' },
+        { agentId: 'reviewer-agent', role: 'reviewer', content: 'second pass — approved', timestamp: 't3' },
+      ],
+    })
+    expect(extractLlmReviewerReasoning(task)).toBe('second pass — approved')
+  })
+
+  it('returns undefined when no reviewer note exists', () => {
+    const task = mkTask({
+      notes: [
+        { agentId: 'worker-agent', role: 'worker', content: 'w', timestamp: 't' },
+      ],
+    })
+    expect(extractLlmReviewerReasoning(task)).toBeUndefined()
+  })
+})
+
+describe('recordLlmVerdict — reasoning persistence', () => {
+  it('pulls reasoning from the most recent reviewer-agent note when not explicitly passed', () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'x',
+      tasks: [
+        mkTask({
+          notes: [
+            {
+              agentId: 'reviewer-agent',
+              role: 'reviewer',
+              content: '**Review:** ac-1: Met — ghost variant renders per criterion.\n**Verdict:** Approved\n**Reasoning:** Button.tsx:23 adds the variant; snapshot test covers it.',
+              timestamp: 't1',
+            },
+          ],
+        }),
+      ],
+    }
+    const record = recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'gate_check',
+      now: 'now',
+    })
+    expect(record?.reasoning).toContain('ghost variant renders')
+    expect(record?.reasoning).toContain('Button.tsx:23')
+    expect(q.tasks[0]!.reviewVerdicts[0]!.reasoning).toBe(record?.reasoning)
+  })
+
+  it('explicit reasoning argument wins over note extraction', () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'x',
+      tasks: [
+        mkTask({
+          notes: [
+            {
+              agentId: 'reviewer-agent',
+              role: 'reviewer',
+              content: 'stale note content',
+              timestamp: 't1',
+            },
+          ],
+        }),
+      ],
+    }
+    const record = recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'gate_check',
+      now: 'now',
+      reasoning: 'explicit trace from structured LLM output',
+    })
+    expect(record?.reasoning).toBe('explicit trace from structured LLM output')
+  })
+
+  it('leaves reasoning undefined when the reviewer produced no note', () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'x',
+      tasks: [mkTask()],
+    }
+    const record = recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'gate_check',
+      now: 'now',
+    })
+    expect(record?.reasoning).toBeUndefined()
   })
 })

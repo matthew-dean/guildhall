@@ -41,6 +41,12 @@ export const DETERMINISTIC_PASS_THRESHOLD = 0.8
 export interface DeterministicVerdict {
   verdict: 'approve' | 'revise'
   reason: string
+  /**
+   * Full signal-by-signal breakdown of how the rubric scored this task.
+   * Populated alongside `reason` so the audit trail has the full working,
+   * not just the headline.
+   */
+  reasoning: string
   score: number
   failingSignals: string[]
 }
@@ -67,27 +73,56 @@ export function deterministicReview(task: Task): DeterministicVerdict {
   const totalWeight = Object.values(rubric).reduce((a, b) => a + b, 0)
   let weighted = 0
   const failing: string[] = []
+  const trace: string[] = []
 
   const acs = task.acceptanceCriteria
   const acsAllMet = acs.length > 0 && acs.every((a) => a.met)
-  if (acsAllMet) weighted += rubric['acceptance-criteria-met']
-  else failing.push('acceptance-criteria-met')
+  if (acsAllMet) {
+    weighted += rubric['acceptance-criteria-met']
+    trace.push(`acceptance-criteria-met: +${rubric['acceptance-criteria-met'].toFixed(1)} (${acs.length} AC(s), all met)`)
+  } else {
+    failing.push('acceptance-criteria-met')
+    const unmet = acs.filter((a) => !a.met).map((a) => a.id)
+    trace.push(
+      acs.length === 0
+        ? `acceptance-criteria-met: +0.0 (no ACs defined — cannot credit)`
+        : `acceptance-criteria-met: +0.0 (unmet: ${unmet.join(', ') || '?'})`,
+    )
+  }
 
   const hardGates = task.gateResults.filter((g) => g.type === 'hard')
   const hardAllPass = hardGates.length > 0 && hardGates.every((g) => g.passed)
-  if (hardAllPass) weighted += rubric['no-regressions']
-  else failing.push('no-regressions')
+  if (hardAllPass) {
+    weighted += rubric['no-regressions']
+    trace.push(`no-regressions: +${rubric['no-regressions'].toFixed(1)} (${hardGates.length} hard gate(s), all passed)`)
+  } else {
+    failing.push('no-regressions')
+    const failed = hardGates.filter((g) => !g.passed).map((g) => g.gateId)
+    trace.push(
+      hardGates.length === 0
+        ? `no-regressions: +0.0 (no hard gates have run — cannot confirm)`
+        : `no-regressions: +0.0 (failed: ${failed.join(', ')})`,
+    )
+  }
 
   const lintGate = hardGates.find((g) => g.gateId === 'lint')
   if (!lintGate || lintGate.passed) {
     weighted += rubric['conventions-followed']
+    trace.push(
+      lintGate
+        ? `conventions-followed: +${rubric['conventions-followed'].toFixed(1)} (lint gate passed)`
+        : `conventions-followed: +${rubric['conventions-followed'].toFixed(1)} (no lint gate registered — credited)`,
+    )
   } else {
     failing.push('conventions-followed')
+    trace.push(`conventions-followed: +0.0 (lint gate failed)`)
   }
 
   // No structured signal — assume credit. The LLM reviewer owns these.
   weighted += rubric['no-scope-creep']
   weighted += rubric.documented
+  trace.push(`no-scope-creep: +${rubric['no-scope-creep'].toFixed(1)} (no deterministic signal — credited)`)
+  trace.push(`documented: +${rubric.documented.toFixed(1)} (no deterministic signal — credited)`)
 
   const score = weighted / totalWeight
   const verdict: DeterministicVerdict['verdict'] =
@@ -98,7 +133,14 @@ export function deterministicReview(task: Task): DeterministicVerdict {
       ? `Deterministic review: score ${score.toFixed(2)} \u2265 ${DETERMINISTIC_PASS_THRESHOLD}`
       : `Deterministic review: score ${score.toFixed(2)} < ${DETERMINISTIC_PASS_THRESHOLD}; failing signals: ${failing.join(', ') || '(none recorded)'}`
 
-  return { verdict, reason, score, failingSignals: failing }
+  const reasoning = [
+    `Rubric walkthrough (weighted /${totalWeight.toFixed(1)}):`,
+    ...trace.map((t) => `  - ${t}`),
+    `Total: ${weighted.toFixed(2)} / ${totalWeight.toFixed(1)} = ${score.toFixed(3)}`,
+    `Threshold: ${DETERMINISTIC_PASS_THRESHOLD} → ${verdict === 'approve' ? 'APPROVE' : 'REVISE'}`,
+  ].join('\n')
+
+  return { verdict, reason, reasoning, score, failingSignals: failing }
 }
 
 export interface ApplyDeterministicVerdictInput {
@@ -132,6 +174,7 @@ export function applyDeterministicVerdict(
     verdict: input.verdict.verdict,
     reviewerPath: 'deterministic',
     reason: input.verdict.reason,
+    reasoning: input.verdict.reasoning,
     score: input.verdict.score,
     failingSignals: input.verdict.failingSignals,
     ...(input.llmError !== undefined ? { llmError: input.llmError } : {}),
@@ -149,11 +192,39 @@ export function applyDeterministicVerdict(
 }
 
 /**
+ * Extract the LLM reviewer's reasoning trace from the task. The reviewer
+ * agent writes its per-AC + per-rubric walkthrough into `task.notes` via
+ * the update-task tool; we pull the most-recent `reviewer-agent` note so
+ * that text lands on the `ReviewVerdict.reasoning` field alongside the
+ * verdict itself.
+ *
+ * Exported for test clarity — prefer passing `reasoning` explicitly into
+ * `recordLlmVerdict` when you already have it.
+ */
+export function extractLlmReviewerReasoning(task: Task): string | undefined {
+  // Walk backwards to find the latest note authored by the reviewer agent.
+  for (let i = task.notes.length - 1; i >= 0; i--) {
+    const note = task.notes[i]
+    if (!note) continue
+    if (note.agentId === 'reviewer-agent' || note.role === 'reviewer') {
+      const content = note.content?.trim()
+      if (content) return content
+    }
+  }
+  return undefined
+}
+
+/**
  * Record that the LLM reviewer path produced the verdict. Inferred from the
  * before/after status: a transition to `gate_check` means the LLM approved;
  * a transition to `in_progress` means it asked for revision; any other
  * terminal-ish transition (blocked, etc.) records a neutral "revise" so the
  * audit trail still has a row for this review pass.
+ *
+ * Reasoning: if `input.reasoning` is omitted, we pull the most-recent
+ * reviewer-agent note off the task so the audit trail always has the "why".
+ * Callers with a richer source of truth (streamed LLM output, structured
+ * verdict JSON) can pass `reasoning` explicitly to override.
  *
  * Mutates the queue in place; caller persists.
  */
@@ -164,6 +235,7 @@ export function recordLlmVerdict(input: {
   afterStatus: TaskStatus
   now: string
   policyVersion?: string
+  reasoning?: string
 }): ReviewVerdict | undefined {
   if (input.beforeStatus !== 'review') return undefined
   const idx = input.queue.tasks.findIndex((t) => t.id === input.taskId)
@@ -177,10 +249,13 @@ export function recordLlmVerdict(input: {
       ? 'LLM reviewer approved (transitioned to gate_check)'
       : `LLM reviewer requested revision (transitioned to ${input.afterStatus})`
 
+  const reasoning = input.reasoning ?? extractLlmReviewerReasoning(task)
+
   const record: ReviewVerdict = {
     verdict,
     reviewerPath: 'llm',
     reason,
+    ...(reasoning ? { reasoning } : {}),
     failingSignals: [],
     recordedAt: input.now,
     ...(input.policyVersion !== undefined ? { policyVersion: input.policyVersion } : {}),

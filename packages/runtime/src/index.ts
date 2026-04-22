@@ -145,6 +145,7 @@ export {
   deterministicReview,
   applyDeterministicVerdict,
   recordLlmVerdict,
+  extractLlmReviewerReasoning,
   SOFT_GATE_RUBRIC,
   DETERMINISTIC_PASS_THRESHOLD,
 } from './reviewer-dispatch.js'
