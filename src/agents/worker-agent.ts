@@ -11,7 +11,7 @@ import {
 import { GuildhallAgent } from './guildhall-agent.js'
 import type { AgentLLM } from './llm.js'
 import type { SkillDefinition } from '@guildhall/skills'
-import type { Compactor, HookExecutor } from '@guildhall/engine'
+import type { AnyTool, Compactor, HookExecutor } from '@guildhall/engine'
 
 const WORKER_AGENT_PROMPT = `
 You are a Worker Agent in the Guildhall multi-agent system. You implement tasks.
@@ -59,6 +59,8 @@ export function createWorkerAgent(
     hookExecutor?: HookExecutor
     compactor?: Compactor
     sessionPersistence?: { cwd: string; sessionId?: string }
+    /** Optional tools appended to the factory's built-in set (e.g. MCP adapters). */
+    extraTools?: readonly AnyTool[]
   } = {},
 ): GuildhallAgent {
   return new GuildhallAgent({
@@ -74,6 +76,7 @@ export function createWorkerAgent(
       updateTaskTool,
       logProgressTool,
       raiseEscalationTool,
+      ...(opts.extraTools ?? []),
     ],
     ...(opts.skills ? { skills: opts.skills } : {}),
     ...(opts.hookExecutor ? { hookExecutor: opts.hookExecutor } : {}),

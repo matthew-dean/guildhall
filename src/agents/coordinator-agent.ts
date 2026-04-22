@@ -14,7 +14,7 @@ import type { CoordinatorDomain } from '@guildhall/core'
 import { GuildhallAgent } from './guildhall-agent.js'
 import type { AgentLLM } from './llm.js'
 import type { SkillDefinition } from '@guildhall/skills'
-import type { Compactor, HookExecutor } from '@guildhall/engine'
+import type { AnyTool, Compactor, HookExecutor } from '@guildhall/engine'
 
 // ---------------------------------------------------------------------------
 // Coordinator Agent (factory)
@@ -110,6 +110,8 @@ export function createCoordinatorAgent(
     hookExecutor?: HookExecutor
     compactor?: Compactor
     sessionPersistence?: { cwd: string; sessionId?: string }
+    /** Optional tools appended to the factory's built-in set (e.g. MCP adapters). */
+    extraTools?: readonly AnyTool[]
   } = {},
 ): GuildhallAgent {
   return new GuildhallAgent({
@@ -127,6 +129,7 @@ export function createCoordinatorAgent(
       saveAgentSettingTool,
       raiseEscalationTool,
       resolveEscalationTool,
+      ...(opts.extraTools ?? []),
     ],
     ...(opts.skills ? { skills: opts.skills } : {}),
     ...(opts.hookExecutor ? { hookExecutor: opts.hookExecutor } : {}),

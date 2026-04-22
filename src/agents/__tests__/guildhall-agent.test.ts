@@ -6,7 +6,8 @@ import type {
 } from '@guildhall/engine'
 import type { ConversationMessage, UsageSnapshot } from '@guildhall/protocol'
 import { GuildhallAgent, clampPermissionMode, composeSystemPromptWithSkills } from '../guildhall-agent.js'
-import { PermissionMode } from '@guildhall/engine'
+import { PermissionMode, defineTool } from '@guildhall/engine'
+import { z } from 'zod'
 import { readFileTool, shellTool } from '@guildhall/tools'
 import { createSpecAgent, createWorkerAgent, createCoordinatorAgent, createReviewerAgent, createGateCheckerAgent } from '../index.js'
 import type { CoordinatorDomain } from '@guildhall/core'
@@ -353,6 +354,90 @@ describe('agent factories', () => {
   it('createGateCheckerAgent', () => {
     const a = createGateCheckerAgent(llm)
     expect(a.name).toBe('gate-checker-agent')
+  })
+
+  // ------------------------------------------------------------------
+  // extraTools injection — every factory must surface caller-provided
+  // tools in the engine's tool registry. This is the seam MCP adapters
+  // ride through the orchestrator.
+  // ------------------------------------------------------------------
+  describe('extraTools injection', () => {
+    function stubTool(name: string) {
+      return defineTool<Record<string, never>>({
+        name,
+        description: `stub ${name}`,
+        inputSchema: z.object({}),
+        jsonSchema: { type: 'object', properties: {}, additionalProperties: false },
+        execute: async () => ({ output: 'ok', is_error: false }),
+      })
+    }
+
+    async function toolNamesAfterGenerate(agent: GuildhallAgent, client: ScriptedApiClient) {
+      await agent.generate('go')
+      return client.requests[0]?.tools.map((t) => t['name']) ?? []
+    }
+
+    it('createSpecAgent appends extraTools to its built-in set', async () => {
+      const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
+      const agent = createSpecAgent(
+        { apiClient: client, modelId: 'm' },
+        { extraTools: [stubTool('mcp__x__ping')] },
+      )
+      const names = await toolNamesAfterGenerate(agent, client)
+      expect(names).toContain('mcp__x__ping')
+      expect(names).toContain('read-file') // built-ins preserved
+    })
+
+    it('createWorkerAgent appends extraTools', async () => {
+      const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
+      const agent = createWorkerAgent(
+        { apiClient: client, modelId: 'm' },
+        { extraTools: [stubTool('mcp__x__tool')] },
+      )
+      const names = await toolNamesAfterGenerate(agent, client)
+      expect(names).toContain('mcp__x__tool')
+      expect(names).toContain('shell')
+    })
+
+    it('createReviewerAgent appends extraTools', async () => {
+      const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
+      const agent = createReviewerAgent(
+        { apiClient: client, modelId: 'm' },
+        { extraTools: [stubTool('mcp__x__r')] },
+      )
+      const names = await toolNamesAfterGenerate(agent, client)
+      expect(names).toContain('mcp__x__r')
+    })
+
+    it('createGateCheckerAgent appends extraTools', async () => {
+      const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
+      const agent = createGateCheckerAgent(
+        { apiClient: client, modelId: 'm' },
+        { extraTools: [stubTool('mcp__x__g')] },
+      )
+      const names = await toolNamesAfterGenerate(agent, client)
+      expect(names).toContain('mcp__x__g')
+    })
+
+    it('createCoordinatorAgent appends extraTools', async () => {
+      const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
+      const domain: CoordinatorDomain = {
+        id: 'looma',
+        name: 'Looma',
+        mandate: 'UI quality.',
+        projectPaths: [],
+        concerns: [],
+        autonomousDecisions: [],
+        escalationTriggers: [],
+      }
+      const agent = createCoordinatorAgent(
+        domain,
+        { apiClient: client, modelId: 'm' },
+        { extraTools: [stubTool('mcp__x__c')] },
+      )
+      const names = await toolNamesAfterGenerate(agent, client)
+      expect(names).toContain('mcp__x__c')
+    })
   })
 
   it('createCoordinatorAgent interpolates the domain name', () => {

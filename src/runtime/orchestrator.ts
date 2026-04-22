@@ -20,6 +20,7 @@ import {
 } from '@guildhall/core'
 import { readProjectConfig, type ResolvedConfig } from '@guildhall/config'
 import { PermissionMode, HookEvent, type HookExecutor } from '@guildhall/engine'
+import { McpClientManager, createMcpTools } from '@guildhall/mcp'
 import { loadSkillRegistry } from '@guildhall/skills'
 import {
   logProgress,
@@ -1782,9 +1783,29 @@ export async function runOrchestrator(
     sessionId: sessionIdFor(role),
   })
 
+  // FR-21 parity: connect to configured MCP servers and inject their tools
+  // into every agent's registry. A failed server surfaces via McpConnectionStatus
+  // but the workspace still boots — upstream treats MCP as best-effort.
+  const mcpServers = config.mcp?.servers ?? {}
+  const mcpManager = new McpClientManager(mcpServers)
+  if (Object.keys(mcpServers).length > 0) {
+    try {
+      await mcpManager.connectAll()
+      const connected = mcpManager.listStatuses().filter((s) => s.state === 'connected').length
+      const total = mcpManager.listStatuses().length
+      console.log(`[guildhall] MCP: ${connected}/${total} server(s) connected`)
+    } catch (err) {
+      console.warn(
+        `[guildhall] MCP connectAll failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
+  const mcpTools = createMcpTools(mcpManager)
+
   const baseAgentOpts = {
     skills,
     compactor,
+    extraTools: mcpTools,
     ...(hookExecutor ? { hookExecutor } : {}),
   }
 
@@ -1850,10 +1871,14 @@ export async function runOrchestrator(
     ...(opts.stopSignal ? { stopSignal: opts.stopSignal } : {}),
   })
 
-  await orchestrator.run({
-    ...(opts.maxTicks !== undefined ? { maxTicks: opts.maxTicks } : {}),
-    ...(opts.tickDelayMs !== undefined ? { tickDelayMs: opts.tickDelayMs } : {}),
-  })
+  try {
+    await orchestrator.run({
+      ...(opts.maxTicks !== undefined ? { maxTicks: opts.maxTicks } : {}),
+      ...(opts.tickDelayMs !== undefined ? { tickDelayMs: opts.tickDelayMs } : {}),
+    })
+  } finally {
+    await mcpManager.close()
+  }
 }
 
 function sleep(ms: number): Promise<void> {

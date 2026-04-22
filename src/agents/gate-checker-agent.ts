@@ -11,7 +11,7 @@ import { STANDARD_TS_GATES } from '@guildhall/core'
 import { GuildhallAgent } from './guildhall-agent.js'
 import type { AgentLLM } from './llm.js'
 import type { SkillDefinition } from '@guildhall/skills'
-import type { Compactor, HookExecutor } from '@guildhall/engine'
+import type { AnyTool, Compactor, HookExecutor } from '@guildhall/engine'
 
 const gateDescriptions = Object.values(STANDARD_TS_GATES)
   .map((g) => `- ${g.id}: \`${g.command}\``)
@@ -68,13 +68,15 @@ export function createGateCheckerAgent(
     hookExecutor?: HookExecutor
     compactor?: Compactor
     sessionPersistence?: { cwd: string; sessionId?: string }
+    /** Optional tools appended to the factory's built-in set (e.g. MCP adapters). */
+    extraTools?: readonly AnyTool[]
   } = {},
 ): GuildhallAgent {
   return new GuildhallAgent({
     name: 'gate-checker-agent',
     llm,
     systemPrompt: GATE_CHECKER_AGENT_PROMPT,
-    tools: [runGatesTool, shellTool, readTasksTool, updateTaskTool, logDecisionTool, logProgressTool, raiseEscalationTool],
+    tools: [runGatesTool, shellTool, readTasksTool, updateTaskTool, logDecisionTool, logProgressTool, raiseEscalationTool, ...(opts.extraTools ?? [])],
     ...(opts.skills ? { skills: opts.skills } : {}),
     ...(opts.hookExecutor ? { hookExecutor: opts.hookExecutor } : {}),
     ...(opts.compactor ? { compactor: opts.compactor } : {}),
