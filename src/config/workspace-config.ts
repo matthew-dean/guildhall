@@ -133,9 +133,9 @@ export function bootstrapWorkspace(
   // Seed empty memory files
   const memoryFiles = {
     'TASKS.json': '[]',
-    'MEMORY.md': `# ${options.name} Memory\n\n_Updated by Forge agents._\n`,
-    'DECISIONS.md': `# ${options.name} Decisions\n\n_Architecture decisions recorded by Forge agents._\n`,
-    'PROGRESS.md': `# ${options.name} Progress\n\n_Progress log maintained by Forge agents._\n`,
+    'MEMORY.md': `# ${options.name} Memory\n\n_Updated by GuildHall agents._\n`,
+    'DECISIONS.md': `# ${options.name} Decisions\n\n_Architecture decisions recorded by GuildHall agents._\n`,
+    'PROGRESS.md': `# ${options.name} Progress\n\n_Progress log maintained by GuildHall agents._\n`,
   }
 
   for (const [filename, content] of Object.entries(memoryFiles)) {

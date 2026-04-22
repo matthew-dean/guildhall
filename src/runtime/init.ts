@@ -31,7 +31,7 @@ export async function runInit(opts: InitOptions): Promise<void> {
   if (reconfigure && hasExisting) {
     console.log(`Reconfiguring workspace at: ${absPath}`)
   } else {
-    console.log(`Initializing new Forge workspace at: ${absPath}`)
+    console.log(`Initializing new GuildHall workspace at: ${absPath}`)
   }
   console.log()
 

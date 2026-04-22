@@ -41,12 +41,12 @@ function expandPath(p: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Forge CLI
+// GuildHall CLI
 //
 // Commands:
 //   guildhall init [path]                — interactive wizard, creates guildhall.yaml + registers
 //   guildhall register <path>           — register an existing workspace (must have guildhall.yaml)
-//   forge unregister <id|path>      — remove a workspace from the registry
+//   guildhall unregister <id|path>  — remove a workspace from the registry
 //   guildhall list                      — list all registered workspaces
 //   guildhall run [id|path]             — run the orchestrator for a workspace
 //     --domain <id>                 — only process tasks for one coordinator domain
@@ -86,7 +86,7 @@ function positionals(): string[] {
 
 function printHelp() {
   console.log(`
-Forge — multi-agent operating system for software projects
+GuildHall — multi-agent operating system for software projects
 
 Usage:
   guildhall init [path]              Launch dashboard + browser-based setup wizard
@@ -95,7 +95,7 @@ Usage:
     --no-serve                   Write guildhall.yaml only (requires --cli-wizard)
     --cli-wizard                 Legacy: run the terminal setup wizard instead
   guildhall register <path>          Register an existing workspace (must contain guildhall.yaml)
-  forge unregister <id|path>     Remove a workspace from the registry
+  guildhall unregister <id|path> Remove a workspace from the registry
   guildhall list                     Show all registered workspaces
 
   guildhall run [id|path]            Run the orchestrator for a workspace
@@ -207,7 +207,7 @@ async function cmdUnregister() {
   const pos = positionals()
   const idOrPath = pos[0]
   if (!idOrPath) {
-    console.error('[guildhall] Usage: forge unregister <id|path>')
+    console.error('[guildhall] Usage: guildhall unregister <id|path>')
     process.exit(1)
   }
 
@@ -506,7 +506,7 @@ async function main() {
     case 'approve-meta-intake': return cmdApproveMetaIntake()
     default:
       console.error(`[guildhall] Unknown command: ${command}`)
-      console.error(`[guildhall] Run "forge help" for usage.`)
+      console.error(`[guildhall] Run "guildhall help" for usage.`)
       process.exit(1)
   }
 }
