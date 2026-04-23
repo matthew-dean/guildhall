@@ -25,12 +25,23 @@ export {
   guildsByRole,
   pickPrimaryEngineer,
   renderPersonaPrompt,
+  resolvePrinciples,
   renderSpecContributions,
+  resolveSpecContribution,
   reviewersForTask,
   collectGuildRubrics,
   runGuildDeterministicChecks,
   type TaggedRubricItem,
 } from './registry.js'
+
+export {
+  loadGuildComposition,
+  composeGuildRoster,
+  loadProjectGuildRoster,
+  type GuildsYaml,
+  type CustomGuildSpec,
+  type LoadedComposition,
+} from './composition.js'
 
 export {
   contrastRatio,

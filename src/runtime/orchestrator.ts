@@ -104,10 +104,12 @@ import { loadDesignSystem } from './design-system-store.js'
 import {
   selectApplicableGuilds,
   reviewersForTask,
+  loadProjectGuildRoster,
   type GuildDefinition,
 } from '@guildhall/guilds'
 import {
   aggregateFanout,
+  boundedConcurrency,
   personaVerdictToReviewRecord,
   type PersonaVerdict,
 } from './reviewer-fanout.js'
@@ -1422,6 +1424,7 @@ export class Orchestrator {
     const designSystem = await loadDesignSystem(this.opts.config.memoryDir).catch(
       () => undefined,
     )
+    const { guilds: roster } = loadProjectGuildRoster(this.opts.config.memoryDir)
     const gateOutcome = await runGuildGates({
       task,
       signals: {
@@ -1431,6 +1434,7 @@ export class Orchestrator {
         projectPath: task.projectPath,
       },
       now: this.now(),
+      roster,
     })
 
     // No applicable checks ran → nothing to decide; let the shell-gate pass proceed.
@@ -1538,12 +1542,16 @@ export class Orchestrator {
     const designSystem = await loadDesignSystem(this.opts.config.memoryDir).catch(
       () => undefined,
     )
-    const applicable = selectApplicableGuilds({
-      task,
-      designSystem,
-      memoryDir: this.opts.config.memoryDir,
-      projectPath: task.projectPath,
-    })
+    const { guilds: roster } = loadProjectGuildRoster(this.opts.config.memoryDir)
+    const applicable = selectApplicableGuilds(
+      {
+        task,
+        designSystem,
+        memoryDir: this.opts.config.memoryDir,
+        projectPath: task.projectPath,
+      },
+      roster,
+    )
     const personas = reviewersForTask(applicable)
     if (personas.length === 0) return null
 
@@ -2199,10 +2207,10 @@ export async function runOrchestrator(
     coordinators,
   }
 
-  const reviewerFanout = buildDefaultReviewerFanout(
-    models.reviewer,
-    hookExecutor ? { hookExecutor } : {},
-  )
+  const reviewerFanout = buildDefaultReviewerFanout(models.reviewer, {
+    ...(hookExecutor ? { hookExecutor } : {}),
+    concurrency: projectCfg.reviewerFanoutConcurrency,
+  })
 
   const orchestrator = new Orchestrator({
     config,
@@ -2239,26 +2247,32 @@ function taskModeToPermissionMode(mode: TaskPermissionMode): PermissionMode {
 
 /**
  * Build a ReviewerFanoutRunner that creates one fresh persona reviewer
- * agent per applicable persona, runs each in sequence against a shared
- * task context, and parses the structured verdict from each response. The
- * orchestrator aggregates across runners.
+ * agent per applicable persona and parses the structured verdict from
+ * each response. The orchestrator aggregates across personas.
  *
- * Runs sequentially rather than in parallel to keep LM Studio / local-LLM
- * setups happy — a single local model usually cannot service concurrent
- * requests. A future refinement could flip this to `Promise.all` when the
- * provider reports concurrent capacity.
+ * ## Concurrency
+ *
+ * `opts.concurrency` controls how many persona calls run at once:
+ * - `1` (default) — strictly sequential. Safe for LM Studio and any
+ *   single-session local model; wall-clock cost is `N * per-persona`.
+ * - `n > 1` — up to `n` personas in flight simultaneously. Appropriate
+ *   for cloud providers (Anthropic, OpenAI, …) whose rate limits
+ *   comfortably exceed `n`. Wall-clock cost collapses to roughly
+ *   `ceil(N / n) * per-persona`.
+ *
+ * An LLM failure for one persona doesn't abort the whole review — we
+ * record a parseable "revise" verdict so the strict-all aggregator
+ * surfaces the failing persona with a readable reason.
  */
 export function buildDefaultReviewerFanout(
   reviewerLlm: AgentLLM,
-  opts: { hookExecutor?: HookExecutor } = {},
+  opts: { hookExecutor?: HookExecutor; concurrency?: number } = {},
 ): ReviewerFanoutRunner {
+  const concurrency = Math.max(1, Math.floor(opts.concurrency ?? 1))
   return async ({ task, personas, context }) => {
-    // Import parsePersonaOutput lazily so this function stays side-effect free
-    // at import time — the reviewer-fanout module is pure but typed to avoid
-    // circular imports.
     const { parsePersonaOutput } = await import('./reviewer-fanout.js')
-    const verdicts: PersonaVerdict[] = []
-    for (const persona of personas) {
+
+    const runPersona = async (persona: GuildDefinition): Promise<PersonaVerdict> => {
       const agent = createPersonaReviewerAgent(persona, reviewerLlm, {
         ...(opts.hookExecutor ? { hookExecutor: opts.hookExecutor } : {}),
       })
@@ -2269,18 +2283,17 @@ export function buildDefaultReviewerFanout(
       ].join('\n')
       try {
         const result = await agent.generate(prompt)
-        verdicts.push(parsePersonaOutput(persona, result.text))
+        return parsePersonaOutput(persona, result.text)
       } catch (err) {
-        // An LLM failure for one persona shouldn't abort the whole review —
-        // record a parseable "revise" verdict so the aggregate surfaces it.
-        verdicts.push(
-          parsePersonaOutput(
-            persona,
-            `**Verdict:** revise\n**Reasoning:** ${persona.name} failed to produce a verdict (${err instanceof Error ? err.message : String(err)}). Treating as revise per strict-all policy.`,
-          ),
+        return parsePersonaOutput(
+          persona,
+          `**Verdict:** revise\n**Reasoning:** ${persona.name} failed to produce a verdict (${err instanceof Error ? err.message : String(err)}). Treating as revise per strict-all policy.`,
         )
       }
     }
-    return verdicts
+
+    return boundedConcurrency(personas, concurrency, (persona) =>
+      runPersona(persona),
+    )
   }
 }

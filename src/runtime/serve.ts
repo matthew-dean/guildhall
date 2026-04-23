@@ -19,6 +19,12 @@ import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
 import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
 import { resolveEscalation, updateDesignSystem } from '@guildhall/tools'
 import { DesignSystem, summarizeDesignSystem } from '@guildhall/core'
+import {
+  loadProjectGuildRoster,
+  selectApplicableGuilds,
+  reviewersForTask,
+  pickPrimaryEngineer,
+} from '@guildhall/guilds'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
 import {
   createExploringTask,
@@ -373,6 +379,143 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return taskId === id
       })
       return c.json({ task, recentEvents: recent })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // GET /api/project/task/:id/experts — which personas are applicable for
+  // this task, and how their verdicts / gate results map onto them.
+  //
+  // Response shape:
+  //   {
+  //     primaryEngineer: slug | null,
+  //     applicable: [{ slug, name, role, blurb }],
+  //     reviewers:  [{ slug, name, role }],
+  //     verdictsBySlug: {
+  //       [slug]: [{ verdict, reason, reasoning, reviewerPath, recordedAt, ... }]
+  //     },
+  //     gateResultsBySlug: {
+  //       [slug]: [{ gateId, passed, output, checkedAt }]
+  //     },
+  //     warnings: string[]   // composition load warnings, if any
+  //   }
+  //
+  // Gate-result-to-slug mapping uses the gate id namespace: guild checks use
+  // dotted prefixes (`a11y.contrast-matrix`, `color.near-duplicate-roles`,
+  // `sec.no-hardcoded-secrets`, etc.). Anything that doesn't namespace-match
+  // a known guild falls under "unattributed" so the hard-gate results
+  // (typecheck / build / test / lint) still surface somewhere in the UI.
+  // -------------------------------------------------------------------------
+  app.get('/api/project/task/:id/experts', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        | { tasks?: Array<Record<string, unknown>> }
+        | Array<Record<string, unknown>>
+      const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
+      const id = c.req.param('id')
+      const task = tasks.find(t => (t as { id?: string }).id === id) as
+        | Record<string, unknown>
+        | undefined
+      if (!task) return c.json({ error: 'task not found' }, 404)
+
+      const memDir = join(project.path, 'memory')
+      const designSystem = await loadDesignSystem(memDir).catch(() => undefined)
+      const { guilds: roster, warnings } = loadProjectGuildRoster(memDir)
+
+      // `selectApplicableGuilds` expects a Task type; we pass through a
+      // structurally-compatible subset without forcing a full schema parse
+      // at this endpoint (tasks on disk may predate recent zod additions).
+      const signals = {
+        task: task as unknown as Parameters<typeof selectApplicableGuilds>[0]['task'],
+        ...(designSystem ? { designSystem } : {}),
+        memoryDir: memDir,
+        projectPath: project.path,
+      }
+      const applicable = selectApplicableGuilds(signals, roster)
+      const reviewers = reviewersForTask(applicable)
+      const primaryEngineer = pickPrimaryEngineer(applicable)
+
+      const applicableSlugs = new Set(applicable.map(g => g.slug))
+
+      // Group review verdicts by guild slug. Each PersonaVerdict is persisted
+      // with `failingSignals: [guildSlug]` on revise; on approve we
+      // attribute by matching `reason` prefix ("The Accessibility Specialist
+      // approved"). Keep the mapping robust — unknown attribution falls into
+      // a generic bucket.
+      const verdicts = Array.isArray(task.reviewVerdicts)
+        ? (task.reviewVerdicts as Array<Record<string, unknown>>)
+        : []
+      const verdictsBySlug: Record<string, Array<Record<string, unknown>>> = {}
+      const nameToSlug = new Map<string, string>()
+      for (const g of roster) nameToSlug.set(g.name, g.slug)
+      for (const v of verdicts) {
+        let slug: string | null = null
+        const failingSignals = v.failingSignals
+        if (Array.isArray(failingSignals) && failingSignals.length > 0) {
+          const candidate = failingSignals[0]
+          if (typeof candidate === 'string' && applicableSlugs.has(candidate)) {
+            slug = candidate
+          }
+        }
+        if (!slug && typeof v.reason === 'string') {
+          for (const [name, s] of nameToSlug) {
+            if (v.reason.includes(name)) {
+              slug = s
+              break
+            }
+          }
+        }
+        const bucket = slug ?? 'unattributed'
+        ;(verdictsBySlug[bucket] ??= []).push(v)
+      }
+
+      // Group gate results by guild via the gate-id prefix namespace.
+      const prefixToSlug: Record<string, string> = {
+        'a11y.': 'accessibility-specialist',
+        'color.': 'color-theorist',
+        'sec.': 'security-engineer',
+        'test.': 'test-engineer',
+        'component-designer.': 'component-designer',
+        'copy.': 'copywriter',
+      }
+      const gateResults = Array.isArray(task.gateResults)
+        ? (task.gateResults as Array<Record<string, unknown>>)
+        : []
+      const gateResultsBySlug: Record<string, Array<Record<string, unknown>>> = {}
+      for (const g of gateResults) {
+        const gateId = typeof g.gateId === 'string' ? g.gateId : ''
+        let slug = 'unattributed'
+        for (const [prefix, s] of Object.entries(prefixToSlug)) {
+          if (gateId.startsWith(prefix)) {
+            slug = s
+            break
+          }
+        }
+        ;(gateResultsBySlug[slug] ??= []).push(g)
+      }
+
+      return c.json({
+        primaryEngineer: primaryEngineer?.slug ?? null,
+        applicable: applicable.map(g => ({
+          slug: g.slug,
+          name: g.name,
+          role: g.role,
+          blurb: g.blurb,
+        })),
+        reviewers: reviewers.map(g => ({
+          slug: g.slug,
+          name: g.name,
+          role: g.role,
+        })),
+        verdictsBySlug,
+        gateResultsBySlug,
+        warnings,
+      })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }

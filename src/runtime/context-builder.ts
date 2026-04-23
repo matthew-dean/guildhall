@@ -13,6 +13,7 @@ import {
   renderSpecContributions,
   collectGuildRubrics,
   reviewersForTask,
+  loadProjectGuildRoster,
 } from '@guildhall/guilds'
 import { loadGoalForTask } from './business-envelope.js'
 import { loadDesignSystem } from './design-system-store.js'
@@ -214,7 +215,8 @@ export async function buildContext(
     memoryDir,
     projectPath: task.projectPath,
   }
-  const applicableGuilds = selectApplicableGuilds(guildSignals)
+  const { guilds: roster } = loadProjectGuildRoster(memoryDir)
+  const applicableGuilds = selectApplicableGuilds(guildSignals, roster)
   const applicableGuildSlugs = applicableGuilds.map((g) => g.slug)
   const reviewerSlugs = reviewersForTask(applicableGuilds).map((g) => g.slug)
   const primaryEngineer = pickPrimaryEngineer(applicableGuilds)
@@ -224,7 +226,7 @@ export async function buildContext(
   // rationale.
   let personaPrompt = ''
   if (task.status === 'exploring') {
-    personaPrompt = renderSpecContributions(applicableGuilds)
+    personaPrompt = renderSpecContributions(applicableGuilds, guildSignals)
   } else if (task.status === 'in_progress' && primaryEngineer) {
     personaPrompt = renderPersonaPrompt(primaryEngineer, guildSignals)
   }

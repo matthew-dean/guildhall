@@ -4,7 +4,8 @@ import type { ReviewVerdict } from '@guildhall/core'
 /**
  * Reviewer fan-out: at `review`, each applicable persona produces an
  * independent verdict through its own lens. This file holds the pure,
- * testable pieces — parser + aggregator. The orchestrator wires them to
+ * testable pieces — parser, aggregator, and a generic bounded-concurrency
+ * pool used by the default LLM runner. The orchestrator wires them to
  * actual LLM calls via `createPersonaReviewerAgent`.
  *
  * Aggregation rule (strict by default): every persona must approve for the
@@ -147,4 +148,42 @@ export function personaVerdictToReviewRecord(
     ...(opts.policyVersion !== undefined ? { policyVersion: opts.policyVersion } : {}),
     ...(opts.llmError !== undefined ? { llmError: opts.llmError } : {}),
   }
+}
+
+/**
+ * Bounded-concurrency pool: apply `work` to every item in `items` with up
+ * to `concurrency` calls in flight at once. Results are returned in the
+ * same order as `items`. `concurrency <= 1` falls back to a strictly
+ * sequential for-loop. An error thrown by `work` for any single item
+ * propagates out; callers that need per-item error isolation should
+ * catch inside `work` themselves.
+ */
+export async function boundedConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  work: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const n = Math.max(1, Math.floor(concurrency))
+  if (n <= 1) {
+    const out: R[] = []
+    for (let i = 0; i < items.length; i++) {
+      out.push(await work(items[i]!, i))
+    }
+    return out
+  }
+  const out: R[] = new Array(items.length)
+  let nextIdx = 0
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const i = nextIdx++
+      if (i >= items.length) return
+      out[i] = await work(items[i]!, i)
+    }
+  }
+  const workers = Array.from(
+    { length: Math.min(n, items.length) },
+    () => worker(),
+  )
+  await Promise.all(workers)
+  return out
 }

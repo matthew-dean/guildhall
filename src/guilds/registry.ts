@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { GuildDefinition, GuildSignals, CheckResult, GuildRole } from './types.js'
 import { projectManagerGuild } from './project-manager/index.js'
 import { componentDesignerGuild } from './component-designer/index.js'
@@ -91,6 +93,42 @@ export function pickPrimaryEngineer(
 }
 
 /**
+ * Resolve a guild's principles, honoring per-project overrides. Precedence:
+ *   1. `<memoryDir>/guilds/<slug>/principles.md` — project-specific voice.
+ *   2. `guild.specializePrinciples(signals)` — dynamic specialization (e.g.
+ *      Project Manager's status-specific playbooks, Frontend Engineer's
+ *      framework layer).
+ *   3. `guild.principles` — the bundled default loaded at module import.
+ *
+ * Projects can shadow any persona without touching TS — drop a file at
+ * `memory/guilds/<slug>/principles.md` and the next dispatch picks it up.
+ */
+export function resolvePrinciples(
+  guild: GuildDefinition,
+  signals: GuildSignals,
+): string {
+  const override = readOverridePrinciples(guild.slug, signals.memoryDir)
+  if (override) return override
+  const specialized = guild.specializePrinciples?.(signals) ?? null
+  return specialized ?? guild.principles
+}
+
+function readOverridePrinciples(
+  slug: string,
+  memoryDir: string | undefined,
+): string | null {
+  if (!memoryDir) return null
+  const override = join(memoryDir, 'guilds', slug, 'principles.md')
+  if (!existsSync(override)) return null
+  try {
+    const body = readFileSync(override, 'utf8').trim()
+    return body.length > 0 ? body : null
+  } catch {
+    return null
+  }
+}
+
+/**
  * Render a single persona's principles as a system-prompt additive. Used to
  * attach a specific engineer's voice to the worker at `in_progress`, or to
  * attach a single reviewer persona to a specialized reviewer agent at
@@ -101,9 +139,37 @@ export function renderPersonaPrompt(
   guild: GuildDefinition,
   signals: GuildSignals,
 ): string {
-  const specialized = guild.specializePrinciples?.(signals) ?? null
-  const body = (specialized ?? guild.principles).trim()
+  const body = resolvePrinciples(guild, signals).trim()
   return [`## Persona: ${guild.name}`, '', body].join('\n')
+}
+
+/**
+ * Resolve a guild's spec contribution, honoring a project override at
+ * `<memoryDir>/guilds/<slug>/spec-contribution.md`. Returns null if neither
+ * the override nor the bundled field is present.
+ */
+export function resolveSpecContribution(
+  guild: GuildDefinition,
+  signals: GuildSignals,
+): string | null {
+  if (signals.memoryDir) {
+    const override = join(
+      signals.memoryDir,
+      'guilds',
+      guild.slug,
+      'spec-contribution.md',
+    )
+    if (existsSync(override)) {
+      try {
+        const body = readFileSync(override, 'utf8').trim()
+        if (body.length > 0) return body
+      } catch {
+        // fall through
+      }
+    }
+  }
+  const bundled = guild.specContribution?.trim()
+  return bundled && bundled.length > 0 ? bundled : null
 }
 
 /**
@@ -116,24 +182,25 @@ export function renderPersonaPrompt(
  */
 export function renderSpecContributions(
   guilds: readonly GuildDefinition[],
+  signals: GuildSignals,
 ): string {
   const contributors = guilds.filter(
-    (g) =>
-      (g.role === 'designer' || g.role === 'specialist') &&
-      g.specContribution &&
-      g.specContribution.trim().length > 0,
+    (g) => g.role === 'designer' || g.role === 'specialist',
   )
-  if (contributors.length === 0) return ''
+  const resolved = contributors
+    .map((g) => ({ guild: g, body: resolveSpecContribution(g, signals) }))
+    .filter((x): x is { guild: GuildDefinition; body: string } => x.body !== null)
+  if (resolved.length === 0) return ''
   const blocks: string[] = [
     '## Expert contributions to the spec',
     '',
     'Each expert below has requirements that must be answered *in the spec* before the engineer starts building. Missing answers mean escalations later.',
     '',
   ]
-  for (const g of contributors) {
-    blocks.push(`### ${g.name}`)
+  for (const { guild, body } of resolved) {
+    blocks.push(`### ${guild.name}`)
     blocks.push('')
-    blocks.push(g.specContribution!.trim())
+    blocks.push(body)
     blocks.push('')
     blocks.push('---')
     blocks.push('')

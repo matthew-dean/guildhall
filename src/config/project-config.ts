@@ -47,6 +47,16 @@ export const ProjectGuildhallConfig = z.object({
    * multiple providers are reachable.
    */
   preferredProvider: z.enum(['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api']).optional(),
+
+  /**
+   * How many persona reviewer agents to run concurrently during
+   * `review` fan-out. Default `1` (sequential) is safe for any provider
+   * — LM Studio / llama.cpp can't service concurrent requests on a
+   * single session. Raise to 2–4 when the reviewer is a cloud provider
+   * (Anthropic, OpenAI, Codex) whose rate limits comfortably exceed the
+   * roster size — wall-clock review latency drops roughly linearly.
+   */
+  reviewerFanoutConcurrency: z.number().int().positive().max(16).default(1),
 })
 export type ProjectGuildhallConfig = z.infer<typeof ProjectGuildhallConfig>
 

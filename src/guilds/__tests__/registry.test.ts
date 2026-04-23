@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { Task, DesignSystem } from '@guildhall/core'
 import {
   BUILTIN_GUILDS,
@@ -218,15 +218,84 @@ describe('renderPersonaPrompt', () => {
   })
 })
 
+describe('memory-dir overrides', () => {
+  let tmpDir: string
+  beforeEach(async () => {
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+    const os = await import('node:os')
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guild-override-test-'))
+  })
+  afterEach(async () => {
+    const fs = await import('node:fs/promises')
+    await fs.rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('renderPersonaPrompt uses memoryDir override when present', async () => {
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+    const dir = path.join(tmpDir, 'guilds', 'component-designer')
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(
+      path.join(dir, 'principles.md'),
+      "I'm the project-specific Component Designer. We use kebab-case props here.\n",
+      'utf-8',
+    )
+    const cd = BUILTIN_GUILDS.find((g) => g.slug === 'component-designer')!
+    const rendered = renderPersonaPrompt(cd, {
+      task: baseTask,
+      memoryDir: tmpDir,
+      projectPath: '/tmp/project',
+    })
+    expect(rendered).toContain('project-specific Component Designer')
+    expect(rendered).toContain('kebab-case props')
+    // Bundled prose not present when override wins.
+    expect(rendered).not.toContain('atomic layers are real')
+  })
+
+  it('renderPersonaPrompt falls back to specializePrinciples + bundled when no override', () => {
+    const cd = BUILTIN_GUILDS.find((g) => g.slug === 'component-designer')!
+    const rendered = renderPersonaPrompt(cd, {
+      task: baseTask,
+      memoryDir: tmpDir,
+      projectPath: '/tmp/project',
+    })
+    expect(rendered).toContain('Component Designer')
+  })
+
+  it('renderSpecContributions uses memoryDir override for specContribution', async () => {
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+    const dir = path.join(tmpDir, 'guilds', 'accessibility-specialist')
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(
+      path.join(dir, 'spec-contribution.md'),
+      'Project-override a11y questions: SR testing matrix; RTL? high-contrast mode?',
+      'utf-8',
+    )
+    const text = renderSpecContributions(BUILTIN_GUILDS, {
+      task: baseTask,
+      designSystem: designSystemWithFailingPair,
+      memoryDir: tmpDir,
+      projectPath: '/tmp/project',
+    })
+    expect(text).toContain('Project-override a11y questions')
+    expect(text).toContain('SR testing matrix')
+  })
+})
+
 describe('renderSpecContributions', () => {
+  const signals = {
+    task: baseTask,
+    memoryDir: '/tmp',
+    projectPath: '/tmp/project',
+  }
   it('is empty when no designer/specialist applies', () => {
     const applicable = [BUILTIN_GUILDS.find((g) => g.slug === 'project-manager')!]
-    expect(
-      renderSpecContributions(applicable),
-    ).toBe('')
+    expect(renderSpecContributions(applicable, signals)).toBe('')
   })
   it('includes designers and specialists, excludes engineers and overseer', () => {
-    const text = renderSpecContributions(BUILTIN_GUILDS)
+    const text = renderSpecContributions(BUILTIN_GUILDS, signals)
     expect(text).toContain('The Component Designer')
     expect(text).toContain('The Color Theorist')
     expect(text).toContain('The Accessibility Specialist')

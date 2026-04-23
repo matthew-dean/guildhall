@@ -9,6 +9,7 @@
   import SpecTab from './drawer/SpecTab.svelte'
   import TranscriptTab from './drawer/TranscriptTab.svelte'
   import HistoryTab from './drawer/HistoryTab.svelte'
+  import ExpertsTab from './drawer/ExpertsTab.svelte'
   import ProvenanceTab from './drawer/ProvenanceTab.svelte'
   import type { DrawerPayload, DrawerTab, Escalation } from '../lib/types.js'
 
@@ -27,6 +28,7 @@
   const TABS = [
     { id: 'spec', label: 'Spec' },
     { id: 'transcript', label: 'Transcript' },
+    { id: 'experts', label: 'Experts' },
     { id: 'history', label: 'History' },
     { id: 'provenance', label: 'Provenance' },
   ] as const
@@ -156,6 +158,8 @@
       />
     {:else if activeTab === 'transcript'}
       <TranscriptTab task={payload.task} />
+    {:else if activeTab === 'experts'}
+      <ExpertsTab taskId={taskId} />
     {:else if activeTab === 'history'}
       <HistoryTab task={payload.task} />
     {:else if activeTab === 'provenance'}

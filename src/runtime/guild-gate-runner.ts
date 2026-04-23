@@ -3,6 +3,7 @@ import {
   runGuildDeterministicChecks,
   selectApplicableGuilds,
   type CheckResult,
+  type GuildDefinition,
   type GuildSignals,
 } from '@guildhall/guilds'
 
@@ -23,6 +24,12 @@ export interface RunGuildGatesInput {
   task: Task
   signals: GuildSignals
   now: string
+  /**
+   * Optional project-specific roster. When omitted, the built-in roster is
+   * used. Callers that honor `memory/guilds.yaml` composition pass the
+   * composed list here.
+   */
+  roster?: readonly GuildDefinition[]
 }
 
 export interface RunGuildGatesOutput {
@@ -67,7 +74,7 @@ function isSkipped(check: CheckResult): boolean {
 export async function runGuildGates(
   input: RunGuildGatesInput,
 ): Promise<RunGuildGatesOutput> {
-  const guilds = selectApplicableGuilds(input.signals)
+  const guilds = selectApplicableGuilds(input.signals, input.roster)
   const rawResults = await runGuildDeterministicChecks(guilds, input.signals)
   const gateResults = rawResults
     .filter((r) => !isSkipped(r))
