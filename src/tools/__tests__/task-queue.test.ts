@@ -37,6 +37,7 @@ const seedQueue = {
       notes: [],
       gateResults: [],
       reviewVerdicts: [],
+    adjudications: [],
       escalations: [],
       revisionCount: 0,
       createdAt: new Date().toISOString(),

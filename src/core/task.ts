@@ -111,6 +111,61 @@ export const ReviewVerdict = z.object({
 })
 export type ReviewVerdict = z.infer<typeof ReviewVerdict>
 
+// Reviewer fan-out adjudication. When lever `reviewer_fanout_policy` is
+// `coordinator_adjudicates_on_conflict` and the detector fires (same persona
+// emits `revise` across two consecutive rounds with overlapping revision
+// items), the owning coordinator issues a binding decision that supersedes
+// the dissenting persona verdicts. The worker's next prompt is the scoped
+// instructions only — never the raw conflict — so the worker cannot
+// relitigate the call. See docs/disagreement-and-handoff.md §1.
+export const AdjudicationRecord = z.object({
+  /** Which review round produced the conflict (1-indexed). */
+  round: z.number().int().positive(),
+  /** What triggered the adjudication. */
+  trigger: z.enum(['same_persona_repeat_dissent', 'explicit_request', 'policy_conflict']),
+  /** Guild slugs whose revise verdicts this record resolves. */
+  dissenters: z.array(z.string()).default([]),
+  /** Guild slugs whose concerns won. */
+  winningConcerns: z.array(z.string()).default([]),
+  /** Guild slugs whose concerns were superseded. */
+  supersededConcerns: z.array(z.string()).default([]),
+  /** One-line headline for CLI / PROGRESS.md. */
+  summary: z.string(),
+  /** Full rationale — references spec, goal guardrails, and the dissent. */
+  rationale: z.string(),
+  /** Scoped instructions the worker sees on the next prompt. */
+  scopeInstructions: z.array(z.string()).default([]),
+  /** `coordinator` (per FR-02 domain owner) or `human` when escalated. */
+  decidedBy: z.enum(['coordinator', 'human']),
+  decidedAt: z.string(), // ISO timestamp
+  policyVersion: z.string().optional(),
+})
+export type AdjudicationRecord = z.infer<typeof AdjudicationRecord>
+
+// Sequential agent handoff within one task. Lets a task declare N engineer
+// specialists who work in sequence on the same worktree. Each step picks one
+// engineer by guild slug (e.g. frontend-engineer, backend-engineer); the
+// orchestrator advances `task.handoffStep` after each step completes and
+// only dispatches the normal reviewer fan-out after the final step.
+//
+// The worker writes a structured handoff note before transitioning to
+// `review`; the orchestrator captures that note onto the completed
+// `HandoffStep`, reverts status to `in_progress`, and picks the next
+// engineer. See docs/disagreement-and-handoff.md §2.
+export const HandoffStep = z.object({
+  /** Guild slug (e.g. `frontend-engineer`, `backend-engineer`). */
+  agent: z.string(),
+  /** Optional list of acceptance-criteria ids this step owns. */
+  scope: z.array(z.string()).default([]),
+  /** Optional freeform extra instructions for this step only. */
+  instructions: z.string().optional(),
+  /** ISO timestamp captured when the step's worker handed off. */
+  completedAt: z.string().optional(),
+  /** Structured handoff note the step's worker left for the next. */
+  handoffNote: z.string().optional(),
+})
+export type HandoffStep = z.infer<typeof HandoffStep>
+
 // FR-10: Structured escalation events. An escalation halts a task until a human
 // (or an automated resolver) records a resolution. The orchestrator treats a
 // task with any open escalation as blocked and refuses to route it further.
@@ -292,7 +347,22 @@ export const Task = z.object({
   // FR-26 / FR-27: append-only audit trail of reviewer verdicts. Every pass
   // through the `review` status appends one entry — `reviewerPath` records
   // whether the LLM reviewer ran or the deterministic fallback (AC-18).
+  // Under fan-out, one entry per applicable persona per round.
   reviewVerdicts: z.array(ReviewVerdict).default([]),
+
+  // Coordinator adjudication records when the `coordinator_adjudicates_on_
+  // conflict` policy fires. Append-only; each entry supersedes the dissent
+  // it resolves. See docs/disagreement-and-handoff.md §1.
+  adjudications: z.array(AdjudicationRecord).default([]),
+
+  // Sequential engineer handoff (§2 of docs/disagreement-and-handoff.md).
+  // When set, the orchestrator picks one engineer per step instead of
+  // calling `pickPrimaryEngineer`. Each step completes with a handoff note
+  // that the next step's engineer reads; only the final step's completion
+  // triggers the normal reviewer fan-out.
+  handoffSequence: z.array(HandoffStep).optional(),
+  /** Index of the currently-active step in `handoffSequence` (0-based). */
+  handoffStep: z.number().int().nonnegative().optional(),
 
   // How many times this task has been sent back for revision
   revisionCount: z.number().default(0),

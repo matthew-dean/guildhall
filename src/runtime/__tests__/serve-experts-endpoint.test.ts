@@ -35,6 +35,7 @@ async function seedTask(
         notes: [],
         gateResults: [],
         reviewVerdicts: [],
+    adjudications: [],
         escalations: [],
         agentIssues: [],
         revisionCount: 0,

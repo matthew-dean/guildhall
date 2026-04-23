@@ -46,6 +46,7 @@ function task(overrides: Partial<Task> = {}): Task {
     notes: [],
     gateResults: [],
     reviewVerdicts: [],
+    adjudications: [],
     escalations: [],
     agentIssues: [],
     revisionCount: 0,

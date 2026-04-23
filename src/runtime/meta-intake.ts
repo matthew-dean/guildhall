@@ -169,6 +169,7 @@ export async function createMetaIntakeTask(
     notes: [],
     gateResults: [],
     reviewVerdicts: [],
+    adjudications: [],
     escalations: [],
     agentIssues: [],
     revisionCount: 0,

@@ -13,7 +13,9 @@ import { selectApiClient, inferPreferredProvider } from './provider-selection.js
 import {
   TaskQueue,
   TERMINAL_TASK_STATUSES,
+  type AdjudicationRecord,
   type AgentIssue,
+  type ReviewVerdict,
   type Task,
   type TaskStatus,
   type TaskPermissionMode,
@@ -112,6 +114,7 @@ import {
   boundedConcurrency,
   personaVerdictToReviewRecord,
   type PersonaVerdict,
+  type ReviewerFanoutPolicy,
 } from './reviewer-fanout.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -400,6 +403,16 @@ export class Orchestrator {
     if (task.status === 'gate_check') {
       const guildGateOutcome = await this.runGuildGatesInline(task, queueBefore)
       if (guildGateOutcome) return guildGateOutcome
+    }
+
+    // Handoff sequence pre-pass at `review`: when the task is running a
+    // multi-step handoff and the current step is NOT the last, we capture
+    // the step's handoff note, advance `handoffStep`, and revert status to
+    // `in_progress`. The reviewer fan-out only fires on the final step's
+    // completion. See docs/disagreement-and-handoff.md §2.
+    if (task.status === 'review' && hasPendingHandoffStep(task)) {
+      const handoffOutcome = await this.advanceHandoffStepInline(task)
+      if (handoffOutcome) return handoffOutcome
     }
 
     // Reviewer fan-out at `review`: each applicable persona (Component
@@ -1399,6 +1412,27 @@ export class Orchestrator {
   }
 
   /**
+   * Resolve the `reviewer_fanout_policy` for a domain. Fan-out aggregation
+   * uses this to decide how dissents roll up into the task-level verdict
+   * (strict, advisory, majority) and whether to flag conflicts for
+   * coordinator adjudication. Falls back to `strict` on any read error —
+   * the conservative default, matching today's behavior before the lever
+   * landed.
+   */
+  private async resolveReviewerFanoutPolicy(
+    domain: string,
+  ): Promise<ReviewerFanoutPolicy> {
+    try {
+      const settings = await this.readLeverSettings()
+      const domainLevers = resolveDomainLevers(settings, domain)
+      return domainLevers.reviewer_fanout_policy
+        .position as ReviewerFanoutPolicy
+    } catch {
+      return 'strict'
+    }
+  }
+
+  /**
    * FR-27 / AC-18: apply a deterministic reviewer verdict directly to the
    * queue. Used by the `deterministic_only` mode and by the
    * `llm_with_deterministic_fallback` mode after an LLM outage. Writes the
@@ -1523,6 +1557,64 @@ export class Orchestrator {
   }
 
   /**
+   * Capture the current handoff step's worker note, record its completion
+   * timestamp, advance `handoffStep`, and revert status to `in_progress`
+   * so the next specialist picks up on the next tick. Only called when
+   * `hasPendingHandoffStep(task)` is true; the final step falls through
+   * to the normal reviewer fan-out.
+   */
+  private async advanceHandoffStepInline(
+    task: Task,
+  ): Promise<TickOutcome | null> {
+    const beforeStatus = task.status
+    return await this.withQueueWriteLock(async () => {
+      const queue = await this.readQueue()
+      const t = queue.tasks.find((x) => x.id === task.id)
+      if (!t || !t.handoffSequence) return null
+      const idx = t.handoffStep ?? 0
+      const currentStep = t.handoffSequence[idx]
+      if (!currentStep) return null
+      const nextStep = t.handoffSequence[idx + 1]
+      if (!nextStep) return null // guarded by hasPendingHandoffStep but safe
+
+      const now = this.now()
+      const handoffNote = extractHandoffNote(t)
+      // Clone the step shape — zod `.default([])` nested shapes can't be
+      // partially mutated without TypeScript's exactOptionalPropertyTypes
+      // complaining, so we rebuild the step.
+      t.handoffSequence = t.handoffSequence.map((s, i) =>
+        i === idx
+          ? {
+              ...s,
+              completedAt: now,
+              ...(handoffNote ? { handoffNote } : {}),
+            }
+          : s,
+      )
+      t.handoffStep = idx + 1
+      t.status = 'in_progress'
+      t.updatedAt = now
+      queue.lastUpdated = now
+      await this.writeQueue(queue)
+      await this.logTickProgress({
+        task: t,
+        agent: 'handoff-orchestrator',
+        beforeStatus,
+        afterStatus: 'in_progress',
+        transitioned: true,
+        note: `handoff step ${idx + 1}/${t.handoffSequence.length} (${currentStep.agent}) → step ${idx + 2} (${nextStep.agent})`,
+      })
+      return {
+        kind: 'processed',
+        taskId: task.id,
+        agent: 'handoff-orchestrator',
+        beforeStatus,
+        afterStatus: 'in_progress',
+      } as TickOutcome
+    })
+  }
+
+  /**
    * Reviewer fan-out pre-pass at `review`. Runs each applicable reviewer
    * persona through `opts.reviewerFanout` and aggregates their verdicts
    * strict-all: any `revise` bounces the task back to `in_progress` with
@@ -1581,7 +1673,13 @@ export class Orchestrator {
     }
     if (verdicts.length === 0) return null
 
-    const aggregate = aggregateFanout(verdicts)
+    // Policy selection + prior-rounds extraction for same-persona-repeat
+    // dissent detection. When the lever is
+    // `coordinator_adjudicates_on_conflict`, `aggregate.needsAdjudication`
+    // may flip true — we branch on it below.
+    const policy = await this.resolveReviewerFanoutPolicy(task.domain)
+    const priorRounds = extractPriorVerdictRounds(task.reviewVerdicts)
+    const aggregate = aggregateFanout(verdicts, { policy, priorRounds })
     const beforeStatus = task.status
 
     return await this.withQueueWriteLock(async () => {
@@ -1594,6 +1692,26 @@ export class Orchestrator {
       const now = this.now()
       for (const v of verdicts) {
         t.reviewVerdicts.push(personaVerdictToReviewRecord(v, { now }))
+      }
+
+      // Under `coordinator_adjudicates_on_conflict`, recurrent same-persona
+      // dissent short-circuits to the domain coordinator instead of looping
+      // the worker. The worker will re-enter in_progress only after the
+      // coordinator lands a binding AdjudicationRecord with scoped
+      // instructions.
+      if (aggregate.needsAdjudication) {
+        const adjudicationOutcome = await this.routeToCoordinatorAdjudication({
+          queue,
+          task: t,
+          aggregate,
+          verdicts,
+          round: priorRounds.length + 1,
+          now,
+          beforeStatus,
+        })
+        if (adjudicationOutcome) return adjudicationOutcome
+        // If routing failed (no coordinator, etc.), fall through to the
+        // default revise path so the system stays conservative.
       }
 
       if (aggregate.verdict === 'approve') {
@@ -1668,6 +1786,166 @@ export class Orchestrator {
         afterStatus: 'in_progress',
       } as TickOutcome
     })
+  }
+
+  /**
+   * Route a fan-out aggregate with `needsAdjudication: true` to the domain
+   * coordinator. The coordinator receives the verdict set + dissent
+   * transcript, produces a binding AdjudicationRecord (appended to
+   * `task.adjudications`), and either:
+   *   - Advances the task to `gate_check` with superseded dissenters
+   *     recorded (coordinator resolved the conflict in favor of approving
+   *     the work).
+   *   - Bounces to `in_progress` with the coordinator's `scopeInstructions`
+   *     as the worker prompt, rather than the raw dissent (worker cannot
+   *     relitigate; it executes within the adjudicated scope).
+   *   - Raises an escalation if the coordinator cannot decide
+   *     autonomously under the current `remediation_autonomy` posture.
+   *
+   * This method builds the record deterministically from the aggregate; the
+   * live coordinator LLM pass will be layered on later (FR-32 remediation
+   * loop extension). For now we record a deterministic "keep the dissent's
+   * scoped instructions, mark recurrent-dissent as the trigger" decision
+   * and bounce to the worker with those instructions — which is still a
+   * meaningful improvement: the worker's prompt is the specific list of
+   * changes, not the full conflict transcript.
+   */
+  private async routeToCoordinatorAdjudication(input: {
+    queue: TaskQueue
+    task: Task
+    aggregate: ReturnType<typeof aggregateFanout>
+    verdicts: readonly PersonaVerdict[]
+    round: number
+    now: string
+    beforeStatus: TaskStatus
+  }): Promise<TickOutcome | null> {
+    const coord = this.opts.agents.coordinators[input.task.domain]
+    const coordinatorId = coord?.name ?? 'coordinator-default'
+
+    // For v1: the deterministic adjudication record. Every dissenter is
+    // recorded as a "winning concern" (we treat all dissents as load-
+    // bearing until an LLM coordinator pass overrides). The worker gets
+    // scoped instructions = the union of dissent revision items, framed as
+    // the coordinator's decision.
+    const dissenterSlugs = input.aggregate.dissenting.map(d => d.guildSlug)
+    const scopeInstructions: string[] = []
+    for (const d of input.aggregate.dissenting) {
+      for (const item of d.revisionItems) {
+        if (!scopeInstructions.includes(item)) scopeInstructions.push(item)
+      }
+    }
+
+    const rationale = [
+      `Reviewer fan-out round ${input.round} produced recurring dissent from`,
+      `${dissenterSlugs.join(', ')}. Policy \`coordinator_adjudicates_on_`,
+      `conflict\` routes to the domain coordinator (${input.task.domain}).`,
+      '',
+      'Decision (deterministic v1): keep each dissenting persona\'s scoped',
+      'instructions. Worker executes the scoped list; the dissent transcript',
+      'is NOT in the worker prompt so the worker cannot relitigate.',
+    ].join('\n')
+
+    const adjudication: AdjudicationRecord = {
+      round: input.round,
+      trigger: input.aggregate.adjudicationTrigger ?? 'same_persona_repeat_dissent',
+      dissenters: dissenterSlugs,
+      winningConcerns: dissenterSlugs,
+      supersededConcerns: [],
+      summary: `Coordinator adjudicated: worker to address ${scopeInstructions.length} scoped item${scopeInstructions.length === 1 ? '' : 's'} from ${dissenterSlugs.join(', ')}`,
+      rationale,
+      scopeInstructions,
+      decidedBy: 'coordinator',
+      decidedAt: input.now,
+    }
+    input.task.adjudications.push(adjudication)
+
+    // Write a DECISIONS.md entry capturing the adjudication so the audit
+    // trail lives outside TASKS.json too.
+    const decisionsPath = path.join(this.opts.config.memoryDir, 'DECISIONS.md')
+    const decisionEntry = [
+      `### ${input.now} — Reviewer fan-out adjudication`,
+      '',
+      `**Task:** ${input.task.id}`,
+      `**Domain:** ${input.task.domain}`,
+      `**Coordinator:** ${coordinatorId}`,
+      `**Trigger:** ${adjudication.trigger} (round ${adjudication.round})`,
+      `**Dissenters:** ${dissenterSlugs.join(', ') || 'none'}`,
+      '',
+      '**Rationale:**',
+      rationale,
+      '',
+      '**Scoped instructions to worker:**',
+      ...scopeInstructions.map(i => `- ${i}`),
+      '',
+      '---',
+      '',
+    ].join('\n')
+    try {
+      await fs.appendFile(decisionsPath, decisionEntry, 'utf8')
+    } catch {
+      // Appending to DECISIONS.md is best-effort; the task-level record is
+      // the load-bearing trail.
+    }
+
+    // Build the worker's next prompt from scope instructions only.
+    const scopedFeedback = [
+      `**Coordinator adjudication (round ${adjudication.round}):**`,
+      '',
+      adjudication.summary,
+      '',
+      '**Scoped instructions (address exactly these items):**',
+      ...scopeInstructions.map(i => `- ${i}`),
+    ].join('\n')
+
+    input.task.notes.push({
+      agentId: coordinatorId,
+      role: 'coordinator',
+      content: scopedFeedback,
+      timestamp: input.now,
+    })
+    input.task.status = 'in_progress'
+    input.task.revisionCount += 1
+    input.task.updatedAt = input.now
+    input.queue.lastUpdated = input.now
+
+    // maxRevisions still caps: if the coordinator keeps having to adjudicate,
+    // escalate to human.
+    if (input.task.revisionCount > this.opts.config.maxRevisions) {
+      await this.writeQueue(input.queue)
+      await raiseEscalation({
+        tasksPath: this.tasksPath(),
+        progressPath: this.progressPath(),
+        taskId: input.task.id,
+        agentId: coordinatorId,
+        reason: 'max_revisions_exceeded',
+        summary:
+          `Adjudicated ${input.task.revisionCount} times (maxRevisions=${this.opts.config.maxRevisions}). ` +
+          `Coordinator cannot resolve; escalating.`,
+        details: rationale,
+      })
+      return {
+        kind: 'blocked-max-revisions',
+        taskId: input.task.id,
+        revisionCount: input.task.revisionCount,
+      } as TickOutcome
+    }
+
+    await this.writeQueue(input.queue)
+    await this.logTickProgress({
+      task: input.task,
+      agent: coordinatorId,
+      beforeStatus: input.beforeStatus,
+      afterStatus: 'in_progress',
+      transitioned: true,
+      note: `coordinator adjudicated (dissenters: ${dissenterSlugs.join(', ')}) → scoped rework`,
+    })
+    return {
+      kind: 'processed',
+      taskId: input.task.id,
+      agent: coordinatorId,
+      beforeStatus: input.beforeStatus,
+      afterStatus: 'in_progress',
+    } as TickOutcome
   }
 
   private async applyReviewVerdictInline(opts: {
@@ -2234,6 +2512,105 @@ export async function runOrchestrator(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * True iff the task is running a handoff sequence and has at least one
+ * more step after the current one. Used by the `review` pre-pass to
+ * distinguish "step complete, advance" from "final step complete, run
+ * normal fan-out review."
+ */
+function hasPendingHandoffStep(task: Task): boolean {
+  const seq = task.handoffSequence
+  if (!seq || seq.length === 0) return false
+  const idx = task.handoffStep ?? 0
+  return idx + 1 < seq.length
+}
+
+/**
+ * Parse the worker's latest note for a structured `## Handoff note` section
+ * (case-insensitive header). Falls back to the entire note text when no
+ * explicit section is present — always better to preserve the worker's
+ * intent than to silently drop it.
+ */
+function extractHandoffNote(task: Task): string {
+  // Walk backwards to find the latest worker note.
+  for (let i = task.notes.length - 1; i >= 0; i--) {
+    const n = task.notes[i]
+    if (!n) continue
+    if (
+      n.role === 'worker' ||
+      n.agentId === 'worker-agent' ||
+      n.agentId?.endsWith('-engineer')
+    ) {
+      const content = n.content ?? ''
+      const match = content.match(
+        /^\s*##\s+Handoff note\s*\n([\s\S]*?)(?:\n##\s|\n?$)/im,
+      )
+      if (match) return match[1]!.trim()
+      return content.trim()
+    }
+  }
+  return ''
+}
+
+/**
+ * Rebuild prior fan-out rounds from the flat `task.reviewVerdicts` trail.
+ * Verdicts recorded within the same ISO second are treated as one round
+ * (the fan-out persists every persona's verdict with the same `recordedAt`).
+ * The most-recent round is placed last in the returned list so
+ * `findRecurrentDissent` can compare against `priorRounds.at(-1)`.
+ *
+ * Each element is a PersonaVerdict-shaped slice derived from the stored
+ * ReviewVerdict — `guildSlug` comes from `failingSignals[0]` (fan-out
+ * writes the persona slug there on revise) or is inferred from the
+ * `reason` text on approve.
+ */
+function extractPriorVerdictRounds(
+  verdicts: readonly ReviewVerdict[],
+): PersonaVerdict[][] {
+  if (verdicts.length === 0) return []
+  const rounds: PersonaVerdict[][] = []
+  let currentKey: string | null = null
+  let current: PersonaVerdict[] = []
+  for (const v of verdicts) {
+    const key = v.recordedAt
+    if (key !== currentKey) {
+      if (current.length > 0) rounds.push(current)
+      current = []
+      currentKey = key
+    }
+    // Fan-out tags failingSignals[0] with the persona slug on revise;
+    // approves leave failingSignals empty. Fall back to parsing the slug
+    // out of the reason prefix ("<guildName> approved/requested revision").
+    const slug =
+      v.failingSignals[0] ?? guessSlugFromReason(v.reason) ?? 'unknown'
+    current.push({
+      guildSlug: slug,
+      guildName: slug,
+      verdict: v.verdict,
+      reasoning: v.reasoning ?? v.reason,
+      // `revisionItems` aren't persisted verbatim on ReviewVerdict — the
+      // dissent text lives in `reasoning`. The detector does token-set
+      // overlap on the whole string, so passing `[reasoning]` is equivalent
+      // to the empty-items case for this purpose.
+      revisionItems: v.verdict === 'revise' ? [v.reasoning ?? v.reason] : [],
+      rawOutput: v.reasoning ?? v.reason,
+    })
+  }
+  if (current.length > 0) rounds.push(current)
+  return rounds
+}
+
+function guessSlugFromReason(reason: string): string | null {
+  // Fan-out writes "The <Persona Name> approved/requested revision" into
+  // reason. Slugify the persona name section. This is advisory — callers
+  // that need strict attribution should use failingSignals[0].
+  const m = /^The\s+([A-Z][A-Za-z ]+?)\s+(approved|requested revision)/.exec(
+    reason,
+  )
+  if (!m) return null
+  return m[1]!.toLowerCase().replace(/\s+/g, '-')
 }
 
 /** FR-15: map the zod-enum task field onto the engine's PermissionMode enum. */

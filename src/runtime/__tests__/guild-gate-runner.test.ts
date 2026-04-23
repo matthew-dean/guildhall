@@ -16,6 +16,7 @@ const baseTask: Task = {
   notes: [],
   gateResults: [],
   reviewVerdicts: [],
+    adjudications: [],
   escalations: [],
   agentIssues: [],
   revisionCount: 0,

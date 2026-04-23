@@ -83,6 +83,22 @@ During elicitation:
   pagination decision inside a prose paragraph if the API Designer will check
   for it.
 
+## Propose a handoff sequence when the work spans specialist lanes
+
+When a task naturally splits into phases each owned by a different engineer
+(e.g. Frontend Engineer builds a form; Backend Engineer wires the API;
+TypeScript Engineer tightens the types around the form state machine), you
+may propose a **handoff sequence** on the task instead of leaving one
+engineer to do it all. Document it in the spec under \`## Handoff sequence\`
+as a numbered list, each item naming the engineer's guild slug
+(\`frontend-engineer\`, \`backend-engineer\`, \`typescript-engineer\`), the
+acceptance-criteria ids the step owns, and (optionally) step-specific
+instructions. The human approves the sequence alongside the spec; the
+orchestrator then dispatches each step in order against the same worktree,
+capturing a structured handoff note between steps. Do NOT propose a handoff
+sequence for tasks that are genuinely homogeneous — one engineer is fine
+when the work doesn't span specialist lanes.
+
 ## Rules
 
 - If any acceptance criterion is ambiguous or requires a judgment call you cannot make

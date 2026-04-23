@@ -242,6 +242,7 @@ function buildFixupTask(opts: {
     notes: [],
     gateResults: [],
     reviewVerdicts: [],
+    adjudications: [],
     revisionCount: 0,
     remediationAttempts: 0,
     escalations: [],
