@@ -146,6 +146,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
     ...(workspace.runtime ? { runtime: workspace.runtime } : {}),
     ...(workspace.hooks ? { hooks: workspace.hooks } : {}),
     ...(workspace.mcp ? { mcp: workspace.mcp } : {}),
+    ...(workspace.bootstrap ? { bootstrap: workspace.bootstrap } : {}),
   })
 
   return resolved

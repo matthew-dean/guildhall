@@ -91,6 +91,7 @@ import {
   type FanoutCapacity,
 } from './fanout-dispatcher.js'
 import { isStopRequested } from './stop-requested.js'
+import { runBootstrap, bootstrapNeeded } from './bootstrap-runner.js'
 import {
   deterministicReview,
   applyDeterministicVerdict,
@@ -658,6 +659,39 @@ export class Orchestrator {
           `[guildhall] SESSION_START hook blocked startup: ${pre.reason ?? '(no reason)'}`,
         )
         return
+      }
+    }
+
+    // Project bootstrap: run install/build/migrate commands and verify via
+    // successGates before any task is dispatched. Skipped when the lockfile
+    // hash + command set haven't changed since the last successful run.
+    // A failed bootstrap aborts startup — dispatching workers into a project
+    // that can't typecheck is worse than doing nothing.
+    const bootstrap = this.opts.config.bootstrap
+    if (bootstrap && bootstrap.commands.length > 0) {
+      const needed = bootstrapNeeded(
+        this.opts.config.memoryDir,
+        this.opts.config.projectPath,
+        bootstrap.commands,
+        bootstrap.successGates,
+      )
+      if (needed) {
+        console.log('[guildhall] running bootstrap…')
+        const res = runBootstrap({
+          projectPath: this.opts.config.projectPath,
+          memoryDir: this.opts.config.memoryDir,
+          commands: bootstrap.commands,
+          successGates: bootstrap.successGates,
+          timeoutMs: bootstrap.timeoutMs,
+        })
+        if (!res.success) {
+          const failed = res.steps.find((s) => s.result === 'fail')
+          console.error(
+            `[guildhall] bootstrap failed on ${failed?.kind ?? 'step'} \`${failed?.command ?? ''}\` (exit ${failed?.exitCode ?? '?'}). See memory/bootstrap.json.`,
+          )
+          return
+        }
+        console.log(`[guildhall] bootstrap passed (${res.steps.length} steps).`)
       }
     }
 

@@ -97,6 +97,63 @@ describe('WorkspaceYamlConfig', () => {
     expect(config.coordinators[0]?.autonomousDecisions).toEqual([])
   })
 
+  it('defaults bootstrap to undefined (opt-in)', () => {
+    const config = WorkspaceYamlConfig.parse({ name: 'Test' })
+    expect(config.bootstrap).toBeUndefined()
+  })
+
+  it('parses a bootstrap block with commands and successGates', () => {
+    const config = WorkspaceYamlConfig.parse({
+      name: 'Test',
+      bootstrap: {
+        commands: ['pnpm install'],
+        successGates: ['pnpm typecheck'],
+        timeoutMs: 300_000,
+      },
+    })
+    expect(config.bootstrap?.commands).toEqual(['pnpm install'])
+    expect(config.bootstrap?.successGates).toEqual(['pnpm typecheck'])
+    expect(config.bootstrap?.timeoutMs).toBe(300_000)
+  })
+
+  it('parses bootstrap.provenance with tried attempts', () => {
+    const config = WorkspaceYamlConfig.parse({
+      name: 'Test',
+      bootstrap: {
+        commands: ['pnpm install'],
+        successGates: ['pnpm typecheck'],
+        provenance: {
+          establishedBy: 'meta-intake-agent',
+          establishedAt: '2026-04-23T00:00:00.000Z',
+          tried: [
+            { command: 'pnpm install', result: 'pass' },
+            { command: 'pnpm typecheck', result: 'pass' },
+          ],
+        },
+      },
+    })
+    expect(config.bootstrap?.provenance?.establishedBy).toBe('meta-intake-agent')
+    expect(config.bootstrap?.provenance?.tried).toHaveLength(2)
+    expect(config.bootstrap?.provenance?.tried[0]?.result).toBe('pass')
+  })
+
+  it('applies bootstrap default timeoutMs when commands provided', () => {
+    const config = WorkspaceYamlConfig.parse({
+      name: 'Test',
+      bootstrap: { commands: ['pnpm install'], successGates: [] },
+    })
+    expect(config.bootstrap?.timeoutMs).toBe(300_000)
+  })
+
+  it('rejects bootstrap with negative timeout', () => {
+    expect(() =>
+      WorkspaceYamlConfig.parse({
+        name: 'Test',
+        bootstrap: { commands: ['pnpm install'], successGates: [], timeoutMs: -1 },
+      }),
+    ).toThrow()
+  })
+
   it('parses an mcp.servers block with stdio + http transports', () => {
     const config = WorkspaceYamlConfig.parse({
       name: 'Test',

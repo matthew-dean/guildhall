@@ -94,6 +94,28 @@ export const WorkspaceYamlConfig = z.object({
   mcp: z.object({
     servers: z.record(z.string(), mcpServerConfigSchema).default({}),
   }).optional(),
+
+  // Project bootstrap: shell commands that put the project into a testable
+  // state (e.g. `pnpm install`, `pnpm db:migrate`). The orchestrator runs
+  // these before dispatching any worker and re-runs when the lockfile hash
+  // changes. `successGates` are the commands that must pass after bootstrap
+  // for the state to be considered testable — the meta-intake agent
+  // empirically verifies these before writing the block. `provenance`
+  // records what was tried so humans can audit the derivation.
+  bootstrap: z.object({
+    commands: z.array(z.string()).default([]),
+    successGates: z.array(z.string()).default([]),
+    timeoutMs: z.number().int().positive().default(300_000),
+    provenance: z.object({
+      establishedBy: z.string(),
+      establishedAt: z.string(),
+      tried: z.array(z.object({
+        command: z.string(),
+        result: z.enum(['pass', 'fail']),
+        stderr: z.string().optional(),
+      })).default([]),
+    }).optional(),
+  }).optional(),
 })
 export type WorkspaceYamlConfig = z.infer<typeof WorkspaceYamlConfig>
 
@@ -303,6 +325,24 @@ export const ResolvedConfig = z.object({
   // WorkspaceYamlConfig.mcp.
   mcp: z.object({
     servers: z.record(z.string(), mcpServerConfigSchema).default({}),
+  }).optional(),
+
+  // Project bootstrap block (passthrough from WorkspaceYamlConfig.bootstrap).
+  // The orchestrator runs `commands` before the first task dispatch and re-runs
+  // when the lockfile hash changes; `successGates` verify testability.
+  bootstrap: z.object({
+    commands: z.array(z.string()),
+    successGates: z.array(z.string()),
+    timeoutMs: z.number().int().positive(),
+    provenance: z.object({
+      establishedBy: z.string(),
+      establishedAt: z.string(),
+      tried: z.array(z.object({
+        command: z.string(),
+        result: z.enum(['pass', 'fail']),
+        stderr: z.string().optional(),
+      })),
+    }).optional(),
   }).optional(),
 })
 export type ResolvedConfig = z.infer<typeof ResolvedConfig>
