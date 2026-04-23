@@ -123,3 +123,77 @@ describe('shellTool — engine-tool interface', () => {
     expect(shellTool.isReadOnly({ command: 'echo', cwd: '/tmp', timeoutMs: 1000 })).toBe(false)
   })
 })
+
+describe('runShell — interactive-scaffold preflight', () => {
+  it('blocks `npm create vite` without a non-interactive flag', () => {
+    const result = runShell({
+      command: 'npm create vite my-app',
+      cwd: '/tmp',
+      timeoutMs: 5000,
+    })
+    expect(result.success).toBe(false)
+    expect(result.interactiveRequired).toBe(true)
+    expect(result.exitCode).toBe(-1)
+    expect(result.output).toContain('non-interactive')
+  })
+
+  it('passes `npm create vite --yes` through to the shell', () => {
+    const result = runShell({
+      command: 'npm create vite --yes --help',
+      cwd: '/tmp',
+      timeoutMs: 5000,
+    })
+    // We don't care whether the fake command succeeds; we only care that
+    // preflight didn't short-circuit it.
+    expect(result.interactiveRequired).toBeUndefined()
+  })
+
+  it('does not flag unrelated commands', () => {
+    const result = runShell({ command: 'echo hello', cwd: '/tmp', timeoutMs: 5000 })
+    expect(result.interactiveRequired).toBeUndefined()
+  })
+})
+
+describe('runShell — output formatting', () => {
+  it('normalizes CRLF to LF', () => {
+    const result = runShell({
+      command: "node -e \"process.stdout.write('a\\r\\nb\\r\\nc')\"",
+      cwd: '/tmp',
+      timeoutMs: 5000,
+    })
+    expect(result.success).toBe(true)
+    expect(result.output).toBe('a\nb\nc')
+  })
+
+  it('truncates output over 12000 chars with a marker', () => {
+    // Print 15000 x'es — well over the 12000-char cap.
+    const result = runShell({
+      command: "node -e \"process.stdout.write('x'.repeat(15000))\"",
+      cwd: '/tmp',
+      timeoutMs: 5000,
+    })
+    expect(result.success).toBe(true)
+    expect(result.output.endsWith('...[truncated]...')).toBe(true)
+    expect(result.output.length).toBeLessThan(15000)
+    expect(result.output.length).toBeGreaterThan(12000)
+  })
+
+  it('returns the "(no output)" sentinel for successful silent commands', () => {
+    const result = runShell({ command: 'true', cwd: '/tmp', timeoutMs: 5000 })
+    expect(result.success).toBe(true)
+    expect(result.output).toBe('(no output)')
+  })
+})
+
+describe('runShell — timeout with partial output', () => {
+  it('marks timedOut and includes a timeout banner', () => {
+    const result = runShell({
+      command: "node -e \"console.log('before'); setTimeout(() => {}, 5000)\"",
+      cwd: '/tmp',
+      timeoutMs: 500,
+    })
+    expect(result.success).toBe(false)
+    expect(result.timedOut).toBe(true)
+    expect(result.output).toContain('timed out')
+  })
+})
