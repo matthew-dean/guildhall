@@ -15,6 +15,9 @@ import {
   webSearchTool,
   skillTool,
   notebookEditTool,
+  sleepTool,
+  briefTool,
+  toolSearchTool,
 } from '@guildhall/tools'
 import { GuildhallAgent } from './guildhall-agent.js'
 import type { AgentLLM } from './llm.js'
@@ -95,6 +98,9 @@ export function createWorkerAgent(
       webSearchTool,
       skillTool,
       notebookEditTool,
+      sleepTool,
+      briefTool,
+      toolSearchTool,
       ...(opts.extraTools ?? []),
     ],
     ...(opts.skills ? { skills: opts.skills } : {}),
