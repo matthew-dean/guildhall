@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { editFile, editFileTool, readFile, readFileTool } from '../files.js'
+import { editFile, editFileTool, readFile, readFileTool, writeFile, writeFileTool } from '../files.js'
 
 async function mkSandbox(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-files-test-'))
@@ -197,6 +197,70 @@ describe('readFile', () => {
     const binResult = await readFile({ filePath: bin })
     expect(binResult.exists).toBe(true)
     expect(binResult.isBinary).toBe(true)
+  })
+})
+
+describe('writeFile', () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkSandbox()
+  })
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+
+  it('writes to an absolute path and creates missing parents', async () => {
+    const target = path.join(dir, 'a', 'b', 'c.txt')
+    const result = await writeFile({ filePath: target, content: 'hello' })
+    expect(result.success).toBe(true)
+    expect(result.path).toBe(target)
+    expect(await fs.readFile(target, 'utf-8')).toBe('hello')
+  })
+
+  it('resolves cwd-relative paths when cwd option is provided', async () => {
+    const result = await writeFile(
+      { filePath: 'nested/out.txt', content: 'x' },
+      { cwd: dir },
+    )
+    expect(result.success).toBe(true)
+    expect(result.path).toBe(path.join(dir, 'nested', 'out.txt'))
+    expect(await fs.readFile(result.path, 'utf-8')).toBe('x')
+  })
+
+  it('refuses to create parents when createDirectories is false', async () => {
+    const target = path.join(dir, 'missing', 'leaf.txt')
+    const result = await writeFile({
+      filePath: target,
+      content: 'never written',
+      createDirectories: false,
+    })
+    expect(result.success).toBe(false)
+    expect(result.error).toBeDefined()
+  })
+})
+
+describe('writeFileTool.execute', () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkSandbox()
+  })
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+
+  it('resolves relative filePath against ctx.cwd', async () => {
+    const result = await writeFileTool.execute(
+      { filePath: 'rel.txt', content: 'ok' },
+      { cwd: dir, metadata: {} },
+    )
+    expect(result.is_error).toBe(false)
+    const abs = path.join(dir, 'rel.txt')
+    expect(result.output).toContain(abs)
+    expect(await fs.readFile(abs, 'utf-8')).toBe('ok')
   })
 })
 

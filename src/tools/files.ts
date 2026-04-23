@@ -5,6 +5,8 @@
  *   openharness/src/openharness/tools/file_edit_tool.py
  * readFileTool is ported from
  *   openharness/src/openharness/tools/file_read_tool.py
+ * writeFileTool is ported from
+ *   openharness/src/openharness/tools/file_write_tool.py
  * Upstream: https://github.com/HKUDS/OpenHarness (MIT)
  * Upstream SHA at port time: 559ba76f237db957a1a21453170df8500479dc7d
  *
@@ -23,6 +25,11 @@
  *   - Default limit is 2000 lines (upstream 200) — Guildhall agents read
  *     whole files far more often than not, and the harness caps wide reads
  *     via compaction rather than truncating at the tool.
+ *   - writeFileTool accepts absolute paths, ~-prefixed paths, and
+ *     cwd-relative paths (upstream resolves via pathlib + ctx.cwd). The
+ *     programmatic `writeFile()` helper takes an optional `{cwd}` option so
+ *     non-tool callers can opt in; callers that have always passed absolute
+ *     paths keep working unchanged.
  */
 
 import { defineTool } from '@guildhall/engine'
@@ -149,44 +156,71 @@ export const readFileTool = defineTool({
 })
 
 const writeFileInputSchema = z.object({
-  filePath: z.string().describe('Absolute path to the file'),
+  filePath: z.string().describe('Path to the file (absolute, ~-prefixed, or cwd-relative)'),
   content: z.string().describe('Full content to write'),
+  createDirectories: z
+    .boolean()
+    .optional()
+    .describe('Create missing parent directories (default true).'),
 })
 
 export type WriteFileInput = z.input<typeof writeFileInputSchema>
 export interface WriteFileResult {
   success: boolean
+  path: string
   error?: string
 }
 
-export async function writeFile(input: WriteFileInput): Promise<WriteFileResult> {
+function resolveFilePath(cwd: string | undefined, candidate: string): string {
+  const expanded = candidate.startsWith('~')
+    ? path.join(process.env['HOME'] ?? '', candidate.slice(1))
+    : candidate
+  if (path.isAbsolute(expanded)) return path.resolve(expanded)
+  return path.resolve(cwd ?? process.cwd(), expanded)
+}
+
+export async function writeFile(
+  input: WriteFileInput,
+  opts: { cwd?: string } = {},
+): Promise<WriteFileResult> {
+  const absPath = resolveFilePath(opts.cwd, input.filePath)
+  const shouldMkdir = input.createDirectories !== false
   try {
-    await fs.mkdir(path.dirname(input.filePath), { recursive: true })
-    await fs.writeFile(input.filePath, input.content, 'utf-8')
-    return { success: true }
+    if (shouldMkdir) await fs.mkdir(path.dirname(absPath), { recursive: true })
+    await fs.writeFile(absPath, input.content, 'utf-8')
+    return { success: true, path: absPath }
   } catch (err) {
-    return { success: false, error: String(err) }
+    return { success: false, path: absPath, error: String(err) }
   }
 }
 
 export const writeFileTool = defineTool({
   name: 'write-file',
   description:
-    'Write content to a file. Creates parent directories if needed. Use for creating or updating source files, docs, or memory files.',
+    'Write content to a file. Accepts absolute paths, ~-prefixed paths, or paths relative to the working directory. Creates parent directories unless createDirectories is false. Use for creating or updating source files, docs, or memory files.',
   inputSchema: writeFileInputSchema,
   jsonSchema: {
     type: 'object',
     properties: {
-      filePath: { type: 'string', description: 'Absolute path to the file' },
+      filePath: {
+        type: 'string',
+        description: 'Path to the file (absolute, ~-prefixed, or cwd-relative)',
+      },
       content: { type: 'string', description: 'Full content to write' },
+      createDirectories: {
+        type: 'boolean',
+        description: 'Create missing parent directories (default true).',
+      },
     },
     required: ['filePath', 'content'],
   },
   isReadOnly: () => false,
-  execute: async (input) => {
-    const result = await writeFile(input)
+  execute: async (input, ctx) => {
+    const result = await writeFile(input, { cwd: ctx.cwd })
     return {
-      output: result.success ? `Wrote ${input.filePath}` : `Error writing ${input.filePath}: ${result.error ?? 'unknown'}`,
+      output: result.success
+        ? `Wrote ${result.path}`
+        : `Error writing ${result.path}: ${result.error ?? 'unknown'}`,
       is_error: !result.success,
       metadata: result as unknown as Record<string, unknown>,
     }
