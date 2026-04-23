@@ -431,6 +431,55 @@ export class Orchestrator {
       }
     }
 
+    // When a worktree is freshly minted (or its lockfile has changed), re-run
+    // the project's bootstrap inside the worktree so the worker lands in a
+    // testable state. Status is stored per-worktree under `<wt>/.guildhall/`
+    // so the project's shared memory isn't trampled and the cache disappears
+    // naturally when the worktree is cleaned up. A failure here aborts the
+    // dispatch — better to surface it than hand the worker a broken tree.
+    const wtBootstrap = this.opts.config.bootstrap
+    if (
+      wtBootstrap &&
+      wtBootstrap.commands.length > 0 &&
+      activeWorktreePath !== this.opts.config.projectPath
+    ) {
+      const wtMemoryDir = path.join(activeWorktreePath, '.guildhall')
+      const needed = bootstrapNeeded(
+        wtMemoryDir,
+        activeWorktreePath,
+        wtBootstrap.commands,
+        wtBootstrap.successGates,
+      )
+      if (needed) {
+        console.log(`[guildhall] bootstrapping worktree ${activeWorktreePath}…`)
+        const res = runBootstrap({
+          projectPath: activeWorktreePath,
+          memoryDir: wtMemoryDir,
+          commands: wtBootstrap.commands,
+          successGates: wtBootstrap.successGates,
+          timeoutMs: wtBootstrap.timeoutMs,
+        })
+        if (!res.success) {
+          const failed = res.steps.find((s) => s.result === 'fail')
+          const msg = `worktree bootstrap failed on ${failed?.kind ?? 'step'} \`${failed?.command ?? ''}\` (exit ${failed?.exitCode ?? '?'})`
+          await this.logTickProgress({
+            task,
+            agent: agent.name,
+            beforeStatus,
+            afterStatus: beforeStatus,
+            transitioned: false,
+            note: `error: ${msg}`,
+          })
+          return {
+            kind: 'agent-error',
+            taskId: task.id,
+            agent: agent.name,
+            error: msg,
+          }
+        }
+      }
+    }
+
     const ctx = await buildContext(task, this.opts.config.memoryDir)
     const tasksPath = this.tasksPath()
 
