@@ -41,10 +41,19 @@ describe.skipIf(!BASE_URL)('OpenAICompatibleClient (local server)', () => {
         messages: [
           {
             role: 'user',
-            content: [{ type: 'text', text: 'Say the single word "pong" and nothing else.' }],
+            content: [
+              {
+                type: 'text',
+                // `/no_think` is Qwen3's toggle to skip reasoning; harmless on
+                // non-reasoning models. The 256-token budget is enough for a
+                // reasoning model that ignores the toggle to still finish and
+                // emit a text block.
+                text: '/no_think Say the single word "pong" and nothing else.',
+              },
+            ],
           },
         ],
-        max_tokens: 32,
+        max_tokens: 256,
         tools: [],
       })) {
         events.push(ev)
