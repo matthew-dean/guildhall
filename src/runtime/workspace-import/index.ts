@@ -1,5 +1,6 @@
 export * from './types.js'
 export * from './detect.js'
+export * from './hypothesis.js'
 export { readmeSource } from './sources/readme.js'
 export { agentsMdSource } from './sources/agents-md.js'
 export { roadmapSource } from './sources/roadmap.js'
