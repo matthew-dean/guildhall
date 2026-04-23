@@ -114,7 +114,38 @@ levers:
           rationale: <short phrase>
 \`\`\`
 
-When the user approves the draft, run the \`guildhall approve-meta-intake\` CLI command — the runtime will parse both fences, merge coordinators into \`guildhall.yaml\`, record lever positions in \`memory/agent-settings.yaml\` with \`setBy: 'spec-agent-intake'\`, and mark this task done.`
+Bootstrap verification — CRITICAL
+=================================
+
+Every project needs a deterministic way to reach a testable state before workers can be dispatched. Your job here is NOT to guess — it is to EMPIRICALLY VERIFY, then write down what worked.
+
+1. INSPECT the project (package.json, lockfiles, pyproject.toml, Makefile, README, etc.) to form a hypothesis.
+2. EXECUTE candidate commands via the shell tool, with cwd set to the project path. Try the install command, then the candidate successGates (typecheck, build, test, lint — whichever are defined).
+3. OBSERVE results. If the install fails because a package manager is missing, try another (npm → pnpm, pnpm → npm, poetry → pip). If a gate fails for code reasons (real errors, not tooling), keep it in the list — a failing gate is a SIGNAL that work remains, not a reason to drop the gate.
+4. ITERATE. Every attempt — pass or fail — goes into \`provenance.tried\`. This is the audit trail future humans will read.
+5. EMIT the verified bootstrap block ONLY when \`commands\` run cleanly and \`successGates\` execute (failures from real code issues are still acceptable — they'll unblock as tasks complete). If you cannot find a working bootstrap, emit a block with the best-effort commands and a \`tried\` log explaining what blocked you; do not fabricate.
+
+Third YAML codefence:
+
+\`\`\`yaml
+bootstrap:
+  commands:
+    - <verified install/migration command>
+  successGates:
+    - <verified gate command>
+  timeoutMs: 300000  # optional; default 5 minutes
+  provenance:
+    establishedBy: spec-agent-intake
+    establishedAt: <ISO timestamp>
+    tried:
+      - command: <command attempted>
+        result: pass
+      - command: <command attempted>
+        result: fail
+        stderr: <short excerpt>
+\`\`\`
+
+When the user approves the draft, run the \`guildhall approve-meta-intake\` CLI command — the runtime will parse all three fences, merge coordinators + bootstrap into \`guildhall.yaml\`, record lever positions in \`memory/agent-settings.yaml\` with \`setBy: 'spec-agent-intake'\`, and mark this task done.`
 
 export interface CreateMetaIntakeInput {
   memoryDir: string
@@ -294,6 +325,103 @@ function normalizeConcerns(value: unknown): DraftCoordinator['concerns'] {
     })
   }
   return out
+}
+
+// ---------------------------------------------------------------------------
+// Bootstrap draft: a YAML codefence the Spec Agent emits once it has
+// empirically verified the install + test commands for this project. The
+// agent runs the hypothesis via the shell tool, iterates on failure, and
+// records every attempt in `provenance.tried` before writing the fence.
+// ---------------------------------------------------------------------------
+
+export interface BootstrapTryRecord {
+  command: string
+  result: 'pass' | 'fail'
+  stderr?: string
+}
+
+export interface BootstrapDraft {
+  commands: string[]
+  successGates: string[]
+  timeoutMs?: number
+  provenance?: {
+    establishedBy: string
+    establishedAt: string
+    tried: BootstrapTryRecord[]
+  }
+}
+
+function normalizeTried(value: unknown): BootstrapTryRecord[] {
+  if (!Array.isArray(value)) return []
+  const out: BootstrapTryRecord[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const r = item as Record<string, unknown>
+    const command = typeof r['command'] === 'string' ? r['command'] : undefined
+    const resultRaw = r['result']
+    const result = resultRaw === 'pass' || resultRaw === 'fail' ? resultRaw : undefined
+    if (!command || !result) continue
+    const stderr = typeof r['stderr'] === 'string' ? r['stderr'] : undefined
+    out.push(stderr !== undefined ? { command, result, stderr } : { command, result })
+  }
+  return out
+}
+
+/**
+ * Extract the `bootstrap:` YAML codefence from a meta-intake spec. Returns
+ * null when no valid fence is present. The schema here is permissive — final
+ * validation happens in `writeWorkspaceConfig` against `WorkspaceYamlConfig`.
+ */
+export function parseBootstrapDraft(spec: string): BootstrapDraft | null {
+  const fence = /```ya?ml\s*\n([\s\S]*?)```/gi
+  let match: RegExpExecArray | null
+  while ((match = fence.exec(spec)) !== null) {
+    const body = match[1] ?? ''
+    let parsed: unknown
+    try {
+      parsed = yamlLoad(body)
+    } catch {
+      continue
+    }
+    if (!parsed || typeof parsed !== 'object') continue
+    const obj = parsed as Record<string, unknown>
+    if (!('bootstrap' in obj)) continue
+    const raw = obj['bootstrap']
+    if (!raw || typeof raw !== 'object') continue
+    const b = raw as Record<string, unknown>
+
+    const commands = normalizeStringList(b['commands'])
+    const successGates = normalizeStringList(b['successGates'])
+    if (commands.length === 0 && successGates.length === 0) continue
+
+    const draft: BootstrapDraft = { commands, successGates }
+    if (typeof b['timeoutMs'] === 'number' && b['timeoutMs'] > 0) {
+      draft.timeoutMs = b['timeoutMs']
+    }
+    const provRaw = b['provenance']
+    if (provRaw && typeof provRaw === 'object') {
+      const p = provRaw as Record<string, unknown>
+      const establishedBy =
+        typeof p['establishedBy'] === 'string' ? p['establishedBy'] : undefined
+      // js-yaml parses ISO timestamps as Date objects by default.
+      const rawAt = p['establishedAt']
+      const establishedAt =
+        typeof rawAt === 'string'
+          ? rawAt
+          : rawAt instanceof Date
+            ? rawAt.toISOString()
+            : undefined
+      if (establishedBy && establishedAt) {
+        draft.provenance = {
+          establishedBy,
+          establishedAt,
+          tried: normalizeTried(p['tried']),
+        }
+      }
+    }
+    return draft
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -496,6 +624,10 @@ export interface ApproveMetaIntakeResult {
     overrides: Record<string, string[]>
     rejected: Array<{ scope: string; lever: string; reason: string }>
   }
+  bootstrap?: {
+    commands: string[]
+    successGates: string[]
+  }
   error?: string
 }
 
@@ -537,9 +669,26 @@ export async function approveMetaIntake(
     added++
   }
 
-  writeWorkspaceConfig(input.workspacePath, { ...config, coordinators: merged })
-
   const now = new Date().toISOString()
+
+  // Optional third fence: bootstrap. When present, merge into guildhall.yaml
+  // so the orchestrator can run install/gate commands before dispatching
+  // workers. Absence is fine — the project simply has no bootstrap phase.
+  const bootstrapDraft = parseBootstrapDraft(task.spec)
+  const nextConfig: typeof config = { ...config, coordinators: merged }
+  if (bootstrapDraft) {
+    nextConfig.bootstrap = {
+      commands: bootstrapDraft.commands,
+      successGates: bootstrapDraft.successGates,
+      timeoutMs: bootstrapDraft.timeoutMs ?? 300_000,
+      provenance: bootstrapDraft.provenance ?? {
+        establishedBy: 'spec-agent-intake',
+        establishedAt: now,
+        tried: [],
+      },
+    }
+  }
+  writeWorkspaceConfig(input.workspacePath, nextConfig)
 
   // Optional second fence: lever inferences. Absence is fine — levers just
   // stay at system-default. A parseable-but-invalid position surfaces as an
@@ -563,9 +712,18 @@ export async function approveMetaIntake(
   queue.lastUpdated = now
   await writeQueue(input.memoryDir, queue)
 
-  const transcriptSummary = leverMerge
-    ? `Meta-intake approved. Added ${added} coordinator(s) to guildhall.yaml. Levers set: project=${leverMerge.projectSet.length}, domain-default=${leverMerge.domainDefaultSet.length}, overrides=${Object.keys(leverMerge.overridesSet).length}.`
-    : `Meta-intake approved. Added ${added} coordinator(s) to guildhall.yaml.`
+  const parts: string[] = [`Added ${added} coordinator(s) to guildhall.yaml.`]
+  if (leverMerge) {
+    parts.push(
+      `Levers set: project=${leverMerge.projectSet.length}, domain-default=${leverMerge.domainDefaultSet.length}, overrides=${Object.keys(leverMerge.overridesSet).length}.`,
+    )
+  }
+  if (bootstrapDraft) {
+    parts.push(
+      `Bootstrap recorded: ${bootstrapDraft.commands.length} command(s), ${bootstrapDraft.successGates.length} gate(s).`,
+    )
+  }
+  const transcriptSummary = `Meta-intake approved. ${parts.join(' ')}`
 
   await appendExploringTranscript({
     memoryDir: input.memoryDir,
@@ -584,6 +742,14 @@ export async function approveMetaIntake(
             domainDefault: leverMerge.domainDefaultSet,
             overrides: leverMerge.overridesSet,
             rejected: leverMerge.rejected,
+          },
+        }
+      : {}),
+    ...(bootstrapDraft
+      ? {
+          bootstrap: {
+            commands: bootstrapDraft.commands,
+            successGates: bootstrapDraft.successGates,
           },
         }
       : {}),

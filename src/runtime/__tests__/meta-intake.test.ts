@@ -12,6 +12,7 @@ import {
   approveMetaIntake,
   parseCoordinatorDraft,
   parseLeverInferences,
+  parseBootstrapDraft,
   mergeLeverInferences,
   workspaceNeedsMetaIntake,
   META_INTAKE_TASK_ID,
@@ -707,5 +708,221 @@ levers:
     const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
     expect(result.success).toBe(false)
     expect(result.error).toContain('Failed to merge inferred levers')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Bootstrap-verification fence: the meta-intake agent runs candidate install +
+// gate commands via shell, records pass/fail in provenance.tried, and emits
+// a bootstrap: YAML codefence once a working sequence is found. approveMetaIntake
+// merges that block into guildhall.yaml so the orchestrator's bootstrap phase
+// can use it.
+// ---------------------------------------------------------------------------
+
+describe('parseBootstrapDraft', () => {
+  it('extracts commands + successGates + provenance from a bootstrap: fence', () => {
+    const spec = `\`\`\`yaml
+bootstrap:
+  commands:
+    - pnpm install
+  successGates:
+    - pnpm typecheck
+    - pnpm test
+  timeoutMs: 600000
+  provenance:
+    establishedBy: spec-agent-intake
+    establishedAt: 2026-04-23T10:00:00.000Z
+    tried:
+      - command: pnpm install
+        result: pass
+      - command: npm install
+        result: fail
+        stderr: "npm: command not found"
+\`\`\``
+    const draft = parseBootstrapDraft(spec)
+    expect(draft).not.toBeNull()
+    expect(draft!.commands).toEqual(['pnpm install'])
+    expect(draft!.successGates).toEqual(['pnpm typecheck', 'pnpm test'])
+    expect(draft!.timeoutMs).toBe(600000)
+    expect(draft!.provenance!.establishedBy).toBe('spec-agent-intake')
+    expect(draft!.provenance!.tried).toHaveLength(2)
+    expect(draft!.provenance!.tried[1]!.result).toBe('fail')
+    expect(draft!.provenance!.tried[1]!.stderr).toContain('command not found')
+  })
+
+  it('returns null when no bootstrap fence is present', () => {
+    expect(parseBootstrapDraft('```yaml\ncoordinators: []\n```')).toBeNull()
+    expect(parseBootstrapDraft('no fence at all')).toBeNull()
+  })
+
+  it('accepts a bootstrap block with no provenance', () => {
+    const spec = `\`\`\`yaml
+bootstrap:
+  commands:
+    - pnpm install
+  successGates: []
+\`\`\``
+    const draft = parseBootstrapDraft(spec)
+    expect(draft).not.toBeNull()
+    expect(draft!.commands).toEqual(['pnpm install'])
+    expect(draft!.successGates).toEqual([])
+    expect(draft!.provenance).toBeUndefined()
+  })
+
+  it('ignores non-string commands in the list', () => {
+    const spec = `\`\`\`yaml
+bootstrap:
+  commands:
+    - pnpm install
+    - 42
+    - null
+  successGates: []
+\`\`\``
+    const draft = parseBootstrapDraft(spec)
+    expect(draft!.commands).toEqual(['pnpm install'])
+  })
+
+  it('returns null when both commands and successGates are empty', () => {
+    const spec = `\`\`\`yaml
+bootstrap:
+  commands: []
+  successGates: []
+\`\`\``
+    expect(parseBootstrapDraft(spec)).toBeNull()
+  })
+
+  it('skips tried entries missing command or result', () => {
+    const spec = `\`\`\`yaml
+bootstrap:
+  commands: [pnpm install]
+  successGates: []
+  provenance:
+    establishedBy: spec-agent-intake
+    establishedAt: 2026-04-23T10:00:00.000Z
+    tried:
+      - command: ok
+        result: pass
+      - command: missing-result
+      - result: pass
+\`\`\``
+    const draft = parseBootstrapDraft(spec)
+    expect(draft!.provenance!.tried).toHaveLength(1)
+    expect(draft!.provenance!.tried[0]!.command).toBe('ok')
+  })
+})
+
+describe('approveMetaIntake + bootstrap fence', () => {
+  beforeEach(async () => {
+    await createMetaIntakeTask({ memoryDir, projectPath: tmpDir })
+  })
+
+  it('merges bootstrap into guildhall.yaml alongside coordinators', async () => {
+    const spec = `\`\`\`yaml
+coordinators:
+  - id: core
+    name: Core
+    domain: core
+    mandate: core stuff
+    concerns: []
+    autonomousDecisions: []
+    escalationTriggers: []
+\`\`\`
+
+\`\`\`yaml
+bootstrap:
+  commands:
+    - pnpm install
+  successGates:
+    - pnpm typecheck
+    - pnpm test
+  provenance:
+    establishedBy: spec-agent-intake
+    establishedAt: 2026-04-23T10:00:00.000Z
+    tried:
+      - command: pnpm install
+        result: pass
+      - command: pnpm typecheck
+        result: pass
+\`\`\``
+    const queue = await readQueue()
+    queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)!.spec = spec
+    await fs.writeFile(
+      path.join(memoryDir, 'TASKS.json'),
+      JSON.stringify(queue, null, 2),
+      'utf-8',
+    )
+
+    const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
+    expect(result.success).toBe(true)
+    expect(result.bootstrap).toEqual({
+      commands: ['pnpm install'],
+      successGates: ['pnpm typecheck', 'pnpm test'],
+    })
+
+    const config = readWorkspaceConfig(tmpDir)
+    expect(config.bootstrap).toBeDefined()
+    expect(config.bootstrap!.commands).toEqual(['pnpm install'])
+    expect(config.bootstrap!.successGates).toEqual(['pnpm typecheck', 'pnpm test'])
+    expect(config.bootstrap!.provenance!.establishedBy).toBe('spec-agent-intake')
+    expect(config.bootstrap!.provenance!.tried).toHaveLength(2)
+  })
+
+  it('stamps default provenance when the agent omits it', async () => {
+    const spec = `\`\`\`yaml
+coordinators:
+  - id: core
+    name: Core
+    domain: core
+    mandate: m
+    concerns: []
+    autonomousDecisions: []
+    escalationTriggers: []
+\`\`\`
+
+\`\`\`yaml
+bootstrap:
+  commands: [pnpm install]
+  successGates: [pnpm test]
+\`\`\``
+    const queue = await readQueue()
+    queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)!.spec = spec
+    await fs.writeFile(
+      path.join(memoryDir, 'TASKS.json'),
+      JSON.stringify(queue, null, 2),
+      'utf-8',
+    )
+
+    const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
+    expect(result.success).toBe(true)
+    const config = readWorkspaceConfig(tmpDir)
+    expect(config.bootstrap!.provenance!.establishedBy).toBe('spec-agent-intake')
+    expect(config.bootstrap!.provenance!.establishedAt).toMatch(/\d{4}-\d{2}-\d{2}T/)
+    expect(config.bootstrap!.provenance!.tried).toEqual([])
+  })
+
+  it('still succeeds when no bootstrap fence is present', async () => {
+    const spec = `\`\`\`yaml
+coordinators:
+  - id: core
+    name: Core
+    domain: core
+    mandate: m
+    concerns: []
+    autonomousDecisions: []
+    escalationTriggers: []
+\`\`\``
+    const queue = await readQueue()
+    queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)!.spec = spec
+    await fs.writeFile(
+      path.join(memoryDir, 'TASKS.json'),
+      JSON.stringify(queue, null, 2),
+      'utf-8',
+    )
+
+    const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
+    expect(result.success).toBe(true)
+    expect(result.bootstrap).toBeUndefined()
+    const config = readWorkspaceConfig(tmpDir)
+    expect(config.bootstrap).toBeUndefined()
   })
 })
