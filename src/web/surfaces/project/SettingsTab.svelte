@@ -11,6 +11,8 @@
   import Input from '../../lib/Input.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import Byline from '../../lib/Byline.svelte'
+  import LogViewer from '../../lib/LogViewer.svelte'
+  import DefinitionList from '../../lib/DefinitionList.svelte'
   import { nav } from '../../lib/nav.svelte.js'
   import { project } from '../../lib/project.svelte.js'
 
@@ -43,6 +45,38 @@
   let leversError = $state<string | null>(null)
   let designSystem = $state<DesignSystem | null | undefined>(undefined)
 
+  interface BootstrapStep {
+    kind: 'command' | 'gate'
+    command: string
+    result: 'pass' | 'fail'
+    exitCode: number
+    output: string
+    durationMs: number
+  }
+  interface BootstrapStatus {
+    success: boolean
+    lastRunAt: string
+    durationMs: number
+    steps: BootstrapStep[]
+  }
+  interface BootstrapInfo {
+    configured: boolean
+    needed: boolean
+    status: BootstrapStatus | null
+    bootstrap?: {
+      commands: string[]
+      successGates: string[]
+      timeoutMs: number
+      provenance?: {
+        establishedBy: string
+        establishedAt: string
+        tried: Array<{ command: string; result: string; stderr?: string }>
+      } | null
+    }
+  }
+  let bootstrapInfo = $state<BootstrapInfo | null>(null)
+  let bootstrapRunning = $state(false)
+
   $effect(() => {
     fetch('/api/setup/status')
       .then(r => r.json())
@@ -63,7 +97,28 @@
       .then(r => r.json())
       .then(j => (designSystem = j?.designSystem ?? null))
       .catch(() => (designSystem = null))
+    void loadBootstrap()
   })
+
+  async function loadBootstrap() {
+    try {
+      const r = await fetch('/api/project/bootstrap/status')
+      bootstrapInfo = (await r.json()) as BootstrapInfo
+    } catch {
+      bootstrapInfo = null
+    }
+  }
+
+  async function runBootstrap() {
+    if (bootstrapRunning) return
+    bootstrapRunning = true
+    try {
+      await fetch('/api/project/bootstrap/run', { method: 'POST' })
+      await loadBootstrap()
+    } finally {
+      bootstrapRunning = false
+    }
+  }
 
   const coordinators = $derived(project.detail?.config?.coordinators ?? [])
 
@@ -177,6 +232,66 @@
           {/each}
         </div>
       {/if}
+    </Card>
+
+    <Card title="Bootstrap">
+      <Stack gap="3">
+        {#if !bootstrapInfo}
+          <p class="muted">Loading…</p>
+        {:else if !bootstrapInfo.configured}
+          <p class="muted">
+            No bootstrap established yet. The meta-intake agent will empirically verify install
+            + gate commands and write them to <code>guildhall.yaml</code>.
+          </p>
+        {:else}
+          <Row gap="2">
+            <Chip
+              label={bootstrapInfo.status?.success
+                ? 'passed'
+                : bootstrapInfo.status
+                  ? 'failed'
+                  : 'never run'}
+              tone={bootstrapInfo.status?.success ? 'ok' : bootstrapInfo.status ? 'danger' : 'warn'}
+            />
+            {#if bootstrapInfo.needed}
+              <Chip label="re-run needed" tone="warn" />
+            {/if}
+            {#if bootstrapInfo.status}
+              <Byline verb="Last run" at={bootstrapInfo.status.lastRunAt} />
+            {/if}
+          </Row>
+
+          <DefinitionList
+            size="sm"
+            items={[
+              ['Commands', bootstrapInfo.bootstrap?.commands.join(' · ') ?? '—'],
+              ['Gates', bootstrapInfo.bootstrap?.successGates.join(' · ') ?? '—'],
+              [
+                'Established by',
+                bootstrapInfo.bootstrap?.provenance
+                  ? `${bootstrapInfo.bootstrap.provenance.establishedBy} (${bootstrapInfo.bootstrap.provenance.establishedAt})`
+                  : null,
+              ],
+            ]}
+          />
+
+          {#if bootstrapInfo.status && bootstrapInfo.status.steps.length > 0}
+            <LogViewer
+              lines={bootstrapInfo.status.steps.map(
+                s =>
+                  `[${s.result === 'pass' ? '✓' : '✗'}] ${s.kind}: ${s.command} (${s.durationMs}ms)`,
+              )}
+              maxHeight="200px"
+            />
+          {/if}
+
+          <Row justify="end">
+            <Button onclick={runBootstrap} disabled={bootstrapRunning}>
+              {bootstrapRunning ? 'Running…' : 'Re-run bootstrap'}
+            </Button>
+          </Row>
+        {/if}
+      </Stack>
     </Card>
 
     <Card title="Levers">

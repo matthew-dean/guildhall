@@ -35,6 +35,11 @@ import {
   parseCoordinatorDraft,
   workspaceNeedsMetaIntake,
 } from './meta-intake.js'
+import {
+  readBootstrapStatus,
+  bootstrapNeeded,
+  runBootstrap,
+} from './bootstrap-runner.js'
 
 // ---------------------------------------------------------------------------
 // guildhall serve — single-project dashboard
@@ -55,6 +60,8 @@ import {
 //   GET    /api/project/meta-intake/draft → current task spec + parsed coordinator draft preview
 //   POST   /api/project/meta-intake/approve → merge the draft into guildhall.yaml
 //   GET    /api/project/needs-meta-intake
+//   GET    /api/project/bootstrap/status   → last run + whether it needs re-running
+//   POST   /api/project/bootstrap/run      → run the verified bootstrap synchronously
 //   GET    /api/project/task/:id      → full task + recent events for drawer
 //   POST   /api/project/task/:id/pause              → human override → blocked
 //   POST   /api/project/task/:id/shelve             → human override → shelved
@@ -285,6 +292,69 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ needsMetaIntake: true })
       return c.json({ needsMetaIntake: workspaceNeedsMetaIntake(project.path) })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // Bootstrap status + manual re-run. Read-only GET is cheap; POST runs the
+  // verified commands synchronously and returns the fresh status. Both gate
+  // on `project.config.bootstrap` being present — absent means meta-intake
+  // hasn't established a bootstrap yet.
+  // -------------------------------------------------------------------------
+  app.get('/api/project/bootstrap/status', c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ configured: false, needed: false, status: null })
+      }
+      const bootstrap = project.config?.bootstrap
+      if (!bootstrap || bootstrap.commands.length === 0) {
+        return c.json({ configured: false, needed: false, status: null })
+      }
+      const memoryDir = join(project.path, 'memory')
+      const status = readBootstrapStatus(memoryDir)
+      const needed = bootstrapNeeded(
+        memoryDir,
+        project.path,
+        bootstrap.commands,
+        bootstrap.successGates,
+      )
+      return c.json({
+        configured: true,
+        needed,
+        status,
+        bootstrap: {
+          commands: bootstrap.commands,
+          successGates: bootstrap.successGates,
+          timeoutMs: bootstrap.timeoutMs,
+          provenance: bootstrap.provenance ?? null,
+        },
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/bootstrap/run', c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const bootstrap = project.config?.bootstrap
+      if (!bootstrap || bootstrap.commands.length === 0) {
+        return c.json({ error: 'No bootstrap configured for this project.' }, 400)
+      }
+      const memoryDir = join(project.path, 'memory')
+      const result = runBootstrap({
+        projectPath: project.path,
+        memoryDir,
+        commands: bootstrap.commands,
+        successGates: bootstrap.successGates,
+        timeoutMs: bootstrap.timeoutMs,
+      })
+      const status = readBootstrapStatus(memoryDir)
+      return c.json({ success: result.success, status })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
