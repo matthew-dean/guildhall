@@ -458,6 +458,172 @@ milestones:
     expect(second.seeded).toBe(true)
   })
 
+  // ---------------------------------------------------------------------
+  // FR-34 full pipeline: real files on disk → detect → seed → approve →
+  // TASKS.json populated. Every earlier test in this file mocks the
+  // inventory; this one runs the real source loaders against fixture files
+  // to prove the end-to-end path works on a realistic repo shape.
+  // ---------------------------------------------------------------------
+  it('FR-34 e2e: fixture files → detect → seed → approve populates TASKS.json', async () => {
+    // Lay down a realistic "existing project" on disk.
+    await fs.writeFile(
+      path.join(tmpDir, 'README.md'),
+      [
+        '# Acme Widget',
+        '',
+        'A widget platform for acme-flavored orchestration.',
+        '',
+        '## Goals',
+        '',
+        '- Ship the dashboard',
+        '- Cut latency in half',
+        '',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '- [ ] Wire the auth flow',
+        '- [ ] Add metric exporter',
+        '- [x] Initial scaffold',
+        '',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'AGENTS.md'),
+      '# Agents\n\nConventions: run pnpm test before every commit.\n',
+      'utf-8',
+    )
+
+    // Run the full pipeline: detect happens inside maybeSeedWorkspaceImport.
+    const seeded = await import('../workspace-importer.js').then((m) =>
+      m.maybeSeedWorkspaceImport({
+        memoryDir,
+        projectPath: tmpDir,
+        leverPosition: 'suggest',
+      }),
+    )
+    expect(seeded.outcome).toBe('seeded')
+    expect(seeded.seeded).toBe(true)
+
+    // Real sources produced real signals.
+    const sources = new Set(seeded.inventory.signals.map((s) => s.source))
+    expect(sources.has('readme')).toBe(true)
+    expect(sources.has('roadmap')).toBe(true)
+
+    // Draft carries the ROADMAP open items as tasks and the README goal.
+    expect(seeded.draft.tasks.length).toBeGreaterThan(0)
+    expect(seeded.draft.goals.length).toBeGreaterThan(0)
+    expect(seeded.draft.milestones.length).toBeGreaterThan(0) // `[x] Initial scaffold`
+
+    // Importer task exists in `exploring` with origination=system.
+    const qAfterSeed = await readQueue()
+    const importer = qAfterSeed.tasks.find(
+      (t) => t.id === WORKSPACE_IMPORT_TASK_ID,
+    )!
+    expect(importer.status).toBe('exploring')
+    expect(importer.origination).toBe('system')
+
+    // Simulate the importer agent promoting the draft into the YAML-fence
+    // output format by building fences directly from the real draft. Using
+    // the draft (rather than hand-rolled fences) is what makes this an
+    // actual end-to-end proof: the data that reaches approve() is what the
+    // detector + hypothesis formed from the real files.
+    const yamlTaskBlock = seeded.draft.tasks
+      .map((t) => {
+        const lines = [
+          `  - id: ${t.suggestedId}`,
+          `    title: ${JSON.stringify(t.title)}`,
+          `    description: ${JSON.stringify(t.description)}`,
+          `    domain: ${t.domain}`,
+          `    priority: ${t.priority}`,
+        ]
+        const refs = t.references ?? []
+        if (refs.length) {
+          lines.push('    references:')
+          for (const ref of refs) lines.push(`      - ${JSON.stringify(ref)}`)
+        }
+        return lines.join('\n')
+      })
+      .join('\n')
+    const yamlGoalBlock = seeded.draft.goals
+      .map(
+        (g) =>
+          `  - id: ${g.id}\n    title: ${JSON.stringify(g.title)}\n    rationale: ${JSON.stringify(g.rationale)}`,
+      )
+      .join('\n')
+    const yamlMilestoneBlock = seeded.draft.milestones
+      .map(
+        (m) =>
+          `  - title: ${JSON.stringify(m.title)}\n    evidence: ${JSON.stringify(m.evidence)}`,
+      )
+      .join('\n')
+    importer.spec = [
+      '```yaml',
+      'goals:',
+      yamlGoalBlock,
+      '```',
+      '',
+      '```yaml',
+      'tasks:',
+      yamlTaskBlock,
+      '```',
+      '',
+      '```yaml',
+      'milestones:',
+      yamlMilestoneBlock,
+      '```',
+    ].join('\n')
+    await fs.writeFile(
+      path.join(memoryDir, 'TASKS.json'),
+      JSON.stringify(qAfterSeed, null, 2),
+      'utf-8',
+    )
+
+    // Approve → tasks merged, goals persisted, milestones logged.
+    const approved = await approveWorkspaceImport({ memoryDir, projectPath: tmpDir })
+    expect(approved.success).toBe(true)
+    expect(approved.tasksAdded).toBe(seeded.draft.tasks.length)
+    expect(approved.goalsRecorded).toBe(seeded.draft.goals.length)
+    expect(approved.milestonesLogged).toBe(seeded.draft.milestones.length)
+
+    const qFinal = await readQueue()
+
+    // Importer task is done.
+    expect(
+      qFinal.tasks.find((t) => t.id === WORKSPACE_IMPORT_TASK_ID)?.status,
+    ).toBe('done')
+
+    // Every drafted task landed as proposed + origination=system.
+    for (const t of seeded.draft.tasks) {
+      const landed = qFinal.tasks.find((x) => x.id === t.suggestedId)
+      expect(landed, `task ${t.suggestedId}`).toBeDefined()
+      expect(landed!.status).toBe('proposed')
+      expect(landed!.origination).toBe('system')
+    }
+
+    // workspace-goals.json persisted with every goal.
+    const goalsRaw = await fs.readFile(
+      path.join(memoryDir, 'workspace-goals.json'),
+      'utf-8',
+    )
+    const goalsPersisted = JSON.parse(goalsRaw)
+    expect(goalsPersisted.goals).toHaveLength(seeded.draft.goals.length)
+
+    // PROGRESS.md logs every completed milestone (e.g. "Initial scaffold").
+    const progress = await fs.readFile(
+      path.join(memoryDir, 'PROGRESS.md'),
+      'utf-8',
+    )
+    for (const m of seeded.draft.milestones) {
+      expect(progress).toContain(m.title)
+    }
+  })
+
   it('suffixes conflicting task ids rather than overwriting', async () => {
     await seedImporterWithSpec(`
 \`\`\`yaml

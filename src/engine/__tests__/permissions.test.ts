@@ -64,7 +64,9 @@ describe('PermissionChecker — modes', () => {
     expect(d.allowed).toBe(true)
   })
 
-  it('plan mode blocks mutating tools', () => {
+  // AC-09: in `plan` mode no mutation occurs — mutating tools are blocked
+  // at the dispatch layer without a confirmation escape hatch.
+  it('AC-09: plan mode blocks mutating tools', () => {
     const d = new PermissionChecker(
       defaultPermissionSettings(PermissionMode.PLAN),
     ).evaluate('write', { isReadOnly: false })

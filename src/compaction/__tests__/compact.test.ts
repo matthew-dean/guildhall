@@ -538,6 +538,39 @@ describe('autoCompactIfNeeded', () => {
     expect(client.requests).toHaveLength(0)
   })
 
+  // AC-10: crossing the autocompact threshold emits `compact_progress`
+  // FR-16 events for the phase transitions consumable by a subscriber.
+  it('AC-10: emits compact_progress events when threshold is exceeded', async () => {
+    const msgs: ConversationMessage[] = []
+    for (let i = 0; i < 30; i += 1) {
+      msgs.push(userText(`q${i}`))
+      msgs.push(assistantText(`a${i}`))
+    }
+    const state = createAutoCompactState()
+    const client = new ScriptedCompactClient([])
+    const events: CompactProgressEvent[] = []
+    const out = await autoCompactIfNeeded(msgs, {
+      apiClient: client,
+      model: 'claude-opus-4-7',
+      state,
+      autoCompactThresholdTokens: 20,
+      preserveRecent: 6,
+      progressCallback: async (e) => {
+        events.push(e)
+      },
+    })
+    expect(out.compacted).toBe(true)
+    // Subscriber must observe at least start + end for the session-memory
+    // compaction path, both typed as compact_progress with a known trigger.
+    const phases = events.map((e) => e.phase)
+    expect(phases).toContain('session_memory_start')
+    expect(phases).toContain('session_memory_end')
+    for (const e of events) {
+      expect(e.type).toBe('compact_progress')
+      expect(e.trigger).toBe('auto')
+    }
+  })
+
   it('bumps consecutive_failures when the LLM compact call fails', async () => {
     const msgs: ConversationMessage[] = []
     // keep this short so session-memory cannot kick in (needs keep_recent + 4)

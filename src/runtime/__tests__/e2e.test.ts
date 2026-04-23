@@ -27,13 +27,17 @@ import {
   reportIssue,
   writeCheckpoint,
   readCheckpoint,
+  proposeTask,
+  preRejectTask,
 } from '@guildhall/tools'
 import {
   AGENT_SETTINGS_FILENAME,
   makeDefaultSettings,
   saveLeverSettings,
+  type DomainLevers,
 } from '@guildhall/levers'
 import { PermissionMode } from '@guildhall/engine'
+import { LivenessTracker } from '../liveness.js'
 
 // ---------------------------------------------------------------------------
 // End-to-end integration tests
@@ -125,6 +129,144 @@ function stubAgent(
 function resolveBootstrapped() {
   return resolveConfig({ workspacePath: tmpDir })
 }
+
+// ---------------------------------------------------------------------------
+// AC-03: the orchestrator processes a task from exploring → done end-to-end.
+//
+// This test is the spine AC — it asserts the full FR-01 lifecycle is walked
+// without skipping a state. The FR-14 meta-intake test below exercises a
+// superset (zero-coordinator bootstrap + lifecycle), but AC-03 wants a
+// dedicated assertion that isn't entangled with meta-intake. Here we seed a
+// coordinator inline at workspace bootstrap time so the test focuses purely
+// on the lifecycle transitions.
+// ---------------------------------------------------------------------------
+
+describe('E2E AC-03: task lifecycle exploring → done', () => {
+  it('walks every FR-01 status in order with no skips', async () => {
+    // Re-bootstrap with an inline coordinator so we skip FR-14 meta-intake.
+    await fs.rm(tmpDir, { recursive: true, force: true })
+    await fs.mkdir(tmpDir, { recursive: true })
+    bootstrapWorkspace(tmpDir, {
+      name: 'AC-03 Workspace',
+      coordinators: [
+        {
+          id: 'looma',
+          name: 'Looma Coordinator',
+          domain: 'looma',
+          mandate: 'Oversee UI quality.',
+          concerns: [
+            {
+              id: 'a11y',
+              description: 'Accessibility regressions',
+              reviewQuestions: ['Does this preserve keyboard navigation?'],
+            },
+          ],
+          autonomousDecisions: ['Minor copy tweaks'],
+          escalationTriggers: ['Public component API changes'],
+        },
+      ],
+    })
+
+    // Create a task in `exploring` and verify that is indeed the starting state.
+    const intake = await createExploringTask({
+      memoryDir,
+      ask: 'Add a ghost button variant to the design system',
+      domain: 'looma',
+      projectPath: tmpDir,
+    })
+    const initialQueue = await readQueue()
+    const initialTask = initialQueue.tasks.find((t) => t.id === intake.taskId)!
+    expect(initialTask.status).toBe('exploring')
+
+    // Human approves the spec → exploring → spec_review.
+    await setTaskSpec(
+      intake.taskId,
+      '## Summary\nAdd a ghost button variant.\n## AC\n1. renders.',
+    )
+    const specApproval = await approveSpec({
+      memoryDir,
+      taskId: intake.taskId,
+      approvalNote: 'LGTM',
+    })
+    expect(specApproval.success).toBe(true)
+    expect(specApproval.newStatus).toBe('spec_review')
+
+    // Scripted agents drive the remaining transitions. Each agent reads the
+    // current status from disk and advances it by one state.
+    const coord = stubAgent('looma-coordinator', async () => {
+      const q = await readQueue()
+      const t = q.tasks.find((x) => x.id === intake.taskId)!
+      if (t.status === 'spec_review') {
+        await mutateTask(intake.taskId, { status: 'ready' })
+      } else if (t.status === 'ready') {
+        await mutateTask(intake.taskId, {
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+        })
+      }
+    })
+    const worker = stubAgent('worker-agent', async () => {
+      await mutateTask(intake.taskId, { status: 'review' })
+    })
+    const reviewer = stubAgent('reviewer-agent', async () => {
+      await mutateTask(intake.taskId, { status: 'gate_check' })
+    })
+    const gateChecker = stubAgent('gate-checker-agent', async () => {
+      await mutateTask(intake.taskId, {
+        status: 'done',
+        completedAt: '2026-04-20T00:00:00Z',
+      })
+    })
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker,
+      reviewer,
+      gateChecker,
+      coordinators: { looma: coord },
+    }
+
+    const config = resolveBootstrapped()
+    const orch = new Orchestrator({ config, agents, idleShutdownAfterTicks: 2 })
+
+    const observedStatuses: TaskStatus[] = []
+    for (let i = 0; i < 12; i++) {
+      const outcome = await orch.tick()
+      if (outcome.kind === 'processed') {
+        observedStatuses.push(outcome.afterStatus)
+        if (outcome.afterStatus === 'done') break
+      }
+      if (outcome.kind === 'idle' && outcome.allDone) break
+    }
+
+    // The spine claim: every intermediate state is visited in order, ending
+    // in `done`. `exploring` and `spec_review` are asserted above (pre-orch).
+    expect(observedStatuses).toEqual([
+      'ready',
+      'in_progress',
+      'review',
+      'gate_check',
+      'done',
+    ])
+
+    // Task on disk is terminal in `done` with a completedAt timestamp.
+    const finalQueue = await readQueue()
+    const finalTask = finalQueue.tasks.find((t) => t.id === intake.taskId)!
+    expect(finalTask.status).toBe('done')
+    expect(finalTask.completedAt).toBe('2026-04-20T00:00:00Z')
+
+    // FR-09 progress logging captured at least the terminal transition.
+    const progress = await fs.readFile(progressPath, 'utf-8')
+    expect(progress).toContain('gate_check → done')
+
+    // FR-08 exploring transcript persisted across the whole run.
+    const transcript = await fs.readFile(
+      path.join(memoryDir, 'exploring', `${intake.taskId}.md`),
+      'utf-8',
+    )
+    expect(transcript).toContain('Add a ghost button variant')
+    expect(transcript).toContain('Spec approved')
+  })
+})
 
 describe('E2E: meta-intake → FR-14 coordinator bootstrap → running tasks', () => {
   it('walks a brand-new workspace from zero coordinators to a done task', async () => {
@@ -561,6 +703,456 @@ describe('E2E AC-22: report_issue → coordinator remediation inbox', () => {
     // remediationAttempts was bumped twice.
     const finalQueue = await readQueue()
     expect(finalQueue.tasks[0]!.remediationAttempts).toBe(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// AC-15 end-to-end:
+//   An agent calls the propose-task tool to create a task in `proposed`
+//   status. The orchestrator's next tick reads the domain's task_origination
+//   lever and applies the matching promotion action. The disk state must
+//   exactly match the lever position for all four positions.
+// ---------------------------------------------------------------------------
+describe('E2E AC-15: proposeTask → orchestrator tick → status per task_origination', () => {
+  it('routes a proposed task to the status dictated by the lever position', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'guildhall.yaml'),
+      `name: E2E Workspace\nid: e2e-workspace\ncoordinators:\n  - id: looma\n    name: Looma\n    domain: looma\n    mandate: UI\n`,
+      'utf-8',
+    )
+
+    const config = resolveBootstrapped()
+    const orch = new Orchestrator({
+      config,
+      agents: {
+        spec: stubAgent('spec-agent'),
+        worker: stubAgent('worker-agent'),
+        reviewer: stubAgent('reviewer-agent'),
+        gateChecker: stubAgent('gate-checker-agent'),
+        coordinators: { looma: stubAgent('looma-coordinator') },
+      },
+      idleShutdownAfterTicks: 2,
+    })
+
+    // Bootstrap writes TASKS.json as a bare array (legacy shape); re-write
+    // it as an empty TaskQueue object so proposeTask can parse it.
+    await fs.writeFile(
+      tasksPath,
+      JSON.stringify({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] }, null, 2),
+      'utf-8',
+    )
+
+    type Position = DomainLevers['task_origination']['position']
+    const cases: Array<{ id: string; position: Position; expectedStatus: TaskStatus }> = [
+      { id: 'prop-human', position: 'human_only', expectedStatus: 'shelved' },
+      { id: 'prop-hum-approve', position: 'agent_proposed_human_approved', expectedStatus: 'spec_review' },
+      { id: 'prop-coord-approve', position: 'agent_proposed_coordinator_approved', expectedStatus: 'spec_review' },
+      { id: 'prop-auto', position: 'agent_autonomous', expectedStatus: 'ready' },
+    ]
+
+    for (const c of cases) {
+      // 1. Set the domain lever for `looma`.
+      const settings = makeDefaultSettings(new Date('2026-04-20T00:00:00Z'))
+      settings.domains.default.task_origination = {
+        position: c.position,
+        rationale: `AC-15 test (${c.position})`,
+        setAt: '2026-04-20T00:00:00Z',
+        setBy: 'user-direct',
+      }
+      await saveLeverSettings({
+        path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+        settings,
+      })
+
+      // 2. An agent calls propose-task (the real tool) to create the task.
+      const result = await proposeTask({
+        tasksPath,
+        proposal: {
+          id: c.id,
+          title: `Proposal ${c.id}`,
+          description: 'Agent noticed work worth doing',
+          domain: 'looma',
+          projectPath: tmpDir,
+          proposedBy: 'worker-agent',
+          rationale: 'noticed during review',
+        },
+      })
+      if (!result.success) throw new Error(`proposeTask failed: ${result.error}`)
+      expect(result.success).toBe(true)
+
+      const afterPropose = await readQueue()
+      const proposed = afterPropose.tasks.find((t) => t.id === c.id)!
+      expect(proposed.status).toBe('proposed')
+      expect(proposed.origination).toBe('agent')
+
+      // 3. Orchestrator tick — decideProposal applies the lever decision.
+      //    Loop until we see a proposal-decided outcome for this task id,
+      //    because other already-terminal tasks from prior iterations still
+      //    live on the queue and may be scanned first on some ticks.
+      let decided = false
+      for (let i = 0; i < 8 && !decided; i++) {
+        const outcome = await orch.tick()
+        if (outcome.kind === 'proposal-decided' && outcome.taskId === c.id) {
+          expect(outcome.leverPosition).toBe(c.position)
+          expect(outcome.newStatus).toBe(c.expectedStatus)
+          decided = true
+        }
+        if (outcome.kind === 'idle' && outcome.allDone) break
+      }
+      expect(decided).toBe(true)
+
+      // 4. Disk state matches the decision.
+      const afterTick = await readQueue()
+      const final = afterTick.tasks.find((t) => t.id === c.id)!
+      expect(final.status).toBe(c.expectedStatus)
+
+      // 5. PROGRESS.md records the promotion with the governing lever.
+      const progress = await fs.readFile(progressPath, 'utf-8')
+      expect(progress).toContain(`Proposal ${c.id}: proposed → ${c.expectedStatus}`)
+      expect(progress).toContain(`lever=${c.position}`)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// AC-16 end-to-end:
+//   A worker calls pre-reject-task. The task moves to `shelved` with
+//   source=worker_pre_rejection WITHOUT incrementing revisionCount. The
+//   orchestrator's next tick then applies pre_rejection_policy: under
+//   `terminal_shelved` the task stays shelved; under `requeue_lower_priority`
+//   it comes back as `ready` at a lowered priority with requeueCount bumped.
+// ---------------------------------------------------------------------------
+describe('E2E AC-16: worker pre-rejection → pre_rejection_policy applied on tick', () => {
+  it('shelves the task, leaves revisionCount untouched, then applies the lever on the next tick', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'guildhall.yaml'),
+      `name: E2E Workspace\nid: e2e-workspace\ncoordinators:\n  - id: looma\n    name: Looma\n    domain: looma\n    mandate: UI\n`,
+      'utf-8',
+    )
+
+    // First leg: pre_rejection_policy=terminal_shelved → stays shelved.
+    const settingsTerminal = makeDefaultSettings(new Date('2026-04-20T00:00:00Z'))
+    settingsTerminal.domains.default.pre_rejection_policy = {
+      position: 'terminal_shelved',
+      rationale: 'AC-16 leg 1',
+      setAt: '2026-04-20T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings: settingsTerminal,
+    })
+
+    const now = '2026-04-20T00:00:00Z'
+    const queue: TaskQueue = {
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'task-terminal',
+          title: 'Worker says no-op',
+          description: 'Details',
+          domain: 'looma',
+          projectPath: tmpDir,
+          status: 'in_progress',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          assignedTo: 'worker-agent',
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'task-requeue',
+          title: 'Worker says duplicate',
+          description: 'Details',
+          domain: 'looma',
+          projectPath: tmpDir,
+          status: 'in_progress',
+          priority: 'high',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          assignedTo: 'worker-agent',
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    // Worker calls pre-reject-task (the real tool) on the first task.
+    const pr1 = await preRejectTask({
+      tasksPath,
+      taskId: 'task-terminal',
+      code: 'no_op',
+      detail: 'spec is already satisfied by an earlier change',
+      rejectedBy: 'worker-agent',
+    })
+    expect(pr1.success).toBe(true)
+
+    // Immediately after the tool call the task is shelved via worker path,
+    // but policyApplied is still false — the orchestrator hasn't run yet.
+    // Critically, revisionCount must be untouched (FR-22).
+    const afterReject1 = await readQueue()
+    const shelved1 = afterReject1.tasks.find((t) => t.id === 'task-terminal')!
+    expect(shelved1.status).toBe('shelved')
+    expect(shelved1.revisionCount).toBe(0)
+    expect(shelved1.shelveReason?.source).toBe('worker_pre_rejection')
+    expect(shelved1.shelveReason?.policyApplied).toBe(false)
+    expect(shelved1.shelveReason?.code).toBe('no_op')
+
+    // Orchestrator tick → applyPreRejectionPolicy under terminal_shelved
+    // keeps the task shelved and flips policyApplied=true.
+    const config = resolveBootstrapped()
+    const orch = new Orchestrator({
+      config,
+      agents: {
+        spec: stubAgent('spec-agent'),
+        worker: stubAgent('worker-agent'),
+        reviewer: stubAgent('reviewer-agent'),
+        gateChecker: stubAgent('gate-checker-agent'),
+        coordinators: { looma: stubAgent('looma-coordinator') },
+      },
+      idleShutdownAfterTicks: 3,
+    })
+
+    let terminalDecided = false
+    for (let i = 0; i < 8 && !terminalDecided; i++) {
+      const outcome = await orch.tick()
+      if (outcome.kind === 'pre-rejection-applied' && outcome.taskId === 'task-terminal') {
+        expect(outcome.domainLeverPosition).toBe('terminal_shelved')
+        terminalDecided = true
+      }
+      if (outcome.kind === 'idle' && outcome.allDone) break
+    }
+    expect(terminalDecided).toBe(true)
+
+    const afterTick1 = await readQueue()
+    const settled1 = afterTick1.tasks.find((t) => t.id === 'task-terminal')!
+    expect(settled1.status).toBe('shelved')
+    expect(settled1.revisionCount).toBe(0)
+    expect(settled1.shelveReason?.policyApplied).toBe(true)
+
+    // Second leg: flip pre_rejection_policy=requeue_lower_priority, then
+    // pre-reject task-requeue. The next tick should bring it back to
+    // `ready` with a lower priority and requeueCount=1.
+    const settingsRequeue = makeDefaultSettings(new Date('2026-04-20T00:00:00Z'))
+    settingsRequeue.domains.default.pre_rejection_policy = {
+      position: 'requeue_lower_priority',
+      rationale: 'AC-16 leg 2',
+      setAt: '2026-04-20T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings: settingsRequeue,
+    })
+
+    const pr2 = await preRejectTask({
+      tasksPath,
+      taskId: 'task-requeue',
+      code: 'duplicate',
+      detail: 'another in-flight task overlaps',
+      rejectedBy: 'worker-agent',
+    })
+    expect(pr2.success).toBe(true)
+
+    let requeueDecided = false
+    for (let i = 0; i < 8 && !requeueDecided; i++) {
+      const outcome = await orch.tick()
+      if (outcome.kind === 'pre-rejection-applied' && outcome.taskId === 'task-requeue') {
+        expect(outcome.domainLeverPosition).toBe('requeue_lower_priority')
+        requeueDecided = true
+      }
+      if (outcome.kind === 'idle' && outcome.allDone) break
+    }
+    expect(requeueDecided).toBe(true)
+
+    const afterTick2 = await readQueue()
+    const settled2 = afterTick2.tasks.find((t) => t.id === 'task-requeue')!
+    expect(settled2.status).toBe('ready')
+    expect(settled2.revisionCount).toBe(0) // FR-22: NEVER bumped by pre-rejection.
+    expect(settled2.priority).toBe('normal') // high → normal under requeue_lower_priority.
+    expect(settled2.shelveReason?.requeueCount).toBe(1)
+    expect(settled2.shelveReason?.policyApplied).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// AC-21 end-to-end:
+//   With agent_health_strictness: strict, a registered worker that stops
+//   emitting FR-16 events for >45s surfaces as a `stall` remediation trigger
+//   on the next tick. The coordinator is invoked with a RemediationContext
+//   that carries the stall flag AND the strictness lever, and the chosen
+//   action is authorized + recorded via the FR-32 pathway.
+// ---------------------------------------------------------------------------
+describe('E2E AC-21: stall (>45s silence under strict) → coordinator remediation', () => {
+  it('raises a stall trigger, builds a stall-context for the coordinator, and records the decision', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'guildhall.yaml'),
+      `name: E2E Workspace\nid: e2e-workspace\ncoordinators:\n  - id: looma\n    name: Looma\n    domain: looma\n    mandate: UI\n`,
+      'utf-8',
+    )
+
+    // Strict liveness + auto remediation so the coordinator's chosen action
+    // executes without confirmation, keeping this test focused on the
+    // stall → context → decision path.
+    const settings = makeDefaultSettings(new Date('2026-04-20T00:00:00Z'))
+    settings.project.agent_health_strictness = {
+      position: 'strict',
+      rationale: 'AC-21 test',
+      setAt: '2026-04-20T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    settings.project.remediation_autonomy = {
+      position: 'auto',
+      rationale: 'AC-21 test',
+      setAt: '2026-04-20T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    // Seed a task in_progress with a worker. Same shape as the AC-22 test.
+    const now = '2026-04-20T00:00:00Z'
+    const queue: TaskQueue = {
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'task-001',
+          title: 'Render the report',
+          description: 'Details',
+          domain: 'looma',
+          projectPath: tmpDir,
+          status: 'in_progress',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          assignedTo: 'worker-agent',
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    // Inject a LivenessTracker with a controllable clock so we can simulate
+    // >45s of silence without sleeping. The orchestrator's refreshLiveness­
+    // Strictness() will still read `strict` out of agent-settings.yaml and
+    // call setStrictness on this same tracker.
+    const registeredAtMs = Date.UTC(2026, 3, 20, 0, 0, 0)
+    let currentClockMs = registeredAtMs
+    const liveness = new LivenessTracker({
+      strictness: 'standard',
+      now: () => currentClockMs,
+    })
+
+    const config = resolveBootstrapped()
+    const orch = new Orchestrator({
+      config,
+      agents: {
+        spec: stubAgent('spec-agent'),
+        worker: stubAgent('worker-agent'),
+        reviewer: stubAgent('reviewer-agent'),
+        gateChecker: stubAgent('gate-checker-agent'),
+        coordinators: {
+          looma: stubAgent('looma-coordinator'),
+        },
+      },
+      liveness,
+      idleShutdownAfterTicks: 2,
+    })
+
+    // Pull `strict` into the tracker from agent-settings.yaml (this is what
+    // a real orchestrator tick does before scanning stalls).
+    await orch.refreshLivenessStrictness()
+
+    // Register the worker at t=T0, then advance the mock clock 46s forward
+    // — one second past the 45s strict stall threshold.
+    orch.liveness.register('worker-agent', 'task-001')
+    currentClockMs = registeredAtMs + 46_000
+    const scanAtMs = currentClockMs
+
+    const triggers = await orch.collectRemediationTriggers(scanAtMs)
+    const stallTriggers = triggers.filter((t) => t.kind === 'stall')
+    // With a just-registered agent at "now" and a 46s-forward scan, exactly
+    // one stall trigger should fire for this worker.
+    expect(stallTriggers).toHaveLength(1)
+    const stall = stallTriggers[0]!
+    if (stall.kind !== 'stall') throw new Error('unreachable')
+    expect(stall.taskId).toBe('task-001')
+    expect(stall.agentId).toBe('worker-agent')
+    expect(stall.flag.strictness).toBe('strict')
+    expect(stall.flag.silentMs).toBeGreaterThanOrEqual(45_000)
+
+    // The coordinator is "invoked" — in this test we model the invocation
+    // as buildRemediationContextFor returning a full context bundle with
+    // the stall trigger AND the strictness lever. That is the interface the
+    // serve-layer coordinator agent consumes verbatim.
+    const ctx = await orch.buildRemediationContextFor(stall)
+    expect(ctx.trigger.kind).toBe('stall')
+    expect(ctx.taskId).toBe('task-001')
+    expect(ctx.leverState.remediationAutonomy).toBe('auto')
+    expect(ctx.leverState.agentHealthStrictness).toBe('strict')
+
+    // Coordinator chooses a non-destructive recovery action; under
+    // remediation_autonomy=auto this goes autonomous.
+    const action = {
+      kind: 'restart_from_checkpoint' as const,
+      rationale: 'worker went silent past the strict threshold',
+    }
+    const auth = orch.authorizeRemediation(action, ctx)
+    expect(auth).toEqual({ kind: 'autonomous' })
+
+    await orch.recordRemediation({
+      context: ctx,
+      action,
+      authorization: auth,
+      decidedBy: 'looma',
+    })
+
+    // AC-24-adjacent proof: the DECISIONS.md entry captures trigger type,
+    // chosen action, and lever state including agent_health_strictness.
+    const decisions = await fs.readFile(
+      path.join(memoryDir, 'DECISIONS.md'),
+      'utf-8',
+    )
+    expect(decisions).toMatch(/Remediation: restart_from_checkpoint \(stall trigger\)/)
+    expect(decisions).toMatch(/agent_health_strictness=strict/)
+
+    // The task's remediationAttempts was bumped by the decision record.
+    const finalQueue = await readQueue()
+    expect(finalQueue.tasks[0]!.remediationAttempts).toBe(1)
   })
 })
 

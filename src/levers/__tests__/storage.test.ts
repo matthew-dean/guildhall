@@ -37,6 +37,43 @@ describe('loadLeverSettings', () => {
     expect(stat.isFile()).toBe(true)
   })
 
+  // AC-13: agent-settings.yaml stores every lever from §2.1 with position +
+  // inference rationale. Seeding defaults must produce a complete, readable
+  // set of levers (both project-scope and domain-scope) where every entry
+  // carries a position and rationale so downstream reads are deterministic.
+  it('AC-13: seeded defaults expose every lever with position + rationale', async () => {
+    const loaded = await loadLeverSettings({ path: settingsPath })
+
+    type LeverRecord = {
+      position: unknown
+      rationale: string
+      setAt: string
+      setBy: string
+    }
+    const entries = (obj: Record<string, unknown>): Array<[string, LeverRecord]> =>
+      Object.entries(obj) as Array<[string, LeverRecord]>
+
+    // Every project-scope lever has a non-empty position and rationale.
+    for (const [name, record] of entries(loaded.project as Record<string, unknown>)) {
+      expect(record.position, `project.${name} position`).toBeDefined()
+      expect(typeof record.rationale, `project.${name} rationale`).toBe('string')
+      expect(record.rationale.length, `project.${name} rationale non-empty`).toBeGreaterThan(0)
+      expect(record.setAt, `project.${name} setAt`).toBeDefined()
+      expect(record.setBy, `project.${name} setBy`).toBeDefined()
+    }
+
+    // Every domain-scope lever (across every domain) ditto.
+    for (const [dname, domain] of Object.entries(loaded.domains) as Array<
+      [string, Record<string, unknown>]
+    >) {
+      for (const [lname, record] of entries(domain)) {
+        expect(record.position, `domains.${dname}.${lname} position`).toBeDefined()
+        expect(typeof record.rationale, `domains.${dname}.${lname} rationale`).toBe('string')
+        expect(record.rationale.length, `domains.${dname}.${lname} rationale`).toBeGreaterThan(0)
+      }
+    }
+  })
+
   it('round-trips through save/load', async () => {
     const seeded = makeDefaultSettings()
     await saveLeverSettings({ path: settingsPath, settings: seeded })
