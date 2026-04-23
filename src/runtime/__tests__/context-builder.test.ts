@@ -233,9 +233,12 @@ describe('buildContext — formatted output', () => {
     await writeDecisions('## looma decision\n' + 'y'.repeat(5_000) + '\n---\n')
 
     const ctx = await buildContext(baseTask, tmpDir)
-    // 4000 memory + 2000 decisions + task summary + progress (60 lines ~= 1000 chars) + markers
-    // Total should be well under 10k chars
-    expect(ctx.formatted.length).toBeLessThan(12_000)
+    // Budget: 4000 memory + 2000 decisions + task summary + progress (60 lines
+    // ~= 1000 chars) + at most one persona's principles at `in_progress`
+    // (~2–3 KB, or `exploring` spec-contribution block of similar size).
+    // Multiple personas are never concatenated into a single prompt — the
+    // reviewer fan-out attaches one persona per dispatch.
+    expect(ctx.formatted.length).toBeLessThan(14_000)
   })
 })
 

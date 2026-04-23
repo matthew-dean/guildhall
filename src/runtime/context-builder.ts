@@ -6,6 +6,14 @@ import {
   selectApplicableReviewRubrics,
   renderRubricSelection,
 } from '@guildhall/core'
+import {
+  selectApplicableGuilds,
+  pickPrimaryEngineer,
+  renderPersonaPrompt,
+  renderSpecContributions,
+  collectGuildRubrics,
+  reviewersForTask,
+} from '@guildhall/guilds'
 import { loadGoalForTask } from './business-envelope.js'
 import { loadDesignSystem } from './design-system-store.js'
 
@@ -44,6 +52,39 @@ export interface BuiltContext {
    * or with no transcript yet.
    */
   exploringTranscript: string
+  /**
+   * Stage-scoped persona prompt additive. What this holds depends on the
+   * task status:
+   *   - `exploring`    — every applicable designer/specialist's
+   *                      `specContribution` prose, so the Spec Agent
+   *                      elicits the answers each expert needs.
+   *   - `in_progress`  — the single primary engineer's principles (Frontend
+   *                      Engineer, TypeScript Engineer, …) framed as the
+   *                      worker's persona. Framework-specialized when
+   *                      detected (Vue / React / Svelte / …).
+   *   - `review`       — empty (the reviewer fan-out attaches personas at
+   *                      dispatch time, one reviewer per applicable guild).
+   *   - other statuses — empty; those stages don't need persona prompt.
+   */
+  personaPrompt: string
+  /**
+   * Slugs of guilds currently applicable. Downstream consumers (reviewer
+   * dispatcher, gate runner) use this instead of re-running applicability
+   * predicates.
+   */
+  applicableGuildSlugs: string[]
+  /**
+   * Slug of the primary engineer persona (if any) for the current task —
+   * populated at `in_progress`. Lets the orchestrator trace which engineer
+   * built the code in the audit log.
+   */
+  primaryEngineerSlug: string | null
+  /**
+   * Slugs of guilds that should produce independent review verdicts at
+   * `review`. Populated regardless of status so a preview of the fan-out is
+   * visible throughout the task's life.
+   */
+  reviewerSlugs: string[]
   /**
    * FR-23: business-envelope summary for the task's parent goal. Empty when
    * the task has no `parentGoalId` or the goal book is absent. Agents see the
@@ -167,9 +208,35 @@ export async function buildContext(
         .filter(Boolean)
         .join('\n')
     : ''
+  const guildSignals = {
+    task,
+    designSystem: ds,
+    memoryDir,
+    projectPath: task.projectPath,
+  }
+  const applicableGuilds = selectApplicableGuilds(guildSignals)
+  const applicableGuildSlugs = applicableGuilds.map((g) => g.slug)
+  const reviewerSlugs = reviewersForTask(applicableGuilds).map((g) => g.slug)
+  const primaryEngineer = pickPrimaryEngineer(applicableGuilds)
+  const primaryEngineerSlug = primaryEngineer?.slug ?? null
+
+  // Stage-scoped persona prompt. See BuiltContext.personaPrompt for the
+  // rationale.
+  let personaPrompt = ''
+  if (task.status === 'exploring') {
+    personaPrompt = renderSpecContributions(applicableGuilds)
+  } else if (task.status === 'in_progress' && primaryEngineer) {
+    personaPrompt = renderPersonaPrompt(primaryEngineer, guildSignals)
+  }
+
   const designSystem = ds ? summarizeDesignSystem(ds) : ''
   const rubricSelection = selectApplicableReviewRubrics(task, ds)
-  const reviewRubrics = renderRubricSelection(rubricSelection)
+  const coreRubrics = renderRubricSelection(rubricSelection)
+  // Reviewer rubric items are attached per-reviewer at dispatch time (fan-out),
+  // not pushed into the worker context. collectGuildRubrics is kept available
+  // for the reviewer dispatcher.
+  void collectGuildRubrics
+  const reviewRubrics = coreRubrics
 
   const taskSummary = [
     `## Current Task: ${task.id}`,
@@ -197,6 +264,8 @@ export async function buildContext(
     '',
     taskSummary,
     '',
+    personaPrompt,
+    '',
     envelope ? `## Business Envelope (FR-23)\n${envelope}` : '',
     '',
     designSystem ? `## Design System\n${designSystem}` : '',
@@ -222,6 +291,10 @@ export async function buildContext(
     recentProgress,
     recentDecisions,
     exploringTranscript,
+    personaPrompt,
+    applicableGuildSlugs,
+    primaryEngineerSlug,
+    reviewerSlugs,
     envelope,
     designSystem,
     reviewRubrics,
