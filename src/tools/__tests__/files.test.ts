@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { editFile, editFileTool } from '../files.js'
+import { editFile, editFileTool, readFile, readFileTool } from '../files.js'
 
 async function mkSandbox(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-files-test-'))
@@ -161,5 +161,115 @@ describe('editFileTool.execute', () => {
     )
     expect(result.is_error).toBe(true)
     expect(result.output).toContain('matches 3 times')
+  })
+})
+
+describe('readFile', () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkSandbox()
+  })
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+
+  it('returns raw content for an existing text file', async () => {
+    const file = path.join(dir, 'hello.txt')
+    await fs.writeFile(file, 'alpha\nbeta\n', 'utf-8')
+    const result = await readFile({ filePath: file })
+    expect(result.exists).toBe(true)
+    expect(result.content).toBe('alpha\nbeta\n')
+    expect(result.isDirectory).toBeUndefined()
+    expect(result.isBinary).toBeUndefined()
+  })
+
+  it('flags directories and binaries without reading their bytes as text', async () => {
+    const subdir = path.join(dir, 'subdir')
+    await fs.mkdir(subdir)
+    const dirResult = await readFile({ filePath: subdir })
+    expect(dirResult.exists).toBe(true)
+    expect(dirResult.isDirectory).toBe(true)
+
+    const bin = path.join(dir, 'bin.dat')
+    await fs.writeFile(bin, Buffer.from([0x00, 0x01, 0x02]))
+    const binResult = await readFile({ filePath: bin })
+    expect(binResult.exists).toBe(true)
+    expect(binResult.isBinary).toBe(true)
+  })
+})
+
+describe('readFileTool.execute', () => {
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkSandbox()
+  })
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+
+  it('renders cat -n style line numbers', async () => {
+    const file = path.join(dir, 'a.txt')
+    await fs.writeFile(file, 'first\nsecond\nthird', 'utf-8')
+    const result = await readFileTool.execute(
+      { filePath: file },
+      { cwd: dir, metadata: {} },
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toBe('     1\tfirst\n     2\tsecond\n     3\tthird')
+  })
+
+  it('honors offset and limit', async () => {
+    const file = path.join(dir, 'b.txt')
+    await fs.writeFile(file, 'l1\nl2\nl3\nl4\nl5', 'utf-8')
+    const result = await readFileTool.execute(
+      { filePath: file, offset: 2, limit: 2 },
+      { cwd: dir, metadata: {} },
+    )
+    // Line numbers are 1-based starting from `offset + 1`.
+    expect(result.output).toBe('     3\tl3\n     4\tl4')
+  })
+
+  it('returns the empty-range notice when offset is past end of file', async () => {
+    const file = path.join(dir, 'c.txt')
+    await fs.writeFile(file, 'only', 'utf-8')
+    const result = await readFileTool.execute(
+      { filePath: file, offset: 5 },
+      { cwd: dir, metadata: {} },
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('no content in selected range')
+  })
+
+  it('returns is_error=true when the path is a directory', async () => {
+    const result = await readFileTool.execute(
+      { filePath: dir },
+      { cwd: dir, metadata: {} },
+    )
+    expect(result.is_error).toBe(true)
+    expect(result.output).toContain('cannot read directory')
+  })
+
+  it('returns is_error=true for a binary file', async () => {
+    const file = path.join(dir, 'bin.dat')
+    await fs.writeFile(file, Buffer.from([0x00, 0xff]))
+    const result = await readFileTool.execute(
+      { filePath: file },
+      { cwd: dir, metadata: {} },
+    )
+    expect(result.is_error).toBe(true)
+    expect(result.output).toContain('binary file')
+  })
+
+  it('returns is_error=true when the file is missing', async () => {
+    const result = await readFileTool.execute(
+      { filePath: path.join(dir, 'nope.txt') },
+      { cwd: dir, metadata: {} },
+    )
+    expect(result.is_error).toBe(true)
+    expect(result.output).toContain('file not found')
   })
 })

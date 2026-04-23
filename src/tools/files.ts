@@ -3,6 +3,8 @@
  *
  * editFileTool is ported from
  *   openharness/src/openharness/tools/file_edit_tool.py
+ * readFileTool is ported from
+ *   openharness/src/openharness/tools/file_read_tool.py
  * Upstream: https://github.com/HKUDS/OpenHarness (MIT)
  * Upstream SHA at port time: 559ba76f237db957a1a21453170df8500479dc7d
  *
@@ -15,6 +17,12 @@
  *     to avoid regex-escape pitfalls with `replaceAll`-style behavior.
  *   - Parameter casing follows the rest of the Guildhall tool set
  *     (`filePath` / `oldString` / `newString`), not Python snake_case.
+ *   - readFileTool keeps the existing `readFile()` helper returning raw
+ *     content for in-process callers; the line-numbered render is applied
+ *     only at the LLM-facing `execute()` boundary.
+ *   - Default limit is 2000 lines (upstream 200) — Guildhall agents read
+ *     whole files far more often than not, and the harness caps wide reads
+ *     via compaction rather than truncating at the tool.
  */
 
 import { defineTool } from '@guildhall/engine'
@@ -23,43 +31,118 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Dirent } from 'node:fs'
 
+const READ_FILE_DEFAULT_LIMIT = 2000
+
 const readFileInputSchema = z.object({
   filePath: z.string().describe('Absolute path to the file'),
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe('Zero-based starting line for partial reads'),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(2000)
+    .optional()
+    .describe(`Max lines to return (default ${READ_FILE_DEFAULT_LIMIT})`),
 })
 
 export type ReadFileInput = z.input<typeof readFileInputSchema>
 export interface ReadFileResult {
   content: string
   exists: boolean
+  /** True when the path exists but is a directory. */
+  isDirectory?: boolean
+  /** True when the file contains a NUL byte (binary). */
+  isBinary?: boolean
 }
 
 export async function readFile(input: ReadFileInput): Promise<ReadFileResult> {
   try {
-    const content = await fs.readFile(input.filePath, 'utf-8')
-    return { content, exists: true }
+    const stat = await fs.stat(input.filePath)
+    if (stat.isDirectory()) return { content: '', exists: true, isDirectory: true }
+    const raw = await fs.readFile(input.filePath)
+    if (raw.includes(0)) return { content: '', exists: true, isBinary: true }
+    return { content: raw.toString('utf-8'), exists: true }
   } catch {
     return { content: '', exists: false }
   }
 }
 
+/**
+ * Render a file slice in `cat -n`-style: 6-char right-aligned line number,
+ * a tab, the line text. Matches upstream's output so ported edit/grep tools
+ * can key off the same format.
+ */
+function renderLineNumbered(content: string, offset: number, limit: number): string {
+  const lines = content.split('\n')
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  const selected = lines.slice(offset, offset + limit)
+  if (selected.length === 0) return ''
+  return selected
+    .map((line, i) => `${String(offset + i + 1).padStart(6, ' ')}\t${line}`)
+    .join('\n')
+}
+
 export const readFileTool = defineTool({
   name: 'read-file',
   description:
-    'Read a file from the filesystem. Use this to read source files, docs, config files, or memory files.',
+    'Read a UTF-8 file from the filesystem. Returns line-numbered content (cat -n style) so edit tools can target specific lines. Supports offset/limit for partial reads on large files.',
   inputSchema: readFileInputSchema,
   jsonSchema: {
     type: 'object',
     properties: {
       filePath: { type: 'string', description: 'Absolute path to the file' },
+      offset: {
+        type: 'integer',
+        minimum: 0,
+        description: 'Zero-based starting line for partial reads',
+      },
+      limit: {
+        type: 'integer',
+        minimum: 1,
+        maximum: 2000,
+        description: `Max lines to return (default ${READ_FILE_DEFAULT_LIMIT})`,
+      },
     },
     required: ['filePath'],
   },
   isReadOnly: () => true,
   execute: async (input) => {
     const result = await readFile(input)
+    if (!result.exists) {
+      return {
+        output: `(file not found: ${input.filePath})`,
+        is_error: true,
+        metadata: result as unknown as Record<string, unknown>,
+      }
+    }
+    if (result.isDirectory) {
+      return {
+        output: `(cannot read directory: ${input.filePath})`,
+        is_error: true,
+        metadata: result as unknown as Record<string, unknown>,
+      }
+    }
+    if (result.isBinary) {
+      return {
+        output: `(binary file, not read as text: ${input.filePath})`,
+        is_error: true,
+        metadata: result as unknown as Record<string, unknown>,
+      }
+    }
+    const offset = input.offset ?? 0
+    const limit = input.limit ?? READ_FILE_DEFAULT_LIMIT
+    const body = renderLineNumbered(result.content, offset, limit)
     return {
-      output: result.exists ? result.content : `(file not found: ${input.filePath})`,
-      is_error: !result.exists,
+      output:
+        body.length > 0
+          ? body
+          : `(no content in selected range for ${input.filePath})`,
+      is_error: false,
       metadata: result as unknown as Record<string, unknown>,
     }
   },
