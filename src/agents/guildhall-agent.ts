@@ -25,6 +25,10 @@ import {
   loadSessionSnapshot,
   saveSessionSnapshot,
 } from '@guildhall/sessions'
+import {
+  composeSystemPromptWithDefaults,
+  type EngineeringDefaultTopic,
+} from '@guildhall/engineering-defaults'
 export type { StreamEvent }
 import type { AgentLLM } from './llm.js'
 
@@ -72,6 +76,13 @@ export interface GuildhallAgentOptions {
     cwd: string
     sessionId?: string
   }
+  /**
+   * Which engineering-defaults topics to append to the system prompt. The
+   * defaults ("invisible floor" of best-practices — coding, testing, frontend,
+   * git, security, dependencies, architecture, documentation, review) are
+   * always appended unless this list is explicitly narrowed or set to `[]`.
+   */
+  engineeringDefaults?: readonly EngineeringDefaultTopic[]
 }
 
 export interface GenerateResult {
@@ -98,9 +109,12 @@ export class GuildhallAgent {
     this.currentMode = this.baselineMode
     this.sessionPersistence = options.sessionPersistence
 
-    const systemPrompt = options.skills && options.skills.length > 0
+    const withSkills = options.skills && options.skills.length > 0
       ? composeSystemPromptWithSkills(options.systemPrompt, options.skills)
       : options.systemPrompt
+    const systemPrompt = options.engineeringDefaults !== undefined
+      ? composeSystemPromptWithDefaults(withSkills, options.engineeringDefaults)
+      : composeSystemPromptWithDefaults(withSkills)
 
     this.engine = new QueryEngine({
       apiClient: options.llm.apiClient,

@@ -7,7 +7,7 @@ import {
   buildModelSet,
   type GuildhallAgent,
 } from '@guildhall/agents'
-import { selectApiClient } from './provider-selection.js'
+import { selectApiClient, inferPreferredProvider } from './provider-selection.js'
 import {
   TaskQueue,
   TERMINAL_TASK_STATUSES,
@@ -1625,7 +1625,11 @@ export class Orchestrator {
    *   - milestone : task reached `done` (all gates passed)
    *   - blocked   : task reached `blocked` (max revisions or hard block)
    *   - escalation: agent error requiring human attention
-   *   - heartbeat : every other transition (the routine case)
+   *   - heartbeat : a real transition that isn't one of the above
+   *
+   * No-op ticks (agent ran, chose not to transition, no error) are NOT
+   * written here — that kind of liveness signal belongs in the ephemeral
+   * SSE stream, not the on-disk progress history.
    */
   private async logTickProgress(entry: {
     task: Task
@@ -1635,6 +1639,11 @@ export class Orchestrator {
     transitioned: boolean
     note?: string
   }): Promise<void> {
+    const isError = entry.note?.startsWith('error:') ?? false
+    const hasMeaningfulNote =
+      entry.note !== undefined && entry.note !== 'no transition'
+    if (!entry.transitioned && !isError && !hasMeaningfulNote) return
+
     const type = this.classifyEntry(entry.afterStatus, entry.note)
     const arrow = entry.transitioned
       ? `${entry.beforeStatus} → ${entry.afterStatus}`
@@ -1663,7 +1672,11 @@ export class Orchestrator {
     afterStatus: TaskStatus,
     note: string | undefined,
   ): ProgressEntry['type'] {
-    if (note?.startsWith('error:')) return 'escalation'
+    // Max-turns is self-healing (the next tick resumes), not a real failure —
+    // don't inflate it to an escalation.
+    if (note?.startsWith('error:') && !/Exceeded maximum turn limit/.test(note)) {
+      return 'escalation'
+    }
     if (afterStatus === 'done') return 'milestone'
     if (afterStatus === 'blocked') return 'blocked'
     return 'heartbeat'
@@ -1733,8 +1746,15 @@ export async function runOrchestrator(
   // Studio URL) actually take effect at orchestrator boot. Keys in env vars
   // still win as ambient defaults; values from disk override them when set.
   const projectCfg = readProjectConfig(config.projectPath)
+  // When no explicit preferredProvider is configured, infer one from the
+  // role→model assignment so a project that wires up qwen/deepseek locally
+  // doesn't silently fall through to whichever cloud OAuth happens to be
+  // present (past incident: qwen/qwen3.6-35b-a3b routed to Codex, which
+  // rejected the model on every tick and left the session stuck).
+  const preferredProvider =
+    projectCfg.preferredProvider ?? inferPreferredProvider(config.models)
   const selection = await selectApiClient({
-    ...(projectCfg.preferredProvider ? { preferredProvider: projectCfg.preferredProvider } : {}),
+    ...(preferredProvider ? { preferredProvider } : {}),
     ...(projectCfg.anthropicApiKey ? { anthropicApiKey: projectCfg.anthropicApiKey } : {}),
     ...(projectCfg.openaiApiKey ? { openaiApiKey: projectCfg.openaiApiKey } : {}),
     ...(projectCfg.lmStudioUrl ? { llamaCppUrl: projectCfg.lmStudioUrl } : {}),

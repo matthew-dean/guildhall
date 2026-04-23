@@ -106,6 +106,29 @@ describe('tickOutcomeToBackendEvent — FR-16 wire mapping', () => {
     expect(parsed.message).toContain('boom')
   })
 
+  it('humanizes the "Exceeded maximum turn limit" error for non-technical readers', () => {
+    // The activity feed used to show "Agent worker-agent failed on task-001:
+    // Exceeded maximum turn limit (8)" which reads as a scary ERROR to a
+    // non-engineer even though the agent's progress was saved and the next
+    // tick picks up. The translated message must not use the word "failed"
+    // and must reassure that no action is required.
+    const outcome: TickOutcome = {
+      kind: 'agent-error',
+      taskId: 'task-001',
+      agent: 'worker-agent',
+      error: 'Exceeded maximum turn limit (8)',
+    }
+    const evt = tickOutcomeToBackendEvent(outcome)
+    const parsed = backendEventSchema.parse(evt)
+    expect(parsed.type).toBe('error')
+    expect(parsed.message).not.toMatch(/failed/i)
+    expect(parsed.message).not.toMatch(/exceeded maximum turn limit/i)
+    expect(parsed.message).toMatch(/worker-agent/)
+    expect(parsed.message).toMatch(/task-001/)
+    expect(parsed.message).toMatch(/8 steps/)
+    expect(parsed.message).toMatch(/no action needed/i)
+  })
+
   it('maps no-coordinator to a wire error event', () => {
     const outcome: TickOutcome = {
       kind: 'no-coordinator',

@@ -31,6 +31,7 @@ import {
   readCodexCredentials,
 } from '@guildhall/providers'
 import { notImplementedApiClient } from '@guildhall/agents'
+import { findModel, type ModelAssignmentConfig } from '@guildhall/core'
 
 export type ProviderName =
   | 'claude-oauth'
@@ -303,4 +304,65 @@ function failForced(forced: ProviderName, reason: string): SelectApiClientResult
     providerName: 'none',
     reason: `${forced} forced but unavailable — ${reason}`,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Model-id → PreferredProviderKey inference
+//
+// A project's guildhall.yaml names models per role (spec, coordinator, worker,
+// reviewer, gateChecker). If no explicit preferredProvider is set we infer one
+// from those model ids so e.g. a project configured for local qwen doesn't
+// silently fall through to Codex / Claude OAuth just because that credential
+// happens to exist on the machine.
+//
+// Strategy: map each role's model id to a PreferredProviderKey. Return a
+// single key only when every role agrees. Disagreement / unknowns → undefined,
+// which leaves the normal resolution chain in charge.
+// ---------------------------------------------------------------------------
+
+function providerKeyForModelId(id: string): PreferredProviderKey | undefined {
+  const catalog = findModel(id)
+  if (catalog) {
+    switch (catalog.provider) {
+      case 'lm-studio':
+        return 'llama-cpp'
+      case 'anthropic':
+        return 'claude-oauth'
+      case 'openai':
+        return 'openai-api'
+      case 'google':
+        return undefined
+    }
+  }
+  const lower = id.toLowerCase()
+  if (lower.startsWith('claude-')) return 'claude-oauth'
+  if (/^(gpt-|o1-|o3-|o4-|chatgpt-)/.test(lower)) return 'openai-api'
+  // Common local / open-weight families and huggingface-style slugs ("org/model").
+  if (/^(qwen|deepseek|llama|mistral|mixtral|phi|gemma|hermes|solar|yi|command-r|codestral)/.test(lower)) {
+    return 'llama-cpp'
+  }
+  if (lower.includes('/')) return 'llama-cpp'
+  return undefined
+}
+
+/**
+ * Infer a preferred provider from a role→model assignment. Returns a single
+ * PreferredProviderKey iff every role maps to the same provider; otherwise
+ * undefined (callers should leave preferredProvider unset and fall through to
+ * the normal resolution chain).
+ */
+export function inferPreferredProvider(
+  models: ModelAssignmentConfig,
+): PreferredProviderKey | undefined {
+  const keys: Array<PreferredProviderKey | undefined> = [
+    providerKeyForModelId(models.spec),
+    providerKeyForModelId(models.coordinator),
+    providerKeyForModelId(models.worker),
+    providerKeyForModelId(models.reviewer),
+    providerKeyForModelId(models.gateChecker),
+  ]
+  const first = keys[0]
+  if (!first) return undefined
+  for (const k of keys) if (k !== first) return undefined
+  return first
 }

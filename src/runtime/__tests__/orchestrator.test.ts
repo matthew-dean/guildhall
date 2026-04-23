@@ -499,7 +499,9 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(progress).toContain('MILESTONE')
   })
 
-  it('writes a HEARTBEAT entry with "unchanged" when no transition occurred', async () => {
+  it('does NOT write a PROGRESS.md entry when the agent ran but no transition occurred', async () => {
+    // No-op ticks are noise in the on-disk progress history. Orchestrator-
+    // alive signal belongs in the ephemeral SSE stream, not PROGRESS.md.
     await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
     const worker = stubAgent('worker-agent')
     const orch = new Orchestrator({
@@ -507,9 +509,25 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
       agents: agentSet({ worker }),
     })
     await orch.tick()
-    const progress = await fs.readFile(progressPath, 'utf-8')
-    expect(progress).toContain('HEARTBEAT')
-    expect(progress).toContain('unchanged')
+    const progress = await fs
+      .readFile(progressPath, 'utf-8')
+      .catch(() => '')
+    expect(progress).not.toContain('HEARTBEAT')
+    expect(progress).not.toContain('unchanged')
+  })
+
+  it('stays silent across many no-op ticks (no PROGRESS.md churn)', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+    for (let i = 0; i < 5; i++) await orch.tick()
+    const progress = await fs
+      .readFile(progressPath, 'utf-8')
+      .catch(() => '')
+    expect(progress).toBe('')
   })
 
   it('writes an ESCALATION entry when max revisions is exceeded (FR-10 supersedes BLOCKED)', async () => {
@@ -554,7 +572,9 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     await writeQueue([
       mkTask({ id: 'a', status: 'in_progress', domain: 'knit-web' }),
     ])
-    const worker = stubAgent('worker-agent')
+    const worker = stubAgent('worker-agent', async () => {
+      await mutateTask('a', { status: 'review' })
+    })
     const orch = new Orchestrator({
       config: baseConfig(),
       agents: agentSet({ worker }),

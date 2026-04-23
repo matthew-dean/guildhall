@@ -238,6 +238,46 @@ describe('OpenAICompatibleClient', () => {
     expect(body).toHaveProperty('max_completion_tokens', 128)
     expect(body).not.toHaveProperty('max_tokens')
   })
+
+  // Repro for the LM-Studio/llama.cpp HTTP 400 we saw in t-minus-t: a tool
+  // whose input_schema was the default `{ type: 'object' }` (no `properties`
+  // key) made the local validator reject the whole request with `path:
+  // [N, function, parameters, properties] required`. Every tool must serialize
+  // into a `function.parameters` object whose `type` is `'object'` AND that
+  // carries a `properties` object (empty is fine).
+  it("serializes tools with no properties as `parameters: { type: 'object', properties: {} }`", async () => {
+    let captured: Record<string, unknown> | undefined
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      captured = JSON.parse((init?.body as string) ?? '{}') as Record<string, unknown>
+      return sseResponse([dataFrame({ choices: [{ delta: {}, finish_reason: 'stop' }] }), 'data: [DONE]\n\n'])
+    }) as unknown as typeof fetch
+    const client = new OpenAICompatibleClient({ fetch: fakeFetch })
+    await collect(
+      client.streamMessage({
+        model: 'llama-3',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+        max_tokens: 64,
+        tools: [
+          { name: 'noargs', description: 'no args', input_schema: { type: 'object' } },
+          { name: 'empty', description: 'empty schema', input_schema: {} },
+          { name: 'oneArg', description: 'one', input_schema: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] } },
+        ],
+      }),
+    )
+    const tools = captured?.tools as Array<Record<string, unknown>>
+    expect(tools).toHaveLength(3)
+    for (const tool of tools) {
+      const fn = tool.function as Record<string, unknown>
+      const params = fn.parameters as Record<string, unknown>
+      expect(params.type).toBe('object')
+      expect(params.properties).toBeTypeOf('object')
+      expect(params.properties).not.toBeNull()
+    }
+    // existing properties/required are preserved untouched
+    const oneArgParams = (tools[2]!.function as Record<string, unknown>).parameters as Record<string, unknown>
+    expect(oneArgParams.properties).toEqual({ x: { type: 'string' } })
+    expect(oneArgParams.required).toEqual(['x'])
+  })
 })
 
 describe('OpenAICompatibleClient retry behavior', () => {

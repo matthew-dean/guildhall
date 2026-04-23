@@ -246,9 +246,28 @@ function convertToolsToOpenAI(
     function: {
       name: tool.name,
       description: (tool.description as string | undefined) ?? '',
-      parameters: (tool.input_schema as Record<string, unknown> | undefined) ?? {},
+      parameters: normalizeToolParameters(
+        tool.input_schema as Record<string, unknown> | undefined,
+      ),
     },
   }))
+}
+
+// LM Studio and llama.cpp validate tool schemas strictly: a `parameters`
+// object whose type is 'object' MUST carry a `properties` object, even when
+// the tool takes no arguments. Anthropic's API is lenient about the missing
+// field, so the bug is invisible on Claude but fatal on local runs. Normalize
+// here so every outgoing call has a well-formed parameters block.
+function normalizeToolParameters(
+  raw: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const base: Record<string, unknown> =
+    raw && typeof raw === 'object' ? { ...raw } : {}
+  if (base.type == null) base.type = 'object'
+  if (base.type === 'object' && (base.properties == null || typeof base.properties !== 'object')) {
+    base.properties = {}
+  }
+  return base
 }
 
 function tokenLimitFieldFor(model: string, maxTokens: number): Record<string, number> {

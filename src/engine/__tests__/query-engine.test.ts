@@ -117,6 +117,50 @@ describe('QueryEngine.hasPendingContinuation', () => {
   })
 })
 
+describe('QueryEngine — message persistence across tool loops', () => {
+  it('keeps the assistant tool_use + tool_result in history when the next turn errors', async () => {
+    // Repro for stuck-orchestrator bug: tick 1 emits an assistant tool_use,
+    // the tool executes, tick 2's API call fails. The resulting message
+    // history must still contain the assistant + tool_result pair so
+    // sanitize-on-save doesn't drop the orphan assistant and next tick
+    // can resume from a coherent state.
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'noop',
+        description: '',
+        inputSchema: z.object({}).passthrough(),
+        execute: async () => ({ output: 'done', is_error: false }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'toolu_1', name: 'noop', input: {} }],
+        },
+      },
+      {
+        message: { role: 'assistant', content: [{ type: 'text', text: '' }] },
+        throwBefore: new Error('upstream hiccup'),
+      },
+    ])
+    const engine = new QueryEngine({
+      apiClient: client,
+      toolRegistry: registry,
+      permissionChecker: autoChecker(),
+      cwd: '/tmp',
+      model: 'test',
+      systemPrompt: '',
+    })
+    for await (const _ of engine.submitMessage('go')) void _
+    const msgs = engine.messages
+    expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
+    const lastUser = msgs[2]!
+    expect(lastUser.content[0]!.type).toBe('tool_result')
+  })
+})
+
 describe('QueryEngine — tool loop integration', () => {
   it('runs a tool through the engine and appends result to history', async () => {
     const registry = new ToolRegistry()

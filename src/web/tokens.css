@@ -1,0 +1,82 @@
+/*
+ * Design tokens. Mirrors src/engineering-defaults/frontend.md.
+ * Any component-level styling in src/web must reference these tokens only —
+ * no hardcoded hex/rgb, no raw px/rem font-sizes or spacings.
+ */
+
+:root {
+  /* colors — semantic */
+  --bg: #0f0f11;
+  --bg-raised: #1a1a1f;
+  --bg-raised-2: #24242c;
+  --border: #2a2a33;
+  --accent: #7c6df0;
+  --accent-2: #4ecca3;
+  --text: #e8e8f0;
+  --text-muted: #888899;
+  --danger: #e05252;
+  --warn: #d4a23c;
+
+  /* type scale */
+  --fs-0: 11px;
+  --fs-1: 12px;
+  --fs-2: 13px;
+  --fs-3: 14px;
+  --fs-4: 16px;
+  --fs-5: 20px;
+
+  /* spacing scale */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+
+  /* line-heights */
+  --lh-tight: 1.2;
+  --lh-body: 1.5;
+
+  /* radii */
+  --r-1: 4px;
+  --r-2: 6px;
+  --r-3: 8px;
+
+  /* interactive controls — single source of truth so buttons, tabs,
+     inputs, selects, and textareas line up. Tighter than default; the
+     user flagged 32px-height buttons as too heavy. */
+  --control-h: 26px;
+  --control-pad-y: 4px;
+  --control-pad-x: 10px;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: var(--fs-2);
+  line-height: var(--lh-body);
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4 { line-height: var(--lh-tight); font-weight: 600; }
+h1 { font-size: var(--fs-5); }
+h2 { font-size: var(--fs-4); letter-spacing: -0.2px; }
+h3 { font-size: var(--fs-3); }
+h4 { font-size: var(--fs-1); font-weight: 700; }
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

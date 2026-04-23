@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { Buffer } from 'node:buffer'
-import { selectApiClient } from '../provider-selection.js'
+import { selectApiClient, inferPreferredProvider } from '../provider-selection.js'
 
 let tmpDir: string
 let claudeCredPath: string
@@ -319,5 +319,84 @@ describe('selectApiClient', () => {
         codexCredentialPath: codexCredPath,
       }),
     ).rejects.toThrow()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// inferPreferredProvider — model-id → provider inference
+//
+// Repro: a project configured qwen/qwen3.6-35b-a3b for every role but had no
+// explicit preferredProvider. The normal resolution order picked Codex (the
+// first reachable OAuth), which rejected the qwen model at the first API call
+// and stuck the orchestrator in a user-message retry loop. The inference
+// helper exists to let the orchestrator pre-populate preferredProvider when
+// the configured models unambiguously point at one provider.
+// ---------------------------------------------------------------------------
+
+describe('inferPreferredProvider', () => {
+  it('returns "llama-cpp" when every role is a known lm-studio catalog model', () => {
+    const result = inferPreferredProvider({
+      spec: 'qwen2.5-coder-32b-instruct',
+      coordinator: 'qwen2.5-coder-32b-instruct',
+      worker: 'qwen2.5-coder-32b-instruct',
+      reviewer: 'qwen2.5-coder-14b-instruct',
+      gateChecker: 'qwen2.5-coder-7b-instruct',
+    })
+    expect(result).toBe('llama-cpp')
+  })
+
+  it('returns "llama-cpp" for unlisted ids that heuristically look local (qwen/, deepseek/, llama/…)', () => {
+    const result = inferPreferredProvider({
+      spec: 'qwen/qwen3.6-35b-a3b',
+      coordinator: 'qwen/qwen3.6-35b-a3b',
+      worker: 'qwen/qwen3.6-35b-a3b',
+      reviewer: 'qwen/qwen3.6-35b-a3b',
+      gateChecker: 'qwen/qwen3.6-35b-a3b',
+    })
+    expect(result).toBe('llama-cpp')
+  })
+
+  it('returns "claude-oauth" when every role is a claude-* model', () => {
+    const result = inferPreferredProvider({
+      spec: 'claude-sonnet-4-6',
+      coordinator: 'claude-sonnet-4-6',
+      worker: 'claude-sonnet-4-6',
+      reviewer: 'claude-haiku-4-5-20251001',
+      gateChecker: 'claude-haiku-4-5-20251001',
+    })
+    expect(result).toBe('claude-oauth')
+  })
+
+  it('returns "openai-api" when every role is a gpt-* model', () => {
+    const result = inferPreferredProvider({
+      spec: 'gpt-4o',
+      coordinator: 'gpt-4o',
+      worker: 'gpt-4o',
+      reviewer: 'gpt-4o-mini',
+      gateChecker: 'gpt-4o-mini',
+    })
+    expect(result).toBe('openai-api')
+  })
+
+  it('returns undefined when roles disagree (mixed providers)', () => {
+    const result = inferPreferredProvider({
+      spec: 'claude-sonnet-4-6',
+      coordinator: 'claude-sonnet-4-6',
+      worker: 'qwen2.5-coder-32b-instruct',
+      reviewer: 'claude-haiku-4-5-20251001',
+      gateChecker: 'qwen2.5-coder-7b-instruct',
+    })
+    expect(result).toBeUndefined()
+  })
+
+  it('returns undefined when no role has a recognisable provider', () => {
+    const result = inferPreferredProvider({
+      spec: 'mystery-model',
+      coordinator: 'mystery-model',
+      worker: 'mystery-model',
+      reviewer: 'mystery-model',
+      gateChecker: 'mystery-model',
+    })
+    expect(result).toBeUndefined()
   })
 })

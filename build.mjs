@@ -3,6 +3,7 @@
 // Internal modules (src/*) are inlined; runtime npm deps stay external.
 
 import { build, context } from 'esbuild'
+import esbuildSvelte from 'esbuild-svelte'
 import { cpSync, existsSync, mkdirSync, rmSync, chmodSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,6 +12,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = __dirname
 const OUT_DIR = resolve(ROOT, 'dist')
 const ENTRY = resolve(ROOT, 'src/runtime/cli.ts')
+const WEB_ENTRY = resolve(ROOT, 'src/web/main.ts')
+const WEB_OUT_DIR = join(OUT_DIR, 'web')
 
 const EXTERNALS = Object.keys(
   JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')).dependencies ?? {},
@@ -25,10 +28,18 @@ const copyAssetsPlugin = {
   name: 'copy-assets',
   setup(pluginBuild) {
     pluginBuild.onEnd(() => {
-      const src = resolve(ROOT, 'src/skills/bundled/content')
-      const dst = join(OUT_DIR, 'bundled', 'content')
-      if (existsSync(src)) {
-        cpSync(src, dst, { recursive: true })
+      const skillsSrc = resolve(ROOT, 'src/skills/bundled/content')
+      const skillsDst = join(OUT_DIR, 'bundled', 'content')
+      if (existsSync(skillsSrc)) {
+        cpSync(skillsSrc, skillsDst, { recursive: true })
+      }
+      const defaultsSrc = resolve(ROOT, 'src/engineering-defaults')
+      const defaultsDst = join(OUT_DIR, 'engineering-defaults')
+      if (existsSync(defaultsSrc)) {
+        cpSync(defaultsSrc, defaultsDst, {
+          recursive: true,
+          filter: (path) => !path.endsWith('.ts'),
+        })
       }
     })
   },
@@ -65,16 +76,45 @@ const buildOptions = {
   plugins: [copyAssetsPlugin],
 }
 
+/**
+ * Web bundle: Svelte 5 dashboard that mounts over the Hono-served HTML shell.
+ * Compiled as a browser ESM bundle with Svelte's own CSS extracted to app.css.
+ */
+const webBuildOptions = {
+  entryPoints: [WEB_ENTRY],
+  bundle: true,
+  outfile: join(WEB_OUT_DIR, 'app.js'),
+  platform: 'browser',
+  format: 'esm',
+  target: 'es2022',
+  conditions: ['svelte', 'browser', 'module', 'import', 'default'],
+  mainFields: ['svelte', 'browser', 'module', 'main'],
+  plugins: [
+    esbuildSvelte({
+      compilerOptions: { css: 'external' },
+    }),
+  ],
+  loader: { '.css': 'css' },
+  sourcemap: true,
+  minify: false,
+  logLevel: 'info',
+}
+
 const watch = process.argv.includes('--watch')
 
 cleanDist()
+mkdirSync(WEB_OUT_DIR, { recursive: true })
 
 if (watch) {
   const ctx = await context(buildOptions)
+  const webCtx = await context(webBuildOptions)
   await ctx.watch()
+  await webCtx.watch()
   console.log('[guildhall build] Watching for changes…')
 } else {
   await build(buildOptions)
+  await build(webBuildOptions)
   chmodSync(join(OUT_DIR, 'cli.js'), 0o755)
   console.log(`[guildhall build] ✓ dist/cli.js`)
+  console.log(`[guildhall build] ✓ dist/web/app.js + app.css`)
 }

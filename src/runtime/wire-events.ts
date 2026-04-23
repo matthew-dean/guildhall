@@ -56,7 +56,7 @@ export function tickOutcomeToBackendEvent(outcome: TickOutcome): BackendEvent | 
     case 'agent-error':
       return {
         type: 'error',
-        message: `Agent ${outcome.agent} failed on ${outcome.taskId}: ${outcome.error}`,
+        message: humanizeAgentError(outcome.agent, outcome.taskId, outcome.error),
         task_id: outcome.taskId,
         agent_name: outcome.agent,
       }
@@ -98,6 +98,22 @@ export function tickOutcomeToBackendEvent(outcome: TickOutcome): BackendEvent | 
       // itself — return null rather than emit a synthetic event.
       return null
   }
+}
+
+// Translate internal agent error messages into plain English for the activity
+// feed. The most common case — "Exceeded maximum turn limit (N)" — is not a
+// failure from the human's perspective: the agent ran its per-tick budget, its
+// side-effects persisted, and the next tick resumes. Render those as a
+// pause-and-resume note, not a red ERROR.
+function humanizeAgentError(agent: string, taskId: string, error: string): string {
+  const maxTurnsMatch = /Exceeded maximum turn limit \((\d+)\)/.exec(error)
+  if (maxTurnsMatch) {
+    return (
+      `${agent} ran its step budget (${maxTurnsMatch[1]} steps) on ${taskId} and saved progress. ` +
+      `The next orchestrator tick will pick up where it left off — no action needed.`
+    )
+  }
+  return `Agent ${agent} failed on ${taskId}: ${error}`
 }
 
 /**

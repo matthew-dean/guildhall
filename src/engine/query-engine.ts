@@ -216,12 +216,16 @@ export class QueryEngine {
     }
 
     const context = this.buildContext(this.maxTurns)
-    const queryMessages = [...this.messagesInternal]
 
-    for await (const { event, usage } of runQuery(context, queryMessages)) {
-      if (event.type === 'assistant_turn_complete') {
-        this.messagesInternal = [...queryMessages]
-      }
+    // runQuery mutates the messages array in place — assistant turns and
+    // tool_result follow-ups are appended directly to messagesInternal so
+    // that a mid-loop exit (stream error, maxTurns, reactive-compact bail)
+    // still leaves the in-memory and on-save state coherent. Taking a
+    // snapshot here was a prior source of drift: assistant_turn_complete
+    // fires *before* tool execution pushes the tool_result, so a snapshot
+    // restored at that event would drop the unmatched assistant tool_use
+    // during sanitize-on-save.
+    for await (const { event, usage } of runQuery(context, this.messagesInternal)) {
       if (usage !== null) this.addUsage(usage)
       yield event
     }
