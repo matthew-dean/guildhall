@@ -56,6 +56,10 @@ export function makeDefaultSettings(now: Date = new Date()): LeverSettings {
       position: 'none',
       ...stub('no slot allocation until fanout is enabled'),
     },
+    workspace_import_autonomy: {
+      position: 'suggest',
+      ...stub('detect existing signals in a non-empty workspace; draft an inventory and wait for human approval before mutating TASKS.json'),
+    },
   }
 
   const domainDefault: DomainLevers = {

@@ -27,6 +27,7 @@ function makeProject(
     agent_health_strictness: entry('standard' as const),
     remediation_autonomy: entry('auto' as const),
     runtime_isolation: entry('none' as const),
+    workspace_import_autonomy: entry('suggest' as const),
   }
 }
 

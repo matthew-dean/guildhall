@@ -74,6 +74,7 @@ export const projectLeversSchema = z.object({
     z.enum(['auto', 'confirm_destructive', 'confirm_all', 'pause_all_on_issue']),
   ),
   runtime_isolation: entry(z.enum(['none', 'slot_allocation'])),
+  workspace_import_autonomy: entry(z.enum(['off', 'suggest', 'apply'])),
 })
 
 export type ProjectLevers = z.infer<typeof projectLeversSchema>
@@ -141,6 +142,7 @@ export const PROJECT_LEVER_NAMES = [
   'agent_health_strictness',
   'remediation_autonomy',
   'runtime_isolation',
+  'workspace_import_autonomy',
 ] as const satisfies readonly (keyof ProjectLevers)[]
 
 export const DOMAIN_LEVER_NAMES = [
