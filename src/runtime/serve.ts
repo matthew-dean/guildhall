@@ -40,6 +40,13 @@ import {
   bootstrapNeeded,
   runBootstrap,
 } from './bootstrap-runner.js'
+import {
+  maybeSeedWorkspaceImport,
+  approveWorkspaceImport,
+  parseWorkspaceImport,
+  workspaceNeedsImport,
+  WORKSPACE_IMPORT_TASK_ID,
+} from './workspace-importer.js'
 
 // ---------------------------------------------------------------------------
 // guildhall serve — single-project dashboard
@@ -406,16 +413,202 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
+      const memoryDir = join(project.path, 'memory')
       const result = await approveMetaIntake({
         workspacePath: project.path,
-        memoryDir: join(project.path, 'memory'),
+        memoryDir,
       })
       if (!result.success) {
         return c.json({ error: result.error ?? 'Approval failed' }, 400)
       }
       // Re-resolve so subsequent GETs reflect the newly-added coordinators.
       project = resolveProject(project.path)
-      return c.json({ ok: true, coordinatorsAdded: result.coordinatorsAdded ?? 0 })
+
+      // FR-34: now that coordinators exist, check whether the workspace has
+      // existing artifacts worth importing into TASKS.json. The lever
+      // (`workspace_import_autonomy`) gates this — default 'suggest' seeds
+      // the reserved task but waits for human approval.
+      const importOutcome = await maybeSeedWorkspaceImport({
+        memoryDir,
+        projectPath: project.path,
+      })
+
+      return c.json({
+        ok: true,
+        coordinatorsAdded: result.coordinatorsAdded ?? 0,
+        workspaceImport: {
+          outcome: importOutcome.outcome,
+          seeded: importOutcome.seeded,
+          leverPosition: importOutcome.leverPosition,
+          draftPreview: {
+            goals: importOutcome.draft.goals.length,
+            tasks: importOutcome.draft.tasks.length,
+            milestones: importOutcome.draft.milestones.length,
+          },
+        },
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // FR-34 workspace import — status / draft preview / approval.
+  // -------------------------------------------------------------------------
+  app.get('/api/project/workspace-import/status', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({
+          needed: false,
+          seeded: false,
+          taskStatus: null,
+          draft: { goals: 0, tasks: 0, milestones: 0 },
+        })
+      }
+      const memoryDir = join(project.path, 'memory')
+      const need = await workspaceNeedsImport({
+        memoryDir,
+        projectPath: project.path,
+      })
+
+      // Lever read — mirror the defaulting rule in maybeSeedWorkspaceImport.
+      let leverPosition: 'off' | 'suggest' | 'apply' = 'suggest'
+      try {
+        const settings = await loadLeverSettings({
+          path: defaultAgentSettingsPath(project.path),
+        })
+        const pos = settings.project['workspace_import_autonomy']?.position
+        if (pos === 'off' || pos === 'suggest' || pos === 'apply') {
+          leverPosition = pos
+        }
+      } catch {}
+
+      // Is there a reserved task?
+      const tasksPath = join(memoryDir, 'TASKS.json')
+      let taskStatus: string | null = null
+      let specPresent = false
+      if (existsSync(tasksPath)) {
+        const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+          | { tasks?: Array<Record<string, unknown>> }
+          | Array<Record<string, unknown>>
+        const list = Array.isArray(raw) ? raw : raw.tasks ?? []
+        const task = list.find(
+          t => (t as { id?: string }).id === WORKSPACE_IMPORT_TASK_ID,
+        ) as { status?: string; spec?: string } | undefined
+        if (task) {
+          taskStatus = task.status ?? null
+          specPresent =
+            typeof task.spec === 'string' && task.spec.trim().length > 0
+        }
+      }
+
+      return c.json({
+        needed: need.needed,
+        seeded: taskStatus !== null,
+        taskStatus,
+        specPresent,
+        leverPosition,
+        draft: {
+          goals: need.draft.goals.length,
+          tasks: need.draft.tasks.length,
+          milestones: need.draft.milestones.length,
+        },
+        inventory: {
+          ran: need.inventory.ran,
+          signals: need.inventory.signals.length,
+          failed: need.inventory.failed,
+        },
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/workspace-import', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const memoryDir = join(project.path, 'memory')
+      const res = await maybeSeedWorkspaceImport({
+        memoryDir,
+        projectPath: project.path,
+      })
+      return c.json({
+        seeded: res.seeded,
+        outcome: res.outcome,
+        leverPosition: res.leverPosition,
+        draft: {
+          goals: res.draft.goals.length,
+          tasks: res.draft.tasks.length,
+          milestones: res.draft.milestones.length,
+        },
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/workspace-import/draft', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ taskExists: false, specReady: false, parsed: null })
+      }
+      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+      if (!existsSync(tasksPath)) {
+        return c.json({ taskExists: false, specReady: false, parsed: null })
+      }
+      const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+        | { tasks?: Array<Record<string, unknown>> }
+        | Array<Record<string, unknown>>
+      const list = Array.isArray(raw) ? raw : raw.tasks ?? []
+      const task = list.find(
+        t => (t as { id?: string }).id === WORKSPACE_IMPORT_TASK_ID,
+      ) as { spec?: string; status?: string } | undefined
+      if (!task) {
+        return c.json({ taskExists: false, specReady: false, parsed: null })
+      }
+      const spec = typeof task.spec === 'string' ? task.spec : ''
+      if (spec.trim().length === 0) {
+        return c.json({
+          taskExists: true,
+          specReady: false,
+          taskStatus: task.status ?? null,
+          parsed: null,
+        })
+      }
+      const parsed = parseWorkspaceImport(spec)
+      const specReady =
+        parsed.goals.length + parsed.tasks.length + parsed.milestones.length > 0
+      return c.json({
+        taskExists: true,
+        specReady,
+        taskStatus: task.status ?? null,
+        parsed,
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/workspace-import/approve', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const result = await approveWorkspaceImport({
+        memoryDir: join(project.path, 'memory'),
+        projectPath: project.path,
+      })
+      if (!result.success) {
+        return c.json({ error: result.error ?? 'Approval failed' }, 400)
+      }
+      return c.json({
+        ok: true,
+        tasksAdded: result.tasksAdded ?? 0,
+        goalsRecorded: result.goalsRecorded ?? 0,
+        milestonesLogged: result.milestonesLogged ?? 0,
+      })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }

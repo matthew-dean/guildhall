@@ -3,6 +3,7 @@ import path from 'node:path'
 import { load as yamlLoad } from 'js-yaml'
 import { TaskQueue, type Task, type TaskPriority } from '@guildhall/core'
 import { appendExploringTranscript } from '@guildhall/tools'
+import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
 import {
   detectWorkspaceSignals,
   formWorkspaceHypothesis,
@@ -609,5 +610,114 @@ export async function approveWorkspaceImport(
     tasksAdded,
     goalsRecorded: parsed.goals.length,
     milestonesLogged,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Lever-driven seed decision — used by init.ts and the meta-intake approval
+// flow to decide whether to automatically create the reserved importer task.
+// ---------------------------------------------------------------------------
+
+export type ImportAutonomyPosition = 'off' | 'suggest' | 'apply'
+
+export interface MaybeSeedWorkspaceImportInput {
+  memoryDir: string
+  projectPath: string
+  /**
+   * Optional injected lever position (tests). When omitted, loaded from
+   * `memory/agent-settings.yaml`. Defaults to 'suggest' if settings are
+   * missing or the lever has not been written yet.
+   */
+  leverPosition?: ImportAutonomyPosition
+  /** Optional injected inventory (tests). Normally detected fresh. */
+  inventory?: WorkspaceInventory
+}
+
+export interface MaybeSeedWorkspaceImportResult {
+  /** Whether the reserved task exists (either newly created or already present). */
+  seeded: boolean
+  /**
+   * Why seeding was/was not performed. 'off' = lever disabled; 'not-needed'
+   * = workspace already has user tasks or no signals; 'already-seeded' =
+   * reserved task existed before this call; 'seeded' = we created it.
+   */
+  outcome: 'off' | 'not-needed' | 'already-seeded' | 'seeded'
+  inventory: WorkspaceInventory
+  draft: WorkspaceImportDraft
+  leverPosition: ImportAutonomyPosition
+}
+
+async function resolveImportAutonomy(
+  memoryDir: string,
+): Promise<ImportAutonomyPosition> {
+  const workspacePath = path.dirname(memoryDir)
+  const settingsPath = defaultAgentSettingsPath(workspacePath)
+  try {
+    const settings = await loadLeverSettings({ path: settingsPath })
+    const entry = settings.project['workspace_import_autonomy']
+    const pos = entry?.position
+    if (pos === 'off' || pos === 'suggest' || pos === 'apply') return pos
+  } catch {
+    // missing or unreadable settings file — fall back to the default.
+  }
+  return 'suggest'
+}
+
+/**
+ * Detect-and-optionally-seed helper, consulted by init and the meta-intake
+ * approval flow. Reads the `workspace_import_autonomy` lever:
+ *
+ *   - 'off'     → never seed; return `outcome: 'off'`.
+ *   - 'suggest' → seed the reserved task but do NOT auto-approve. The
+ *                 dashboard UI surfaces the draft for the user. (Default.)
+ *   - 'apply'   → same as 'suggest' at this phase; auto-approval after the
+ *                 agent emits fences is gated on an additional user nod in
+ *                 the dashboard. A fully-autonomous path can be layered on
+ *                 later without changing the data model here.
+ */
+export async function maybeSeedWorkspaceImport(
+  input: MaybeSeedWorkspaceImportInput,
+): Promise<MaybeSeedWorkspaceImportResult> {
+  const leverPosition =
+    input.leverPosition ?? (await resolveImportAutonomy(input.memoryDir))
+  const needCheck = await workspaceNeedsImport({
+    memoryDir: input.memoryDir,
+    projectPath: input.projectPath,
+    ...(input.inventory ? { inventory: input.inventory } : {}),
+  })
+
+  if (leverPosition === 'off') {
+    return {
+      seeded: false,
+      outcome: 'off',
+      inventory: needCheck.inventory,
+      draft: needCheck.draft,
+      leverPosition,
+    }
+  }
+
+  if (!needCheck.needed) {
+    return {
+      seeded: false,
+      outcome: 'not-needed',
+      inventory: needCheck.inventory,
+      draft: needCheck.draft,
+      leverPosition,
+    }
+  }
+
+  const res = await createWorkspaceImportTask({
+    memoryDir: input.memoryDir,
+    projectPath: input.projectPath,
+    inventory: needCheck.inventory,
+    draft: needCheck.draft,
+  })
+
+  return {
+    seeded: true,
+    outcome: res.alreadyExists ? 'already-seeded' : 'seeded',
+    inventory: res.inventory,
+    draft: res.draft,
+    leverPosition,
   }
 }

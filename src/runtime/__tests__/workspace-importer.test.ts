@@ -9,6 +9,7 @@ import {
   workspaceNeedsImport,
   approveWorkspaceImport,
   parseWorkspaceImport,
+  maybeSeedWorkspaceImport,
   WORKSPACE_IMPORT_TASK_ID,
   WORKSPACE_IMPORT_DOMAIN,
 } from '../workspace-importer.js'
@@ -405,6 +406,56 @@ milestones:
     expect(progress).toContain('Ship v0.1.0')
     expect(progress).toContain('abc12345')
     expect(progress).toContain('MILESTONE')
+  })
+
+  it('maybeSeedWorkspaceImport respects lever=off', async () => {
+    const res = await maybeSeedWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      inventory: sampleInventory(),
+      leverPosition: 'off',
+    })
+    expect(res.seeded).toBe(false)
+    expect(res.outcome).toBe('off')
+    const q = await readQueue()
+    expect(q.tasks.find((t) => t.id === WORKSPACE_IMPORT_TASK_ID)).toBeUndefined()
+  })
+
+  it('maybeSeedWorkspaceImport seeds the reserved task on lever=suggest', async () => {
+    const res = await maybeSeedWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      inventory: sampleInventory(),
+      leverPosition: 'suggest',
+    })
+    expect(res.seeded).toBe(true)
+    expect(res.outcome).toBe('seeded')
+    const q = await readQueue()
+    expect(q.tasks.find((t) => t.id === WORKSPACE_IMPORT_TASK_ID)).toBeDefined()
+  })
+
+  it('maybeSeedWorkspaceImport skips when no signals are found', async () => {
+    const res = await maybeSeedWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      inventory: invWith([]),
+      leverPosition: 'suggest',
+    })
+    expect(res.seeded).toBe(false)
+    expect(res.outcome).toBe('not-needed')
+  })
+
+  it('maybeSeedWorkspaceImport reports already-seeded on the second run', async () => {
+    const opts = {
+      memoryDir,
+      projectPath: tmpDir,
+      inventory: sampleInventory(),
+      leverPosition: 'suggest' as const,
+    }
+    await maybeSeedWorkspaceImport(opts)
+    const second = await maybeSeedWorkspaceImport(opts)
+    expect(second.outcome).toBe('already-seeded')
+    expect(second.seeded).toBe(true)
   })
 
   it('suffixes conflicting task ids rather than overwriting', async () => {
