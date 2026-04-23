@@ -1927,6 +1927,9 @@ export async function runOrchestrator(
   const gateCheckerAgentInst = createGateCheckerAgent(models.gateChecker, {
     ...baseAgentOpts,
     sessionPersistence: persistFor('gate-checker'),
+    ...(config.bootstrap && config.bootstrap.successGates.length > 0
+      ? { successGates: config.bootstrap.successGates }
+      : {}),
   })
   const coordinators: Record<string, GuildhallAgent> = Object.fromEntries(
     config.coordinators.map((entry) => [

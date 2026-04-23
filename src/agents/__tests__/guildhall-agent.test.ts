@@ -419,6 +419,30 @@ describe('agent factories', () => {
       expect(names).toContain('mcp__x__g')
     })
 
+    it('createGateCheckerAgent defaults to STANDARD_TS_GATES when no successGates passed', async () => {
+      const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
+      const agent = createGateCheckerAgent({ apiClient: client, modelId: 'm' })
+      await agent.generate('go')
+      const sys = client.requests[0]?.system_prompt ?? ''
+      expect(sys).toContain('typecheck')
+      expect(sys).toContain('falling back to the TypeScript defaults')
+    })
+
+    it("createGateCheckerAgent uses project's successGates verbatim when provided", async () => {
+      const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
+      const agent = createGateCheckerAgent(
+        { apiClient: client, modelId: 'm' },
+        { successGates: ['pnpm typecheck', 'pnpm test', 'cargo clippy -- -D warnings'] },
+      )
+      await agent.generate('go')
+      const sys = client.requests[0]?.system_prompt ?? ''
+      expect(sys).toContain('`pnpm typecheck`')
+      expect(sys).toContain('`pnpm test`')
+      expect(sys).toContain('`cargo clippy -- -D warnings`')
+      expect(sys).toContain('verified `bootstrap.successGates`')
+      expect(sys).not.toContain('falling back to the TypeScript defaults')
+    })
+
     it('createCoordinatorAgent appends extraTools', async () => {
       const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
       const domain: CoordinatorDomain = {

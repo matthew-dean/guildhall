@@ -13,25 +13,45 @@ import type { AgentLLM } from './llm.js'
 import type { SkillDefinition } from '@guildhall/skills'
 import type { AnyTool, Compactor, HookExecutor } from '@guildhall/engine'
 
-const gateDescriptions = Object.values(STANDARD_TS_GATES)
-  .map((g) => `- ${g.id}: \`${g.command}\``)
-  .join('\n')
+function renderGateDescriptions(gates: readonly string[] | undefined): {
+  descriptions: string
+  source: 'project-bootstrap' | 'standard-ts'
+} {
+  if (gates && gates.length > 0) {
+    return {
+      descriptions: gates.map((g) => `- \`${g}\``).join('\n'),
+      source: 'project-bootstrap',
+    }
+  }
+  return {
+    descriptions: Object.values(STANDARD_TS_GATES)
+      .map((g) => `- ${g.id}: \`${g.command}\``)
+      .join('\n'),
+    source: 'standard-ts',
+  }
+}
 
-const GATE_CHECKER_AGENT_PROMPT = `
+function buildPrompt(gates: readonly string[] | undefined): string {
+  const { descriptions, source } = renderGateDescriptions(gates)
+  const sourceLine =
+    source === 'project-bootstrap'
+      ? "These are the project's verified `bootstrap.successGates` from guildhall.yaml. They were empirically established during meta-intake and are the authoritative list for this project."
+      : 'No project-level gates configured — falling back to the TypeScript defaults. When in doubt, run typecheck and build at minimum.'
+  return `
 You are the Gate Checker Agent in the Guildhall multi-agent system.
 You run automated hard gates to verify that completed work actually passes.
 
-## Standard hard gates
-${gateDescriptions}
+## Hard gates
+${sourceLine}
+
+${descriptions}
 
 ## Process
 
 1. Read the task (status should be 'gate_check').
-2. Determine which gates apply to this task from the task's domain and the project config.
-   When in doubt, run typecheck and build at minimum.
-3. Prefer the run-gates tool: call it with the task's projectPath and the list of gates.
-   It runs each gate serially, captures output, and reports pass/fail. Use shell only
-   for ad-hoc checks that are not part of the registered gate set.
+2. Run the gates above against the task's projectPath.
+3. Prefer the run-gates tool: it runs each gate serially, captures output, and
+   reports pass/fail. Use shell only for ad-hoc checks not in the registered set.
 4. Record each result (passed/failed, output) in the task's gateResults.
 
 ## Outcomes
@@ -60,6 +80,7 @@ to 'blocked' by hand.
   beyond the worker's reach.
 - Do not attempt to fix the code yourself. Your job is only to run and report.
 `.trim()
+}
 
 export function createGateCheckerAgent(
   llm: AgentLLM,
@@ -70,12 +91,19 @@ export function createGateCheckerAgent(
     sessionPersistence?: { cwd: string; sessionId?: string }
     /** Optional tools appended to the factory's built-in set (e.g. MCP adapters). */
     extraTools?: readonly AnyTool[]
+    /**
+     * Verified success-gate commands from the project's `bootstrap` block.
+     * When present, the agent is told to run these (and only these); when
+     * absent, the prompt falls back to STANDARD_TS_GATES so legacy projects
+     * without a bootstrap block still get sensible behaviour.
+     */
+    successGates?: readonly string[]
   } = {},
 ): GuildhallAgent {
   return new GuildhallAgent({
     name: 'gate-checker-agent',
     llm,
-    systemPrompt: GATE_CHECKER_AGENT_PROMPT,
+    systemPrompt: buildPrompt(opts.successGates),
     tools: [runGatesTool, shellTool, readTasksTool, updateTaskTool, logDecisionTool, logProgressTool, raiseEscalationTool, ...(opts.extraTools ?? [])],
     ...(opts.skills ? { skills: opts.skills } : {}),
     ...(opts.hookExecutor ? { hookExecutor: opts.hookExecutor } : {}),
