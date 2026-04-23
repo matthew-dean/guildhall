@@ -7,6 +7,8 @@ import { TaskQueue } from '@guildhall/core'
 import {
   createWorkspaceImportTask,
   workspaceNeedsImport,
+  approveWorkspaceImport,
+  parseWorkspaceImport,
   WORKSPACE_IMPORT_TASK_ID,
   WORKSPACE_IMPORT_DOMAIN,
 } from '../workspace-importer.js'
@@ -218,5 +220,212 @@ describe('workspaceNeedsImport', () => {
     // After the reserved task was created the detection signal still says
     // 'needed' because the reserved task is not a user task.
     expect(res.needed).toBe(true)
+  })
+})
+
+describe('parseWorkspaceImport', () => {
+  it('returns empty buckets when spec has no fences', () => {
+    expect(parseWorkspaceImport('hello world')).toEqual({
+      goals: [],
+      tasks: [],
+      milestones: [],
+    })
+  })
+
+  it('parses goals / tasks / milestones fences independently', () => {
+    const spec = `
+\`\`\`yaml
+goals:
+  - id: g1
+    title: Ship orchestrator
+    rationale: North star per README
+\`\`\`
+
+\`\`\`yaml
+tasks:
+  - id: t-wire-dashboard
+    title: Wire dashboard card
+    description: Render import preview + approve button
+    domain: ui
+    priority: high
+    references:
+      - ROADMAP.md
+\`\`\`
+
+\`\`\`yaml
+milestones:
+  - title: Ship v0.1.0
+    evidence: abc12345
+\`\`\`
+`
+    const parsed = parseWorkspaceImport(spec)
+    expect(parsed.goals).toEqual([
+      { id: 'g1', title: 'Ship orchestrator', rationale: 'North star per README' },
+    ])
+    expect(parsed.tasks).toEqual([
+      {
+        id: 't-wire-dashboard',
+        title: 'Wire dashboard card',
+        description: 'Render import preview + approve button',
+        domain: 'ui',
+        priority: 'high',
+        references: ['ROADMAP.md'],
+      },
+    ])
+    expect(parsed.milestones).toEqual([
+      { title: 'Ship v0.1.0', evidence: 'abc12345' },
+    ])
+  })
+
+  it('falls back to normal priority and default domain on invalid values', () => {
+    const parsed = parseWorkspaceImport(`
+\`\`\`yaml
+tasks:
+  - id: t1
+    title: whatever
+    priority: urgent-now
+\`\`\`
+`)
+    expect(parsed.tasks[0]!.priority).toBe('normal')
+    expect(parsed.tasks[0]!.domain).toBe('core')
+  })
+
+  it('skips malformed fence entries but keeps the valid ones', () => {
+    const parsed = parseWorkspaceImport(`
+\`\`\`yaml
+tasks:
+  - title: no id
+  - id: t-ok
+    title: ok
+\`\`\`
+`)
+    expect(parsed.tasks).toHaveLength(1)
+    expect(parsed.tasks[0]!.id).toBe('t-ok')
+  })
+})
+
+describe('approveWorkspaceImport', () => {
+  async function seedImporterWithSpec(spec: string) {
+    await createWorkspaceImportTask({
+      memoryDir,
+      projectPath: tmpDir,
+      inventory: sampleInventory(),
+    })
+    const q = await readQueue()
+    const task = q.tasks.find((t) => t.id === WORKSPACE_IMPORT_TASK_ID)!
+    task.spec = spec
+    await fs.writeFile(
+      path.join(memoryDir, 'TASKS.json'),
+      JSON.stringify(q, null, 2),
+    )
+  }
+
+  it('errors when the importer task is missing', async () => {
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(res.success).toBe(false)
+    expect(res.error).toContain('No workspace-import task')
+  })
+
+  it('errors when the spec has no parseable fences', async () => {
+    await seedImporterWithSpec('just free text, no yaml fences')
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(res.success).toBe(false)
+    expect(res.error).toContain('Could not find')
+  })
+
+  it('inserts tasks as proposed + origination=system, records goals + milestones', async () => {
+    await seedImporterWithSpec(`
+\`\`\`yaml
+goals:
+  - id: g1
+    title: Ship orchestrator
+    rationale: README
+\`\`\`
+
+\`\`\`yaml
+tasks:
+  - id: t-wire-dashboard
+    title: Wire dashboard card
+    description: do the thing
+    domain: ui
+    priority: high
+    references:
+      - ROADMAP.md
+\`\`\`
+
+\`\`\`yaml
+milestones:
+  - title: Ship v0.1.0
+    evidence: abc12345
+\`\`\`
+`)
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(res).toMatchObject({
+      success: true,
+      tasksAdded: 1,
+      goalsRecorded: 1,
+      milestonesLogged: 1,
+    })
+
+    const q = await readQueue()
+    const importerTask = q.tasks.find((t) => t.id === WORKSPACE_IMPORT_TASK_ID)!
+    expect(importerTask.status).toBe('done')
+    expect(importerTask.completedAt).toBeTypeOf('string')
+
+    const newTask = q.tasks.find((t) => t.id === 't-wire-dashboard')!
+    expect(newTask.status).toBe('proposed')
+    expect(newTask.origination).toBe('system')
+    expect(newTask.domain).toBe('ui')
+    expect(newTask.priority).toBe('high')
+    expect(newTask.notes[0]!.content).toContain('ROADMAP.md')
+
+    const goalsRaw = await fs.readFile(
+      path.join(memoryDir, 'workspace-goals.json'),
+      'utf-8',
+    )
+    const goals = JSON.parse(goalsRaw)
+    expect(goals.goals[0]).toMatchObject({
+      id: 'g1',
+      title: 'Ship orchestrator',
+    })
+
+    const progress = await fs.readFile(
+      path.join(memoryDir, 'PROGRESS.md'),
+      'utf-8',
+    )
+    expect(progress).toContain('Ship v0.1.0')
+    expect(progress).toContain('abc12345')
+    expect(progress).toContain('MILESTONE')
+  })
+
+  it('suffixes conflicting task ids rather than overwriting', async () => {
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: t-wire-dashboard
+    title: v1
+    domain: ui
+  - id: t-wire-dashboard
+    title: v2
+    domain: ui
+\`\`\`
+`)
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(res.tasksAdded).toBe(2)
+    const q = await readQueue()
+    expect(q.tasks.find((t) => t.id === 't-wire-dashboard')?.title).toBe('v1')
+    expect(q.tasks.find((t) => t.id === 't-wire-dashboard-2')?.title).toBe('v2')
   })
 })

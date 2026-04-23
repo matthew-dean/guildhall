@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { TaskQueue, type Task } from '@guildhall/core'
+import { load as yamlLoad } from 'js-yaml'
+import { TaskQueue, type Task, type TaskPriority } from '@guildhall/core'
 import { appendExploringTranscript } from '@guildhall/tools'
 import {
   detectWorkspaceSignals,
@@ -308,4 +309,305 @@ export async function workspaceNeedsImport(opts: {
   // started building out tasks manually.
   const needed = userTasks.length === 0 && inventory.signals.length > 0
   return { needed, inventory, draft }
+}
+
+// ---------------------------------------------------------------------------
+// Approval — parse the three YAML fences the agent emitted and merge them
+// into TASKS.json, PROGRESS.md, and memory/workspace-goals.json.
+// ---------------------------------------------------------------------------
+
+export interface ParsedImport {
+  goals: readonly ParsedGoal[]
+  tasks: readonly ParsedTask[]
+  milestones: readonly ParsedMilestone[]
+}
+
+export interface ParsedGoal {
+  id: string
+  title: string
+  rationale: string
+}
+
+export interface ParsedTask {
+  id: string
+  title: string
+  description: string
+  domain: string
+  priority: TaskPriority
+  references: readonly string[]
+}
+
+export interface ParsedMilestone {
+  title: string
+  evidence: string
+}
+
+const PRIORITIES: ReadonlySet<TaskPriority> = new Set([
+  'critical',
+  'high',
+  'normal',
+  'low',
+])
+
+function iterateYamlFences(spec: string): Generator<Record<string, unknown>> {
+  return (function* () {
+    const fence = /```ya?ml\s*\n([\s\S]*?)```/gi
+    let match: RegExpExecArray | null
+    while ((match = fence.exec(spec)) !== null) {
+      const body = match[1] ?? ''
+      let parsed: unknown
+      try {
+        parsed = yamlLoad(body)
+      } catch {
+        continue
+      }
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        yield parsed as Record<string, unknown>
+      }
+    }
+  })()
+}
+
+function normStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((v): v is string => typeof v === 'string')
+}
+
+/**
+ * Pulls the `goals:` / `tasks:` / `milestones:` fences out of the importer
+ * task's spec. Each section is independent: the agent can emit just one if
+ * that's all the workspace justified.
+ */
+export function parseWorkspaceImport(spec: string): ParsedImport {
+  const goals: ParsedGoal[] = []
+  const tasks: ParsedTask[] = []
+  const milestones: ParsedMilestone[] = []
+
+  for (const obj of iterateYamlFences(spec)) {
+    if (Array.isArray(obj['goals'])) {
+      for (const raw of obj['goals']) {
+        if (!raw || typeof raw !== 'object') continue
+        const g = raw as Record<string, unknown>
+        const id = typeof g['id'] === 'string' ? g['id'] : undefined
+        const title = typeof g['title'] === 'string' ? g['title'] : undefined
+        const rationale = typeof g['rationale'] === 'string' ? g['rationale'] : ''
+        if (!id || !title) continue
+        goals.push({ id, title, rationale })
+      }
+    }
+    if (Array.isArray(obj['tasks'])) {
+      for (const raw of obj['tasks']) {
+        if (!raw || typeof raw !== 'object') continue
+        const t = raw as Record<string, unknown>
+        const id = typeof t['id'] === 'string' ? t['id'] : undefined
+        const title = typeof t['title'] === 'string' ? t['title'] : undefined
+        const description =
+          typeof t['description'] === 'string' ? t['description'] : ''
+        const domain = typeof t['domain'] === 'string' ? t['domain'] : 'core'
+        const rawPriority = t['priority']
+        const priority =
+          typeof rawPriority === 'string' && PRIORITIES.has(rawPriority as TaskPriority)
+            ? (rawPriority as TaskPriority)
+            : 'normal'
+        if (!id || !title) continue
+        tasks.push({
+          id,
+          title,
+          description,
+          domain,
+          priority,
+          references: normStringList(t['references']),
+        })
+      }
+    }
+    if (Array.isArray(obj['milestones'])) {
+      for (const raw of obj['milestones']) {
+        if (!raw || typeof raw !== 'object') continue
+        const m = raw as Record<string, unknown>
+        const title = typeof m['title'] === 'string' ? m['title'] : undefined
+        const evidence =
+          typeof m['evidence'] === 'string' ? m['evidence'] : ''
+        if (!title) continue
+        milestones.push({ title, evidence })
+      }
+    }
+  }
+
+  return { goals, tasks, milestones }
+}
+
+export interface ApproveWorkspaceImportInput {
+  memoryDir: string
+  projectPath: string
+}
+
+export interface ApproveWorkspaceImportResult {
+  success: boolean
+  tasksAdded?: number
+  goalsRecorded?: number
+  milestonesLogged?: number
+  error?: string
+}
+
+const WORKSPACE_GOALS_FILE = 'workspace-goals.json'
+
+function uniqueTaskId(existingIds: Set<string>, suggested: string): string {
+  if (!existingIds.has(suggested)) return suggested
+  for (let n = 2; n < 1000; n++) {
+    const candidate = `${suggested}-${n}`
+    if (!existingIds.has(candidate)) return candidate
+  }
+  throw new Error(`Cannot allocate unique id for ${suggested}`)
+}
+
+/**
+ * Consume the workspace-import draft: parse fences, append tasks as
+ * `proposed` so FR-21 task_origination still governs promotion, record
+ * milestones to PROGRESS.md, persist goals into
+ * `memory/workspace-goals.json`, and mark the reserved task done.
+ *
+ * Safe to call multiple times: tasks with ids already present are
+ * skipped (the reserved task's spec is the source of truth).
+ */
+export async function approveWorkspaceImport(
+  input: ApproveWorkspaceImportInput,
+): Promise<ApproveWorkspaceImportResult> {
+  const queue = await readQueue(input.memoryDir)
+  const task = queue.tasks.find((t) => t.id === WORKSPACE_IMPORT_TASK_ID)
+  if (!task) {
+    return {
+      success: false,
+      error: `No workspace-import task found (id: ${WORKSPACE_IMPORT_TASK_ID})`,
+    }
+  }
+  if (!task.spec || task.spec.trim().length === 0) {
+    return {
+      success: false,
+      error:
+        'Workspace-import task has no spec yet; ask the importer agent to emit the YAML fences first.',
+    }
+  }
+
+  const parsed = parseWorkspaceImport(task.spec)
+  if (
+    parsed.goals.length === 0 &&
+    parsed.tasks.length === 0 &&
+    parsed.milestones.length === 0
+  ) {
+    return {
+      success: false,
+      error:
+        'Could not find goals/tasks/milestones fences in the workspace-import spec.',
+    }
+  }
+
+  const now = new Date().toISOString()
+
+  // Merge tasks into the queue as `proposed`. Dup ids get suffixed.
+  const existingIds = new Set(queue.tasks.map((t) => t.id))
+  let tasksAdded = 0
+  for (const t of parsed.tasks) {
+    const id = uniqueTaskId(existingIds, t.id)
+    existingIds.add(id)
+    queue.tasks.push({
+      id,
+      title: t.title,
+      description: t.description,
+      domain: t.domain,
+      projectPath: input.projectPath,
+      status: 'proposed',
+      priority: t.priority,
+      dependsOn: [],
+      outOfScope: [],
+      acceptanceCriteria: [],
+      notes: t.references.length > 0
+        ? [
+            {
+              agentId: 'workspace-importer',
+              role: 'importer',
+              content: `Imported from: ${t.references.join(', ')}`,
+              timestamp: now,
+            },
+          ]
+        : [],
+      gateResults: [],
+      reviewVerdicts: [],
+      escalations: [],
+      agentIssues: [],
+      revisionCount: 0,
+      remediationAttempts: 0,
+      origination: 'system',
+      createdAt: now,
+      updatedAt: now,
+    })
+    tasksAdded++
+  }
+
+  // Mark the importer task done.
+  task.status = 'done'
+  task.updatedAt = now
+  task.completedAt = now
+  queue.lastUpdated = now
+  await writeQueue(input.memoryDir, queue)
+
+  // Persist goals (overwrites prior import — the agent is authoritative).
+  if (parsed.goals.length > 0) {
+    const goalsPath = path.join(input.memoryDir, WORKSPACE_GOALS_FILE)
+    await fs.writeFile(
+      goalsPath,
+      JSON.stringify(
+        { version: 1, recordedAt: now, goals: parsed.goals },
+        null,
+        2,
+      ),
+      'utf-8',
+    )
+  }
+
+  // Append milestones to PROGRESS.md.
+  let milestonesLogged = 0
+  if (parsed.milestones.length > 0) {
+    const progressPath = path.join(input.memoryDir, 'PROGRESS.md')
+    const blocks: string[] = []
+    for (const m of parsed.milestones) {
+      blocks.push(
+        [
+          `\n### 🏁 MILESTONE — ${now}`,
+          `**Agent:** workspace-importer | **Domain:** ${WORKSPACE_IMPORT_DOMAIN}`,
+          '',
+          m.title,
+          m.evidence ? `\nEvidence: ${m.evidence}` : '',
+          '',
+          '---',
+        ]
+          .filter((line) => line !== '')
+          .join('\n'),
+      )
+      milestonesLogged++
+    }
+    await fs.appendFile(progressPath, blocks.join(''), 'utf-8')
+  }
+
+  const summary = [
+    `Workspace import approved.`,
+    `Tasks proposed: ${tasksAdded}.`,
+    parsed.goals.length > 0 ? `Goals recorded: ${parsed.goals.length}.` : '',
+    milestonesLogged > 0 ? `Milestones logged: ${milestonesLogged}.` : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  await appendExploringTranscript({
+    memoryDir: input.memoryDir,
+    taskId: WORKSPACE_IMPORT_TASK_ID,
+    role: 'system',
+    content: summary,
+  })
+
+  return {
+    success: true,
+    tasksAdded,
+    goalsRecorded: parsed.goals.length,
+    milestonesLogged,
+  }
 }
