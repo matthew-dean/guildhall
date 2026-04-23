@@ -13,6 +13,7 @@
   import ReleaseTab from './project/ReleaseTab.svelte'
   import SettingsTab from './project/SettingsTab.svelte'
   import MetaIntakeBanner from './MetaIntakeBanner.svelte'
+  import WorkspaceImportBanner from './WorkspaceImportBanner.svelte'
   import IntakeModal from './IntakeModal.svelte'
   import { project } from '../lib/project.svelte.js'
   import { onEvent } from '../lib/events.js'
@@ -147,6 +148,8 @@
 
     {#if needsMeta}
       <MetaIntakeBanner />
+    {:else}
+      <WorkspaceImportBanner />
     {/if}
 
     <Tabs tabs={TABS} active={currentView} onselect={onSelectTab} />
