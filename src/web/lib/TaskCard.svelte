@@ -5,6 +5,7 @@
 -->
 <script lang="ts">
   import { nav } from './nav.svelte.js'
+  import Icon, { type IconName } from './Icon.svelte'
   import type { TaskLite } from './types.js'
 
   const ACTIVE_STATUSES = new Set([
@@ -14,6 +15,8 @@
     'exploring',
     'spec_review',
   ])
+
+  type StatusTone = 'danger' | 'warn' | 'ok' | 'accent' | 'neutral'
 
   interface Props {
     task: TaskLite
@@ -30,6 +33,28 @@
     Array.isArray(task.escalations) && task.escalations.some(e => !e.resolvedAt),
   )
 
+  const statusTone = $derived<StatusTone>(
+    status === 'blocked'
+      ? 'danger'
+      : status === 'shelved'
+        ? 'warn'
+        : status === 'done'
+          ? 'ok'
+          : isActive
+            ? 'accent'
+            : 'neutral',
+  )
+
+  const statusIcon = $derived<IconName>(
+    status === 'blocked'
+      ? 'alert-triangle'
+      : status === 'done'
+        ? 'check-circle-2'
+        : isActive
+          ? 'loader'
+          : 'circle',
+  )
+
   function open() {
     nav('/task/' + encodeURIComponent(task.id))
   }
@@ -43,23 +68,26 @@
 </script>
 
 <div
-  class="task-card st-{status}"
+  class="task-card st-{status} tone-{statusTone}"
   class:st-active={isActive}
+  class:st-blocked-bold={status === 'blocked'}
   role="button"
   tabindex="0"
   onclick={open}
   onkeydown={onKey}
 >
   <div class="tc-head">
-    <span class="tc-status">{status}</span>
-    {#if isActive}
-      <span class="tc-spin" title="Orchestrator is ticking this task"></span>
-    {/if}
+    <span class="tc-status chip-{statusTone}" class:chip-loud={status === 'blocked'}>
+      <Icon name={statusIcon} size={12} spin={statusIcon === 'loader'} />
+      <span>{status}</span>
+    </span>
     {#if isQueued && !orchestratorRunning}
-      <span class="tc-queued" title="Queued — orchestrator is stopped">⏸</span>
+      <span class="tc-queued" title="Queued — orchestrator is stopped">paused</span>
     {/if}
     {#if hasEscalations}
-      <span class="tc-flag" title="Open escalation">⚑</span>
+      <span class="tc-flag" title="Open escalation">
+        <Icon name="alert-triangle" size={12} />
+      </span>
     {/if}
     <span class="grow"></span>
     <span class="tc-id">{task.id}</span>
@@ -76,31 +104,37 @@
 
 <style>
   .task-card {
-    background: var(--bg);
-    border: 1px solid var(--border);
+    background: var(--bg-raised);
+    border: 1px solid var(--border-strong);
     border-radius: var(--r-2);
     padding: var(--s-2) var(--s-3);
     cursor: pointer;
     display: flex;
     flex-direction: column;
     gap: var(--s-1);
+    border-left-width: 3px;
+    border-left-color: var(--stripe-neutral);
   }
   .task-card:hover {
     border-color: var(--accent);
+    border-left-width: 3px;
   }
+  .tone-danger { border-left-color: var(--stripe-danger); }
+  .tone-warn { border-left-color: var(--stripe-warn); }
+  .tone-ok { border-left-color: var(--stripe-ok); }
+  .tone-accent { border-left-color: var(--stripe-accent); }
+
   .st-active {
-    border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 6%, var(--bg));
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised));
   }
   .st-done {
     opacity: 0.6;
   }
-  .st-blocked {
-    border-left: 3px solid var(--danger);
-  }
   .st-shelved {
-    opacity: 0.5;
-    border-left: 3px solid var(--warn);
+    opacity: 0.6;
+  }
+  .st-blocked-bold {
+    background: color-mix(in srgb, var(--danger) 8%, var(--bg-raised));
   }
 
   .tc-head {
@@ -114,7 +148,33 @@
     color: var(--text-muted);
   }
   .tc-status {
-    color: var(--text);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    color: var(--text-muted);
+    background: rgba(136, 136, 153, 0.12);
+  }
+  .chip-danger {
+    color: var(--danger);
+    background: rgba(224, 82, 82, 0.15);
+  }
+  .chip-warn {
+    color: var(--warn);
+    background: rgba(212, 162, 60, 0.15);
+  }
+  .chip-ok {
+    color: var(--accent-2);
+    background: rgba(78, 204, 163, 0.15);
+  }
+  .chip-accent {
+    color: var(--accent);
+    background: rgba(124, 109, 240, 0.15);
+  }
+  .chip-loud {
+    font-weight: 800;
+    box-shadow: 0 0 0 1px var(--danger);
   }
   .grow {
     flex: 1;
@@ -127,18 +187,6 @@
     color: var(--text-muted);
     font-size: var(--fs-0);
   }
-  .tc-spin {
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    border: 2px solid var(--accent);
-    border-right-color: transparent;
-    border-radius: 50%;
-    animation: spin 0.9s linear infinite;
-  }
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
   .tc-queued {
     color: var(--warn);
     text-transform: none;
@@ -146,8 +194,8 @@
   }
   .tc-flag {
     color: var(--warn);
-    text-transform: none;
-    letter-spacing: 0;
+    display: inline-flex;
+    align-items: center;
   }
   .tc-title {
     color: var(--text);

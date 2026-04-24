@@ -174,3 +174,13 @@ export type ProjectView =
   | 'timeline'
   | 'release'
   | 'settings'
+
+/**
+ * Sub-path within a ProjectView. Only `settings`, `coordinators`, and
+ * `release` surface a sub-nav in the left rail; everything else stays null.
+ *
+ *  - settings:     'ready' | 'coordinators' | 'advanced'
+ *  - release:      'verdict' | 'criteria'
+ *  - coordinators: 'all' | '<coordinator-id>'
+ */
+export type ProjectSubView = string | null

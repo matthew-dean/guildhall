@@ -114,7 +114,7 @@
     <Card title="Live activity">
       <div class="feed" id="work-feed">
         {#if events.length === 0 && !running}
-          <p class="muted">Idle — press ▶ Start to begin.</p>
+          <p class="muted">Idle — press Start to begin.</p>
         {:else if events.length === 0}
           <p class="muted">Connecting…</p>
         {:else}

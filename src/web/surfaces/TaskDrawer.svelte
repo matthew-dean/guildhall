@@ -8,6 +8,7 @@
 -->
 <script lang="ts">
   import Button from '../lib/Button.svelte'
+  import Icon from '../lib/Icon.svelte'
   import Tabs from '../lib/Tabs.svelte'
   import Modal from '../lib/Modal.svelte'
   import Textarea from '../lib/Textarea.svelte'
@@ -144,7 +145,7 @@
   <header class="gh-drawer-head">
     <h3>{payload?.task.title ?? taskId}</h3>
     <Button variant="ghost" size="sm" ariaLabel="Close" onclick={onClose}>
-      ✕
+      <Icon name="x" size={16} />
     </Button>
   </header>
 

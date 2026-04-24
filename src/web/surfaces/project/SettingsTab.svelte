@@ -5,6 +5,10 @@
     · Secondary: Coordinators summary card.
     · Overflow (<details> "Advanced"): Workspace identity, rename, Levers
       (read-only), Design system.
+  Left-rail sub-nav maps:
+    /settings            -> subView null | 'ready'       => ready block
+    /settings/coordinators -> 'coordinators'             => coordinators block
+    /settings/advanced   -> 'advanced'                    => advanced block
 -->
 <script lang="ts">
   import Card from '../../lib/Card.svelte'
@@ -19,6 +23,12 @@
   import DefinitionList from '../../lib/DefinitionList.svelte'
   import { nav } from '../../lib/nav.svelte.js'
   import { project } from '../../lib/project.svelte.js'
+
+  interface Props {
+    subView?: string | null
+  }
+  let { subView = null }: Props = $props()
+  const section = $derived(subView ?? 'ready')
 
   interface Lever {
     name: string
@@ -231,6 +241,7 @@
   </Card>
 {:else}
   <Stack gap="4">
+  {#if section === 'ready'}
     <!-- PRIMARY: Ready-to-start checklist -->
     <Card title="Ready to start?" titleTag="h2">
       <ul class="checklist">
@@ -270,7 +281,9 @@
         </li>
       </ul>
     </Card>
+  {/if}
 
+  {#if section === 'coordinators'}
     <!-- SECONDARY: Coordinators summary -->
     <Card title="Coordinators">
       {#if coordinators.length === 0}
@@ -289,7 +302,9 @@
         </div>
       {/if}
     </Card>
+  {/if}
 
+  {#if section === 'ready'}
     <!-- Bootstrap detail (shown only when configured, collapsed-ish via its own card) -->
     {#if bootstrapInfo?.configured}
       <Card title="Bootstrap detail">
@@ -343,11 +358,11 @@
         </Stack>
       </Card>
     {/if}
+  {/if}
 
+  {#if section === 'advanced'}
     <!-- OVERFLOW: Advanced -->
-    <details class="advanced">
-      <summary>Advanced</summary>
-      <div class="advanced-body">
+    <div class="advanced-body">
         <Stack gap="4">
           <Card title="Workspace identity">
             <Stack gap="3">
@@ -451,7 +466,7 @@
           </Card>
         </Stack>
       </div>
-    </details>
+  {/if}
   </Stack>
 {/if}
 
@@ -539,25 +554,6 @@
     flex-direction: column;
     gap: var(--s-1);
     font-size: var(--fs-2);
-  }
-  .advanced > summary {
-    cursor: pointer;
-    color: var(--text-muted);
-    font-size: var(--fs-1);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-weight: 700;
-    list-style: none;
-    padding: var(--s-2) 0;
-  }
-  .advanced > summary::-webkit-details-marker {
-    display: none;
-  }
-  .advanced > summary::before {
-    content: '▸ ';
-  }
-  .advanced[open] > summary::before {
-    content: '▾ ';
   }
   .advanced-body {
     margin-top: var(--s-3);

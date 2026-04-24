@@ -8,11 +8,19 @@
 
   interface Props {
     detail: ProjectDetail
+    subView?: string | null
   }
 
-  let { detail }: Props = $props()
+  let { detail, subView = null }: Props = $props()
 
-  const coordinators = $derived(detail.config?.coordinators ?? [])
+  const allCoordinators = $derived(detail.config?.coordinators ?? [])
+  const coordinators = $derived(
+    subView && subView !== 'all'
+      ? allCoordinators.filter(
+          c => (c.id ?? c.name ?? '').toString() === decodeURIComponent(subView),
+        )
+      : allCoordinators,
+  )
   const tasks = $derived<Task[]>(detail.tasks ?? [])
   const running = $derived((detail.run?.status ?? 'stopped') === 'running')
 

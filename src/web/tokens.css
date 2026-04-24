@@ -7,15 +7,27 @@
 :root {
   /* colors — semantic */
   --bg: #0f0f11;
-  --bg-raised: #1a1a1f;
-  --bg-raised-2: #24242c;
+  --bg-base: #0f0f11;        /* page background */
+  --bg-raised: #1a1a1f;      /* rails, sections, inset surfaces */
+  --bg-raised-2: #24242c;    /* hover/secondary button fill */
+  --bg-elevated: #22222a;    /* cards — one step brighter than raised */
   --border: #2a2a33;
+  --border-strong: #3a3a45;  /* card 1px outline / stronger edge */
   --accent: #7c6df0;
   --accent-2: #4ecca3;
   --text: #e8e8f0;
   --text-muted: #888899;
   --danger: #e05252;
   --warn: #d4a23c;
+
+  /* status stripes — saturated 3px left borders for cards/rows.
+     Kept as solid colors (not tints) so the stripe remains legible on
+     elevated backgrounds. Bodies stay neutral; stripe + chip do the work. */
+  --stripe-danger: #e05252;
+  --stripe-warn: #d4a23c;
+  --stripe-ok: #4ecca3;
+  --stripe-accent: #7c6df0;
+  --stripe-neutral: #3a3a45;
 
   /* type scale */
   --fs-0: 11px;

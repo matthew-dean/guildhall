@@ -12,7 +12,7 @@
   import type { ProjectView as Tab } from './lib/types.js'
 
   type Route =
-    | { kind: 'project'; view: Tab; drawerTaskId: string | null }
+    | { kind: 'project'; view: Tab; sub: string | null; drawerTaskId: string | null }
     | { kind: 'setup' }
     | { kind: 'providers' }
 
@@ -21,11 +21,31 @@
     if (p === '/providers') return { kind: 'providers' }
     const taskMatch = /^\/task\/(.+)$/.exec(p)
     if (taskMatch) {
-      return { kind: 'project', view: 'work', drawerTaskId: decodeURIComponent(taskMatch[1]) }
+      return {
+        kind: 'project',
+        view: 'work',
+        sub: null,
+        drawerTaskId: decodeURIComponent(taskMatch[1]),
+      }
     }
-    if (p === '/settings') return { kind: 'project', view: 'settings', drawerTaskId: null }
-    if (p === '/release') return { kind: 'project', view: 'release', drawerTaskId: null }
-    return { kind: 'project', view: 'work', drawerTaskId: null }
+    const settingsSub = /^\/settings\/(.+)$/.exec(p)
+    if (settingsSub)
+      return { kind: 'project', view: 'settings', sub: settingsSub[1], drawerTaskId: null }
+    if (p === '/settings')
+      return { kind: 'project', view: 'settings', sub: null, drawerTaskId: null }
+    const releaseSub = /^\/release\/(.+)$/.exec(p)
+    if (releaseSub)
+      return { kind: 'project', view: 'release', sub: releaseSub[1], drawerTaskId: null }
+    if (p === '/release')
+      return { kind: 'project', view: 'release', sub: null, drawerTaskId: null }
+    const coordSub = /^\/coordinators\/(.+)$/.exec(p)
+    if (coordSub)
+      return { kind: 'project', view: 'coordinators', sub: coordSub[1], drawerTaskId: null }
+    if (p === '/coordinators')
+      return { kind: 'project', view: 'coordinators', sub: null, drawerTaskId: null }
+    if (p === '/planner') return { kind: 'project', view: 'planner', sub: null, drawerTaskId: null }
+    if (p === '/timeline') return { kind: 'project', view: 'timeline', sub: null, drawerTaskId: null }
+    return { kind: 'project', view: 'work', sub: null, drawerTaskId: null }
   }
 
   const route = $derived(parse(path.value))
@@ -43,7 +63,7 @@
 </script>
 
 {#if route.kind === 'project'}
-  <ProjectView initialView={route.view} />
+  <ProjectView initialView={route.view} initialSub={route.sub} />
   {#if route.drawerTaskId}
     <TaskDrawer taskId={route.drawerTaskId} onClose={closeDrawer} />
   {/if}

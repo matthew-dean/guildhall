@@ -6,6 +6,7 @@
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte'
+  import Icon from './Icon.svelte'
 
   interface Props {
     open: boolean
@@ -40,7 +41,7 @@
         class="gh-modal-x"
         aria-label="Close"
         onclick={onClose}
-      >✕</button>
+      ><Icon name="x" size={16} /></button>
     </header>
     <div class="gh-modal-body">
       {#if children}{@render children()}{/if}

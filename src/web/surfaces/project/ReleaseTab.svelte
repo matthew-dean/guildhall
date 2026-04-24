@@ -42,6 +42,12 @@
     }
   }
 
+  interface Props {
+    subView?: string | null
+  }
+  let { subView = null }: Props = $props()
+  const section = $derived(subView ?? 'verdict')
+
   let data = $state<ReleasePayload | null>(null)
   let error = $state<string | null>(null)
   let initNeeded = $state(false)
@@ -175,6 +181,7 @@
   <p class="muted">Loading release readiness…</p>
 {:else}
   <Stack gap="4">
+  {#if section === 'verdict'}
     <!-- PRIMARY: verdict -->
     <Card tone={verdict.tone === 'ok' ? 'ok' : verdict.tone === 'warn' ? 'warn' : 'default'}>
       <div class="verdict">
@@ -182,7 +189,9 @@
         <span class="verdict-reason">{verdict.reason}</span>
       </div>
     </Card>
+  {/if}
 
+  {#if section === 'criteria'}
     <!-- SECONDARY: criteria list -->
     <Card title="Criteria">
       <ul class="criteria">
@@ -234,7 +243,7 @@
       </ul>
     </Card>
 
-    <!-- Overflow: status tally -->
+    <!-- Overflow: status tally (kept within criteria sub-view) -->
     <details class="tally-more">
       <summary>Task-state tally ({data.totals.done}/{data.totals.tasks} done)</summary>
       <div class="tally-body">
@@ -254,6 +263,7 @@
         {/if}
       </div>
     </details>
+  {/if}
   </Stack>
 {/if}
 

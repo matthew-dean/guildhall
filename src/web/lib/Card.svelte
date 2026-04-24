@@ -5,7 +5,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
 
-  type Tone = 'default' | 'warn' | 'danger' | 'ok'
+  type Tone = 'default' | 'warn' | 'danger' | 'ok' | 'accent'
 
   interface Props {
     title?: string
@@ -48,22 +48,29 @@
 
 <style>
   .card {
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
     border-radius: var(--r-3);
     padding: var(--s-4);
+    position: relative;
   }
-  /* Tone stripes use an inset shadow so they don't shift content inward
-     the way a thicker border would (same padding/alignment across tones). */
-  .card.tone-warn {
-    box-shadow: inset 3px 0 0 var(--warn);
+  /* Tone stripes are a 3px solid left border rendered via ::before so they
+     don't shift content (padding stays constant across tones). */
+  .card::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    border-top-left-radius: var(--r-3);
+    border-bottom-left-radius: var(--r-3);
+    background: transparent;
   }
-  .card.tone-danger {
-    box-shadow: inset 3px 0 0 var(--danger);
-  }
-  .card.tone-ok {
-    box-shadow: inset 3px 0 0 var(--accent-2);
-  }
+  .card.tone-warn::before { background: var(--stripe-warn); }
+  .card.tone-danger::before { background: var(--stripe-danger); }
+  .card.tone-ok::before { background: var(--stripe-ok); }
+  .card.tone-accent::before { background: var(--stripe-accent); }
   .card-head {
     display: flex;
     align-items: baseline;
