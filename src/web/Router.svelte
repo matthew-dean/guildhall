@@ -23,11 +23,17 @@
     if (taskMatch) {
       return {
         kind: 'project',
-        view: 'work',
+        view: 'inbox',
         sub: null,
         drawerTaskId: decodeURIComponent(taskMatch[1]),
       }
     }
+    if (p === '/inbox' || p === '/')
+      return { kind: 'project', view: 'inbox', sub: null, drawerTaskId: null }
+    if (p === '/work')
+      return { kind: 'project', view: 'work', sub: null, drawerTaskId: null }
+    if (p === '/workspace-import')
+      return { kind: 'project', view: 'workspace-import', sub: null, drawerTaskId: null }
     const settingsSub = /^\/settings\/(.+)$/.exec(p)
     if (settingsSub)
       return { kind: 'project', view: 'settings', sub: settingsSub[1], drawerTaskId: null }
@@ -45,7 +51,7 @@
       return { kind: 'project', view: 'coordinators', sub: null, drawerTaskId: null }
     if (p === '/planner') return { kind: 'project', view: 'planner', sub: null, drawerTaskId: null }
     if (p === '/timeline') return { kind: 'project', view: 'timeline', sub: null, drawerTaskId: null }
-    return { kind: 'project', view: 'work', sub: null, drawerTaskId: null }
+    return { kind: 'project', view: 'inbox', sub: null, drawerTaskId: null }
   }
 
   const route = $derived(parse(path.value))

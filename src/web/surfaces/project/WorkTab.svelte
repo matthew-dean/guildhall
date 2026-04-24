@@ -1,16 +1,15 @@
 <!--
   Work view. Primary/secondary/overflow IA:
-    · Primary (LEFT): task grid, with a "Needs you" banner above it when
-      anything is blocked or has an open escalation.
+    · Primary (LEFT): task grid. "Needs you" attention now lives on the
+      Inbox tab, which owns the coordinator ↔ human prompts; the Work tab
+      shows tasks + live activity only.
     · Secondary (RIGHT rail): live activity feed.
     · Overflow: "Recent progress" (PROGRESS.md) collapsed behind <details>.
 -->
 <script lang="ts">
   import Card from '../../lib/Card.svelte'
-  import Chip from '../../lib/Chip.svelte'
   import TaskCard from '../../lib/TaskCard.svelte'
   import Markdown from '../../lib/Markdown.svelte'
-  import Row from '../../lib/Row.svelte'
   import { onEvent, summarizeEvent, eventTaskId, eventCssClass } from '../../lib/events.js'
   import { nav } from '../../lib/nav.svelte.js'
   import type { ProjectDetail, EventEnvelope, Task } from '../../lib/types.js'
@@ -26,14 +25,6 @@
   const needsMeta = $derived(coordinators.length === 0)
   const runStatus = $derived(detail.run?.status ?? 'stopped')
   const running = $derived(runStatus === 'running')
-
-  const needsYou = $derived(
-    tasks.filter(
-      (t) =>
-        t.status === 'blocked' ||
-        (t.escalations ?? []).some((e) => !e.resolvedAt),
-    ),
-  )
 
   let progress = $state('Loading…')
   let events = $state<EventEnvelope[]>([])
@@ -70,29 +61,10 @@
     const id = eventTaskId(ev)
     if (id) nav('/task/' + encodeURIComponent(id))
   }
-
-  function scrollToBlocked() {
-    const el = document.getElementById('needs-you')
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
 </script>
 
 <div class="two-col">
   <div class="col col-primary">
-    {#if needsYou.length > 0}
-      <Card tone="warn">
-        {#snippet actions()}
-          <Chip label={`${needsYou.length} waiting`} tone="warn" />
-        {/snippet}
-        <Row justify="between" align="center">
-          <strong>Needs you</strong>
-          <button type="button" class="linkbtn" onclick={scrollToBlocked}>
-            Review blocked tasks →
-          </button>
-        </Row>
-      </Card>
-    {/if}
-
     <Card title="Tasks ({tasks.length})">
       {#if tasks.length === 0}
         {#if needsMeta}
@@ -101,7 +73,7 @@
           <p class="muted">No tasks yet — <strong>+ New Task</strong> to begin.</p>
         {/if}
       {:else}
-        <div class="task-grid" id="needs-you">
+        <div class="task-grid">
           {#each tasks as t (t.id)}
             <TaskCard task={t} orchestratorRunning={running} />
           {/each}
@@ -195,17 +167,6 @@
   .ev-error      { color: var(--danger); }
   .ev-issue      { color: var(--warn); }
   .ev-supervisor { color: var(--text-muted); }
-  .linkbtn {
-    background: transparent;
-    border: none;
-    padding: 0;
-    font: inherit;
-    color: var(--accent);
-    cursor: pointer;
-  }
-  .linkbtn:hover {
-    text-decoration: underline;
-  }
   .progress-more > summary {
     cursor: pointer;
     color: var(--text-muted);

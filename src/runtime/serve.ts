@@ -53,6 +53,7 @@ import {
   workspaceNeedsImport,
   WORKSPACE_IMPORT_TASK_ID,
 } from './workspace-importer.js'
+import { buildInbox } from './inbox.js'
 
 // ---------------------------------------------------------------------------
 // guildhall serve — single-project dashboard
@@ -615,6 +616,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
         goalsRecorded: result.goalsRecorded ?? 0,
         milestonesLogged: result.milestonesLogged ?? 0,
       })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // Coordinator inbox — prioritized list of things the human must resolve
+  // for the coordinator to make progress. Source of truth is on-disk state
+  // (guildhall.yaml, TASKS.json, agent-settings.yaml, workspace-goals.json).
+  // -------------------------------------------------------------------------
+  app.get('/api/project/inbox', c => {
+    try {
+      if (project.initializationNeeded) return c.json({ items: [] })
+      const items = buildInbox({ projectPath: project.path })
+      return c.json({ items })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }

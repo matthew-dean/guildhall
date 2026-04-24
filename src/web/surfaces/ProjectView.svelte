@@ -12,7 +12,9 @@
   import Button from '../lib/Button.svelte'
   import Chip from '../lib/Chip.svelte'
   import Icon, { type IconName } from '../lib/Icon.svelte'
+  import InboxTab from './project/InboxTab.svelte'
   import WorkTab from './project/WorkTab.svelte'
+  import WorkspaceImportTab from './project/WorkspaceImportTab.svelte'
   import PlannerTab from './project/PlannerTab.svelte'
   import CoordinatorsTab from './project/CoordinatorsTab.svelte'
   import TimelineTab from './project/TimelineTab.svelte'
@@ -31,7 +33,7 @@
     initialSub?: string | null
   }
 
-  let { initialView = 'work', initialSub = null }: Props = $props()
+  let { initialView = 'inbox', initialSub = null }: Props = $props()
 
   let currentView = $state<ProjectView>(initialView)
   let currentSub = $state<string | null>(initialSub)
@@ -76,7 +78,8 @@
   const needsMeta = $derived(coordinators.length === 0)
 
   const entries = $derived<NavEntry[]>([
-    { id: 'work', label: 'Work', icon: 'activity', path: '/' },
+    { id: 'inbox', label: 'Inbox', icon: 'inbox', path: '/inbox' },
+    { id: 'work', label: 'Work', icon: 'activity', path: '/work' },
     { id: 'planner', label: 'Planner', icon: 'list-checks', path: '/planner' },
     {
       id: 'coordinators',
@@ -259,7 +262,11 @@
         {/if}
 
         <div class="body">
-          {#if currentView === 'work'}
+          {#if currentView === 'inbox'}
+            <InboxTab />
+          {:else if currentView === 'workspace-import'}
+            <WorkspaceImportTab />
+          {:else if currentView === 'work'}
             <WorkTab {detail} />
           {:else if currentView === 'planner'}
             <PlannerTab {detail} />

@@ -24,6 +24,12 @@
     | 'check'
     | 'x'
     | 'chevron-down'
+    | 'inbox'
+    | 'wrench'
+    | 'package'
+    | 'file-text'
+    | 'file-check'
+    | 'sliders'
 </script>
 
 <script lang="ts">
@@ -45,6 +51,12 @@
   import Check from 'lucide-svelte/icons/check'
   import X from 'lucide-svelte/icons/x'
   import ChevronDown from 'lucide-svelte/icons/chevron-down'
+  import Inbox from 'lucide-svelte/icons/inbox'
+  import Wrench from 'lucide-svelte/icons/wrench'
+  import Package from 'lucide-svelte/icons/package'
+  import FileText from 'lucide-svelte/icons/file-text'
+  import FileCheck from 'lucide-svelte/icons/file-check'
+  import Sliders from 'lucide-svelte/icons/sliders'
 
   interface Props {
     name: IconName
@@ -75,6 +87,12 @@
   {:else if name === 'check'}<Check {size} {strokeWidth} />
   {:else if name === 'x'}<X {size} {strokeWidth} />
   {:else if name === 'chevron-down'}<ChevronDown {size} {strokeWidth} />
+  {:else if name === 'inbox'}<Inbox {size} {strokeWidth} />
+  {:else if name === 'wrench'}<Wrench {size} {strokeWidth} />
+  {:else if name === 'package'}<Package {size} {strokeWidth} />
+  {:else if name === 'file-text'}<FileText {size} {strokeWidth} />
+  {:else if name === 'file-check'}<FileCheck {size} {strokeWidth} />
+  {:else if name === 'sliders'}<Sliders {size} {strokeWidth} />
   {/if}
 </span>
 

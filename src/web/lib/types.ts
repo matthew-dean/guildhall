@@ -168,12 +168,14 @@ export interface EventEnvelope {
 }
 
 export type ProjectView =
+  | 'inbox'
   | 'work'
   | 'planner'
   | 'coordinators'
   | 'timeline'
   | 'release'
   | 'settings'
+  | 'workspace-import'
 
 /**
  * Sub-path within a ProjectView. Only `settings`, `coordinators`, and
