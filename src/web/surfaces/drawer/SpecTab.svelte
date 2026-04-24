@@ -24,7 +24,7 @@
     onPause: () => void
     onShelve: () => void
     onUnshelve: () => void
-    onResolveEscalation: (escalation: Escalation) => void
+    onResolveEscalation: (escalation: Escalation, mode: 'retry' | 'resolve') => void
     onSendFollowUp: (message: string) => Promise<void>
   }
 
@@ -166,16 +166,6 @@
     </Card>
   {/if}
 
-  <Row justify="end" gap="2">
-    {#if task.status !== 'done' && task.status !== 'shelved'}
-      <Button variant="secondary" disabled={busy} onclick={onPause}>Pause</Button>
-    {/if}
-    {#if task.status !== 'done'}
-      <Button variant="danger" disabled={busy} onclick={onShelve}>Shelve</Button>
-    {/if}
-    <a class="copy-link" href="/task/{encodeURIComponent(task.id)}">copy link</a>
-  </Row>
-
   {#if exploring}
     <Card title="Follow-up to spec agent">
       <Stack gap="2">
@@ -215,11 +205,5 @@
   }
   .bullet li {
     margin: var(--s-1) 0;
-  }
-  .copy-link {
-    color: var(--text-muted);
-    font-size: var(--fs-1);
-    text-decoration: underline dotted;
-    align-self: center;
   }
 </style>

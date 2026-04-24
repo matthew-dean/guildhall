@@ -2,15 +2,22 @@
   Task drawer shell. Loads /api/project/task/:id, exposes the four-tab UI,
   and hosts every action (approve/pause/shelve/unshelve/resolve/follow-up).
   Child components handle rendering; this file owns state and HTTP.
+
+  Uses ResolveEscalationModal (no window.prompt) and an inline ApproveSpecModal
+  for the optional approval note. Footer with primary actions is sticky.
 -->
 <script lang="ts">
   import Button from '../lib/Button.svelte'
   import Tabs from '../lib/Tabs.svelte'
+  import Modal from '../lib/Modal.svelte'
+  import Textarea from '../lib/Textarea.svelte'
+  import Field from '../lib/Field.svelte'
   import SpecTab from './drawer/SpecTab.svelte'
   import TranscriptTab from './drawer/TranscriptTab.svelte'
   import HistoryTab from './drawer/HistoryTab.svelte'
   import ExpertsTab from './drawer/ExpertsTab.svelte'
   import ProvenanceTab from './drawer/ProvenanceTab.svelte'
+  import ResolveEscalationModal from './drawer/ResolveEscalationModal.svelte'
   import type { DrawerPayload, DrawerTab, Escalation } from '../lib/types.js'
 
   interface Props {
@@ -24,6 +31,11 @@
   let error = $state<string | null>(null)
   let busy = $state(false)
   let activeTab = $state<DrawerTab>('spec')
+
+  // Modal state
+  let resolveModal = $state<{ escalation: Escalation; mode: 'retry' | 'resolve' } | null>(null)
+  let approveSpecOpen = $state(false)
+  let approveSpecNote = $state('')
 
   const TABS = [
     { id: 'spec', label: 'Spec' },
@@ -74,28 +86,30 @@
     }
   }
 
-  async function handleApproveSpec() {
-    const note = window.prompt(
-      'Optional approval note for the coordinator (leave blank to just approve):',
-    )
-    const body = note && note.trim() ? { approvalNote: note.trim() } : undefined
+  function handleApproveSpec() {
+    approveSpecNote = ''
+    approveSpecOpen = true
+  }
+
+  async function submitApproveSpec() {
+    const note = approveSpecNote.trim()
+    const body = note ? { approvalNote: note } : undefined
+    approveSpecOpen = false
     await post('approve-spec', body)
   }
 
-  async function handleResolveEscalation(escalation: Escalation) {
-    const resolution = window.prompt(
-      'How should the agent resolve this escalation? (This note is fed back into the coordinator.)',
-    )
-    if (!resolution || !resolution.trim()) return
-    const nextStatus = window.prompt(
-      'Next status after resolving (ready | in_progress | exploring | spec_review | review | gate_check)',
-      'ready',
-    )
-    if (!nextStatus) return
+  function handleResolveEscalation(escalation: Escalation, mode: 'retry' | 'resolve' = 'resolve') {
+    resolveModal = { escalation, mode }
+  }
+
+  async function submitResolveEscalation(args: { resolution: string; nextStatus: string }) {
+    const current = resolveModal
+    if (!current) return
+    resolveModal = null
     await post('resolve-escalation', {
-      escalationId: escalation.id,
-      resolution: resolution.trim(),
-      nextStatus: nextStatus.trim(),
+      escalationId: current.escalation.id,
+      resolution: args.resolution,
+      nextStatus: args.nextStatus,
     })
   }
 
@@ -106,6 +120,11 @@
   function confirmed(action: string): boolean {
     return window.confirm(`${action} task ${taskId}?`)
   }
+
+  const task = $derived(payload?.task)
+  const canPause = $derived(task && task.status !== 'done' && task.status !== 'shelved')
+  const canShelve = $derived(task && task.status !== 'done')
+  const isShelved = $derived(task?.status === 'shelved')
 
   $effect(() => {
     void load()
@@ -166,7 +185,76 @@
       <ProvenanceTab task={payload.task} />
     {/if}
   </div>
+
+  {#if payload && task}
+    <footer class="gh-drawer-foot">
+      {#if canPause}
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={busy}
+          onclick={() => confirmed('Pause') && post('pause')}
+        >
+          Pause
+        </Button>
+      {/if}
+      {#if isShelved}
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={busy}
+          onclick={() => confirmed('Unshelve') && post('unshelve')}
+        >
+          Unshelve
+        </Button>
+      {:else if canShelve}
+        <Button
+          variant="danger"
+          size="sm"
+          disabled={busy}
+          onclick={() => confirmed('Shelve') && post('shelve')}
+        >
+          Shelve
+        </Button>
+      {/if}
+      <a class="copy-link" href="/task/{encodeURIComponent(task.id)}">copy link</a>
+    </footer>
+  {/if}
 </aside>
+
+<ResolveEscalationModal
+  open={resolveModal !== null}
+  escalation={resolveModal?.escalation ?? null}
+  mode={resolveModal?.mode ?? 'resolve'}
+  {busy}
+  onClose={() => (resolveModal = null)}
+  onSubmit={submitResolveEscalation}
+/>
+
+<Modal
+  open={approveSpecOpen}
+  title="Approve spec"
+  onClose={() => (approveSpecOpen = false)}
+  size="sm"
+>
+  {#snippet children()}
+    <Field label="Note (optional)">
+      <Textarea
+        bind:value={approveSpecNote}
+        rows={3}
+        placeholder="Context for the coordinator on resume."
+      />
+    </Field>
+  {/snippet}
+  {#snippet footer()}
+    <Button variant="ghost" disabled={busy} onclick={() => (approveSpecOpen = false)}>
+      Cancel
+    </Button>
+    <Button variant="primary" disabled={busy} onclick={submitApproveSpec}>
+      Approve
+    </Button>
+  {/snippet}
+</Modal>
 
 <style>
   .gh-drawer-backdrop {
@@ -201,6 +289,21 @@
     flex: 1;
     overflow-y: auto;
     padding: var(--s-4);
+  }
+  .gh-drawer-foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--s-2);
+    padding: var(--s-3) var(--s-4);
+    border-top: 1px solid var(--border);
+    background: var(--bg-sunken, var(--bg));
+  }
+  .copy-link {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    text-decoration: underline dotted;
+    margin-left: var(--s-2);
   }
   .loading,
   .error {

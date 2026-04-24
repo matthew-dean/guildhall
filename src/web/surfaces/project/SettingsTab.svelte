@@ -1,6 +1,10 @@
 <!--
-  Settings tab: workspace identity, coordinators (read-only), levers (read-only
-  grouped by scope), design-system card (approve the current draft).
+  Settings tab. Primary/secondary/overflow IA:
+    · Primary: "Ready to start?" checklist — Bootstrap / Coordinators /
+      LLM provider — each a single-line row with status chip + action.
+    · Secondary: Coordinators summary card.
+    · Overflow (<details> "Advanced"): Workspace identity, rename, Levers
+      (read-only), Design system.
 -->
 <script lang="ts">
   import Card from '../../lib/Card.svelte'
@@ -77,6 +81,12 @@
   let bootstrapInfo = $state<BootstrapInfo | null>(null)
   let bootstrapRunning = $state(false)
 
+  interface ProviderStatus {
+    configured: boolean
+    active?: string
+  }
+  let providerStatus = $state<ProviderStatus | null>(null)
+
   $effect(() => {
     fetch('/api/setup/status')
       .then(r => r.json())
@@ -97,6 +107,16 @@
       .then(r => r.json())
       .then(j => (designSystem = j?.designSystem ?? null))
       .catch(() => (designSystem = null))
+    fetch('/api/providers/status')
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => {
+        if (!j) return
+        providerStatus = {
+          configured: Boolean(j?.configured ?? j?.active),
+          active: j?.active,
+        }
+      })
+      .catch(() => (providerStatus = { configured: false }))
     void loadBootstrap()
   })
 
@@ -120,7 +140,29 @@
     }
   }
 
+  async function resetLevers() {
+    try {
+      leversError = null
+      const r = await fetch('/api/config/levers/reset', { method: 'POST' })
+      const j = await r.json().catch(() => ({}))
+      if (j?.error) {
+        leversError = String(j.error)
+        return
+      }
+      const fresh = await fetch('/api/config/levers').then(r => r.json())
+      levers = fresh.levers ?? []
+    } catch (err) {
+      leversError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
   const coordinators = $derived(project.detail?.config?.coordinators ?? [])
+
+  const bootstrapReady = $derived(
+    Boolean(bootstrapInfo?.configured && bootstrapInfo?.status?.success),
+  )
+  const providerReady = $derived(Boolean(providerStatus?.configured))
+  const coordinatorsReady = $derived(coordinators.length > 0)
 
   function flashIdentity(text: string, error: boolean) {
     identityStatus = { text, error }
@@ -188,37 +230,51 @@
     </Row>
   </Card>
 {:else}
-  <div class="grid">
-    <Card title="Workspace identity">
-      <Stack gap="3">
-        <p class="muted">
-          Stored in <code>guildhall.yaml</code>. Renaming the ID doesn't rewrite existing memory
-          logs — prefer to set it once.
-        </p>
-        <label class="field">
-          <span>Workspace name</span>
-          <Input bind:value={name} />
-        </label>
-        <label class="field">
-          <span>Workspace ID (slug)</span>
-          <Input bind:value={id} />
-        </label>
-        <Row justify="end" gap="2" align="center">
-          {#if identityStatus}
-            <span class="status" class:error={identityStatus.error}>{identityStatus.text}</span>
+  <Stack gap="4">
+    <!-- PRIMARY: Ready-to-start checklist -->
+    <Card title="Ready to start?" titleTag="h2">
+      <ul class="checklist">
+        <li class="check-row">
+          <span class="check-label">Bootstrap</span>
+          <Chip
+            label={bootstrapReady ? 'passed' : bootstrapInfo?.configured ? 'failed' : 'not set'}
+            tone={bootstrapReady ? 'ok' : bootstrapInfo?.configured ? 'danger' : 'warn'}
+          />
+          {#if !bootstrapReady}
+            <button type="button" class="linkbtn" onclick={runBootstrap} disabled={bootstrapRunning}>
+              {bootstrapRunning ? 'Running…' : 'Configure →'}
+            </button>
           {/if}
-          <Button variant="primary" disabled={savingIdentity} onclick={saveIdentity}>
-            Save identity
-          </Button>
-        </Row>
-      </Stack>
+        </li>
+        <li class="check-row">
+          <span class="check-label">Coordinators</span>
+          <Chip
+            label={coordinatorsReady ? `${coordinators.length} defined` : 'none'}
+            tone={coordinatorsReady ? 'ok' : 'warn'}
+          />
+          {#if !coordinatorsReady}
+            <button type="button" class="linkbtn" onclick={() => nav('/')}>Configure →</button>
+          {/if}
+        </li>
+        <li class="check-row">
+          <span class="check-label">LLM provider</span>
+          <Chip
+            label={providerReady ? (providerStatus?.active ?? 'configured') : 'not configured'}
+            tone={providerReady ? 'ok' : 'warn'}
+          />
+          {#if !providerReady}
+            <button type="button" class="linkbtn" onclick={() => nav('/providers')}>
+              Configure →
+            </button>
+          {/if}
+        </li>
+      </ul>
     </Card>
 
+    <!-- SECONDARY: Coordinators summary -->
     <Card title="Coordinators">
       {#if coordinators.length === 0}
-        <p class="muted">
-          No coordinators defined yet. Run meta-intake from the project page to bootstrap them.
-        </p>
+        <p class="muted">None yet — run meta-intake to bootstrap.</p>
       {:else}
         <div class="coord-list">
           {#each coordinators as c, i (c.id ?? c.name ?? i)}
@@ -234,16 +290,10 @@
       {/if}
     </Card>
 
-    <Card title="Bootstrap">
-      <Stack gap="3">
-        {#if !bootstrapInfo}
-          <p class="muted">Loading…</p>
-        {:else if !bootstrapInfo.configured}
-          <p class="muted">
-            No bootstrap established yet. The meta-intake agent will empirically verify install
-            + gate commands and write them to <code>guildhall.yaml</code>.
-          </p>
-        {:else}
+    <!-- Bootstrap detail (shown only when configured, collapsed-ish via its own card) -->
+    {#if bootstrapInfo?.configured}
+      <Card title="Bootstrap detail">
+        <Stack gap="3">
           <Row gap="2">
             <Chip
               label={bootstrapInfo.status?.success
@@ -290,103 +340,119 @@
               {bootstrapRunning ? 'Running…' : 'Re-run bootstrap'}
             </Button>
           </Row>
-        {/if}
-      </Stack>
-    </Card>
+        </Stack>
+      </Card>
+    {/if}
 
-    <Card title="Levers">
-      <Stack gap="2">
-        <p class="muted">
-          Every policy is a named lever with an explicit position. Stored with provenance in
-          <code>memory/agent-settings.yaml</code> — read-only here for now.
-        </p>
-        {#if leversError}
-          <p class="error">Could not load levers: {leversError}</p>
-        {:else if !levers}
-          <p class="muted">Loading…</p>
-        {:else if levers.length === 0}
-          <p class="muted">No levers configured.</p>
-        {:else}
-          {#each leversByScope as [scope, entries] (scope)}
-            <div class="lever-scope">{scope}</div>
-            <table class="lever-table">
-              <tbody>
-                {#each entries as l, i (l.name + i)}
-                  <tr>
-                    <td><code>{l.name}</code></td>
-                    <td><strong>{l.position}</strong></td>
-                    <td class="lever-by">{l.setBy}</td>
-                  </tr>
-                  <tr class="lever-rationale">
-                    <td colspan="3">{l.rationale}</td>
-                  </tr>
+    <!-- OVERFLOW: Advanced -->
+    <details class="advanced">
+      <summary>Advanced</summary>
+      <div class="advanced-body">
+        <Stack gap="4">
+          <Card title="Workspace identity">
+            <Stack gap="3">
+              <label class="field">
+                <span>Workspace name</span>
+                <Input bind:value={name} />
+              </label>
+              <label class="field">
+                <span>Workspace ID (slug)</span>
+                <Input bind:value={id} />
+              </label>
+              <Row justify="end" gap="2" align="center">
+                {#if identityStatus}
+                  <span class="status" class:error={identityStatus.error}>{identityStatus.text}</span>
+                {/if}
+                <Button variant="primary" disabled={savingIdentity} onclick={saveIdentity}>
+                  Save identity
+                </Button>
+              </Row>
+            </Stack>
+          </Card>
+
+          <Card title="Levers">
+            <Stack gap="2">
+              {#if leversError}
+                <Row justify="between" align="center" gap="2">
+                  <span class="error">Could not load levers: {leversError}</span>
+                  <Button variant="secondary" size="sm" onclick={resetLevers}>
+                    Reset to defaults
+                  </Button>
+                </Row>
+              {:else if !levers}
+                <p class="muted">Loading…</p>
+              {:else if levers.length === 0}
+                <p class="muted">No levers configured.</p>
+              {:else}
+                {#each leversByScope as [scope, entries] (scope)}
+                  <div class="lever-scope">{scope}</div>
+                  <table class="lever-table">
+                    <tbody>
+                      {#each entries as l, i (l.name + i)}
+                        <tr>
+                          <td><code>{l.name}</code></td>
+                          <td><strong>{l.position}</strong></td>
+                          <td class="lever-by">{l.setBy}</td>
+                        </tr>
+                        <tr class="lever-rationale">
+                          <td colspan="3">{l.rationale}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
                 {/each}
-              </tbody>
-            </table>
-          {/each}
-        {/if}
-      </Stack>
-    </Card>
+              {/if}
+            </Stack>
+          </Card>
 
-    <Card title="Design system">
-      <Stack gap="3">
-        <p class="muted">
-          Tokens, primitives, interactions, a11y, and copy voice. Drafted by the spec agent or a
-          human; stored in <code>memory/design-system.yaml</code>. Implementers see a summary of
-          the approved revision in every context.
-        </p>
-        {#if designSystem === undefined}
-          <p class="muted">Loading…</p>
-        {:else if !designSystem}
-          <p class="muted">
-            No design system drafted yet. The spec agent will propose one during exploring; you
-            can also author or edit <code>memory/design-system.yaml</code> directly.
-          </p>
-        {:else}
-          <div class="ds-head">
-            <strong>Revision {designSystem.revision ?? 0}</strong>
-            <Chip
-              label={designSystem.approvedAt ? 'approved' : 'draft'}
-              tone={designSystem.approvedAt ? 'ok' : 'warn'}
-            />
-            <Byline by={designSystem.authoredBy ?? 'unknown'} at={designSystem.authoredAt} />
-          </div>
-          <div class="ds-facts">
-            <div><span class="muted">Tokens:</span> {dsTokenCount}</div>
-            <div><span class="muted">Primitives:</span> {designSystem.primitives?.length ?? 0}</div>
-            <div><span class="muted">Tone:</span> {designSystem.copyVoice?.tone ?? 'plain'}</div>
-            <div><span class="muted">Min contrast:</span> {designSystem.a11y?.minContrastRatio ?? '—'}</div>
-          </div>
-          {#if designSystem.primitives?.length}
-            <ul class="ds-prims">
-              {#each designSystem.primitives as p, i (p.name + i)}
-                <li><strong>{p.name}</strong> <span class="muted">— {p.usage}</span></li>
-              {/each}
-            </ul>
-          {/if}
-          {#if designSystem.approvedAt}
-            <p class="muted">
-              <Byline
-                verb="Approved by"
-                by={designSystem.approvedBy ?? 'human'}
-                at={designSystem.approvedAt}
-              />
-            </p>
-          {:else}
-            <Row justify="end">
-              <Button variant="primary" onclick={approveDesignSystem}>Approve current draft</Button>
-            </Row>
-          {/if}
-        {/if}
-      </Stack>
-    </Card>
-
-    <Card title="LLM provider">
-      <p class="muted">
-        LLM credentials are configured globally. <a href="/providers">Open Providers →</a>
-      </p>
-    </Card>
-  </div>
+          <Card title="Design system">
+            <Stack gap="3">
+              {#if designSystem === undefined}
+                <p class="muted">Loading…</p>
+              {:else if !designSystem}
+                <p class="muted">No draft yet.</p>
+              {:else}
+                <div class="ds-head">
+                  <strong>Revision {designSystem.revision ?? 0}</strong>
+                  <Chip
+                    label={designSystem.approvedAt ? 'approved' : 'draft'}
+                    tone={designSystem.approvedAt ? 'ok' : 'warn'}
+                  />
+                  <Byline by={designSystem.authoredBy ?? 'unknown'} at={designSystem.authoredAt} />
+                </div>
+                <div class="ds-facts">
+                  <div><span class="muted">Tokens:</span> {dsTokenCount}</div>
+                  <div><span class="muted">Primitives:</span> {designSystem.primitives?.length ?? 0}</div>
+                  <div><span class="muted">Tone:</span> {designSystem.copyVoice?.tone ?? 'plain'}</div>
+                  <div><span class="muted">Min contrast:</span> {designSystem.a11y?.minContrastRatio ?? '—'}</div>
+                </div>
+                {#if designSystem.primitives?.length}
+                  <ul class="ds-prims">
+                    {#each designSystem.primitives as p, i (p.name + i)}
+                      <li><strong>{p.name}</strong> <span class="muted">— {p.usage}</span></li>
+                    {/each}
+                  </ul>
+                {/if}
+                {#if designSystem.approvedAt}
+                  <p class="muted">
+                    <Byline
+                      verb="Approved by"
+                      by={designSystem.approvedBy ?? 'human'}
+                      at={designSystem.approvedAt}
+                    />
+                  </p>
+                {:else}
+                  <Row justify="end">
+                    <Button variant="primary" onclick={approveDesignSystem}>Approve current draft</Button>
+                  </Row>
+                {/if}
+              {/if}
+            </Stack>
+          </Card>
+        </Stack>
+      </div>
+    </details>
+  </Stack>
 {/if}
 
 <style>
@@ -398,11 +464,6 @@
   .error {
     color: var(--danger);
     font-size: var(--fs-1);
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: var(--s-3);
   }
   .field {
     display: flex;
@@ -427,6 +488,43 @@
     border-radius: var(--r-1);
     font-size: var(--fs-1);
   }
+  .checklist {
+    list-style: none;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .check-row {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    padding: var(--s-2) 0;
+    border-top: 1px solid var(--border);
+  }
+  .check-row:first-child {
+    border-top: none;
+  }
+  .check-label {
+    min-width: 120px;
+    font-weight: 600;
+    font-size: var(--fs-2);
+  }
+  .linkbtn {
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin-left: auto;
+    font: inherit;
+    color: var(--accent);
+    cursor: pointer;
+  }
+  .linkbtn:hover {
+    text-decoration: underline;
+  }
+  .linkbtn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
   .coord-list {
     display: flex;
     flex-direction: column;
@@ -441,6 +539,28 @@
     flex-direction: column;
     gap: var(--s-1);
     font-size: var(--fs-2);
+  }
+  .advanced > summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+    list-style: none;
+    padding: var(--s-2) 0;
+  }
+  .advanced > summary::-webkit-details-marker {
+    display: none;
+  }
+  .advanced > summary::before {
+    content: '▸ ';
+  }
+  .advanced[open] > summary::before {
+    content: '▾ ';
+  }
+  .advanced-body {
+    margin-top: var(--s-3);
   }
   .lever-scope {
     text-transform: uppercase;

@@ -1,11 +1,14 @@
 <!--
-  Release readiness view. Summarises what's blocking a release candidate:
-  open escalations, unapproved briefs/specs, shelved/blocked tasks, design
-  system approval, and a status-count tally.
+  Release readiness view. Primary/secondary/overflow IA:
+    · Primary: single VERDICT block — big status chip + one-line reason.
+    · Secondary: criteria list, one row per check (icon + label + chip).
+      Each row expandable via <details> to show the offending tasks.
+    · No card grid; single column.
 -->
 <script lang="ts">
   import Card from '../../lib/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
+  import Stack from '../../lib/Stack.svelte'
   import { nav } from '../../lib/nav.svelte.js'
 
   interface ReleaseItem {
@@ -78,6 +81,82 @@
     if (id) nav('/task/' + encodeURIComponent(id))
   }
 
+  interface Criterion {
+    key: string
+    label: string
+    items: ReleaseItem[]
+    clearLabel: string
+  }
+
+  const criteria = $derived<Criterion[]>(
+    data
+      ? [
+          {
+            key: 'escalations',
+            label: 'Open escalations',
+            items: data.openEscalations,
+            clearLabel: 'No open escalations.',
+          },
+          {
+            key: 'briefs',
+            label: 'Unapproved briefs',
+            items: data.unapprovedBriefs,
+            clearLabel: 'All briefs approved.',
+          },
+          {
+            key: 'specs',
+            label: 'Specs awaiting approval',
+            items: data.unapprovedSpecs,
+            clearLabel: 'Nothing in spec_review.',
+          },
+          {
+            key: 'shelved',
+            label: 'Shelved tasks',
+            items: data.shelvedUnclaimed,
+            clearLabel: 'No shelved tasks.',
+          },
+          {
+            key: 'blocked',
+            label: 'Agent-blocked tasks',
+            items: data.blockedByAgent,
+            clearLabel: 'No agent-blocked tasks.',
+          },
+        ]
+      : [],
+  )
+
+  const dsLabel = $derived(() => {
+    const ds = data?.designSystem
+    if (!ds) return { label: 'not drafted', tone: 'warn' as const, clear: false }
+    if (!ds.drafted) return { label: 'not drafted', tone: 'warn' as const, clear: false }
+    if (ds.approved)
+      return { label: `approved · rev ${ds.revision ?? 0}`, tone: 'ok' as const, clear: true }
+    return { label: `draft · rev ${ds.revision ?? 0}`, tone: 'warn' as const, clear: false }
+  })
+
+  const verdict = $derived.by(() => {
+    if (!data) return { label: '…', tone: 'neutral' as const, reason: '' }
+    if (data.totals.tasks === 0) {
+      return {
+        label: 'Not yet',
+        tone: 'warn' as const,
+        reason: 'No tasks in this project.',
+      }
+    }
+    if (data.totals.blockingCount === 0 && dsLabel().clear) {
+      return {
+        label: 'Ready to ship',
+        tone: 'ok' as const,
+        reason: `${data.totals.done}/${data.totals.tasks} tasks done · no human blockers.`,
+      }
+    }
+    return {
+      label: 'Blocked',
+      tone: 'warn' as const,
+      reason: `${data.totals.blockingCount} item${data.totals.blockingCount === 1 ? '' : 's'} waiting on you.`,
+    }
+  })
+
   const statusRows = $derived(
     data ? Object.entries(data.statusCounts).sort((a, b) => b[1] - a[1]) : [],
   )
@@ -95,105 +174,70 @@
 {:else if !data}
   <p class="muted">Loading release readiness…</p>
 {:else}
-  <div class="page">
-    <h2 class="page-title">Release readiness</h2>
+  <Stack gap="4">
+    <!-- PRIMARY: verdict -->
+    <Card tone={verdict.tone === 'ok' ? 'ok' : verdict.tone === 'warn' ? 'warn' : 'default'}>
+      <div class="verdict">
+        <Chip label={verdict.label} tone={verdict.tone} />
+        <span class="verdict-reason">{verdict.reason}</span>
+      </div>
+    </Card>
 
-    {#if data.totals.blockingCount === 0}
-      <Card title="✓ No human blockers" tone="ok">
-        <p class="muted">Every task that needed you is cleared. Agents can keep moving.</p>
-      </Card>
-    {:else}
-      <Card
-        title="{data.totals.blockingCount} item{data.totals.blockingCount === 1 ? '' : 's'} waiting on you"
-        tone="warn"
-      >
-        <p class="muted">Resolve these before the next release candidate.</p>
-      </Card>
-    {/if}
+    <!-- SECONDARY: criteria list -->
+    <Card title="Criteria">
+      <ul class="criteria">
+        {#each criteria as c (c.key)}
+          {@const clear = c.items.length === 0}
+          <li class="crit-row">
+            {#if clear}
+              <details class="crit-det" aria-disabled="true">
+                <summary class="crit-summary crit-clear">
+                  <span class="crit-icon">✓</span>
+                  <span class="crit-label">{c.label}</span>
+                  <Chip label="clear" tone="ok" />
+                </summary>
+              </details>
+            {:else}
+              <details class="crit-det">
+                <summary class="crit-summary">
+                  <span class="crit-icon">✗</span>
+                  <span class="crit-label">{c.label}</span>
+                  <Chip label={`${c.items.length} open`} tone="warn" />
+                </summary>
+                <ul class="crit-items">
+                  {#each c.items as it, i (i)}
+                    <li>
+                      <button type="button" class="link" onclick={() => openTask(idOf(it))}>
+                        {titleOf(it)}
+                      </button>
+                      {#if extraOf(it)}
+                        <span class="muted"> · {extraOf(it)}</span>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              </details>
+            {/if}
+          </li>
+        {/each}
 
-    <div class="grid">
-      {#snippet section(title, subtitle, items, empty)}
-        <Card {title}>
-          {#snippet actions()}
-            <Chip
-              label={items.length === 0 ? 'clear' : items.length + ' open'}
-              tone={items.length === 0 ? 'ok' : 'warn'}
-            />
-          {/snippet}
-          {#if subtitle}<p class="sub muted">{subtitle}</p>{/if}
-          {#if items.length === 0}
-            <p class="muted">{empty}</p>
-          {:else}
-            <ul class="release-list">
-              {#each items as it, i (i)}
-                <li>
-                  <button type="button" class="link" onclick={() => openTask(idOf(it))}>
-                    {titleOf(it)}
-                  </button>
-                  {#if extraOf(it)}
-                    <span class="muted"> · {extraOf(it)}</span>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
-          {/if}
-        </Card>
-      {/snippet}
-
-      {@render section(
-        'Open escalations',
-        'Agents have paused on these and need a human call (FR-10).',
-        data.openEscalations,
-        'No open escalations.'
-      )}
-      {@render section(
-        'Unapproved briefs',
-        'Tasks that authored a product brief but have not been approved yet.',
-        data.unapprovedBriefs,
-        'Every drafted brief has an approval.'
-      )}
-      {@render section(
-        'Specs awaiting approval',
-        'Tasks in spec_review — approve to let an implementer pick them up.',
-        data.unapprovedSpecs,
-        'Nothing in spec_review.'
-      )}
-      {@render section(
-        'Shelved tasks',
-        'Set aside and likely need a human decision about whether to revive.',
-        data.shelvedUnclaimed,
-        'No shelved tasks.'
-      )}
-      {@render section(
-        'Agent-blocked tasks',
-        'Orchestrator paused these; a human review may help.',
-        data.blockedByAgent,
-        'No agent-blocked tasks.'
-      )}
-
-      <Card title="Design system">
-        <p class="sub muted">Approve the current revision so implementers are bound by it.</p>
-        {#if data.designSystem.drafted}
-          {#if data.designSystem.approved}
-            <p>
-              <Chip label="approved" tone="ok" />
-              <span class="muted">revision {data.designSystem.revision}</span>
-            </p>
-          {:else}
-            <p>
-              <Chip label="draft" tone="warn" />
-              <span class="muted">revision {data.designSystem.revision} — needs human approval</span>
-            </p>
-          {/if}
-        {:else}
-          <p><Chip label="not drafted" tone="warn" /></p>
+        {#if dsLabel()}
+          {@const ds = dsLabel()}
+          <li class="crit-row">
+            <div class="crit-summary" style="cursor: default">
+              <span class="crit-icon">{ds.clear ? '✓' : '✗'}</span>
+              <span class="crit-label">Design system</span>
+              <Chip label={ds.label} tone={ds.tone} />
+            </div>
+          </li>
         {/if}
-      </Card>
+      </ul>
+    </Card>
 
-      <Card title="Task-state tally">
-        {#snippet actions()}
-          <span class="muted">{data.totals.done}/{data.totals.tasks} done</span>
-        {/snippet}
+    <!-- Overflow: status tally -->
+    <details class="tally-more">
+      <summary>Task-state tally ({data.totals.done}/{data.totals.tasks} done)</summary>
+      <div class="tally-body">
         {#if statusRows.length === 0}
           <p class="muted">No tasks yet.</p>
         {:else}
@@ -208,9 +252,9 @@
             </tbody>
           </table>
         {/if}
-      </Card>
-    </div>
-  </div>
+      </div>
+    </details>
+  </Stack>
 {/if}
 
 <style>
@@ -219,26 +263,60 @@
     font-size: var(--fs-2);
     line-height: var(--lh-body);
   }
-  .page {
+  .verdict {
     display: flex;
-    flex-direction: column;
-    gap: var(--s-4);
-  }
-  .page-title {
-    font-size: var(--fs-4);
-    font-weight: 700;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    align-items: center;
     gap: var(--s-3);
+    flex-wrap: wrap;
   }
-  .sub {
-    margin-bottom: var(--s-2);
+  .verdict-reason {
+    font-size: var(--fs-3);
+    color: var(--text);
+    line-height: var(--lh-tight);
   }
-  .release-list {
+  .criteria {
     list-style: none;
     padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .crit-row {
+    border-top: 1px solid var(--border);
+  }
+  .crit-row:first-child {
+    border-top: none;
+  }
+  .crit-det {
+    width: 100%;
+  }
+  .crit-summary {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    padding: var(--s-2) 0;
+    cursor: pointer;
+    list-style: none;
+  }
+  .crit-summary::-webkit-details-marker {
+    display: none;
+  }
+  .crit-icon {
+    width: 16px;
+    text-align: center;
+    color: var(--warn);
+    font-weight: 700;
+  }
+  .crit-clear .crit-icon {
+    color: var(--accent-2);
+  }
+  .crit-label {
+    flex: 1;
+    font-size: var(--fs-2);
+    font-weight: 600;
+  }
+  .crit-items {
+    list-style: none;
+    padding: 0 0 var(--s-2) var(--s-5);
     display: flex;
     flex-direction: column;
     gap: var(--s-1);
@@ -256,6 +334,28 @@
   }
   .link:hover {
     text-decoration: underline;
+  }
+  .tally-more > summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+    list-style: none;
+    padding: var(--s-2) 0;
+  }
+  .tally-more > summary::-webkit-details-marker {
+    display: none;
+  }
+  .tally-more > summary::before {
+    content: '▸ ';
+  }
+  .tally-more[open] > summary::before {
+    content: '▾ ';
+  }
+  .tally-body {
+    margin-top: var(--s-2);
   }
   .tally {
     border-collapse: collapse;
