@@ -3,6 +3,7 @@ export { createCoordinatorAgent } from './coordinator-agent.js'
 export { createWorkerAgent } from './worker-agent.js'
 export { createReviewerAgent } from './reviewer-agent.js'
 export { createGateCheckerAgent } from './gate-checker-agent.js'
+export { classifyDiffScope, type DiffScope } from './diff-scope.js'
 export {
   createPersonaReviewerAgent,
   personaReviewerSystemPrompt,

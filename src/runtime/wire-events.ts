@@ -92,6 +92,18 @@ export function tickOutcomeToBackendEvent(outcome: TickOutcome): BackendEvent | 
           `requeueCount=${outcome.requeueCount})`,
       }
 
+    case 'bootstrap-required':
+      // Structural halt: no task-scoped event exists, so we ride on the
+      // generic `error` type. The UI filters on `reason === 'bootstrap_*'`
+      // to render the "Run bootstrap" nudge on the Ready page.
+      return {
+        type: 'error',
+        message:
+          outcome.reason === 'bootstrap_failed'
+            ? `Bootstrap failed — ${outcome.pendingTaskCount} task(s) held until bootstrap passes.`
+            : `Bootstrap not verified — ${outcome.pendingTaskCount} task(s) held until bootstrap runs.`,
+        reason: outcome.reason,
+      }
     case 'batch':
       // FR-24: fanout outcomes are flattened in the run-loop before reaching
       // this mapper. A raw batch here means a caller passed us the envelope

@@ -67,3 +67,10 @@ export type TickOutcome =
    * one-per-tick.
    */
   | { kind: 'batch'; outcomes: TickOutcome[] }
+  /**
+   * Structural-reliability halt: the project's `bootstrap` block is either
+   * missing (`bootstrap_required`) or failed (`bootstrap_failed`). The
+   * orchestrator refuses to dispatch any task until the human runs bootstrap
+   * from the Ready page (POST /api/project/bootstrap/run).
+   */
+  | { kind: 'bootstrap-required'; reason: 'bootstrap_required' | 'bootstrap_failed'; pendingTaskCount: number }

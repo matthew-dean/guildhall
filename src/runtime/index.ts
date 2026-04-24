@@ -112,6 +112,22 @@ export type {
 } from './provider-selection.js'
 export { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
 export type { ResolvedWorkspace } from './workspace-loader.js'
+export {
+  detectPackageManager,
+  detectGateCommands,
+  runBootstrap as runStructuralBootstrap,
+  writeBootstrapResult,
+} from './bootstrap.js'
+export type {
+  PackageManager,
+  GateName,
+  GateCommand,
+  GateCommandMap,
+  BootstrapBlock,
+  BootstrapResult as StructuralBootstrapResult,
+  BootstrapOptions as StructuralBootstrapOptions,
+  Spawner,
+} from './bootstrap.js'
 export { runInit } from './init.js'
 export type { InitOptions } from './init.js'
 export { runServe } from './serve.js'

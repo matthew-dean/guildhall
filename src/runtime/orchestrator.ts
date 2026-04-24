@@ -347,6 +347,18 @@ export class Orchestrator {
       ...(this.opts.domainFilter ? { domainFilter: this.opts.domainFilter } : {}),
     })
 
+    // Structural-reliability hard precondition: refuse to dispatch if the
+    // project's bootstrap block is unverified or its last install failed.
+    // Running a worker against an environment that can't even resolve
+    // `pnpm` / `oxlint` / tsconfig guarantees gate failures on infrastructure
+    // rather than on actual work — the Ready page surfaces the same state and
+    // offers a "Run bootstrap" button. Skipped in idle ticks so a bootstrap-less
+    // workspace with no pending work doesn't emit noise.
+    if (picks.length > 0) {
+      const halt = this.bootstrapHalt(picks.length)
+      if (halt) return halt
+    }
+
     if (picks.length === 0) {
       this.consecutiveIdleTicks++
       const allDone = queueBefore.tasks.every((t) =>
@@ -894,6 +906,10 @@ export class Orchestrator {
         } else if (outcome.kind === 'pre-rejection-applied') {
           console.log(
             `[guildhall] tick ${tick}: ${outcome.taskId} pre-rejection ${outcome.actionKind} → ${outcome.newStatus} (policy=${String(outcome.domainLeverPosition)}, count=${outcome.requeueCount}).`,
+          )
+        } else if (outcome.kind === 'bootstrap-required') {
+          console.warn(
+            `[guildhall] tick ${tick}: bootstrap ${outcome.reason} — ${outcome.pendingTaskCount} task(s) held; run bootstrap from /settings/ready.`,
           )
         }
 
@@ -2167,6 +2183,30 @@ export class Orchestrator {
    * (capacity 1) on any read error — starting a fanout dispatch with stale
    * lever state would be strictly worse than running one task.
    */
+  /**
+   * Structural-reliability precondition check. Returns a halt outcome when
+   * the bootstrap block is either absent/unverified (`bootstrap_required`) or
+   * present with a failed install (`bootstrap_failed`). Returns null when the
+   * project is either fully verified or has no bootstrap block configured at
+   * all (legacy projects and fresh workspaces keep their pre-existing
+   * behaviour — the inbox already surfaces "bootstrap_missing" for them).
+   */
+  private bootstrapHalt(pendingTaskCount: number): TickOutcome | null {
+    const b = this.opts.config.bootstrap
+    if (!b) return null
+    const hasStructural =
+      b.verifiedAt != null || b.install != null || b.gates != null ||
+      b.commands.length > 0 || b.successGates.length > 0
+    if (!hasStructural) return null
+    if (b.install?.status === 'failed') {
+      return { kind: 'bootstrap-required', reason: 'bootstrap_failed', pendingTaskCount }
+    }
+    if (b.verifiedAt == null) {
+      return { kind: 'bootstrap-required', reason: 'bootstrap_required', pendingTaskCount }
+    }
+    return null
+  }
+
   private async resolveCapacity(): Promise<FanoutCapacity> {
     try {
       const settings = await this.readLeverSettings()

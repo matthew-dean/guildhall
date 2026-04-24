@@ -115,6 +115,38 @@ export const WorkspaceYamlConfig = z.object({
         stderr: z.string().optional(),
       })).default([]),
     }).optional(),
+    // Structural verification block written by `runBootstrap` (see
+    // src/runtime/bootstrap.ts). Presence of `verifiedAt` is the hard
+    // precondition the orchestrator enforces before dispatching any task.
+    verifiedAt: z.string().optional(),
+    packageManager: z.enum(['pnpm', 'npm', 'yarn', 'bun', 'none']).optional(),
+    install: z.object({
+      command: z.string(),
+      lastRunAt: z.string().optional(),
+      status: z.enum(['ok', 'failed']).optional(),
+    }).optional(),
+    gates: z.object({
+      lint: z.object({
+        command: z.string(),
+        available: z.boolean(),
+        unavailableReason: z.string().optional(),
+      }).optional(),
+      typecheck: z.object({
+        command: z.string(),
+        available: z.boolean(),
+        unavailableReason: z.string().optional(),
+      }).optional(),
+      build: z.object({
+        command: z.string(),
+        available: z.boolean(),
+        unavailableReason: z.string().optional(),
+      }).optional(),
+      test: z.object({
+        command: z.string(),
+        available: z.boolean(),
+        unavailableReason: z.string().optional(),
+      }).optional(),
+    }).optional(),
   }).optional(),
 })
 export type WorkspaceYamlConfig = z.infer<typeof WorkspaceYamlConfig>
@@ -342,6 +374,35 @@ export const ResolvedConfig = z.object({
         result: z.enum(['pass', 'fail']),
         stderr: z.string().optional(),
       })),
+    }).optional(),
+    verifiedAt: z.string().optional(),
+    packageManager: z.enum(['pnpm', 'npm', 'yarn', 'bun', 'none']).optional(),
+    install: z.object({
+      command: z.string(),
+      lastRunAt: z.string().optional(),
+      status: z.enum(['ok', 'failed']).optional(),
+    }).optional(),
+    gates: z.object({
+      lint: z.object({
+        command: z.string(),
+        available: z.boolean(),
+        unavailableReason: z.string().optional(),
+      }).optional(),
+      typecheck: z.object({
+        command: z.string(),
+        available: z.boolean(),
+        unavailableReason: z.string().optional(),
+      }).optional(),
+      build: z.object({
+        command: z.string(),
+        available: z.boolean(),
+        unavailableReason: z.string().optional(),
+      }).optional(),
+      test: z.object({
+        command: z.string(),
+        available: z.boolean(),
+        unavailableReason: z.string().optional(),
+      }).optional(),
     }).optional(),
   }).optional(),
 })

@@ -93,16 +93,36 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   const yamlPath = join(projectPath, 'guildhall.yaml')
   if (existsSync(yamlPath)) {
     const cfg = readYamlSafe(yamlPath) as
-      | { bootstrap?: { install?: unknown; gates?: unknown; commands?: unknown; successGates?: unknown } }
+      | {
+          bootstrap?: {
+            install?: unknown
+            gates?: unknown
+            commands?: unknown
+            successGates?: unknown
+            verifiedAt?: unknown
+          }
+        }
       | null
     const b = cfg?.bootstrap
     const hasInstall =
       (Array.isArray(b?.install) && b!.install.length > 0) ||
+      (typeof b?.install === 'object' && b!.install !== null && !Array.isArray(b!.install)) ||
       (Array.isArray(b?.commands) && b!.commands.length > 0)
     const hasGates =
       (Array.isArray(b?.gates) && b!.gates.length > 0) ||
+      (typeof b?.gates === 'object' && b!.gates !== null && !Array.isArray(b!.gates)) ||
       (Array.isArray(b?.successGates) && b!.successGates.length > 0)
-    if (!b || !hasInstall || !hasGates) {
+    // Structural form considered "complete" when it has a verifiedAt stamp
+    // AND an install + gates block — this matches the hard precondition the
+    // orchestrator enforces before dispatching tasks.
+    const hasVerifiedAt = typeof b?.verifiedAt === 'string' && b!.verifiedAt.length > 0
+    const isComplete = hasInstall && hasGates && (
+      // Structural shape: require verifiedAt
+      (typeof b?.install === 'object' && !Array.isArray(b?.install))
+        ? hasVerifiedAt
+        : true
+    )
+    if (!b || !isComplete) {
       items.push({
         kind: 'bootstrap_missing',
         severity: 'high',

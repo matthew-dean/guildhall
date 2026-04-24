@@ -116,6 +116,44 @@ describe('buildInbox', () => {
     expect(items).toEqual([])
   })
 
+  it('structural bootstrap with verifiedAt + gates → no bootstrap_missing item', async () => {
+    await writeYaml('guildhall.yaml', {
+      name: 'Ready',
+      id: 'ready',
+      coordinators: [],
+      bootstrap: {
+        verifiedAt: '2026-04-23T00:00:00Z',
+        packageManager: 'pnpm',
+        install: { command: 'pnpm install', status: 'ok', lastRunAt: '2026-04-23T00:00:00Z' },
+        gates: {
+          lint: { command: 'pnpm lint', available: true },
+          typecheck: { command: 'pnpm tsc --noEmit', available: true },
+          build: { command: 'pnpm build', available: true },
+          test: { command: 'pnpm test', available: true },
+        },
+      },
+    })
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.find(i => i.kind === 'bootstrap_missing')).toBeUndefined()
+  })
+
+  it('structural bootstrap without verifiedAt → still emits bootstrap_missing', async () => {
+    await writeYaml('guildhall.yaml', {
+      name: 'NotReady',
+      id: 'notready',
+      coordinators: [],
+      bootstrap: {
+        packageManager: 'pnpm',
+        install: { command: 'pnpm install' },
+        gates: { lint: { command: 'pnpm lint', available: true } },
+      },
+    })
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.find(i => i.kind === 'bootstrap_missing')).toBeDefined()
+  })
+
   it('bootstrap_missing: emitted when guildhall.yaml has no bootstrap block', async () => {
     await writeYaml('guildhall.yaml', { name: 'x', id: 'x', coordinators: [] })
     await writeJson('memory/workspace-goals.json', { goals: [] })

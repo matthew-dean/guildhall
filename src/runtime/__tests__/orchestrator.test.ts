@@ -249,6 +249,83 @@ describe('Orchestrator.tick — idle handling', () => {
   })
 })
 
+describe('Orchestrator.tick — bootstrap precondition', () => {
+  it('refuses to dispatch when bootstrap has install/gates but no verifiedAt', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
+    const worker = stubAgent('worker-agent')
+    const cfg = baseConfig({
+      bootstrap: {
+        commands: [],
+        successGates: [],
+        timeoutMs: 300_000,
+        packageManager: 'pnpm',
+        install: { command: 'pnpm install', status: 'ok' },
+        gates: {
+          lint: { command: 'pnpm lint', available: true },
+        },
+      },
+    })
+    const orch = new Orchestrator({ config: cfg, agents: agentSet({ worker }) })
+    const out = await orch.tick()
+    expect(out.kind).toBe('bootstrap-required')
+    if (out.kind === 'bootstrap-required') {
+      expect(out.reason).toBe('bootstrap_required')
+      expect(out.pendingTaskCount).toBe(1)
+    }
+    expect(worker.calls).toHaveLength(0)
+  })
+
+  it('emits bootstrap_failed when last install failed', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
+    const worker = stubAgent('worker-agent')
+    const cfg = baseConfig({
+      bootstrap: {
+        commands: [],
+        successGates: [],
+        timeoutMs: 300_000,
+        verifiedAt: '2026-04-23T00:00:00Z',
+        packageManager: 'pnpm',
+        install: { command: 'pnpm install', status: 'failed' },
+        gates: { lint: { command: 'pnpm lint', available: true } },
+      },
+    })
+    const orch = new Orchestrator({ config: cfg, agents: agentSet({ worker }) })
+    const out = await orch.tick()
+    expect(out.kind).toBe('bootstrap-required')
+    if (out.kind === 'bootstrap-required') expect(out.reason).toBe('bootstrap_failed')
+    expect(worker.calls).toHaveLength(0)
+  })
+
+  it('dispatches normally when bootstrap.verifiedAt is present and install is ok', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
+    const worker = stubAgent('worker-agent')
+    const cfg = baseConfig({
+      bootstrap: {
+        commands: [],
+        successGates: [],
+        timeoutMs: 300_000,
+        verifiedAt: '2026-04-23T00:00:00Z',
+        packageManager: 'pnpm',
+        install: { command: 'pnpm install', status: 'ok' },
+        gates: { lint: { command: 'pnpm lint', available: true } },
+      },
+    })
+    const orch = new Orchestrator({ config: cfg, agents: agentSet({ worker }) })
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    expect(worker.calls).toHaveLength(1)
+  })
+
+  it('dispatches normally when there is no bootstrap block at all (legacy)', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet({ worker }) })
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    expect(worker.calls).toHaveLength(1)
+  })
+})
+
 describe('Orchestrator.tick — routing', () => {
   it('routes exploring tasks to the spec agent', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
