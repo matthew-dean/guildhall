@@ -4,6 +4,10 @@ export { createWorkerAgent } from './worker-agent.js'
 export { createReviewerAgent } from './reviewer-agent.js'
 export { createGateCheckerAgent } from './gate-checker-agent.js'
 export {
+  createPersonaReviewerAgent,
+  personaReviewerSystemPrompt,
+} from './persona-reviewer.js'
+export {
   GuildhallAgent,
   clampPermissionMode,
   type GuildhallAgentOptions,

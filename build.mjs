@@ -41,6 +41,14 @@ const copyAssetsPlugin = {
           filter: (path) => !path.endsWith('.ts'),
         })
       }
+      const guildsSrc = resolve(ROOT, 'src/guilds')
+      const guildsDst = join(OUT_DIR, 'guilds')
+      if (existsSync(guildsSrc)) {
+        cpSync(guildsSrc, guildsDst, {
+          recursive: true,
+          filter: (path) => !path.endsWith('.ts') && !path.includes('__tests__'),
+        })
+      }
     })
   },
 }

@@ -6,6 +6,15 @@ import {
   selectApplicableReviewRubrics,
   renderRubricSelection,
 } from '@guildhall/core'
+import {
+  selectApplicableGuilds,
+  pickPrimaryEngineer,
+  renderPersonaPrompt,
+  renderSpecContributions,
+  collectGuildRubrics,
+  reviewersForTask,
+  loadProjectGuildRoster,
+} from '@guildhall/guilds'
 import { loadGoalForTask } from './business-envelope.js'
 import { loadDesignSystem } from './design-system-store.js'
 
@@ -44,6 +53,39 @@ export interface BuiltContext {
    * or with no transcript yet.
    */
   exploringTranscript: string
+  /**
+   * Stage-scoped persona prompt additive. What this holds depends on the
+   * task status:
+   *   - `exploring`    — every applicable designer/specialist's
+   *                      `specContribution` prose, so the Spec Agent
+   *                      elicits the answers each expert needs.
+   *   - `in_progress`  — the single primary engineer's principles (Frontend
+   *                      Engineer, TypeScript Engineer, …) framed as the
+   *                      worker's persona. Framework-specialized when
+   *                      detected (Vue / React / Svelte / …).
+   *   - `review`       — empty (the reviewer fan-out attaches personas at
+   *                      dispatch time, one reviewer per applicable guild).
+   *   - other statuses — empty; those stages don't need persona prompt.
+   */
+  personaPrompt: string
+  /**
+   * Slugs of guilds currently applicable. Downstream consumers (reviewer
+   * dispatcher, gate runner) use this instead of re-running applicability
+   * predicates.
+   */
+  applicableGuildSlugs: string[]
+  /**
+   * Slug of the primary engineer persona (if any) for the current task —
+   * populated at `in_progress`. Lets the orchestrator trace which engineer
+   * built the code in the audit log.
+   */
+  primaryEngineerSlug: string | null
+  /**
+   * Slugs of guilds that should produce independent review verdicts at
+   * `review`. Populated regardless of status so a preview of the fan-out is
+   * visible throughout the task's life.
+   */
+  reviewerSlugs: string[]
   /**
    * FR-23: business-envelope summary for the task's parent goal. Empty when
    * the task has no `parentGoalId` or the goal book is absent. Agents see the
@@ -119,6 +161,55 @@ function extractRelevantDecisions(decisions: string, domain: string): string {
   return relevant.slice(0, MAX_DECISIONS_CHARS)
 }
 
+/**
+ * Render a "where we are in the handoff sequence" header + the prior
+ * steps' handoff notes. The active engineer reads this to pick up the
+ * previous specialist's work without re-deriving the state from the
+ * worktree diff alone.
+ */
+function renderHandoffStepHeader(input: {
+  sequence: ReadonlyArray<import('@guildhall/core').HandoffStep>
+  stepIndex: number
+}): string {
+  const step = input.sequence[input.stepIndex]
+  if (!step) return ''
+  const total = input.sequence.length
+  const lines: string[] = [
+    `## Handoff sequence — step ${input.stepIndex + 1} of ${total}`,
+    '',
+    `You are the engineer for this step (\`${step.agent}\`). The task is being worked by a sequence of specialists sharing one worktree. Your scope is **only** what this step owns — do not re-do previous steps' work, do not preempt later steps.`,
+    '',
+  ]
+  if (step.scope.length > 0) {
+    lines.push('**Your scope (acceptance criteria ids):**')
+    for (const s of step.scope) lines.push(`- ${s}`)
+    lines.push('')
+  }
+  if (step.instructions && step.instructions.trim().length > 0) {
+    lines.push('**Step-specific instructions:**')
+    lines.push(step.instructions.trim())
+    lines.push('')
+  }
+  const priorSteps = input.sequence.slice(0, input.stepIndex)
+  const notes = priorSteps
+    .map((p, i) => ({ step: i + 1, agent: p.agent, note: p.handoffNote ?? '' }))
+    .filter((p) => p.note.trim().length > 0)
+  if (notes.length > 0) {
+    lines.push('**Prior step handoff notes:**')
+    for (const n of notes) {
+      lines.push('')
+      lines.push(`### From step ${n.step} (${n.agent})`)
+      lines.push('')
+      lines.push(n.note)
+    }
+    lines.push('')
+  }
+  lines.push(
+    'When you finish your scope, write a structured handoff note (what you completed, state of the worktree, known gaps for the next agent) inside your self-critique under the heading `## Handoff note` before flipping the task to `review`.',
+  )
+  return lines.join('\n')
+}
+
 export async function buildContext(
   task: Task,
   memoryDir: string
@@ -167,9 +258,63 @@ export async function buildContext(
         .filter(Boolean)
         .join('\n')
     : ''
+  const guildSignals = {
+    task,
+    designSystem: ds,
+    memoryDir,
+    projectPath: task.projectPath,
+  }
+  const { guilds: roster } = loadProjectGuildRoster(memoryDir)
+  const applicableGuilds = selectApplicableGuilds(guildSignals, roster)
+  const applicableGuildSlugs = applicableGuilds.map((g) => g.slug)
+  const reviewerSlugs = reviewersForTask(applicableGuilds).map((g) => g.slug)
+
+  // Engineer selection: handoff sequence (when present) wins over the
+  // default `pickPrimaryEngineer` heuristic. The current step's `agent`
+  // slug names the engineer; we look it up in the roster directly so a
+  // project's custom engineer (via memory/guilds.yaml) is honored.
+  const handoffStep =
+    task.handoffSequence && typeof task.handoffStep === 'number'
+      ? task.handoffSequence[task.handoffStep]
+      : undefined
+  let primaryEngineer = pickPrimaryEngineer(applicableGuilds)
+  if (handoffStep) {
+    const stepEngineer = roster.find(
+      (g) => g.slug === handoffStep.agent && g.role === 'engineer',
+    )
+    if (stepEngineer) primaryEngineer = stepEngineer
+  }
+  const primaryEngineerSlug = primaryEngineer?.slug ?? null
+
+  // Stage-scoped persona prompt. See BuiltContext.personaPrompt for the
+  // rationale. When a handoff step is active, append the prior steps'
+  // handoff notes + this step's scope/instructions so the engineer picks
+  // up where the previous specialist left off.
+  let personaPrompt = ''
+  if (task.status === 'exploring') {
+    personaPrompt = renderSpecContributions(applicableGuilds, guildSignals)
+  } else if (task.status === 'in_progress' && primaryEngineer) {
+    personaPrompt = renderPersonaPrompt(primaryEngineer, guildSignals)
+    if (handoffStep && task.handoffSequence) {
+      personaPrompt = [
+        personaPrompt,
+        '',
+        renderHandoffStepHeader({
+          sequence: task.handoffSequence,
+          stepIndex: task.handoffStep ?? 0,
+        }),
+      ].join('\n')
+    }
+  }
+
   const designSystem = ds ? summarizeDesignSystem(ds) : ''
   const rubricSelection = selectApplicableReviewRubrics(task, ds)
-  const reviewRubrics = renderRubricSelection(rubricSelection)
+  const coreRubrics = renderRubricSelection(rubricSelection)
+  // Reviewer rubric items are attached per-reviewer at dispatch time (fan-out),
+  // not pushed into the worker context. collectGuildRubrics is kept available
+  // for the reviewer dispatcher.
+  void collectGuildRubrics
+  const reviewRubrics = coreRubrics
 
   const taskSummary = [
     `## Current Task: ${task.id}`,
@@ -197,6 +342,8 @@ export async function buildContext(
     '',
     taskSummary,
     '',
+    personaPrompt,
+    '',
     envelope ? `## Business Envelope (FR-23)\n${envelope}` : '',
     '',
     designSystem ? `## Design System\n${designSystem}` : '',
@@ -222,6 +369,10 @@ export async function buildContext(
     recentProgress,
     recentDecisions,
     exploringTranscript,
+    personaPrompt,
+    applicableGuildSlugs,
+    primaryEngineerSlug,
+    reviewerSlugs,
     envelope,
     designSystem,
     reviewRubrics,

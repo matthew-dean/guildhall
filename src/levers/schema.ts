@@ -102,6 +102,26 @@ export const domainLeversSchema = z.object({
   reviewer_mode: entry(
     z.enum(['llm_only', 'deterministic_only', 'llm_with_deterministic_fallback']),
   ),
+  /**
+   * How the reviewer fan-out aggregates N persona verdicts at `review`.
+   *  - `strict`: any revise bounces the task to in_progress with combined
+   *    feedback (current default).
+   *  - `coordinator_adjudicates_on_conflict`: when the same persona emits
+   *    `revise` in two consecutive rounds with overlapping revision items,
+   *    the coordinator adjudicates instead of bouncing to the worker.
+   *  - `advisory`: any approval passes; dissents become notes.
+   *  - `majority`: at least 50% of applicable reviewers must approve.
+   *
+   * See docs/disagreement-and-handoff.md §1 for the full design.
+   */
+  reviewer_fanout_policy: entry(
+    z.enum([
+      'strict',
+      'coordinator_adjudicates_on_conflict',
+      'advisory',
+      'majority',
+    ]),
+  ),
   max_revisions: entry(z.number().int().min(0)),
   escalation_on_ambiguity: entry(z.enum(['always', 'coordinator_first', 'never'])),
   crash_recovery_default: entry(
@@ -151,6 +171,7 @@ export const DOMAIN_LEVER_NAMES = [
   'pre_rejection_policy',
   'completion_approval',
   'reviewer_mode',
+  'reviewer_fanout_policy',
   'max_revisions',
   'escalation_on_ambiguity',
   'crash_recovery_default',

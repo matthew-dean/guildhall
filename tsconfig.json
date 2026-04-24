@@ -24,6 +24,7 @@
       "@guildhall/core": ["./src/core/index.ts"],
       "@guildhall/engine": ["./src/engine/index.ts"],
       "@guildhall/engineering-defaults": ["./src/engineering-defaults/index.ts"],
+      "@guildhall/guilds": ["./src/guilds/index.ts"],
       "@guildhall/hooks": ["./src/hooks/index.ts"],
       "@guildhall/levers": ["./src/levers/index.ts"],
       "@guildhall/mcp": ["./src/mcp/index.ts"],

@@ -83,6 +83,10 @@ export function makeDefaultSettings(now: Date = new Date()): LeverSettings {
       position: 'llm_with_deterministic_fallback',
       ...stub('prefer LLM reviewer; fall back to deterministic rubric when the LLM is unavailable'),
     },
+    reviewer_fanout_policy: {
+      position: 'strict',
+      ...stub('every persona must approve; worker synthesizes dissenting revisions. Coordinator adjudication turns on once conflicts prove recurrent.'),
+    },
     max_revisions: {
       position: 3,
       ...stub('three revision passes before escalation — enough for iteration, short enough to surface systemic spec issues'),

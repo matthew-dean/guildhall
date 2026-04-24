@@ -19,6 +19,7 @@ export default defineConfig({
       'core',
       'engine',
       'engineering-defaults',
+      'guilds',
       'hooks',
       'levers',
       'mcp',

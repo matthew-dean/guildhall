@@ -39,6 +39,17 @@ export interface GateResult {
   output?: string
 }
 
+export interface ReviewVerdict {
+  verdict?: 'approve' | 'revise'
+  reviewerPath?: 'llm' | 'deterministic' | string
+  reason?: string
+  reasoning?: string
+  failingSignals?: string[]
+  recordedAt?: string
+  policyVersion?: string
+  llmError?: string
+}
+
 export interface TaskNote {
   role?: string
   agentId?: string
@@ -69,6 +80,7 @@ export interface Task {
   spec?: string
   acceptanceCriteria?: AcceptanceCriterion[]
   gateResults?: GateResult[]
+  reviewVerdicts?: ReviewVerdict[]
   escalations?: Escalation[]
   notes?: TaskNote[]
   origination?: string
@@ -87,7 +99,7 @@ export interface DrawerPayload {
   recentEvents?: unknown[]
 }
 
-export type DrawerTab = 'spec' | 'transcript' | 'history' | 'provenance'
+export type DrawerTab = 'spec' | 'transcript' | 'experts' | 'history' | 'provenance'
 
 /**
  * Task card view — a trimmed Task with just the fields the mini-card renders.

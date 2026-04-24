@@ -4,14 +4,18 @@ import {
   createWorkerAgent,
   createReviewerAgent,
   createGateCheckerAgent,
+  createPersonaReviewerAgent,
   buildModelSet,
   type GuildhallAgent,
+  type AgentLLM,
 } from '@guildhall/agents'
 import { selectApiClient, inferPreferredProvider } from './provider-selection.js'
 import {
   TaskQueue,
   TERMINAL_TASK_STATUSES,
+  type AdjudicationRecord,
   type AgentIssue,
+  type ReviewVerdict,
   type Task,
   type TaskStatus,
   type TaskPermissionMode,
@@ -98,6 +102,21 @@ import {
   recordLlmVerdict,
   type ReviewerMode,
 } from './reviewer-dispatch.js'
+import { runGuildGates } from './guild-gate-runner.js'
+import { loadDesignSystem } from './design-system-store.js'
+import {
+  selectApplicableGuilds,
+  reviewersForTask,
+  loadProjectGuildRoster,
+  type GuildDefinition,
+} from '@guildhall/guilds'
+import {
+  aggregateFanout,
+  boundedConcurrency,
+  personaVerdictToReviewRecord,
+  type PersonaVerdict,
+  type ReviewerFanoutPolicy,
+} from './reviewer-fanout.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -149,6 +168,21 @@ export interface OrchestratorAgentSet {
   /** Keyed by domain id */
   coordinators: Record<string, OrchestratorAgent>
 }
+
+/**
+ * Reviewer fan-out runner. Given a task and the applicable reviewer
+ * personas, returns one `PersonaVerdict` per persona. The orchestrator
+ * aggregates and transitions the task. Production wires a default runner
+ * that constructs a `createPersonaReviewerAgent` per persona; tests inject
+ * a stub that returns canned verdicts without touching an LLM.
+ */
+export type ReviewerFanoutRunner = (input: {
+  task: Task
+  personas: GuildDefinition[]
+  context: string
+  memoryDir: string
+  projectPath: string
+}) => Promise<PersonaVerdict[]>
 
 export type { TickOutcome } from './tick-outcome.js'
 import type { TickOutcome } from './tick-outcome.js'
@@ -207,6 +241,16 @@ export interface OrchestratorOptions {
    * real repo.
    */
   gitDriver?: GitDriver
+  /**
+   * Optional reviewer fan-out runner. When supplied, at `review` the
+   * orchestrator runs one LLM call per applicable reviewer persona (each
+   * through its own lens) instead of dispatching a single generic reviewer.
+   * Verdicts aggregate under a strict-all policy: any revise bounces the
+   * task to `in_progress` with combined feedback.
+   *
+   * When absent, the legacy single-reviewer dispatch runs unchanged.
+   */
+  reviewerFanout?: ReviewerFanoutRunner
 }
 
 const DEFAULT_IDLE_SHUTDOWN = 10
@@ -349,6 +393,38 @@ export class Orchestrator {
     // via the same pure-policy path.
     if (needsPreRejectionPolicy(task)) {
       return await this.applyPreRejectionPolicy(task, queueBefore)
+    }
+
+    // Guild deterministic-check pre-pass at `gate_check`: each applicable
+    // guild's pure-function checks (WCAG contrast, OKLab near-duplicates, …)
+    // run *before* the LLM gate-checker. Failures short-circuit straight to
+    // `in_progress` — there's no point running build/test if a token pair
+    // fails WCAG. All-pass (or no applicable checks) falls through to the
+    // normal shell-gate pass.
+    if (task.status === 'gate_check') {
+      const guildGateOutcome = await this.runGuildGatesInline(task, queueBefore)
+      if (guildGateOutcome) return guildGateOutcome
+    }
+
+    // Handoff sequence pre-pass at `review`: when the task is running a
+    // multi-step handoff and the current step is NOT the last, we capture
+    // the step's handoff note, advance `handoffStep`, and revert status to
+    // `in_progress`. The reviewer fan-out only fires on the final step's
+    // completion. See docs/disagreement-and-handoff.md §2.
+    if (task.status === 'review' && hasPendingHandoffStep(task)) {
+      const handoffOutcome = await this.advanceHandoffStepInline(task)
+      if (handoffOutcome) return handoffOutcome
+    }
+
+    // Reviewer fan-out at `review`: each applicable persona (Component
+    // Designer, Accessibility Specialist, Color Theorist, …) reviews
+    // independently through its own lens. Aggregation is strict — any revise
+    // bounces the task to `in_progress` with combined feedback. Falls
+    // through to the legacy single-reviewer dispatch when no fan-out runner
+    // is configured or no reviewer personas apply.
+    if (task.status === 'review' && this.opts.reviewerFanout) {
+      const fanoutOutcome = await this.runReviewerFanoutInline(task, queueBefore)
+      if (fanoutOutcome) return fanoutOutcome
     }
 
     const beforeStatus = task.status
@@ -1419,6 +1495,27 @@ export class Orchestrator {
   }
 
   /**
+   * Resolve the `reviewer_fanout_policy` for a domain. Fan-out aggregation
+   * uses this to decide how dissents roll up into the task-level verdict
+   * (strict, advisory, majority) and whether to flag conflicts for
+   * coordinator adjudication. Falls back to `strict` on any read error —
+   * the conservative default, matching today's behavior before the lever
+   * landed.
+   */
+  private async resolveReviewerFanoutPolicy(
+    domain: string,
+  ): Promise<ReviewerFanoutPolicy> {
+    try {
+      const settings = await this.readLeverSettings()
+      const domainLevers = resolveDomainLevers(settings, domain)
+      return domainLevers.reviewer_fanout_policy
+        .position as ReviewerFanoutPolicy
+    } catch {
+      return 'strict'
+    }
+  }
+
+  /**
    * FR-27 / AC-18: apply a deterministic reviewer verdict directly to the
    * queue. Used by the `deterministic_only` mode and by the
    * `llm_with_deterministic_fallback` mode after an LLM outage. Writes the
@@ -1428,6 +1525,512 @@ export class Orchestrator {
    * the task back to `in_progress` bumps `revisionCount` just like the LLM
    * path does, and we enforce `maxRevisions` the same way.
    */
+  /**
+   * Guild deterministic-check pre-pass at `gate_check`. Runs the applicable
+   * guilds' pure-function checks (e.g. WCAG contrast matrix, OKLab near-
+   * duplicate scan), appends each result to `task.gateResults` as a `soft`
+   * gate, and — if any failed — short-circuits to `in_progress` with
+   * aggregated feedback. Returns `null` when no action was taken (all
+   * passed, or no applicable guild checks), letting the caller fall
+   * through to the normal shell-gate LLM dispatch.
+   */
+  private async runGuildGatesInline(
+    task: Task,
+    _queueBefore: TaskQueue,
+  ): Promise<TickOutcome | null> {
+    const designSystem = await loadDesignSystem(this.opts.config.memoryDir).catch(
+      () => undefined,
+    )
+    const { guilds: roster } = loadProjectGuildRoster(this.opts.config.memoryDir)
+    const gateOutcome = await runGuildGates({
+      task,
+      signals: {
+        task,
+        designSystem,
+        memoryDir: this.opts.config.memoryDir,
+        projectPath: task.projectPath,
+      },
+      now: this.now(),
+      roster,
+    })
+
+    // No applicable checks ran → nothing to decide; let the shell-gate pass proceed.
+    if (gateOutcome.gateResults.length === 0) return null
+
+    // Persist the guild gate results regardless of pass/fail. This happens
+    // under the queue write lock so concurrent fanout dispatches serialize.
+    const beforeStatus = task.status
+    return await this.withQueueWriteLock(async () => {
+      const queue = await this.readQueue()
+      const t = queue.tasks.find((x) => x.id === task.id)
+      if (!t) return null
+      t.gateResults.push(...gateOutcome.gateResults)
+      t.updatedAt = this.now()
+      queue.lastUpdated = this.now()
+
+      if (gateOutcome.allPassed) {
+        await this.writeQueue(queue)
+        await this.logTickProgress({
+          task: t,
+          agent: 'guild-gate-runner',
+          beforeStatus,
+          afterStatus: t.status,
+          transitioned: false,
+          note: `guild gates passed (${gateOutcome.gateResults.length} check${gateOutcome.gateResults.length === 1 ? '' : 's'})`,
+        })
+        // Passed → fall through to the shell-gate agent.
+        return null
+      }
+
+      // Any guild gate failed → bounce to in_progress with aggregated feedback.
+      const failed = gateOutcome.gateResults.filter((g) => !g.passed)
+      const feedback = [
+        `**Guild gates failed (${failed.length}):**`,
+        ...failed.map((g) => `- \`${g.gateId}\`: ${(g.output ?? '').split('\n')[0] ?? 'failed'}`),
+      ].join('\n')
+      t.notes.push({
+        agentId: 'guild-gate-runner',
+        role: 'gate-checker',
+        content: feedback,
+        timestamp: this.now(),
+      })
+      t.status = 'in_progress'
+      t.revisionCount += 1
+      t.updatedAt = this.now()
+      queue.lastUpdated = this.now()
+
+      // Enforce maxRevisions the same way the reviewer path does.
+      if (t.revisionCount > this.opts.config.maxRevisions) {
+        await this.writeQueue(queue)
+        await raiseEscalation({
+          tasksPath: this.tasksPath(),
+          progressPath: this.progressPath(),
+          taskId: task.id,
+          agentId: 'guild-gate-runner',
+          reason: 'max_revisions_exceeded',
+          summary:
+            `Exceeded maxRevisions (${this.opts.config.maxRevisions}). ` +
+            `Guild gates keep failing.`,
+          details: feedback,
+        })
+        return {
+          kind: 'blocked-max-revisions',
+          taskId: task.id,
+          revisionCount: t.revisionCount,
+        } as TickOutcome
+      }
+
+      await this.writeQueue(queue)
+      await this.logTickProgress({
+        task: t,
+        agent: 'guild-gate-runner',
+        beforeStatus,
+        afterStatus: 'in_progress',
+        transitioned: true,
+        note: `guild gates failed (${failed.length}) → in_progress`,
+      })
+      return {
+        kind: 'processed',
+        taskId: task.id,
+        agent: 'guild-gate-runner',
+        beforeStatus,
+        afterStatus: 'in_progress',
+      } as TickOutcome
+    })
+  }
+
+  /**
+   * Capture the current handoff step's worker note, record its completion
+   * timestamp, advance `handoffStep`, and revert status to `in_progress`
+   * so the next specialist picks up on the next tick. Only called when
+   * `hasPendingHandoffStep(task)` is true; the final step falls through
+   * to the normal reviewer fan-out.
+   */
+  private async advanceHandoffStepInline(
+    task: Task,
+  ): Promise<TickOutcome | null> {
+    const beforeStatus = task.status
+    return await this.withQueueWriteLock(async () => {
+      const queue = await this.readQueue()
+      const t = queue.tasks.find((x) => x.id === task.id)
+      if (!t || !t.handoffSequence) return null
+      const idx = t.handoffStep ?? 0
+      const currentStep = t.handoffSequence[idx]
+      if (!currentStep) return null
+      const nextStep = t.handoffSequence[idx + 1]
+      if (!nextStep) return null // guarded by hasPendingHandoffStep but safe
+
+      const now = this.now()
+      const handoffNote = extractHandoffNote(t)
+      // Clone the step shape — zod `.default([])` nested shapes can't be
+      // partially mutated without TypeScript's exactOptionalPropertyTypes
+      // complaining, so we rebuild the step.
+      t.handoffSequence = t.handoffSequence.map((s, i) =>
+        i === idx
+          ? {
+              ...s,
+              completedAt: now,
+              ...(handoffNote ? { handoffNote } : {}),
+            }
+          : s,
+      )
+      t.handoffStep = idx + 1
+      t.status = 'in_progress'
+      t.updatedAt = now
+      queue.lastUpdated = now
+      await this.writeQueue(queue)
+      await this.logTickProgress({
+        task: t,
+        agent: 'handoff-orchestrator',
+        beforeStatus,
+        afterStatus: 'in_progress',
+        transitioned: true,
+        note: `handoff step ${idx + 1}/${t.handoffSequence.length} (${currentStep.agent}) → step ${idx + 2} (${nextStep.agent})`,
+      })
+      return {
+        kind: 'processed',
+        taskId: task.id,
+        agent: 'handoff-orchestrator',
+        beforeStatus,
+        afterStatus: 'in_progress',
+      } as TickOutcome
+    })
+  }
+
+  /**
+   * Reviewer fan-out pre-pass at `review`. Runs each applicable reviewer
+   * persona through `opts.reviewerFanout` and aggregates their verdicts
+   * strict-all: any `revise` bounces the task back to `in_progress` with
+   * combined feedback. All approvals advance the task to `gate_check`.
+   *
+   * Returns `null` when no reviewer personas apply OR no runner is
+   * configured — the caller falls through to the legacy single-reviewer
+   * dispatch.
+   */
+  private async runReviewerFanoutInline(
+    task: Task,
+    _queueBefore: TaskQueue,
+  ): Promise<TickOutcome | null> {
+    const runner = this.opts.reviewerFanout
+    if (!runner) return null
+
+    const designSystem = await loadDesignSystem(this.opts.config.memoryDir).catch(
+      () => undefined,
+    )
+    const { guilds: roster } = loadProjectGuildRoster(this.opts.config.memoryDir)
+    const applicable = selectApplicableGuilds(
+      {
+        task,
+        designSystem,
+        memoryDir: this.opts.config.memoryDir,
+        projectPath: task.projectPath,
+      },
+      roster,
+    )
+    const personas = reviewersForTask(applicable)
+    if (personas.length === 0) return null
+
+    // Build the JIT context once; every persona sees the same facts.
+    const ctx = await buildContext(task, this.opts.config.memoryDir)
+
+    let verdicts: PersonaVerdict[]
+    try {
+      verdicts = await runner({
+        task,
+        personas,
+        context: ctx.formatted,
+        memoryDir: this.opts.config.memoryDir,
+        projectPath: task.projectPath,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      await this.logTickProgress({
+        task,
+        agent: 'reviewer-fanout',
+        beforeStatus: 'review',
+        afterStatus: 'review',
+        transitioned: false,
+        note: `reviewer fan-out failed: ${message} — falling through to single reviewer`,
+      })
+      return null
+    }
+    if (verdicts.length === 0) return null
+
+    // Policy selection + prior-rounds extraction for same-persona-repeat
+    // dissent detection. When the lever is
+    // `coordinator_adjudicates_on_conflict`, `aggregate.needsAdjudication`
+    // may flip true — we branch on it below.
+    const policy = await this.resolveReviewerFanoutPolicy(task.domain)
+    const priorRounds = extractPriorVerdictRounds(task.reviewVerdicts)
+    const aggregate = aggregateFanout(verdicts, { policy, priorRounds })
+    const beforeStatus = task.status
+
+    return await this.withQueueWriteLock(async () => {
+      const queue = await this.readQueue()
+      const t = queue.tasks.find((x) => x.id === task.id)
+      if (!t) return null
+
+      // Persist one ReviewVerdict per persona — the audit trail shows which
+      // expert agreed and which objected.
+      const now = this.now()
+      for (const v of verdicts) {
+        t.reviewVerdicts.push(personaVerdictToReviewRecord(v, { now }))
+      }
+
+      // Under `coordinator_adjudicates_on_conflict`, recurrent same-persona
+      // dissent short-circuits to the domain coordinator instead of looping
+      // the worker. The worker will re-enter in_progress only after the
+      // coordinator lands a binding AdjudicationRecord with scoped
+      // instructions.
+      if (aggregate.needsAdjudication) {
+        const adjudicationOutcome = await this.routeToCoordinatorAdjudication({
+          queue,
+          task: t,
+          aggregate,
+          verdicts,
+          round: priorRounds.length + 1,
+          now,
+          beforeStatus,
+        })
+        if (adjudicationOutcome) return adjudicationOutcome
+        // If routing failed (no coordinator, etc.), fall through to the
+        // default revise path so the system stays conservative.
+      }
+
+      if (aggregate.verdict === 'approve') {
+        t.status = 'gate_check'
+        t.updatedAt = now
+        queue.lastUpdated = now
+        await this.writeQueue(queue)
+        await this.logTickProgress({
+          task: t,
+          agent: 'reviewer-fanout',
+          beforeStatus,
+          afterStatus: 'gate_check',
+          transitioned: true,
+          note: `fan-out approve (${verdicts.length} persona${verdicts.length === 1 ? '' : 's'})`,
+        })
+        return {
+          kind: 'processed',
+          taskId: task.id,
+          agent: 'reviewer-fanout',
+          beforeStatus,
+          afterStatus: 'gate_check',
+        } as TickOutcome
+      }
+
+      // Aggregate says revise — append combined feedback, bump revisionCount,
+      // enforce maxRevisions.
+      t.notes.push({
+        agentId: 'reviewer-fanout',
+        role: 'reviewer',
+        content: aggregate.combinedFeedback,
+        timestamp: now,
+      })
+      t.status = 'in_progress'
+      t.revisionCount += 1
+      t.updatedAt = now
+      queue.lastUpdated = now
+
+      if (t.revisionCount > this.opts.config.maxRevisions) {
+        await this.writeQueue(queue)
+        await raiseEscalation({
+          tasksPath: this.tasksPath(),
+          progressPath: this.progressPath(),
+          taskId: task.id,
+          agentId: 'reviewer-fanout',
+          reason: 'max_revisions_exceeded',
+          summary:
+            `Exceeded maxRevisions (${this.opts.config.maxRevisions}). ` +
+            `Reviewer fan-out keeps rejecting.`,
+          details: aggregate.combinedFeedback,
+        })
+        return {
+          kind: 'blocked-max-revisions',
+          taskId: task.id,
+          revisionCount: t.revisionCount,
+        } as TickOutcome
+      }
+
+      await this.writeQueue(queue)
+      await this.logTickProgress({
+        task: t,
+        agent: 'reviewer-fanout',
+        beforeStatus,
+        afterStatus: 'in_progress',
+        transitioned: true,
+        note: `fan-out revise (dissenters: ${aggregate.dissenting.map((d) => d.guildSlug).join(', ')})`,
+      })
+      return {
+        kind: 'processed',
+        taskId: task.id,
+        agent: 'reviewer-fanout',
+        beforeStatus,
+        afterStatus: 'in_progress',
+      } as TickOutcome
+    })
+  }
+
+  /**
+   * Route a fan-out aggregate with `needsAdjudication: true` to the domain
+   * coordinator. The coordinator receives the verdict set + dissent
+   * transcript, produces a binding AdjudicationRecord (appended to
+   * `task.adjudications`), and either:
+   *   - Advances the task to `gate_check` with superseded dissenters
+   *     recorded (coordinator resolved the conflict in favor of approving
+   *     the work).
+   *   - Bounces to `in_progress` with the coordinator's `scopeInstructions`
+   *     as the worker prompt, rather than the raw dissent (worker cannot
+   *     relitigate; it executes within the adjudicated scope).
+   *   - Raises an escalation if the coordinator cannot decide
+   *     autonomously under the current `remediation_autonomy` posture.
+   *
+   * This method builds the record deterministically from the aggregate; the
+   * live coordinator LLM pass will be layered on later (FR-32 remediation
+   * loop extension). For now we record a deterministic "keep the dissent's
+   * scoped instructions, mark recurrent-dissent as the trigger" decision
+   * and bounce to the worker with those instructions — which is still a
+   * meaningful improvement: the worker's prompt is the specific list of
+   * changes, not the full conflict transcript.
+   */
+  private async routeToCoordinatorAdjudication(input: {
+    queue: TaskQueue
+    task: Task
+    aggregate: ReturnType<typeof aggregateFanout>
+    verdicts: readonly PersonaVerdict[]
+    round: number
+    now: string
+    beforeStatus: TaskStatus
+  }): Promise<TickOutcome | null> {
+    const coord = this.opts.agents.coordinators[input.task.domain]
+    const coordinatorId = coord?.name ?? 'coordinator-default'
+
+    // For v1: the deterministic adjudication record. Every dissenter is
+    // recorded as a "winning concern" (we treat all dissents as load-
+    // bearing until an LLM coordinator pass overrides). The worker gets
+    // scoped instructions = the union of dissent revision items, framed as
+    // the coordinator's decision.
+    const dissenterSlugs = input.aggregate.dissenting.map(d => d.guildSlug)
+    const scopeInstructions: string[] = []
+    for (const d of input.aggregate.dissenting) {
+      for (const item of d.revisionItems) {
+        if (!scopeInstructions.includes(item)) scopeInstructions.push(item)
+      }
+    }
+
+    const rationale = [
+      `Reviewer fan-out round ${input.round} produced recurring dissent from`,
+      `${dissenterSlugs.join(', ')}. Policy \`coordinator_adjudicates_on_`,
+      `conflict\` routes to the domain coordinator (${input.task.domain}).`,
+      '',
+      'Decision (deterministic v1): keep each dissenting persona\'s scoped',
+      'instructions. Worker executes the scoped list; the dissent transcript',
+      'is NOT in the worker prompt so the worker cannot relitigate.',
+    ].join('\n')
+
+    const adjudication: AdjudicationRecord = {
+      round: input.round,
+      trigger: input.aggregate.adjudicationTrigger ?? 'same_persona_repeat_dissent',
+      dissenters: dissenterSlugs,
+      winningConcerns: dissenterSlugs,
+      supersededConcerns: [],
+      summary: `Coordinator adjudicated: worker to address ${scopeInstructions.length} scoped item${scopeInstructions.length === 1 ? '' : 's'} from ${dissenterSlugs.join(', ')}`,
+      rationale,
+      scopeInstructions,
+      decidedBy: 'coordinator',
+      decidedAt: input.now,
+    }
+    input.task.adjudications.push(adjudication)
+
+    // Write a DECISIONS.md entry capturing the adjudication so the audit
+    // trail lives outside TASKS.json too.
+    const decisionsPath = path.join(this.opts.config.memoryDir, 'DECISIONS.md')
+    const decisionEntry = [
+      `### ${input.now} — Reviewer fan-out adjudication`,
+      '',
+      `**Task:** ${input.task.id}`,
+      `**Domain:** ${input.task.domain}`,
+      `**Coordinator:** ${coordinatorId}`,
+      `**Trigger:** ${adjudication.trigger} (round ${adjudication.round})`,
+      `**Dissenters:** ${dissenterSlugs.join(', ') || 'none'}`,
+      '',
+      '**Rationale:**',
+      rationale,
+      '',
+      '**Scoped instructions to worker:**',
+      ...scopeInstructions.map(i => `- ${i}`),
+      '',
+      '---',
+      '',
+    ].join('\n')
+    try {
+      await fs.appendFile(decisionsPath, decisionEntry, 'utf8')
+    } catch {
+      // Appending to DECISIONS.md is best-effort; the task-level record is
+      // the load-bearing trail.
+    }
+
+    // Build the worker's next prompt from scope instructions only.
+    const scopedFeedback = [
+      `**Coordinator adjudication (round ${adjudication.round}):**`,
+      '',
+      adjudication.summary,
+      '',
+      '**Scoped instructions (address exactly these items):**',
+      ...scopeInstructions.map(i => `- ${i}`),
+    ].join('\n')
+
+    input.task.notes.push({
+      agentId: coordinatorId,
+      role: 'coordinator',
+      content: scopedFeedback,
+      timestamp: input.now,
+    })
+    input.task.status = 'in_progress'
+    input.task.revisionCount += 1
+    input.task.updatedAt = input.now
+    input.queue.lastUpdated = input.now
+
+    // maxRevisions still caps: if the coordinator keeps having to adjudicate,
+    // escalate to human.
+    if (input.task.revisionCount > this.opts.config.maxRevisions) {
+      await this.writeQueue(input.queue)
+      await raiseEscalation({
+        tasksPath: this.tasksPath(),
+        progressPath: this.progressPath(),
+        taskId: input.task.id,
+        agentId: coordinatorId,
+        reason: 'max_revisions_exceeded',
+        summary:
+          `Adjudicated ${input.task.revisionCount} times (maxRevisions=${this.opts.config.maxRevisions}). ` +
+          `Coordinator cannot resolve; escalating.`,
+        details: rationale,
+      })
+      return {
+        kind: 'blocked-max-revisions',
+        taskId: input.task.id,
+        revisionCount: input.task.revisionCount,
+      } as TickOutcome
+    }
+
+    await this.writeQueue(input.queue)
+    await this.logTickProgress({
+      task: input.task,
+      agent: coordinatorId,
+      beforeStatus: input.beforeStatus,
+      afterStatus: 'in_progress',
+      transitioned: true,
+      note: `coordinator adjudicated (dissenters: ${dissenterSlugs.join(', ')}) → scoped rework`,
+    })
+    return {
+      kind: 'processed',
+      taskId: input.task.id,
+      agent: coordinatorId,
+      beforeStatus: input.beforeStatus,
+      afterStatus: 'in_progress',
+    } as TickOutcome
+  }
+
   private async applyReviewVerdictInline(opts: {
     task: Task
     queue: TaskQueue
@@ -1968,9 +2571,15 @@ export async function runOrchestrator(
     coordinators,
   }
 
+  const reviewerFanout = buildDefaultReviewerFanout(models.reviewer, {
+    ...(hookExecutor ? { hookExecutor } : {}),
+    concurrency: projectCfg.reviewerFanoutConcurrency,
+  })
+
   const orchestrator = new Orchestrator({
     config,
     agents,
+    reviewerFanout,
     ...(opts.domainFilter ? { domainFilter: opts.domainFilter } : {}),
     ...(hookExecutor ? { hookExecutor } : {}),
     ...(opts.onBackendEvent ? { onBackendEvent: opts.onBackendEvent } : {}),
@@ -1991,11 +2600,163 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+/**
+ * True iff the task is running a handoff sequence and has at least one
+ * more step after the current one. Used by the `review` pre-pass to
+ * distinguish "step complete, advance" from "final step complete, run
+ * normal fan-out review."
+ */
+function hasPendingHandoffStep(task: Task): boolean {
+  const seq = task.handoffSequence
+  if (!seq || seq.length === 0) return false
+  const idx = task.handoffStep ?? 0
+  return idx + 1 < seq.length
+}
+
+/**
+ * Parse the worker's latest note for a structured `## Handoff note` section
+ * (case-insensitive header). Falls back to the entire note text when no
+ * explicit section is present — always better to preserve the worker's
+ * intent than to silently drop it.
+ */
+function extractHandoffNote(task: Task): string {
+  // Walk backwards to find the latest worker note.
+  for (let i = task.notes.length - 1; i >= 0; i--) {
+    const n = task.notes[i]
+    if (!n) continue
+    if (
+      n.role === 'worker' ||
+      n.agentId === 'worker-agent' ||
+      n.agentId?.endsWith('-engineer')
+    ) {
+      const content = n.content ?? ''
+      const match = content.match(
+        /^\s*##\s+Handoff note\s*\n([\s\S]*?)(?:\n##\s|\n?$)/im,
+      )
+      if (match) return match[1]!.trim()
+      return content.trim()
+    }
+  }
+  return ''
+}
+
+/**
+ * Rebuild prior fan-out rounds from the flat `task.reviewVerdicts` trail.
+ * Verdicts recorded within the same ISO second are treated as one round
+ * (the fan-out persists every persona's verdict with the same `recordedAt`).
+ * The most-recent round is placed last in the returned list so
+ * `findRecurrentDissent` can compare against `priorRounds.at(-1)`.
+ *
+ * Each element is a PersonaVerdict-shaped slice derived from the stored
+ * ReviewVerdict — `guildSlug` comes from `failingSignals[0]` (fan-out
+ * writes the persona slug there on revise) or is inferred from the
+ * `reason` text on approve.
+ */
+function extractPriorVerdictRounds(
+  verdicts: readonly ReviewVerdict[],
+): PersonaVerdict[][] {
+  if (verdicts.length === 0) return []
+  const rounds: PersonaVerdict[][] = []
+  let currentKey: string | null = null
+  let current: PersonaVerdict[] = []
+  for (const v of verdicts) {
+    const key = v.recordedAt
+    if (key !== currentKey) {
+      if (current.length > 0) rounds.push(current)
+      current = []
+      currentKey = key
+    }
+    // Fan-out tags failingSignals[0] with the persona slug on revise;
+    // approves leave failingSignals empty. Fall back to parsing the slug
+    // out of the reason prefix ("<guildName> approved/requested revision").
+    const slug =
+      v.failingSignals[0] ?? guessSlugFromReason(v.reason) ?? 'unknown'
+    current.push({
+      guildSlug: slug,
+      guildName: slug,
+      verdict: v.verdict,
+      reasoning: v.reasoning ?? v.reason,
+      // `revisionItems` aren't persisted verbatim on ReviewVerdict — the
+      // dissent text lives in `reasoning`. The detector does token-set
+      // overlap on the whole string, so passing `[reasoning]` is equivalent
+      // to the empty-items case for this purpose.
+      revisionItems: v.verdict === 'revise' ? [v.reasoning ?? v.reason] : [],
+      rawOutput: v.reasoning ?? v.reason,
+    })
+  }
+  if (current.length > 0) rounds.push(current)
+  return rounds
+}
+
+function guessSlugFromReason(reason: string): string | null {
+  // Fan-out writes "The <Persona Name> approved/requested revision" into
+  // reason. Slugify the persona name section. This is advisory — callers
+  // that need strict attribution should use failingSignals[0].
+  const m = /^The\s+([A-Z][A-Za-z ]+?)\s+(approved|requested revision)/.exec(
+    reason,
+  )
+  if (!m) return null
+  return m[1]!.toLowerCase().replace(/\s+/g, '-')
+}
+
 /** FR-15: map the zod-enum task field onto the engine's PermissionMode enum. */
 function taskModeToPermissionMode(mode: TaskPermissionMode): PermissionMode {
   switch (mode) {
     case 'plan':      return PermissionMode.PLAN
     case 'full_auto': return PermissionMode.FULL_AUTO
     case 'default':   return PermissionMode.DEFAULT
+  }
+}
+
+/**
+ * Build a ReviewerFanoutRunner that creates one fresh persona reviewer
+ * agent per applicable persona and parses the structured verdict from
+ * each response. The orchestrator aggregates across personas.
+ *
+ * ## Concurrency
+ *
+ * `opts.concurrency` controls how many persona calls run at once:
+ * - `1` (default) — strictly sequential. Safe for LM Studio and any
+ *   single-session local model; wall-clock cost is `N * per-persona`.
+ * - `n > 1` — up to `n` personas in flight simultaneously. Appropriate
+ *   for cloud providers (Anthropic, OpenAI, …) whose rate limits
+ *   comfortably exceed `n`. Wall-clock cost collapses to roughly
+ *   `ceil(N / n) * per-persona`.
+ *
+ * An LLM failure for one persona doesn't abort the whole review — we
+ * record a parseable "revise" verdict so the strict-all aggregator
+ * surfaces the failing persona with a readable reason.
+ */
+export function buildDefaultReviewerFanout(
+  reviewerLlm: AgentLLM,
+  opts: { hookExecutor?: HookExecutor; concurrency?: number } = {},
+): ReviewerFanoutRunner {
+  const concurrency = Math.max(1, Math.floor(opts.concurrency ?? 1))
+  return async ({ task, personas, context }) => {
+    const { parsePersonaOutput } = await import('./reviewer-fanout.js')
+
+    const runPersona = async (persona: GuildDefinition): Promise<PersonaVerdict> => {
+      const agent = createPersonaReviewerAgent(persona, reviewerLlm, {
+        ...(opts.hookExecutor ? { hookExecutor: opts.hookExecutor } : {}),
+      })
+      const prompt = [
+        context,
+        '',
+        `Task id: ${task.id}. Review this task through your lens alone and emit the required verdict format.`,
+      ].join('\n')
+      try {
+        const result = await agent.generate(prompt)
+        return parsePersonaOutput(persona, result.text)
+      } catch (err) {
+        return parsePersonaOutput(
+          persona,
+          `**Verdict:** revise\n**Reasoning:** ${persona.name} failed to produce a verdict (${err instanceof Error ? err.message : String(err)}). Treating as revise per strict-all policy.`,
+        )
+      }
+    }
+
+    return boundedConcurrency(personas, concurrency, (persona) =>
+      runPersona(persona),
+    )
   }
 }
