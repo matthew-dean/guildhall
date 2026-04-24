@@ -52,7 +52,7 @@ function expandPath(p: string): string {
 //     --domain <id>                 — only process tasks for one coordinator domain
 //     --max-ticks <n>               — stop after N ticks (useful for testing)
 //   guildhall serve                     — start the web dashboard (all workspaces)
-//     --port <n>                    — override the dashboard port (default: 7842)
+//     --port <n>                    — override the dashboard port (default: 7777)
 //   guildhall config [id|path]          — re-run the init wizard on an existing workspace
 // ---------------------------------------------------------------------------
 
@@ -90,7 +90,7 @@ GuildHall — multi-agent operating system for software projects
 
 Usage:
   guildhall init [path]              Launch dashboard + browser-based setup wizard
-    --port <n>                   Override dashboard port (default: 7842)
+    --port <n>                   Override dashboard port (default: 7777)
     --no-browser                 Don't open a browser window
     --no-serve                   Write guildhall.yaml only (requires --cli-wizard)
     --cli-wizard                 Legacy: run the terminal setup wizard instead
@@ -103,7 +103,7 @@ Usage:
     --max-ticks <n>              Stop after N ticks (testing)
 
   guildhall serve                    Start the web dashboard for all workspaces
-    --port <n>                   Override dashboard port (default: 7842)
+    --port <n>                   Override dashboard port (default: 7777)
 
   guildhall config [id|path]         Re-run the init wizard on an existing workspace
 
@@ -148,7 +148,7 @@ async function cmdInit() {
   const targetDir = pos[0] ?? process.cwd()
   const absPath = resolve(expandPath(targetDir))
   const portArg = getFlag('--port')
-  const port = portArg ? Number(portArg) : 7842
+  const port = portArg ? Number(portArg) : 7777
   const useCliWizard = process.argv.includes('--cli-wizard')
   const noOpen = process.argv.includes('--no-open') || process.argv.includes('--no-browser')
   const noServe = process.argv.includes('--no-serve')
@@ -277,7 +277,7 @@ async function cmdServe() {
   const projectPath = pathArg ? resolve(expandPath(pathArg)) : process.cwd()
   const opts: Parameters<typeof runServe>[0] = { projectPath }
   if (portArg) opts.port = Number(portArg)
-  const port = opts.port ?? 7842
+  const port = opts.port ?? 7777
   await runServe(opts)
   if (!noOpen) setTimeout(() => openBrowser(`http://localhost:${port}`), 400)
 }

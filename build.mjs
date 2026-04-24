@@ -7,6 +7,7 @@ import esbuildSvelte from 'esbuild-svelte'
 import { cpSync, existsSync, mkdirSync, rmSync, chmodSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { spawnSync } from 'node:child_process'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = __dirname
@@ -110,8 +111,21 @@ const webBuildOptions = {
 
 const watch = process.argv.includes('--watch')
 
+// Extract help-topic metadata from docs/ into src/web/generated/ before the
+// svelte bundle reads it. Fails the build on malformed frontmatter.
+function extractHelpTopics() {
+  const result = spawnSync('node', ['scripts/extract-help-topics.mjs'], {
+    cwd: ROOT,
+    stdio: 'inherit',
+  })
+  if (result.status !== 0) {
+    throw new Error('[guildhall build] help-topic extraction failed')
+  }
+}
+
 cleanDist()
 mkdirSync(WEB_OUT_DIR, { recursive: true })
+extractHelpTopics()
 
 if (watch) {
   const ctx = await context(buildOptions)

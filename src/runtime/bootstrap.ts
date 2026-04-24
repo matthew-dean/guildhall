@@ -335,5 +335,8 @@ export function writeBootstrapResult(
   }
 
   const merged = { ...current, bootstrap: nextBootstrap }
-  writeFileSync(yamlPath, stringifyYaml(merged), 'utf8')
+  // `yaml`'s default stringifier emits unquoted ISO timestamps, which the
+  // loader then re-parses as `Date`. Our Zod schema expects `string`, so
+  // force double-quoting to preserve round-trip identity.
+  writeFileSync(yamlPath, stringifyYaml(merged, { defaultStringType: 'QUOTE_DOUBLE' }), 'utf8')
 }

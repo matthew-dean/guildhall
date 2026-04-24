@@ -176,7 +176,7 @@ export const GlobalConfig = z.object({
   openaiApiKey: z.string().optional(),
 
   // Dashboard server port for `guildhall serve`
-  servePort: z.number().int().min(1024).max(65535).default(7842),
+  servePort: z.number().int().min(1024).max(65535).default(7777),
 })
 export type GlobalConfig = z.infer<typeof GlobalConfig>
 

@@ -41,14 +41,23 @@
 
 <style>
   .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--s-2);
     border: 1px solid transparent;
     border-radius: var(--r-1);
     font-weight: 600;
     font-size: var(--fs-2);
     font-family: inherit;
     cursor: pointer;
-    line-height: var(--lh-tight);
+    line-height: 1;
     min-height: var(--control-h);
+    white-space: nowrap;
+  }
+  .btn :global(svg) {
+    display: block;
+    flex: none;
   }
   .btn:disabled {
     opacity: 0.5;

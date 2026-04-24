@@ -19,7 +19,7 @@ export type InboxSeverity = 'high' | 'medium' | 'low'
 
 export type InboxItem =
   | { kind: 'bootstrap_missing'; severity: 'high'; title: string; detail: string; actionHref?: string }
-  | { kind: 'workspace_import_pending'; severity: 'high'; title: string; detail: string; signals: string[]; actionHref: string }
+  | { kind: 'workspace_import_pending'; severity: 'medium'; title: string; detail: string; signals: string[]; actionHref: string; dismissEndpoint: string }
   | { kind: 'brief_approval'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
   | { kind: 'spec_approval'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
   | { kind: 'open_escalation'; severity: 'high'; taskId: string; escalationId: string; title: string; detail: string; actionHref: string }
@@ -27,6 +27,28 @@ export type InboxItem =
 
 export interface BuildInboxOptions {
   projectPath: string
+}
+
+/**
+ * High-severity blockers that gate downstream actions in the UI.
+ *
+ * When true, the UI disables specific controls (Start, + New Task, etc.) with
+ * a tooltip pointing the user back at the relevant Inbox item. Kept as a
+ * narrow, explicit shape — derived from the Inbox items themselves — rather
+ * than letting every consumer re-derive the rules.
+ */
+export interface InboxBlockers {
+  /** Bootstrap not verified → orchestrator cannot safely dispatch agents. */
+  bootstrap: boolean
+  /** Workspace signals present but not imported → new tasks may duplicate existing goals. */
+  workspaceImport: boolean
+}
+
+export function buildInboxBlockers(items: readonly InboxItem[]): InboxBlockers {
+  return {
+    bootstrap: items.some(i => i.kind === 'bootstrap_missing'),
+    workspaceImport: items.some(i => i.kind === 'workspace_import_pending'),
+  }
 }
 
 const KIND_ORDER: Record<InboxItem['kind'], number> = {
@@ -65,7 +87,24 @@ function readYamlSafe(path: string): unknown {
   }
 }
 
-function detectWorkspaceSignals(projectPath: string): string[] {
+/**
+ * Cheap, sync repo-shape check: which well-known anchor files/dirs exist?
+ *
+ * NOTE: distinct from `detectWorkspaceSignals` in
+ * `workspace-import/detect.ts`, which runs the full (async) content
+ * extraction pipeline — parsing README headings, TODO comments, git log,
+ * etc. — and returns semantic `WorkspaceSignal`s (candidate goals, tasks,
+ * milestones).
+ *
+ * The inbox chip uses the anchor check to decide whether to nudge the
+ * user toward /workspace-import at all; the import tab then runs the
+ * semantic detector for the actual review content. The two surfaces MUST
+ * speak different vocabularies ("anchors" vs "signals") — we previously
+ * reused the word "signals" on both, producing the confusing pattern
+ * where the chip said "Found 5 signals" and the tab said "No signals
+ * detected".
+ */
+export function detectRepoAnchors(projectPath: string): string[] {
   const candidates = [
     'README.md',
     'pnpm-workspace.yaml',
@@ -137,22 +176,23 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   // --- workspace_import_pending --------------------------------------------
   const goalsPath = join(projectPath, 'memory', 'workspace-goals.json')
   const hasGoals = existsSync(goalsPath)
-  const signals = detectWorkspaceSignals(projectPath)
-  const hasReadme = signals.includes('README.md')
+  const anchors = detectRepoAnchors(projectPath)
+  const hasReadme = anchors.includes('README.md')
   const hasAnchor =
-    signals.includes('pnpm-workspace.yaml') ||
-    signals.includes('package.json') ||
-    signals.includes('packages') ||
-    signals.includes('skills') ||
-    signals.includes('ROADMAP.md')
+    anchors.includes('pnpm-workspace.yaml') ||
+    anchors.includes('package.json') ||
+    anchors.includes('packages') ||
+    anchors.includes('skills') ||
+    anchors.includes('ROADMAP.md')
   if (!hasGoals && hasReadme && hasAnchor) {
     items.push({
       kind: 'workspace_import_pending',
-      severity: 'high',
-      title: 'Workspace not scanned',
-      detail: 'README + packages found but no proposals imported.',
-      signals,
+      severity: 'medium',
+      title: 'Existing repo detected',
+      detail: `Anchors found (${anchors.slice(0, 3).join(', ')}${anchors.length > 3 ? '…' : ''}). Open to see what the detector extracts — or dismiss.`,
+      signals: anchors,
       actionHref: '/workspace-import',
+      dismissEndpoint: '/api/project/workspace-import/dismiss',
     })
   }
 

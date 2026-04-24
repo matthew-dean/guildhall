@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
-import { buildServeApp } from '../serve.js'
+import { buildServeApp, filterEventsForTask } from '../serve.js'
 
 // Integration tests for the v0.2 UI endpoints:
 //   GET  /api/project/task/:id        — per-task detail powering the drawer
@@ -67,6 +67,24 @@ describe('GET /api/project/task/:id', () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request('http://localhost/api/project/task/missing'))
     expect(res.status).toBe(404)
+  })
+})
+
+describe('filterEventsForTask (drawer live feed)', () => {
+  it('matches wire-protocol snake_case task_id', () => {
+    const events = [
+      { event: { type: 'task_transition', task_id: 't1', from_status: 'ready', to_status: 'in_progress' } },
+      { event: { type: 'task_transition', task_id: 't2', from_status: 'ready', to_status: 'in_progress' } },
+      { event: { type: 'supervisor_started' } }, // no task_id
+    ]
+    expect(filterEventsForTask(events, 't1')).toHaveLength(1)
+    expect(filterEventsForTask(events, 't2')).toHaveLength(1)
+    expect(filterEventsForTask(events, 'none')).toHaveLength(0)
+  })
+
+  it('also matches legacy camelCase taskId shapes', () => {
+    const events = [{ event: { type: 'agent_note', taskId: 't9', content: 'hi' } }]
+    expect(filterEventsForTask(events, 't9')).toHaveLength(1)
   })
 })
 

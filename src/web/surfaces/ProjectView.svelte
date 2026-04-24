@@ -16,12 +16,14 @@
   import WorkTab from './project/WorkTab.svelte'
   import WorkspaceImportTab from './project/WorkspaceImportTab.svelte'
   import PlannerTab from './project/PlannerTab.svelte'
+  import FactsTab from './project/FactsTab.svelte'
   import CoordinatorsTab from './project/CoordinatorsTab.svelte'
   import TimelineTab from './project/TimelineTab.svelte'
   import ReleaseTab from './project/ReleaseTab.svelte'
   import SettingsTab from './project/SettingsTab.svelte'
   import MetaIntakeBanner from './MetaIntakeBanner.svelte'
   import WorkspaceImportBanner from './WorkspaceImportBanner.svelte'
+  import DoThisNext from './DoThisNext.svelte'
   import IntakeModal from './IntakeModal.svelte'
   import { project } from '../lib/project.svelte.js'
   import { onEvent } from '../lib/events.js'
@@ -38,7 +40,48 @@
   let currentView = $state<ProjectView>(initialView)
   let currentSub = $state<string | null>(initialSub)
   let busy = $state(false)
+  let runError = $state<string | null>(null)
   let intakeOpen = $state(false)
+
+  // Inbox blockers drive disabled-state on top-bar actions so hard blockers
+  // (e.g. bootstrap not verified) can't be bypassed by pressing Start.
+  interface Blockers { bootstrap: boolean; workspaceImport: boolean }
+  let blockers = $state<Blockers>({ bootstrap: false, workspaceImport: false })
+  let inboxHighCount = $state(0)
+
+  async function loadInbox(): Promise<void> {
+    try {
+      const r = await fetch('/api/project/inbox')
+      if (!r.ok) return
+      const j = (await r.json()) as {
+        items?: Array<{ severity?: string }>
+        blockers?: Blockers
+      }
+      if (j.blockers) blockers = j.blockers
+      inboxHighCount = (j.items ?? []).filter(i => i.severity === 'high').length
+    } catch {
+      /* leave prior values intact */
+    }
+  }
+
+  $effect(() => {
+    void loadInbox()
+  })
+  $effect(() => {
+    const off = onEvent(ev => {
+      const t = ev.event?.type ?? ''
+      // Refresh on anything that might change inbox state.
+      if (
+        t.startsWith('task_') ||
+        t.startsWith('escalation_') ||
+        t.startsWith('bootstrap_') ||
+        t.startsWith('supervisor_')
+      ) {
+        void loadInbox()
+      }
+    })
+    return off
+  })
 
   $effect(() => {
     currentView = initialView
@@ -114,6 +157,8 @@
       subs: [
         { id: 'ready', label: 'Ready', path: '/settings' },
         { id: 'coordinators', label: 'Coordinators', path: '/settings/coordinators' },
+        { id: 'providers', label: 'Providers', path: '/settings/providers' },
+        { id: 'facts', label: 'Facts', path: '/settings/facts' },
         { id: 'advanced', label: 'Advanced', path: '/settings/advanced' },
       ],
     },
@@ -125,8 +170,18 @@
 
   async function start() {
     busy = true
+    runError = null
     try {
-      await fetch('/api/project/start', { method: 'POST' })
+      const res = await fetch('/api/project/start', { method: 'POST' })
+      if (!res.ok) {
+        try {
+          const body = (await res.json()) as { error?: string; code?: string }
+          runError = body.error ?? `Start failed (HTTP ${res.status})`
+        } catch {
+          runError = `Start failed (HTTP ${res.status})`
+        }
+        return
+      }
       setTimeout(() => void project.refresh(), 300)
     } finally {
       busy = false
@@ -135,8 +190,18 @@
 
   async function stop() {
     busy = true
+    runError = null
     try {
-      await fetch('/api/project/stop', { method: 'POST' })
+      const res = await fetch('/api/project/stop', { method: 'POST' })
+      if (!res.ok) {
+        try {
+          const body = (await res.json()) as { error?: string }
+          runError = body.error ?? `Stop failed (HTTP ${res.status})`
+        } catch {
+          runError = `Stop failed (HTTP ${res.status})`
+        }
+        return
+      }
       setTimeout(() => void project.refresh(), 300)
     } finally {
       busy = false
@@ -149,10 +214,67 @@
 
   const detail = $derived(project.detail)
   const runStatus = $derived(detail?.run?.status ?? 'stopped')
-  const runTone = $derived(
-    runStatus === 'running' ? 'ok' : runStatus === 'error' ? 'danger' : 'neutral',
+
+  // Project phase surfaced in the top-bar chip. Distinguishes "setup isn't
+  // done yet" (hard blockers open, or no coordinator) from "operating — just
+  // not currently running". Gives the user a clear mental model of what the
+  // controls actually do right now.
+  type Phase = 'setting-up' | 'paused' | 'running' | 'error'
+  const phase = $derived<Phase>(
+    runStatus === 'error'
+      ? 'error'
+      : runStatus === 'running'
+        ? 'running'
+        : needsMeta || blockers.bootstrap
+          ? 'setting-up'
+          : 'paused',
+  )
+  const phaseLabel = $derived(
+    phase === 'setting-up'
+      ? 'Setting up'
+      : phase === 'running'
+        ? 'Running'
+        : phase === 'error'
+          ? 'Error'
+          : 'Paused',
+  )
+  const phaseTone = $derived(
+    phase === 'running'
+      ? 'ok'
+      : phase === 'error'
+        ? 'danger'
+        : phase === 'setting-up'
+          ? 'warn'
+          : 'neutral',
   )
   const providersActive = $derived(path.value === '/providers')
+
+  // Task counts for the top-bar indicator. Stuck = has at least one open
+  // escalation. Active = running/in-progress-like statuses.
+  const taskList = $derived(detail?.tasks ?? [])
+  const activeCount = $derived(
+    taskList.filter(t => {
+      const s = (t as { status?: string }).status
+      return s && !['done', 'blocked', 'cancelled', 'archived'].includes(s)
+    }).length,
+  )
+  const stuckCount = $derived(
+    taskList.filter(t => {
+      const escs = (t as { escalations?: Array<{ resolvedAt?: unknown }> }).escalations
+      return Array.isArray(escs) && escs.some(e => !e.resolvedAt)
+    }).length,
+  )
+
+  const startDisabledReason = $derived(
+    blockers.bootstrap ? 'Complete bootstrap in Inbox before starting' : null,
+  )
+  const newTaskDisabledReason = $derived(
+    needsMeta
+      ? 'Bootstrap the project first'
+      : blockers.bootstrap
+        ? 'Complete bootstrap in Inbox before adding tasks'
+        : null,
+  )
 </script>
 
 {#if detail?.initializationNeeded}
@@ -228,22 +350,54 @@
     <div class="main">
       <header class="topbar">
         <span class="ws-chip" title="Workspace">{detail.name}</span>
-        <Chip label={runStatus} tone={runTone} />
+        <Chip label={phaseLabel} tone={phaseTone} />
+        {#if activeCount > 0 || stuckCount > 0}
+          <button
+            type="button"
+            class="tasks-indicator"
+            class:has-stuck={stuckCount > 0}
+            onclick={() => go('/work')}
+            title="Jump to Work"
+            aria-label="{activeCount} active, {stuckCount} stuck"
+          >
+            <span class="tasks-count">{activeCount} active</span>
+            {#if stuckCount > 0}
+              <span class="tasks-stuck">· {stuckCount} stuck</span>
+            {/if}
+          </button>
+        {/if}
+        {#if inboxHighCount > 0}
+          <button
+            type="button"
+            class="inbox-indicator"
+            onclick={() => go('/inbox')}
+            title="Jump to Inbox"
+            aria-label="{inboxHighCount} inbox items need you"
+          >
+            <Icon name="inbox" size={14} />
+            <span>{inboxHighCount}</span>
+          </button>
+        {/if}
         <span class="grow"></span>
         <Button
           variant="secondary"
-          disabled={busy || needsMeta}
+          disabled={busy || newTaskDisabledReason !== null}
           onclick={newTask}
-          ariaLabel={needsMeta ? 'Bootstrap the project first' : 'New task'}
+          ariaLabel={newTaskDisabledReason ?? 'New task'}
         >
-          <span class="btn-inner"><Icon name="plus" size={16} /> New Task</span>
+          <span class="btn-inner" title={newTaskDisabledReason ?? ''}>
+            <Icon name="plus" size={16} /> New Task
+          </span>
         </Button>
         <Button
           variant="primary"
-          disabled={busy || runStatus === 'running' || runStatus === 'stopping'}
+          disabled={busy || runStatus === 'running' || runStatus === 'stopping' || startDisabledReason !== null}
           onclick={start}
+          ariaLabel={startDisabledReason ?? 'Start orchestrator'}
         >
-          <span class="btn-inner"><Icon name="play" size={16} /> Start</span>
+          <span class="btn-inner" title={startDisabledReason ?? ''}>
+            <Icon name="play" size={16} /> Start
+          </span>
         </Button>
         <Button
           variant="danger"
@@ -255,10 +409,24 @@
       </header>
 
       <div class="page">
+        {#if runError}
+          <div class="start-error" role="alert">
+            <Icon name="alert-triangle" size={14} />
+            <span>{runError}</span>
+            {#if /provider/i.test(runError)}
+              <a href="/providers" onclick={(e) => { e.preventDefault(); nav('/providers') }}>Open Providers</a>
+            {/if}
+            <button class="dismiss" onclick={() => (runError = null)} aria-label="Dismiss">×</button>
+          </div>
+        {/if}
         {#if needsMeta}
           <MetaIntakeBanner />
         {:else}
           <WorkspaceImportBanner />
+        {/if}
+
+        {#if currentView !== 'inbox'}
+          <DoThisNext />
         {/if}
 
         <div class="body">
@@ -270,6 +438,8 @@
             <WorkTab {detail} />
           {:else if currentView === 'planner'}
             <PlannerTab {detail} />
+          {:else if currentView === 'facts'}
+            <FactsTab />
           {:else if currentView === 'coordinators'}
             <CoordinatorsTab {detail} subView={currentSub} />
           {:else if currentView === 'timeline'}
@@ -404,6 +574,37 @@
     background: var(--bg-elevated);
   }
   .grow { flex: 1; }
+  .tasks-indicator,
+  .inbox-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    padding: 2px 8px;
+    cursor: pointer;
+    font: inherit;
+    line-height: 1;
+  }
+  .tasks-indicator:hover,
+  .inbox-indicator:hover {
+    color: var(--text);
+    border-color: var(--border-strong);
+    background: var(--bg-raised-2);
+  }
+  .tasks-indicator.has-stuck {
+    color: var(--warn);
+    border-color: var(--warn);
+  }
+  .tasks-stuck { font-weight: 600; }
+  .inbox-indicator {
+    color: var(--danger);
+    border-color: var(--danger);
+    font-weight: 600;
+  }
   .btn-inner {
     display: inline-flex;
     align-items: center;
@@ -421,6 +622,30 @@
   }
   .page-centered {
     padding: var(--s-4);
+  }
+  .start-error {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    padding: var(--s-2) var(--s-3);
+    border: 1px solid var(--color-danger, #c0392b);
+    background: var(--color-danger-bg, #fdecea);
+    color: var(--color-danger-fg, #8a1f1a);
+    border-radius: var(--radius-md, 6px);
+    font-size: 13px;
+  }
+  .start-error a {
+    color: inherit;
+    text-decoration: underline;
+    margin-left: auto;
+  }
+  .start-error .dismiss {
+    background: none;
+    border: none;
+    color: inherit;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 0 var(--s-1);
   }
   .body {
     display: flex;

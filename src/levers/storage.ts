@@ -66,10 +66,54 @@ export async function loadLeverSettings(opts: LoadOptions): Promise<LeverSetting
     throw new LeverSettingsCorruptError(opts.path, (err as Error).message)
   }
   const result = leverSettingsSchema.safeParse(parsed)
-  if (!result.success) {
-    throw new LeverSettingsCorruptError(opts.path, formatIssues(result.error.issues))
+  if (result.success) return result.data
+
+  // Self-heal path: the most common corruption in practice is "schema grew a
+  // new required lever; on-disk file doesn't have it yet". Deep-merge the
+  // defaults in so user-set positions survive, then re-validate. If the file
+  // is structurally broken in some other way (wrong types, bogus keys), fall
+  // through to the hard error.
+  const merged = mergeWithDefaults(parsed, makeDefaultSettings(opts.now?.()))
+  const reparsed = leverSettingsSchema.safeParse(merged)
+  if (reparsed.success) {
+    await saveLeverSettings({ path: opts.path, settings: reparsed.data })
+    return reparsed.data
   }
-  return result.data
+  throw new LeverSettingsCorruptError(opts.path, formatIssues(result.error.issues))
+}
+
+/**
+ * Deep-merge `base` (defaults) into `incoming` (from disk) so that any keys
+ * present on `incoming` win, and any keys only present on `base` are filled
+ * in. Used to repair lever files that pre-date a schema addition.
+ */
+function mergeWithDefaults(incoming: unknown, base: LeverSettings): unknown {
+  if (incoming === null || typeof incoming !== 'object' || Array.isArray(incoming)) {
+    return base
+  }
+  const src = incoming as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  const baseRec = base as unknown as Record<string, unknown>
+  const keys = new Set([...Object.keys(baseRec), ...Object.keys(src)])
+  for (const key of keys) {
+    const b = baseRec[key]
+    const i = src[key]
+    if (i === undefined) {
+      out[key] = b
+    } else if (
+      b !== null &&
+      typeof b === 'object' &&
+      !Array.isArray(b) &&
+      i !== null &&
+      typeof i === 'object' &&
+      !Array.isArray(i)
+    ) {
+      out[key] = mergeWithDefaults(i, b as unknown as LeverSettings)
+    } else {
+      out[key] = i
+    }
+  }
+  return out
 }
 
 /**

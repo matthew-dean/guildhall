@@ -50,6 +50,7 @@
     if (p === '/coordinators')
       return { kind: 'project', view: 'coordinators', sub: null, drawerTaskId: null }
     if (p === '/planner') return { kind: 'project', view: 'planner', sub: null, drawerTaskId: null }
+    if (p === '/facts') return { kind: 'project', view: 'facts', sub: null, drawerTaskId: null }
     if (p === '/timeline') return { kind: 'project', view: 'timeline', sub: null, drawerTaskId: null }
     return { kind: 'project', view: 'inbox', sub: null, drawerTaskId: null }
   }

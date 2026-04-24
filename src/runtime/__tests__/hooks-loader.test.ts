@@ -29,7 +29,7 @@ function baseConfig(hooks?: Record<string, unknown[]>): ResolvedConfig {
     heartbeatInterval: 5,
     ignore: [],
     lmStudioUrl: 'http://localhost:1234/v1',
-    servePort: 7842,
+    servePort: 7777,
   }
   if (hooks) cfg.hooks = hooks
   return cfg

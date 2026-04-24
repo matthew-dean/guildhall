@@ -22,7 +22,13 @@ import {
   type CoordinatorDomain,
   type ProgressEntry,
 } from '@guildhall/core'
-import { readProjectConfig, type ResolvedConfig } from '@guildhall/config'
+import {
+  readProjectConfig,
+  updateProjectConfig,
+  migrateProjectProvidersToGlobal,
+  resolveGlobalCredentials,
+  type ResolvedConfig,
+} from '@guildhall/config'
 import { PermissionMode, HookEvent, type HookExecutor } from '@guildhall/engine'
 import { McpClientManager, createMcpTools } from '@guildhall/mcp'
 import { loadSkillRegistry } from '@guildhall/skills'
@@ -2479,11 +2485,24 @@ export async function runOrchestrator(
   // rejected the model on every tick and left the session stuck).
   const preferredProvider =
     projectCfg.preferredProvider ?? inferPreferredProvider(config.models)
+  // Credentials live in the global store (~/.guildhall/providers.yaml) —
+  // env vars still win (resolveGlobalCredentials honors that precedence).
+  // Any legacy project-local keys are opportunistically migrated before we
+  // read them, so pre-0.3 projects get cleaned up on first boot.
+  try {
+    migrateProjectProvidersToGlobal(config.projectPath, {
+      readProject: (p) => readProjectConfig(p),
+      writeProject: (p, patch) => updateProjectConfig(p, patch),
+    })
+  } catch {
+    /* best-effort — never block orchestrator boot on migration */
+  }
+  const creds = resolveGlobalCredentials()
   const selection = await selectApiClient({
     ...(preferredProvider ? { preferredProvider } : {}),
-    ...(projectCfg.anthropicApiKey ? { anthropicApiKey: projectCfg.anthropicApiKey } : {}),
-    ...(projectCfg.openaiApiKey ? { openaiApiKey: projectCfg.openaiApiKey } : {}),
-    ...(projectCfg.lmStudioUrl ? { llamaCppUrl: projectCfg.lmStudioUrl } : {}),
+    ...(creds.anthropicApiKey ? { anthropicApiKey: creds.anthropicApiKey } : {}),
+    ...(creds.openaiApiKey ? { openaiApiKey: creds.openaiApiKey } : {}),
+    ...(creds.llamaCppUrl ? { llamaCppUrl: creds.llamaCppUrl } : {}),
   })
   if (selection.providerName === 'none') {
     console.warn(`[guildhall] ${selection.reason}`)

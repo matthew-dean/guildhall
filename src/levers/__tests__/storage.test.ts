@@ -110,6 +110,37 @@ describe('loadLeverSettings', () => {
       LeverSettingsCorruptError,
     )
   })
+
+  it('self-heals when the schema grew a new required lever (missing domain key)', async () => {
+    // Start from a valid-at-the-time-of-writing settings file, then drop
+    // `reviewer_fanout_policy` from domains.default to simulate an older
+    // file that pre-dates a schema addition. The loader should fill the
+    // missing key from defaults, rewrite the file, and return successfully.
+    const settings = makeDefaultSettings()
+    await saveLeverSettings({ path: settingsPath, settings })
+
+    const raw = (await fs.readFile(settingsPath, 'utf8')).replace(
+      /\n  reviewer_fanout_policy:[\s\S]*?(?=\n  [a-z]|\n[a-z]|$)/,
+      '\n',
+    )
+    await fs.writeFile(settingsPath, raw, 'utf8')
+
+    // First load should heal instead of throwing.
+    const healed = await loadLeverSettings({ path: settingsPath })
+    expect(healed.domains.default.reviewer_fanout_policy).toBeDefined()
+    // And the on-disk file is now valid for subsequent reads.
+    const reloaded = await loadLeverSettings({ path: settingsPath })
+    expect(reloaded.domains.default.reviewer_fanout_policy).toBeDefined()
+  })
+
+  it('still throws when the file is wrong-shaped (not just missing keys)', async () => {
+    await fs.mkdir(join(tmpDir, 'memory'), { recursive: true })
+    // Bad primitive type — self-heal can't recover this.
+    await fs.writeFile(settingsPath, 'version: "one"\nproject: {}\ndomains: {}\n', 'utf8')
+    await expect(loadLeverSettings({ path: settingsPath })).rejects.toBeInstanceOf(
+      LeverSettingsCorruptError,
+    )
+  })
 })
 
 describe('resolveDomainLevers', () => {

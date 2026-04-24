@@ -56,7 +56,7 @@ function baseConfig(): ResolvedConfig {
     heartbeatInterval: 5,
     ignore: [],
     lmStudioUrl: 'http://localhost:1234',
-    servePort: 7842,
+    servePort: 7777,
   }
 }
 

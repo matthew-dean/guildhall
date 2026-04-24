@@ -20,6 +20,8 @@
   import ProvenanceTab from './drawer/ProvenanceTab.svelte'
   import ResolveEscalationModal from './drawer/ResolveEscalationModal.svelte'
   import type { DrawerPayload, DrawerTab, Escalation } from '../lib/types.js'
+  import { onEvent, eventTaskId } from '../lib/events.js'
+  import { onDestroy } from 'svelte'
 
   interface Props {
     taskId: string
@@ -43,7 +45,7 @@
     { id: 'transcript', label: 'Transcript' },
     { id: 'experts', label: 'Experts' },
     { id: 'history', label: 'History' },
-    { id: 'provenance', label: 'Provenance' },
+    { id: 'provenance', label: 'Origin' },
   ] as const
 
   async function load() {
@@ -129,6 +131,31 @@
 
   $effect(() => {
     void load()
+  })
+
+  // Live updates: whenever the orchestrator emits an event for THIS task,
+  // re-fetch the drawer payload so transitions, notes, escalations, and
+  // history reflect reality without the user having to close/reopen the drawer.
+  // Coarse refresh is cheaper and simpler than selective merging, and the
+  // drawer payload is small.
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null
+  function scheduleRefresh() {
+    if (refreshTimer) return
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null
+      void load()
+    }, 150)
+  }
+  const offEvent = onEvent((env) => {
+    const tid = eventTaskId(env)
+    if (tid && tid === taskId) scheduleRefresh()
+  })
+  onDestroy(() => {
+    offEvent()
+    if (refreshTimer) {
+      clearTimeout(refreshTimer)
+      refreshTimer = null
+    }
   })
 </script>
 

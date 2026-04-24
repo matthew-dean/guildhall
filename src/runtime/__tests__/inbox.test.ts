@@ -10,7 +10,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { stringify as stringifyYaml } from 'yaml'
 
-import { buildInbox } from '../inbox.js'
+import { buildInbox, buildInboxBlockers, type InboxItem } from '../inbox.js'
 
 let tmpDir: string
 let memoryDir: string
@@ -175,10 +175,17 @@ describe('buildInbox', () => {
     const hit = items.find(i => i.kind === 'workspace_import_pending')
     expect(hit).toBeDefined()
     if (!hit || hit.kind !== 'workspace_import_pending') throw new Error('unreachable')
-    expect(hit.severity).toBe('high')
+    expect(hit.severity).toBe('medium')
+    expect(hit.dismissEndpoint).toBe('/api/project/workspace-import/dismiss')
     expect(hit.signals).toContain('README.md')
     expect(hit.signals).toContain('package.json')
     expect(hit.actionHref).toBe('/workspace-import')
+    // Language matters: the chip-side label must say "anchors", not
+    // "signals", so it doesn't contradict the Workspace Import tab (which
+    // uses "signals" for semantic content the detector extracted).
+    expect(hit.title).toBe('Existing repo detected')
+    expect(hit.detail).toMatch(/anchors found/i)
+    expect(hit.detail).not.toMatch(/\d+ signals?/i)
   })
 
   it('brief_approval: emitted for tasks whose productBrief has no approvedAt', async () => {
@@ -301,5 +308,38 @@ describe('buildInbox', () => {
     expect(severities).toContain('high')
     expect(severities).toContain('medium')
     expect(severities).toContain('low')
+  })
+})
+
+describe('buildInboxBlockers', () => {
+  const item = (kind: InboxItem['kind']): InboxItem => {
+    // Minimal shape cast — only `kind` matters to buildInboxBlockers.
+    return { kind, severity: 'high', title: 't', detail: 'd' } as unknown as InboxItem
+  }
+
+  it('returns all-false when the inbox is empty', () => {
+    expect(buildInboxBlockers([])).toEqual({ bootstrap: false, workspaceImport: false })
+  })
+
+  it('flags bootstrap when bootstrap_missing is present', () => {
+    const blockers = buildInboxBlockers([item('bootstrap_missing')])
+    expect(blockers.bootstrap).toBe(true)
+    expect(blockers.workspaceImport).toBe(false)
+  })
+
+  it('flags workspaceImport when workspace_import_pending is present', () => {
+    const blockers = buildInboxBlockers([item('workspace_import_pending')])
+    expect(blockers.bootstrap).toBe(false)
+    expect(blockers.workspaceImport).toBe(true)
+  })
+
+  it('does not flag blockers for non-blocking kinds (briefs, escalations, lever questions)', () => {
+    const blockers = buildInboxBlockers([
+      item('brief_approval'),
+      item('spec_approval'),
+      item('open_escalation'),
+      item('lever_questions'),
+    ])
+    expect(blockers).toEqual({ bootstrap: false, workspaceImport: false })
   })
 })

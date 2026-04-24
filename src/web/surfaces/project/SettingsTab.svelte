@@ -21,6 +21,9 @@
   import Byline from '../../lib/Byline.svelte'
   import LogViewer from '../../lib/LogViewer.svelte'
   import DefinitionList from '../../lib/DefinitionList.svelte'
+  import FactsTab from './FactsTab.svelte'
+  import ProjectProvidersSection from './ProjectProvidersSection.svelte'
+  import Help from '../../lib/Help.svelte'
   import { nav } from '../../lib/nav.svelte.js'
   import { project } from '../../lib/project.svelte.js'
 
@@ -139,12 +142,45 @@
     }
   }
 
+  let bootstrapError = $state<string | null>(null)
+  // Toast after a manual bootstrap run so the user sees what actually
+  // happened — pressing "Configure" and silently landing on "Running" was
+  // the documented UX bug.
+  let bootstrapToast = $state<{ text: string; tone: 'ok' | 'danger' } | null>(null)
+
+  function flashToast(text: string, tone: 'ok' | 'danger'): void {
+    bootstrapToast = { text, tone }
+    setTimeout(() => {
+      if (bootstrapToast?.text === text) bootstrapToast = null
+    }, 4500)
+  }
+
+  function summarizeBootstrapResult(j: unknown): string {
+    const d = (j as { detected?: { packageManager?: string; gates?: Record<string, { available?: boolean }> } })?.detected
+    if (!d) return 'Bootstrap verified.'
+    const pm = d.packageManager ?? 'none'
+    const gates = d.gates ? Object.entries(d.gates).filter(([, v]) => v?.available).map(([k]) => k) : []
+    const gateList = gates.length > 0 ? gates.join(', ') : 'no gates'
+    return `Bootstrap verified (${pm}): ${gateList}`
+  }
+
   async function runBootstrap() {
     if (bootstrapRunning) return
     bootstrapRunning = true
+    bootstrapError = null
     try {
-      await fetch('/api/project/bootstrap/run', { method: 'POST' })
+      const r = await fetch('/api/project/bootstrap/run', { method: 'POST' })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j?.error) {
+        bootstrapError = j?.error ?? `HTTP ${r.status}`
+        flashToast(`Bootstrap failed: ${bootstrapError}`, 'danger')
+      } else {
+        flashToast(summarizeBootstrapResult(j), 'ok')
+      }
       await loadBootstrap()
+    } catch (err) {
+      bootstrapError = err instanceof Error ? err.message : String(err)
+      flashToast(`Bootstrap failed: ${bootstrapError}`, 'danger')
     } finally {
       bootstrapRunning = false
     }
@@ -241,7 +277,14 @@
   </Card>
 {:else}
   <Stack gap="4">
-  {#if section === 'ready'}
+  {#if bootstrapToast}
+    <div class="toast toast-{bootstrapToast.tone}" role="status">{bootstrapToast.text}</div>
+  {/if}
+  {#if section === 'facts'}
+    <FactsTab />
+  {:else if section === 'providers'}
+    <ProjectProvidersSection />
+  {:else if section === 'ready'}
     <!-- PRIMARY: Ready-to-start checklist -->
     <Card title="Ready to start?" titleTag="h2">
       <ul class="checklist">
@@ -255,6 +298,9 @@
             <button type="button" class="linkbtn" onclick={runBootstrap} disabled={bootstrapRunning}>
               {bootstrapRunning ? 'Running…' : 'Configure →'}
             </button>
+          {/if}
+          {#if bootstrapError}
+            <div class="row-error">{bootstrapError}</div>
           {/if}
         </li>
         <li class="check-row">
@@ -387,6 +433,12 @@
 
           <Card title="Levers">
             <Stack gap="2">
+              <Row align="center" gap="2">
+                <span class="muted">
+                  Every behavioral knob is a named lever with full provenance.
+                </span>
+                <Help topic="subsystem.levers" />
+              </Row>
               {#if leversError}
                 <Row justify="between" align="center" gap="2">
                   <span class="error">Could not load levers: {leversError}</span>
@@ -405,7 +457,10 @@
                     <tbody>
                       {#each entries as l, i (l.name + i)}
                         <tr>
-                          <td><code>{l.name}</code></td>
+                          <td>
+                            <code>{l.name}</code>
+                            <Help topic={`lever.${l.name}`} size={12} />
+                          </td>
                           <td><strong>{l.position}</strong></td>
                           <td class="lever-by">{l.setBy}</td>
                         </tr>
@@ -539,6 +594,29 @@
   .linkbtn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+  .row-error {
+    flex-basis: 100%;
+    margin-top: var(--s-1);
+    font-size: var(--fs-1);
+    color: var(--danger);
+  }
+  .toast {
+    padding: var(--s-2) var(--s-3);
+    border-radius: var(--r-1);
+    border: 1px solid var(--border);
+    font-size: var(--fs-2);
+    font-weight: 600;
+  }
+  .toast-ok {
+    background: color-mix(in srgb, var(--accent-2) 15%, transparent);
+    border-color: var(--accent-2);
+    color: var(--accent-2);
+  }
+  .toast-danger {
+    background: color-mix(in srgb, var(--danger) 15%, transparent);
+    border-color: var(--danger);
+    color: var(--danger);
   }
   .coord-list {
     display: flex;

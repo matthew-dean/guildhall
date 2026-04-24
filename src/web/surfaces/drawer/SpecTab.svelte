@@ -91,15 +91,15 @@
   </Card>
 
   {#if brief}
-    <Card>
+    <Card tone={briefApproved ? 'ok' : 'warn'}>
       {#snippet actions()}
         <Chip
-          label={briefApproved ? 'Approved' : 'Approve?'}
+          label={briefApproved ? 'Approved' : 'Draft'}
           tone={briefApproved ? 'ok' : 'warn'}
         />
       {/snippet}
       <Stack gap="3">
-        <h3>Brief</h3>
+        <h3>Product brief {briefApproved ? '' : '(draft)'}</h3>
         {#if brief.userJob}
           <Field label="User need"><Markdown source={brief.userJob} /></Field>
         {/if}
@@ -117,10 +117,19 @@
           <Field label="Rollout"><Markdown source={brief.rolloutPlan} /></Field>
         {/if}
         {#if !briefApproved}
+          <!--
+            One-line lede = what Approve does. No "3 options" menu; the
+            other paths (Redirect via follow-up, Ignore by leaving alone)
+            are already visible elsewhere in this tab. Menus-of-menus was
+            what users called out as disorienting.
+          -->
+          <p class="lede">
+            Approve if <em>User need</em> + <em>Done when</em> match your intent. Otherwise type a correction in <em>Follow-up to spec agent</em> below and the spec agent revises it.
+          </p>
           <Row justify="end" gap="2" align="center">
             <Byline by={brief.authoredBy ?? '?'} />
             <Button variant="primary" disabled={busy} onclick={onApproveBrief}>
-              Approve
+              Approve brief
             </Button>
           </Row>
         {/if}
@@ -151,12 +160,15 @@
   {/if}
 
   {#if specApprovalPending}
-    <Card>
+    <Card tone="warn">
       {#snippet actions()}
-        <Chip label="Approve?" tone="warn" />
+        <Chip label="Awaiting your approval" tone="warn" />
       {/snippet}
       <Stack gap="3">
-        <h3>Spec</h3>
+        <h3>Spec ready for review</h3>
+        <p class="lede">
+          Approve to hand off to the worker. Revisions belong in <em>Follow-up to spec agent</em> below.
+        </p>
         <Row justify="end">
           <Button variant="primary" disabled={busy} onclick={onApproveSpec}>
             Approve spec
@@ -205,5 +217,16 @@
   }
   .bullet li {
     margin: var(--s-1) 0;
+  }
+  .lede {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+    margin: 0;
+  }
+  .lede em {
+    font-style: normal;
+    color: var(--text);
+    font-weight: 600;
   }
 </style>

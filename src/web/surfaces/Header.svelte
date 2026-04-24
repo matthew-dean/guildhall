@@ -10,10 +10,20 @@
   import StatusDot from '../lib/StatusDot.svelte'
 
   let sseStatus = $state<SseStatus>('connecting')
+  let version = $state<string | null>(null)
 
   $effect(() => {
     const off = onStatus(s => (sseStatus = s))
     return off
+  })
+
+  $effect(() => {
+    fetch('/api/version')
+      .then(r => r.json())
+      .then((j: { version?: string }) => {
+        if (j?.version) version = j.version
+      })
+      .catch(() => {})
   })
 
   const sseTone = $derived<'active' | 'warn' | 'idle'>(
@@ -32,6 +42,9 @@
   <button type="button" class="brand" onclick={goHome} aria-label="Workspace home">
     Guildhall
   </button>
+  {#if version}
+    <span class="version" title="Guildhall runtime version">v{version}</span>
+  {/if}
   <span class="grow"></span>
   <span class="sse-status">
     <StatusDot tone={sseTone} pulse={sseStatus === 'live'} />
@@ -62,6 +75,13 @@
   }
   .brand:hover {
     color: var(--accent);
+  }
+  .version {
+    font-size: var(--fs-0);
+    color: var(--text-muted);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin-left: -2px;
   }
   .grow {
     flex: 1;

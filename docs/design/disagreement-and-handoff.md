@@ -1,3 +1,12 @@
+---
+title: Disagreement & handoff
+help_topic: design.disagreement_and_handoff
+help_summary: |
+  Design notes on two open questions — how reviewer personas resolve
+  substantive conflicts (4-layer escalation) and how agents hand off
+  mid-task without overhead.
+---
+
 # Disagreement & handoff — design notes
 
 **Status:** draft · pre-SPEC · 2026-04-23

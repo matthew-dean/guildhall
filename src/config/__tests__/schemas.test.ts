@@ -179,7 +179,7 @@ describe('GlobalConfig', () => {
     expect(config.maxRevisions).toBe(3)
     expect(config.heartbeatInterval).toBe(5)
     expect(config.lmStudioUrl).toBe('http://localhost:1234/v1')
-    expect(config.servePort).toBe(7842)
+    expect(config.servePort).toBe(7777)
   })
 
   it('validates servePort range', () => {

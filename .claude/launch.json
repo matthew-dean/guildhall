@@ -1,0 +1,30 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "guildhall-tmt",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "/Users/matthew/git/oss/guildhall/dist/cli.js",
+        "serve",
+        "/Users/matthew/git/oss/t-minus-t",
+        "--port",
+        "7843",
+        "--no-open"
+      ],
+      "port": 7843
+    },
+    {
+      "name": "gh-fr34-demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "/Users/matthew/git/oss/guildhall/dist/cli.js",
+        "serve",
+        "/tmp/gh-fr34-demo",
+        "--port",
+        "7871"
+      ],
+      "port": 7871
+    }
+  ]
+}

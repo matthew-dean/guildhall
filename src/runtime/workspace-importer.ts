@@ -438,6 +438,60 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
   return { goals, tasks, milestones }
 }
 
+/**
+ * Serialize a deterministic `WorkspaceImportDraft` (detector output) into
+ * the YAML-fence format the importer-agent would have emitted, so
+ * `approveWorkspaceImport` / `parseWorkspaceImport` can consume it without
+ * an agent round-trip. This is what lets the user Approve the detector
+ * findings directly when they don't need or want agent refinement.
+ */
+export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
+  const escape = (s: string): string =>
+    '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'
+  const lines: string[] = []
+
+  if (draft.goals.length > 0) {
+    lines.push('```yaml')
+    lines.push('goals:')
+    for (const g of draft.goals) {
+      lines.push(`  - id: ${escape(g.id)}`)
+      lines.push(`    title: ${escape(g.title)}`)
+      lines.push(`    rationale: ${escape(g.rationale || '')}`)
+    }
+    lines.push('```')
+    lines.push('')
+  }
+  if (draft.tasks.length > 0) {
+    lines.push('```yaml')
+    lines.push('tasks:')
+    for (const t of draft.tasks) {
+      lines.push(`  - id: ${escape(t.suggestedId)}`)
+      lines.push(`    title: ${escape(t.title)}`)
+      lines.push(`    description: ${escape(t.description || '')}`)
+      lines.push(`    domain: ${escape(t.domain || 'core')}`)
+      lines.push(`    priority: ${t.priority}`)
+      if (t.references && t.references.length > 0) {
+        lines.push('    references:')
+        for (const r of t.references) lines.push(`      - ${escape(r)}`)
+      }
+    }
+    lines.push('```')
+    lines.push('')
+  }
+  if (draft.milestones.length > 0) {
+    lines.push('```yaml')
+    lines.push('milestones:')
+    for (const m of draft.milestones) {
+      lines.push(`  - title: ${escape(m.title)}`)
+      lines.push(`    evidence: ${escape(m.evidence || '')}`)
+    }
+    lines.push('```')
+    lines.push('')
+  }
+
+  return lines.join('\n')
+}
+
 export interface ApproveWorkspaceImportInput {
   memoryDir: string
   projectPath: string
@@ -464,8 +518,9 @@ function uniqueTaskId(existingIds: Set<string>, suggested: string): string {
 
 /**
  * Consume the workspace-import draft: parse fences, append tasks as
- * `proposed` so FR-21 task_origination still governs promotion, record
- * milestones to PROGRESS.md, persist goals into
+ * `ready` + `origination='human'` (the Approve click in the UI is the
+ * human approval — FR-21 task_origination only governs agent-originated
+ * proposals), record milestones to PROGRESS.md, persist goals into
  * `memory/workspace-goals.json`, and mark the reserved task done.
  *
  * Safe to call multiple times: tasks with ids already present are
@@ -517,7 +572,11 @@ export async function approveWorkspaceImport(
       description: t.description,
       domain: t.domain,
       projectPath: input.projectPath,
-      status: 'proposed',
+      // The Approve click in the Workspace Import UI IS the human approval —
+      // land tasks in `ready` directly. Routing them through `proposed` was
+      // dead-end state because evaluateProposal requires origination='agent'
+      // and would throw on these system/human-sourced entries.
+      status: 'ready',
       priority: t.priority,
       dependsOn: [],
       outOfScope: [],
@@ -539,7 +598,7 @@ export async function approveWorkspaceImport(
       agentIssues: [],
       revisionCount: 0,
       remediationAttempts: 0,
-      origination: 'system',
+      origination: 'human',
       createdAt: now,
       updatedAt: now,
     })

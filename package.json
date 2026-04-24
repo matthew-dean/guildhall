@@ -28,7 +28,12 @@
     "lint:deps": "depcruise src",
     "clean": "rm -rf dist",
     "release": "node scripts/publish.mjs",
-    "release:dry": "node scripts/publish.mjs --dry-run"
+    "release:dry": "node scripts/publish.mjs --dry-run",
+    "docs:extract-help": "node scripts/extract-help-topics.mjs",
+    "docs:check-help-sync": "node scripts/check-help-sync.mjs",
+    "docs:dev": "npm run docs:extract-help && vitepress dev docs",
+    "docs:build": "npm run docs:extract-help && vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.1",
@@ -52,6 +57,7 @@
     "svelte": "~5.55.4",
     "svelte-preprocess": "~6.0.3",
     "typescript": "^5.9.3",
+    "vitepress": "^1.5.0",
     "vitest": "^3.1.1"
   },
   "engines": {

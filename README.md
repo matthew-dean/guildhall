@@ -56,7 +56,7 @@ The metaphor: a medieval guildhall, where masters, journeymen, and apprentices w
 npx guildhall init
 ```
 
-That's it. `init` writes a `guildhall.yaml` and pops open a dashboard at <http://localhost:7842/setup> that walks through:
+That's it. `init` writes a `guildhall.yaml` and pops open a dashboard at <http://localhost:7777/setup> that walks through:
 
 1. **Identity** — workspace name + slug
 2. **Provider** — Claude (via Claude Code CLI), Codex (via Codex CLI), local `llama.cpp` / LM Studio, or paste-in Anthropic / OpenAI API keys

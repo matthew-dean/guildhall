@@ -63,6 +63,26 @@ export {
   updateProjectConfig,
 } from './project-config.js'
 
+// Global providers store (~/.guildhall/providers.yaml)
+export {
+  GLOBAL_PROVIDERS_FILENAME,
+  GlobalProvidersSchema,
+  globalProvidersPath,
+  readGlobalProviders,
+  writeGlobalProviders,
+  setProvider,
+  removeProvider,
+  markProviderVerified,
+  resolveGlobalCredentials,
+  migrateProjectProvidersToGlobal,
+} from './global-providers.js'
+export type {
+  GlobalProviders,
+  ProviderKind,
+  ResolvedProviderCredentials,
+  MigrationReport,
+} from './global-providers.js'
+
 // Config resolution (merged result)
 export { resolveConfig } from './resolve.js'
 export type { ResolveOptions } from './resolve.js'

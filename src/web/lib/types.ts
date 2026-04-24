@@ -176,6 +176,7 @@ export type ProjectView =
   | 'release'
   | 'settings'
   | 'workspace-import'
+  | 'facts'
 
 /**
  * Sub-path within a ProjectView. Only `settings`, `coordinators`, and

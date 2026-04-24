@@ -14,9 +14,21 @@ import {
   updateProjectConfig,
   FORGE_YAML_FILENAME,
   slugify,
+  readGlobalProviders,
+  setProvider,
+  removeProvider,
+  markProviderVerified,
+  resolveGlobalCredentials,
+  migrateProjectProvidersToGlobal,
+  type ProviderKind,
 } from '@guildhall/config'
 import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
-import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
+import {
+  loadLeverSettings,
+  saveLeverSettings,
+  defaultAgentSettingsPath,
+  makeDefaultSettings,
+} from '@guildhall/levers'
 import { resolveEscalation, updateDesignSystem } from '@guildhall/tools'
 import { DesignSystem, summarizeDesignSystem } from '@guildhall/core'
 import {
@@ -26,6 +38,7 @@ import {
   pickPrimaryEngineer,
 } from '@guildhall/guilds'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
+import { selectApiClient, type PreferredProviderKey } from './provider-selection.js'
 import {
   createExploringTask,
   approveSpec,
@@ -47,13 +60,22 @@ import {
   runBootstrap,
 } from './bootstrap-runner.js'
 import {
+  runBootstrap as runDetectedBootstrap,
+  writeBootstrapResult,
+} from './bootstrap.js'
+import {
   maybeSeedWorkspaceImport,
   approveWorkspaceImport,
   parseWorkspaceImport,
   workspaceNeedsImport,
   WORKSPACE_IMPORT_TASK_ID,
+  formatDetectedDraftAsSpec,
 } from './workspace-importer.js'
-import { buildInbox } from './inbox.js'
+import {
+  detectWorkspaceSignals,
+  formWorkspaceHypothesis,
+} from './workspace-import/index.js'
+import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
 
 // ---------------------------------------------------------------------------
 // guildhall serve — single-project dashboard
@@ -124,6 +146,26 @@ function resolveProject(projectPath: string): ResolvedProject {
 }
 
 /**
+ * Filter a supervisor event buffer down to events for a specific task id.
+ *
+ * Accepts both the canonical wire-protocol field (`task_id`, snake_case — see
+ * src/protocol/wire.ts) and the camelCase `taskId` that older internal
+ * supervisor-emitted shapes use. Exported for regression testing because the
+ * two field styles previously drifted and left the drawer's recent-events
+ * feed silently empty.
+ */
+export function filterEventsForTask<T extends { event?: unknown }>(
+  events: T[],
+  taskId: string,
+): T[] {
+  return events.filter(ev => {
+    const inner = ev.event as { task_id?: string; taskId?: string } | undefined
+    const t = inner?.task_id ?? inner?.taskId
+    return t === taskId
+  })
+}
+
+/**
  * Build the Hono app for a project without binding to a port. Exposed for
  * integration tests that want to call `app.fetch(new Request(...))` directly;
  * `runServe` wraps this with @hono/node-server.
@@ -138,6 +180,42 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   const supervisor = new OrchestratorSupervisor()
   const app = new Hono()
+
+  // -------------------------------------------------------------------------
+  // API: runtime version (shown next to the "Guildhall" wordmark)
+  // -------------------------------------------------------------------------
+  let _cachedVersion: string | null = null
+  function readRuntimeVersion(): string {
+    if (_cachedVersion !== null) return _cachedVersion
+    try {
+      // src/runtime/serve.ts → up to package root
+      const here = dirname(fileURLToPath(import.meta.url))
+      // Walk up until we find a package.json.
+      let dir = here
+      for (let i = 0; i < 6; i++) {
+        const candidate = join(dir, 'package.json')
+        if (existsSync(candidate)) {
+          const pkg = JSON.parse(readFileSync(candidate, 'utf-8')) as {
+            name?: string
+            version?: string
+          }
+          if (pkg?.name === 'guildhall' || pkg?.name === '@guildhall/cli') {
+            _cachedVersion = pkg.version ?? 'unknown'
+            return _cachedVersion
+          }
+        }
+        dir = dirname(dir)
+      }
+    } catch {
+      /* fall through */
+    }
+    _cachedVersion = 'unknown'
+    return _cachedVersion
+  }
+
+  app.get('/api/version', c => {
+    return c.json({ version: readRuntimeVersion() })
+  })
 
   // -------------------------------------------------------------------------
   // API: project
@@ -182,13 +260,50 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
-  app.post('/api/project/start', c => {
+  app.post('/api/project/start', async c => {
     try {
       if (project.initializationNeeded) {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
+      // Preflight: a run with no provider is worse than no run — the
+      // orchestrator boots, every tick fails, and the UI shows "Running"
+      // while nothing actually moves. Catch the missing-provider case here
+      // and return an actionable 400 so the Start button surfaces a clear
+      // "configure a provider first" message instead of a silent spin.
+      const projectCfg = readProjectConfig(project.path)
+      try {
+        migrateProjectProvidersToGlobal(project.path, {
+          readProject: (p) => readProjectConfig(p),
+          writeProject: (p, patch) => updateProjectConfig(p, patch),
+        })
+      } catch {
+        /* best-effort */
+      }
+      const creds = resolveGlobalCredentials()
+      const preferred = projectCfg.preferredProvider
+      const preflight = await selectApiClient({
+        ...(preferred ? { preferredProvider: preferred } : {}),
+        ...(creds.anthropicApiKey ? { anthropicApiKey: creds.anthropicApiKey } : {}),
+        ...(creds.openaiApiKey ? { openaiApiKey: creds.openaiApiKey } : {}),
+        ...(creds.llamaCppUrl ? { llamaCppUrl: creds.llamaCppUrl } : {}),
+      })
+      if (preflight.providerName === 'none') {
+        return c.json(
+          {
+            error:
+              preflight.reason ??
+              'No provider configured. Open Providers (/providers) to set one up.',
+            code: 'no_provider',
+          },
+          400,
+        )
+      }
       const run = supervisor.start({ workspaceId: project.id, workspacePath: project.path })
-      return c.json({ status: run.status, startedAt: run.startedAt })
+      return c.json({
+        status: run.status,
+        startedAt: run.startedAt,
+        provider: preflight.providerName,
+      })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -356,19 +471,31 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
       const bootstrap = project.config?.bootstrap
-      if (!bootstrap || bootstrap.commands.length === 0) {
-        return c.json({ error: 'No bootstrap configured for this project.' }, 400)
-      }
       const memoryDir = join(project.path, 'memory')
-      const result = runBootstrap({
-        projectPath: project.path,
-        memoryDir,
-        commands: bootstrap.commands,
-        successGates: bootstrap.successGates,
-        timeoutMs: bootstrap.timeoutMs,
+
+      // Legacy path: run the array-based commands from guildhall.yaml when
+      // present. Fall through to detection-based bootstrap otherwise so
+      // workspaces without a pre-authored bootstrap block still get the
+      // environment verified (detect package manager, install, probe gates).
+      if (bootstrap && bootstrap.commands.length > 0) {
+        const result = runBootstrap({
+          projectPath: project.path,
+          memoryDir,
+          commands: bootstrap.commands,
+          successGates: bootstrap.successGates,
+          timeoutMs: bootstrap.timeoutMs,
+        })
+        const status = readBootstrapStatus(memoryDir)
+        return c.json({ success: result.success, status })
+      }
+
+      const detected = runDetectedBootstrap(project.path)
+      writeBootstrapResult(project.path, detected)
+      return c.json({
+        success: detected.ok,
+        detected: detected.bootstrap,
+        logs: detected.logs,
       })
-      const status = readBootstrapStatus(memoryDir)
-      return c.json({ success: result.success, status })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -431,6 +558,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // Re-resolve so subsequent GETs reflect the newly-added coordinators.
       project = resolveProject(project.path)
 
+      // Bootstrap the environment eagerly so the user doesn't have to hunt
+      // for a separate "Configure" action. Skip install (slow, needs real
+      // network) — that still runs on the first explicit Configure press or
+      // on first dispatch. Gate-resolution + structural detection here is
+      // cheap and lets the orchestrator unblock on its own.
+      let autoBootstrap: { success: boolean; packageManager?: string } | null = null
+      try {
+        const detected = runDetectedBootstrap(project.path, { skipInstall: true })
+        writeBootstrapResult(project.path, detected)
+        autoBootstrap = { success: detected.ok, packageManager: detected.bootstrap.packageManager }
+      } catch {
+        autoBootstrap = { success: false }
+      }
+
       // FR-34: now that coordinators exist, check whether the workspace has
       // existing artifacts worth importing into TASKS.json. The lever
       // (`workspace_import_autonomy`) gates this — default 'suggest' seeds
@@ -443,6 +584,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return c.json({
         ok: true,
         coordinatorsAdded: result.coordinatorsAdded ?? 0,
+        autoBootstrap,
         workspaceImport: {
           outcome: importOutcome.outcome,
           seeded: importOutcome.seeded,
@@ -558,12 +700,72 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/project/workspace-import/draft', async c => {
     try {
+      // The same cheap anchor check the inbox chip uses, echoed back so the
+      // Workspace Import tab can say "anchors present but nothing extracted"
+      // when the semantic detector returns empty — which otherwise produces
+      // the contradictory "Found 5 signals … click Review … No signals
+      // detected" UX.
+      const anchors = detectRepoAnchors(project.path)
       if (project.initializationNeeded) {
-        return c.json({ taskExists: false, specReady: false, parsed: null })
+        return c.json({
+          taskExists: false,
+          specReady: false,
+          parsed: null,
+          detected: null,
+          dismissed: false,
+          anchors,
+        })
       }
-      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+      const memoryDir = join(project.path, 'memory')
+      // Dismissed state — surface it so the UI can show an "undo" affordance
+      // instead of re-running the scan silently.
+      let dismissed = false
+      try {
+        const goalsPath = join(memoryDir, 'workspace-goals.json')
+        if (existsSync(goalsPath)) {
+          const g = JSON.parse(await fsp.readFile(goalsPath, 'utf-8')) as {
+            dismissed?: boolean
+          }
+          dismissed = Boolean(g.dismissed)
+        }
+      } catch {
+        /* treat as not-dismissed */
+      }
+
+      // Deterministic detector preview — runs regardless of whether the
+      // agent has populated the task spec yet. This is what the UI shows
+      // first: real findings the user can Approve or Dismiss *now*.
+      let detected: {
+        goals: unknown[]
+        tasks: unknown[]
+        milestones: unknown[]
+        context: unknown[]
+        stats: { inputSignals: number; drafted: number; deduped: number }
+      } | null = null
+      try {
+        const inventory = await detectWorkspaceSignals({ projectPath: project.path })
+        const draft = formWorkspaceHypothesis(inventory)
+        detected = {
+          goals: [...draft.goals],
+          tasks: [...draft.tasks],
+          milestones: [...draft.milestones],
+          context: [...draft.context],
+          stats: draft.stats,
+        }
+      } catch {
+        /* detector best-effort */
+      }
+
+      const tasksPath = join(memoryDir, 'TASKS.json')
       if (!existsSync(tasksPath)) {
-        return c.json({ taskExists: false, specReady: false, parsed: null })
+        return c.json({
+          taskExists: false,
+          specReady: false,
+          parsed: null,
+          detected,
+          dismissed,
+          anchors,
+        })
       }
       const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
         | { tasks?: Array<Record<string, unknown>> }
@@ -573,7 +775,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         t => (t as { id?: string }).id === WORKSPACE_IMPORT_TASK_ID,
       ) as { spec?: string; status?: string } | undefined
       if (!task) {
-        return c.json({ taskExists: false, specReady: false, parsed: null })
+        return c.json({
+          taskExists: false,
+          specReady: false,
+          parsed: null,
+          detected,
+          dismissed,
+          anchors,
+        })
       }
       const spec = typeof task.spec === 'string' ? task.spec : ''
       if (spec.trim().length === 0) {
@@ -582,6 +791,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
           specReady: false,
           taskStatus: task.status ?? null,
           parsed: null,
+          detected,
+          dismissed,
+          anchors,
         })
       }
       const parsed = parseWorkspaceImport(spec)
@@ -592,6 +804,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         specReady,
         taskStatus: task.status ?? null,
         parsed,
+        detected,
+        dismissed,
+        anchors,
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -603,8 +818,42 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
+      const memoryDir = join(project.path, 'memory')
+
+      // Fallback: if the reserved task has no agent-authored spec yet, seed
+      // it from the deterministic detector output. This lets the user
+      // Approve immediately without waiting on the workspace-importer
+      // agent, and is safe because the detector draft uses the same YAML
+      // fence format the agent would have produced.
+      try {
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (existsSync(tasksPath)) {
+          const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as {
+            tasks?: Array<Record<string, unknown>>
+          }
+          const list = Array.isArray(raw) ? raw : raw.tasks ?? []
+          const idx = list.findIndex(
+            (t) => (t as { id?: string }).id === WORKSPACE_IMPORT_TASK_ID,
+          )
+          const task = idx >= 0 ? (list[idx] as { spec?: string }) : undefined
+          const specEmpty = !task || !task.spec || task.spec.trim().length === 0
+          if (specEmpty) {
+            const inventory = await detectWorkspaceSignals({ projectPath: project.path })
+            const draft = formWorkspaceHypothesis(inventory)
+            const spec = formatDetectedDraftAsSpec(draft)
+            if (spec && task) {
+              ;(task as Record<string, unknown>).spec = spec
+              const next = Array.isArray(raw) ? list : { ...raw, tasks: list }
+              await fsp.writeFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
+            }
+          }
+        }
+      } catch {
+        /* detector fallback best-effort; real approveWorkspaceImport will surface the error */
+      }
+
       const result = await approveWorkspaceImport({
-        memoryDir: join(project.path, 'memory'),
+        memoryDir,
         projectPath: project.path,
       })
       if (!result.success) {
@@ -626,11 +875,139 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // for the coordinator to make progress. Source of truth is on-disk state
   // (guildhall.yaml, TASKS.json, agent-settings.yaml, workspace-goals.json).
   // -------------------------------------------------------------------------
-  app.get('/api/project/inbox', c => {
+  // Aggregated "project facts" view — everything the agent knows about the
+  // workspace, collected from on-disk state. Read-only; each section has an
+  // `editHref` pointing at the canonical place to change it.
+  app.get('/api/project/facts', async c => {
     try {
-      if (project.initializationNeeded) return c.json({ items: [] })
+      if (project.initializationNeeded) return c.json({ initializationNeeded: true })
+      const memoryDir = join(project.path, 'memory')
+      const cfg = project.config
+
+      // Bootstrap block from guildhall.yaml (structural form).
+      const b = (cfg?.bootstrap ?? null) as
+        | {
+            verifiedAt?: string
+            packageManager?: string
+            install?: { command?: string; status?: string; lastRunAt?: string } | string[]
+            gates?: Record<string, { command?: string; available?: boolean; unavailableReason?: string }>
+          }
+        | null
+
+      // Design system summary.
+      let designSummary: string | null = null
+      try {
+        const ds = await loadDesignSystem(memoryDir)
+        if (ds) designSummary = summarizeDesignSystem(ds)
+      } catch {
+        /* leave null */
+      }
+
+      // Workspace goals file (imported or dismissed state).
+      const goalsPath = join(memoryDir, 'workspace-goals.json')
+      let workspaceGoals:
+        | { imported: boolean; dismissed: boolean; goalCount: number; taskCount: number; milestoneCount: number }
+        | null = null
+      if (existsSync(goalsPath)) {
+        try {
+          const raw = JSON.parse(readFileSync(goalsPath, 'utf8')) as Record<string, unknown>
+          if ((raw as { dismissed?: boolean }).dismissed) {
+            workspaceGoals = { imported: false, dismissed: true, goalCount: 0, taskCount: 0, milestoneCount: 0 }
+          } else {
+            const goals = Array.isArray(raw.goals) ? (raw.goals as unknown[]).length : 0
+            const tasks = Array.isArray(raw.tasks) ? (raw.tasks as unknown[]).length : 0
+            const milestones = Array.isArray(raw.milestones) ? (raw.milestones as unknown[]).length : 0
+            workspaceGoals = {
+              imported: true,
+              dismissed: false,
+              goalCount: goals,
+              taskCount: tasks,
+              milestoneCount: milestones,
+            }
+          }
+        } catch {
+          /* leave null */
+        }
+      }
+
+      return c.json({
+        identity: {
+          name: cfg?.name ?? project.id,
+          id: project.id,
+          path: project.path,
+          editHref: '/settings',
+        },
+        environment: {
+          packageManager: b?.packageManager ?? 'unknown',
+          verifiedAt: typeof b?.verifiedAt === 'string' ? b.verifiedAt : null,
+          install: b?.install ?? null,
+          gates: b?.gates ?? null,
+          editHref: '/settings',
+        },
+        workspace: {
+          goals: workspaceGoals,
+          reviewHref: '/workspace-import',
+        },
+        coordinators: {
+          count: cfg?.coordinators?.length ?? 0,
+          list: (cfg?.coordinators ?? []).map(c => ({ id: c.id, name: c.name })),
+          editHref: '/coordinators',
+        },
+        designSystem: {
+          summary: designSummary,
+          editHref: '/settings',
+        },
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // Dismiss the workspace-import review. Writes a `dismissed: true` marker
+  // into memory/workspace-goals.json so the Inbox item stops appearing;
+  // findings stay reachable via /workspace-import for later review.
+  app.post('/api/project/workspace-import/dismiss', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const memoryDir = join(project.path, 'memory')
+      await fsp.mkdir(memoryDir, { recursive: true })
+      const goalsPath = join(memoryDir, 'workspace-goals.json')
+      await fsp.writeFile(
+        goalsPath,
+        JSON.stringify({ dismissed: true, dismissedAt: new Date().toISOString() }, null, 2),
+        'utf-8',
+      )
+      return c.json({ ok: true })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/inbox', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ items: [], blockers: { bootstrap: false, workspaceImport: false } })
+      }
+      // Self-healing scan: if the workspace has signals but nobody has run
+      // the scanner yet, kick it off implicitly. The user shouldn't have to
+      // press "Scan" — once a coordinator exists, the agent discovers
+      // existing goals/tasks on its own and surfaces them for review.
+      // No-op if already seeded, off, or not needed.
+      try {
+        const memoryDir = join(project.path, 'memory')
+        const goalsPath = join(memoryDir, 'workspace-goals.json')
+        if (
+          !existsSync(goalsPath) &&
+          (project.config?.coordinators?.length ?? 0) > 0
+        ) {
+          await maybeSeedWorkspaceImport({ memoryDir, projectPath: project.path })
+        }
+      } catch {
+        /* never let self-healing break the inbox read */
+      }
       const items = buildInbox({ projectPath: project.path })
-      return c.json({ items })
+      const blockers = buildInboxBlockers(items)
+      return c.json({ items, blockers })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -653,10 +1030,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const id = c.req.param('id')
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
-      const recent = supervisor.recent(project.id).filter(ev => {
-        const taskId = (ev as { event?: { taskId?: string } }).event?.taskId
-        return taskId === id
-      })
+      const recent = filterEventsForTask(supervisor.recent(project.id), id)
       return c.json({ task, recentEvents: recent })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -1091,6 +1465,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  // POST /api/config/levers/reset — wipe the on-disk lever file and re-seed
+  // from defaults. Used to recover from LeverSettingsCorruptError (schema
+  // grew, stale on-disk file is missing a newly-required lever).
+  app.post('/api/config/levers/reset', async c => {
+    try {
+      const path = defaultAgentSettingsPath(projectPath)
+      await saveLeverSettings({ path, settings: makeDefaultSettings() })
+      return c.json({ ok: true })
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
   // -------------------------------------------------------------------------
   // API: design system
   //
@@ -1320,20 +1707,70 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  // -------------------------------------------------------------------------
+  // Providers: global (machine-scoped) credential store.
+  //
+  // Credentials live in ~/.guildhall/providers.yaml and are shared across
+  // all projects on this machine. Project configs carry only a
+  // `preferredProvider` selection — no secrets.
+  //
+  // Endpoints:
+  //   GET  /api/setup/providers       detection + stored credentials
+  //   POST /api/setup/providers/config set/update one provider's credential
+  //                                    or the project's preferredProvider
+  //   POST /api/providers/test        send-test-message roundtrip, marks verified
+  //   POST /api/providers/disconnect  revoke a stored credential
+  // -------------------------------------------------------------------------
+
+  function describeProviders() {
+    // Run the legacy-config migration on every request. It is idempotent
+    // and cheap (a single YAML read + Zod parse) and means users who
+    // upgrade in-place never see stale credentials in their project file.
+    try {
+      migrateProjectProvidersToGlobal(projectPath, {
+        readProject: (p) => readProjectConfig(p),
+        writeProject: (p, patch) => updateProjectConfig(p, patch),
+      })
+    } catch {
+      /* best-effort — never let migration break the endpoint */
+    }
+
+    const global = readGlobalProviders()
+    const creds = resolveGlobalCredentials(global, process.env)
+    const claudeCredPath = join(homedir(), '.claude', '.credentials.json')
+    const codexCredPath = join(homedir(), '.codex', 'auth.json')
+    const claudeInstalled = existsSync(claudeCredPath)
+    const codexInstalled = existsSync(codexCredPath)
+
+    return {
+      global,
+      creds,
+      claudeCredPath,
+      codexCredPath,
+      claudeInstalled,
+      codexInstalled,
+    }
+  }
+
+  async function probeLlamaCpp(url: string): Promise<boolean> {
+    try {
+      const res = await fetch(url + '/models', { signal: AbortSignal.timeout(800) })
+      return res.ok
+    } catch {
+      return false
+    }
+  }
+
   app.get('/api/setup/providers', async c => {
     try {
+      const { global, creds, claudeCredPath, codexCredPath, claudeInstalled, codexInstalled } =
+        describeProviders()
       const stored = readProjectConfig(projectPath)
-      const claudeCredPath = join(homedir(), '.claude', '.credentials.json')
-      const codexCredPath = join(homedir(), '.codex', 'auth.json')
 
-      const claudeInstalled = existsSync(claudeCredPath)
-      const codexInstalled = existsSync(codexCredPath)
+      const llamaUrl = creds.llamaCppUrl ?? ''
+      const llamaReachable = llamaUrl.length > 0 ? await probeLlamaCpp(llamaUrl) : false
 
-      let lmStudioReachable = false
-      try {
-        const res = await fetch(stored.lmStudioUrl + '/models', { signal: AbortSignal.timeout(800) })
-        lmStudioReachable = res.ok
-      } catch { /* unreachable — expected */ }
+      const v = (kind: ProviderKind) => global.providers[kind]?.verifiedAt ?? null
 
       return c.json({
         preferredProvider: stored.preferredProvider ?? null,
@@ -1341,38 +1778,50 @@ export function buildServeApp(opts: ServeOptions = {}): {
           'claude-oauth': {
             label: 'Claude Pro/Max (via Claude Code CLI)',
             detected: claudeInstalled,
+            verifiedAt: v('claude-oauth'),
             detail: claudeInstalled
               ? `Credentials detected at ${claudeCredPath}`
-              : 'Install Claude Code (`brew install anthropic/claude/claude`) and run `claude auth login`.',
+              : 'Install Claude Code and run `claude auth login`.',
           },
           'codex': {
             label: 'Codex (via Codex CLI)',
             detected: codexInstalled,
+            verifiedAt: v('codex-oauth'),
             detail: codexInstalled
               ? `Credentials detected at ${codexCredPath}`
               : 'Install the Codex CLI and run `codex auth login`.',
           },
           'llama-cpp': {
             label: 'Local llama.cpp / LM Studio',
-            detected: lmStudioReachable,
-            detail: lmStudioReachable
-              ? `Reachable at ${stored.lmStudioUrl}`
-              : `Not reachable at ${stored.lmStudioUrl}. Start LM Studio or llama.cpp and click refresh.`,
-            url: stored.lmStudioUrl,
+            detected: llamaReachable,
+            verifiedAt: v('llama-cpp'),
+            url: llamaUrl || null,
+            detail:
+              llamaUrl.length === 0
+                ? 'Paste the server URL (e.g. http://localhost:1234/v1) to enable.'
+                : llamaReachable
+                  ? `Reachable at ${llamaUrl}`
+                  : `Not reachable at ${llamaUrl}. Start LM Studio / llama.cpp and click refresh.`,
           },
           'anthropic-api': {
             label: 'Anthropic API key',
-            detected: Boolean(stored.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY),
-            detail: stored.anthropicApiKey
-              ? 'Stored in .guildhall/config.yaml'
-              : (process.env.ANTHROPIC_API_KEY ? 'Picked up from $ANTHROPIC_API_KEY' : 'Paste an API key to enable.'),
+            detected: Boolean(creds.anthropicApiKey),
+            verifiedAt: v('anthropic-api'),
+            detail: global.providers['anthropic-api']?.apiKey
+              ? 'Stored in ~/.guildhall/providers.yaml'
+              : process.env.ANTHROPIC_API_KEY
+                ? 'Picked up from $ANTHROPIC_API_KEY'
+                : 'Paste an API key to enable.',
           },
           'openai-api': {
             label: 'OpenAI API key',
-            detected: Boolean(stored.openaiApiKey ?? process.env.OPENAI_API_KEY),
-            detail: stored.openaiApiKey
-              ? 'Stored in .guildhall/config.yaml'
-              : (process.env.OPENAI_API_KEY ? 'Picked up from $OPENAI_API_KEY' : 'Paste an API key to enable.'),
+            detected: Boolean(creds.openaiApiKey),
+            verifiedAt: v('openai-api'),
+            detail: global.providers['openai-api']?.apiKey
+              ? 'Stored in ~/.guildhall/providers.yaml'
+              : process.env.OPENAI_API_KEY
+                ? 'Picked up from $OPENAI_API_KEY'
+                : 'Paste an API key to enable.',
           },
         },
       })
@@ -1383,30 +1832,193 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.post('/api/setup/providers/config', async c => {
     try {
-      const body = await c.req.json().catch(() => ({})) as {
+      const body = (await c.req.json().catch(() => ({}))) as {
         preferredProvider?: string
         anthropicApiKey?: string
         openaiApiKey?: string
         lmStudioUrl?: string
       }
       const allowed = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api'] as const
-      const patch: Parameters<typeof updateProjectConfig>[1] = {}
+      // preferredProvider lives in the project file (selection, not a secret).
       if (body.preferredProvider) {
         if (!(allowed as readonly string[]).includes(body.preferredProvider)) {
           return c.json({ error: `Unknown provider "${body.preferredProvider}"` }, 400)
         }
-        patch.preferredProvider = body.preferredProvider as typeof allowed[number]
+        updateProjectConfig(projectPath, {
+          preferredProvider: body.preferredProvider as (typeof allowed)[number],
+        })
       }
-      if (typeof body.anthropicApiKey === 'string') patch.anthropicApiKey = body.anthropicApiKey
-      if (typeof body.openaiApiKey === 'string') patch.openaiApiKey = body.openaiApiKey
-      if (typeof body.lmStudioUrl === 'string') patch.lmStudioUrl = body.lmStudioUrl
-      const saved = updateProjectConfig(projectPath, patch)
-      const redacted: Record<string, unknown> = { ...saved }
-      if (redacted.anthropicApiKey) redacted.anthropicApiKey = '•••'
-      if (redacted.openaiApiKey) redacted.openaiApiKey = '•••'
-      return c.json(redacted)
+      // Credentials go to the global store.
+      if (typeof body.anthropicApiKey === 'string' && body.anthropicApiKey.trim().length > 0) {
+        setProvider('anthropic-api', { apiKey: body.anthropicApiKey.trim() })
+      }
+      if (typeof body.openaiApiKey === 'string' && body.openaiApiKey.trim().length > 0) {
+        setProvider('openai-api', { apiKey: body.openaiApiKey.trim() })
+      }
+      if (typeof body.lmStudioUrl === 'string' && body.lmStudioUrl.trim().length > 0) {
+        setProvider('llama-cpp', { url: body.lmStudioUrl.trim() })
+      }
+      return c.json({ ok: true })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // Pick a cheap, widely-available model id for a verification round-trip
+  // against each provider. For llama.cpp we ask the server which model is
+  // currently loaded (it owns that choice; we can't know locally).
+  async function modelForRoundtrip(
+    name: PreferredProviderKey,
+    llamaUrl: string,
+  ): Promise<string | undefined> {
+    switch (name) {
+      case 'claude-oauth':
+      case 'anthropic-api':
+        return 'claude-haiku-4-5-20251001'
+      case 'openai-api':
+        return 'gpt-4o-mini'
+      case 'codex':
+      case 'codex-oauth':
+        return 'gpt-5-codex'
+      case 'llama-cpp': {
+        if (!llamaUrl) return undefined
+        try {
+          const res = await fetch(llamaUrl.replace(/\/$/, '') + '/models', {
+            signal: AbortSignal.timeout(1500),
+          })
+          if (!res.ok) return undefined
+          const body = (await res.json()) as { data?: Array<{ id?: string }> }
+          const first = body.data?.[0]?.id
+          return typeof first === 'string' && first.length > 0 ? first : undefined
+        } catch {
+          return undefined
+        }
+      }
+    }
+  }
+
+  /**
+   * Send a trivial prompt through the provider's real client and return a
+   * success marker + first-chars sample (or a human-readable error). The
+   * caller records a verifiedAt timestamp on success. No fallback magic:
+   * if the forced provider isn't reachable with the configured creds we
+   * surface exactly that failure so the user can fix it.
+   */
+  async function testProviderRoundtrip(
+    name: PreferredProviderKey,
+  ): Promise<{ ok: boolean; error?: string; sample?: string }> {
+    const global = readGlobalProviders()
+    const creds = resolveGlobalCredentials(global, process.env)
+    const forced: PreferredProviderKey = name
+    const forcedInternal = forced === 'codex' ? 'codex-oauth' : forced
+    const model = await modelForRoundtrip(forced, creds.llamaCppUrl ?? '')
+    if (!model) {
+      return {
+        ok: false,
+        error:
+          forced === 'llama-cpp'
+            ? 'No model loaded on the llama.cpp/LM Studio server. Load a model and try again.'
+            : `No default model known for ${forced}.`,
+      }
+    }
+    let selected
+    try {
+      const selectOpts: Parameters<typeof selectApiClient>[0] = {
+        provider: forcedInternal,
+      }
+      if (creds.anthropicApiKey) selectOpts.anthropicApiKey = creds.anthropicApiKey
+      if (creds.openaiApiKey) selectOpts.openaiApiKey = creds.openaiApiKey
+      if (creds.llamaCppUrl) selectOpts.llamaCppUrl = creds.llamaCppUrl
+      selected = await selectApiClient(selectOpts)
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+    if (selected.providerName === 'none') {
+      return { ok: false, error: selected.reason ?? `${forced} not available.` }
+    }
+    try {
+      let sample = ''
+      const iterable = selected.apiClient.streamMessage({
+        model,
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: 'Reply with a single word: OK' }],
+          },
+        ],
+        max_tokens: 32,
+        tools: [],
+      })
+      for await (const ev of iterable) {
+        if (ev.type === 'text_delta') {
+          sample += ev.text
+          if (sample.length > 80) break
+        } else if (ev.type === 'message_complete') {
+          break
+        }
+      }
+      const trimmed = sample.trim()
+      if (trimmed.length === 0) {
+        return { ok: false, error: 'Provider returned an empty response.' }
+      }
+      return { ok: true, sample: trimmed.slice(0, 80) }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+
+  // Send a trivial prompt through the provider's real client and mark
+  // verified on success. This is the "did my paste actually work?" button
+  // — the alpha-critical piece that was missing before.
+  app.post('/api/providers/test', async c => {
+    try {
+      const body = (await c.req.json().catch(() => ({}))) as { provider?: string }
+      const allowed = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api'] as const
+      const name = body.provider
+      if (!name || !(allowed as readonly string[]).includes(name)) {
+        return c.json({ ok: false, error: `Unknown provider "${name ?? ''}"` }, 400)
+      }
+      const result = await testProviderRoundtrip(name as (typeof allowed)[number])
+      if (result.ok) {
+        const storeKind: ProviderKind =
+          name === 'codex' ? 'codex-oauth' : (name as ProviderKind)
+        try {
+          markProviderVerified(storeKind)
+        } catch {
+          /* verification timestamp is a convenience, not required */
+        }
+      }
+      return c.json(result)
+    } catch (err) {
+      return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // Revoke a stored credential. For OAuth providers we just clear the
+  // "verified" marker; the actual credential lives in a CLI directory
+  // that we do not touch.
+  app.post('/api/providers/disconnect', async c => {
+    try {
+      const body = (await c.req.json().catch(() => ({}))) as { provider?: string }
+      const allowed = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api'] as const
+      const name = body.provider
+      if (!name || !(allowed as readonly string[]).includes(name)) {
+        return c.json({ ok: false, error: `Unknown provider "${name ?? ''}"` }, 400)
+      }
+      const storeKind: ProviderKind =
+        name === 'codex' ? 'codex-oauth' : (name as ProviderKind)
+      if (storeKind === 'claude-oauth' || storeKind === 'codex-oauth') {
+        // Clear the verified marker; CLI-managed credential is left alone.
+        removeProvider(storeKind)
+        return c.json({
+          ok: true,
+          note: 'Cleared the verified marker. The underlying OAuth credential is managed by the CLI — run its logout command to revoke it fully.',
+        })
+      }
+      removeProvider(storeKind)
+      return c.json({ ok: true })
+    } catch (err) {
+      return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })
 

@@ -33,9 +33,16 @@
   )
   const firstOpen = $derived<Escalation | undefined>(openEscalations[0])
 
+  // blockReason is persisted as "<enum_code>: <summary>" by the escalation
+  // tool. Strip the enum prefix for display — the reason chip below carries
+  // the human-readable code label already.
+  function stripEnumPrefix(s: string): string {
+    return s.replace(/^[a-z_]+:\s*/, '')
+  }
+
   const headline = $derived.by(() => {
     if (task.status === 'blocked') {
-      return task.blockReason ?? 'Blocked — waiting on human action.'
+      return stripEnumPrefix(task.blockReason ?? 'Blocked — waiting on human action.')
     }
     if (task.status === 'shelved') {
       return task.shelveReason?.detail ?? 'Shelved by policy or pre-rejection.'

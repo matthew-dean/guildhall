@@ -60,7 +60,7 @@ function baseConfig(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
     heartbeatInterval: 5,
     ignore: [],
     lmStudioUrl: 'http://localhost:1234',
-    servePort: 7842,
+    servePort: 7777,
     ...overrides,
   }
 }

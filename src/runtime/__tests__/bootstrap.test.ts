@@ -198,4 +198,29 @@ describe('writeBootstrapResult', () => {
     expect(parsed.bootstrap.verifiedAt).toBeDefined()
     expect(existsSync(join(dir, 'guildhall.yaml'))).toBe(true)
   })
+
+  it('round-trips ISO timestamps as strings, not Dates (guards the on-load schema)', () => {
+    writeFileSync(
+      join(dir, 'guildhall.yaml'),
+      'name: Round Trip\nid: rt\ncoordinators: []\n',
+      'utf8',
+    )
+    writeFileSync(join(dir, 'pnpm-lock.yaml'), '')
+    writePkg({ typecheck: 'tsc --noEmit' })
+    const spawner: Spawner = () => ({ ok: true, exitCode: 0, stdout: '', stderr: '' })
+    const res = runBootstrap(dir, { spawner, skipInstall: false })
+    writeBootstrapResult(dir, res)
+    // Reload and assert that YAML didn't auto-promote the ISO strings to
+    // `Date` objects — the Zod schema demands z.string().
+    const loaded = parseYaml(readFileSync(join(dir, 'guildhall.yaml'), 'utf8')) as {
+      bootstrap: {
+        verifiedAt: unknown
+        install: { lastRunAt?: unknown }
+      }
+    }
+    expect(typeof loaded.bootstrap.verifiedAt).toBe('string')
+    if (loaded.bootstrap.install.lastRunAt !== undefined) {
+      expect(typeof loaded.bootstrap.install.lastRunAt).toBe('string')
+    }
+  })
 })

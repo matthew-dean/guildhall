@@ -290,7 +290,7 @@ export async function runInit(opts: InitOptions): Promise<void> {
   console.log(`[guildhall] ✓ memory/ directory ready`)
   console.log()
   console.log('Next step:')
-  console.log(`  • The dashboard will now launch at http://localhost:7842`)
+  console.log(`  • The dashboard will now launch at http://localhost:7777`)
   console.log(`  • Use the setup wizard to pick an agent provider, then add tasks`)
   console.log()
 }

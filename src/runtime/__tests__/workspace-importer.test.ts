@@ -10,9 +10,11 @@ import {
   approveWorkspaceImport,
   parseWorkspaceImport,
   maybeSeedWorkspaceImport,
+  formatDetectedDraftAsSpec,
   WORKSPACE_IMPORT_TASK_ID,
   WORKSPACE_IMPORT_DOMAIN,
 } from '../workspace-importer.js'
+import { formWorkspaceHypothesis } from '../workspace-import/hypothesis.js'
 import type { WorkspaceInventory } from '../workspace-import/detect.js'
 import type { WorkspaceSignal } from '../workspace-import/types.js'
 
@@ -341,7 +343,7 @@ describe('approveWorkspaceImport', () => {
     expect(res.error).toContain('Could not find')
   })
 
-  it('inserts tasks as proposed + origination=system, records goals + milestones', async () => {
+  it('inserts tasks as ready + origination=human, records goals + milestones', async () => {
     await seedImporterWithSpec(`
 \`\`\`yaml
 goals:
@@ -384,8 +386,8 @@ milestones:
     expect(importerTask.completedAt).toBeTypeOf('string')
 
     const newTask = q.tasks.find((t) => t.id === 't-wire-dashboard')!
-    expect(newTask.status).toBe('proposed')
-    expect(newTask.origination).toBe('system')
+    expect(newTask.status).toBe('ready')
+    expect(newTask.origination).toBe('human')
     expect(newTask.domain).toBe('ui')
     expect(newTask.priority).toBe('high')
     expect(newTask.notes[0]!.content).toContain('ROADMAP.md')
@@ -599,12 +601,13 @@ milestones:
       qFinal.tasks.find((t) => t.id === WORKSPACE_IMPORT_TASK_ID)?.status,
     ).toBe('done')
 
-    // Every drafted task landed as proposed + origination=system.
+    // Every drafted task landed as ready + origination=human (the Approve
+    // click is the human approval — orchestrator can pick them up next tick).
     for (const t of seeded.draft.tasks) {
       const landed = qFinal.tasks.find((x) => x.id === t.suggestedId)
       expect(landed, `task ${t.suggestedId}`).toBeDefined()
-      expect(landed!.status).toBe('proposed')
-      expect(landed!.origination).toBe('system')
+      expect(landed!.status).toBe('ready')
+      expect(landed!.origination).toBe('human')
     }
 
     // workspace-goals.json persisted with every goal.
@@ -645,5 +648,54 @@ tasks:
     const q = await readQueue()
     expect(q.tasks.find((t) => t.id === 't-wire-dashboard')?.title).toBe('v1')
     expect(q.tasks.find((t) => t.id === 't-wire-dashboard-2')?.title).toBe('v2')
+  })
+})
+
+// The Workspace Import tab needs to let users approve the detector's
+// deterministic findings directly, without waiting on an agent round-trip
+// to emit YAML fences. formatDetectedDraftAsSpec serializes the detector
+// output into the same fence format the parser expects, so
+// approveWorkspaceImport can consume it.
+describe('formatDetectedDraftAsSpec', () => {
+  it('round-trips through parseWorkspaceImport into tasks/goals/milestones', () => {
+    const inventory = sampleInventory()
+    const draft = formWorkspaceHypothesis(inventory)
+    const spec = formatDetectedDraftAsSpec(draft)
+    const parsed = parseWorkspaceImport(spec)
+    expect(parsed.goals.length).toBeGreaterThan(0)
+    expect(parsed.tasks.length).toBeGreaterThan(0)
+    expect(parsed.milestones.length).toBeGreaterThan(0)
+    // Titles survive the round-trip verbatim.
+    expect(parsed.goals.map((g) => g.title)).toContain(
+      'Ship multi-agent orchestrator',
+    )
+    expect(parsed.tasks.map((t) => t.title)).toContain('Wire dashboard card')
+    expect(parsed.milestones.map((m) => m.title)).toContain('Ship v0.1.0')
+  })
+
+  it('returns empty string for empty draft (no fences to emit)', () => {
+    const empty = formWorkspaceHypothesis({
+      signals: [],
+      bySource: {},
+      ran: [],
+      failed: [],
+    })
+    expect(formatDetectedDraftAsSpec(empty)).toBe('')
+  })
+
+  it('escapes quotes in titles/descriptions so YAML stays valid', () => {
+    const inventory = invWith([
+      {
+        source: 'readme',
+        kind: 'goal',
+        title: 'Add "dark" mode',
+        evidence: 'Supports toggle between light/dark themes',
+        confidence: 'high',
+      },
+    ])
+    const draft = formWorkspaceHypothesis(inventory)
+    const spec = formatDetectedDraftAsSpec(draft)
+    const parsed = parseWorkspaceImport(spec)
+    expect(parsed.goals[0]?.title).toBe('Add "dark" mode')
   })
 })

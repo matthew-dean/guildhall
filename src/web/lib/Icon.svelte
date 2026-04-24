@@ -30,6 +30,7 @@
     | 'file-text'
     | 'file-check'
     | 'sliders'
+    | 'help-circle'
 </script>
 
 <script lang="ts">
@@ -57,6 +58,7 @@
   import FileText from 'lucide-svelte/icons/file-text'
   import FileCheck from 'lucide-svelte/icons/file-check'
   import Sliders from 'lucide-svelte/icons/sliders'
+  import HelpCircle from 'lucide-svelte/icons/circle-help'
 
   interface Props {
     name: IconName
@@ -93,6 +95,7 @@
   {:else if name === 'file-text'}<FileText {size} {strokeWidth} />
   {:else if name === 'file-check'}<FileCheck {size} {strokeWidth} />
   {:else if name === 'sliders'}<Sliders {size} {strokeWidth} />
+  {:else if name === 'help-circle'}<HelpCircle {size} {strokeWidth} />
   {/if}
 </span>
 
