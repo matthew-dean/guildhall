@@ -6,6 +6,8 @@
 <script lang="ts">
   import { nav } from './nav.svelte.js'
   import Icon, { type IconName } from './Icon.svelte'
+  import StatusLight from './StatusLight.svelte'
+  import { friendlyDomain } from './display.js'
   import type { TaskLite } from './types.js'
 
   const ACTIVE_STATUSES = new Set([
@@ -29,6 +31,7 @@
   const isQueued = $derived(ACTIVE_STATUSES.has(status))
   const isActive = $derived(isQueued && orchestratorRunning)
   const prio = $derived(task.priority && task.priority !== 'normal' ? task.priority : '')
+  const domainLabel = $derived(friendlyDomain(task.domain))
   const hasEscalations = $derived(
     Array.isArray(task.escalations) && task.escalations.some(e => !e.resolvedAt),
   )
@@ -65,6 +68,7 @@
       open()
     }
   }
+
 </script>
 
 <div
@@ -78,7 +82,11 @@
 >
   <div class="tc-head">
     <span class="tc-status chip-{statusTone}" class:chip-loud={status === 'blocked'}>
-      <Icon name={statusIcon} size={12} spin={statusIcon === 'loader'} />
+      {#if isActive}
+        <StatusLight pulse />
+      {:else}
+        <Icon name={statusIcon} size={12} />
+      {/if}
       <span>{status}</span>
     </span>
     {#if isQueued && !orchestratorRunning}
@@ -89,12 +97,10 @@
         <Icon name="alert-triangle" size={12} />
       </span>
     {/if}
-    <span class="grow"></span>
-    <span class="tc-id">{task.id}</span>
   </div>
   <div class="tc-title">{task.title ?? '(untitled)'}</div>
   <div class="tc-meta">
-    {#if task.domain}<span>{task.domain}</span>{/if}
+    {#if domainLabel}<span>{domainLabel}</span>{/if}
     {#if prio}<span>· {prio}</span>{/if}
     {#if (task.revisionCount ?? 0) > 0}
       <span class="tc-rev">r{task.revisionCount}</span>
@@ -175,17 +181,6 @@
   .chip-loud {
     font-weight: 800;
     box-shadow: 0 0 0 1px var(--danger);
-  }
-  .grow {
-    flex: 1;
-  }
-  .tc-id {
-    font-family: 'SF Mono', monospace;
-    text-transform: none;
-    letter-spacing: 0;
-    font-weight: 400;
-    color: var(--text-muted);
-    font-size: var(--fs-0);
   }
   .tc-queued {
     color: var(--warn);

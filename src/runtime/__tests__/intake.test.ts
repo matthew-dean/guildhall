@@ -352,6 +352,22 @@ describe('resumeExploring', () => {
     expect(transcript).toContain('one more requirement')
   })
 
+  it('moves a non-terminal task back to exploring when the user replies', async () => {
+    let queue = await readQueue()
+    queue.tasks[0]!.status = 'ready'
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2))
+
+    const result = await resumeExploring({
+      memoryDir,
+      taskId: 'task-001',
+      message: 'Actually, re-check the imported TODO before implementing.',
+    })
+    expect(result.success).toBe(true)
+
+    queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('exploring')
+  })
+
   it('resolves a pending escalation and returns task to exploring', async () => {
     await raiseEscalation({
       tasksPath,

@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, promises as fsp } from 'node:fs'
+import { readFileSync, existsSync, mkdirSync, statSync, writeFileSync, promises as fsp } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
@@ -6,6 +6,7 @@ import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
+import { atomicWriteText } from '@guildhall/sessions'
 import {
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -52,6 +53,7 @@ import {
   createMetaIntakeTask,
   META_INTAKE_TASK_ID,
   parseCoordinatorDraft,
+  synthesizeMetaIntakeDraft,
   workspaceNeedsMetaIntake,
 } from './meta-intake.js'
 import {
@@ -66,6 +68,7 @@ import {
 import {
   maybeSeedWorkspaceImport,
   approveWorkspaceImport,
+  createWorkspaceImportTask,
   parseWorkspaceImport,
   workspaceNeedsImport,
   WORKSPACE_IMPORT_TASK_ID,
@@ -76,6 +79,19 @@ import {
   formWorkspaceHypothesis,
 } from './workspace-import/index.js'
 import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
+import { buildThread } from './thread.js'
+import {
+  buildSnapshot,
+  listWizards,
+  progressFor,
+  readWizardsState,
+  emptyWizardsState,
+  buildTaskSnapshot,
+  listTaskWizards,
+  progressForTask,
+  type WizardsState,
+} from './wizards.js'
+import { stringify as stringifyYaml } from 'yaml'
 
 // ---------------------------------------------------------------------------
 // guildhall serve — single-project dashboard
@@ -131,6 +147,111 @@ interface ResolvedProject {
   /** Null if guildhall.yaml is missing — wizard handles this case. */
   config: ReturnType<typeof readWorkspaceConfig> | null
   initializationNeeded: boolean
+}
+
+// ---------------------------------------------------------------------------
+// Wizards helpers — small shims so serve.ts doesn't have to know about the
+// on-disk layout of memory/wizards.yaml.
+// ---------------------------------------------------------------------------
+function writeWizardsState(projectPath: string, state: WizardsState): void {
+  const memDir = join(projectPath, 'memory')
+  if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true })
+  const path = join(memDir, 'wizards.yaml')
+  writeFileSync(path, stringifyYaml(state), 'utf8')
+}
+
+function mutateSkip(
+  state: WizardsState,
+  wizardId: string,
+  stepId: string,
+  mode: 'add' | 'remove',
+): WizardsState {
+  const prev = state.skipped[wizardId] ?? []
+  const set = new Set(prev)
+  if (mode === 'add') set.add(stepId)
+  else set.delete(stepId)
+  return {
+    ...state,
+    skipped: { ...state.skipped, [wizardId]: Array.from(set) },
+  }
+}
+
+// Exported for tests — runtime doesn't need it directly but the test
+// module benefits from sharing the same writer as the endpoint.
+export { writeWizardsState as _writeWizardsState, mutateSkip as _mutateSkip }
+
+/**
+ * Map short archetype ids to coordinator config seeds. Deliberately minimal —
+ * the intent is "start somewhere real" not "nail the full mandate/concerns
+ * shape" (which is what meta-intake is for). The user can refine later from
+ * Settings → Coordinators.
+ */
+function archetypesToCoordinators(archetypes: string[]): Array<{
+  id: string
+  name: string
+  domain: string
+  mandate: string
+  concerns: Array<{ id: string; description: string; reviewQuestions: string[] }>
+}> {
+  const seeds: Record<string, ReturnType<typeof archetypesToCoordinators>[number]> = {
+    product: {
+      id: 'product',
+      name: 'Product Coordinator',
+      domain: 'product',
+      mandate:
+        'Owns user-facing behavior, product brief coherence, and whether a task is doing the right thing for users before we ask whether it is done correctly.',
+      concerns: [
+        {
+          id: 'user-value',
+          description: 'Every shipped change should be traceable to a stated user need.',
+          reviewQuestions: [
+            'Which user need does this change serve?',
+            'What does "done" look like from the user\'s perspective?',
+          ],
+        },
+      ],
+    },
+    tech: {
+      id: 'tech',
+      name: 'Tech Coordinator',
+      domain: 'tech',
+      mandate:
+        'Owns implementation quality, architectural coherence, and making sure the codebase stays maintainable as tasks land.',
+      concerns: [
+        {
+          id: 'maintainability',
+          description: 'Changes should preserve or improve long-term code health.',
+          reviewQuestions: [
+            'Does this change introduce accidental complexity?',
+            'Are there abstractions being invented where simpler code would do?',
+          ],
+        },
+      ],
+    },
+    qa: {
+      id: 'qa',
+      name: 'QA Coordinator',
+      domain: 'qa',
+      mandate:
+        'Owns verification: tests, gates, and making sure we know a change works before it merges.',
+      concerns: [
+        {
+          id: 'test-coverage',
+          description: 'Behavior changes should come with verifiable tests.',
+          reviewQuestions: [
+            'Is this change covered by a test that would fail if the behavior regressed?',
+            'Are the gates (typecheck, build, test) still green?',
+          ],
+        },
+      ],
+    },
+  }
+  const result: Array<ReturnType<typeof archetypesToCoordinators>[number]> = []
+  for (const a of archetypes) {
+    const seed = seeds[a]
+    if (seed) result.push(seed)
+  }
+  return result
 }
 
 function resolveProject(projectPath: string): ResolvedProject {
@@ -215,6 +336,60 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/version', c => {
     return c.json({ version: readRuntimeVersion() })
+  })
+
+  // -------------------------------------------------------------------------
+  // API: build-info — staleness check.
+  //
+  // Node loads dist/cli.js once at process start; later rebuilds don't take
+  // effect until restart. To stop the silent "I rebuilt but the running
+  // server is yesterday's binary" failure mode, we capture the dist mtime
+  // at startup and re-stat on every request. If they differ, the running
+  // server is stale and the web app shows a "restart needed" banner.
+  // -------------------------------------------------------------------------
+  const distEntryPath = (() => {
+    try {
+      const here = dirname(fileURLToPath(import.meta.url))
+      const candidates = [
+        join(here, 'cli.js'),       // dist/cli.js when serve.js sits in dist/
+        join(here, '..', 'cli.js'), // dist/cli.js when serve.js is dist/runtime/serve.js
+        fileURLToPath(import.meta.url),
+      ]
+      for (const c of candidates) {
+        if (existsSync(c)) return c
+      }
+    } catch {
+      /* fallthrough */
+    }
+    return null
+  })()
+  let bootBuildMtimeMs = 0
+  try {
+    if (distEntryPath) {
+      bootBuildMtimeMs = Math.floor(statSync(distEntryPath).mtimeMs)
+    }
+  } catch {
+    bootBuildMtimeMs = 0
+  }
+  const processStartedAt = new Date().toISOString()
+
+  app.get('/api/build-info', c => {
+    let currentBuildMtimeMs = bootBuildMtimeMs
+    try {
+      if (distEntryPath) {
+        currentBuildMtimeMs = Math.floor(statSync(distEntryPath).mtimeMs)
+      }
+    } catch {
+      /* keep boot value */
+    }
+    return c.json({
+      pid: process.pid,
+      processStartedAt,
+      bootBuildMtimeMs,
+      currentBuildMtimeMs,
+      stale: currentBuildMtimeMs > bootBuildMtimeMs,
+      distPath: distEntryPath,
+    })
   })
 
   // -------------------------------------------------------------------------
@@ -601,6 +776,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  app.post('/api/project/meta-intake/synthesize', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const result = await synthesizeMetaIntakeDraft({
+        workspacePath: project.path,
+        memoryDir: join(project.path, 'memory'),
+      })
+      if (!result.success) {
+        return c.json({ error: result.error ?? 'Could not synthesize meta-intake draft' }, 400)
+      }
+      return c.json({ ok: true, drafts: result.drafts ?? [] })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
   // -------------------------------------------------------------------------
   // FR-34 workspace import — status / draft preview / approval.
   // -------------------------------------------------------------------------
@@ -820,36 +1013,71 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const memoryDir = join(project.path, 'memory')
 
-      // Fallback: if the reserved task has no agent-authored spec yet, seed
-      // it from the deterministic detector output. This lets the user
-      // Approve immediately without waiting on the workspace-importer
-      // agent, and is safe because the detector draft uses the same YAML
-      // fence format the agent would have produced.
+      // Fallback: if the reserved task is missing or has no agent-authored
+      // spec yet, create the task (idempotent) and seed the spec from the
+      // deterministic detector output. This lets the user Approve immediately
+      // without waiting on the workspace-importer agent, and is safe because
+      // the detector draft uses the same YAML fence format the agent would
+      // have produced.
       try {
         const tasksPath = join(memoryDir, 'TASKS.json')
-        if (existsSync(tasksPath)) {
-          const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as {
-            tasks?: Array<Record<string, unknown>>
-          }
-          const list = Array.isArray(raw) ? raw : raw.tasks ?? []
-          const idx = list.findIndex(
+        const raw = existsSync(tasksPath)
+          ? (JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+              | Array<Record<string, unknown>>
+              | { tasks?: Array<Record<string, unknown>> })
+          : { tasks: [] as Array<Record<string, unknown>> }
+        const list = Array.isArray(raw) ? raw : raw.tasks ?? []
+        let idx = list.findIndex(
+          (t) => (t as { id?: string }).id === WORKSPACE_IMPORT_TASK_ID,
+        )
+        // Ensure the reserved task exists. createWorkspaceImportTask is
+        // idempotent and seeds the exploring transcript.
+        if (idx < 0) {
+          await createWorkspaceImportTask({
+            memoryDir,
+            projectPath: project.path,
+          })
+          // Re-read after creation.
+          const raw2 = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+            | Array<Record<string, unknown>>
+            | { tasks?: Array<Record<string, unknown>> }
+          const list2 = Array.isArray(raw2) ? raw2 : raw2.tasks ?? []
+          idx = list2.findIndex(
             (t) => (t as { id?: string }).id === WORKSPACE_IMPORT_TASK_ID,
           )
-          const task = idx >= 0 ? (list[idx] as { spec?: string }) : undefined
-          const specEmpty = !task || !task.spec || task.spec.trim().length === 0
+          if (idx >= 0) {
+            const task = list2[idx] as { spec?: string }
+            const inventory = await detectWorkspaceSignals({ projectPath: project.path })
+            const draft = formWorkspaceHypothesis(inventory)
+            const spec = formatDetectedDraftAsSpec(draft)
+            if (spec) {
+              task.spec = spec
+              const next = Array.isArray(raw2) ? list2 : { ...raw2, tasks: list2 }
+              await fsp.writeFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
+            }
+          }
+        } else {
+          const task = list[idx] as { spec?: string }
+          const specEmpty = !task.spec || task.spec.trim().length === 0
           if (specEmpty) {
             const inventory = await detectWorkspaceSignals({ projectPath: project.path })
             const draft = formWorkspaceHypothesis(inventory)
             const spec = formatDetectedDraftAsSpec(draft)
-            if (spec && task) {
-              ;(task as Record<string, unknown>).spec = spec
+            if (spec) {
+              task.spec = spec
               const next = Array.isArray(raw) ? list : { ...raw, tasks: list }
               await fsp.writeFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
             }
           }
         }
-      } catch {
-        /* detector fallback best-effort; real approveWorkspaceImport will surface the error */
+      } catch (e) {
+        // Surface the underlying problem instead of swallowing it — the user
+        // would otherwise see only the generic "No workspace-import task" from
+        // approveWorkspaceImport, which hides the real failure.
+        return c.json(
+          { error: `Could not prepare workspace-import task: ${e instanceof Error ? e.message : String(e)}` },
+          500,
+        )
       }
 
       const result = await approveWorkspaceImport({
@@ -1008,6 +1236,223 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const items = buildInbox({ projectPath: project.path })
       const blockers = buildInboxBlockers(items)
       return c.json({ items, blockers })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/thread', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ turns: [], activeTurnId: null, caughtUp: false })
+      }
+      const thread = buildThread({ projectPath: project.path })
+      return c.json(thread)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // Wizards — resumable guided checklists (onboard, spec-fill, release, ...).
+  // Progress is derived from on-disk facts; wizards.yaml persists only skip
+  // markers + completedAt stamps. See src/runtime/wizards.ts.
+  //
+  // GET  /api/project/wizards                     → all applicable wizards
+  // POST /api/project/wizards/:id/skip            → { stepId }
+  // POST /api/project/wizards/:id/unskip          → { stepId }
+  // -------------------------------------------------------------------------
+  app.get('/api/project/wizards', c => {
+    try {
+      if (project.initializationNeeded) return c.json({ wizards: [] })
+      const snap = buildSnapshot({ projectPath: project.path })
+      const wizards = listWizards()
+        .filter(w => w.applicable(snap))
+        .map(w => progressFor(w, snap))
+      return c.json({ wizards })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/wizards/:id/skip', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const wizardId = c.req.param('id')
+      const body = (await c.req.json().catch(() => ({}))) as { stepId?: string }
+      const stepId = typeof body?.stepId === 'string' ? body.stepId : ''
+      if (!wizardId || !stepId) return c.json({ error: 'wizardId and stepId required' }, 400)
+      const wizard = listWizards().find(w => w.id === wizardId)
+      if (!wizard) return c.json({ error: `unknown wizard: ${wizardId}` }, 404)
+      const step = wizard.steps.find(s => s.id === stepId)
+      if (!step) return c.json({ error: `unknown step: ${stepId}` }, 404)
+      if (!step.skippable) return c.json({ error: `step is not skippable: ${stepId}` }, 400)
+      const state = readWizardsState(project.path)
+      const next = mutateSkip(state, wizardId, stepId, 'add')
+      writeWizardsState(project.path, next)
+      return c.json({ ok: true, state: next })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/wizards/:id/unskip', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const wizardId = c.req.param('id')
+      const body = (await c.req.json().catch(() => ({}))) as { stepId?: string }
+      const stepId = typeof body?.stepId === 'string' ? body.stepId : ''
+      if (!wizardId || !stepId) return c.json({ error: 'wizardId and stepId required' }, 400)
+      const state = readWizardsState(project.path)
+      const next = mutateSkip(state, wizardId, stepId, 'remove')
+      writeWizardsState(project.path, next)
+      return c.json({ ok: true, state: next })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // Task-scoped wizards. Progress derives from the live task record, so any
+  // edit (spec agent updates the brief, human approves, reviewer appends an
+  // acceptance criterion) auto-flips the corresponding step to done.
+  // -------------------------------------------------------------------------
+  app.get('/api/project/task/:id/wizards', c => {
+    try {
+      if (project.initializationNeeded) return c.json({ wizards: [] })
+      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        | { tasks?: Array<Record<string, unknown>> }
+        | Array<Record<string, unknown>>
+      const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
+      const id = c.req.param('id')
+      const task = tasks.find(t => (t as { id?: string }).id === id)
+      if (!task) return c.json({ error: 'task not found' }, 404)
+      const snap = buildTaskSnapshot({
+        projectPath: project.path,
+        task: task as Parameters<typeof buildTaskSnapshot>[0]['task'],
+      })
+      const wizards = listTaskWizards()
+        .filter(w => w.applicable(snap))
+        .map(w => progressForTask(w, snap))
+      return c.json({ wizards })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/task/:id/wizards/:wizardId/skip', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const taskId = c.req.param('id')
+      const wizardId = c.req.param('wizardId')
+      const body = (await c.req.json().catch(() => ({}))) as { stepId?: string }
+      const stepId = typeof body?.stepId === 'string' ? body.stepId : ''
+      if (!taskId || !wizardId || !stepId) {
+        return c.json({ error: 'taskId, wizardId and stepId required' }, 400)
+      }
+      const wizard = listTaskWizards().find(w => w.id === wizardId)
+      if (!wizard) return c.json({ error: `unknown task wizard: ${wizardId}` }, 404)
+      const step = wizard.steps.find(s => s.id === stepId)
+      if (!step) return c.json({ error: `unknown step: ${stepId}` }, 404)
+      if (!step.skippable) return c.json({ error: `step is not skippable: ${stepId}` }, 400)
+      const state = readWizardsState(project.path)
+      const next = mutateSkip(state, `${wizardId}:${taskId}`, stepId, 'add')
+      writeWizardsState(project.path, next)
+      return c.json({ ok: true, state: next })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/task/:id/wizards/:wizardId/unskip', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const taskId = c.req.param('id')
+      const wizardId = c.req.param('wizardId')
+      const body = (await c.req.json().catch(() => ({}))) as { stepId?: string }
+      const stepId = typeof body?.stepId === 'string' ? body.stepId : ''
+      if (!taskId || !wizardId || !stepId) {
+        return c.json({ error: 'taskId, wizardId and stepId required' }, 400)
+      }
+      const state = readWizardsState(project.path)
+      const next = mutateSkip(state, `${wizardId}:${taskId}`, stepId, 'remove')
+      writeWizardsState(project.path, next)
+      return c.json({ ok: true, state: next })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // Onboard step backers: coordinators seed + project brief.
+  //
+  // These endpoints exist specifically so onboard step bodies have something
+  // concrete to POST to without needing a full coordinator-editor UI today.
+  // The meta-intake agent remains the "agent-drafted" path; these are the
+  // "I'll just pick one" path.
+  // -------------------------------------------------------------------------
+  app.post('/api/project/coordinators/seed', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const body = (await c.req.json().catch(() => ({}))) as {
+        archetypes?: string[]
+      }
+      const archetypes = Array.isArray(body.archetypes) ? body.archetypes : []
+      if (archetypes.length === 0) return c.json({ error: 'no archetypes selected' }, 400)
+
+      const existing = readWorkspaceConfig(project.path)
+      const existingIds = new Set((existing.coordinators ?? []).map(c => c.id))
+      const seeds = archetypesToCoordinators(archetypes).filter(s => !existingIds.has(s.id))
+      if (seeds.length === 0) {
+        return c.json({ ok: true, added: 0, coordinators: existing.coordinators ?? [] })
+      }
+      const nextConfig = {
+        ...existing,
+        coordinators: [...(existing.coordinators ?? []), ...seeds],
+      }
+      writeWorkspaceConfig(project.path, nextConfig as Parameters<typeof writeWorkspaceConfig>[1])
+      project = resolveProject(project.path)
+      return c.json({ ok: true, added: seeds.length, coordinators: nextConfig.coordinators })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/brief', c => {
+    try {
+      if (project.initializationNeeded) return c.json({ current: '', seed: { readme: '', roadmap: [] } })
+      const briefPath = join(project.path, 'memory', 'project-brief.md')
+      const current = existsSync(briefPath) ? readFileSync(briefPath, 'utf8') : ''
+      const readmePath = join(project.path, 'README.md')
+      const roadmapPath = join(project.path, 'ROADMAP.md')
+      const readmeFirstPara = existsSync(readmePath)
+        ? (readFileSync(readmePath, 'utf8').split(/\n{2,}/).find(p => p.trim() && !p.trim().startsWith('#')) ?? '').trim().slice(0, 800)
+        : ''
+      const roadmapHeadings = existsSync(roadmapPath)
+        ? readFileSync(roadmapPath, 'utf8')
+            .split(/\r?\n/)
+            .filter(l => /^#{1,3}\s+/.test(l))
+            .map(l => l.replace(/^#{1,3}\s+/, '').trim())
+            .slice(0, 12)
+        : []
+      return c.json({ current, seed: { readme: readmeFirstPara, roadmap: roadmapHeadings } })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/brief', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const body = (await c.req.json().catch(() => ({}))) as { content?: string }
+      const content = typeof body.content === 'string' ? body.content.trim() : ''
+      if (content.length < 40) return c.json({ error: 'brief must be at least 40 characters' }, 400)
+      const memDir = join(project.path, 'memory')
+      if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true })
+      writeFileSync(join(memDir, 'project-brief.md'), content + '\n', 'utf8')
+      return c.json({ ok: true })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -1197,6 +1642,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         'resume',
         'unshelve',
         'resolve-escalation',
+        'answer-question',
+        'answer-questions',
       ] as const
       if (!(KNOWN_ACTIONS as readonly string[]).includes(action)) {
         return c.json({ error: 'unknown action' }, 400)
@@ -1261,8 +1708,110 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.productBrief = brief
         task.updatedAt = now
         queue.lastUpdated = now
-        await fsp.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true })
+      }
+
+      if (action === 'answer-question') {
+        // Mark an open AgentQuestion as answered. Body: {questionId, answer}.
+        // The answer is also appended to the exploring transcript so the
+        // asking agent picks it up on the next tick (same path as `resume`).
+        const body = (await c.req.json().catch(() => ({}))) as {
+          questionId?: string
+          answer?: string
+        }
+        if (!body.questionId) return c.json({ error: 'Missing questionId' }, 400)
+        if (!body.answer || !body.answer.trim()) {
+          return c.json({ error: 'Missing answer' }, 400)
+        }
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as
+          | Record<string, unknown>
+          | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        const questions = (task.openQuestions as Array<Record<string, unknown>> | undefined) ?? []
+        const q = questions.find(x => (x as { id?: string }).id === body.questionId)
+        if (!q) return c.json({ error: 'question not found' }, 404)
+        const now = new Date().toISOString()
+        q.answeredAt = now
+        q.answer = body.answer.trim()
+        task.openQuestions = questions
+        task.updatedAt = now
+        queue.lastUpdated = now
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        // Also append to the exploring transcript so the asking agent reads it.
+        await resumeExploring({
+          memoryDir,
+          taskId: id,
+          message: `Answer to "${(q as { id?: string }).id}": ${body.answer.trim()}`,
+        })
+        return c.json({ ok: true })
+      }
+
+      if (action === 'answer-questions') {
+        // Batch-answer multiple open AgentQuestions atomically. Body:
+        //   { answers: [{questionId, answer}, ...] }
+        // Used by the Thread surface when the user fills in a section of
+        // co-active questions and submits them together. The orchestrator
+        // gets ONE resume with all answers stitched into the transcript,
+        // so the asking agent can write a complete brief in one shot
+        // instead of partial-then-partial across N resumes.
+        const body = (await c.req.json().catch(() => ({}))) as {
+          answers?: Array<{ questionId?: string; answer?: string }>
+        }
+        const list = Array.isArray(body.answers) ? body.answers : []
+        if (list.length === 0) return c.json({ error: 'Missing answers' }, 400)
+        for (const a of list) {
+          if (!a.questionId) return c.json({ error: 'Missing questionId in answers[]' }, 400)
+          if (!a.answer || !a.answer.trim()) {
+            return c.json({ error: 'Missing answer in answers[]' }, 400)
+          }
+        }
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as
+          | Record<string, unknown>
+          | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        const questions = (task.openQuestions as Array<Record<string, unknown>> | undefined) ?? []
+        const now = new Date().toISOString()
+        const transcriptLines: string[] = []
+        const missing: string[] = []
+        for (const a of list) {
+          const q = questions.find(x => (x as { id?: string }).id === a.questionId)
+          if (!q) { missing.push(a.questionId!); continue }
+          q.answeredAt = now
+          q.answer = a.answer!.trim()
+          transcriptLines.push(`Answer to "${a.questionId}": ${a.answer!.trim()}`)
+        }
+        if (missing.length > 0) {
+          return c.json({ error: `question(s) not found: ${missing.join(', ')}` }, 404)
+        }
+        task.openQuestions = questions
+        task.updatedAt = now
+        queue.lastUpdated = now
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        // Single resume with all answers — agent gets the full batch in one
+        // context restart instead of N separate ones.
+        await resumeExploring({
+          memoryDir,
+          taskId: id,
+          message: transcriptLines.join('\n'),
+        })
+        return c.json({ ok: true, count: list.length })
       }
 
       if (action === 'resolve-escalation') {
@@ -1332,7 +1881,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       task.notes = notes
       task.updatedAt = now
       queue.lastUpdated = now
-      await fsp.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+      atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
       return c.json({ ok: true, status: task.status })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -1668,6 +2217,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.post('/api/setup/identity', async c => {
     try {
+      project = resolveProject(project.path)
       const body = await c.req.json().catch(() => ({})) as {
         name?: string
         id?: string
@@ -1767,7 +2317,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         describeProviders()
       const stored = readProjectConfig(projectPath)
 
-      const llamaUrl = creds.llamaCppUrl ?? ''
+      const defaultLlamaUrl = 'http://localhost:1234/v1'
+      const configuredLlamaUrl = creds.llamaCppUrl ?? ''
+      const llamaUrl = configuredLlamaUrl || defaultLlamaUrl
       const llamaReachable = llamaUrl.length > 0 ? await probeLlamaCpp(llamaUrl) : false
 
       const v = (kind: ProviderKind) => global.providers[kind]?.verifiedAt ?? null
@@ -1795,10 +2347,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
             label: 'Local llama.cpp / LM Studio',
             detected: llamaReachable,
             verifiedAt: v('llama-cpp'),
-            url: llamaUrl || null,
+            url: llamaReachable ? llamaUrl : configuredLlamaUrl || null,
             detail:
-              llamaUrl.length === 0
-                ? 'Paste the server URL (e.g. http://localhost:1234/v1) to enable.'
+              configuredLlamaUrl.length === 0 && !llamaReachable
+                ? `Not reachable at ${defaultLlamaUrl}. Start LM Studio / llama.cpp or paste a server URL.`
                 : llamaReachable
                   ? `Reachable at ${llamaUrl}`
                   : `Not reachable at ${llamaUrl}. Start LM Studio / llama.cpp and click refresh.`,
@@ -2073,6 +2625,22 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   console.log(`[guildhall serve] Project: ${project.path}`)
   console.log(`[guildhall serve] ${project.initializationNeeded ? '⚠ Not initialized — wizard at /setup' : `✓ ${project.config?.name ?? project.id}`}`)
   console.log(`[guildhall serve] Dashboard: http://localhost:${port}`)
+  console.log(`[guildhall serve] PID: ${process.pid}`)
+  // Heads-up to any humans: Node loaded the dist into memory at startup.
+  // Subsequent rebuilds need a kill+restart to take effect. The web app
+  // surfaces this as a banner via /api/build-info — this line just makes
+  // the same fact visible from the terminal.
+  try {
+    const here = dirname(fileURLToPath(import.meta.url))
+    const distEntry = [join(here, 'cli.js'), join(here, '..', 'cli.js')].find(p => existsSync(p))
+    if (distEntry) {
+      const mtime = statSync(distEntry).mtimeMs
+      console.log(`[guildhall serve] Loaded build: ${new Date(mtime).toISOString()}  (${distEntry})`)
+      console.log(`[guildhall serve] Rebuild → restart required (kill ${process.pid} + re-run).`)
+    }
+  } catch {
+    /* non-fatal */
+  }
   console.log(`[guildhall serve] Press Ctrl+C to stop.`)
   console.log()
 
@@ -2159,4 +2727,3 @@ function dashboardHtml(): string {
 </body>
 </html>`
 }
-

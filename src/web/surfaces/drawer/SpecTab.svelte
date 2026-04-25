@@ -8,12 +8,15 @@
   import Row from '../../lib/Row.svelte'
   import Card from '../../lib/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
+  import { friendlyDomain } from '../../lib/display.js'
   import Button from '../../lib/Button.svelte'
   import Field from '../../lib/Field.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import Textarea from '../../lib/Textarea.svelte'
   import Byline from '../../lib/Byline.svelte'
   import WhyStuck from './WhyStuck.svelte'
+  import SpecFillChecklist from './SpecFillChecklist.svelte'
+  import SuggestionCard from './SuggestionCard.svelte'
   import type { Task, Escalation } from '../../lib/types.js'
 
   interface Props {
@@ -41,6 +44,9 @@
   }: Props = $props()
 
   let followup = $state('')
+  // NOTE: the drawer is now a READ-ONLY artifact view. The interactive
+  // approve / reply / answer-question affordances live in the Thread
+  // surface. Past-context here is for inspection only.
 
   const openEscalations = $derived(
     (task.escalations ?? []).filter((e) => !e.resolvedAt),
@@ -57,6 +63,13 @@
   const exploring = $derived(task.status === 'exploring')
   const specApprovalPending = $derived(exploring && specText.length > 0)
 
+  // Agent-suggested tasks the user hasn't said "yes" to yet get the
+  // simple-question surface. Everything else (brief, spec, acceptance,
+  // approval cards) is hidden until they accept.
+  const isUnacceptedSuggestion = $derived(
+    task.origination === 'agent' && !briefApproved,
+  )
+
   async function send() {
     const msg = followup.trim()
     if (!msg) return
@@ -66,6 +79,15 @@
 </script>
 
 <Stack gap="4">
+  {#if isUnacceptedSuggestion}
+    <SuggestionCard
+      {task}
+      {busy}
+      onYes={onApproveBrief}
+      onNo={onShelve}
+      onDifferent={onSendFollowUp}
+    />
+  {:else}
   {#if stuck}
     <WhyStuck
       {task}
@@ -75,12 +97,15 @@
     />
   {/if}
 
+  <SpecFillChecklist taskId={task.id} refreshKey={task} />
+
+  <div data-spec-section="section-about">
   <Card title="About">
     <Stack gap="2">
       <Markdown source={task.description ?? '(no description)'} />
       <Row wrap gap="2">
         <Chip label={task.status ?? 'unknown'} tone="neutral" />
-        {#if task.domain}<Chip label={task.domain} tone="neutral" />{/if}
+        {#if task.domain}<Chip label={friendlyDomain(task.domain)} tone="neutral" />{/if}
         {#if task.priority}<Chip label="priority: {task.priority}" tone="neutral" />{/if}
         {#if (task.revisionCount ?? 0) > 0}
           <Chip label="revisions: {task.revisionCount}" tone="neutral" />
@@ -89,7 +114,9 @@
       </Row>
     </Stack>
   </Card>
+  </div>
 
+  <div data-spec-section="section-brief">
   {#if brief}
     <Card tone={briefApproved ? 'ok' : 'warn'}>
       {#snippet actions()}
@@ -99,15 +126,21 @@
         />
       {/snippet}
       <Stack gap="3">
-        <h3>Product brief {briefApproved ? '' : '(draft)'}</h3>
+        <h3>Did the agent understand you?</h3>
+        <p class="explainer">
+          You wrote a task. Before any code gets written, the spec agent wrote
+          down what it <em>thinks</em> you want and how it'll know it's done.
+          If that matches your intent, approve and the worker starts. If it
+          misread you, correct it below.
+        </p>
         {#if brief.userJob}
-          <Field label="User need"><Markdown source={brief.userJob} /></Field>
+          <Field label="What it thinks you want"><Markdown source={brief.userJob} /></Field>
         {/if}
         {#if brief.successMetric || brief.successCriteria}
-          <Field label="Done when"><Markdown source={brief.successMetric ?? brief.successCriteria} /></Field>
+          <Field label="How it'll know it's done"><Markdown source={brief.successMetric ?? brief.successCriteria} /></Field>
         {/if}
         {#if brief.antiPatterns && brief.antiPatterns.length > 0}
-          <Field label="Not">
+          <Field label="Explicitly NOT">
             <ul class="bullet">
               {#each brief.antiPatterns as p}<li><Markdown source={p} inline /></li>{/each}
             </ul>
@@ -117,20 +150,11 @@
           <Field label="Rollout"><Markdown source={brief.rolloutPlan} /></Field>
         {/if}
         {#if !briefApproved}
-          <!--
-            One-line lede = what Approve does. No "3 options" menu; the
-            other paths (Redirect via follow-up, Ignore by leaving alone)
-            are already visible elsewhere in this tab. Menus-of-menus was
-            what users called out as disorienting.
-          -->
           <p class="lede">
-            Approve if <em>User need</em> + <em>Done when</em> match your intent. Otherwise type a correction in <em>Follow-up to spec agent</em> below and the spec agent revises it.
+            Open in <strong>Thread</strong> to approve or reply.
           </p>
           <Row justify="end" gap="2" align="center">
             <Byline by={brief.authoredBy ?? '?'} />
-            <Button variant="primary" disabled={busy} onclick={onApproveBrief}>
-              Approve brief
-            </Button>
           </Row>
         {/if}
       </Stack>
@@ -140,6 +164,7 @@
       <p class="muted">Spec agent will draft a brief if this task touches product surface area.</p>
     </Card>
   {/if}
+  </div>
 
   <Card title="Spec">
     {#if specText}
@@ -149,6 +174,7 @@
     {/if}
   </Card>
 
+  <div data-spec-section="section-acceptance">
   {#if acceptance.length > 0}
     <Card title="Acceptance criteria">
       <ul class="bullet">
@@ -158,22 +184,16 @@
       </ul>
     </Card>
   {/if}
+  </div>
 
   {#if specApprovalPending}
     <Card tone="warn">
       {#snippet actions()}
         <Chip label="Awaiting your approval" tone="warn" />
       {/snippet}
-      <Stack gap="3">
+      <Stack gap="2">
         <h3>Spec ready for review</h3>
-        <p class="lede">
-          Approve to hand off to the worker. Revisions belong in <em>Follow-up to spec agent</em> below.
-        </p>
-        <Row justify="end">
-          <Button variant="primary" disabled={busy} onclick={onApproveSpec}>
-            Approve spec
-          </Button>
-        </Row>
+        <p class="lede">Open in <strong>Thread</strong> to approve.</p>
       </Stack>
     </Card>
   {/if}
@@ -195,6 +215,7 @@
         </Row>
       </Stack>
     </Card>
+  {/if}
   {/if}
 </Stack>
 
@@ -228,5 +249,19 @@
     font-style: normal;
     color: var(--text);
     font-weight: 600;
+  }
+  .explainer {
+    color: var(--text);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+    margin: 0 0 var(--s-1) 0;
+    padding: var(--s-2) var(--s-3);
+    background: var(--bg-raised-2);
+    border-left: 2px solid var(--warn, #d0a146);
+    border-radius: var(--r-1);
+  }
+  .explainer em {
+    font-style: italic;
+    color: var(--text);
   }
 </style>

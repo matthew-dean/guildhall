@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
 import { WorkspaceYamlConfig, AgentSettings, AGENT_OVERRIDES_FILENAME, slugify } from './schemas.js'
+import { ensureProjectLocalStateIgnored } from './project-config.js'
 import type { ZodError } from 'zod'
 
 // ---------------------------------------------------------------------------
@@ -79,6 +80,7 @@ export function writeWorkspaceConfig(workspacePath: string, config: WorkspaceYam
   if (!existsSync(absPath)) {
     mkdirSync(absPath, { recursive: true })
   }
+  ensureProjectLocalStateIgnored(absPath)
 
   const validated = WorkspaceYamlConfig.parse(config)
   const yaml = yamlDump(validated, { lineWidth: 120, noRefs: true })

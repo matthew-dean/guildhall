@@ -12,6 +12,8 @@
   import Button from '../lib/Button.svelte'
   import Chip from '../lib/Chip.svelte'
   import Icon, { type IconName } from '../lib/Icon.svelte'
+  import Tooltip from '../lib/Tooltip.svelte'
+  import ThreadTab from './project/ThreadTab.svelte'
   import InboxTab from './project/InboxTab.svelte'
   import WorkTab from './project/WorkTab.svelte'
   import WorkspaceImportTab from './project/WorkspaceImportTab.svelte'
@@ -21,8 +23,6 @@
   import TimelineTab from './project/TimelineTab.svelte'
   import ReleaseTab from './project/ReleaseTab.svelte'
   import SettingsTab from './project/SettingsTab.svelte'
-  import MetaIntakeBanner from './MetaIntakeBanner.svelte'
-  import WorkspaceImportBanner from './WorkspaceImportBanner.svelte'
   import DoThisNext from './DoThisNext.svelte'
   import IntakeModal from './IntakeModal.svelte'
   import { project } from '../lib/project.svelte.js'
@@ -35,7 +35,7 @@
     initialSub?: string | null
   }
 
-  let { initialView = 'inbox', initialSub = null }: Props = $props()
+  let { initialView = 'thread', initialSub = null }: Props = $props()
 
   let currentView = $state<ProjectView>(initialView)
   let currentSub = $state<string | null>(initialSub)
@@ -121,7 +121,8 @@
   const needsMeta = $derived(coordinators.length === 0)
 
   const entries = $derived<NavEntry[]>([
-    { id: 'inbox', label: 'Inbox', icon: 'inbox', path: '/inbox' },
+    { id: 'thread', label: 'Thread', icon: 'sparkles', path: '/thread' },
+    { id: 'inbox', label: 'Notifications', icon: 'inbox', path: '/notifications' },
     { id: 'work', label: 'Work', icon: 'activity', path: '/work' },
     { id: 'planner', label: 'Planner', icon: 'list-checks', path: '/planner' },
     {
@@ -252,6 +253,13 @@
   // Task counts for the top-bar indicator. Stuck = has at least one open
   // escalation. Active = running/in-progress-like statuses.
   const taskList = $derived(detail?.tasks ?? [])
+  const metaIntakePending = $derived(
+    taskList.some(t => {
+      const id = (t as { id?: string }).id
+      const status = (t as { status?: string }).status
+      return id === 'task-meta-intake' && status !== 'done' && status !== 'shelved'
+    }),
+  )
   const activeCount = $derived(
     taskList.filter(t => {
       const s = (t as { status?: string }).status
@@ -266,13 +274,13 @@
   )
 
   const startDisabledReason = $derived(
-    blockers.bootstrap ? 'Complete bootstrap in Inbox before starting' : null,
+    blockers.bootstrap && !metaIntakePending ? 'Complete bootstrap in Thread before starting' : null,
   )
   const newTaskDisabledReason = $derived(
     needsMeta
       ? 'Bootstrap the project first'
       : blockers.bootstrap
-        ? 'Complete bootstrap in Inbox before adding tasks'
+        ? 'Complete bootstrap in Thread before adding tasks'
         : null,
   )
 </script>
@@ -292,21 +300,28 @@
 {:else}
   <div class="shell">
     <aside class="rail" aria-label="Project navigation">
+      <div class="rail-head" title={detail.name}>
+        <div class="rail-project">{detail.name}</div>
+        <div class="rail-status">
+          <Chip label={phaseLabel} tone={phaseTone} />
+        </div>
+      </div>
       <nav class="rail-nav">
         {#each entries as e (e.id)}
           {@const active = currentView === e.id}
-          <button
-            type="button"
-            class="rail-item"
-            class:active
-            onclick={() => go(e.path)}
-            aria-current={active ? 'page' : undefined}
-            title={e.label}
-          >
-            <span class="rail-stripe"></span>
-            <Icon name={e.icon} size={18} />
-            <span class="rail-label">{e.label}</span>
-          </button>
+          <Tooltip text={e.label} placement="right" className="rail-tooltip">
+            <button
+              type="button"
+              class="rail-item"
+              class:active
+              onclick={() => go(e.path)}
+              aria-current={active ? 'page' : undefined}
+            >
+              <span class="rail-stripe"></span>
+              <Icon name={e.icon} size={18} />
+              <span class="rail-label">{e.label}</span>
+            </button>
+          </Tooltip>
           {#if active && e.subs}
             <ul class="rail-subs">
               {#each e.subs as s (s.id)}
@@ -333,24 +348,23 @@
         {/each}
       </nav>
       <div class="rail-bottom">
-        <button
-          type="button"
-          class="rail-item"
-          class:active={providersActive}
-          onclick={() => go('/providers')}
-          title="Providers"
-        >
-          <span class="rail-stripe"></span>
-          <Icon name="plug" size={18} />
-          <span class="rail-label">Providers</span>
-        </button>
+        <Tooltip text="Providers" placement="right" className="rail-tooltip">
+          <button
+            type="button"
+            class="rail-item"
+            class:active={providersActive}
+            onclick={() => go('/providers')}
+          >
+            <span class="rail-stripe"></span>
+            <Icon name="plug" size={18} />
+            <span class="rail-label">Providers</span>
+          </button>
+        </Tooltip>
       </div>
     </aside>
 
     <div class="main">
       <header class="topbar">
-        <span class="ws-chip" title="Workspace">{detail.name}</span>
-        <Chip label={phaseLabel} tone={phaseTone} />
         {#if activeCount > 0 || stuckCount > 0}
           <button
             type="button"
@@ -370,9 +384,9 @@
           <button
             type="button"
             class="inbox-indicator"
-            onclick={() => go('/inbox')}
-            title="Jump to Inbox"
-            aria-label="{inboxHighCount} inbox items need you"
+            onclick={() => go('/notifications')}
+            title="Jump to Notifications"
+            aria-label="{inboxHighCount} notifications need you"
           >
             <Icon name="inbox" size={14} />
             <span>{inboxHighCount}</span>
@@ -419,18 +433,14 @@
             <button class="dismiss" onclick={() => (runError = null)} aria-label="Dismiss">×</button>
           </div>
         {/if}
-        {#if needsMeta}
-          <MetaIntakeBanner />
-        {:else}
-          <WorkspaceImportBanner />
-        {/if}
-
-        {#if currentView !== 'inbox'}
+        {#if currentView !== 'thread' && currentView !== 'inbox'}
           <DoThisNext />
         {/if}
 
         <div class="body">
-          {#if currentView === 'inbox'}
+          {#if currentView === 'thread'}
+            <ThreadTab />
+          {:else if currentView === 'inbox'}
             <InboxTab />
           {:else if currentView === 'workspace-import'}
             <WorkspaceImportTab />
@@ -474,6 +484,10 @@
     padding: var(--s-3) 0;
     gap: var(--s-2);
     min-width: 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
   }
   .rail-nav {
     display: flex;
@@ -502,6 +516,10 @@
     text-align: left;
     border-radius: 0;
     line-height: var(--lh-tight);
+  }
+  :global(.rail-tooltip) {
+    display: block;
+    width: 100%;
   }
   .rail-item:hover {
     color: var(--text);
@@ -562,16 +580,26 @@
     border-bottom: 1px solid var(--border);
     background: var(--bg-raised);
   }
-  .ws-chip {
-    font-size: var(--fs-1);
+  .rail-head {
+    padding: var(--s-3) var(--s-3) var(--s-4) var(--s-3);
+    border-bottom: 1px solid var(--border);
+    margin-bottom: var(--s-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .rail-project {
+    font-size: var(--fs-2);
+    font-weight: 700;
     color: var(--text);
-    padding: 2px var(--s-2);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--r-1);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-weight: 700;
-    background: var(--bg-elevated);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .rail-status {
+    display: flex;
   }
   .grow { flex: 1; }
   .tasks-indicator,
@@ -663,5 +691,7 @@
     .rail-label { display: none; }
     .rail-subs { display: none; }
     .rail-item { justify-content: center; padding: var(--s-2); }
+    .rail-project { display: none; }
+    .rail-head { padding: var(--s-2); align-items: center; }
   }
 </style>

@@ -10,7 +10,7 @@
   import Card from '../lib/Card.svelte'
   import Button from '../lib/Button.svelte'
   import { onEvent } from '../lib/events.js'
-  import { nav } from '../lib/nav.svelte.js'
+  import { nav, path } from '../lib/nav.svelte.js'
 
   interface InboxItem {
     kind: string
@@ -26,10 +26,11 @@
 
   async function load(): Promise<void> {
     try {
-      const r = await fetch('/api/project/inbox')
-      if (!r.ok) return
-      const j = (await r.json()) as { items?: InboxItem[] }
-      items = j.items ?? []
+      const inboxRes = await fetch('/api/project/inbox')
+      if (inboxRes.ok) {
+        const j = (await inboxRes.json()) as { items?: InboxItem[] }
+        items = j.items ?? []
+      }
     } catch {
       /* keep prior */
     } finally {
@@ -47,7 +48,8 @@
         t.startsWith('task_') ||
         t.startsWith('escalation_') ||
         t.startsWith('bootstrap_') ||
-        t.startsWith('supervisor_')
+        t.startsWith('supervisor_') ||
+        t.startsWith('config_')
       ) {
         void load()
       }
@@ -107,6 +109,13 @@
           button: 'Open advanced',
           href: item.actionHref ?? '/settings/advanced',
         }
+      case 'spec_fill_pending':
+        return {
+          verb: `Finish the spec${id}`,
+          why: item.detail ?? 'Shape the task so the reviewer has something to verify.',
+          button: 'Open task',
+          href: item.actionHref ?? '/work',
+        }
       default:
         return {
           verb: item.title,
@@ -117,33 +126,72 @@
     }
   }
 
-  const top = $derived(items[0])
-  const rx = $derived(top ? prescribe(top) : null)
-  const more = $derived(Math.max(0, items.length - 1))
-  const tone = $derived(top?.severity === 'high' ? 'danger' : top?.severity === 'medium' ? 'warn' : 'neutral')
+  function routeOnly(href: string): string {
+    return href.split('?')[0]?.split('#')[0] ?? href
+  }
+
+  interface TopSource {
+    verb: string
+    why: string
+    button: string
+    href: string
+    severity: 'high' | 'medium' | 'low'
+    moreLabel: string
+    moreHref: string
+  }
+
+  const visibleItems = $derived.by(() =>
+    items
+      .map(item => ({ item, prescription: prescribe(item) }))
+      .filter(({ prescription }) => routeOnly(prescription.href) !== path.value),
+  )
+  const source = $derived<TopSource | null>(
+    visibleItems[0]
+        ? (() => {
+            const top = visibleItems[0]!
+            return {
+              verb: top.prescription.verb,
+              why: top.prescription.why,
+              button: top.prescription.button,
+              href: top.prescription.href,
+              severity: top.item.severity,
+              moreLabel: `${visibleItems.length - 1} more in Inbox ›`,
+              moreHref: '/inbox',
+            }
+          })()
+        : null,
+  )
+  const tone = $derived(
+    source?.severity === 'high'
+      ? 'danger'
+      : source?.severity === 'medium'
+        ? 'warn'
+        : 'neutral',
+  )
+  const moreCount = $derived(visibleItems.length - 1)
 
   function go(href: string) {
     nav(href)
   }
 </script>
 
-{#if loaded && top && rx}
+{#if loaded && source}
   <Card {tone}>
     <div class="row">
       <div class="text">
         <div class="eyebrow">Do this next</div>
-        <div class="verb">{rx.verb}</div>
-        {#if rx.why}
-          <div class="why">{rx.why}</div>
+        <div class="verb">{source.verb}</div>
+        {#if source.why}
+          <div class="why">{source.why}</div>
         {/if}
       </div>
       <div class="actions">
-        <Button variant="primary" onclick={() => go(rx.href)}>
-          {rx.button} →
+        <Button variant="primary" onclick={() => go(source.href)}>
+          {source.button} →
         </Button>
-        {#if more > 0}
+        {#if moreCount > 0}
           <button type="button" class="more" onclick={() => go('/inbox')}>
-            {more} more in Inbox ›
+            {moreCount} more in Inbox ›
           </button>
         {/if}
       </div>

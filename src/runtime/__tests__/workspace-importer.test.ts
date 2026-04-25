@@ -343,7 +343,7 @@ describe('approveWorkspaceImport', () => {
     expect(res.error).toContain('Could not find')
   })
 
-  it('inserts tasks as ready + origination=human, records goals + milestones', async () => {
+  it('inserts tasks as exploring + origination=human, records goals + milestones', async () => {
     await seedImporterWithSpec(`
 \`\`\`yaml
 goals:
@@ -386,7 +386,7 @@ milestones:
     expect(importerTask.completedAt).toBeTypeOf('string')
 
     const newTask = q.tasks.find((t) => t.id === 't-wire-dashboard')!
-    expect(newTask.status).toBe('ready')
+    expect(newTask.status).toBe('exploring')
     expect(newTask.origination).toBe('human')
     expect(newTask.domain).toBe('ui')
     expect(newTask.priority).toBe('high')
@@ -601,12 +601,12 @@ milestones:
       qFinal.tasks.find((t) => t.id === WORKSPACE_IMPORT_TASK_ID)?.status,
     ).toBe('done')
 
-    // Every drafted task landed as ready + origination=human (the Approve
-    // click is the human approval — orchestrator can pick them up next tick).
+    // Every drafted task landed in intake + origination=human. The approve
+    // click imports candidates; the spec agent still has to shape them.
     for (const t of seeded.draft.tasks) {
       const landed = qFinal.tasks.find((x) => x.id === t.suggestedId)
       expect(landed, `task ${t.suggestedId}`).toBeDefined()
-      expect(landed!.status).toBe('ready')
+      expect(landed!.status).toBe('exploring')
       expect(landed!.origination).toBe('human')
     }
 

@@ -27,8 +27,12 @@
   })
 </script>
 
-{#if html}
-  <div class="md" class:md-inline={inline}>
+{#if html && inline}
+  <span class="md md-inline">
+    {@html html}
+  </span>
+{:else if html}
+  <div class="md">
     {@html html}
   </div>
 {:else}

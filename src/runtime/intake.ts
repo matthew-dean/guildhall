@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { TaskQueue, type Task, type TaskStatus } from '@guildhall/core'
+import { atomicWriteText } from '@guildhall/sessions'
 import {
   appendExploringTranscript,
   resolveEscalation,
@@ -37,7 +38,7 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  await fs.writeFile(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2), 'utf-8')
+  atomicWriteText(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2) + '\n')
 }
 
 function nextTaskId(queue: TaskQueue): string {
@@ -302,6 +303,9 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
   const queue = await readQueue(input.memoryDir)
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+  if (task.status === 'done' || task.status === 'shelved') {
+    return { success: false, error: `Task ${input.taskId} is ${task.status}` }
+  }
 
   if (input.resolveEscalationId) {
     const result = await resolveEscalation({
@@ -323,6 +327,13 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
       role: 'user',
       content: input.message,
     })
+  }
+
+  if (input.message && task.status !== 'blocked') {
+    task.status = 'exploring'
+    task.updatedAt = new Date().toISOString()
+    queue.lastUpdated = task.updatedAt
+    await writeQueue(input.memoryDir, queue)
   }
 
   return { success: true }

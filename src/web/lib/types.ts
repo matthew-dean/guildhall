@@ -25,6 +25,18 @@ export interface ProductBrief {
   authoredBy?: string
 }
 
+/**
+ * Agent → user question. Mirrors `AgentQuestion` in src/core/task.ts.
+ * Producers MUST classify any prompt to the user into one of these kinds —
+ * no free-prose questions. The UI renders each kind with a fixed deterministic
+ * affordance (see web/lib/AgentQuestion.svelte).
+ */
+export type AgentQuestion =
+  | { kind: 'confirm'; id: string; askedBy: string; askedAt: string; restatement: string; answeredAt?: string; answer?: string }
+  | { kind: 'yesno'; id: string; askedBy: string; askedAt: string; prompt: string; answeredAt?: string; answer?: string }
+  | { kind: 'choice'; id: string; askedBy: string; askedAt: string; prompt: string; choices: string[]; answeredAt?: string; answer?: string }
+  | { kind: 'text'; id: string; askedBy: string; askedAt: string; prompt: string; answeredAt?: string; answer?: string }
+
 export interface AcceptanceCriterion {
   description?: string
   text?: string
@@ -77,6 +89,7 @@ export interface Task {
   blockReason?: string
   shelveReason?: ShelveReason
   productBrief?: ProductBrief
+  openQuestions?: AgentQuestion[]
   spec?: string
   acceptanceCriteria?: AcceptanceCriterion[]
   gateResults?: GateResult[]
@@ -168,6 +181,7 @@ export interface EventEnvelope {
 }
 
 export type ProjectView =
+  | 'thread'
   | 'inbox'
   | 'work'
   | 'planner'

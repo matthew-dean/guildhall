@@ -63,6 +63,8 @@ describe('workspace-config', () => {
       expect(config.name).toBe('Bootstrap Test')
       expect(config.id).toBe('bootstrap-test')
       expect(existsSync(join(wsDir, FORGE_YAML_FILENAME))).toBe(true)
+      expect(existsSync(join(wsDir, '.guildhall'))).toBe(true)
+      expect(readFileSync(join(wsDir, '.gitignore'), 'utf8')).toContain('.guildhall/')
       expect(existsSync(join(wsDir, 'memory', 'TASKS.json'))).toBe(true)
       expect(existsSync(join(wsDir, 'memory', 'MEMORY.md'))).toBe(true)
       expect(existsSync(join(wsDir, 'memory', 'DECISIONS.md'))).toBe(true)

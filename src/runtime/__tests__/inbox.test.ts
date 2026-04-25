@@ -276,6 +276,101 @@ describe('buildInbox', () => {
     expect(first.actionHref).toBe('/settings/advanced')
   })
 
+  it('spec_fill_pending: emitted for an open task missing acceptance criteria', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-sf',
+          title: 'Ship auth audit',
+          description: 'Audit the auth flow for launch blockers.',
+          // Brief is approved so brief_approval doesn't fire.
+          productBrief: {
+            userJob: 'solo devs',
+            successCriteria: 'passes audit',
+            approvedAt: '2026-01-01T00:00:00Z',
+          },
+          status: 'in_progress',
+          acceptanceCriteria: [],
+        },
+      ],
+    })
+    const items = buildInbox({ projectPath: tmpDir })
+    const hit = items.find(i => i.kind === 'spec_fill_pending')
+    expect(hit).toBeDefined()
+    if (!hit || hit.kind !== 'spec_fill_pending') throw new Error('unreachable')
+    expect(hit.taskId).toBe('task-sf')
+    expect(hit.missingSteps).toContain('acceptance')
+    expect(hit.detail).toMatch(/acceptance/i)
+    expect(hit.severity).toBe('low')
+    expect(hit.actionHref).toBe('/task/task-sf')
+  })
+
+  it('spec_fill_pending: NOT emitted when brief is awaiting approval (dedupe)', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-dup',
+          title: 'Foo',
+          description: 'Something to look at.',
+          productBrief: { userJob: 'x', successCriteria: 'y' }, // no approvedAt
+          status: 'exploring',
+          acceptanceCriteria: [],
+        },
+      ],
+    })
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.find(i => i.kind === 'brief_approval')).toBeDefined()
+    expect(items.find(i => i.kind === 'spec_fill_pending')).toBeUndefined()
+  })
+
+  it('spec_fill_pending: NOT emitted for terminal tasks', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'done-task',
+          title: 'Already shipped',
+          status: 'done',
+          acceptanceCriteria: [],
+        },
+      ],
+    })
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.find(i => i.kind === 'spec_fill_pending')).toBeUndefined()
+  })
+
+  it('spec_fill_pending: capped at 3 per pass to avoid flooding the inbox', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    const tasks = Array.from({ length: 6 }).map((_, i) => ({
+      id: `t-${i}`,
+      title: `Task ${i}`,
+      description: 'Exploring something real.',
+      productBrief: {
+        userJob: 'u',
+        successCriteria: 'd',
+        approvedAt: '2026-01-01T00:00:00Z',
+      },
+      status: 'in_progress',
+      acceptanceCriteria: [],
+    }))
+    await writeJson('memory/TASKS.json', { version: 1, lastUpdated: '', tasks })
+    const items = buildInbox({ projectPath: tmpDir })
+    const hits = items.filter(i => i.kind === 'spec_fill_pending')
+    expect(hits).toHaveLength(3)
+  })
+
   it('severity ordering: high → medium → low', async () => {
     // No bootstrap (high), brief awaiting approval (medium), defaults (low).
     await writeYaml('guildhall.yaml', { name: 'x', id: 'x', coordinators: [] })

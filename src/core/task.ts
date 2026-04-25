@@ -199,6 +199,67 @@ export type Escalation = z.infer<typeof Escalation>
 // worked, and what should we NOT do?" Brief approval is orthogonal to spec
 // approval — a task may have an approved brief before its spec is final, or
 // may skip the brief entirely for purely infrastructural work.
+// ---------------------------------------------------------------------------
+// Agent → user questions (FR-mini, ADHD-UX directive)
+//
+// Every prompt an agent puts to the user MUST classify into ONE of four
+// kinds. No free prose. The UI renders each kind with a single deterministic
+// affordance: tap-to-confirm, yes/no, multiple choice with "Other…", or a
+// long-text reply. This kills the "is the agent asking me or telling me?"
+// confusion that emerges when an agent writes a paragraph that contains a
+// question buried inside.
+//
+// Producers (spec agent, coordinator, importer, etc.) emit AgentQuestion
+// values into `task.openQuestions`. The drawer renders any open questions
+// ABOVE the brief / spec / acceptance cards, since they are blocking by
+// definition. Answers are appended via POST /api/project/task/:id/answer.
+// ---------------------------------------------------------------------------
+
+const AgentQuestionBase = {
+  /** Stable id within the task — survives re-renders / re-asks. */
+  id: z.string(),
+  /** Which agent asked (spec-agent, coordinator, etc.). */
+  askedBy: z.string(),
+  askedAt: z.string(),
+  /** ISO timestamp when the user answered, or undefined if still open. */
+  answeredAt: z.string().optional(),
+  /** Free-text capture of the user's answer regardless of kind. */
+  answer: z.string().optional(),
+}
+
+export const AgentQuestion = z.discriminatedUnion('kind', [
+  // "Here's what I think you want — confirm or correct." Equivalent to the
+  // current brief-approval surface. UI: Approve / Reply.
+  z.object({
+    ...AgentQuestionBase,
+    kind: z.literal('confirm'),
+    /** What the agent thinks is true; one statement. */
+    restatement: z.string(),
+  }),
+  // Binary choice. UI: Yes / No / Reply.
+  z.object({
+    ...AgentQuestionBase,
+    kind: z.literal('yesno'),
+    prompt: z.string(),
+  }),
+  // Multiple choice with mandatory "Other…" escape hatch. UI: chip per choice
+  // + free-text fallback.
+  z.object({
+    ...AgentQuestionBase,
+    kind: z.literal('choice'),
+    prompt: z.string(),
+    /** Must be 2..6 short labels. UI also surfaces an "Other…" textbox. */
+    choices: z.array(z.string()).min(2).max(6),
+  }),
+  // Open-ended. UI: textarea + Send.
+  z.object({
+    ...AgentQuestionBase,
+    kind: z.literal('text'),
+    prompt: z.string(),
+  }),
+])
+export type AgentQuestion = z.infer<typeof AgentQuestion>
+
 export const ProductBrief = z.object({
   userJob: z.string(),                            // The user's job-to-be-done this task serves
   successMetric: z.string(),                      // How we'll know it worked
@@ -328,6 +389,12 @@ export const Task = z.object({
   // anti-patterns, rollout plan. Authored by the Spec Agent alongside the
   // technical spec; approved by the human independently of spec approval.
   productBrief: ProductBrief.optional(),
+
+  // Open agent → user questions. See AgentQuestion above. Any question with
+  // `answeredAt` undefined is "open" and renders at the top of the drawer
+  // until the user answers. Producers MUST classify into one of the four
+  // kinds — no free prose questions.
+  openQuestions: z.array(AgentQuestion).optional(),
 
   // Scope boundaries — what this task explicitly will NOT do
   outOfScope: z.array(z.string()).default([]),

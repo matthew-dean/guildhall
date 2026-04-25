@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { load as yamlLoad } from 'js-yaml'
+import { dump as yamlDump, load as yamlLoad } from 'js-yaml'
 import { TaskQueue, type Task } from '@guildhall/core'
+import { atomicWriteText } from '@guildhall/sessions'
 import { readWorkspaceConfig, writeWorkspaceConfig } from '@guildhall/config'
 import { appendExploringTranscript } from '@guildhall/tools'
 import {
@@ -45,12 +46,31 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  await fs.writeFile(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2), 'utf-8')
+  atomicWriteText(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2) + '\n')
 }
 
 const META_INTAKE_SEED = `You are bootstrapping a new Guildhall workspace. Your job in this conversation is to produce a DRAFT list of coordinator definitions for this codebase AND infer initial lever positions from the user's project-guidance answers.
 
-Interview the user with short, focused PROJECT questions. Work toward answers for:
+Default to drafting from repo evidence. Ask the user only for the minimum
+missing PROJECT signal needed to avoid a bad coordinator split. If you have
+enough repository evidence plus one user answer, write the best-guess draft
+instead of continuing to interview.
+
+When you ask questions:
+- Ask at most two questions before drafting.
+- Prefer one multi-select or confirm/correct question over one question per
+  coordinator.
+- Ask in product terms. Say "project areas" or "review lanes", not
+  "coordinator domains".
+- Choice labels must be friendly names with enough context for a human to
+  choose, e.g. "VS Code extension UI - editor-facing commands and views", not
+  "vscode-extension-ui" or another slug.
+- Do not ask for every coordinator mandate one at a time. Infer mandates from
+  paths, README, package names, tests, and the user's project guidance.
+- A wrong draft is recoverable because the user reviews it before merge; a
+  long interview blocks setup.
+
+Work toward answers for:
 
 1. What are the major *zones of concern* in this codebase (e.g. UI layer, data/API layer, infra, docs, release/ops)? Each zone becomes one coordinator.
 2. For each zone: one-paragraph mandate — what outcomes does it protect?
@@ -187,9 +207,9 @@ export async function createMetaIntakeTask(
   const now = new Date().toISOString()
   const task: Task = {
     id: META_INTAKE_TASK_ID,
-    title: 'Bootstrap coordinators for this workspace',
+    title: 'Map project areas and starter tasks',
     description:
-      'Interview the user about the codebase, then draft coordinator definitions for guildhall.yaml.',
+      'Scan the codebase, ask for missing context, then propose review lanes and starter tasks.',
     domain: META_INTAKE_DOMAIN,
     projectPath: input.projectPath,
     status: 'exploring',
@@ -256,6 +276,17 @@ export interface DraftCoordinator {
   concerns: Array<{ id: string; description: string; reviewQuestions: string[] }>
   autonomousDecisions: string[]
   escalationTriggers: string[]
+}
+
+export interface SynthesizeMetaIntakeDraftInput {
+  workspacePath: string
+  memoryDir: string
+}
+
+export interface SynthesizeMetaIntakeDraftResult {
+  success: boolean
+  drafts?: DraftCoordinator[]
+  error?: string
 }
 
 /**
@@ -326,6 +357,264 @@ function normalizeConcerns(value: unknown): DraftCoordinator['concerns'] {
     })
   }
   return out
+}
+
+function titleizeDomain(id: string): string {
+  return id
+    .replace(/[-_]+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map(part => {
+      const lower = part.toLowerCase()
+      if (['ui', 'api', 'cli', 'qa', 'dts', 'js', 'ts', 'vscode'].includes(lower)) {
+        return lower === 'vscode' ? 'VS Code' : lower.toUpperCase()
+      }
+      return lower.charAt(0).toUpperCase() + lower.slice(1)
+    })
+    .join(' ')
+}
+
+function slugifyDomain(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function splitDomainAnswer(answer: string): string[] {
+  return answer
+    .split(',')
+    .map(s => slugifyDomain(s.trim()))
+    .filter(Boolean)
+}
+
+function questionAnswer(task: Task, includes: string): string | undefined {
+  const questions = Array.isArray(task.openQuestions) ? task.openQuestions : []
+  const needle = includes.toLowerCase()
+  const found = questions.find(q => {
+    const prompt = 'prompt' in q && typeof q.prompt === 'string' ? q.prompt : ''
+    return prompt.toLowerCase().includes(needle) && typeof q.answer === 'string' && q.answer.trim().length > 0
+  })
+  return found && typeof found.answer === 'string' ? found.answer.trim() : undefined
+}
+
+function selectedDomainsFromAnswers(task: Task): string[] {
+  const questions = Array.isArray(task.openQuestions) ? task.openQuestions : []
+  const domainQuestion = questions.find(q => {
+    const prompt = 'prompt' in q && typeof q.prompt === 'string' ? q.prompt : ''
+    return /coordinator domains|project areas|review lanes/i.test(prompt) &&
+      typeof q.answer === 'string' &&
+      q.answer.trim().length > 0
+  })
+  if (domainQuestion && typeof domainQuestion.answer === 'string') {
+    const parsed = splitDomainAnswer(domainQuestion.answer)
+    if (parsed.length > 0) return [...new Set(parsed)]
+  }
+  return ['converter-core', 'extension-ui', 'testing-qa', 'docs']
+}
+
+function coordinatorTemplate(id: string, task: Task): DraftCoordinator {
+  const templates: Record<string, Omit<DraftCoordinator, 'id' | 'domain'>> = {
+    'converter-core': {
+      name: 'Converter Core',
+      mandate: questionAnswer(task, 'converter-core mandate') ??
+        'Protect the TypeScript-to-JSDoc conversion engine so edits round-trip correctly between the in-editor TypeScript view and saved JavaScript.',
+      concerns: [
+        {
+          id: 'round-trip-correctness',
+          description: 'Type annotations, comments, generics, and supported TypeScript syntax survive conversion without semantic drift.',
+          reviewQuestions: [
+            'Does this preserve runtime JavaScript while improving the TypeScript editing view?',
+            'Are edge cases covered by converter tests?',
+          ],
+        },
+      ],
+      autonomousDecisions: ['Approve small parser or formatting fixes covered by converter tests.'],
+      escalationTriggers: ['A change cannot round-trip without losing user-authored code or comments.'],
+    },
+    'extension-ui': {
+      name: 'Editor Extension Experience',
+      path: 'packages/extension',
+      mandate: 'Protect the VS Code/Cursor command flow, virtual document behavior, save lifecycle, and user-facing extension ergonomics.',
+      concerns: [
+        {
+          id: 'editor-workflow',
+          description: 'Opening, editing, and saving JavaScript as TypeScript feels predictable inside the editor.',
+          reviewQuestions: [
+            'Can a user tell whether they are editing the virtual TypeScript view or the saved JavaScript file?',
+            'Does the save path avoid data loss and stale editor state?',
+          ],
+        },
+      ],
+      autonomousDecisions: ['Approve command labels and small editor-state fixes that do not change conversion semantics.'],
+      escalationTriggers: ['A change alters save behavior, file ownership, or editor trust boundaries.'],
+    },
+    'dts-generation': {
+      name: 'Declaration File Generation',
+      mandate: 'Protect optional .d.ts generation so generated declarations match saved JavaScript and never surprise users by default.',
+      concerns: [
+        {
+          id: 'declaration-safety',
+          description: 'Declaration output is opt-in, reproducible, and aligned with the converter output.',
+          reviewQuestions: [
+            'Is declaration generation still off by default unless the user opts in?',
+            'Do generated declarations match the saved JavaScript API?',
+          ],
+        },
+      ],
+      autonomousDecisions: ['Approve narrow declaration formatting fixes covered by tests.'],
+      escalationTriggers: ['A change writes new files automatically or changes default generation behavior.'],
+    },
+    'testing-qa': {
+      name: 'Testing and Quality',
+      mandate: 'Protect the project gates and test coverage for converter behavior, extension workflow, and release readiness.',
+      concerns: [
+        {
+          id: 'gate-coverage',
+          description: 'Build, lint, and tests remain meaningful signals for project health.',
+          reviewQuestions: [
+            'Does this add or update tests for changed behavior?',
+            'Are failing gates treated as work to fix rather than ignored?',
+          ],
+        },
+      ],
+      autonomousDecisions: ['Approve test-only changes that clarify existing behavior.'],
+      escalationTriggers: ['A gate is removed, weakened, or marked optional without a clear reason.'],
+    },
+    docs: {
+      name: 'Documentation',
+      mandate: questionAnswer(task, 'docs mandate') ??
+        'Keep README, usage guidance, and developer docs aligned with how the extension and converter actually work.',
+      concerns: [
+        {
+          id: 'docs-match-product',
+          description: 'Documentation explains the real user workflow and current feature support.',
+          reviewQuestions: [
+            'Would a new user understand what the extension does and how to try it?',
+            'Do examples match supported converter behavior?',
+          ],
+        },
+      ],
+      autonomousDecisions: ['Approve wording fixes that clarify current behavior without changing product promises.'],
+      escalationTriggers: ['Docs promise unsupported TypeScript features or a release channel that does not exist yet.'],
+    },
+    'release-publishing': {
+      name: 'Release and Publishing',
+      mandate: 'Protect packaging, versioning, marketplace readiness, and publish-time checks.',
+      concerns: [
+        {
+          id: 'release-safety',
+          description: 'Published artifacts are built, tested, versioned, and documented consistently.',
+          reviewQuestions: [
+            'Are package metadata and marketplace assets ready for the intended release?',
+            'Do release commands use verified build outputs?',
+          ],
+        },
+      ],
+      autonomousDecisions: ['Approve metadata corrections that do not publish or change credentials.'],
+      escalationTriggers: ['A change publishes, signs, or creates persistent credentials.'],
+    },
+  }
+
+  const fallback: Omit<DraftCoordinator, 'id' | 'domain'> = {
+    name: titleizeDomain(id),
+    mandate: `Protect the ${titleizeDomain(id)} area of the project as future tasks are planned and reviewed.`,
+    concerns: [
+      {
+        id: 'area-quality',
+        description: `Changes in ${titleizeDomain(id)} stay scoped, testable, and understandable.`,
+        reviewQuestions: ['Does this change preserve the intended behavior for this project area?'],
+      },
+    ],
+    autonomousDecisions: ['Approve small, tested fixes within this area.'],
+    escalationTriggers: ['The change crosses project boundaries or changes user-visible behavior without a clear spec.'],
+  }
+  const base = templates[id] ?? fallback
+  return {
+    id,
+    domain: id,
+    name: base.name,
+    ...(base.path ? { path: base.path } : {}),
+    mandate: base.mandate,
+    concerns: base.concerns,
+    autonomousDecisions: base.autonomousDecisions,
+    escalationTriggers: base.escalationTriggers,
+  }
+}
+
+async function packageScripts(workspacePath: string): Promise<Record<string, string>> {
+  try {
+    const raw = await fs.readFile(path.join(workspacePath, 'package.json'), 'utf-8')
+    const parsed = JSON.parse(raw) as { scripts?: Record<string, unknown> }
+    const scripts: Record<string, string> = {}
+    for (const [name, value] of Object.entries(parsed.scripts ?? {})) {
+      if (typeof value === 'string') scripts[name] = value
+    }
+    return scripts
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Deterministic escape hatch for meta-intake. If the LLM has already asked and
+ * received enough setup answers but failed to emit YAML, synthesize a reviewable
+ * draft from the saved answers and repo package metadata.
+ */
+export async function synthesizeMetaIntakeDraft(
+  input: SynthesizeMetaIntakeDraftInput,
+): Promise<SynthesizeMetaIntakeDraftResult> {
+  const queue = await readQueue(input.memoryDir)
+  const task = queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)
+  if (!task) return { success: false, error: `No meta-intake task found (id: ${META_INTAKE_TASK_ID})` }
+  const existing = parseCoordinatorDraft(task.spec ?? '')
+  if (existing && existing.length > 0) return { success: true, drafts: existing }
+
+  const domains = selectedDomainsFromAnswers(task)
+  const drafts = domains.map(domain => coordinatorTemplate(domain, task))
+  if (drafts.length === 0) return { success: false, error: 'Could not infer any coordinator roles from saved answers.' }
+
+  const scripts = await packageScripts(input.workspacePath)
+  const successGates = ['build', 'test', 'lint']
+    .filter(name => typeof scripts[name] === 'string')
+    .map(name => `pnpm run ${name}`)
+
+  const specParts = [
+    'Deterministic fallback draft from saved meta-intake answers. Review before merging.',
+    '',
+    '```yaml',
+    yamlDump({ coordinators: drafts }, { lineWidth: 100, noRefs: true }).trim(),
+    '```',
+  ]
+  if (successGates.length > 0) {
+    specParts.push(
+      '',
+      '```yaml',
+      yamlDump({
+        bootstrap: {
+          commands: ['pnpm install'],
+          successGates,
+          timeoutMs: 300_000,
+        },
+      }, { lineWidth: 100, noRefs: true }).trim(),
+      '```',
+    )
+  }
+
+  const now = new Date().toISOString()
+  task.spec = specParts.join('\n') + '\n'
+  task.status = 'spec_review'
+  task.updatedAt = now
+  queue.lastUpdated = now
+  await writeQueue(input.memoryDir, queue)
+  await appendExploringTranscript({
+    memoryDir: input.memoryDir,
+    taskId: META_INTAKE_TASK_ID,
+    role: 'system',
+    content: 'Synthesized a meta-intake draft from saved answers after the agent failed to emit YAML.',
+  })
+
+  return { success: true, drafts }
 }
 
 // ---------------------------------------------------------------------------

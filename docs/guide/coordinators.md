@@ -1,12 +1,17 @@
 ---
-title: Coordinators & domains
+title: Coordinator roles
+help_topic: guide.coordinators
+help_summary: |
+  Coordinator roles are review lanes for future work. Guildhall uses them to route tasks, choose the right reviewer, and decide what an agent may handle without interrupting you.
 ---
 
-# Coordinators & domains
+# Coordinator roles
 
-A **coordinator** owns a **domain** — a named slice of the project. Tasks belong to exactly one domain, and the coordinator for that domain decides whether tasks advance.
+A **coordinator role** is a review lane for a named slice of the project. Tasks belong to exactly one lane, and the coordinator for that lane decides whether work is clear enough to advance.
 
-## Defining a coordinator
+In the UI, approving coordinator roles means approving the way Guildhall will split future work for this repo. For example, a VS Code extension might have review lanes for editor integration, type conversion, generated declaration files, tests, and documentation.
+
+## Defining a coordinator role
 
 Coordinators live under `coordinators:` in `guildhall.yaml`:
 
@@ -38,7 +43,7 @@ coordinators:
       - Adding a new package to the monorepo
 ```
 
-## What the coordinator does
+## What the coordinator role does
 
 At every tick, for every task in its domain, the coordinator agent:
 
@@ -60,4 +65,4 @@ For a new project, run:
 guildhall meta-intake
 ```
 
-A meta-intake agent interviews you about the codebase, reads what it needs to read, and drafts coordinator definitions. Run `guildhall approve-meta-intake` to merge the draft into `guildhall.yaml`.
+A meta-intake agent reads the codebase, asks for missing context, and drafts coordinator definitions. Run `guildhall approve-meta-intake` to merge the draft into `guildhall.yaml`.

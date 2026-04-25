@@ -43,6 +43,7 @@
     "js-yaml": "^4.1.0",
     "lucide-svelte": "~1.0.1",
     "marked": "~18.0.2",
+    "svelte-sonner": "~1.1.1",
     "yaml": "^2.6.1",
     "zod": "^3.24.1"
   },

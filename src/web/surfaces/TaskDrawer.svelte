@@ -40,6 +40,14 @@
   let approveSpecOpen = $state(false)
   let approveSpecNote = $state('')
 
+  function friendlyFetchError(err: unknown): string {
+    const message = err instanceof Error ? err.message : String(err)
+    if (/failed to fetch|networkerror|load failed/i.test(message)) {
+      return 'Could not reach the local Guildhall server. Restart `pnpm exec guildhall serve` and reload.'
+    }
+    return message
+  }
+
   const TABS = [
     { id: 'spec', label: 'Spec' },
     { id: 'transcript', label: 'Transcript' },
@@ -59,7 +67,7 @@
       payload = (await res.json()) as DrawerPayload
       error = null
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err)
+      error = friendlyFetchError(err)
     }
   }
 
@@ -84,6 +92,9 @@
       }
       await load()
       return true
+    } catch (err) {
+      error = friendlyFetchError(err)
+      return false
     } finally {
       busy = false
     }

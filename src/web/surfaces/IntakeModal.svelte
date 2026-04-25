@@ -11,6 +11,7 @@
   import Select from '../lib/Select.svelte'
   import Textarea from '../lib/Textarea.svelte'
   import { project } from '../lib/project.svelte.js'
+  import { friendlyDomain } from '../lib/display.js'
   import type { CoordinatorConfig } from '../lib/types.js'
 
   interface Props {
@@ -109,7 +110,10 @@
   ] as const
 
   const coordOptions = $derived(
-    coordinators.map((c) => ({ value: c.domain ?? '', label: `${c.name} (${c.domain})` })),
+    coordinators.map((c) => ({
+      value: c.domain ?? '',
+      label: c.name || friendlyDomain(c.domain) || 'Coordinator',
+    })),
   )
   const bugDomainOptions = $derived([
     { value: '', label: '(auto — from stack trace, or first coordinator)' },

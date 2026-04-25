@@ -15,7 +15,9 @@
   import Stack from '../../lib/Stack.svelte'
   import Button from '../../lib/Button.svelte'
   import Chip from '../../lib/Chip.svelte'
+  import Markdown from '../../lib/Markdown.svelte'
   import { nav } from '../../lib/nav.svelte.js'
+  import { toast } from 'svelte-sonner'
 
   interface DetectedGoal {
     id: string
@@ -86,7 +88,6 @@
   let data = $state<DraftResponse | null>(null)
   let error = $state<string | null>(null)
   let busy = $state<null | 'approve' | 'dismiss'>(null)
-  let toast = $state<{ text: string; tone: 'ok' | 'danger' } | null>(null)
 
   async function load() {
     error = null
@@ -107,13 +108,6 @@
     load()
   })
 
-  function flash(text: string, tone: 'ok' | 'danger') {
-    toast = { text, tone }
-    setTimeout(() => {
-      if (toast?.text === text) toast = null
-    }, 4500)
-  }
-
   async function approve() {
     busy = 'approve'
     try {
@@ -128,18 +122,18 @@
         error?: string
       }
       if (!r.ok || j.error) {
-        flash(j.error ?? `Approve failed (${r.status})`, 'danger')
+        // Errors stick until dismissed (sonner default duration: Infinity).
+        toast.error(j.error ?? `Approve failed (${r.status})`)
         return
       }
-      flash(
+      toast.success(
         `Imported ${j.tasksAdded ?? 0} tasks · ${j.goalsRecorded ?? 0} goals · ${j.milestonesLogged ?? 0} milestones`,
-        'ok',
       )
       await load()
       // Bounce to planner so user sees the new tasks.
       setTimeout(() => nav('/planner'), 900)
     } catch (e) {
-      flash(e instanceof Error ? e.message : String(e), 'danger')
+      toast.error(e instanceof Error ? e.message : String(e))
     } finally {
       busy = null
     }
@@ -152,13 +146,13 @@
         method: 'POST',
       })
       if (!r.ok) {
-        flash(`Dismiss failed (${r.status})`, 'danger')
+        toast.error(`Dismiss failed (${r.status})`)
         return
       }
-      flash('Dismissed. Findings remain visible here if you change your mind.', 'ok')
+      toast.success('Dismissed. Findings remain visible here if you change your mind.')
       await load()
     } catch (e) {
-      flash(e instanceof Error ? e.message : String(e), 'danger')
+      toast.error(e instanceof Error ? e.message : String(e))
     } finally {
       busy = null
     }
@@ -178,45 +172,69 @@
         : 'empty',
   )
 
+  function displayText(value: string): string {
+    return value
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+
+  function equivalentText(a: string, b: string): boolean {
+    return displayText(a).toLowerCase() === displayText(b).toLowerCase()
+  }
+
+  function displaySub(title: string, sub: string): string {
+    if (!sub || equivalentText(title, sub)) return ''
+    return displayText(sub)
+  }
+
   const goals = $derived(
     showSource === 'agent'
       ? (data?.parsed?.goals ?? []).map(g => ({
           id: g.id,
-          title: g.title,
-          rationale: g.rationale,
+          title: displayText(g.title),
+          rationale: displaySub(g.title, g.rationale),
         }))
       : (data?.detected?.goals ?? []).map(g => ({
           id: g.id,
-          title: g.title,
-          rationale: g.rationale,
+          title: displayText(g.title),
+          rationale: displaySub(g.title, g.rationale),
         })),
   )
   const tasks = $derived(
     showSource === 'agent'
       ? (data?.parsed?.tasks ?? []).map(t => ({
           id: t.id,
-          title: t.title,
-          description: t.description,
+          title: displayText(t.title),
+          description: displaySub(t.title, t.description),
           domain: t.domain,
           priority: t.priority,
         }))
       : (data?.detected?.tasks ?? []).map(t => ({
           id: t.suggestedId,
-          title: t.title,
-          description: t.description,
+          title: displayText(t.title),
+          description: displaySub(t.title, t.description),
           domain: t.domain,
           priority: t.priority,
         })),
   )
   const milestones = $derived(
     showSource === 'agent'
-      ? data?.parsed?.milestones ?? []
-      : data?.detected?.milestones ?? [],
+      ? (data?.parsed?.milestones ?? []).map(m => ({
+          title: displayText(m.title),
+          evidence: displaySub(m.title, m.evidence),
+        }))
+      : (data?.detected?.milestones ?? []).map(m => ({
+          title: displayText(m.title),
+          evidence: displaySub(m.title, m.evidence),
+        })),
   )
 
   const hasAnything = $derived(
     goals.length + tasks.length + milestones.length > 0,
   )
+  const imported = $derived(data?.taskStatus === 'done')
 </script>
 
 <div class="wrap">
@@ -228,10 +246,6 @@
       the planner, or dismiss if this isn't useful.
     </p>
   </header>
-
-  {#if toast}
-    <div class="toast toast-{toast.tone}">{toast.text}</div>
-  {/if}
 
   {#if error}
     <Card tone="danger">
@@ -255,7 +269,9 @@
         <div class="summary-row">
           <div class="summary-text">
             <div class="summary-primary">
-              {#if showSource === 'agent'}
+              {#if imported}
+                Imported findings.
+              {:else if showSource === 'agent'}
                 Importer agent refined these findings.
               {:else if showSource === 'detector'}
                 Detector findings — no agent refinement yet.
@@ -275,7 +291,7 @@
             {/if}
           </div>
           <div class="summary-actions">
-            {#if hasAnything}
+            {#if hasAnything && !imported}
               <Button
                 variant="primary"
                 onclick={approve}
@@ -300,11 +316,10 @@
           <ul class="items">
             {#each goals as g (g.id)}
               <li>
-                <div class="item-title">{g.title}</div>
+                <div class="item-title"><Markdown source={g.title} inline /></div>
                 {#if g.rationale}
-                  <div class="item-sub">{g.rationale}</div>
+                  <div class="item-sub"><Markdown source={g.rationale} inline /></div>
                 {/if}
-                <div class="item-meta"><code>{g.id}</code></div>
               </li>
             {/each}
           </ul>
@@ -317,19 +332,15 @@
             {#each tasks as t (t.id)}
               <li>
                 <div class="item-title">
-                  {t.title}
+                  <Markdown source={t.title} inline />
                   <Chip
                     label={t.priority}
                     tone={t.priority === 'critical' || t.priority === 'high' ? 'danger' : 'neutral'}
                   />
                 </div>
                 {#if t.description}
-                  <div class="item-sub">{t.description}</div>
+                  <div class="item-sub"><Markdown source={t.description} inline /></div>
                 {/if}
-                <div class="item-meta">
-                  <code>{t.id}</code>
-                  · domain <code>{t.domain}</code>
-                </div>
               </li>
             {/each}
           </ul>
@@ -341,9 +352,9 @@
           <ul class="items">
             {#each milestones as m (m.title)}
               <li>
-                <div class="item-title">{m.title}</div>
+                <div class="item-title"><Markdown source={m.title} inline /></div>
                 {#if m.evidence}
-                  <div class="item-sub">{m.evidence}</div>
+                  <div class="item-sub"><Markdown source={m.evidence} inline /></div>
                 {/if}
               </li>
             {/each}
@@ -384,14 +395,6 @@
     font-size: var(--fs-1);
   }
   .muted { color: var(--text-muted); font-size: var(--fs-2); }
-  .toast {
-    padding: var(--s-2) var(--s-3);
-    border-radius: var(--r-1);
-    font-size: var(--fs-2);
-    font-weight: 600;
-  }
-  .toast-ok { background: var(--ok-bg, #1a3a1f); color: var(--ok, #6fcf6f); }
-  .toast-danger { background: var(--danger-bg, #3a1a1a); color: var(--danger, #ff6b6b); }
   .summary-row {
     display: flex;
     align-items: center;
@@ -439,13 +442,10 @@
     font-size: var(--fs-1);
     line-height: var(--lh-body);
   }
-  .item-meta {
-    margin-top: 4px;
-    color: var(--text-muted);
-    font-size: var(--fs-1);
-  }
-  code {
-    font-family: 'SF Mono', monospace;
-    font-size: 0.92em;
+  .item-title :global(.md),
+  .item-sub :global(.md) {
+    color: inherit;
+    font-size: inherit;
+    line-height: inherit;
   }
 </style>

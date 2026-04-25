@@ -185,3 +185,46 @@ describe('POST /api/project/meta-intake/approve', () => {
     }
   })
 })
+
+describe('POST /api/project/meta-intake/synthesize', () => {
+  it('creates a reviewable draft from answered setup questions when the agent emitted no spec', async () => {
+    await createMetaIntakeTask({ memoryDir, projectPath: tmpDir })
+    const queue = await readQueue()
+    const task = queue.tasks.find(t => t.id === META_INTAKE_TASK_ID)
+    if (!task) throw new Error('missing meta-intake task')
+    task.openQuestions = [
+      {
+        id: 'q-domains',
+        kind: 'choice',
+        askedBy: 'spec-agent',
+        askedAt: '2026-01-01T00:00:00.000Z',
+        prompt: 'Pick all that apply — these will become your coordinator domains.',
+        choices: ['converter-core', 'extension-ui', 'docs'],
+        answeredAt: '2026-01-01T00:01:00.000Z',
+        answer: 'converter-core, extension-ui, docs',
+      },
+    ]
+    await fs.writeFile(path.join(memoryDir, 'TASKS.json'), JSON.stringify(queue, null, 2), 'utf-8')
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ scripts: { build: 'tsc -b', test: 'vitest' } }, null, 2),
+      'utf-8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/meta-intake/synthesize', { method: 'POST' }),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json() as Record<string, any>
+    expect(body.ok).toBe(true)
+    expect(body.drafts).toHaveLength(3)
+    expect(body.drafts[0].name).toBe('Converter Core')
+
+    const updated = await readQueue()
+    const updatedTask = updated.tasks.find(t => t.id === META_INTAKE_TASK_ID)
+    expect(updatedTask?.status).toBe('spec_review')
+    expect(updatedTask?.spec).toContain('coordinators:')
+    expect(updatedTask?.spec).toContain('bootstrap:')
+  })
+})

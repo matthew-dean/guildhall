@@ -375,6 +375,19 @@ function normStringList(value: unknown): string[] {
   return value.filter((v): v is string => typeof v === 'string')
 }
 
+function normalizeImportText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[`*_~]/g, '')
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function supportingText(title: string, value: string): string {
+  return normalizeImportText(title) === normalizeImportText(value) ? '' : value
+}
+
 /**
  * Pulls the `goals:` / `tasks:` / `milestones:` fences out of the importer
  * task's spec. Each section is independent: the agent can emit just one if
@@ -392,8 +405,9 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
         const g = raw as Record<string, unknown>
         const id = typeof g['id'] === 'string' ? g['id'] : undefined
         const title = typeof g['title'] === 'string' ? g['title'] : undefined
-        const rationale = typeof g['rationale'] === 'string' ? g['rationale'] : ''
+        const rawRationale = typeof g['rationale'] === 'string' ? g['rationale'] : ''
         if (!id || !title) continue
+        const rationale = supportingText(title, rawRationale)
         goals.push({ id, title, rationale })
       }
     }
@@ -403,7 +417,7 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
         const t = raw as Record<string, unknown>
         const id = typeof t['id'] === 'string' ? t['id'] : undefined
         const title = typeof t['title'] === 'string' ? t['title'] : undefined
-        const description =
+        const rawDescription =
           typeof t['description'] === 'string' ? t['description'] : ''
         const domain = typeof t['domain'] === 'string' ? t['domain'] : 'core'
         const rawPriority = t['priority']
@@ -415,7 +429,7 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
         tasks.push({
           id,
           title,
-          description,
+          description: supportingText(title, rawDescription),
           domain,
           priority,
           references: normStringList(t['references']),
@@ -456,7 +470,7 @@ export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
     for (const g of draft.goals) {
       lines.push(`  - id: ${escape(g.id)}`)
       lines.push(`    title: ${escape(g.title)}`)
-      lines.push(`    rationale: ${escape(g.rationale || '')}`)
+      if (g.rationale) lines.push(`    rationale: ${escape(g.rationale)}`)
     }
     lines.push('```')
     lines.push('')
@@ -518,10 +532,9 @@ function uniqueTaskId(existingIds: Set<string>, suggested: string): string {
 
 /**
  * Consume the workspace-import draft: parse fences, append tasks as
- * `ready` + `origination='human'` (the Approve click in the UI is the
- * human approval — FR-21 task_origination only governs agent-originated
- * proposals), record milestones to PROGRESS.md, persist goals into
- * `memory/workspace-goals.json`, and mark the reserved task done.
+ * `exploring` + `origination='human'`, record milestones to PROGRESS.md,
+ * persist goals into `memory/workspace-goals.json`, and mark the reserved
+ * task done.
  *
  * Safe to call multiple times: tasks with ids already present are
  * skipped (the reserved task's spec is the source of truth).
@@ -560,7 +573,7 @@ export async function approveWorkspaceImport(
 
   const now = new Date().toISOString()
 
-  // Merge tasks into the queue as `proposed`. Dup ids get suffixed.
+  // Merge tasks into the queue as intake candidates. Dup ids get suffixed.
   const existingIds = new Set(queue.tasks.map((t) => t.id))
   let tasksAdded = 0
   for (const t of parsed.tasks) {
@@ -572,11 +585,10 @@ export async function approveWorkspaceImport(
       description: t.description,
       domain: t.domain,
       projectPath: input.projectPath,
-      // The Approve click in the Workspace Import UI IS the human approval —
-      // land tasks in `ready` directly. Routing them through `proposed` was
-      // dead-end state because evaluateProposal requires origination='agent'
-      // and would throw on these system/human-sourced entries.
-      status: 'ready',
+      // Import approval means "yes, bring this into Guildhall", not "a worker
+      // has a real spec." Imported TODOs and docs need normal spec-agent
+      // intake before workers touch them.
+      status: 'exploring',
       priority: t.priority,
       dependsOn: [],
       outOfScope: [],

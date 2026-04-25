@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
 import { z } from 'zod'
 import { ModelAssignmentConfig } from '@guildhall/core'
@@ -69,6 +69,30 @@ export function projectConfigPath(projectPath: string): string {
 }
 
 /**
+ * Ensure project-local Guildhall state is created and ignored by the host repo.
+ * This is safe to call repeatedly from init/setup paths.
+ */
+export function ensureProjectLocalStateIgnored(projectPath: string): void {
+  const projectRoot = resolve(projectPath)
+  if (!existsSync(projectRoot)) mkdirSync(projectRoot, { recursive: true })
+  const dir = projectConfigDir(projectRoot)
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+
+  const rootGitignore = join(projectRoot, '.gitignore')
+  const entry = '.guildhall/'
+  const existing = existsSync(rootGitignore) ? readFileSync(rootGitignore, 'utf8') : ''
+  const alreadyIgnored = existing
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+#.*$/, '').trim())
+    .some((line) => line === '.guildhall' || line === '.guildhall/' || line === '/.guildhall' || line === '/.guildhall/')
+
+  if (alreadyIgnored) return
+
+  const prefix = existing.length === 0 ? '' : existing.endsWith('\n') ? existing : `${existing}\n`
+  writeFileSync(rootGitignore, `${prefix}${entry}\n`, 'utf8')
+}
+
+/**
  * Read `<project>/.guildhall/config.yaml`. Returns defaults if the file is
  * missing (so boot is never blocked by missing project-local state).
  */
@@ -93,14 +117,7 @@ export function readProjectConfig(projectPath: string): ProjectGuildhallConfig {
  * File permissions are 0600 because this stores API keys.
  */
 export function writeProjectConfig(projectPath: string, config: ProjectGuildhallConfig): void {
-  const dir = projectConfigDir(projectPath)
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  const gitignorePath = join(dir, '.gitignore')
-  if (!existsSync(gitignorePath)) {
-    // Keep .guildhall/ untracked without requiring the user to edit their
-    // outer repo's .gitignore — config may hold API keys.
-    writeFileSync(gitignorePath, '*\n!.gitignore\n', 'utf8')
-  }
+  ensureProjectLocalStateIgnored(projectPath)
   const validated = ProjectGuildhallConfig.parse(config)
   const yaml = yamlDump(validated, { lineWidth: 120, noRefs: true })
   writeFileSync(projectConfigPath(projectPath), yaml, { encoding: 'utf8', mode: 0o600 })

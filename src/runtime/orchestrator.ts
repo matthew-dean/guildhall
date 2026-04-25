@@ -95,6 +95,7 @@ import {
   resolveMergePolicy,
   type MergePolicy,
 } from './merge-dispatcher.js'
+import { atomicWriteText, loadSessionById } from '@guildhall/sessions'
 import {
   pickNextTasks,
   resolveFanoutCapacity,
@@ -102,6 +103,10 @@ import {
 } from './fanout-dispatcher.js'
 import { isStopRequested } from './stop-requested.js'
 import { runBootstrap, bootstrapNeeded } from './bootstrap-runner.js'
+import {
+  META_INTAKE_TASK_ID,
+  parseCoordinatorDraft,
+} from './meta-intake.js'
 import {
   deterministicReview,
   applyDeterministicVerdict,
@@ -134,6 +139,39 @@ import path from 'node:path'
 const PROPOSAL_PROMOTER_AGENT_ID = 'proposal-promoter'
 const PRE_REJECTION_POLICY_AGENT_ID = 'pre-rejection-policy'
 
+type AgentGenerateResult = Awaited<ReturnType<OrchestratorAgent['generate']>>
+
+function findMetaIntakeDraftText(result: AgentGenerateResult): string | null {
+  const candidates = [
+    result.text,
+    ...(result.messages ?? [])
+      .slice()
+      .reverse()
+      .filter((message) => message.role === 'assistant')
+      .map((message) => messageContentText(message.content)),
+  ]
+
+  for (const candidate of candidates) {
+    const text = candidate.trim()
+    if (!text) continue
+    if (parseCoordinatorDraft(text)) return text
+  }
+  return null
+}
+
+function messageContentText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((block) => {
+      if (!block || typeof block !== 'object') return ''
+      const entry = block as { type?: unknown; text?: unknown }
+      return entry.type === 'text' && typeof entry.text === 'string' ? entry.text : ''
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
 // ---------------------------------------------------------------------------
 // Forge Orchestrator
 //
@@ -157,7 +195,10 @@ const PRE_REJECTION_POLICY_AGENT_ID = 'pre-rejection-policy'
  */
 export interface OrchestratorAgent {
   readonly name: string
-  generate(prompt: string): Promise<{ text: string }>
+  generate(prompt: string): Promise<{
+    text: string
+    messages?: Array<{ role?: string; content?: unknown }>
+  }>
   /**
    * FR-15: optional hook called by the orchestrator before `generate()` when
    * the task carries a `permissionMode` override. Agents that ignore this
@@ -445,6 +486,11 @@ export class Orchestrator {
       if (fanoutOutcome) return fanoutOutcome
     }
 
+    if (task.id === META_INTAKE_TASK_ID && !task.spec) {
+      const recovered = await this.recoverMetaIntakeDraftFromSpecSession(task)
+      if (recovered) return recovered
+    }
+
     const beforeStatus = task.status
     const selection = this.selectAgent(task)
 
@@ -608,8 +654,14 @@ export class Orchestrator {
     // of this generate() call.
     this.livenessTracker.register(agent.name, task.id)
 
+    let generatedText = ''
+    let generatedMetaIntakeDraft: string | null = null
     try {
-      await agent.generate(prompt)
+      const result = await agent.generate(prompt)
+      generatedText = result.text
+      if (task.id === META_INTAKE_TASK_ID) {
+        generatedMetaIntakeDraft = findMetaIntakeDraftText(result)
+      }
     } catch (err) {
       this.livenessTracker.unregister(agent.name)
       if (slot) this.slotAllocator?.release(task.id)
@@ -652,6 +704,20 @@ export class Orchestrator {
       const taskAfter = queueAfter.tasks.find((t) => t.id === task.id) ?? task
       let afterStatus = taskAfter.status
       let transitioned = beforeStatus !== afterStatus
+
+      if (
+        task.id === META_INTAKE_TASK_ID &&
+        !taskAfter.spec &&
+        generatedMetaIntakeDraft
+      ) {
+        taskAfter.spec = generatedMetaIntakeDraft
+        if (taskAfter.status === 'exploring') taskAfter.status = 'spec_review'
+        taskAfter.updatedAt = this.now()
+        queueAfter.lastUpdated = this.now()
+        await this.writeQueue(queueAfter)
+        afterStatus = taskAfter.status
+        transitioned = true
+      }
 
       // FR-27 / AC-18: record LLM verdict when a review actually ran.
       if (beforeStatus === 'review') {
@@ -1213,6 +1279,16 @@ export class Orchestrator {
             "update-task tool to set status to 'spec_review'.",
         }
       case 'spec_review': {
+        if (task.id === META_INTAKE_TASK_ID && !task.spec) {
+          return {
+            kind: 'agent',
+            agent: this.opts.agents.spec,
+            promptSuffix:
+              "The meta-intake task reached spec_review, but its spec field is empty. " +
+              "Write the full coordinator, lever, and bootstrap YAML draft into the task spec via update-task. " +
+              "If you emit the draft in your final text, include all YAML fences so the orchestrator can recover it.",
+          }
+        }
         const coord = this.opts.agents.coordinators[task.domain]
         if (!coord) return { kind: 'no-coordinator' }
         return {
@@ -1360,6 +1436,58 @@ export class Orchestrator {
       actionKind: decision.action.kind,
       leverPosition: decision.leverPosition,
       newStatus,
+    }
+  }
+
+  private async recoverMetaIntakeDraftFromSpecSession(task: Task): Promise<TickOutcome | null> {
+    const snapshot = loadSessionById(
+      this.opts.config.projectPath,
+      `${this.opts.config.workspaceId}-spec`,
+    )
+    if (!snapshot) return null
+    const taskCreatedMs = Date.parse(task.createdAt)
+    const snapshotCreatedMs = snapshot.created_at * 1000
+    if (
+      Number.isFinite(taskCreatedMs) &&
+      Number.isFinite(snapshotCreatedMs) &&
+      snapshotCreatedMs < taskCreatedMs
+    ) {
+      return null
+    }
+    const draft = findMetaIntakeDraftText({
+      text: '',
+      messages: snapshot.messages,
+    })
+    if (!draft) return null
+
+    const queue = await this.readQueue()
+    const target = queue.tasks.find((t) => t.id === task.id)
+    if (!target || target.spec) return null
+
+    const beforeStatus = target.status
+    target.spec = draft
+    if (target.status === 'exploring') target.status = 'spec_review'
+    target.updatedAt = this.now()
+    queue.lastUpdated = this.now()
+    await this.writeQueue(queue)
+
+    await this.logTickProgress({
+      task: target,
+      agent: 'spec-agent',
+      beforeStatus,
+      afterStatus: target.status,
+      transitioned: beforeStatus !== target.status,
+      note: 'recovered meta-intake draft from saved spec-agent session',
+    })
+
+    return {
+      kind: 'processed',
+      taskId: task.id,
+      agent: 'spec-agent',
+      beforeStatus,
+      afterStatus: target.status,
+      transitioned: beforeStatus !== target.status,
+      revisionCount: target.revisionCount,
     }
   }
 
@@ -2349,7 +2477,7 @@ export class Orchestrator {
   }
 
   private async writeQueue(queue: TaskQueue): Promise<void> {
-    await fs.writeFile(this.tasksPath(), JSON.stringify(queue, null, 2), 'utf-8')
+    atomicWriteText(this.tasksPath(), JSON.stringify(queue, null, 2) + '\n')
   }
 
   /**
@@ -2459,6 +2587,20 @@ function toCoordinatorDomain(
   }
 }
 
+async function sessionNamespaceForProject(config: ResolvedConfig): Promise<string> {
+  const epochPath = path.join(config.memoryDir, '.session-epoch')
+  try {
+    const existing = (await fs.readFile(epochPath, 'utf8')).trim()
+    if (existing) return existing
+  } catch {
+    /* create below */
+  }
+  const epoch = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  await fs.mkdir(config.memoryDir, { recursive: true })
+  await fs.writeFile(epochPath, `${epoch}\n`, 'utf8')
+  return epoch
+}
+
 /**
  * Back-compat entry point for the CLI. Builds the real agent set using the
  * not-yet-wired LLM provider stub and runs the orchestrator loop.
@@ -2542,7 +2684,8 @@ export async function runOrchestrator(
   // a halted orchestrator can be resumed without losing per-role history. We
   // key sessions by agent role so the five roles don't stomp each other; the
   // workspace id is folded in to keep multi-project setups isolated.
-  const sessionIdFor = (role: string) => `${config.workspaceId}-${role}`
+  const sessionNamespace = await sessionNamespaceForProject(config)
+  const sessionIdFor = (role: string) => `${config.workspaceId}-${sessionNamespace}-${role}`
   const persistFor = (role: string) => ({
     cwd: config.projectPath,
     sessionId: sessionIdFor(role),

@@ -58,6 +58,7 @@ export {
   PROJECT_CONFIG_FILENAME,
   projectConfigDir,
   projectConfigPath,
+  ensureProjectLocalStateIgnored,
   readProjectConfig,
   writeProjectConfig,
   updateProjectConfig,

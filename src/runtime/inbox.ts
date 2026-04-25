@@ -14,6 +14,12 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
+import {
+  buildTaskSnapshot,
+  specFillWizard,
+  progressForTask,
+  emptyWizardsState,
+} from './wizards.js'
 
 export type InboxSeverity = 'high' | 'medium' | 'low'
 
@@ -24,6 +30,7 @@ export type InboxItem =
   | { kind: 'spec_approval'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
   | { kind: 'open_escalation'; severity: 'high'; taskId: string; escalationId: string; title: string; detail: string; actionHref: string }
   | { kind: 'lever_questions'; severity: 'low'; title: string; detail: string; defaultCount: number; actionHref: string }
+  | { kind: 'spec_fill_pending'; severity: 'low'; taskId: string; title: string; detail: string; actionHref: string; missingSteps: string[] }
 
 export interface BuildInboxOptions {
   projectPath: string
@@ -58,6 +65,7 @@ const KIND_ORDER: Record<InboxItem['kind'], number> = {
   brief_approval: 3,
   spec_approval: 4,
   lever_questions: 5,
+  spec_fill_pending: 6,
 }
 
 const SEVERITY_ORDER: Record<InboxSeverity, number> = {
@@ -196,9 +204,14 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     })
   }
 
-  // --- tasks: briefs / specs / escalations ---------------------------------
+  // --- tasks: briefs / specs / escalations / spec-fill gaps ----------------
   const tasksPath = join(projectPath, 'memory', 'TASKS.json')
   const tasks = tasksArray(readJsonSafe(tasksPath))
+  // Cap the number of spec-fill nudges we emit so a project with 40 open
+  // tasks doesn't flood the inbox — DoThisNext only consumes the top one
+  // anyway, and the per-task Spec tab shows full progress inline.
+  const SPEC_FILL_EMIT_CAP = 3
+  let specFillEmitted = 0
   for (const t of tasks) {
     const id = typeof t.id === 'string' ? t.id : ''
     const title = typeof t.title === 'string' ? t.title : id
@@ -225,6 +238,55 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
         detail: 'Spec awaiting approval.',
         actionHref: '/task/' + encodeURIComponent(id),
       })
+    }
+
+    // spec-fill gap: only for tasks where the wizard is applicable and
+    // incomplete. Title/description are almost always filled by intake so
+    // the practically-interesting misses are brief + acceptance criteria.
+    // We emit the LIVE missing-step list so DoThisNext can say "missing
+    // acceptance criteria" rather than the vague "spec incomplete".
+    //
+    // Dedupe with brief_approval / spec_approval: if the brief is drafted
+    // and awaiting approval, OR the spec is in review, don't also nudge
+    // "finish the spec" — those surface with their own prescriptive verb.
+    const briefDraftPending =
+      brief && typeof brief === 'object' && !brief.approvedAt
+    const specInReview = t.status === 'spec_review'
+    if (specFillEmitted < SPEC_FILL_EMIT_CAP && !briefDraftPending && !specInReview) {
+      const snap = buildTaskSnapshot({
+        projectPath,
+        task: t as Parameters<typeof buildTaskSnapshot>[0]['task'],
+        readWizardsState: () => emptyWizardsState(),
+      })
+      if (specFillWizard.applicable(snap)) {
+        const prog = progressForTask(specFillWizard, snap)
+        if (!prog.complete) {
+          const missingSteps = prog.steps
+            .filter(s => s.status === 'pending')
+            .map(s => s.id)
+          if (missingSteps.length > 0) {
+            const labelById: Record<string, string> = {
+              title: 'title',
+              description: 'description',
+              brief: 'product brief',
+              acceptance: 'acceptance criteria',
+            }
+            const missingLabels = missingSteps
+              .map(id => labelById[id] ?? id)
+              .join(', ')
+            items.push({
+              kind: 'spec_fill_pending',
+              severity: 'low',
+              taskId: id,
+              title: truncateTitle(title),
+              detail: `Missing ${missingLabels}.`,
+              actionHref: '/task/' + encodeURIComponent(id),
+              missingSteps,
+            })
+            specFillEmitted += 1
+          }
+        }
+      }
     }
 
     const escalations = Array.isArray(t.escalations)

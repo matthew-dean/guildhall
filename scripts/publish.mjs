@@ -14,8 +14,9 @@
  *   3. Bump the root `package.json` to the new version.
  *   4. Typecheck + tests + dep-cruise as the pre-publish gate.
  *   5. Rebuild `dist/` fresh.
- *   6. `npm publish` with `--access=public`.
- *   7. Commit the version bump and tag `v<version>`.
+ *   6. Verify package contents exclude raw docs/ but keep generated help.
+ *   7. `npm publish` with `--access=public`.
+ *   8. Commit the version bump and tag `v<version>`.
  *
  * Flags:
  *   --dry-run             Print each step; run everything except `npm publish`
@@ -39,6 +40,8 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const MANIFEST = join(ROOT, 'package.json')
+const GENERATED_HELP_TOPICS = join(ROOT, 'src/web/generated/help-topics.json')
+const WEB_BUNDLE = join(ROOT, 'dist/web/app.js')
 
 // ---------------------------------------------------------------------------
 // Args
@@ -105,7 +108,14 @@ log('Building dist/…')
 run('pnpm', ['build'])
 
 // ---------------------------------------------------------------------------
-// 6. Publish
+// 6. Package contents guard
+// ---------------------------------------------------------------------------
+
+log('Checking npm package contents…')
+assertNoDocsInPackage()
+
+// ---------------------------------------------------------------------------
+// 7. Publish
 // ---------------------------------------------------------------------------
 
 const publishArgs = ['publish', '--access=public', '--tag', flags.tag]
@@ -115,7 +125,7 @@ log(`Publishing guildhall@${nextVersion} (tag: ${flags.tag})${flags.dryRun ? ' [
 run('npm', publishArgs)
 
 // ---------------------------------------------------------------------------
-// 7. Commit + tag
+// 8. Commit + tag
 // ---------------------------------------------------------------------------
 
 if (flags.dryRun) {
@@ -182,6 +192,65 @@ function run(cmd, argv) {
     execFileSync(cmd, argv, { stdio: 'inherit', cwd: ROOT })
   } catch {
     die(`Command failed: ${cmd} ${argv.join(' ')}`)
+  }
+}
+
+function runCapture(cmd, argv) {
+  try {
+    return execFileSync(cmd, argv, {
+      cwd: ROOT,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'inherit'],
+    })
+  } catch {
+    die(`Command failed: ${cmd} ${argv.join(' ')}`)
+  }
+}
+
+function assertNoDocsInPackage() {
+  const stdout = runCapture('npm', ['pack', '--dry-run', '--json'])
+  let packs
+  try {
+    packs = JSON.parse(stdout)
+  } catch {
+    die('Could not parse `npm pack --dry-run --json` output.')
+  }
+
+  const files = packs.flatMap((pack) => pack.files ?? [])
+  const docsFiles = files
+    .map((file) => file.path)
+    .filter((path) => path === 'docs' || path.startsWith('docs/'))
+
+  if (docsFiles.length > 0) {
+    die(`Refusing to publish package with docs/ files:\n${docsFiles.map((path) => `  - ${path}`).join('\n')}`)
+  }
+
+  assertHelpSystemInPackage(files)
+
+  log(`Package contents OK (${files.length} files, no raw docs/; generated help is bundled).`)
+}
+
+function assertHelpSystemInPackage(files) {
+  const packedPaths = new Set(files.map((file) => file.path))
+  if (!packedPaths.has('dist/web/app.js')) {
+    die('Refusing to publish package without dist/web/app.js; the help system is bundled into the web app.')
+  }
+
+  let topics
+  try {
+    topics = JSON.parse(readFileSync(GENERATED_HELP_TOPICS, 'utf-8'))
+  } catch {
+    die('Refusing to publish package without generated help topics. Run `pnpm build` before publishing.')
+  }
+
+  const firstTopic = Object.values(topics)[0]
+  if (!firstTopic?.href) {
+    die('Refusing to publish package without generated help topic hrefs.')
+  }
+
+  const webBundle = readFileSync(WEB_BUNDLE, 'utf-8')
+  if (!webBundle.includes(firstTopic.href)) {
+    die('Refusing to publish package because dist/web/app.js does not include generated help topics.')
   }
 }
 

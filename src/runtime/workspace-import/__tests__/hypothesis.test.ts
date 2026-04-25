@@ -72,6 +72,65 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.stats).toEqual({ inputSignals: 4, drafted: 4, deduped: 0 })
   })
 
+  it('does not copy identical evidence into goal rationale or task description', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'readme',
+          kind: 'goal',
+          title: '✨ **Live conversion** - See changes',
+          evidence: '✨ **Live conversion** - See changes',
+          confidence: 'medium',
+        },
+        {
+          source: 'todo-comments',
+          kind: 'open_work',
+          title: 'Consider caching',
+          evidence: 'Consider caching',
+          confidence: 'low',
+        },
+      ]),
+    )
+    expect(draft.goals[0]!.rationale).toBe('')
+    expect(draft.tasks[0]!.description).toBe('')
+  })
+
+  it('does not promote generic TODOs or bootstrap chores into starter tasks', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'todo-comments',
+          kind: 'open_work',
+          title: 'TODO: Add more features:',
+          evidence: 'TODO: Add more features:',
+          confidence: 'low',
+        },
+        {
+          source: 'todo-comments',
+          kind: 'open_work',
+          title: 'TODO: Could clean up visible type tags here if needed',
+          evidence: 'TODO: Could clean up visible type tags here if needed',
+          confidence: 'low',
+        },
+        {
+          source: 'roadmap',
+          kind: 'open_work',
+          title: 'Verify bootstrap: pnpm install → build → test',
+          evidence: '- [ ] Verify bootstrap: pnpm install → build → test',
+          confidence: 'high',
+        },
+        {
+          source: 'roadmap',
+          kind: 'open_work',
+          title: 'Implement declaration file generation',
+          evidence: '- [ ] Implement declaration file generation',
+          confidence: 'high',
+        },
+      ]),
+    )
+    expect(draft.tasks.map(t => t.title)).toEqual(['Implement declaration file generation'])
+  })
+
   it('produces stable suggestedId slugs', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
@@ -84,7 +143,7 @@ describe('formWorkspaceHypothesis', () => {
         },
       ]),
     )
-    expect(draft.tasks[0]!.suggestedId).toBe('task-import-add-dark-mode-toggle')
+    expect(draft.tasks[0]!.suggestedId).toMatch(/^task-import-[a-z0-9]{1,7}$/)
     const draft2 = formWorkspaceHypothesis(
       invFrom([
         {

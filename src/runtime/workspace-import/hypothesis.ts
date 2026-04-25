@@ -88,11 +88,22 @@ function normalize(title: string): string {
     .trim()
 }
 
-function slug(title: string): string {
-  return normalize(title)
-    .replace(/\s+/g, '-')
-    .slice(0, 60)
-    .replace(/-+$/, '')
+function stableHash(input: string): string {
+  let h = 0x811c9dc5
+  for (const ch of input) {
+    h ^= ch.charCodeAt(0)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(36).slice(0, 7)
+}
+
+function compactGeneratedId(prefix: string, title: string, fallback: number): string {
+  const key = normalize(title)
+  return `${prefix}-${stableHash(key || String(fallback))}`
+}
+
+function supportingText(title: string, evidence: string): string {
+  return normalize(title) === normalize(evidence) ? '' : evidence
 }
 
 const CONFIDENCE_RANK: Record<DraftConfidence, number> = {
@@ -115,6 +126,30 @@ function priorityFromConfidence(confidence: DraftConfidence): DraftTask['priorit
   if (confidence === 'high') return 'normal'
   if (confidence === 'medium') return 'normal'
   return 'low'
+}
+
+function isGenericTodo(sig: WorkspaceSignal): boolean {
+  if (sig.source !== 'todo-comments' || sig.confidence !== 'low') return false
+  const title = normalize(sig.title.replace(/^todo\s*:?\s*/i, ''))
+  if (!title) return true
+  if (/^add more features?$/.test(title)) return true
+  if (/^(could|maybe|possibly|eventually)\b/.test(title)) return true
+  return false
+}
+
+function isBootstrapChore(sig: WorkspaceSignal): boolean {
+  if (sig.source !== 'roadmap') return false
+  const title = normalize(sig.title)
+  return (
+    /\bpnpm install\b/.test(title) ||
+    /\bnpm install\b/.test(title) ||
+    /\byarn install\b/.test(title) ||
+    /\bverify bootstrap\b/.test(title)
+  )
+}
+
+function shouldSkipTaskSignal(sig: WorkspaceSignal): boolean {
+  return isGenericTodo(sig) || isBootstrapChore(sig)
 }
 
 /**
@@ -175,9 +210,9 @@ function addGoal(
   const existing = index.get(key)
   if (!existing) {
     index.set(key, {
-      id: `goal-${slug(sig.title) || index.size + 1}`,
+      id: compactGeneratedId('goal', sig.title, index.size + 1),
       title: sig.title,
-      rationale: sig.evidence,
+      rationale: supportingText(sig.title, sig.evidence),
       source: sig.source,
       ...(sig.references ? { references: sig.references } : {}),
       confidence: sig.confidence,
@@ -192,7 +227,7 @@ function addGoal(
   const refs = mergeReferences(existing.references, sig.references)
   if (refs) merged.references = refs
   if (shouldBump) {
-    merged.rationale = sig.evidence
+    merged.rationale = supportingText(sig.title, sig.evidence)
     merged.source = sig.source
   }
   index.set(key, merged)
@@ -203,14 +238,15 @@ function addTask(
   sig: WorkspaceSignal,
   bump: (cur: { confidence: DraftConfidence } | undefined, next: DraftConfidence) => boolean,
 ): void {
+  if (shouldSkipTaskSignal(sig)) return
   const key = normalize(sig.title)
   if (!key) return
   const existing = index.get(key)
   if (!existing) {
     index.set(key, {
-      suggestedId: `task-import-${slug(sig.title) || index.size + 1}`,
+      suggestedId: compactGeneratedId('task-import', sig.title, index.size + 1),
       title: sig.title,
-      description: sig.evidence,
+      description: supportingText(sig.title, sig.evidence),
       domain: 'core',
       priority: priorityFromConfidence(sig.confidence),
       source: sig.source,
@@ -230,7 +266,7 @@ function addTask(
   const refs = mergeReferences(existing.references, sig.references)
   if (refs) merged.references = refs
   if (shouldBump) {
-    merged.description = sig.evidence
+    merged.description = supportingText(sig.title, sig.evidence)
     merged.source = sig.source
   }
   index.set(key, merged)

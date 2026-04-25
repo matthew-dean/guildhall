@@ -7,6 +7,8 @@
   import TaskDrawer from './surfaces/TaskDrawer.svelte'
   import SetupWizard from './surfaces/SetupWizard.svelte'
   import ProvidersPage from './surfaces/ProvidersPage.svelte'
+  import StaleServerBanner from './lib/StaleServerBanner.svelte'
+  import { Toaster } from 'svelte-sonner'
   import { path, nav } from './lib/nav.svelte.js'
   import { connectStream } from './lib/events.js'
   import type { ProjectView as Tab } from './lib/types.js'
@@ -23,12 +25,14 @@
     if (taskMatch) {
       return {
         kind: 'project',
-        view: 'inbox',
+        view: 'thread',
         sub: null,
         drawerTaskId: decodeURIComponent(taskMatch[1]),
       }
     }
-    if (p === '/inbox' || p === '/')
+    if (p === '/' || p === '/thread')
+      return { kind: 'project', view: 'thread', sub: null, drawerTaskId: null }
+    if (p === '/inbox' || p === '/notifications')
       return { kind: 'project', view: 'inbox', sub: null, drawerTaskId: null }
     if (p === '/work')
       return { kind: 'project', view: 'work', sub: null, drawerTaskId: null }
@@ -52,7 +56,7 @@
     if (p === '/planner') return { kind: 'project', view: 'planner', sub: null, drawerTaskId: null }
     if (p === '/facts') return { kind: 'project', view: 'facts', sub: null, drawerTaskId: null }
     if (p === '/timeline') return { kind: 'project', view: 'timeline', sub: null, drawerTaskId: null }
-    return { kind: 'project', view: 'inbox', sub: null, drawerTaskId: null }
+    return { kind: 'project', view: 'thread', sub: null, drawerTaskId: null }
   }
 
   const route = $derived(parse(path.value))
@@ -68,6 +72,9 @@
     if (path.value.startsWith('/task/')) nav('/')
   }
 </script>
+
+<StaleServerBanner />
+<Toaster theme="dark" position="bottom-right" richColors closeButton />
 
 {#if route.kind === 'project'}
   <ProjectView initialView={route.view} initialSub={route.sub} />
