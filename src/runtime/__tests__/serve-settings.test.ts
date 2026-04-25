@@ -339,3 +339,39 @@ describe('GET /api/project/inbox — blockers', () => {
     expect(afterBody.blockers.bootstrap).toBe(false)
   })
 })
+
+describe('GET /api/project — bootstrap status', () => {
+  it('includes the last bootstrap run status so the shell can explain async start failures', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'bootstrap.json'),
+      JSON.stringify({
+        success: false,
+        lastRunAt: '2026-04-25T00:00:00Z',
+        durationMs: 10,
+        commandHash: 'x',
+        lockfileHash: null,
+        steps: [
+          {
+            kind: 'gate',
+            command: 'pnpm run build',
+            result: 'fail',
+            exitCode: 2,
+            output: 'src/customEditorProvider.ts(6,8): error TS2307',
+            durationMs: 10,
+          },
+        ],
+      }),
+      'utf8',
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request('http://localhost/api/project'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      bootstrapStatus?: { success?: boolean; steps?: Array<{ command?: string; result?: string }> }
+    }
+    expect(body.bootstrapStatus?.success).toBe(false)
+    expect(body.bootstrapStatus?.steps?.[0]?.command).toBe('pnpm run build')
+    expect(body.bootstrapStatus?.steps?.[0]?.result).toBe('fail')
+  })
+})

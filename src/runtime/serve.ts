@@ -412,6 +412,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const run = supervisor.get(project.id)
       const recent = supervisor.recent(project.id)
+      const bootstrapStatus = readBootstrapStatus(join(project.path, 'memory'))
       return c.json({
         initializationNeeded: false,
         id: project.id,
@@ -429,6 +430,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             }
           : null,
         recentEvents: recent,
+        ...(bootstrapStatus ? { bootstrapStatus } : {}),
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)

@@ -149,6 +149,14 @@ correct the agent, and ask for direct action from Thread.
   draft from README context when no saved direction exists.
 - Workspace Import still showed "Approve & import" after approval. Fixed the
   imported state to show "Imported findings" and hide the approval actions.
+- Thread thought setup was complete because the reserved meta-intake/import
+  tasks counted as the first user task. Fixed first-task progress to ignore
+  reserved system tasks, then created a real first task for the TypeScript
+  round-trip workflow.
+- Pressing Start after that looked inert: the orchestrator started, ran
+  bootstrap, and stopped because the test project build failed. Fixed the shell
+  and Inbox to surface the failed bootstrap gate from `memory/bootstrap.json`
+  instead of leaving the user to infer it from a stopped run.
 
 ## Verification Log
 
@@ -175,6 +183,19 @@ correct the agent, and ask for direct action from Thread.
 - Current state after deterministic meta-intake fallback: `task-meta-intake`
   is done, five coordinator roles are merged, and Thread is on the active
   setup step "Give the project direction".
+- `pnpm vitest run src/runtime/__tests__/wizards.test.ts src/runtime/__tests__/serve-wizards.test.ts`
+  passed: 28 tests.
+- Browser check after the first-task fix showed Thread on "Seed the first
+  task"; submitting the TypeScript round-trip task created `task-003` in
+  `exploring` with a live Spec Fill checklist.
+- Direct `/api/project/start` returned running, then the run stopped after the
+  bootstrap gate failed. Reproduced the underlying project failure with
+  `pnpm run build` in `t-minus-t`:
+  `src/customEditorProvider.ts(6,8): error TS2307: Cannot find module 'ts-jsdoc-sync'`.
+- Repaired the local test project's converter package metadata so
+  `ts-jsdoc-sync` resolves. Build and tests now pass, but bootstrap is still
+  blocked by lint because `packages/extension` calls `oxlint` and the tool is
+  not installed.
 
 ## Resume Notes
 
@@ -184,12 +205,14 @@ correct the agent, and ask for direct action from Thread.
   - Five coordinator roles are present in `guildhall.yaml`.
   - Project direction was saved from Thread.
   - Workspace Import was approved: 0 tasks, 6 goals, 1 milestone.
-  - Planner currently shows only the two reserved completed setup/import tasks.
+  - `task-003` is the first real task and is still in spec intake.
+  - The current project blocker is bootstrap/lint failure:
+    `packages/extension` runs `oxlint src`, but `oxlint` is missing.
   - Orchestrator run status is stopped.
 - Before resetting `t-minus-t`, ask for explicit confirmation and list the
   exact files/directories to remove.
 - After source changes, run `pnpm build` in Guildhall before testing the linked
   package from `t-minus-t`.
-- Next likely check: confirm policy levers, then seed a real first task for the
-  TypeScript-view workflow and verify the live spec-fill checklist on a
-  non-reserved task.
+- Next likely check: verify the new bootstrap-failure banner in the browser,
+  then decide whether the test project should add/fix `ts-jsdoc-sync` before
+  continuing the task through spec review and execution.

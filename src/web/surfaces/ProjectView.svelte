@@ -184,6 +184,14 @@
         return
       }
       setTimeout(() => void project.refresh(), 300)
+      setTimeout(() => {
+        void project.refresh()
+        void loadInbox()
+      }, 1500)
+      setTimeout(() => {
+        void project.refresh()
+        void loadInbox()
+      }, 3200)
     } finally {
       busy = false
     }
@@ -213,8 +221,35 @@
     intakeOpen = true
   }
 
+  function bootstrapOutputLine(output: string): string | null {
+    const lines = output
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line =>
+        line.length > 0 &&
+        !line.startsWith('>') &&
+        !line.startsWith('Scope:') &&
+        !line.startsWith(' ERR_PNPM_') &&
+        !line.startsWith(' ELIFECYCLE'),
+      )
+    return lines.find(line => /\berror\b|failed|Cannot find module|command not found|spawn ENOENT/i.test(line)) ?? lines[0] ?? null
+  }
+
   const detail = $derived(project.detail)
   const runStatus = $derived(detail?.run?.status ?? 'stopped')
+  const failedBootstrapStep = $derived(
+    detail?.bootstrapStatus?.success === false
+      ? detail.bootstrapStatus.steps?.find(s => s.result === 'fail') ?? null
+      : null,
+  )
+  const bootstrapFailureText = $derived.by(() => {
+    const step = failedBootstrapStep
+    if (!step) return null
+    const command = step.command ?? 'Bootstrap'
+    const exit = typeof step.exitCode === 'number' ? ` exited ${step.exitCode}` : ' failed'
+    const usefulLine = bootstrapOutputLine(step.output ?? '')
+    return usefulLine ? `${command}${exit}: ${usefulLine}` : `${command}${exit}.`
+  })
 
   // Project phase surfaced in the top-bar chip. Distinguishes "setup isn't
   // done yet" (hard blockers open, or no coordinator) from "operating — just
@@ -274,7 +309,11 @@
   )
 
   const startDisabledReason = $derived(
-    blockers.bootstrap && !metaIntakePending ? 'Complete bootstrap in Thread before starting' : null,
+    blockers.bootstrap && !metaIntakePending
+      ? failedBootstrapStep
+        ? 'Fix the bootstrap failure before starting'
+        : 'Complete bootstrap in Thread before starting'
+      : null,
   )
   const newTaskDisabledReason = $derived(
     needsMeta
@@ -431,6 +470,13 @@
               <a href="/providers" onclick={(e) => { e.preventDefault(); nav('/providers') }}>Open Providers</a>
             {/if}
             <button class="dismiss" onclick={() => (runError = null)} aria-label="Dismiss">×</button>
+          </div>
+        {/if}
+        {#if bootstrapFailureText}
+          <div class="start-error" role="alert">
+            <Icon name="alert-triangle" size={14} />
+            <span>{bootstrapFailureText}</span>
+            <a href="/settings/ready" onclick={(e) => { e.preventDefault(); nav('/settings/ready') }}>Open Ready</a>
           </div>
         {/if}
         {#if currentView !== 'thread' && currentView !== 'inbox'}

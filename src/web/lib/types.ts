@@ -143,6 +143,24 @@ export interface ProjectRun {
   error?: string
 }
 
+export interface BootstrapStep {
+  kind?: 'command' | 'gate' | string
+  command?: string
+  result?: 'pass' | 'fail' | string
+  exitCode?: number
+  output?: string
+  durationMs?: number
+}
+
+export interface BootstrapStatus {
+  success?: boolean
+  lastRunAt?: string
+  durationMs?: number
+  commandHash?: string
+  lockfileHash?: string | null
+  steps?: BootstrapStep[]
+}
+
 export interface ProjectDetail {
   initializationNeeded?: boolean
   id?: string
@@ -155,6 +173,7 @@ export interface ProjectDetail {
   }
   tasks?: Task[]
   run?: ProjectRun | null
+  bootstrapStatus?: BootstrapStatus
   recentEvents?: EventEnvelope[]
   error?: string
 }

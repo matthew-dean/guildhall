@@ -14,6 +14,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
+import type { BootstrapStatus } from './bootstrap-runner.js'
 import {
   buildTaskSnapshot,
   specFillWizard,
@@ -95,6 +96,29 @@ function readYamlSafe(path: string): unknown {
   }
 }
 
+function bootstrapOutputLine(output: string): string | undefined {
+  const lines = output
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line =>
+      line.length > 0 &&
+      !line.startsWith('>') &&
+      !line.startsWith('Scope:') &&
+      !line.startsWith(' ERR_PNPM_') &&
+      !line.startsWith(' ELIFECYCLE'),
+    )
+  return lines.find(line => /\berror\b|failed|Cannot find module|command not found|spawn ENOENT/i.test(line)) ?? lines[0]
+}
+
+function failedBootstrapDetail(projectPath: string): string | null {
+  const status = readJsonSafe(join(projectPath, 'memory', 'bootstrap.json')) as BootstrapStatus | null
+  if (!status || status.success !== false) return null
+  const failed = status.steps.find(s => s.result === 'fail')
+  if (!failed) return 'The last bootstrap run failed. Open Ready to rerun the project checks.'
+  const firstUsefulLine = bootstrapOutputLine(failed.output)
+  return `${failed.command} failed with exit ${failed.exitCode}${firstUsefulLine ? `: ${firstUsefulLine}` : '.'}`
+}
+
 /**
  * Cheap, sync repo-shape check: which well-known anchor files/dirs exist?
  *
@@ -135,6 +159,7 @@ function tasksArray(raw: unknown): Array<Record<string, unknown>> {
 export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   const { projectPath } = opts
   const items: InboxItem[] = []
+  const bootstrapFailure = failedBootstrapDetail(projectPath)
 
   // --- bootstrap_missing ---------------------------------------------------
   const yamlPath = join(projectPath, 'guildhall.yaml')
@@ -169,7 +194,15 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
         ? hasVerifiedAt
         : true
     )
-    if (!b || !isComplete) {
+    if (bootstrapFailure) {
+      items.push({
+        kind: 'bootstrap_missing',
+        severity: 'high',
+        title: 'Bootstrap failed',
+        detail: bootstrapFailure,
+        actionHref: '/settings/ready',
+      })
+    } else if (!b || !isComplete) {
       items.push({
         kind: 'bootstrap_missing',
         severity: 'high',

@@ -166,6 +166,36 @@ describe('buildInbox', () => {
     expect(hit.actionHref).toBe('/settings/ready')
   })
 
+  it('bootstrap_missing: reports the last failed bootstrap gate even when config was previously verified', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/bootstrap.json', {
+      success: false,
+      lastRunAt: '2026-04-25T00:00:00Z',
+      durationMs: 10,
+      commandHash: 'x',
+      lockfileHash: null,
+      steps: [
+        {
+          kind: 'gate',
+          command: 'pnpm run build',
+          result: 'fail',
+          exitCode: 2,
+          output: '> build\nsrc/customEditorProvider.ts(6,8): error TS2307: Cannot find module',
+          durationMs: 10,
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    const hit = items.find(i => i.kind === 'bootstrap_missing')
+    expect(hit).toBeDefined()
+    if (!hit) throw new Error('unreachable')
+    expect(hit.title).toBe('Bootstrap failed')
+    expect(hit.detail).toContain('pnpm run build failed with exit 2')
+    expect(hit.detail).toContain('Cannot find module')
+  })
+
   it('workspace_import_pending: emitted when README + package.json present but goals file missing', async () => {
     await writeCompleteBootstrap()
     await writeFile('README.md', '# hello')

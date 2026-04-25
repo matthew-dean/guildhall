@@ -67,7 +67,7 @@ export interface ProjectSnapshot {
    * Also considered done if no repo anchors were detected (nothing to review).
    */
   workspaceImportReviewed: boolean
-  /** Number of tasks in memory/TASKS.json. */
+  /** Number of non-reserved user/project tasks in memory/TASKS.json. */
   taskCount: number
   /** Wizard-scoped persisted state (skip markers + completedAt stamps). */
   wizardState: WizardsState
@@ -561,14 +561,23 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
     if (!anyAnchor) workspaceImportReviewed = true
   }
 
-  // tasks
+  // tasks. Reserved setup/import bookkeeping tasks do not count as "first
+  // task"; otherwise setup can claim the project is ready while Planner only
+  // contains Guildhall's own housekeeping.
   const tasksPath = join(projectPath, 'memory', 'TASKS.json')
   const tasksRaw = readJsonSafe(tasksPath)
-  let taskCount = 0
-  if (Array.isArray(tasksRaw)) taskCount = tasksRaw.length
-  else if (tasksRaw && typeof tasksRaw === 'object' && Array.isArray((tasksRaw as { tasks?: unknown }).tasks)) {
-    taskCount = (tasksRaw as { tasks: unknown[] }).tasks.length
-  }
+  const tasks = Array.isArray(tasksRaw)
+    ? tasksRaw
+    : tasksRaw && typeof tasksRaw === 'object' && Array.isArray((tasksRaw as { tasks?: unknown }).tasks)
+      ? (tasksRaw as { tasks: unknown[] }).tasks
+      : []
+  const taskCount = tasks.filter(task => {
+    if (!task || typeof task !== 'object') return false
+    const t = task as { id?: unknown; domain?: unknown }
+    if (t.id === 'task-meta-intake' || t.id === 'task-workspace-import') return false
+    if (t.domain === '_meta' || t.domain === '_workspace_import') return false
+    return true
+  }).length
 
   return {
     projectPath,

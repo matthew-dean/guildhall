@@ -43,9 +43,9 @@ describe('GET /api/project/wizards', () => {
     // Identity is done after bootstrapWorkspace — name/id are set.
     const identity = onboard!.steps.find(s => s.id === 'identity')
     expect(identity?.status).toBe('done')
-    // Provider is not yet configured in tmp.
+    // Provider can be done on developer machines with OAuth credentials.
     const provider = onboard!.steps.find(s => s.id === 'provider')
-    expect(provider?.status).toBe('pending')
+    expect(['done', 'pending']).toContain(provider?.status)
   })
 })
 

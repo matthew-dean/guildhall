@@ -276,7 +276,11 @@ describe('buildSnapshot', () => {
   })
 
   it('taskCount handles both array and {tasks:[]} shapes', () => {
-    writeFileSync(join(tmp, 'memory', 'TASKS.json'), JSON.stringify([{ id: 'a' }, { id: 'b' }]))
+    writeFileSync(join(tmp, 'memory', 'TASKS.json'), JSON.stringify([
+      { id: 'a' },
+      { id: 'b' },
+      { id: 'task-meta-intake', domain: '_meta' },
+    ]))
     let snap = buildSnapshot({
       projectPath: tmp,
       readProviders: () => ({ providers: {} }),
@@ -286,7 +290,14 @@ describe('buildSnapshot', () => {
 
     writeFileSync(
       join(tmp, 'memory', 'TASKS.json'),
-      JSON.stringify({ tasks: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }),
+      JSON.stringify({
+        tasks: [
+          { id: 'a' },
+          { id: 'b' },
+          { id: 'c' },
+          { id: 'task-workspace-import', domain: '_workspace_import' },
+        ],
+      }),
     )
     snap = buildSnapshot({
       projectPath: tmp,
