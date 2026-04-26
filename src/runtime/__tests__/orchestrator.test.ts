@@ -700,6 +700,26 @@ describe('Orchestrator.tick — error handling', () => {
     const progress = await fs.readFile(progressPath, 'utf-8')
     expect(progress).toContain('error: boom')
   })
+
+  it('blocks the task when an agent hits its turn limit', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
+    const worker = {
+      name: 'worker-agent',
+      async generate() {
+        throw new Error('Exceeded maximum turn limit (8)')
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+    const out = await orch.tick()
+    expect(out.kind).toBe('escalated')
+
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('blocked')
+    expect(q.tasks[0]!.escalations[0]!.summary).toContain('Worker stopped')
+  })
 })
 
 describe('Orchestrator.run — full loops', () => {

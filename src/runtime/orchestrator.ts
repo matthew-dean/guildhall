@@ -141,6 +141,17 @@ const PRE_REJECTION_POLICY_AGENT_ID = 'pre-rejection-policy'
 
 type AgentGenerateResult = Awaited<ReturnType<OrchestratorAgent['generate']>>
 
+function friendlyRuntimeAgentName(agentName: string): string {
+  if (agentName.startsWith('coordinator-')) return 'Coordinator'
+  switch (agentName) {
+    case 'spec-agent': return 'Spec author'
+    case 'worker-agent': return 'Worker'
+    case 'reviewer-agent': return 'Reviewer'
+    case 'gate-checker-agent': return 'Gate checker'
+    default: return agentName
+  }
+}
+
 function findMetaIntakeDraftText(result: AgentGenerateResult): string | null {
   const candidates = [
     result.text,
@@ -701,6 +712,26 @@ export class Orchestrator {
         transitioned: false,
         note: `error: ${message}`,
       })
+      if (/Exceeded maximum turn limit/.test(message)) {
+        const escalation = await raiseEscalation({
+          tasksPath,
+          progressPath: this.progressPath(),
+          taskId: task.id,
+          agentId: agent.name,
+          reason: 'human_judgment_required',
+          summary: `${friendlyRuntimeAgentName(agent.name)} stopped after hitting its turn limit.`,
+          details: message,
+        })
+        if (escalation.success && escalation.escalationId) {
+          return {
+            kind: 'escalated',
+            taskId: task.id,
+            agent: agent.name,
+            reason: message,
+            escalationId: escalation.escalationId,
+          }
+        }
+      }
       return {
         kind: 'agent-error',
         taskId: task.id,
