@@ -377,19 +377,20 @@ describe('Orchestrator.tick — routing', () => {
     expect(gc.calls).toHaveLength(1)
   })
 
-  it('routes spec_review to the coordinator for the task domain', async () => {
-    await writeQueue([mkTask({ id: 'a', status: 'spec_review', domain: 'looma' })])
+  it('leaves a drafted spec_review task idle for human approval', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'spec_review', domain: 'looma', spec: 'draft spec' })])
     const coord = stubAgent('looma-coordinator')
     const orch = new Orchestrator({
       config: baseConfig(),
       agents: agentSet({ coordinators: { looma: coord } }),
     })
-    await orch.tick()
-    expect(coord.calls).toHaveLength(1)
+    const out = await orch.tick()
+    expect(out.kind).toBe('idle')
+    expect(coord.calls).toHaveLength(0)
   })
 
   it('reports no-coordinator when the task domain has none configured', async () => {
-    await writeQueue([mkTask({ id: 'a', status: 'spec_review', domain: 'ghost' })])
+    await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: 'approved spec' })])
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
     const out = await orch.tick()
     expect(out.kind).toBe('no-coordinator')

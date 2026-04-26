@@ -64,7 +64,7 @@
   const specText = $derived((task.spec ?? '').trim())
   const acceptance = $derived(task.acceptanceCriteria ?? [])
   const exploring = $derived(task.status === 'exploring')
-  const specApprovalPending = $derived(exploring && specText.length > 0)
+  const specApprovalPending = $derived(task.status === 'spec_review' && specText.length > 0)
   const needsAcceptance = $derived(exploring && briefApproved && acceptance.length === 0)
 
   // Agent-suggested tasks the user hasn't said "yes" to yet get the

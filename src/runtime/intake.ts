@@ -139,17 +139,17 @@ export interface ApproveSpecResult {
 }
 
 /**
- * Mark a task's spec as approved by the human. Transitions `exploring` →
- * `spec_review`, where the domain coordinator picks it up next.
+ * Mark a task's spec as approved by the human. Transitions `spec_review` →
+ * `ready`, where the domain coordinator can assign a worker.
  */
 export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecResult> {
   const queue = await readQueue(input.memoryDir)
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
-  if (task.status !== 'exploring') {
+  if (task.status !== 'spec_review') {
     return {
       success: false,
-      error: `Task ${input.taskId} is in status '${task.status}', expected 'exploring'`,
+      error: `Task ${input.taskId} is in status '${task.status}', expected 'spec_review'`,
     }
   }
   if (!task.spec || task.spec.trim().length === 0) {
@@ -160,7 +160,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
   }
 
   const now = new Date().toISOString()
-  task.status = 'spec_review'
+  task.status = 'ready'
   task.updatedAt = now
   queue.lastUpdated = now
 
@@ -181,10 +181,10 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     role: 'system',
     content: input.approvalNote
       ? `Spec approved by human. Note: ${input.approvalNote}`
-      : 'Spec approved by human. Task advanced to spec_review.',
+      : 'Spec approved by human. Task advanced to ready.',
   })
 
-  return { success: true, newStatus: 'spec_review' }
+  return { success: true, newStatus: 'ready' }
 }
 
 // ---------------------------------------------------------------------------

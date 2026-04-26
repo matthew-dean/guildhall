@@ -1289,9 +1289,14 @@ export class Orchestrator {
   private selectAgent(task: Task):
     | { kind: 'agent'; agent: OrchestratorAgent; promptSuffix: string }
     | { kind: 'no-coordinator' } {
+    const hasDraftEvidence =
+      task.acceptanceCriteria.length > 0 ||
+      Boolean(task.productBrief) ||
+      task.notes.some(note => note.role === 'spec' || note.agentId === 'spec-agent')
     if (
       task.id !== META_INTAKE_TASK_ID &&
       (task.status === 'ready' || task.status === 'in_progress') &&
+      hasDraftEvidence &&
       !task.spec?.trim()
     ) {
       return {
@@ -1313,9 +1318,9 @@ export class Orchestrator {
             "out-of-scope list, happy path + edge cases, domain routing, blast radius, required skills, " +
             "and escalation triggers. When the spec is complete and the user approves, use the " +
             "update-task tool to set status to 'spec_review'.",
-        }
+      }
       case 'spec_review': {
-        if (!task.spec?.trim()) {
+        if (!task.spec?.trim() && (task.id === META_INTAKE_TASK_ID || hasDraftEvidence)) {
           return {
             kind: 'agent',
             agent: this.opts.agents.spec,

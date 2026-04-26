@@ -16,7 +16,7 @@ import { raiseEscalation } from '@guildhall/tools'
 // FR-12 exploratory task intake
 //
 // Verifies that a fuzzy ask becomes an `exploring` task with a seeded
-// transcript, that approve-spec advances the task, and that a resume can
+// transcript, that approve-spec advances a reviewed spec, and that a resume can
 // resolve a blocking escalation and append a follow-up message.
 // ---------------------------------------------------------------------------
 
@@ -161,16 +161,17 @@ describe('approveSpec', () => {
       projectPath: '/projects/looma',
     })
     const queue = await readQueue()
+    queue.tasks[0]!.status = 'spec_review'
     queue.tasks[0]!.spec = '## Summary\nAdd a ghost button variant.\n## AC\n1. Renders.'
     await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
   })
 
-  it('transitions exploring → spec_review', async () => {
+  it('transitions spec_review → ready', async () => {
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
     expect(result.success).toBe(true)
-    expect(result.newStatus).toBe('spec_review')
+    expect(result.newStatus).toBe('ready')
     const queue = await readQueue()
-    expect(queue.tasks[0]!.status).toBe('spec_review')
+    expect(queue.tasks[0]!.status).toBe('ready')
   })
 
   it('records an approval note on the task when provided', async () => {
@@ -210,7 +211,7 @@ describe('approveSpec', () => {
     expect(result.error).toContain('no spec')
   })
 
-  it('refuses to approve a task not in exploring status', async () => {
+  it('refuses to approve a task not in spec_review status', async () => {
     const queue = await readQueue()
     queue.tasks[0]!.status = 'in_progress'
     await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')

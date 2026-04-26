@@ -76,7 +76,7 @@ export function pickNextTask(
       const task = queue.tasks.find(
         (t) =>
           t.status === status &&
-          !(t.domain === '_meta' && t.status === 'spec_review' && Boolean(t.spec)) &&
+          !(t.status === 'spec_review' && Boolean(t.spec?.trim())) &&
           t.priority === p &&
           (!domain || t.domain === domain) &&
           // FR-10: halt any task with an unresolved escalation regardless of status

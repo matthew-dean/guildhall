@@ -118,7 +118,7 @@ import { stringify as stringifyYaml } from 'yaml'
 //   POST   /api/project/task/:id/pause              → human override → blocked
 //   POST   /api/project/task/:id/shelve             → human override → shelved
 //   POST   /api/project/task/:id/unshelve           → shelved → proposed (clear shelveReason)
-//   POST   /api/project/task/:id/approve-spec       → exploring → spec_review
+//   POST   /api/project/task/:id/approve-spec       → spec_review → ready
 //   POST   /api/project/task/:id/approve-brief      → mark the product brief as human-approved
 //   POST   /api/project/task/:id/resume             → append follow-up to exploring transcript
 //   POST   /api/project/task/:id/resolve-escalation → close an open escalation; unblocks when none remain
@@ -1707,7 +1707,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   //   pause              → blocked      (any non-terminal task)
   //   shelve             → shelved      (any non-done task)
   //   unshelve           → proposed     (shelved task only; clears shelveReason)
-  //   approve-spec       → spec_review  (exploring task with a drafted spec; body: {approvalNote?})
+  //   approve-spec       → ready  (human approves a spec_review task; body: {approvalNote?})
   //   approve-brief      → mark productBrief.approvedBy/approvedAt = human
   //   add-acceptance     → append a human-written acceptance criterion
   //   resume             → append a follow-up message to an exploring transcript

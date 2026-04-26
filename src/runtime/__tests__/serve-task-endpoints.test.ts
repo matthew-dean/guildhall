@@ -141,8 +141,8 @@ describe('POST /api/project/task/:id/pause|shelve', () => {
 })
 
 describe('POST /api/project/task/:id/approve-spec', () => {
-  it('transitions an exploring task with a spec to spec_review and records the approvalNote', async () => {
-    await seedTask('task-1', { status: 'exploring', spec: 'drafted spec body' })
+  it('transitions a spec_review task with a spec to ready and records the approvalNote', async () => {
+    await seedTask('task-1', { status: 'spec_review', spec: 'drafted spec body' })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
       new Request('http://localhost/api/project/task/task-1/approve-spec', {
@@ -154,16 +154,16 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.ok).toBe(true)
-    expect(body.status).toBe('spec_review')
+    expect(body.status).toBe('ready')
 
     const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
     const q = JSON.parse(raw)
-    expect(q.tasks[0].status).toBe('spec_review')
+    expect(q.tasks[0].status).toBe('ready')
     expect(q.tasks[0].notes?.at(-1)?.content).toMatch(/ship it/i)
   })
 
   it('rejects approve-spec when the task has no drafted spec yet', async () => {
-    await seedTask('task-1', { status: 'exploring' })
+    await seedTask('task-1', { status: 'spec_review' })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
       new Request('http://localhost/api/project/task/task-1/approve-spec', { method: 'POST' }),
@@ -173,7 +173,7 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     expect(body.error).toMatch(/spec/i)
   })
 
-  it('rejects approve-spec on a task that is not in exploring', async () => {
+  it('rejects approve-spec on a task that is not in spec_review', async () => {
     await seedTask('task-1', { status: 'in_progress', spec: 'irrelevant' })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
@@ -181,7 +181,7 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     )
     expect(res.status).toBe(400)
     const body = (await res.json()) as Record<string, any>
-    expect(body.error).toMatch(/exploring/i)
+    expect(body.error).toMatch(/spec_review/i)
   })
 })
 

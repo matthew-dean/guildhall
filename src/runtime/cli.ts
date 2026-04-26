@@ -114,7 +114,7 @@ Usage:
     --title <string>             Explicit title (default: derived from the ask)
     --task-id <id>               Override the generated task id
 
-  guildhall approve-spec <task-id>   Approve an exploring task's spec → spec_review
+  guildhall approve-spec <task-id>   Approve a reviewed spec → ready
     --workspace <id|path>        Target workspace
     --note <string>              Optional approval note to record
 
