@@ -20,6 +20,7 @@ import { z } from 'zod'
 import fs from 'node:fs/promises'
 import { TaskQueue } from '@guildhall/core'
 import { randomUUID } from 'node:crypto'
+import { atomicWriteText } from '@guildhall/sessions'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -94,7 +95,7 @@ export async function postUserQuestion(
     task.updatedAt = now
     queue.lastUpdated = now
 
-    await fs.writeFile(input.tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
     return { success: true, questionId: id }
   } catch (err) {
     return { success: false, error: String(err) }

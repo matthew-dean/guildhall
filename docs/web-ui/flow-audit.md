@@ -174,6 +174,18 @@ correct the agent, and ask for direct action from Thread.
   passed: 3 files, 60 tests.
 - `pnpm typecheck` passed.
 - `pnpm build` passed with existing Svelte warnings.
+- After the spec-agent hit its step budget, `/api/project` 500ed because
+  `memory/TASKS.json` contained a complete JSON object followed by an
+  interleaved duplicate tail. Patched TASKS-writing agent tools to use
+  `atomicWriteText` instead of direct `fs.writeFile` so concurrent tool writes
+  cannot leave partial/interleaved task state.
+- Repaired the local `t-minus-t/memory/TASKS.json` by removing the duplicate
+  tail after the first complete JSON object; `node -e "JSON.parse(...)"` now
+  succeeds and `/api/project` returns again.
+- `pnpm vitest run src/tools/__tests__/product-brief.test.ts src/tools/__tests__/task-queue.test.ts src/tools/__tests__/escalation.test.ts src/tools/__tests__/report-issue.test.ts src/tools/__tests__/proposal.test.ts`
+  passed: 59 tests.
+- `pnpm typecheck` passed.
+- `pnpm build` passed with existing Svelte warnings.
 - Browser walkthrough exposed another in-progress clarity gap: after Start,
   `agent_started` was emitted but Thread still showed only the active brief
   approval card, so a user could not tell the spec agent was in a model call.
@@ -275,3 +287,6 @@ correct the agent, and ask for direct action from Thread.
   types, object literal types, and generic types; arrow functions left out for
   a later task. The run was restarted and Thread now shows "Model call in
   progress" on the active brief card while the spec agent is inside LM Studio.
+- The latest run ended in `error` after the spec agent exhausted its 8-step
+  budget again; with TASKS.json repaired, restart the server on the rebuilt
+  Guildhall before continuing.

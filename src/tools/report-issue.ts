@@ -10,6 +10,7 @@ import {
   type Task,
 } from '@guildhall/core'
 import { logProgress } from './memory-tools.js'
+import { atomicWriteText } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-31 Agent-issue channel
@@ -86,7 +87,7 @@ export async function reportIssue(input: ReportIssueInput): Promise<ReportIssueR
     task.updatedAt = now
     queue.lastUpdated = now
 
-    await fs.writeFile(parsed.tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    atomicWriteText(parsed.tasksPath, JSON.stringify(queue, null, 2) + '\n')
 
     if (parsed.progressPath) {
       const entry: ProgressEntry = {
@@ -176,7 +177,7 @@ export async function resolveIssue(input: ResolveIssueInput): Promise<ResolveIss
     task.updatedAt = now
     queue.lastUpdated = now
 
-    await fs.writeFile(parsed.tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    atomicWriteText(parsed.tasksPath, JSON.stringify(queue, null, 2) + '\n')
     return { success: true }
   } catch (err) {
     return { success: false, error: String(err) }

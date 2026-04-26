@@ -2,6 +2,7 @@ import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import { TaskQueue, type ProductBrief } from '@guildhall/core'
+import { atomicWriteText } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // update-product-brief: the Spec Agent's authoring surface for the product
@@ -64,7 +65,7 @@ export async function updateProductBrief(
     task.updatedAt = now
     queue.lastUpdated = now
 
-    await fs.writeFile(input.tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
     return { success: true }
   } catch (err) {
     return { success: false, error: String(err) }

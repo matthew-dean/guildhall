@@ -9,6 +9,7 @@ import {
   type Task,
 } from '@guildhall/core'
 import { logProgress } from './memory-tools.js'
+import { atomicWriteText } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-10 Escalation protocol
@@ -77,7 +78,7 @@ export async function raiseEscalation(
     task.updatedAt = now
     queue.lastUpdated = now
 
-    await fs.writeFile(input.tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
 
     if (input.progressPath) {
       const entry: ProgressEntry = {
@@ -177,7 +178,7 @@ export async function resolveEscalation(
     task.updatedAt = now
     queue.lastUpdated = now
 
-    await fs.writeFile(input.tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
 
     if (input.progressPath) {
       const entry: ProgressEntry = {

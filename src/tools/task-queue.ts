@@ -2,6 +2,7 @@ import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import { Task, TaskQueue, TaskStatus } from '@guildhall/core'
+import { atomicWriteText } from '@guildhall/sessions'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -90,7 +91,7 @@ export async function updateTask(input: UpdateTaskInput): Promise<UpdateTaskResu
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = new Date().toISOString()
 
-    await fs.writeFile(input.tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
     return { success: true }
   } catch (err) {
     return { success: false, error: String(err) }
@@ -140,7 +141,7 @@ export async function addTask(input: AddTaskInput): Promise<AddTaskResult> {
     })
     queue.tasks.push(newTask)
     queue.lastUpdated = new Date().toISOString()
-    await fs.writeFile(input.tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
     return { success: true, taskId: newTask.id }
   } catch (err) {
     return { success: false, error: String(err) }
