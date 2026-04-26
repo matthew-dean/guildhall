@@ -13,6 +13,9 @@ import {
   bootstrapWorkspace,
   readProjectConfig,
   updateProjectConfig,
+  readGlobalConfig,
+  updateGlobalConfig,
+  resolveConfig,
   FORGE_YAML_FILENAME,
   slugify,
   readGlobalProviders,
@@ -518,14 +521,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         )
       }
       if (preflight.providerName === 'llama-cpp' && creds.llamaCppUrl && project.config) {
-        const configuredModels = project.config.models ?? {}
-        const assignedModels: ModelAssignmentConfig = {
-          spec: configuredModels.spec ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.spec,
-          coordinator: configuredModels.coordinator ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.coordinator,
-          worker: configuredModels.worker ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.worker,
-          reviewer: configuredModels.reviewer ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.reviewer,
-          gateChecker: configuredModels.gateChecker ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.gateChecker,
-        }
+        const assignedModels = resolveConfig({ workspacePath: project.path }).models
         const loadedModels = await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
         if (loadedModels.length === 0) {
           return c.json(
@@ -544,7 +540,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             {
               error:
                 `LM Studio has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
-                'Save the LM Studio provider again or load the configured model before starting.',
+                'Load the configured model in LM Studio or choose a loaded model in Providers before starting.',
               code: 'model_unavailable',
               provider: 'llama-cpp',
               loadedModels,
@@ -2364,7 +2360,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         name,
         id,
         ...(subProjectPath ? { projectPath: subProjectPath } : existing?.projectPath ? { projectPath: existing.projectPath } : {}),
-        models: existing?.models ?? { ...DEFAULT_LOCAL_MODEL_ASSIGNMENT },
+        ...(existing?.models ? { models: existing.models } : {}),
         coordinators: existing?.coordinators ?? [],
         maxRevisions: existing?.maxRevisions ?? 3,
         heartbeatInterval: existing?.heartbeatInterval ?? 5,
@@ -2537,16 +2533,108 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (typeof body.lmStudioUrl === 'string' && body.lmStudioUrl.trim().length > 0) {
         const url = body.lmStudioUrl.trim()
         setProvider('llama-cpp', { url })
-        const loadedModels = await loadedLlamaModelIds(url).catch(() => [])
-        const loadedModel = loadedModels[0]
-        if (loadedModel) {
-          const workspace = readWorkspaceConfig(projectPath)
-          writeWorkspaceConfig(projectPath, {
-            ...workspace,
-            models: modelAssignmentForSingleModel(loadedModel),
-          })
-        }
       }
+      return c.json({ ok: true })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/config/models', async c => {
+    try {
+      const global = readGlobalConfig()
+      const workspace = readWorkspaceConfig(projectPath)
+      const resolved = resolveConfig({ workspacePath: projectPath })
+      const creds = resolveGlobalCredentials()
+      const loadedModels = creds.llamaCppUrl
+        ? await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
+        : []
+      const missingModels = loadedModels.length > 0
+        ? missingAssignedModels(resolved.models, loadedModels)
+        : []
+      return c.json({
+        globalModels: global.models ?? {},
+        projectModels: workspace.models ?? {},
+        effectiveModels: resolved.models,
+        loadedModels,
+        missingModels,
+        catalog: [
+          ...new Map(
+            [
+              ...loadedModels.map(id => ({
+                id,
+                provider: 'lm-studio',
+                notes: 'Loaded in LM Studio',
+              })),
+              ...MODEL_CATALOG.map(m => ({
+                id: m.id,
+                provider: m.provider,
+                notes: m.notes ?? '',
+              })),
+              ...Object.values(global.models ?? {}).map(id => ({
+                id,
+                provider: 'lm-studio',
+                notes: 'Global default',
+              })),
+              ...Object.values(workspace.models ?? {}).map(id => ({
+                id,
+                provider: 'lm-studio',
+                notes: 'Project override',
+              })),
+            ].map(item => [item.id, item]),
+          ).values(),
+        ],
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/config/models', async c => {
+    try {
+      const body = (await c.req.json().catch(() => ({}))) as {
+        scope?: 'global' | 'project' | 'global-default'
+        role?: keyof ModelAssignmentConfig
+        model?: string
+      }
+      const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker']
+      if (!body.scope) return c.json({ error: 'Missing "scope"' }, 400)
+      if (!body.role || !roles.includes(body.role)) return c.json({ error: 'Unknown model role' }, 400)
+
+      if (body.scope === 'global') {
+        const model = body.model?.trim()
+        if (!model) return c.json({ error: 'Missing "model"' }, 400)
+        const global = readGlobalConfig()
+        updateGlobalConfig({
+          ...global,
+          models: {
+            ...(global.models ?? {}),
+            [body.role]: model,
+          },
+        })
+        return c.json({ ok: true })
+      }
+
+      const workspace = readWorkspaceConfig(projectPath)
+      const nextModels = { ...(workspace.models ?? {}) }
+      if (body.scope === 'global-default') {
+        delete nextModels[body.role]
+      } else if (body.scope === 'project') {
+        const model = body.model?.trim()
+        if (!model) return c.json({ error: 'Missing "model"' }, 400)
+        nextModels[body.role] = model
+      } else {
+        return c.json({ error: 'Unknown model scope' }, 400)
+      }
+
+      const nextConfig = { ...workspace }
+      if (Object.keys(nextModels).length > 0) {
+        nextConfig.models = nextModels
+      } else {
+        delete nextConfig.models
+      }
+      writeWorkspaceConfig(projectPath, nextConfig)
+      project = resolveProject(project.path)
       return c.json({ ok: true })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)

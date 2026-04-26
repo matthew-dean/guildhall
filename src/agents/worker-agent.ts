@@ -81,6 +81,7 @@ export function createWorkerAgent(
     name: 'worker-agent',
     llm,
     systemPrompt: WORKER_AGENT_PROMPT,
+    maxTurns: 24,
     tools: [
       readFileTool,
       writeFileTool,

@@ -643,10 +643,10 @@ export function buildThread(opts: BuildThreadOptions): Thread {
             : taskStatus === 'ready'
               ? 'Ready for a worker.'
               : taskStatus === 'gate_check'
-                ? 'Gates are running.'
+                ? 'Gate checks are queued. Start the orchestrator to continue.'
                 : taskStatus === 'review'
-                  ? 'Review is running.'
-                  : 'Agent is working.'
+                  ? 'Review is queued. Start the orchestrator to continue.'
+                  : 'Worker is paused. Start the orchestrator to continue.'
       turns.push({
         kind: 'inflight',
         id: `inflight:${taskId}`,

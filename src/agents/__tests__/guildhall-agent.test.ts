@@ -346,6 +346,12 @@ describe('agent factories', () => {
     expect(a.name).toBe('worker-agent')
   })
 
+  it('createWorkerAgent gives coding tasks a larger turn budget', async () => {
+    const a = createWorkerAgent(llm)
+    expect((a as unknown as { engine: { getMaxTurns(): number | null } }).engine.getMaxTurns())
+      .toBe(24)
+  })
+
   it('createReviewerAgent', () => {
     const a = createReviewerAgent(llm)
     expect(a.name).toBe('reviewer-agent')
@@ -537,6 +543,40 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
     expect(reloader.totalUsage).toEqual({ input_tokens: 5, output_tokens: 3 })
   })
 
+  it('persists a recoverable snapshot when generate stops on max turns', async () => {
+    const client = new ScriptedApiClient([
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'tu-1', name: 'shell', input: { command: 'echo hi' } },
+          ],
+        },
+        usage: { input_tokens: 5, output_tokens: 3 },
+      },
+    ])
+    const agent = new GuildhallAgent({
+      name: 'persisting-error',
+      llm: { apiClient: client, modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [shellTool],
+      maxTurns: 1,
+      sessionPersistence: { cwd: projectCwd, sessionId: 'max-turn' },
+    })
+
+    await expect(agent.generate('run a command')).rejects.toThrow('Exceeded maximum turn limit (1)')
+
+    const reloader = new GuildhallAgent({
+      name: 'reload',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [shellTool],
+    })
+    expect(reloader.loadSession({ cwd: projectCwd, sessionId: 'max-turn' })).toBe(true)
+    expect(reloader.messages).toHaveLength(3)
+    expect(reloader.hasPendingContinuation()).toBe(true)
+  })
+
   it('loadSession returns false when no snapshot exists', () => {
     const agent = new GuildhallAgent({
       name: 'cold',
@@ -600,7 +640,7 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
     ])
     const resumer = new GuildhallAgent({
       name: 'resumer',
-      llm: { apiClient: client, modelId: 'test-model' },
+      llm: { apiClient: client, modelId: 'm' },
       systemPrompt: 'sys',
       tools: [shellTool],
     })
@@ -630,11 +670,34 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
 
     const reloader = new GuildhallAgent({
       name: 'reload',
-      llm: { apiClient: new ScriptedApiClient([]), modelId: 'm' },
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'test-model' },
       systemPrompt: '',
       tools: [],
     })
     expect(reloader.loadSession({ cwd: projectCwd, sessionId: 'manual-id' })).toBe(true)
     expect(reloader.messages).toHaveLength(2)
+  })
+
+  it('loadSession refuses snapshots saved for a different model', async () => {
+    const client = new ScriptedApiClient([
+      { message: assistantMsg('old-model reply'), usage: { input_tokens: 1, output_tokens: 1 } },
+    ])
+    const saver = new GuildhallAgent({
+      name: 'saver',
+      llm: { apiClient: client, modelId: 'old-model' },
+      systemPrompt: 'sys',
+      tools: [],
+      sessionPersistence: { cwd: projectCwd, sessionId: 'model-bound' },
+    })
+    await saver.generate('hello')
+
+    const reloader = new GuildhallAgent({
+      name: 'reload',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'new-model' },
+      systemPrompt: 'sys',
+      tools: [],
+    })
+    expect(reloader.loadSession({ cwd: projectCwd, sessionId: 'model-bound' })).toBe(false)
+    expect(reloader.messages).toHaveLength(0)
   })
 })

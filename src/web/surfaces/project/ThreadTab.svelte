@@ -515,6 +515,7 @@
       case 'ready': return 'Ready'
       case 'gate_check': return 'Gates'
       case 'review': return 'Review'
+      case 'in_progress': return turn.liveAgent ? 'In flight' : 'Paused'
       default: return 'In flight'
     }
   }

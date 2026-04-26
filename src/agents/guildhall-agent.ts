@@ -155,16 +155,19 @@ export class GuildhallAgent {
    * the full message list and usage snapshot.
    */
   async generate(prompt: string): Promise<GenerateResult> {
-    for await (const _event of this.engine.submitMessage(prompt)) {
-      void _event
+    try {
+      for await (const _event of this.engine.submitMessage(prompt)) {
+        void _event
+      }
+    } finally {
+      // Persist even on max-turn/API/tool failures. runQuery mutates the
+      // engine history as it goes, so a crash or restart can still recover
+      // the last coherent turn rather than silently dropping progress.
+      this.persistSession()
     }
     const messages = this.engine.messages
     const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
     const text = lastAssistant ? extractText(lastAssistant) : ''
-    // FR-20: persist a fresh snapshot at the turn boundary. Failures here are
-    // logged but never propagate — snapshotting is best-effort; the caller
-    // already has the in-memory result.
-    this.persistSession()
     return {
       text,
       messages,
@@ -208,6 +211,7 @@ export class GuildhallAgent {
       ? loadSessionById(opts.cwd, opts.sessionId)
       : loadSessionSnapshot(opts.cwd)
     if (!snapshot) return false
+    if (snapshot.model && snapshot.model !== this.engine.getModel()) return false
     this.engine.loadMessages(snapshot.messages)
     this.engine.loadUsage(snapshot.usage)
     this.engine.loadToolMetadata(snapshot.tool_metadata)
