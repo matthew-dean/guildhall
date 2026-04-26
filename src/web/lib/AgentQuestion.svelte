@@ -255,7 +255,7 @@
   .prompt {
     margin: 0;
     font-size: var(--fs-3);
-    font-weight: 600;
+    font-weight: 400;
     line-height: var(--lh-tight);
     color: var(--text);
   }
@@ -272,6 +272,7 @@
     padding: var(--s-2) var(--s-3);
     font: inherit;
     font-size: var(--fs-2);
+    font-weight: 400;
     cursor: pointer;
     display: grid;
     grid-template-columns: 18px minmax(0, 1fr);
@@ -323,8 +324,13 @@
     gap: 2px;
   }
   .choice-title {
-    font-weight: 650;
+    font-weight: 400;
     line-height: var(--lh-tight);
+  }
+  .choice-title :global(strong),
+  .choice-detail :global(strong),
+  .prompt :global(strong) {
+    font-weight: 700;
   }
   .choice-title :global(.md),
   .choice-detail :global(.md),
