@@ -1,16 +1,16 @@
 <!--
-  Thread — the linear "structured chat" surface.
+  Thread — the linear structured interaction surface.
 
   This is the home of the project: a chronological transcript of interaction
   cards between the user and the agent collective. Past turns scroll up as
   read-only context; the bottom of the feed always carries the single active
   turn (or "all caught up" if none open).
 
-  The mental model is a chat thread, but each "message" is a deterministic
-  interaction card with a specific affordance — confirm/approve, yes/no,
-  multiple-choice, free-text, or a link to a richer surface (provider page,
-  bootstrap pane). This bridges from the chat-with-LLM pattern users already
-  know to the multi-agent harness model.
+  The mental model is a project log of structured interactions. Cards have
+  specific affordances — confirm/approve, yes/no, multiple-choice, free-text,
+  or a link to a richer surface (provider page, bootstrap pane). Direct agent
+  notes are scoped interventions for a specific task, not an always-additive
+  chat transcript.
 
   Setup steps appear here as the FIRST turns ("intake-agent" persona). Brief
   approvals, agent questions, spec reviews, and escalations are subsequent
@@ -539,7 +539,7 @@
 <div class="thread">
   <header class="thread-head">
     <h1>Thread</h1>
-    <p class="lede">Where the agents and you talk. Older turns scroll up; the active turn is at the bottom.</p>
+    <p class="lede">Structured project interactions: decisions, questions, and live agent updates. Active work stays near the bottom.</p>
   </header>
 
   {#if !loaded}
