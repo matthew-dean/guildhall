@@ -385,6 +385,7 @@ function phaseForTurn(turn: ThreadTurn): TurnPhase {
 }
 
 function friendlyAgentName(agentName: string | undefined): string {
+  if (agentName?.startsWith('coordinator-')) return 'Coordinator'
   switch (agentName) {
     case 'spec-agent': return 'Spec author'
     case 'worker-agent': return 'Worker'
@@ -395,6 +396,7 @@ function friendlyAgentName(agentName: string | undefined): string {
 }
 
 function personaForAgent(agentName: string | undefined): TurnPersona | null {
+  if (agentName?.startsWith('coordinator-')) return 'coord'
   switch (agentName) {
     case 'spec-agent': return 'spec'
     case 'worker-agent': return 'worker'

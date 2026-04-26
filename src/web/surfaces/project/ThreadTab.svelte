@@ -506,6 +506,7 @@
 
   function taskStateLabel(turn: InFlightTurn): string {
     if (turn.liveAgent?.name === 'spec-agent') return 'Spec'
+    if (turn.liveAgent?.name.startsWith('coordinator-')) return 'Ready'
     if (turn.liveAgent?.name === 'worker-agent') return 'In flight'
     if (turn.liveAgent?.name === 'reviewer-agent') return 'Review'
     if (turn.liveAgent?.name === 'gate-checker-agent') return 'Gates'
