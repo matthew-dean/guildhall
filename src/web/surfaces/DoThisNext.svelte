@@ -140,10 +140,16 @@
     moreHref: string
   }
 
+  const prescribedItems = $derived.by(() => items.map(item => ({ item, prescription: prescribe(item) })))
+  const topItemIsCurrentPage = $derived(
+    prescribedItems[0]
+      ? routeOnly(prescribedItems[0].prescription.href) === path.value
+      : false,
+  )
   const visibleItems = $derived.by(() =>
-    items
-      .map(item => ({ item, prescription: prescribe(item) }))
-      .filter(({ prescription }) => routeOnly(prescription.href) !== path.value),
+    topItemIsCurrentPage
+      ? []
+      : prescribedItems.filter(({ prescription }) => routeOnly(prescription.href) !== path.value),
   )
   const source = $derived<TopSource | null>(
     visibleItems[0]

@@ -98,6 +98,11 @@
     configured: boolean
     active?: string
   }
+  interface SetupProvider {
+    detected?: boolean
+    verifiedAt?: string | null
+    detail?: string
+  }
   let providerStatus = $state<ProviderStatus | null>(null)
 
   $effect(() => {
@@ -120,13 +125,20 @@
       .then(r => r.json())
       .then(j => (designSystem = j?.designSystem ?? null))
       .catch(() => (designSystem = null))
-    fetch('/api/providers/status')
+    fetch('/api/setup/providers')
       .then(r => (r.ok ? r.json() : null))
       .then(j => {
         if (!j) return
+        const preferred = typeof j.preferredProvider === 'string' ? j.preferredProvider : null
+        const providers = (j.providers ?? {}) as Record<string, SetupProvider>
+        const preferredInfo = preferred ? providers[preferred] : null
+        const active =
+          preferred && (preferredInfo?.detected || preferredInfo?.verifiedAt)
+            ? preferred
+            : Object.entries(providers).find(([, p]) => p.detected || p.verifiedAt)?.[0]
         providerStatus = {
-          configured: Boolean(j?.configured ?? j?.active),
-          active: j?.active,
+          configured: Boolean(active),
+          ...(active ? { active } : {}),
         }
       })
       .catch(() => (providerStatus = { configured: false }))
@@ -163,6 +175,37 @@
     const gateList = gates.length > 0 ? gates.join(', ') : 'no gates'
     return `Bootstrap verified (${pm}): ${gateList}`
   }
+
+  function bootstrapOutputLine(output: string): string | null {
+    const lines = output
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line =>
+        line.length > 0 &&
+        !line.startsWith('>') &&
+        !line.startsWith('Scope:') &&
+        !line.startsWith(' ERR_PNPM_') &&
+        !line.startsWith(' ELIFECYCLE'),
+      )
+    return lines.find(line => /\berror\b|failed|Cannot find module|command not found|spawn ENOENT/i.test(line)) ?? lines[0] ?? null
+  }
+
+  const failedBootstrapStep = $derived(
+    bootstrapInfo?.status?.success === false
+      ? bootstrapInfo.status.steps.find(s => s.result === 'fail') ?? null
+      : null,
+  )
+  const failedBootstrapSummary = $derived.by(() => {
+    const step = failedBootstrapStep
+    if (!step) return null
+    const line = bootstrapOutputLine(step.output)
+    return line ? `${step.command} exited ${step.exitCode}: ${line}` : `${step.command} exited ${step.exitCode}.`
+  })
+  const failedBootstrapOutput = $derived.by(() => {
+    const step = failedBootstrapStep
+    if (!step) return []
+    return step.output.split(/\r?\n/)
+  })
 
   async function runBootstrap() {
     if (bootstrapRunning) return
@@ -296,7 +339,7 @@
           />
           {#if !bootstrapReady}
             <button type="button" class="linkbtn" onclick={runBootstrap} disabled={bootstrapRunning}>
-              {bootstrapRunning ? 'Running…' : 'Configure →'}
+              {bootstrapRunning ? 'Running…' : 'Run again →'}
             </button>
           {/if}
           {#if bootstrapError}
@@ -394,6 +437,13 @@
               )}
               maxHeight="200px"
             />
+          {/if}
+
+          {#if failedBootstrapSummary}
+            <div class="failure-detail" role="alert">
+              <strong>{failedBootstrapSummary}</strong>
+              <LogViewer lines={failedBootstrapOutput} maxHeight="260px" />
+            </div>
           {/if}
 
           <Row justify="end">
@@ -617,6 +667,21 @@
     background: color-mix(in srgb, var(--danger) 15%, transparent);
     border-color: var(--danger);
     color: var(--danger);
+  }
+  .failure-detail {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    border: 1px solid var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+    color: var(--text);
+    border-radius: var(--r-2);
+    padding: var(--s-3);
+  }
+  .failure-detail strong {
+    color: var(--danger);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
   }
   .coord-list {
     display: flex;

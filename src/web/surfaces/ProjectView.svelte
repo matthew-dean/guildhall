@@ -319,7 +319,9 @@
     needsMeta
       ? 'Bootstrap the project first'
       : blockers.bootstrap
-        ? 'Complete bootstrap in Thread before adding tasks'
+        ? failedBootstrapStep
+          ? 'Fix the bootstrap failure before adding tasks'
+          : 'Complete bootstrap in Thread before adding tasks'
         : null,
   )
 </script>

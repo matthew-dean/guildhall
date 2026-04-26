@@ -157,6 +157,12 @@ correct the agent, and ask for direct action from Thread.
   bootstrap, and stopped because the test project build failed. Fixed the shell
   and Inbox to surface the failed bootstrap gate from `memory/bootstrap.json`
   instead of leaving the user to infer it from a stopped run.
+- Ready still made the blocker harder to act on: it hid command output, skipped
+  to policy levers in the "Do this next" banner, and read provider status from
+  a non-existent endpoint. Fixed Ready so it shows llama.cpp as configured,
+  shows the failed command output inline, labels the bootstrap action "Run
+  again", and suppresses lower-priority nudges while the top inbox item is
+  already the current page.
 
 ## Verification Log
 
@@ -196,6 +202,10 @@ correct the agent, and ask for direct action from Thread.
   `ts-jsdoc-sync` resolves. Build and tests now pass, but bootstrap is still
   blocked by lint because `packages/extension` calls `oxlint` and the tool is
   not installed.
+- Browser check at `/settings/ready` now shows New Task disabled as "Fix the
+  bootstrap failure before adding tasks", LLM provider as `llama-cpp`, inline
+  failed-output detail for `pnpm run lint`, and no lower-priority policy-lever
+  banner above the active bootstrap failure.
 
 ## Resume Notes
 
@@ -213,6 +223,6 @@ correct the agent, and ask for direct action from Thread.
   exact files/directories to remove.
 - After source changes, run `pnpm build` in Guildhall before testing the linked
   package from `t-minus-t`.
-- Next likely check: verify the new bootstrap-failure banner in the browser,
-  then decide whether the test project should add/fix `ts-jsdoc-sync` before
-  continuing the task through spec review and execution.
+- Next likely check: install/add `oxlint` to the test project if the user
+  approves package installation, rerun bootstrap, and continue the task through
+  spec review and execution.
