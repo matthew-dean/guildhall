@@ -99,6 +99,32 @@ describe('updateTask', () => {
     expect(raw.tasks[0].notes[0].timestamp).toBeDefined()
   })
 
+  it('updates the task spec and acceptance criteria', async () => {
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      spec: '## Summary\nBuild the thing.',
+      acceptanceCriteria: [
+        {
+          id: 'ac-1',
+          description: 'Build passes',
+          verifiedBy: 'pnpm test',
+        },
+      ],
+    })
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].spec).toContain('Build the thing')
+    expect(raw.tasks[0].acceptanceCriteria).toEqual([
+      {
+        id: 'ac-1',
+        description: 'Build passes',
+        verifiedBy: 'automated',
+        command: 'pnpm test',
+        met: false,
+      },
+    ])
+  })
+
   it('updates updatedAt timestamp', async () => {
     const before = seedQueue.tasks[0]!.updatedAt
     await new Promise((r) => setTimeout(r, 5))

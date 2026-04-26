@@ -1,7 +1,7 @@
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
-import { Task, TaskQueue, TaskStatus } from '@guildhall/core'
+import { AcceptanceCriteria, Task, TaskQueue, TaskStatus } from '@guildhall/core'
 import { atomicWriteText } from '@guildhall/sessions'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
@@ -64,6 +64,8 @@ const updateTaskInputSchema = z.object({
     .optional(),
   blockReason: z.string().optional(),
   humanJudgment: z.string().optional(),
+  spec: z.string().optional(),
+  acceptanceCriteria: z.array(AcceptanceCriteria).optional(),
   completedAt: z.string().optional(),
 })
 
@@ -84,6 +86,10 @@ export async function updateTask(input: UpdateTaskInput): Promise<UpdateTaskResu
     if (input.assignedTo !== undefined) task.assignedTo = input.assignedTo
     if (input.blockReason !== undefined) task.blockReason = input.blockReason
     if (input.humanJudgment !== undefined) task.humanJudgment = input.humanJudgment
+    if (input.spec !== undefined) task.spec = input.spec
+    if (input.acceptanceCriteria !== undefined) {
+      task.acceptanceCriteria = z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
+    }
     if (input.completedAt !== undefined) task.completedAt = input.completedAt
     if (input.note) {
       task.notes.push({ ...input.note, timestamp: new Date().toISOString() })
@@ -101,7 +107,7 @@ export async function updateTask(input: UpdateTaskInput): Promise<UpdateTaskResu
 export const updateTaskTool = defineTool({
   name: 'update-task',
   description:
-    "Update a task's status. Optionally add an agent note. Use this to transition tasks through the lifecycle.",
+    "Update a task's status, spec, acceptance criteria, assignment, or notes. Use this to transition tasks through the lifecycle.",
   inputSchema: updateTaskInputSchema,
   jsonSchema: { type: 'object' },
   isReadOnly: () => false,

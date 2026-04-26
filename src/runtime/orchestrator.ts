@@ -1289,6 +1289,20 @@ export class Orchestrator {
   private selectAgent(task: Task):
     | { kind: 'agent'; agent: OrchestratorAgent; promptSuffix: string }
     | { kind: 'no-coordinator' } {
+    if (
+      task.id !== META_INTAKE_TASK_ID &&
+      (task.status === 'ready' || task.status === 'in_progress') &&
+      !task.spec?.trim()
+    ) {
+      return {
+        kind: 'agent',
+        agent: this.opts.agents.spec,
+        promptSuffix:
+          "This task advanced without a saved spec. Do not implement it yet. " +
+          "Write the implementation spec into the task spec via update-task, then set status to 'spec_review' so the coordinator can review it.",
+      }
+    }
+
     switch (task.status) {
       case 'exploring':
         return {
@@ -1301,14 +1315,18 @@ export class Orchestrator {
             "update-task tool to set status to 'spec_review'.",
         }
       case 'spec_review': {
-        if (task.id === META_INTAKE_TASK_ID && !task.spec) {
+        if (!task.spec?.trim()) {
           return {
             kind: 'agent',
             agent: this.opts.agents.spec,
             promptSuffix:
-              "The meta-intake task reached spec_review, but its spec field is empty. " +
-              "Write the full coordinator, lever, and bootstrap YAML draft into the task spec via update-task. " +
-              "If you emit the draft in your final text, include all YAML fences so the orchestrator can recover it.",
+              task.id === META_INTAKE_TASK_ID
+                ? "The meta-intake task reached spec_review, but its spec field is empty. " +
+                  "Write the full coordinator, lever, and bootstrap YAML draft into the task spec via update-task. " +
+                  "If you emit the draft in your final text, include all YAML fences so the orchestrator can recover it."
+                : "This task reached spec_review, but its spec field is empty. " +
+                  "Write the implementation spec into the task spec via update-task before any coordinator or worker proceeds. " +
+                  "Do not transition out of spec_review until the spec field is populated.",
           }
         }
         const coord = this.opts.agents.coordinators[task.domain]
