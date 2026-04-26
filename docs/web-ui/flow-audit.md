@@ -174,6 +174,14 @@ correct the agent, and ask for direct action from Thread.
   passed: 3 files, 60 tests.
 - `pnpm typecheck` passed.
 - `pnpm build` passed with existing Svelte warnings.
+- Browser walkthrough exposed another in-progress clarity gap: after Start,
+  `agent_started` was emitted but Thread still showed only the active brief
+  approval card, so a user could not tell the spec agent was in a model call.
+  Added `liveAgent` to brief/question turns and render the same pulsing
+  "Model call in progress" line on active interaction cards.
+- `pnpm vitest run src/runtime/__tests__/serve-providers.test.ts src/runtime/__tests__/wire-events.test.ts`
+  passed: 29 tests.
+- `pnpm build` passed again with existing Svelte warnings.
 - `pnpm docs:extract-help` generated `guide.coordinators` in
   `src/web/generated/help-topics.json`.
 - `pnpm vitest run src/runtime/__tests__/serve-meta-intake.test.ts` passed: 9
@@ -216,6 +224,24 @@ correct the agent, and ask for direct action from Thread.
 - Browser check at `/thread` after Start now shows "Spec author is working on
   this now" and "Model call in progress" while `task-003` is inside the
   spec-agent LLM call.
+- The model call later exhausted its step budget and restarted without making
+  visible spec progress. Root cause found: `guildhall.yaml` still referenced
+  default `qwen2.5-coder-*` role models while LM Studio only had
+  `qwen/qwen3.6-35b-a3b` loaded. Patched Guildhall so saving LM Studio copies
+  the loaded model into the workspace role assignments, and Start now fails
+  fast if LM Studio does not have the configured project model loaded.
+- `pnpm vitest run src/runtime/__tests__/serve-providers.test.ts` passed: 18
+  tests, including the new model mismatch preflight.
+- Browser walkthrough exposed a choice-question bug: the spec question asked
+  "which of these should support?" but rendered as "Pick one"; clicking the
+  first option immediately answered and removed the question. Added explicit
+  `selectionMode` support to agent questions, taught the spec-agent prompt to
+  say `selectionMode: 'multiple'` for pick-all choices, and added a UI fallback
+  so older "which of these should..." prompts render as multi-select.
+- `pnpm typecheck` passed.
+- `pnpm vitest run src/runtime/__tests__/serve-providers.test.ts src/core/__tests__/models.test.ts`
+  passed: 40 tests.
+- `pnpm build` passed with existing Svelte warnings.
 
 ## Resume Notes
 
@@ -234,5 +260,10 @@ correct the agent, and ask for direct action from Thread.
 - After source changes, run `pnpm build` in Guildhall before testing the linked
   package from `t-minus-t`.
 - Next likely check: wait for the spec-agent call to finish. If it remains
-  stuck, surface model-call duration / provider latency in Thread, then either
-  stop/restart the run or ask whether to switch providers/models.
+  stuck, check whether LM Studio is actually generating tokens for the loaded
+  model. The app now catches model-id mismatches before starting.
+- The accidental "Primitive types" answer on `task-003` was corrected via
+  `/api/project/task/task-003/answer-questions`: primitives, union types, array
+  types, object literal types, and generic types; arrow functions left out for
+  a later task. The run was restarted and Thread now shows "Model call in
+  progress" on the active brief card while the spec agent is inside LM Studio.

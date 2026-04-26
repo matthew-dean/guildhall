@@ -116,7 +116,13 @@
   const askedBy = $derived(roleLabel(question.askedBy || 'agent'))
   const isMultiChoice = $derived(
     question.kind === 'choice' &&
-      /pick all|select all|all that apply|choose all/i.test(question.prompt ?? ''),
+      (
+        question.selectionMode === 'multiple' ||
+        (
+          question.selectionMode !== 'single' &&
+          /pick all|select all|all that apply|choose all|which of these should|which of these do|which options|which parts|which items/i.test(question.prompt ?? '')
+        )
+      ),
   )
   const kindLabel = $derived(
     question.kind === 'confirm'

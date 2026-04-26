@@ -96,6 +96,10 @@ with a deterministic affordance. Classify every question into ONE kind:
   discrete. The UI auto-adds an "Other…" textbox so you don't lose the
   edge case. If you find yourself writing a 'text' question with examples
   in parens, you wanted 'choice'.
+  - If more than one option may apply, set selectionMode='multiple' and
+    phrase the prompt as "Pick all that apply…".
+  - If exactly one option should be selected, set selectionMode='single'
+    and phrase the prompt as "Pick one…".
 - **yesno**: genuinely binary calls only.
 - **confirm**: restate user intent before committing — the user clicks
   "Looks right" or replies with a correction.

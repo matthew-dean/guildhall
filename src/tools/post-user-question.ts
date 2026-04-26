@@ -44,6 +44,10 @@ const postUserQuestionInputSchema = z.object({
     .max(6)
     .optional()
     .describe('Required when kind=choice. 2-6 options.'),
+  selectionMode: z
+    .enum(['single', 'multiple'])
+    .optional()
+    .describe('For kind=choice: single means pick one; multiple means pick all that apply.'),
 })
 
 export type PostUserQuestionInput = z.input<typeof postUserQuestionInputSchema>
@@ -81,6 +85,7 @@ export async function postUserQuestion(
                 askedAt: now,
                 prompt: input.body,
                 choices: input.choices!,
+                ...(input.selectionMode ? { selectionMode: input.selectionMode } : {}),
               }
             : { kind: 'text' as const, id, askedBy: input.askedBy, askedAt: now, prompt: input.body }
 
@@ -99,7 +104,7 @@ export async function postUserQuestion(
 export const postUserQuestionTool = defineTool({
   name: 'post-user-question',
   description:
-    "Post an asynchronous structured question to the user on this task. Use this whenever you need human judgment to proceed — the question lands in the user's Thread feed with a kind-specific affordance, and you should yield (end your turn) so the orchestrator can resume you when an answer arrives. PREFER `kind: 'choice'` whenever the answer space is small and discrete (it always degrades to Other… free-text). Use `confirm` to restate intent before committing. Use `yesno` only for genuinely binary calls. Use `text` sparingly — usually a multiple choice with the question phrased as the prompt is better. NEVER bury questions in productBrief.userJob — that field is for what you think the user wants, not for asking them.",
+    "Post an asynchronous structured question to the user on this task. Use this whenever you need human judgment to proceed — the question lands in the user's Thread feed with a kind-specific affordance, and you should yield (end your turn) so the orchestrator can resume you when an answer arrives. PREFER `kind: 'choice'` whenever the answer space is small and discrete (it always degrades to Other… free-text). For choice questions, set `selectionMode: 'multiple'` when more than one answer may apply; otherwise set `selectionMode: 'single'` or omit it. Use `confirm` to restate intent before committing. Use `yesno` only for genuinely binary calls. Use `text` sparingly — usually a multiple choice with the question phrased as the prompt is better. NEVER bury questions in productBrief.userJob — that field is for what you think the user wants, not for asking them.",
   inputSchema: postUserQuestionInputSchema,
   jsonSchema: { type: 'object' },
   isReadOnly: () => false,

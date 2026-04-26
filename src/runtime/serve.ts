@@ -23,7 +23,7 @@ import {
   migrateProjectProvidersToGlobal,
   type ProviderKind,
 } from '@guildhall/config'
-import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
+import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT, type ModelAssignmentConfig } from '@guildhall/core'
 import {
   loadLeverSettings,
   saveLeverSettings,
@@ -437,6 +437,48 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  async function loadedLlamaModelIds(url: string, timeoutMs = 1500): Promise<string[]> {
+    const trimmed = url.trim().replace(/\/$/, '')
+    if (!trimmed) return []
+    const res = await fetch(`${trimmed}/models`, { signal: AbortSignal.timeout(timeoutMs) })
+    if (!res.ok) return []
+    const body = (await res.json().catch(() => ({}))) as { data?: Array<{ id?: unknown }> }
+    return [
+      ...new Set(
+        (body.data ?? [])
+          .map(model => model.id)
+          .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+          .map(id => id.trim()),
+      ),
+    ]
+  }
+
+  function modelAssignmentForSingleModel(modelId: string): ModelAssignmentConfig {
+    return {
+      spec: modelId,
+      coordinator: modelId,
+      worker: modelId,
+      reviewer: modelId,
+      gateChecker: modelId,
+    }
+  }
+
+  function missingAssignedModels(
+    assignment: ModelAssignmentConfig,
+    loadedModels: string[],
+  ): string[] {
+    const loaded = new Set(loadedModels)
+    return [
+      ...new Set([
+        assignment.spec,
+        assignment.coordinator,
+        assignment.worker,
+        assignment.reviewer,
+        assignment.gateChecker,
+      ].filter(model => !loaded.has(model))),
+    ]
+  }
+
   app.post('/api/project/start', async c => {
     try {
       if (project.initializationNeeded) {
@@ -474,6 +516,43 @@ export function buildServeApp(opts: ServeOptions = {}): {
           },
           400,
         )
+      }
+      if (preflight.providerName === 'llama-cpp' && creds.llamaCppUrl && project.config) {
+        const configuredModels = project.config.models ?? {}
+        const assignedModels: ModelAssignmentConfig = {
+          spec: configuredModels.spec ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.spec,
+          coordinator: configuredModels.coordinator ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.coordinator,
+          worker: configuredModels.worker ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.worker,
+          reviewer: configuredModels.reviewer ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.reviewer,
+          gateChecker: configuredModels.gateChecker ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.gateChecker,
+        }
+        const loadedModels = await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
+        if (loadedModels.length === 0) {
+          return c.json(
+            {
+              error:
+                'LM Studio is reachable, but Guildhall could not see a loaded model. Load a model in LM Studio, then start again.',
+              code: 'no_loaded_model',
+              provider: 'llama-cpp',
+            },
+            400,
+          )
+        }
+        const missingModels = missingAssignedModels(assignedModels, loadedModels)
+        if (missingModels.length > 0) {
+          return c.json(
+            {
+              error:
+                `LM Studio has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
+                'Save the LM Studio provider again or load the configured model before starting.',
+              code: 'model_unavailable',
+              provider: 'llama-cpp',
+              loadedModels,
+              missingModels,
+            },
+            400,
+          )
+        }
       }
       const run = supervisor.start({ workspaceId: project.id, workspacePath: project.path })
       return c.json({
@@ -2413,7 +2492,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
         setProvider('openai-api', { apiKey: body.openaiApiKey.trim() })
       }
       if (typeof body.lmStudioUrl === 'string' && body.lmStudioUrl.trim().length > 0) {
-        setProvider('llama-cpp', { url: body.lmStudioUrl.trim() })
+        const url = body.lmStudioUrl.trim()
+        setProvider('llama-cpp', { url })
+        const loadedModels = await loadedLlamaModelIds(url).catch(() => [])
+        const loadedModel = loadedModels[0]
+        if (loadedModel) {
+          const workspace = readWorkspaceConfig(projectPath)
+          writeWorkspaceConfig(projectPath, {
+            ...workspace,
+            models: modelAssignmentForSingleModel(loadedModel),
+          })
+        }
       }
       return c.json({ ok: true })
     } catch (err) {

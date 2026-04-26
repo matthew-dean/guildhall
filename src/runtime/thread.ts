@@ -87,6 +87,7 @@ export interface BriefTurn extends TurnBase {
     rolloutPlan?: string | undefined
     authoredBy?: string | undefined
   }
+  liveAgent?: { name: string; startedAt?: string | undefined } | undefined
   approvedAt?: string | null | undefined
 }
 
@@ -99,6 +100,7 @@ export interface AgentQuestionTurn extends TurnBase {
   kind: 'agent_question'
   taskId: string
   taskTitle: string
+  liveAgent?: { name: string; startedAt?: string | undefined } | undefined
   // Mirrors AgentQuestion union from src/core/task.ts; kept loose here so the
   // server doesn't have to re-import the zod schema for projection.
   question: {
@@ -111,6 +113,7 @@ export interface AgentQuestionTurn extends TurnBase {
     restatement?: string | undefined
     prompt?: string | undefined
     choices?: string[] | undefined
+    selectionMode?: 'single' | 'multiple' | undefined
   }
 }
 
@@ -492,6 +495,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         }
       | undefined
     const approvedAt = brief && typeof brief === 'object' ? brief.approvedAt ?? null : null
+    const liveAgent = liveAgents.get(taskId)
     if (brief && typeof brief === 'object') {
       const briefStillNeedsHuman = !approvedAt && taskStatus === 'exploring'
       const status: TurnStatus = !briefStillNeedsHuman
@@ -517,6 +521,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
           rolloutPlan: brief.rolloutPlan,
           authoredBy: brief.authoredBy,
         },
+        liveAgent,
         approvedAt,
       })
     }
@@ -547,6 +552,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         phase: status === 'done' ? 'done' : 'intake',
         taskId,
         taskTitle,
+        liveAgent,
         question: {
           kind: (q.kind as 'confirm' | 'yesno' | 'choice' | 'text') ?? 'text',
           id: qid,
@@ -558,6 +564,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
           prompt: typeof q.prompt === 'string' ? q.prompt : undefined,
           choices: Array.isArray(q.choices)
             ? (q.choices as unknown[]).filter((c): c is string => typeof c === 'string')
+            : undefined,
+          selectionMode: q.selectionMode === 'single' || q.selectionMode === 'multiple'
+            ? q.selectionMode
             : undefined,
         },
       })
@@ -604,7 +613,6 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     ) {
       const status: TurnStatus = !activeAssigned ? 'active' : 'pending'
       if (status === 'active') activeAssigned = true
-      const liveAgent = liveAgents.get(taskId)
       const summary =
         liveAgent
           ? `${friendlyAgentName(liveAgent.name)} is working on this now.`

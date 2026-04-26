@@ -34,7 +34,7 @@ export interface ProductBrief {
 export type AgentQuestion =
   | { kind: 'confirm'; id: string; askedBy: string; askedAt: string; restatement: string; answeredAt?: string; answer?: string }
   | { kind: 'yesno'; id: string; askedBy: string; askedAt: string; prompt: string; answeredAt?: string; answer?: string }
-  | { kind: 'choice'; id: string; askedBy: string; askedAt: string; prompt: string; choices: string[]; answeredAt?: string; answer?: string }
+  | { kind: 'choice'; id: string; askedBy: string; askedAt: string; prompt: string; choices: string[]; selectionMode?: 'single' | 'multiple' | undefined; answeredAt?: string; answer?: string }
   | { kind: 'text'; id: string; askedBy: string; askedAt: string; prompt: string; answeredAt?: string; answer?: string }
 
 export interface AcceptanceCriterion {

@@ -248,6 +248,8 @@ export const AgentQuestion = z.discriminatedUnion('kind', [
     ...AgentQuestionBase,
     kind: z.literal('choice'),
     prompt: z.string(),
+    /** Single-choice by default; multiple means checkbox-style selection. */
+    selectionMode: z.enum(['single', 'multiple']).optional(),
     /** Must be 2..6 short labels. UI also surfaces an "Other…" textbox. */
     choices: z.array(z.string()).min(2).max(6),
   }),

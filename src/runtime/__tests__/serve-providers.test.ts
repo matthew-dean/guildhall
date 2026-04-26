@@ -12,7 +12,7 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => TMP_HOME }
 })
 
-const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath } =
+const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig } =
   await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
 
@@ -30,6 +30,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.unstubAllGlobals()
   if (existsSync(TMP_HOME)) rmSync(TMP_HOME, { recursive: true, force: true })
   await fs.rm(tmpProject, { recursive: true, force: true })
 })
@@ -98,6 +99,38 @@ describe('POST /api/setup/providers/config', () => {
     // Project config records the selection.
     const raw = await fs.readFile(path.join(tmpProject, '.guildhall', 'config.yaml'), 'utf8')
     expect(raw).toMatch(/preferredProvider:\s*anthropic-api/)
+  })
+
+  it('updates local role models to the loaded LM Studio model when saving llama-cpp', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ data: [{ id: 'qwen/qwen3.6-35b-a3b' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request('http://localhost/api/setup/providers/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          preferredProvider: 'llama-cpp',
+          lmStudioUrl: 'http://localhost:1234/v1',
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const workspace = readWorkspaceConfig(tmpProject)
+    expect(workspace.models).toEqual({
+      spec: 'qwen/qwen3.6-35b-a3b',
+      coordinator: 'qwen/qwen3.6-35b-a3b',
+      worker: 'qwen/qwen3.6-35b-a3b',
+      reviewer: 'qwen/qwen3.6-35b-a3b',
+      gateChecker: 'qwen/qwen3.6-35b-a3b',
+    })
   })
 
   it('rejects unknown preferredProvider values', async () => {
@@ -197,6 +230,29 @@ describe('POST /api/project/start preflight', () => {
     } finally {
       await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
     }
+  })
+
+  it('rejects start when LM Studio does not have the configured project model loaded', async () => {
+    setProvider('llama-cpp', { url: 'http://localhost:1234/v1' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ data: [{ id: 'qwen/qwen3.6-35b-a3b' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/start', { method: 'POST' }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { code?: string; error?: string; loadedModels?: string[]; missingModels?: string[] }
+    expect(body.code).toBe('model_unavailable')
+    expect(body.error).toMatch(/LM Studio/)
+    expect(body.loadedModels).toContain('qwen/qwen3.6-35b-a3b')
+    expect(body.missingModels).toContain('qwen2.5-coder-32b-instruct')
   })
 })
 

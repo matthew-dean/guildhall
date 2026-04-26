@@ -57,17 +57,20 @@
       userJob?: string; successMetric?: string; successCriteria?: string
       antiPatterns?: string[]; rolloutPlan?: string; authoredBy?: string
     }
+    liveAgent?: { name: string; startedAt?: string | undefined } | undefined
     approvedAt?: string | null
   }
   interface AgentQuestionTurn {
     kind: 'agent_question'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string
+    liveAgent?: { name: string; startedAt?: string | undefined } | undefined
     question: {
       kind: 'confirm' | 'yesno' | 'choice' | 'text'
       id: string; askedBy: string; askedAt: string
       answeredAt?: string; answer?: string
       restatement?: string; prompt?: string; choices?: string[]
+      selectionMode?: 'single' | 'multiple' | undefined
     }
   }
   interface SpecReviewTurn {
@@ -236,7 +239,11 @@
   }
 
   function isWorkingTurn(t: Turn): boolean {
-    return t.status === 'active' && t.kind === 'inflight'
+    return t.status === 'active' && (t.kind === 'inflight' || Boolean(turnLiveAgent(t)))
+  }
+
+  function turnLiveAgent(t: Turn): { name: string; startedAt?: string | undefined } | undefined {
+    return 'liveAgent' in t ? t.liveAgent : undefined
   }
 
   const phaseGroups = $derived.by(() => phaseOrder
@@ -578,6 +585,12 @@
                   </button>
                 {/if}
               </div>
+              {#if t.status === 'active' && turnLiveAgent(t)}
+                <div class="live-agent">
+                  <StatusLight tone="running" pulse={true} />
+                  <span>Model call in progress</span>
+                </div>
+              {/if}
 
               {#if t.kind === 'setup_step'}
                 <h3 class="prompt"><Markdown source={t.title} inline /></h3>
@@ -845,12 +858,6 @@
               {:else if t.kind === 'inflight'}
                 <h3 class="prompt">{taskStateLabel(t)}</h3>
                 <p class="why">{t.summary}</p>
-                {#if t.liveAgent}
-                  <div class="live-agent">
-                    <StatusLight tone="running" pulse={true} />
-                    <span>Model call in progress</span>
-                  </div>
-                {/if}
                 {#if t.checklist}
                   <div class="live-checklist">
                     <div class="live-checklist-head">
