@@ -252,15 +252,25 @@
     return 'liveAgent' in t ? t.liveAgent : undefined
   }
 
-  function elapsedSince(startedAt: string | undefined): string | null {
+  function elapsedSeconds(startedAt: string | undefined): number | null {
     if (!startedAt) return null
     const started = Date.parse(startedAt)
     if (!Number.isFinite(started)) return null
-    const seconds = Math.max(0, Math.floor((nowMs - started) / 1000))
+    return Math.max(0, Math.floor((nowMs - started) / 1000))
+  }
+
+  function formatElapsed(seconds: number): string {
     if (seconds < 60) return `${seconds}s elapsed`
     const minutes = Math.floor(seconds / 60)
     const remainder = seconds % 60
     return remainder > 0 ? `${minutes}m ${remainder}s elapsed` : `${minutes}m elapsed`
+  }
+
+  function liveAgentMessage(startedAt: string | undefined): string {
+    const seconds = elapsedSeconds(startedAt)
+    if (seconds === null) return 'Model call in progress'
+    const prefix = seconds >= 90 ? 'Still waiting on model' : 'Model call in progress'
+    return `${prefix} · ${formatElapsed(seconds)}`
   }
 
   const phaseGroups = $derived.by(() => phaseOrder
@@ -610,10 +620,9 @@
               </div>
               {#if t.status === 'active' && turnLiveAgent(t)}
                 {@const live = turnLiveAgent(t)}
-                {@const elapsed = elapsedSince(live?.startedAt)}
                 <div class="live-agent">
                   <StatusLight tone="running" pulse={true} />
-                  <span>Model call in progress{elapsed ? ` · ${elapsed}` : ''}</span>
+                  <span>{liveAgentMessage(live?.startedAt)}</span>
                 </div>
               {/if}
 
