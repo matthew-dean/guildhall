@@ -147,6 +147,10 @@ export interface InFlightTurn extends TurnBase {
   taskTitle: string
   taskStatus?: string | undefined
   summary: string
+  liveAgent?: {
+    name: string
+    startedAt?: string | undefined
+  } | undefined
   checklist?: {
     title: string
     doneCount: number
@@ -186,6 +190,15 @@ export interface BuildThreadOptions {
   projectPath: string
   /** Optional pre-built snapshot (lets callers share one snapshot per request). */
   snapshot?: ProjectSnapshot
+  /** Recent supervisor events, used only for live "agent is currently busy" hints. */
+  recentEvents?: Array<{
+    at?: string | undefined
+    event?: {
+      type?: string | undefined
+      task_id?: string | null | undefined
+      agent_name?: string | null | undefined
+    } | undefined
+  }>
 }
 
 function readJsonSafe(path: string): unknown {
@@ -367,11 +380,45 @@ function phaseForTurn(turn: ThreadTurn): TurnPhase {
   }
 }
 
+function friendlyAgentName(agentName: string | undefined): string {
+  switch (agentName) {
+    case 'spec-agent': return 'Spec author'
+    case 'worker-agent': return 'Worker'
+    case 'reviewer-agent': return 'Reviewer'
+    case 'gate-checker-agent': return 'Gate checker'
+    default: return agentName?.trim() || 'Agent'
+  }
+}
+
+function liveAgentsByTask(events: BuildThreadOptions['recentEvents']): Map<string, { name: string; startedAt?: string | undefined }> {
+  const live = new Map<string, { name: string; startedAt?: string | undefined }>()
+  for (const envelope of events ?? []) {
+    const ev = envelope.event
+    const taskId = typeof ev?.task_id === 'string' ? ev.task_id : null
+    if (!taskId) continue
+    if (ev?.type === 'agent_started') {
+      live.set(taskId, {
+        name: typeof ev.agent_name === 'string' ? ev.agent_name : 'agent',
+        startedAt: envelope.at,
+      })
+    } else if (
+      ev?.type === 'agent_finished' ||
+      ev?.type === 'task_transition' ||
+      ev?.type === 'escalation_raised' ||
+      ev?.type === 'error'
+    ) {
+      live.delete(taskId)
+    }
+  }
+  return live
+}
+
 export function buildThread(opts: BuildThreadOptions): Thread {
   const snap = opts.snapshot ?? buildSnapshot({ projectPath: opts.projectPath })
   const turns: ThreadTurn[] = []
   const tasksPath = join(opts.projectPath, 'memory', 'TASKS.json')
   const tasks = existsSync(tasksPath) ? tasksArray(readJsonSafe(tasksPath)) : []
+  const liveAgents = liveAgentsByTask(opts.recentEvents)
   const metaIntakeDraftReady = tasks.some((t) =>
     t.id === 'task-meta-intake' &&
     t.status === 'spec_review' &&
@@ -557,16 +604,19 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     ) {
       const status: TurnStatus = !activeAssigned ? 'active' : 'pending'
       if (status === 'active') activeAssigned = true
+      const liveAgent = liveAgents.get(taskId)
       const summary =
-        taskStatus === 'exploring'
-          ? 'The spec author is shaping this task.'
-          : taskStatus === 'ready'
-            ? 'Ready for a worker.'
-            : taskStatus === 'gate_check'
-              ? 'Gates are running.'
-              : taskStatus === 'review'
-                ? 'Review is running.'
-                : 'Agent is working.'
+        liveAgent
+          ? `${friendlyAgentName(liveAgent.name)} is working on this now.`
+          : taskStatus === 'exploring'
+            ? 'The spec author is shaping this task.'
+            : taskStatus === 'ready'
+              ? 'Ready for a worker.'
+              : taskStatus === 'gate_check'
+                ? 'Gates are running.'
+                : taskStatus === 'review'
+                  ? 'Review is running.'
+                  : 'Agent is working.'
       turns.push({
         kind: 'inflight',
         id: `inflight:${taskId}`,
@@ -578,6 +628,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         taskTitle,
         taskStatus,
         summary,
+        liveAgent,
         checklist: taskStatus === 'exploring' ? specFillChecklist(opts.projectPath, t) : undefined,
       })
     }

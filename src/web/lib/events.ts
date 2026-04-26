@@ -67,6 +67,10 @@ export function summarizeEvent(env: EventEnvelope): string {
       return 'ERROR: ' + (inner.message ?? '')
     case 'agent_issue':
       return `issue [${inner.severity}/${inner.code}] ${inner.task_id} — ${inner.reason ?? ''}`
+    case 'agent_started':
+      return `${inner.agent_name ?? 'agent'} started ${inner.task_id ?? ''}`
+    case 'agent_finished':
+      return `${inner.agent_name ?? 'agent'} finished ${inner.task_id ?? ''}`
     case 'supervisor_started':
     case 'supervisor_stopped':
     case 'supervisor_error':
@@ -92,6 +96,7 @@ export function eventCssClass(env: EventEnvelope): string {
   if (type === 'escalation_raised') return 'escalation'
   if (type === 'error') return 'error'
   if (type === 'agent_issue') return 'issue'
+  if (type === 'agent_started' || type === 'agent_finished') return 'supervisor'
   if (type.startsWith('supervisor_')) return 'supervisor'
   return ''
 }

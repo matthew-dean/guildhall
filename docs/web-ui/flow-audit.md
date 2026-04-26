@@ -163,6 +163,10 @@ correct the agent, and ask for direct action from Thread.
   shows the failed command output inline, labels the bootstrap action "Run
   again", and suppresses lower-priority nudges while the top inbox item is
   already the current page.
+- After bootstrap passed and Start worked, the run still looked inert during a
+  long spec-agent model call because the supervisor only emitted an event after
+  the agent returned. Added `agent_started` / `agent_finished` lifecycle
+  events and taught Thread to show "Model call in progress" immediately.
 
 ## Verification Log
 
@@ -206,6 +210,12 @@ correct the agent, and ask for direct action from Thread.
   bootstrap failure before adding tasks", LLM provider as `llama-cpp`, inline
   failed-output detail for `pnpm run lint`, and no lower-priority policy-lever
   banner above the active bootstrap failure.
+- User approved adding the missing lint dependency. Added `oxlint` to
+  `packages/extension`, reran Guildhall bootstrap through the app endpoint, and
+  all bootstrap steps passed: install, build, test, lint.
+- Browser check at `/thread` after Start now shows "Spec author is working on
+  this now" and "Model call in progress" while `task-003` is inside the
+  spec-agent LLM call.
 
 ## Resume Notes
 
@@ -216,13 +226,13 @@ correct the agent, and ask for direct action from Thread.
   - Project direction was saved from Thread.
   - Workspace Import was approved: 0 tasks, 6 goals, 1 milestone.
   - `task-003` is the first real task and is still in spec intake.
-  - The current project blocker is bootstrap/lint failure:
-    `packages/extension` runs `oxlint src`, but `oxlint` is missing.
-  - Orchestrator run status is stopped.
+  - Bootstrap is passing after adding `oxlint`.
+  - Orchestrator run status is running, with `task-003` inside a spec-agent
+    model call at the time of this checkpoint.
 - Before resetting `t-minus-t`, ask for explicit confirmation and list the
   exact files/directories to remove.
 - After source changes, run `pnpm build` in Guildhall before testing the linked
   package from `t-minus-t`.
-- Next likely check: install/add `oxlint` to the test project if the user
-  approves package installation, rerun bootstrap, and continue the task through
-  spec review and execution.
+- Next likely check: wait for the spec-agent call to finish. If it remains
+  stuck, surface model-call duration / provider latency in Thread, then either
+  stop/restart the run or ask whether to switch providers/models.

@@ -653,6 +653,13 @@ export class Orchestrator {
     // FR-30: register the agent with the liveness tracker for the duration
     // of this generate() call.
     this.livenessTracker.register(agent.name, task.id)
+    await this.emitBackendEvent({
+      type: 'agent_started',
+      task_id: task.id,
+      agent_name: agent.name,
+      from_status: beforeStatus,
+      message: `${agent.name} is working on ${task.title}`,
+    })
 
     let generatedText = ''
     let generatedMetaIntakeDraft: string | null = null
@@ -664,6 +671,14 @@ export class Orchestrator {
       }
     } catch (err) {
       this.livenessTracker.unregister(agent.name)
+      await this.emitBackendEvent({
+        type: 'agent_finished',
+        task_id: task.id,
+        agent_name: agent.name,
+        from_status: beforeStatus,
+        is_error: true,
+        message: `${agent.name} stopped on ${task.title}`,
+      })
       if (slot) this.slotAllocator?.release(task.id)
       const message = err instanceof Error ? err.message : String(err)
 
@@ -695,6 +710,13 @@ export class Orchestrator {
     }
 
     this.livenessTracker.unregister(agent.name)
+    await this.emitBackendEvent({
+      type: 'agent_finished',
+      task_id: task.id,
+      agent_name: agent.name,
+      from_status: beforeStatus,
+      message: `${agent.name} finished its current step on ${task.title}`,
+    })
     if (slot) this.slotAllocator?.release(task.id)
 
     // Post-generate queue work is serialized across concurrent dispatches so
@@ -2544,6 +2566,17 @@ export class Orchestrator {
 
   private now(): string {
     return this.opts.now?.() ?? new Date().toISOString()
+  }
+
+  private async emitBackendEvent(event: BackendEvent): Promise<void> {
+    if (!this.opts.onBackendEvent) return
+    try {
+      await this.opts.onBackendEvent(event)
+    } catch (err) {
+      console.warn(
+        `[guildhall] onBackendEvent threw (${event.type}): ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
   }
 
   private banner(): void {

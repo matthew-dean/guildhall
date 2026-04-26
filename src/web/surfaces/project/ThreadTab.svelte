@@ -31,6 +31,7 @@
   import AgentQuestion from '../../lib/AgentQuestion.svelte'
   import StatusLight from '../../lib/StatusLight.svelte'
   import Help from '../../lib/Help.svelte'
+  import { onEvent } from '../../lib/events.js'
   import { nav } from '../../lib/nav.svelte.js'
 
   // ---- Turn shape (mirrors src/runtime/thread.ts) ------------------------
@@ -92,6 +93,7 @@
     kind: 'inflight'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string; taskStatus?: string; summary: string
+    liveAgent?: { name: string; startedAt?: string } | undefined
     checklist?: {
       title: string
       doneCount: number
@@ -192,6 +194,21 @@
   onMount(() => {
     void load()
     pollHandle = setInterval(() => void load(), 4000)
+  })
+  $effect(() => {
+    const off = onEvent(ev => {
+      const type = ev.event?.type ?? ev.type ?? ''
+      if (
+        type === 'agent_started' ||
+        type === 'agent_finished' ||
+        type === 'task_transition' ||
+        type === 'agent_issue' ||
+        type === 'escalation_raised'
+      ) {
+        void load()
+      }
+    })
+    return off
   })
   onDestroy(() => {
     if (pollHandle) clearInterval(pollHandle)
@@ -828,6 +845,12 @@
               {:else if t.kind === 'inflight'}
                 <h3 class="prompt">{taskStateLabel(t)}</h3>
                 <p class="why">{t.summary}</p>
+                {#if t.liveAgent}
+                  <div class="live-agent">
+                    <StatusLight tone="running" pulse={true} />
+                    <span>Model call in progress</span>
+                  </div>
+                {/if}
                 {#if t.checklist}
                   <div class="live-checklist">
                     <div class="live-checklist-head">
@@ -1064,6 +1087,16 @@
     border: 1px solid var(--border);
     border-radius: var(--r-2);
     background: var(--bg);
+  }
+  .live-agent {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-2);
+    width: fit-content;
+    color: var(--warn);
+    font-size: var(--fs-1);
+    font-weight: 700;
+    text-transform: uppercase;
   }
   .live-checklist-head,
   .live-step {

@@ -1248,7 +1248,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ turns: [], activeTurnId: null, caughtUp: false })
       }
-      const thread = buildThread({ projectPath: project.path })
+      const thread = buildThread({
+        projectPath: project.path,
+        recentEvents: supervisor.recent(project.id),
+      })
       return c.json(thread)
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
