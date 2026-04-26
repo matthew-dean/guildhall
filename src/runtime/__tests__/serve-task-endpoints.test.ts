@@ -319,7 +319,12 @@ describe('POST /api/project/task/:id/add-acceptance', () => {
     const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
     const q = JSON.parse(raw)
     expect(q.tasks[0].acceptanceCriteria).toEqual([
-      { description: 'Round-trip tests preserve comments and formatting.' },
+      {
+        id: 'ac-1',
+        description: 'Round-trip tests preserve comments and formatting.',
+        verifiedBy: 'review',
+        met: false,
+      },
     ])
     expect(q.tasks[0].notes[0].agentId).toBe('human')
     expect(q.tasks[0].notes[0].content).toContain('Round-trip tests preserve')

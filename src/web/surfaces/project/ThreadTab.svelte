@@ -141,6 +141,8 @@
     done: false,
   })
   let pollHandle: ReturnType<typeof setInterval> | null = null
+  let clockHandle: ReturnType<typeof setInterval> | null = null
+  let nowMs = $state(Date.now())
   const turnElements = new Map<string, HTMLDivElement>()
   const phaseOrder: TurnPhase[] = ['setup', 'intake', 'spec', 'inflight', 'blocked', 'done']
   const phaseLabels: Record<TurnPhase, string> = {
@@ -197,6 +199,9 @@
   onMount(() => {
     void load()
     pollHandle = setInterval(() => void load(), 4000)
+    clockHandle = setInterval(() => {
+      nowMs = Date.now()
+    }, 1000)
   })
   $effect(() => {
     const off = onEvent(ev => {
@@ -215,6 +220,7 @@
   })
   onDestroy(() => {
     if (pollHandle) clearInterval(pollHandle)
+    if (clockHandle) clearInterval(clockHandle)
   })
 
   function personaLabel(p: TurnPersona): string {
@@ -244,6 +250,17 @@
 
   function turnLiveAgent(t: Turn): { name: string; startedAt?: string | undefined } | undefined {
     return 'liveAgent' in t ? t.liveAgent : undefined
+  }
+
+  function elapsedSince(startedAt: string | undefined): string | null {
+    if (!startedAt) return null
+    const started = Date.parse(startedAt)
+    if (!Number.isFinite(started)) return null
+    const seconds = Math.max(0, Math.floor((nowMs - started) / 1000))
+    if (seconds < 60) return `${seconds}s elapsed`
+    const minutes = Math.floor(seconds / 60)
+    const remainder = seconds % 60
+    return remainder > 0 ? `${minutes}m ${remainder}s elapsed` : `${minutes}m elapsed`
   }
 
   const phaseGroups = $derived.by(() => phaseOrder
@@ -592,9 +609,11 @@
                 {/if}
               </div>
               {#if t.status === 'active' && turnLiveAgent(t)}
+                {@const live = turnLiveAgent(t)}
+                {@const elapsed = elapsedSince(live?.startedAt)}
                 <div class="live-agent">
                   <StatusLight tone="running" pulse={true} />
-                  <span>Model call in progress</span>
+                  <span>Model call in progress{elapsed ? ` · ${elapsed}` : ''}</span>
                 </div>
               {/if}
 

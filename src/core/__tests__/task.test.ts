@@ -90,6 +90,25 @@ describe('AcceptanceCriteria', () => {
     })
     expect(result.command).toBe('pnpm build')
   })
+
+  it('normalizes command-like verifiedBy values from agent-written criteria', () => {
+    const result = AcceptanceCriteria.parse({
+      id: 'ac-1',
+      description: 'Tests pass',
+      verifiedBy: 'vitest run',
+    })
+    expect(result.verifiedBy).toBe('automated')
+    expect(result.command).toBe('vitest run')
+  })
+
+  it('normalizes unknown non-command verifiedBy values to reviewer judgment', () => {
+    const result = AcceptanceCriteria.parse({
+      id: 'ac-1',
+      description: 'Copy reads clearly',
+      verifiedBy: 'copywriter',
+    })
+    expect(result.verifiedBy).toBe('review')
+  })
 })
 
 describe('TaskQueue', () => {

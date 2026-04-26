@@ -1816,7 +1816,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const criteria = Array.isArray(task.acceptanceCriteria)
           ? [...task.acceptanceCriteria as Array<Record<string, unknown>>]
           : []
-        criteria.push({ description })
+        criteria.push({
+          id: `ac-${criteria.length + 1}`,
+          description,
+          verifiedBy: 'review',
+          met: false,
+        })
         task.acceptanceCriteria = criteria
         const notes = Array.isArray(task.notes)
           ? [...task.notes as Array<Record<string, unknown>>]

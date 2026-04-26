@@ -359,14 +359,35 @@ export const Checkpoint = z.object({
 })
 export type Checkpoint = z.infer<typeof Checkpoint>
 
-export const AcceptanceCriteria = z.object({
+const ACCEPTANCE_VERIFIERS = ['automated', 'review', 'human'] as const
+
+function normalizeAcceptanceCriteria(input: unknown): unknown {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input
+  const criterion = input as Record<string, unknown>
+  const verifiedBy = criterion.verifiedBy
+  if (verifiedBy === undefined && typeof criterion.command === 'string' && criterion.command.trim()) {
+    return { ...criterion, verifiedBy: 'automated' }
+  }
+  if (typeof verifiedBy !== 'string') return input
+  if ((ACCEPTANCE_VERIFIERS as readonly string[]).includes(verifiedBy)) return input
+
+  const value = verifiedBy.trim()
+  const looksLikeCommand = /\s|\/|^(pnpm|npm|yarn|bun|vitest|tsx|node|tsgo|tsc|cargo|go|pytest|python|make)\b/.test(value)
+  return {
+    ...criterion,
+    verifiedBy: looksLikeCommand ? 'automated' : 'review',
+    ...(looksLikeCommand && typeof criterion.command !== 'string' ? { command: value } : {}),
+  }
+}
+
+export const AcceptanceCriteria = z.preprocess(normalizeAcceptanceCriteria, z.object({
   id: z.string(),
   description: z.string(),
   // How to verify: 'automated' = shell command, 'review' = reviewer agent judgment
-  verifiedBy: z.enum(['automated', 'review', 'human']),
+  verifiedBy: z.enum(ACCEPTANCE_VERIFIERS),
   command: z.string().optional(), // for automated criteria
   met: z.boolean().default(false),
-})
+}))
 export type AcceptanceCriteria = z.infer<typeof AcceptanceCriteria>
 
 export const Task = z.object({
