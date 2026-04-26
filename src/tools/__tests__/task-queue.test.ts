@@ -87,6 +87,12 @@ describe('updateTask', () => {
     expect(raw.tasks[0].status).toBe('spec_review')
   })
 
+  it('updates task title', async () => {
+    await updateTask({ tasksPath, taskId: 'task-001', title: 'Write a clear implementation spec' })
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].title).toBe('Write a clear implementation spec')
+  })
+
   it('appends a note to a task', async () => {
     await updateTask({
       tasksPath,

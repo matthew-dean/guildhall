@@ -53,6 +53,7 @@ export const readTasksTool = defineTool({
 const updateTaskInputSchema = z.object({
   tasksPath: TASKS_PATH_SCHEMA,
   taskId: z.string(),
+  title: z.string().optional(),
   status: TaskStatus.optional(),
   assignedTo: z.string().optional(),
   note: z
@@ -82,6 +83,7 @@ export async function updateTask(input: UpdateTaskInput): Promise<UpdateTaskResu
     const task = queue.tasks.find((t) => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
 
+    if (input.title !== undefined) task.title = input.title
     if (input.status) task.status = input.status
     if (input.assignedTo !== undefined) task.assignedTo = input.assignedTo
     if (input.blockReason !== undefined) task.blockReason = input.blockReason
@@ -107,7 +109,7 @@ export async function updateTask(input: UpdateTaskInput): Promise<UpdateTaskResu
 export const updateTaskTool = defineTool({
   name: 'update-task',
   description:
-    "Update a task's status, spec, acceptance criteria, assignment, or notes. Use this to transition tasks through the lifecycle.",
+    "Update a task's title, status, spec, acceptance criteria, assignment, or notes. Use this to transition tasks through the lifecycle.",
   inputSchema: updateTaskInputSchema,
   jsonSchema: { type: 'object' },
   isReadOnly: () => false,

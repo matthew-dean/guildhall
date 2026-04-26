@@ -393,6 +393,18 @@ function friendlyAgentName(agentName: string | undefined): string {
   }
 }
 
+function personaForAgent(agentName: string | undefined): TurnPersona | null {
+  switch (agentName) {
+    case 'spec-agent': return 'spec'
+    case 'worker-agent': return 'worker'
+    case 'reviewer-agent':
+    case 'gate-checker-agent':
+      return 'coord'
+    default:
+      return null
+  }
+}
+
 function liveAgentsByTask(events: BuildThreadOptions['recentEvents']): Map<string, { name: string; startedAt?: string | undefined }> {
   const live = new Map<string, { name: string; startedAt?: string | undefined }>()
   for (const envelope of events ?? []) {
@@ -613,6 +625,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     ) {
       const status: TurnStatus = !activeAssigned ? 'active' : 'pending'
       if (status === 'active') activeAssigned = true
+      const livePersona = personaForAgent(liveAgent?.name)
+      const persona = livePersona ?? (taskStatus === 'exploring' ? 'spec' : 'worker')
+      const phase = taskStatus === 'exploring' || livePersona === 'spec' ? 'intake' : 'inflight'
       const summary =
         liveAgent
           ? `${friendlyAgentName(liveAgent.name)} is working on this now.`
@@ -629,9 +644,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         kind: 'inflight',
         id: `inflight:${taskId}`,
         at: typeof t.updatedAt === 'string' ? t.updatedAt : createdAt,
-        persona: taskStatus === 'exploring' ? 'spec' : 'worker',
+        persona,
         status,
-        phase: taskStatus === 'exploring' ? 'intake' : 'inflight',
+        phase,
         taskId,
         taskTitle,
         taskStatus,
