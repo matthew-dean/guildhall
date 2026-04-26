@@ -793,6 +793,7 @@
                 {/if}
 
               {:else if t.kind === 'spec_review'}
+                {@const missingSpec = t.taskId !== 'task-meta-intake' && t.spec.trim().length === 0}
                 <div class="prompt-row">
                   <h3 class="prompt">
                     {t.taskId === 'task-meta-intake' ? 'Coordinator roles are ready for review' : 'Spec ready for review'}
@@ -828,6 +829,8 @@
                   </div>
                 {:else if t.spec}
                   <div class="spec-preview"><Markdown source={t.spec} /></div>
+                {:else if missingSpec}
+                  <p class="error">The task is marked ready, but no spec was saved. Ask the spec author to write the spec before approving.</p>
                 {/if}
                 {#if t.status === 'active'}
                   {@const blockedByQuestions = hasOpenQuestionsForTask(t.taskId)}
@@ -871,7 +874,7 @@
                     </Button>
                     <Button
                       variant="primary"
-                      disabled={busyTurnId === t.id || blockedByQuestions}
+                      disabled={busyTurnId === t.id || blockedByQuestions || missingSpec}
                       onclick={() => approveSpec(t)}
                     >
                       {t.taskId === 'task-meta-intake' ? 'Approve and merge' : 'Approve spec'}
