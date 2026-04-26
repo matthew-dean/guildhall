@@ -296,6 +296,51 @@ describe('POST /api/project/task/:id/approve-brief', () => {
   })
 })
 
+describe('POST /api/project/task/:id/add-acceptance', () => {
+  it('appends a human-written acceptance criterion and records a note', async () => {
+    await seedTask('task-1', {
+      status: 'exploring',
+      acceptanceCriteria: [],
+      notes: [],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/add-acceptance', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ description: 'Round-trip tests preserve comments and formatting.' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.ok).toBe(true)
+    expect(body.count).toBe(1)
+
+    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const q = JSON.parse(raw)
+    expect(q.tasks[0].acceptanceCriteria).toEqual([
+      { description: 'Round-trip tests preserve comments and formatting.' },
+    ])
+    expect(q.tasks[0].notes[0].agentId).toBe('human')
+    expect(q.tasks[0].notes[0].content).toContain('Round-trip tests preserve')
+  })
+
+  it('rejects an empty acceptance criterion', async () => {
+    await seedTask('task-1', { status: 'exploring', acceptanceCriteria: [] })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/add-acceptance', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ description: '   ' }),
+      }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.error).toMatch(/description required/i)
+  })
+})
+
 describe('POST /api/project/task/:id/unshelve', () => {
   it('clears shelveReason and returns a shelved task to proposed', async () => {
     await seedTask('task-1', {

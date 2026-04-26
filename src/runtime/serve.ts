@@ -1709,6 +1709,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   //   unshelve           → proposed     (shelved task only; clears shelveReason)
   //   approve-spec       → spec_review  (exploring task with a drafted spec; body: {approvalNote?})
   //   approve-brief      → mark productBrief.approvedBy/approvedAt = human
+  //   add-acceptance     → append a human-written acceptance criterion
   //   resume             → append a follow-up message to an exploring transcript
   //                        (body: {message?, resolveEscalationId?, resolution?})
   //   resolve-escalation → close a named escalation; unblocks when none remain
@@ -1723,6 +1724,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         'shelve',
         'approve-spec',
         'approve-brief',
+        'add-acceptance',
         'resume',
         'unshelve',
         'resolve-escalation',
@@ -1794,6 +1796,42 @@ export function buildServeApp(opts: ServeOptions = {}): {
         queue.lastUpdated = now
         atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true })
+      }
+
+      if (action === 'add-acceptance') {
+        const body = await c.req.json().catch(() => ({})) as { description?: string }
+        const description = (body.description ?? '').trim()
+        if (!description) return c.json({ error: 'description required' }, 400)
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        const now = new Date().toISOString()
+        const criteria = Array.isArray(task.acceptanceCriteria)
+          ? [...task.acceptanceCriteria as Array<Record<string, unknown>>]
+          : []
+        criteria.push({ description })
+        task.acceptanceCriteria = criteria
+        const notes = Array.isArray(task.notes)
+          ? [...task.notes as Array<Record<string, unknown>>]
+          : []
+        notes.push({
+          agentId: 'human',
+          role: 'specifier',
+          content: `Added acceptance criterion: ${description}`,
+          timestamp: now,
+        })
+        task.notes = notes
+        task.updatedAt = now
+        queue.lastUpdated = now
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        return c.json({ ok: true, count: criteria.length })
       }
 
       if (action === 'answer-question') {

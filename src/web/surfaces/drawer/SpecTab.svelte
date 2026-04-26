@@ -29,6 +29,7 @@
     onUnshelve: () => void
     onResolveEscalation: (escalation: Escalation, mode: 'retry' | 'resolve') => void
     onSendFollowUp: (message: string) => Promise<void>
+    onAddAcceptance: (description: string) => Promise<void>
   }
 
   let {
@@ -41,9 +42,11 @@
     onUnshelve,
     onResolveEscalation,
     onSendFollowUp,
+    onAddAcceptance,
   }: Props = $props()
 
   let followup = $state('')
+  let acceptanceDraft = $state('')
   // NOTE: the drawer is now a READ-ONLY artifact view. The interactive
   // approve / reply / answer-question affordances live in the Thread
   // surface. Past-context here is for inspection only.
@@ -62,6 +65,7 @@
   const acceptance = $derived(task.acceptanceCriteria ?? [])
   const exploring = $derived(task.status === 'exploring')
   const specApprovalPending = $derived(exploring && specText.length > 0)
+  const needsAcceptance = $derived(exploring && briefApproved && acceptance.length === 0)
 
   // Agent-suggested tasks the user hasn't said "yes" to yet get the
   // simple-question surface. Everything else (brief, spec, acceptance,
@@ -75,6 +79,13 @@
     if (!msg) return
     await onSendFollowUp(msg)
     followup = ''
+  }
+
+  async function addAcceptance() {
+    const description = acceptanceDraft.trim()
+    if (!description) return
+    await onAddAcceptance(description)
+    acceptanceDraft = ''
   }
 </script>
 
@@ -183,6 +194,26 @@
         {/each}
       </ul>
     </Card>
+  {:else if needsAcceptance}
+    <Card title="Acceptance criterion" tone="warn">
+      <Stack gap="2">
+        <p class="lede">Add one concrete finish line the reviewer can verify.</p>
+        <Textarea
+          bind:value={acceptanceDraft}
+          rows={3}
+          placeholder="Example: Round-trip tests cover variable declarations and function declarations without changing comments or formatting."
+        />
+        <Row justify="end">
+          <Button
+            variant="primary"
+            disabled={busy || acceptanceDraft.trim().length === 0}
+            onclick={addAcceptance}
+          >
+            Add
+          </Button>
+        </Row>
+      </Stack>
+    </Card>
   {/if}
   </div>
 
@@ -199,7 +230,7 @@
   {/if}
 
   {#if exploring}
-    <Card title="Follow-up to spec agent">
+    <Card title={needsAcceptance ? 'Other note to spec author' : 'Follow-up to spec author'}>
       <Stack gap="2">
         <Textarea
           bind:value={followup}
@@ -244,11 +275,6 @@
     font-size: var(--fs-1);
     line-height: var(--lh-body);
     margin: 0;
-  }
-  .lede em {
-    font-style: normal;
-    color: var(--text);
-    font-weight: 600;
   }
   .explainer {
     color: var(--text);

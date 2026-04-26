@@ -131,6 +131,10 @@
     await post('resume', { message })
   }
 
+  async function handleAddAcceptance(description: string) {
+    await post('add-acceptance', { description })
+  }
+
   function confirmed(action: string): boolean {
     return window.confirm(`${action} task ${taskId}?`)
   }
@@ -213,6 +217,7 @@
         onUnshelve={() => confirmed('Unshelve') && post('unshelve')}
         onResolveEscalation={handleResolveEscalation}
         onSendFollowUp={handleSendFollowUp}
+        onAddAcceptance={handleAddAcceptance}
       />
     {:else if activeTab === 'transcript'}
       <TranscriptTab task={payload.task} />
