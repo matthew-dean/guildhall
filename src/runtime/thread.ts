@@ -37,7 +37,7 @@ import { parseCoordinatorDraft } from './meta-intake.js'
 
 export type TurnPersona = 'intake' | 'spec' | 'worker' | 'coord' | 'system'
 export type TurnStatus = 'done' | 'active' | 'pending'
-export type TurnPhase = 'setup' | 'intake' | 'spec' | 'inflight' | 'blocked' | 'done'
+export type TurnPhase = 'setup' | 'intake' | 'spec' | 'ready' | 'inflight' | 'blocked' | 'done'
 export type SetupAffordance =
   | 'link'
   | 'inline-text'
@@ -378,6 +378,7 @@ function phaseForTurn(turn: ThreadTurn): TurnPhase {
     case 'escalation':
       return 'blocked'
     case 'inflight':
+      if (turn.taskStatus === 'ready') return 'ready'
       if (turn.taskStatus === 'exploring') return 'intake'
       return 'inflight'
   }
@@ -627,7 +628,11 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       if (status === 'active') activeAssigned = true
       const livePersona = personaForAgent(liveAgent?.name)
       const persona = livePersona ?? (taskStatus === 'exploring' ? 'spec' : 'worker')
-      const phase = taskStatus === 'exploring' || livePersona === 'spec' ? 'intake' : 'inflight'
+      const phase = taskStatus === 'ready'
+        ? 'ready'
+        : taskStatus === 'exploring' || livePersona === 'spec'
+          ? 'intake'
+          : 'inflight'
       const summary =
         liveAgent
           ? `${friendlyAgentName(liveAgent.name)} is working on this now.`

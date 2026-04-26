@@ -37,7 +37,7 @@
   // ---- Turn shape (mirrors src/runtime/thread.ts) ------------------------
   type TurnPersona = 'intake' | 'spec' | 'worker' | 'coord' | 'system'
   type TurnStatus = 'done' | 'active' | 'pending'
-  type TurnPhase = 'setup' | 'intake' | 'spec' | 'inflight' | 'blocked' | 'done'
+  type TurnPhase = 'setup' | 'intake' | 'spec' | 'ready' | 'inflight' | 'blocked' | 'done'
   type SetupAffordance = 'link' | 'inline-text' | 'inline-textarea' | 'inline-button' | 'inline-choice'
 
   interface SetupStepTurn {
@@ -136,6 +136,7 @@
     setup: true,
     intake: false,
     spec: false,
+    ready: false,
     inflight: false,
     blocked: false,
     done: false,
@@ -144,11 +145,12 @@
   let clockHandle: ReturnType<typeof setInterval> | null = null
   let nowMs = $state(Date.now())
   const turnElements = new Map<string, HTMLDivElement>()
-  const phaseOrder: TurnPhase[] = ['setup', 'intake', 'spec', 'inflight', 'blocked', 'done']
+  const phaseOrder: TurnPhase[] = ['setup', 'intake', 'spec', 'ready', 'inflight', 'blocked', 'done']
   const phaseLabels: Record<TurnPhase, string> = {
     setup: 'Setup',
     intake: 'Intake',
     spec: 'Spec',
+    ready: 'Ready',
     inflight: 'In flight',
     blocked: 'Blocked',
     done: 'Done',
@@ -299,6 +301,7 @@
       setup: phase === 'setup',
       intake: phase === 'intake',
       spec: phase === 'spec',
+      ready: phase === 'ready',
       inflight: phase === 'inflight',
       blocked: phase === 'blocked',
       done: phase === 'done',
