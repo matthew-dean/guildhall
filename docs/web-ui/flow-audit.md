@@ -182,6 +182,14 @@ correct the agent, and ask for direct action from Thread.
 - `pnpm vitest run src/runtime/__tests__/serve-providers.test.ts src/runtime/__tests__/wire-events.test.ts`
   passed: 29 tests.
 - `pnpm build` passed again with existing Svelte warnings.
+- Provider deep-dive found `OpenAICompatibleClient` had no timeout around the
+  OpenAI-compatible `/chat/completions` fetch. Added a 5-minute request timeout
+  that reports `OpenAI-compatible API timed out after 300s` instead of leaving
+  Guildhall in an indefinite model call.
+- `pnpm vitest run src/providers/__tests__/openai-client.test.ts` passed: 14
+  tests.
+- `pnpm typecheck` passed.
+- `pnpm build` passed with existing Svelte warnings.
 - `pnpm docs:extract-help` generated `guide.coordinators` in
   `src/web/generated/help-topics.json`.
 - `pnpm vitest run src/runtime/__tests__/serve-meta-intake.test.ts` passed: 9

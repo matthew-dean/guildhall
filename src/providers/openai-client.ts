@@ -34,6 +34,7 @@ const DEFAULT_BASE_URL = 'http://127.0.0.1:8080/v1'
 const MAX_RETRIES = 3
 const BASE_RETRY_DELAY_MS = 1_000
 const MAX_RETRY_DELAY_MS = 30_000
+const DEFAULT_REQUEST_TIMEOUT_MS = 300_000
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503])
 const MAX_COMPLETION_TOKEN_PREFIXES = ['gpt-5', 'o1', 'o3', 'o4']
 
@@ -44,6 +45,7 @@ export interface OpenAICompatibleClientOptions {
   apiKey?: string
   fetch?: typeof fetch
   maxRetries?: number
+  requestTimeoutMs?: number
 }
 
 export class OpenAIApiError extends Error {
@@ -62,12 +64,14 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
   private readonly apiKey: string
   private readonly fetchImpl: typeof fetch
   private readonly maxRetries: number
+  private readonly requestTimeoutMs: number
 
   constructor(opts: OpenAICompatibleClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(opts.baseUrl) ?? DEFAULT_BASE_URL
     this.apiKey = opts.apiKey ?? 'local'
     this.fetchImpl = opts.fetch ?? fetch
     this.maxRetries = opts.maxRetries ?? MAX_RETRIES
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
   }
 
   async *streamMessage(request: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
@@ -107,15 +111,28 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
       body.stream_options = { include_usage: true }
     }
 
-    const res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${this.apiKey}`,
-        'content-type': 'application/json',
-        accept: 'text/event-stream',
-      },
-      body: JSON.stringify(body),
-    })
+    let res: Response
+    try {
+      res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${this.apiKey}`,
+          'content-type': 'application/json',
+          accept: 'text/event-stream',
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
+      })
+    } catch (err) {
+      if (isAbortError(err)) {
+        throw new OpenAIApiError(
+          `OpenAI-compatible API timed out after ${Math.round(this.requestTimeoutMs / 1000)}s`,
+          null,
+          false,
+        )
+      }
+      throw err
+    }
     if (!res.ok) {
       const text = await res.text().catch(() => '')
       throw new OpenAIApiError(
@@ -130,6 +147,11 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
 
     yield* consumeOpenAiSse(res.body)
   }
+}
+
+function isAbortError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  return err.name === 'AbortError' || err.name === 'TimeoutError'
 }
 
 // -----------------------------------------------------------------------------

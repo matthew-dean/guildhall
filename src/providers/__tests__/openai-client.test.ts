@@ -61,6 +61,39 @@ describe('OpenAICompatibleClient', () => {
     }
   })
 
+  it('passes an abort signal and reports timeout errors clearly', async () => {
+    let signalSeen = false
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      signalSeen = init?.signal instanceof AbortSignal
+      throw new DOMException('The operation timed out.', 'TimeoutError')
+    }) as unknown as typeof fetch
+    const client = new OpenAICompatibleClient({
+      fetch: fakeFetch,
+      requestTimeoutMs: 12_000,
+    })
+
+    let caught: unknown = null
+    try {
+      await collect(
+        client.streamMessage({
+          model: 'llama-3',
+          messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+          max_tokens: 64,
+          tools: [],
+        }),
+      )
+    } catch (err) {
+      caught = err
+    }
+
+    expect(signalSeen).toBe(true)
+    expect(caught).toBeInstanceOf(OpenAIApiError)
+    if (caught instanceof OpenAIApiError) {
+      expect(caught.message).toContain('timed out after 12s')
+      expect(caught.retryable).toBe(false)
+    }
+  })
+
   it('reassembles streamed tool_calls into a tool_use block', async () => {
     const frames = [
       dataFrame({
