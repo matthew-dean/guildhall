@@ -580,8 +580,14 @@
               <div class="meta">
                 <span class="persona">{personaLabel(t.persona)}</span>
                 {#if 'taskTitle' in t}
-                  <button type="button" class="task-chip" onclick={() => nav(`/task/${encodeURIComponent(t.taskId)}`)}>
-                    {displayTaskTitle(t)}
+                  {@const taskTitle = displayTaskTitle(t)}
+                  <button
+                    type="button"
+                    class="task-chip"
+                    title={taskTitle}
+                    onclick={() => nav(`/task/${encodeURIComponent(t.taskId)}`)}
+                  >
+                    <span class="task-chip-text">{taskTitle}</span>
                   </button>
                 {/if}
               </div>
@@ -960,7 +966,7 @@
 
 <style>
   .thread {
-    max-width: 760px;
+    max-width: 680px;
     margin: 0 auto;
     padding: var(--s-3) var(--s-4) var(--s-6);
   }
@@ -997,17 +1003,46 @@
     background: var(--bg-raised-2);
   }
   .meta {
-    display: flex; align-items: center; gap: var(--s-2);
-    font-size: var(--fs-1); color: var(--text-muted);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    min-width: 0;
+    color: var(--text-muted);
   }
-  .persona { font-weight: 600; color: var(--text); }
+  .persona {
+    color: var(--text);
+    font-size: var(--fs-1);
+    font-weight: 550;
+    line-height: var(--lh-tight);
+  }
   .task-chip {
-    border: none; background: var(--bg-raised-2); color: var(--text);
-    padding: 0 var(--s-2); border-radius: var(--r-2); font-size: var(--fs-1);
-    cursor: pointer; font: inherit;
+    display: inline-flex;
+    min-width: 0;
+    max-width: 100%;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    padding: 0;
+    border-radius: var(--r-1);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--fs-0);
+    line-height: var(--lh-tight);
   }
-  .task-chip:hover { background: var(--bg-raised-3); }
-  .prompt { margin: 0; font-size: var(--fs-3); font-weight: 600; line-height: var(--lh-tight); }
+  .task-chip:hover {
+    color: var(--text);
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+  }
+  .task-chip-text {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .prompt { margin: 0; font-size: var(--fs-3); font-weight: 550; line-height: var(--lh-tight); }
   .prompt-row {
     display: flex;
     align-items: center;
@@ -1024,7 +1059,15 @@
   .why { margin: 0; color: var(--text-muted); font-size: var(--fs-2); line-height: var(--lh-body); }
   .detail { margin: 0; color: var(--text-muted); font-size: var(--fs-1); }
   .field { display: flex; flex-direction: column; gap: var(--s-1); }
-  .field-label { font-size: var(--fs-1); color: var(--text-muted); font-weight: 600; }
+  .field :global(.md) {
+    font-size: var(--fs-2);
+    font-weight: 400;
+  }
+  .field-label {
+    font-size: var(--fs-1);
+    color: var(--text-muted);
+    font-weight: 500;
+  }
   .setup-form {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
