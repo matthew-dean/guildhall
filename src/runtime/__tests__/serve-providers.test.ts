@@ -18,6 +18,24 @@ const { buildServeApp } = await import('../serve.js')
 
 let tmpProject: string
 
+function sseResponse(frames: string[]): Response {
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const frame of frames) controller.enqueue(encoder.encode(frame))
+      controller.close()
+    },
+  })
+  return new Response(stream, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+  })
+}
+
+function dataFrame(payload: unknown): string {
+  return `data: ${JSON.stringify(payload)}\n\n`
+}
+
 beforeEach(async () => {
   // Clean env vars so env-precedence doesn't mask the global store.
   delete process.env.ANTHROPIC_API_KEY
@@ -161,6 +179,35 @@ describe('POST /api/setup/providers/config', () => {
     )
     expect(res.status).toBe(200)
     expect(readGlobalConfig().models?.worker).toBe('qwen/qwen3.6-35b-a3b')
+    expect(readWorkspaceConfig(tmpProject).models).toBeUndefined()
+  })
+
+  it('can set a global split-model preset in one request', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request('http://localhost/api/config/models', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'global',
+          models: {
+            spec: 'qwen/qwen3.6-35b-a3b',
+            coordinator: 'qwen/qwen3.6-35b-a3b',
+            worker: 'qwen/qwen3.6-35b-a3b',
+            reviewer: 'qwen/qwen2.5-coder-14b',
+            gateChecker: 'qwen/qwen2.5-coder-14b',
+          },
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(readGlobalConfig().models).toMatchObject({
+      spec: 'qwen/qwen3.6-35b-a3b',
+      coordinator: 'qwen/qwen3.6-35b-a3b',
+      worker: 'qwen/qwen3.6-35b-a3b',
+      reviewer: 'qwen/qwen2.5-coder-14b',
+      gateChecker: 'qwen/qwen2.5-coder-14b',
+    })
     expect(readWorkspaceConfig(tmpProject).models).toBeUndefined()
   })
 
@@ -455,5 +502,50 @@ describe('POST /api/providers/test', () => {
     const body = (await res.json()) as { ok: boolean; error?: string }
     expect(body.ok).toBe(false)
     expect(body.error).toMatch(/model|url|llama|lm studio/i)
+  })
+
+  it('accepts reasoning-only LM Studio responses as a successful provider test', async () => {
+    setProvider('llama-cpp', { url: 'http://localhost:1234/v1' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url
+        if (url.endsWith('/models')) {
+          return new Response(JSON.stringify({ data: [{ id: 'qwen/qwen3.6-35b-a3b' }] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        if (url.endsWith('/chat/completions')) {
+          return sseResponse([
+            dataFrame({
+              choices: [
+                { delta: { reasoning_content: 'I can answer with OK.' }, finish_reason: null },
+              ],
+            }),
+            dataFrame({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+            'data: [DONE]\n\n',
+          ])
+        }
+        return new Response('not found', { status: 404 })
+      }),
+    )
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request('http://localhost/api/providers/test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'llama-cpp' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; sample?: string }
+    expect(body.ok).toBe(true)
+    expect(body.sample).toBe('[reasoning response]')
+    expect(readGlobalProviders().providers['llama-cpp']?.verifiedAt).toBeTruthy()
   })
 })

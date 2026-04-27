@@ -2596,21 +2596,41 @@ export function buildServeApp(opts: ServeOptions = {}): {
         scope?: 'global' | 'project' | 'global-default'
         role?: keyof ModelAssignmentConfig
         model?: string
+        models?: Partial<ModelAssignmentConfig>
       }
       const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker']
       if (!body.scope) return c.json({ error: 'Missing "scope"' }, 400)
-      if (!body.role || !roles.includes(body.role)) return c.json({ error: 'Unknown model role' }, 400)
+
+      const requestedModels = body.models && typeof body.models === 'object'
+        ? Object.entries(body.models).filter((entry): entry is [keyof ModelAssignmentConfig, string] => {
+            const [role, model] = entry
+            return roles.includes(role as keyof ModelAssignmentConfig) && typeof model === 'string'
+          })
+        : null
+      if (body.models && requestedModels?.length !== Object.keys(body.models).length) {
+        return c.json({ error: 'Unknown model role' }, 400)
+      }
+      if (!requestedModels && (!body.role || !roles.includes(body.role))) {
+        return c.json({ error: 'Unknown model role' }, 400)
+      }
 
       if (body.scope === 'global') {
-        const model = body.model?.trim()
-        if (!model) return c.json({ error: 'Missing "model"' }, 400)
         const global = readGlobalConfig()
+        const nextModels = { ...(global.models ?? {}) }
+        if (requestedModels) {
+          for (const [role, model] of requestedModels) {
+            const trimmed = model.trim()
+            if (!trimmed) return c.json({ error: 'Missing "model"' }, 400)
+            nextModels[role] = trimmed
+          }
+        } else {
+          const model = body.model?.trim()
+          if (!model || !body.role) return c.json({ error: 'Missing "model"' }, 400)
+          nextModels[body.role] = model
+        }
         updateGlobalConfig({
           ...global,
-          models: {
-            ...(global.models ?? {}),
-            [body.role]: model,
-          },
+          models: nextModels,
         })
         return c.json({ ok: true })
       }
@@ -2618,11 +2638,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const workspace = readWorkspaceConfig(projectPath)
       const nextModels = { ...(workspace.models ?? {}) }
       if (body.scope === 'global-default') {
-        delete nextModels[body.role]
+        if (requestedModels) {
+          for (const [role] of requestedModels) delete nextModels[role]
+        } else if (body.role) {
+          delete nextModels[body.role]
+        }
       } else if (body.scope === 'project') {
-        const model = body.model?.trim()
-        if (!model) return c.json({ error: 'Missing "model"' }, 400)
-        nextModels[body.role] = model
+        if (requestedModels) {
+          for (const [role, model] of requestedModels) {
+            const trimmed = model.trim()
+            if (!trimmed) return c.json({ error: 'Missing "model"' }, 400)
+            nextModels[role] = trimmed
+          }
+        } else if (body.role) {
+          const model = body.model?.trim()
+          if (!model) return c.json({ error: 'Missing "model"' }, 400)
+          nextModels[body.role] = model
+        }
       } else {
         return c.json({ error: 'Unknown model scope' }, 400)
       }
@@ -2640,6 +2672,32 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })
+
+  function providerRoundtripSampleFromMessage(message: {
+    content?: Array<
+      | { type: 'text'; text: string }
+      | { type: 'reasoning'; text: string }
+      | { type: 'tool_use'; name: string }
+      | Record<string, unknown>
+    >
+  }): string {
+    const blocks = Array.isArray(message.content) ? message.content : []
+    const text = blocks
+      .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+      .map(block => block.text)
+      .join('')
+      .trim()
+    if (text.length > 0) return text
+    const reasoning = blocks
+      .filter((block): block is { type: 'reasoning'; text: string } => block.type === 'reasoning')
+      .map(block => block.text)
+      .join('')
+      .trim()
+    if (reasoning.length > 0) return '[reasoning response]'
+    const toolUse = blocks.find((block): block is { type: 'tool_use'; name: string } => block.type === 'tool_use')
+    if (toolUse) return `[tool call: ${toolUse.name}]`
+    return ''
+  }
 
   // Pick a cheap, widely-available model id for a verification round-trip
   // against each provider. For llama.cpp we ask the server which model is
@@ -2731,6 +2789,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           sample += ev.text
           if (sample.length > 80) break
         } else if (ev.type === 'message_complete') {
+          if (sample.trim().length === 0) sample = providerRoundtripSampleFromMessage(ev.message)
           break
         }
       }
