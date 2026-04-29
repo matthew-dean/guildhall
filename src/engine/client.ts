@@ -21,6 +21,7 @@ export interface ApiMessageRequest {
   system_prompt?: string
   max_tokens: number
   tools: Array<Record<string, unknown>>
+  signal?: AbortSignal | undefined
 }
 
 export interface ApiTextDeltaEvent {

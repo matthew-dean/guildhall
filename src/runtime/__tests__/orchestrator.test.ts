@@ -155,7 +155,7 @@ function agentSet(partial: Partial<OrchestratorAgentSet> = {}): OrchestratorAgen
 }
 
 describe('pickNextTask', () => {
-  it('prioritizes earlier-lifecycle statuses', async () => {
+  it('continues active work before claiming fresh tasks', async () => {
     const q: TaskQueue = {
       version: 1,
       lastUpdated: 'now',
@@ -164,7 +164,19 @@ describe('pickNextTask', () => {
         mkTask({ id: 't-exploring', status: 'exploring' }),
       ],
     }
-    expect(pickNextTask(q)?.id).toBe('t-exploring')
+    expect(pickNextTask(q)?.id).toBe('t-review')
+  })
+
+  it('runs gate checks before sending reviewed work back through other stages', async () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'now',
+      tasks: [
+        mkTask({ id: 't-ready', status: 'ready', priority: 'critical' }),
+        mkTask({ id: 't-gate', status: 'gate_check', priority: 'low' }),
+      ],
+    }
+    expect(pickNextTask(q)?.id).toBe('t-gate')
   })
 
   it('prioritizes higher priority within the same status', async () => {
@@ -177,6 +189,40 @@ describe('pickNextTask', () => {
       ],
     }
     expect(pickNextTask(q)?.id).toBe('t-crit')
+  })
+
+  it('skips tasks whose dependencies are not done', async () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'now',
+      tasks: [
+        mkTask({ id: 'parent', status: 'ready', priority: 'normal' }),
+        mkTask({
+          id: 'child',
+          status: 'ready',
+          priority: 'critical',
+          dependsOn: ['parent'],
+        }),
+      ],
+    }
+    expect(pickNextTask(q)?.id).toBe('parent')
+  })
+
+  it('allows dependent tasks once every dependency is done', async () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'now',
+      tasks: [
+        mkTask({ id: 'parent', status: 'done' }),
+        mkTask({
+          id: 'child',
+          status: 'ready',
+          priority: 'critical',
+          dependsOn: ['parent'],
+        }),
+      ],
+    }
+    expect(pickNextTask(q)?.id).toBe('child')
   })
 
   it('filters by domain when provided', async () => {
@@ -377,6 +423,33 @@ describe('Orchestrator.tick — routing', () => {
     expect(gc.calls).toHaveLength(1)
   })
 
+  it('claims ready tasks deterministically without a coordinator call', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: 'approved spec' })])
+    const coord = stubAgent('ghost-coordinator')
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ coordinators: { ghost: coord }, worker }),
+    })
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('task-claimer')
+      expect(out.beforeStatus).toBe('ready')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(true)
+    }
+    expect(coord.calls).toHaveLength(0)
+    expect(worker.calls).toHaveLength(0)
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('in_progress')
+    expect(q.tasks[0]!.assignedTo).toBe('worker-agent')
+    expect(q.tasks[0]!.notes.at(-1)).toMatchObject({
+      agentId: 'task-claimer',
+      role: 'orchestrator',
+    })
+  })
+
   it('leaves a drafted spec_review task idle for human approval', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'spec_review', domain: 'looma', spec: 'draft spec' })])
     const coord = stubAgent('looma-coordinator')
@@ -389,8 +462,8 @@ describe('Orchestrator.tick — routing', () => {
     expect(coord.calls).toHaveLength(0)
   })
 
-  it('reports no-coordinator when the task domain has none configured', async () => {
-    await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: 'approved spec' })])
+  it('reports no-coordinator when spec_review needs a missing domain coordinator', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'spec_review', domain: 'ghost' })])
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
     const out = await orch.tick()
     expect(out.kind).toBe('no-coordinator')
@@ -723,32 +796,50 @@ describe('Orchestrator.tick — error handling', () => {
 })
 
 describe('Orchestrator.run — full loops', () => {
-  it('drives a task through the full lifecycle in one run', async () => {
-    await writeQueue([mkTask({ id: 'a', status: 'exploring', domain: 'looma' })])
+  it('drives an approved task through the implementation lifecycle in one run', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'ready',
+        domain: 'looma',
+        spec: 'approved spec',
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'Thing is done',
+            verifiedBy: 'automated',
+            command: 'pnpm test',
+            met: true,
+          },
+        ],
+      }),
+    ])
 
     // Each agent transitions the task one step forward.
     const advance = (next: TaskStatus) => async () => {
-      await mutateTask('a', { status: next })
+      await mutateTask('a', {
+        status: next,
+        ...(next === 'done'
+          ? {
+              mergeRecord: {
+                fromBranch: 'guildhall/task-a',
+                toBranch: 'main',
+                strategy: 'ff_only_local',
+                result: 'merged',
+                commitSha: 'abc123',
+                mergedAt: '2026-04-29T00:00:00.000Z',
+              },
+            }
+          : {}),
+      })
     }
 
     const agents: OrchestratorAgentSet = {
-      spec: stubAgent('spec-agent', advance('spec_review')),
+      spec: stubAgent('spec-agent'),
       worker: stubAgent('worker-agent', advance('review')),
       reviewer: stubAgent('reviewer-agent', advance('gate_check')),
       gateChecker: stubAgent('gate-checker-agent', advance('done')),
-      coordinators: {
-        looma: {
-          name: 'looma-coordinator',
-          calls: [] as { prompt: string }[],
-          async generate(_prompt: string) {
-            const q = await readQueue()
-            const task = q.tasks.find((t) => t.id === 'a')!
-            if (task.status === 'spec_review') await mutateTask('a', { status: 'ready' })
-            else if (task.status === 'ready') await mutateTask('a', { status: 'in_progress' })
-            return { text: 'ok' }
-          },
-        } as unknown as OrchestratorAgentSet['coordinators'][string],
-      },
+      coordinators: {},
     }
 
     const orch = new Orchestrator({ config: baseConfig(), agents })
@@ -756,6 +847,46 @@ describe('Orchestrator.run — full loops', () => {
 
     const q = await readQueue()
     expect(q.tasks[0]!.status).toBe('done')
+    const packet = await fs.readFile(
+      path.join(memoryDir, 'tasks', 'a', 'review-packet.md'),
+      'utf-8',
+    )
+    expect(packet).toContain('# Review packet: Do a thing')
+    expect(packet).toContain('- Task: a')
+    expect(packet).toContain('- Status: done')
+    expect(packet).toContain('- [x] ac-1: Thing is done')
+    expect(packet).toContain('## Merge')
+    expect(packet).toContain('- merged: guildhall/task-a -> main via ff_only_local (abc123); 2026-04-29T00:00:00.000Z')
+    expect(packet).toContain('Task is complete and merged.')
+  })
+
+  it('stopAfterOneTask stops after one active task reaches terminal status', async () => {
+    await writeQueue([
+      mkTask({ id: 'a', status: 'in_progress', domain: 'looma' }),
+      mkTask({ id: 'b', status: 'ready', domain: 'looma', spec: 'approved spec' }),
+    ])
+
+    const mutateCurrentTask = (next: TaskStatus) => async (prompt: string) => {
+      const match = prompt.match(/\*\*Current task ID \(for task tools\):\*\* ([^\n]+)/)
+      const taskId = match?.[1]
+      if (!taskId) throw new Error('missing current task id in prompt')
+      await mutateTask(taskId, { status: next })
+    }
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', mutateCurrentTask('review')),
+      reviewer: stubAgent('reviewer-agent', mutateCurrentTask('gate_check')),
+      gateChecker: stubAgent('gate-checker-agent', mutateCurrentTask('done')),
+      coordinators: {},
+    }
+
+    const orch = new Orchestrator({ config: baseConfig(), agents })
+    await orch.run({ maxTicks: 20, tickDelayMs: 0, stopAfterOneTask: true })
+
+    const q = await readQueue()
+    expect(q.tasks.find((t) => t.id === 'a')?.status).toBe('done')
+    expect(q.tasks.find((t) => t.id === 'b')?.status).toBe('ready')
   })
 
   it('stops early when all tasks are terminal (done/blocked)', async () => {

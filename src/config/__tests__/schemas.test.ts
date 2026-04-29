@@ -174,6 +174,16 @@ describe('WorkspaceYamlConfig', () => {
 // GlobalConfig
 // ---------------------------------------------------------------------------
 describe('GlobalConfig', () => {
+  it('disables paid-provider fallback by default', () => {
+    const config = GlobalConfig.parse({})
+    expect(config.allowPaidProviderFallback).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GlobalConfig
+// ---------------------------------------------------------------------------
+describe('GlobalConfig', () => {
   it('parses with all defaults', () => {
     const config = GlobalConfig.parse({})
     expect(config.maxRevisions).toBe(3)

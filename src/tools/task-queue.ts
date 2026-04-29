@@ -1,7 +1,7 @@
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
-import { AcceptanceCriteria, Task, TaskQueue, TaskStatus } from '@guildhall/core'
+import { AcceptanceCriteria, GateResult, Task, TaskQueue, TaskStatus } from '@guildhall/core'
 import { atomicWriteText } from '@guildhall/sessions'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
@@ -52,7 +52,7 @@ export const readTasksTool = defineTool({
 
 const updateTaskInputSchema = z.object({
   tasksPath: TASKS_PATH_SCHEMA,
-  taskId: z.string(),
+  taskId: z.string().optional(),
   title: z.string().optional(),
   status: TaskStatus.optional(),
   assignedTo: z.string().optional(),
@@ -67,12 +67,14 @@ const updateTaskInputSchema = z.object({
   humanJudgment: z.string().optional(),
   spec: z.string().optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).optional(),
+  gateResults: z.array(GateResult).optional(),
   completedAt: z.string().optional(),
 })
 
 export type UpdateTaskInput = z.input<typeof updateTaskInputSchema>
 export interface UpdateTaskResult {
   success: boolean
+  taskId?: string
   error?: string
 }
 
@@ -80,19 +82,41 @@ export async function updateTask(input: UpdateTaskInput): Promise<UpdateTaskResu
   try {
     const raw = await fs.readFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
-    const task = queue.tasks.find((t) => t.id === input.taskId)
-    if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+    const taskId = input.taskId ?? inferSingleActiveTaskId(queue)
+    if (!taskId) {
+      return {
+        success: false,
+        error: 'Missing taskId and could not infer a single active task',
+      }
+    }
+    const task = queue.tasks.find((t) => t.id === taskId)
+    if (!task) return { success: false, taskId, error: `Task ${taskId} not found` }
+
+    if (!hasTaskMutation(input)) {
+      return {
+        success: false,
+        taskId,
+        error:
+          'No task mutation provided. Set at least one of title, status, assignedTo, note, blockReason, humanJudgment, spec, acceptanceCriteria, gateResults, or completedAt.',
+      }
+    }
 
     if (input.title !== undefined) task.title = input.title
-    if (input.status) task.status = input.status
-    if (input.assignedTo !== undefined) task.assignedTo = input.assignedTo
-    if (input.blockReason !== undefined) task.blockReason = input.blockReason
-    if (input.humanJudgment !== undefined) task.humanJudgment = input.humanJudgment
-    if (input.spec !== undefined) task.spec = input.spec
+    if (input.status) task.status = TaskStatus.parse(input.status)
+    if (input.assignedTo !== undefined) {
+      if (input.assignedTo.trim() === '') delete task.assignedTo
+      else task.assignedTo = input.assignedTo
+    }
+    if (input.blockReason !== undefined && input.blockReason.trim() !== '') task.blockReason = input.blockReason
+    if (input.humanJudgment !== undefined && input.humanJudgment.trim() !== '') task.humanJudgment = input.humanJudgment
+    if (input.spec !== undefined && input.spec.trim() !== '') task.spec = input.spec
     if (input.acceptanceCriteria !== undefined) {
       task.acceptanceCriteria = z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
     }
-    if (input.completedAt !== undefined) task.completedAt = input.completedAt
+    if (input.gateResults !== undefined) {
+      task.gateResults = z.array(GateResult).parse(input.gateResults)
+    }
+    if (input.completedAt !== undefined && input.completedAt.trim() !== '') task.completedAt = input.completedAt
     if (input.note) {
       task.notes.push({ ...input.note, timestamp: new Date().toISOString() })
     }
@@ -100,10 +124,30 @@ export async function updateTask(input: UpdateTaskInput): Promise<UpdateTaskResu
     queue.lastUpdated = new Date().toISOString()
 
     atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
-    return { success: true }
+    return { success: true, taskId }
   } catch (err) {
     return { success: false, error: String(err) }
   }
+}
+
+function hasTaskMutation(input: UpdateTaskInput): boolean {
+  return input.title !== undefined ||
+    input.status !== undefined ||
+    input.assignedTo !== undefined ||
+    input.note !== undefined ||
+    input.blockReason !== undefined ||
+    input.humanJudgment !== undefined ||
+    input.spec !== undefined ||
+    input.acceptanceCriteria !== undefined ||
+    input.gateResults !== undefined ||
+    input.completedAt !== undefined
+}
+
+function inferSingleActiveTaskId(queue: z.infer<typeof TaskQueue>): string | null {
+  const candidates = queue.tasks.filter((t) =>
+    ['in_progress', 'review', 'gate_check', 'spec_review'].includes(t.status),
+  )
+  return candidates.length === 1 ? candidates[0]!.id : null
 }
 
 export const updateTaskTool = defineTool({
@@ -111,14 +155,80 @@ export const updateTaskTool = defineTool({
   description:
     "Update a task's title, status, spec, acceptance criteria, assignment, or notes. Use this to transition tasks through the lifecycle.",
   inputSchema: updateTaskInputSchema,
-  jsonSchema: { type: 'object' },
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      tasksPath: { type: 'string', description: 'Absolute path to TASKS.json' },
+      taskId: { type: 'string', description: 'Task id. Omit only when exactly one task is active.' },
+      title: { type: 'string' },
+      status: {
+        type: 'string',
+        enum: [
+          'proposed',
+          'exploring',
+          'spec_review',
+          'ready',
+          'in_progress',
+          'review',
+          'gate_check',
+          'pending_pr',
+          'done',
+          'shelved',
+          'blocked',
+        ],
+      },
+      assignedTo: { type: 'string' },
+      note: {
+        type: 'object',
+        properties: {
+          agentId: { type: 'string' },
+          role: { type: 'string' },
+          content: { type: 'string' },
+        },
+        required: ['agentId', 'role', 'content'],
+      },
+      blockReason: { type: 'string' },
+      humanJudgment: { type: 'string' },
+      spec: { type: 'string' },
+      acceptanceCriteria: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            description: { type: 'string' },
+            verifiedBy: { type: 'string', enum: ['automated', 'review', 'human'] },
+            command: { type: 'string' },
+            met: { type: 'boolean' },
+          },
+          required: ['id', 'description', 'verifiedBy'],
+        },
+      },
+      gateResults: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            gateId: { type: 'string' },
+            type: { type: 'string', enum: ['hard', 'soft'] },
+            passed: { type: 'boolean' },
+            output: { type: 'string' },
+            checkedAt: { type: 'string', description: 'ISO timestamp when the gate ran' },
+          },
+          required: ['gateId', 'type', 'passed', 'checkedAt'],
+        },
+      },
+      completedAt: { type: 'string', description: 'ISO timestamp when the task completed' },
+    },
+    required: ['tasksPath'],
+  },
   isReadOnly: () => false,
   execute: async (input) => {
     const result = await updateTask(input)
     return {
       output: result.success
-        ? `Updated task ${input.taskId}`
-        : `Error updating task ${input.taskId}: ${result.error ?? 'unknown'}`,
+        ? `Updated task ${result.taskId ?? input.taskId ?? '(inferred task)'}`
+        : `Error updating task ${input.taskId ?? '(missing taskId)'}: ${result.error ?? 'unknown'}`,
       is_error: !result.success,
       metadata: result as unknown as Record<string, unknown>,
     }

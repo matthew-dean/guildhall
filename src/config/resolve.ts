@@ -9,9 +9,9 @@ import type { WorkspaceYamlConfig, AgentSettings } from './schemas.js'
 //
 // Priority (highest → lowest):
 //   1. Environment variables (LM_STUDIO_BASE_URL, etc.)
-//   2. memory/agent-overrides.yaml ← agents write here at runtime
-//   3. guildhall.yaml                  ← human intent
-//   4. ~/.guildhall/config.yaml        ← global defaults
+//   2. memory/agent-overrides.yaml ← agents write learned project behavior here
+//   3. guildhall.yaml              ← human project intent
+//   4. ~/.guildhall/config.yaml    ← global model/runtime defaults
 //   5. Built-in defaults           ← Zod schema defaults
 // ---------------------------------------------------------------------------
 
@@ -25,17 +25,11 @@ export interface ResolveOptions {
  * - Appends learned concerns, decisions, triggers
  * - Removes concerns flagged for removal
  * - Appends mandate addendum
- * - Applies model overrides
  */
 function applyAgentSettings(
   workspace: WorkspaceYamlConfig,
   agentSettings: AgentSettings,
 ): WorkspaceYamlConfig {
-  // Model overrides from agents (highest specificity)
-  const models = agentSettings.models
-    ? { ...(workspace.models ?? {}), ...agentSettings.models }
-    : workspace.models
-
   // Coordinator overrides
   const coordinators = workspace.coordinators.map(coord => {
     const override = agentSettings.coordinators[coord.id]
@@ -74,7 +68,6 @@ function applyAgentSettings(
 
   return {
     ...workspace,
-    models,
     coordinators,
     ignore,
     maxRevisions: agentSettings.maxRevisions ?? workspace.maxRevisions,

@@ -208,6 +208,27 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(transcript).toMatch(/respect DOM ordering/)
   })
 
+  it('preserves an in-flight task status when Thread sends a steering note', async () => {
+    await seedTask('task-1', { status: 'in_progress', notes: [] })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/resume', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          message: 'Check the current failure before editing.',
+          preserveStatus: true,
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const queue = JSON.parse(
+      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+    ) as { tasks: Array<Record<string, any>> }
+    expect(queue.tasks[0]!.status).toBe('in_progress')
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('current failure')
+  })
+
   it('rejects resume with neither a message nor an escalation resolution', async () => {
     await seedTask('task-1', { status: 'exploring' })
     const { app } = buildServeApp({ projectPath: tmpDir })

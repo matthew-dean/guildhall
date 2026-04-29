@@ -1,7 +1,7 @@
 <!--
   Modal for resolving an open escalation. Replaces the legacy window.prompt
   chain. Two paths:
-    · Retry — resubmit the task to gate_check with a short "retrying" note
+    · Retry — resolve with the reason-aware primary action
     · Resolve with note — free-form resolution + next status picker
 -->
 <script lang="ts">
@@ -12,7 +12,7 @@
   import Stack from '../../lib/Stack.svelte'
   import Field from '../../lib/Field.svelte'
   import Chip from '../../lib/Chip.svelte'
-  import { escalationReasonLabel, roleLabel } from '../../lib/escalation-labels.js'
+  import { escalationPrimaryAction, escalationReasonLabel, roleLabel } from '../../lib/escalation-labels.js'
   import type { Escalation } from '../../lib/types.js'
 
   interface Props {
@@ -28,12 +28,13 @@
 
   let resolution = $state('')
   let nextStatus = $state<'ready' | 'gate_check' | 'in_progress' | 'exploring' | 'spec_review' | 'review'>('ready')
+  const primaryAction = $derived(escalationPrimaryAction(escalation))
 
   $effect(() => {
     if (open) {
       if (mode === 'retry') {
-        resolution = 'Retrying — infrastructure fixed.'
-        nextStatus = 'gate_check'
+        resolution = primaryAction.resolution
+        nextStatus = primaryAction.nextStatus
       } else {
         resolution = ''
         nextStatus = 'ready'
@@ -43,8 +44,8 @@
 
   async function handleRetry() {
     await onSubmit({
-      resolution: resolution.trim() || 'Retrying — infrastructure fixed.',
-      nextStatus: 'gate_check',
+      resolution: resolution.trim() || primaryAction.resolution,
+      nextStatus: primaryAction.nextStatus,
     })
   }
 
@@ -102,7 +103,7 @@
   {#snippet footer()}
     <Button variant="ghost" disabled={busy} onclick={onClose}>Cancel</Button>
     <Button variant="secondary" disabled={busy} onclick={handleRetry}>
-      Retry gates
+      {primaryAction.label}
     </Button>
     <Button variant="primary" disabled={busy || !resolution.trim()} onclick={handleResolve}>
       Resolve

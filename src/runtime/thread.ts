@@ -30,12 +30,13 @@ import {
   type ProjectSnapshot,
 } from './wizards.js'
 import { parseCoordinatorDraft } from './meta-intake.js'
+import { thresholdMs } from './liveness.js'
 
 // ---------------------------------------------------------------------------
 // Turn shape
 // ---------------------------------------------------------------------------
 
-export type TurnPersona = 'intake' | 'spec' | 'worker' | 'coord' | 'system'
+export type TurnPersona = 'intake' | 'spec' | 'worker' | 'reviewer' | 'coord' | 'system'
 export type TurnStatus = 'done' | 'active' | 'pending'
 export type TurnPhase = 'setup' | 'intake' | 'spec' | 'ready' | 'inflight' | 'blocked' | 'done'
 export type SetupAffordance =
@@ -44,6 +45,12 @@ export type SetupAffordance =
   | 'inline-textarea'
   | 'inline-button'
   | 'inline-choice'
+export interface LiveActivity {
+  at?: string | undefined
+  label: string
+  tone: 'neutral' | 'running' | 'ok' | 'warn' | 'danger'
+  detail?: string | undefined
+}
 
 interface TurnBase {
   id: string
@@ -141,6 +148,17 @@ export interface EscalationTurn extends TurnBase {
   escalationId: string
   summary: string
   details?: string | undefined
+  activity?: LiveActivity[] | undefined
+}
+
+/** Reviewer feedback returned the task to implementation. */
+export interface ReviewFeedbackTurn extends TurnBase {
+  kind: 'review_feedback'
+  taskId: string
+  taskTitle: string
+  summary: string
+  feedback: string
+  revisionCount?: number | undefined
 }
 
 /** Task is currently running; informational, no user action required. */
@@ -153,7 +171,13 @@ export interface InFlightTurn extends TurnBase {
   liveAgent?: {
     name: string
     startedAt?: string | undefined
+    lastEventAt?: string | undefined
+    lastEventType?: string | undefined
+    lastEventLabel?: string | undefined
+    silentMs?: number | undefined
+    stalled?: boolean | undefined
   } | undefined
+  activity?: LiveActivity[] | undefined
   checklist?: {
     title: string
     doneCount: number
@@ -173,6 +197,7 @@ export type ThreadTurn =
   | BriefTurn
   | AgentQuestionTurn
   | SpecReviewTurn
+  | ReviewFeedbackTurn
   | EscalationTurn
   | InFlightTurn
 
@@ -200,6 +225,10 @@ export interface BuildThreadOptions {
       type?: string | undefined
       task_id?: string | null | undefined
       agent_name?: string | null | undefined
+      tool_name?: string | null | undefined
+      message?: string | null | undefined
+      output?: string | null | undefined
+      is_error?: boolean | null | undefined
     } | undefined
   }>
 }
@@ -366,6 +395,7 @@ function setupCurrentValue(stepId: string, snap: ProjectSnapshot, projectPath: s
 }
 
 function phaseForTurn(turn: ThreadTurn): TurnPhase {
+  if (turn.kind === 'review_feedback') return turn.phase
   if (turn.status === 'done') return 'done'
   switch (turn.kind) {
     case 'setup_step':
@@ -400,7 +430,7 @@ function personaForAgent(agentName: string | undefined): TurnPersona | null {
   switch (agentName) {
     case 'spec-agent': return 'spec'
     case 'worker-agent': return 'worker'
-    case 'reviewer-agent':
+    case 'reviewer-agent': return 'reviewer'
     case 'gate-checker-agent':
       return 'coord'
     default:
@@ -408,8 +438,29 @@ function personaForAgent(agentName: string | undefined): TurnPersona | null {
   }
 }
 
-function liveAgentsByTask(events: BuildThreadOptions['recentEvents']): Map<string, { name: string; startedAt?: string | undefined }> {
-  const live = new Map<string, { name: string; startedAt?: string | undefined }>()
+function liveAgentsByTask(events: BuildThreadOptions['recentEvents']): Map<string, {
+  name: string
+  startedAt?: string | undefined
+  lastEventAt?: string | undefined
+  lastEventType?: string | undefined
+  lastEventLabel?: string | undefined
+  silentMs?: number | undefined
+  stalled?: boolean | undefined
+}> {
+  const activityTypes = new Set([
+    'assistant_delta',
+    'assistant_complete',
+    'line_complete',
+    'tool_started',
+    'tool_completed',
+  ])
+  const live = new Map<string, {
+    name: string
+    startedAt?: string | undefined
+    lastEventAt?: string | undefined
+    lastEventType?: string | undefined
+    lastEventLabel?: string | undefined
+  }>()
   for (const envelope of events ?? []) {
     const ev = envelope.event
     const taskId = typeof ev?.task_id === 'string' ? ev.task_id : null
@@ -418,6 +469,9 @@ function liveAgentsByTask(events: BuildThreadOptions['recentEvents']): Map<strin
       live.set(taskId, {
         name: typeof ev.agent_name === 'string' ? ev.agent_name : 'agent',
         startedAt: envelope.at,
+        lastEventAt: envelope.at,
+        lastEventType: ev.type,
+        lastEventLabel: 'Started working',
       })
     } else if (
       ev?.type === 'agent_finished' ||
@@ -426,9 +480,162 @@ function liveAgentsByTask(events: BuildThreadOptions['recentEvents']): Map<strin
       ev?.type === 'error'
     ) {
       live.delete(taskId)
+    } else if (live.has(taskId)) {
+      const current = live.get(taskId)!
+      live.set(taskId, {
+        ...current,
+        lastEventAt: envelope.at ?? current.lastEventAt,
+        lastEventType: ev?.type,
+        lastEventLabel: liveEventLabel(ev),
+      })
+    } else if (ev?.type && activityTypes.has(ev.type)) {
+      live.set(taskId, {
+        name: typeof ev.agent_name === 'string' ? ev.agent_name : 'agent',
+        startedAt: envelope.at,
+        lastEventAt: envelope.at,
+        lastEventType: ev.type,
+        lastEventLabel: liveEventLabel(ev),
+      })
     }
   }
-  return live
+  const now = Date.now()
+  const stalledAfterMs = thresholdMs('standard')
+  return new Map(Array.from(live.entries()).map(([taskId, entry]) => {
+    const last = entry.lastEventAt ? Date.parse(entry.lastEventAt) : NaN
+    const silentMs = Number.isFinite(last) ? Math.max(0, now - last) : undefined
+    return [
+      taskId,
+      {
+        ...entry,
+        ...(silentMs !== undefined ? { silentMs } : {}),
+        stalled: silentMs !== undefined ? silentMs >= stalledAfterMs : false,
+      },
+    ]
+  }))
+}
+
+function liveEventLabel(
+  ev: NonNullable<BuildThreadOptions['recentEvents']>[number]['event'],
+): string {
+  const type = ev?.type ?? ''
+  const tool = friendlyToolName(typeof ev?.tool_name === 'string' ? ev.tool_name : '')
+  if (type === 'tool_started' && tool) return `Started ${tool}`
+  if (type === 'tool_completed' && ev?.is_error && tool) return `Failed ${tool}`
+  if (type === 'tool_completed' && tool) return `Finished ${tool}`
+  if (type === 'assistant_delta') return 'Writing'
+  if (type === 'assistant_complete') return 'Finished a thought'
+  if (type === 'line_complete' && typeof ev?.message === 'string' && ev.message.trim()) {
+    return ev.message.trim()
+  }
+  return type ? type.replace(/_/g, ' ') : 'Working'
+}
+
+function friendlyToolName(tool: string): string {
+  switch (tool) {
+    case 'read-file': return 'file read'
+    case 'edit-file': return 'file edit'
+    case 'run-command': return 'command'
+    case 'search-files': return 'file search'
+    case 'list-files': return 'file list'
+    default: return tool.replace(/[-_]/g, ' ')
+  }
+}
+
+function liveEventTone(
+  ev: NonNullable<BuildThreadOptions['recentEvents']>[number]['event'],
+): 'neutral' | 'running' | 'ok' | 'warn' | 'danger' {
+  const type = ev?.type ?? ''
+  if (type === 'error' || (type === 'tool_completed' && ev?.is_error)) return 'danger'
+  if (type === 'tool_started' || type === 'assistant_delta') return 'running'
+  if (type === 'tool_completed' || type === 'assistant_complete') return 'ok'
+  if (type === 'line_complete') return 'warn'
+  return 'neutral'
+}
+
+function truncateDetail(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim()
+  if (!trimmed) return undefined
+  if (
+    trimmed.includes('Invalid input for edit-file') &&
+    /"path"\s*:\s*\[\s*"oldString"\s*\]/.test(trimmed)
+  ) {
+    return 'The file edit was missing oldString: the exact existing text to replace. Read the file, then call edit-file with filePath, oldString, and newString.'
+  }
+  return trimmed.length > 180 ? `${trimmed.slice(0, 177)}...` : trimmed
+}
+
+function rollingDetail(value: string): string | undefined {
+  const compact = value.replace(/\s+/g, ' ').trim()
+  if (!compact) return undefined
+  return compact.length > 220 ? `...${compact.slice(-217)}` : compact
+}
+
+function compactReviewSummary(value: string): string {
+  const firstAction = value
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.startsWith('- '))
+  if (firstAction) return firstAction.replace(/^-+\s*/, '')
+  const firstSentence = value.replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/)[0]
+  return firstSentence || 'Reviewer requested revisions.'
+}
+
+function trimActivityItems(items: LiveActivity[], limit = 6): LiveActivity[] {
+  if (items.length <= limit) return items
+  const recent = items.slice(-limit)
+  const included = new Set(recent)
+  const stickyFailures = items
+    .filter(item => item.tone === 'danger' && !included.has(item))
+    .slice(-2)
+  if (stickyFailures.length === 0) return recent
+  return [...stickyFailures, ...recent.slice(-(limit - stickyFailures.length))]
+}
+
+function activityByTask(events: BuildThreadOptions['recentEvents']): Map<string, LiveActivity[]> {
+  const activity = new Map<string, LiveActivity[]>()
+  let lastAssistantDeltaTask: string | null = null
+  const deltaTextByTask = new Map<string, string>()
+  for (const envelope of events ?? []) {
+    const ev = envelope.event
+    const taskId = typeof ev?.task_id === 'string' ? ev.task_id : null
+    if (!taskId) continue
+    const type = ev?.type ?? ''
+    const include =
+      type === 'line_complete' ||
+      type === 'tool_started' ||
+      type === 'tool_completed' ||
+      type === 'assistant_complete' ||
+      type === 'error' ||
+      type === 'assistant_delta'
+    if (!include) continue
+    if (type === 'assistant_delta') {
+      const message = typeof ev?.message === 'string' ? ev.message : ''
+      const nextText = `${deltaTextByTask.get(taskId) ?? ''}${message}`
+      deltaTextByTask.set(taskId, nextText.slice(-1000))
+    } else {
+      deltaTextByTask.delete(taskId)
+    }
+    const items = activity.get(taskId) ?? []
+    if (type === 'assistant_delta' && lastAssistantDeltaTask === taskId) {
+      const last = items.at(-1)
+      if (last) last.detail = rollingDetail(deltaTextByTask.get(taskId) ?? '')
+    } else {
+      items.push({
+        at: envelope.at,
+        label: liveEventLabel(ev),
+        tone: liveEventTone(ev),
+        ...(type === 'assistant_delta'
+          ? { detail: rollingDetail(deltaTextByTask.get(taskId) ?? '') }
+          : {}),
+        ...(type === 'tool_completed' || type === 'error'
+          ? { detail: truncateDetail(ev?.output ?? ev?.message) }
+          : {}),
+      })
+    }
+    lastAssistantDeltaTask = type === 'assistant_delta' ? taskId : null
+    activity.set(taskId, trimActivityItems(items))
+  }
+  return activity
 }
 
 export function buildThread(opts: BuildThreadOptions): Thread {
@@ -437,6 +644,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
   const tasksPath = join(opts.projectPath, 'memory', 'TASKS.json')
   const tasks = existsSync(tasksPath) ? tasksArray(readJsonSafe(tasksPath)) : []
   const liveAgents = liveAgentsByTask(opts.recentEvents)
+  const liveActivity = activityByTask(opts.recentEvents)
   const metaIntakeDraftReady = tasks.some((t) =>
     t.id === 'task-meta-intake' &&
     t.status === 'spec_review' &&
@@ -619,6 +827,42 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       })
     }
 
+    const notes = Array.isArray(t.notes)
+      ? (t.notes as Array<Record<string, unknown>>)
+      : []
+    const reviewerNotes = notes
+      .map((note, index) => ({ note, index }))
+      .filter(({ note }) => {
+        const role = typeof note.role === 'string' ? note.role : ''
+        const agentId = typeof note.agentId === 'string' ? note.agentId : ''
+        const content = typeof note.content === 'string' ? note.content.trim() : ''
+        return !!content && (role === 'reviewer' || agentId.includes('reviewer'))
+      })
+    for (const [reviewIndex, { note, index }] of reviewerNotes.entries()) {
+      const role = typeof note.role === 'string' ? note.role : ''
+      const agentId = typeof note.agentId === 'string' ? note.agentId : ''
+      const content = typeof note.content === 'string' ? note.content.trim() : ''
+      if (!content) continue
+      if (role !== 'reviewer' && !agentId.includes('reviewer')) continue
+      const isLatestReviewFeedback = reviewIndex === reviewerNotes.length - 1
+      const at = typeof note.timestamp === 'string' ? note.timestamp : createdAt
+      turns.push({
+        kind: 'review_feedback',
+        id: `review:${taskId}:${at}:${index}`,
+        at,
+        persona: 'reviewer',
+        status: 'done',
+        phase: isLatestReviewFeedback && taskStatus !== 'done' && taskStatus !== 'shelved'
+          ? 'inflight'
+          : 'done',
+        taskId,
+        taskTitle,
+        summary: compactReviewSummary(content),
+        feedback: content,
+        revisionCount: reviewIndex + 1,
+      })
+    }
+
     const hasUnansweredQuestions = openQs.some(q => !q.answeredAt)
     const hasActiveBriefTurn = !!brief && !approvedAt && taskStatus === 'exploring'
     if (
@@ -643,10 +887,10 @@ export function buildThread(opts: BuildThreadOptions): Thread {
             : taskStatus === 'ready'
               ? 'Ready for a worker.'
               : taskStatus === 'gate_check'
-                ? 'Gates are running.'
+                ? 'Gate checks are next.'
                 : taskStatus === 'review'
-                  ? 'Review is running.'
-                  : 'Agent is working.'
+                  ? 'Review is next.'
+                  : 'Waiting for worker activity.'
       turns.push({
         kind: 'inflight',
         id: `inflight:${taskId}`,
@@ -659,6 +903,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         taskStatus,
         summary,
         liveAgent,
+        activity: liveActivity.get(taskId),
         checklist: taskStatus === 'exploring' ? specFillChecklist(opts.projectPath, t) : undefined,
       })
     }
@@ -691,6 +936,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         escalationId: escId,
         summary,
         details: typeof esc.details === 'string' ? esc.details : undefined,
+        activity: liveActivity.get(taskId),
       })
     }
   }

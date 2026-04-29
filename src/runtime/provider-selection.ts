@@ -54,7 +54,7 @@ export type PreferredProviderKey =
   | 'anthropic-api'
   | 'openai-api'
 
-function normalizePreferred(key: PreferredProviderKey): ProviderName {
+export function normalizePreferredProvider(key: PreferredProviderKey): ProviderName {
   if (key === 'codex') return 'codex-oauth'
   return key
 }
@@ -84,6 +84,12 @@ export interface SelectApiClientOptions {
    * `'codex-oauth'`) for convenience.
    */
   preferredProvider?: PreferredProviderKey
+  /**
+   * When a preferred provider is set but unavailable, allow falling back to
+   * another paid/cloud provider. Defaults false so stale local preferences do
+   * not silently spend money.
+   */
+  allowPaidProviderFallback?: boolean
   /**
    * Override the Claude credential path. Primarily used by tests. When
    * omitted we defer to the provider's default (env → ~/.claude/.credentials.json).
@@ -122,9 +128,21 @@ export async function selectApiClient(
   // unreachable we fall through to the normal detection order so the user is
   // not blocked by a stale preference when their environment changes.
   if (opts.preferredProvider) {
-    const preferred = normalizePreferred(opts.preferredProvider)
+    const preferred = normalizePreferredProvider(opts.preferredProvider)
     const probe = await tryProvider(preferred, opts)
     if (probe.ok) return probe.result
+    if (!opts.allowPaidProviderFallback) {
+      const local = preferred === 'llama-cpp' ? { ok: false } as Probe : tryLlama(opts)
+      if (local.ok) return local.result
+      const reason =
+        `${preferred} is preferred but unavailable. Paid-provider fallback is disabled; ` +
+        'enable allowPaidProviderFallback in ~/.guildhall/config.yaml or this project\'s .guildhall/config.yaml to fall back to another cloud provider.'
+      return {
+        apiClient: notImplementedApiClient(reason),
+        providerName: 'none',
+        reason,
+      }
+    }
   }
 
   const claude = await tryClaude(opts)

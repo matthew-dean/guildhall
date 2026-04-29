@@ -200,6 +200,7 @@ export function createSpecAgent(
     skills?: readonly SkillDefinition[]
     hookExecutor?: HookExecutor
     compactor?: Compactor
+    cwd?: string
     sessionPersistence?: { cwd: string; sessionId?: string }
     /** Optional tools appended to the factory's built-in set (e.g. MCP adapters). */
     extraTools?: readonly AnyTool[]
@@ -209,6 +210,7 @@ export function createSpecAgent(
     name: 'spec-agent',
     llm,
     systemPrompt: SPEC_AGENT_PROMPT,
+    ...(opts.cwd ? { cwd: opts.cwd } : {}),
     tools: [
       readFileTool,
       writeFileTool,

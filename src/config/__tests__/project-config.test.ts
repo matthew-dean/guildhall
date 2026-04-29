@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { ensureProjectLocalStateIgnored } from '../project-config.js'
+import { ensureProjectLocalStateIgnored, readProjectConfig, updateProjectConfig } from '../project-config.js'
 
 const TMP = join(tmpdir(), `guildhall-project-config-test-${process.pid}`)
 
@@ -43,5 +43,16 @@ describe('project config local state guard', () => {
     ensureProjectLocalStateIgnored(project)
 
     expect(readFileSync(join(project, '.gitignore'), 'utf8')).toBe('dist\n/.guildhall/\n')
+  })
+
+  it('keeps paid-provider fallback unset until a project explicitly opts in', () => {
+    const project = join(TMP, 'provider-policy')
+    mkdirSync(project, { recursive: true })
+
+    expect(readProjectConfig(project).allowPaidProviderFallback).toBeUndefined()
+
+    updateProjectConfig(project, { allowPaidProviderFallback: true })
+
+    expect(readProjectConfig(project).allowPaidProviderFallback).toBe(true)
   })
 })

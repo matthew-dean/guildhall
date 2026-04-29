@@ -138,9 +138,20 @@ export interface CoordinatorConfig {
 
 export interface ProjectRun {
   status?: string
+  mode?: 'continuous' | 'one_task' | string
   startedAt?: string
   stoppedAt?: string
   error?: string
+  providerStatus?: ProviderStatus
+}
+
+export interface ProviderStatus {
+  preferredProvider?: string | null
+  activeProvider?: string | null
+  fallback?: boolean
+  allowPaidProviderFallback?: boolean
+  selectedAt?: string
+  reason?: string
 }
 
 export interface BootstrapStep {
@@ -173,6 +184,7 @@ export interface ProjectDetail {
   }
   tasks?: Task[]
   run?: ProjectRun | null
+  providerStatus?: ProviderStatus | null
   bootstrapStatus?: BootstrapStatus
   recentEvents?: EventEnvelope[]
   error?: string

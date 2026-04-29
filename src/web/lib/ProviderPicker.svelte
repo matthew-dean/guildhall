@@ -64,7 +64,7 @@
 
 {#if selected === 'anthropic-api' || selected === 'openai-api'}
   <label class="field-label" for="pp-key">
-    API key (stored in <code>.guildhall/config.yaml</code>, gitignored)
+    API key (stored globally in <code>~/.guildhall/providers.yaml</code>)
   </label>
   <Input
     id="pp-key"

@@ -177,6 +177,11 @@ export const GlobalConfig = z.object({
 
   // Dashboard server port for `guildhall serve`
   servePort: z.number().int().min(1024).max(65535).default(7777),
+
+  // Whether a project whose preferred provider is unavailable may fall back
+  // to another paid/cloud provider. Default is deliberately false; projects
+  // can opt in through their local .guildhall/config.yaml.
+  allowPaidProviderFallback: z.boolean().default(false),
 })
 export type GlobalConfig = z.infer<typeof GlobalConfig>
 
@@ -216,8 +221,10 @@ export type WorkspaceRegistry = z.infer<typeof WorkspaceRegistry>
 // memory/agent-overrides.yaml — agent-accumulated configuration
 //
 // Written by agents at runtime via the saveAgentSetting tool.
-// Merged on top of guildhall.yaml during config resolution, so it is the highest-
-// priority config layer (below env vars only).
+// Project-behavior fields are merged on top of guildhall.yaml during config
+// resolution. Model assignments are intentionally not agent-owned; they describe
+// the user's machine and belong in ~/.guildhall/config.yaml unless a human adds
+// an explicit workspace override.
 //
 // Humans can inspect, edit, or revert this file — it is plain YAML.
 // Agents record the rationale for every change in DECISIONS.md so you always
@@ -263,7 +270,8 @@ export const AgentSettings = z.object({
   // Schema version for future migration
   version: z.literal(1).default(1),
 
-  // Model overrides — e.g. if the agent found a role's model keeps timing out
+  // Legacy field: parsed for backward compatibility, but config resolution
+  // ignores it. Model defaults are user/machine settings.
   models: ModelAssignmentConfig.partial().optional(),
 
   // Per-coordinator overrides, keyed by coordinator id (e.g. "looma", "knit")

@@ -42,6 +42,8 @@ Flags:
 
 - `--domain <id>` — only tick this one coordinator domain.
 - `--max-ticks <n>` — stop after N ticks. For testing.
+- `--one-task` — stop after one task reaches a terminal, PR, or blocked
+  handoff point.
 
 ## `guildhall serve [path]`
 

@@ -103,7 +103,29 @@ export const raiseEscalationTool = defineTool({
   description:
     "Raise a structured escalation on a task. This halts the task (sets status='blocked') and records a typed event to PROGRESS.md. Use this — not a plain note — whenever the task needs a human decision or cannot proceed autonomously.",
   inputSchema: raiseEscalationInputSchema,
-  jsonSchema: { type: 'object' },
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      tasksPath: { type: 'string', description: 'Absolute path to TASKS.json' },
+      progressPath: { type: 'string', description: 'Absolute path to PROGRESS.md' },
+      taskId: { type: 'string' },
+      agentId: { type: 'string' },
+      reason: {
+        type: 'string',
+        enum: [
+          'spec_ambiguous',
+          'max_revisions_exceeded',
+          'human_judgment_required',
+          'decision_required',
+          'gate_hard_failure',
+          'scope_boundary',
+        ],
+      },
+      summary: { type: 'string' },
+      details: { type: 'string' },
+    },
+    required: ['taskId', 'agentId', 'reason', 'summary'],
+  },
   isReadOnly: () => false,
   execute: async (input) => {
     const result = await raiseEscalation(input)

@@ -118,6 +118,43 @@ describe('CodexClient', () => {
     expect(terminal.stop_reason).toBe('tool_use')
   })
 
+  it("serializes tools with no properties as `parameters: { type: 'object', properties: {} }`", async () => {
+    let captured: Record<string, unknown> | undefined
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      captured = JSON.parse((init?.body as string) ?? '{}') as Record<string, unknown>
+      return sseResponse([
+        dataFrame({
+          type: 'response.completed',
+          response: { status: 'completed', usage: { input_tokens: 0, output_tokens: 0 } },
+        }),
+      ])
+    }) as unknown as typeof fetch
+    const client = new CodexClient({ credential: testCred, fetch: fakeFetch })
+    await collect(
+      client.streamMessage({
+        model: 'gpt-5.3-codex',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'run' }] }],
+        max_tokens: 64,
+        tools: [
+          { name: 'noargs', description: 'no args', input_schema: { type: 'object' } },
+          { name: 'empty', description: 'empty schema', input_schema: {} },
+          { name: 'oneArg', description: 'one', input_schema: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] } },
+        ],
+      }),
+    )
+
+    const tools = captured?.tools as Array<Record<string, unknown>>
+    expect(tools).toHaveLength(3)
+    for (const tool of tools) {
+      const params = tool.parameters as Record<string, unknown>
+      expect(params.type).toBe('object')
+      expect(params.properties).toBeTypeOf('object')
+      expect(params.properties).not.toBeNull()
+    }
+    expect((tools[2]!.parameters as Record<string, unknown>).properties).toEqual({ x: { type: 'string' } })
+    expect((tools[2]!.parameters as Record<string, unknown>).required).toEqual(['x'])
+  })
+
   it('throws on response.failed events', async () => {
     const frames = [
       dataFrame({

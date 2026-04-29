@@ -13,6 +13,9 @@ import {
   bootstrapWorkspace,
   readProjectConfig,
   updateProjectConfig,
+  readGlobalConfig,
+  updateGlobalConfig,
+  resolveConfig,
   FORGE_YAML_FILENAME,
   slugify,
   readGlobalProviders,
@@ -39,7 +42,12 @@ import {
   pickPrimaryEngineer,
 } from '@guildhall/guilds'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
-import { selectApiClient, type PreferredProviderKey } from './provider-selection.js'
+import {
+  normalizePreferredProvider,
+  inferPreferredProvider,
+  selectApiClient,
+  type PreferredProviderKey,
+} from './provider-selection.js'
 import {
   createExploringTask,
   approveSpec,
@@ -411,8 +419,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tasks = Array.isArray(raw) ? raw : Array.isArray(raw?.tasks) ? raw.tasks : []
       }
       const run = supervisor.get(project.id)
-      const recent = supervisor.recent(project.id)
+      const preferredProvider = readProjectConfig(project.path).preferredProvider
+      const preferredActiveProvider = preferredProvider
+        ? normalizePreferredProvider(preferredProvider)
+        : undefined
+      const recent = supervisor.recent(project.id, undefined, project.path)
       const bootstrapStatus = readBootstrapStatus(join(project.path, 'memory'))
+      const providerStatus = run?.providerStatus ?? (
+        preferredActiveProvider
+          ? {
+              preferredProvider,
+              activeProvider: null,
+              fallback: false,
+            }
+          : null
+      )
       return c.json({
         initializationNeeded: false,
         id: project.id,
@@ -424,11 +445,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         run: run
           ? {
               status: run.status,
+              mode: run.mode,
               startedAt: run.startedAt,
               stoppedAt: run.stoppedAt,
               error: run.error,
+              ...(run.providerStatus ? { providerStatus: run.providerStatus } : {}),
             }
           : null,
+        providerStatus,
         recentEvents: recent,
         ...(bootstrapStatus ? { bootstrapStatus } : {}),
       })
@@ -499,9 +523,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         /* best-effort */
       }
       const creds = resolveGlobalCredentials()
-      const preferred = projectCfg.preferredProvider
+      const globalCfg = readGlobalConfig()
+      const resolvedConfig = resolveConfig({ workspacePath: project.path })
+      const preferred = projectCfg.preferredProvider ?? inferPreferredProvider(resolvedConfig.models)
+      const allowPaidProviderFallback =
+        projectCfg.allowPaidProviderFallback ?? globalCfg.allowPaidProviderFallback
       const preflight = await selectApiClient({
         ...(preferred ? { preferredProvider: preferred } : {}),
+        ...(allowPaidProviderFallback ? { allowPaidProviderFallback: true } : {}),
         ...(creds.anthropicApiKey ? { anthropicApiKey: creds.anthropicApiKey } : {}),
         ...(creds.openaiApiKey ? { openaiApiKey: creds.openaiApiKey } : {}),
         ...(creds.llamaCppUrl ? { llamaCppUrl: creds.llamaCppUrl } : {}),
@@ -518,20 +547,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         )
       }
       if (preflight.providerName === 'llama-cpp' && creds.llamaCppUrl && project.config) {
-        const configuredModels = project.config.models ?? {}
-        const assignedModels: ModelAssignmentConfig = {
-          spec: configuredModels.spec ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.spec,
-          coordinator: configuredModels.coordinator ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.coordinator,
-          worker: configuredModels.worker ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.worker,
-          reviewer: configuredModels.reviewer ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.reviewer,
-          gateChecker: configuredModels.gateChecker ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.gateChecker,
-        }
+        const assignedModels = resolvedConfig.models
         const loadedModels = await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
         if (loadedModels.length === 0) {
           return c.json(
             {
               error:
-                'LM Studio is reachable, but Guildhall could not see a loaded model. Load a model in LM Studio, then start again.',
+                'LM Studio is reachable, but Guildhall could not see a loaded model. To avoid surprise memory pressure from JIT loading, load the model you want in LM Studio, then start again.',
               code: 'no_loaded_model',
               provider: 'llama-cpp',
             },
@@ -543,8 +565,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           return c.json(
             {
               error:
-                `LM Studio has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
-                'Save the LM Studio provider again or load the configured model before starting.',
+                `LM Studio currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
+                'Guildhall will not JIT-load missing models automatically; load the configured model in LM Studio or choose a loaded model in Providers.',
               code: 'model_unavailable',
               provider: 'llama-cpp',
               loadedModels,
@@ -554,11 +576,35 @@ export function buildServeApp(opts: ServeOptions = {}): {
           )
         }
       }
-      const run = supervisor.start({ workspaceId: project.id, workspacePath: project.path })
+      const body = await c.req.json().catch(() => ({})) as {
+        mode?: string
+        stopAfterOneTask?: boolean
+      }
+      const stopAfterOneTask =
+        body.stopAfterOneTask === true || body.mode === 'one_task'
+      const normalizedPreferred = preferred
+        ? normalizePreferredProvider(preferred)
+        : undefined
+      const providerStatus = {
+        ...(preferred ? { preferredProvider: preferred } : {}),
+        activeProvider: preflight.providerName,
+        fallback: Boolean(normalizedPreferred && normalizedPreferred !== preflight.providerName),
+        allowPaidProviderFallback,
+        selectedAt: new Date().toISOString(),
+        ...(preflight.reason ? { reason: preflight.reason } : {}),
+      }
+      const run = supervisor.start({
+        workspaceId: project.id,
+        workspacePath: project.path,
+        ...(stopAfterOneTask ? { stopAfterOneTask: true } : {}),
+        providerStatus,
+      })
       return c.json({
         status: run.status,
+        mode: run.mode,
         startedAt: run.startedAt,
         provider: preflight.providerName,
+        providerStatus: run.providerStatus,
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -567,9 +613,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.post('/api/project/stop', async c => {
     try {
-      const stopped = await supervisor.stop(project.id)
-      if (!stopped) return c.json({ error: 'stop timed out' }, 504)
-      return c.json({ ok: true })
+      const stopped = await supervisor.stop(project.id, { waitMs: 1_000 })
+      return c.json({ ok: true, status: stopped ? 'stopped' : 'stopping' })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -1329,7 +1374,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const thread = buildThread({
         projectPath: project.path,
-        recentEvents: supervisor.recent(project.id),
+        recentEvents: supervisor.recent(project.id, undefined, project.path),
       })
       return c.json(thread)
     } catch (err) {
@@ -1559,7 +1604,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const id = c.req.param('id')
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
-      const recent = filterEventsForTask(supervisor.recent(project.id), id)
+      const recent = filterEventsForTask(supervisor.recent(project.id, undefined, project.path), id)
       return c.json({ task, recentEvents: recent })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -1755,6 +1800,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           message?: string
           resolveEscalationId?: string
           resolution?: string
+          preserveStatus?: boolean
         }
         if (!body.message && !body.resolveEscalationId) {
           return c.json({ error: 'Provide a message or an escalation to resolve' }, 400)
@@ -1765,6 +1811,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ...(body.message ? { message: body.message } : {}),
           ...(body.resolveEscalationId ? { resolveEscalationId: body.resolveEscalationId } : {}),
           ...(body.resolution ? { resolution: body.resolution } : {}),
+          ...(body.preserveStatus ? { preserveStatus: true } : {}),
         })
         if (!result.success) return c.json({ error: result.error ?? 'resume failed' }, 400)
         return c.json({ ok: true })
@@ -2364,7 +2411,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         name,
         id,
         ...(subProjectPath ? { projectPath: subProjectPath } : existing?.projectPath ? { projectPath: existing.projectPath } : {}),
-        models: existing?.models ?? { ...DEFAULT_LOCAL_MODEL_ASSIGNMENT },
+        ...(existing?.models ? { models: existing.models } : {}),
         coordinators: existing?.coordinators ?? [],
         maxRevisions: existing?.maxRevisions ?? 3,
         heartbeatInterval: existing?.heartbeatInterval ?? 5,
@@ -2537,21 +2584,171 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (typeof body.lmStudioUrl === 'string' && body.lmStudioUrl.trim().length > 0) {
         const url = body.lmStudioUrl.trim()
         setProvider('llama-cpp', { url })
-        const loadedModels = await loadedLlamaModelIds(url).catch(() => [])
-        const loadedModel = loadedModels[0]
-        if (loadedModel) {
-          const workspace = readWorkspaceConfig(projectPath)
-          writeWorkspaceConfig(projectPath, {
-            ...workspace,
-            models: modelAssignmentForSingleModel(loadedModel),
-          })
-        }
       }
       return c.json({ ok: true })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })
+
+  app.get('/api/config/models', async c => {
+    try {
+      const global = readGlobalConfig()
+      const workspace = readWorkspaceConfig(projectPath)
+      const resolved = resolveConfig({ workspacePath: projectPath })
+      const creds = resolveGlobalCredentials()
+      const loadedModels = creds.llamaCppUrl
+        ? await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
+        : []
+      const missingModels = loadedModels.length > 0
+        ? missingAssignedModels(resolved.models, loadedModels)
+        : []
+      return c.json({
+        globalModels: global.models ?? {},
+        projectModels: workspace.models ?? {},
+        effectiveModels: resolved.models,
+        loadedModels,
+        missingModels,
+        catalog: [
+          ...new Map(
+            [
+              ...loadedModels.map(id => ({
+                id,
+                provider: 'lm-studio',
+                notes: 'Loaded in LM Studio',
+              })),
+              ...MODEL_CATALOG.map(m => ({
+                id: m.id,
+                provider: m.provider,
+                notes: m.notes ?? '',
+              })),
+              ...Object.values(global.models ?? {}).map(id => ({
+                id,
+                provider: 'lm-studio',
+                notes: 'Global default',
+              })),
+              ...Object.values(workspace.models ?? {}).map(id => ({
+                id,
+                provider: 'lm-studio',
+                notes: 'Project override',
+              })),
+            ].map(item => [item.id, item]),
+          ).values(),
+        ],
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/config/models', async c => {
+    try {
+      const body = (await c.req.json().catch(() => ({}))) as {
+        scope?: 'global' | 'project' | 'global-default'
+        role?: keyof ModelAssignmentConfig
+        model?: string
+        models?: Partial<ModelAssignmentConfig>
+      }
+      const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker']
+      if (!body.scope) return c.json({ error: 'Missing "scope"' }, 400)
+
+      const requestedModels = body.models && typeof body.models === 'object'
+        ? Object.entries(body.models).filter((entry): entry is [keyof ModelAssignmentConfig, string] => {
+            const [role, model] = entry
+            return roles.includes(role as keyof ModelAssignmentConfig) && typeof model === 'string'
+          })
+        : null
+      if (body.models && requestedModels?.length !== Object.keys(body.models).length) {
+        return c.json({ error: 'Unknown model role' }, 400)
+      }
+      if (!requestedModels && (!body.role || !roles.includes(body.role))) {
+        return c.json({ error: 'Unknown model role' }, 400)
+      }
+
+      if (body.scope === 'global') {
+        const global = readGlobalConfig()
+        const nextModels = { ...(global.models ?? {}) }
+        if (requestedModels) {
+          for (const [role, model] of requestedModels) {
+            const trimmed = model.trim()
+            if (!trimmed) return c.json({ error: 'Missing "model"' }, 400)
+            nextModels[role] = trimmed
+          }
+        } else {
+          const model = body.model?.trim()
+          if (!model || !body.role) return c.json({ error: 'Missing "model"' }, 400)
+          nextModels[body.role] = model
+        }
+        updateGlobalConfig({
+          ...global,
+          models: nextModels,
+        })
+        return c.json({ ok: true })
+      }
+
+      const workspace = readWorkspaceConfig(projectPath)
+      const nextModels = { ...(workspace.models ?? {}) }
+      if (body.scope === 'global-default') {
+        if (requestedModels) {
+          for (const [role] of requestedModels) delete nextModels[role]
+        } else if (body.role) {
+          delete nextModels[body.role]
+        }
+      } else if (body.scope === 'project') {
+        if (requestedModels) {
+          for (const [role, model] of requestedModels) {
+            const trimmed = model.trim()
+            if (!trimmed) return c.json({ error: 'Missing "model"' }, 400)
+            nextModels[role] = trimmed
+          }
+        } else if (body.role) {
+          const model = body.model?.trim()
+          if (!model) return c.json({ error: 'Missing "model"' }, 400)
+          nextModels[body.role] = model
+        }
+      } else {
+        return c.json({ error: 'Unknown model scope' }, 400)
+      }
+
+      const nextConfig = { ...workspace }
+      if (Object.keys(nextModels).length > 0) {
+        nextConfig.models = nextModels
+      } else {
+        delete nextConfig.models
+      }
+      writeWorkspaceConfig(projectPath, nextConfig)
+      project = resolveProject(project.path)
+      return c.json({ ok: true })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  function providerRoundtripSampleFromMessage(message: {
+    content?: Array<
+      | { type: 'text'; text: string }
+      | { type: 'reasoning'; text: string }
+      | { type: 'tool_use'; name: string }
+      | Record<string, unknown>
+    >
+  }): string {
+    const blocks = Array.isArray(message.content) ? message.content : []
+    const text = blocks
+      .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+      .map(block => block.text)
+      .join('')
+      .trim()
+    if (text.length > 0) return text
+    const reasoning = blocks
+      .filter((block): block is { type: 'reasoning'; text: string } => block.type === 'reasoning')
+      .map(block => block.text)
+      .join('')
+      .trim()
+    if (reasoning.length > 0) return '[reasoning response]'
+    const toolUse = blocks.find((block): block is { type: 'tool_use'; name: string } => block.type === 'tool_use')
+    if (toolUse) return `[tool call: ${toolUse.name}]`
+    return ''
+  }
 
   // Pick a cheap, widely-available model id for a verification round-trip
   // against each provider. For llama.cpp we ask the server which model is
@@ -2568,7 +2765,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return 'gpt-4o-mini'
       case 'codex':
       case 'codex-oauth':
-        return 'gpt-5-codex'
+        return 'gpt-5.3-codex'
       case 'llama-cpp': {
         if (!llamaUrl) return undefined
         try {
@@ -2643,6 +2840,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           sample += ev.text
           if (sample.length > 80) break
         } else if (ev.type === 'message_complete') {
+          if (sample.trim().length === 0) sample = providerRoundtripSampleFromMessage(ev.message)
           break
         }
       }
@@ -2717,7 +2915,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/events', c => {
     return streamSSE(c, async stream => {
       await stream.writeSSE({ data: JSON.stringify({ type: 'connected', projectId: project.id }) })
-      for (const ev of supervisor.recent(project.id)) {
+      for (const ev of supervisor.recent(project.id, undefined, project.path)) {
         await stream.writeSSE({ data: JSON.stringify(ev) })
       }
       const unsubscribe = supervisor.subscribe(ev => {

@@ -57,8 +57,8 @@ ${escalationList}
 
 **Task management:**
 - Read the task queue at the start of every session. Your domain is: ${domain.id}
-- Assign 'ready' tasks to worker agents by updating assignedTo and setting status to 'in_progress'
 - Review specs (tasks in 'spec_review') and either approve them (→ 'ready') or request revision
+- Leave 'ready' task claiming to the orchestrator. A ready task is already approved; the runtime assigns it to worker-agent deterministically.
 - Monitor in_progress and review tasks; unblock or re-assign as needed
 - Break large goals into smaller tasks and add them to the queue
 
@@ -109,6 +109,7 @@ export function createCoordinatorAgent(
     skills?: readonly SkillDefinition[]
     hookExecutor?: HookExecutor
     compactor?: Compactor
+    cwd?: string
     sessionPersistence?: { cwd: string; sessionId?: string }
     /** Optional tools appended to the factory's built-in set (e.g. MCP adapters). */
     extraTools?: readonly AnyTool[]
@@ -118,6 +119,7 @@ export function createCoordinatorAgent(
     name: `coordinator-${domain.id}`,
     llm,
     systemPrompt: buildCoordinatorPrompt(domain),
+    ...(opts.cwd ? { cwd: opts.cwd } : {}),
     tools: [
       readFileTool,
       readTasksTool,

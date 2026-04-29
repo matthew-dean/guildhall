@@ -14,6 +14,7 @@
   import Markdown from '../../lib/Markdown.svelte'
   import {
     escalationReasonLabel,
+    escalationPrimaryAction,
     roleLabel,
     roleBlurb,
   } from '../../lib/escalation-labels.js'
@@ -62,6 +63,7 @@
   const roleTitle = $derived(
     firstOpen ? roleBlurb(firstOpen.agentId) : '',
   )
+  const primaryAction = $derived(escalationPrimaryAction(firstOpen))
 </script>
 
 <Card tone="danger" title="Why is this stuck?">
@@ -102,7 +104,7 @@
           disabled={busy}
           onclick={() => onResolve(firstOpen, 'retry')}
         >
-          Retry gates
+          {primaryAction.label}
         </Button>
         <Button
           variant="primary"

@@ -65,6 +65,8 @@ export interface GuildhallAgentOptions {
    * instead of failing the whole conversation.
    */
   compactor?: Compactor
+  noToolTurnNudge?: string | undefined
+  noToolTurnNudgeLimit?: number | undefined
   /**
    * FR-20: automatic session persistence. When set, a snapshot is written
    * after every successful `generate()` turn so the agent can resume from
@@ -128,6 +130,12 @@ export class GuildhallAgent {
       maxTokens: options.maxTokens ?? 4096,
       ...(options.hookExecutor ? { hookExecutor: options.hookExecutor } : {}),
       ...(options.compactor ? { compactor: options.compactor } : {}),
+      ...(options.noToolTurnNudge !== undefined
+        ? { noToolTurnNudge: options.noToolTurnNudge }
+        : {}),
+      ...(options.noToolTurnNudgeLimit !== undefined
+        ? { noToolTurnNudgeLimit: options.noToolTurnNudgeLimit }
+        : {}),
     })
   }
 
@@ -155,16 +163,30 @@ export class GuildhallAgent {
    * the full message list and usage snapshot.
    */
   async generate(prompt: string): Promise<GenerateResult> {
-    for await (const _event of this.engine.submitMessage(prompt)) {
-      void _event
+    return await this.generateWithEvents(prompt)
+  }
+
+  async generateWithEvents(
+    prompt: string,
+    onEvent?: (event: StreamEvent) => void | Promise<void>,
+    opts?: { signal?: AbortSignal | undefined },
+  ): Promise<GenerateResult> {
+    let streamError: string | null = null
+    try {
+      for await (const event of this.engine.submitMessage(prompt, opts)) {
+        if (event.type === 'error') streamError = event.message
+        if (onEvent) await onEvent(event)
+      }
+    } finally {
+      // Persist even on max-turn/API/tool failures. runQuery mutates the
+      // engine history as it goes, so a crash or restart can still recover
+      // the last coherent turn rather than silently dropping progress.
+      this.persistSession()
     }
+    if (streamError) throw new Error(streamError)
     const messages = this.engine.messages
     const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
     const text = lastAssistant ? extractText(lastAssistant) : ''
-    // FR-20: persist a fresh snapshot at the turn boundary. Failures here are
-    // logged but never propagate — snapshotting is best-effort; the caller
-    // already has the in-memory result.
-    this.persistSession()
     return {
       text,
       messages,
@@ -203,14 +225,23 @@ export class GuildhallAgent {
    * when a snapshot was found and applied. Never throws — an absent snapshot
    * is a normal "fresh session" state.
    */
-  loadSession(opts: { cwd: string; sessionId?: string }): boolean {
+  loadSession(opts: {
+    cwd: string
+    sessionId?: string | undefined
+    onlyPending?: boolean | undefined
+  }): boolean {
     const snapshot = opts.sessionId
       ? loadSessionById(opts.cwd, opts.sessionId)
       : loadSessionSnapshot(opts.cwd)
     if (!snapshot) return false
+    if (snapshot.model && snapshot.model !== this.engine.getModel()) return false
     this.engine.loadMessages(snapshot.messages)
     this.engine.loadUsage(snapshot.usage)
     this.engine.loadToolMetadata(snapshot.tool_metadata)
+    if (opts.onlyPending && !this.engine.hasPendingContinuation()) {
+      this.engine.clear()
+      return false
+    }
     return true
   }
 

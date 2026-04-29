@@ -43,8 +43,21 @@ class ScriptedApiClient implements SupportsStreamingMessages {
   }
 }
 
+class ThrowingApiClient implements SupportsStreamingMessages {
+  async *streamMessage(_request: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
+    throw new Error('provider rejected model')
+  }
+}
+
 function assistantMsg(text: string): ConversationMessage {
   return { role: 'assistant', content: [{ type: 'text', text }] }
+}
+
+function assistantToolUse(name: string, input: Record<string, unknown> = {}): ConversationMessage {
+  return {
+    role: 'assistant',
+    content: [{ type: 'tool_use', id: `toolu_${name}`, name, input }],
+  }
 }
 
 describe('GuildhallAgent', () => {
@@ -111,6 +124,18 @@ describe('GuildhallAgent', () => {
     expect(r2.text).toBe('second')
     // 2 user + 2 assistant = 4 messages
     expect(r2.messages).toHaveLength(4)
+  })
+
+  it('throws when the provider stream reports an error instead of silently returning an empty turn', async () => {
+    const agent = new GuildhallAgent({
+      name: 't',
+      llm: { apiClient: new ThrowingApiClient(), modelId: 'bad-model' },
+      systemPrompt: 'p',
+      tools: [],
+    })
+
+    await expect(agent.generate('go')).rejects.toThrow(/provider rejected model/)
+    expect(agent.messages.map((m) => m.role)).toEqual(['user'])
   })
 })
 
@@ -346,6 +371,20 @@ describe('agent factories', () => {
     expect(a.name).toBe('worker-agent')
   })
 
+  it('createWorkerAgent gives coding tasks a larger turn budget', async () => {
+    const a = createWorkerAgent(llm)
+    expect((a as unknown as { engine: { getMaxTurns(): number | null } }).engine.getMaxTurns())
+      .toBe(24)
+  })
+
+  it('createWorkerAgent tells workers not to spend turns on plans only', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('## No plan-only turns')
+    expect(prompt).toContain('Every assistant turn must make observable progress')
+    expect(prompt).toContain('If you know the next step, take it with a tool call')
+  })
+
   it('createReviewerAgent', () => {
     const a = createReviewerAgent(llm)
     expect(a.name).toBe('reviewer-agent')
@@ -373,7 +412,14 @@ describe('agent factories', () => {
     }
 
     async function toolNamesAfterGenerate(agent: GuildhallAgent, client: ScriptedApiClient) {
-      await agent.generate('go')
+      try {
+        await agent.generate('go')
+      } catch (err) {
+        // Some role prompts (notably worker) intentionally nudge plan-only
+        // responses into another turn. These tests only need the first API
+        // request to inspect the registered tool schemas.
+        if (!(err instanceof Error) || !/ScriptedApiClient exhausted/.test(err.message)) throw err
+      }
       return client.requests[0]?.tools.map((t) => t['name']) ?? []
     }
 
@@ -389,7 +435,10 @@ describe('agent factories', () => {
     })
 
     it('createWorkerAgent appends extraTools', async () => {
-      const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
+      const client = new ScriptedApiClient([
+        { message: assistantToolUse('mcp__x__tool') },
+        { message: assistantMsg('ok') },
+      ])
       const agent = createWorkerAgent(
         { apiClient: client, modelId: 'm' },
         { extraTools: [stubTool('mcp__x__tool')] },
@@ -397,6 +446,32 @@ describe('agent factories', () => {
       const names = await toolNamesAfterGenerate(agent, client)
       expect(names).toContain('mcp__x__tool')
       expect(names).toContain('shell')
+    })
+
+    it('createWorkerAgent forwards cwd to tool execution context', async () => {
+      let observedCwd: string | null = null
+      const cwdProbe = defineTool<Record<string, never>>({
+        name: 'cwd-probe',
+        description: 'records cwd',
+        inputSchema: z.object({}),
+        jsonSchema: { type: 'object', properties: {}, additionalProperties: false },
+        execute: async (_input, ctx) => {
+          observedCwd = ctx.cwd
+          return { output: 'ok', is_error: false }
+        },
+      })
+      const client = new ScriptedApiClient([
+        { message: assistantToolUse('cwd-probe') },
+        { message: assistantMsg('ok') },
+      ])
+      const agent = createWorkerAgent(
+        { apiClient: client, modelId: 'm' },
+        { cwd: '/tmp/guildhall-agent-cwd', extraTools: [cwdProbe] },
+      )
+
+      await toolNamesAfterGenerate(agent, client)
+
+      expect(observedCwd).toBe('/tmp/guildhall-agent-cwd')
     })
 
     it('createReviewerAgent appends extraTools', async () => {
@@ -461,6 +536,27 @@ describe('agent factories', () => {
       )
       const names = await toolNamesAfterGenerate(agent, client)
       expect(names).toContain('mcp__x__c')
+    })
+
+    it('createCoordinatorAgent does not instruct coordinators to claim ready work', async () => {
+      const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
+      const domain: CoordinatorDomain = {
+        id: 'looma',
+        name: 'Looma',
+        mandate: 'UI quality.',
+        projectPaths: [],
+        concerns: [],
+        autonomousDecisions: [],
+        escalationTriggers: [],
+      }
+      const agent = createCoordinatorAgent(
+        domain,
+        { apiClient: client, modelId: 'm' },
+      )
+      await agent.generate('go')
+      const sys = client.requests[0]?.system_prompt ?? ''
+      expect(sys).not.toContain("Assign 'ready' tasks to worker agents")
+      expect(sys).toContain("Review specs (tasks in 'spec_review')")
     })
   })
 
@@ -537,6 +633,69 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
     expect(reloader.totalUsage).toEqual({ input_tokens: 5, output_tokens: 3 })
   })
 
+  it('can ignore completed snapshots when only pending continuation should resume', async () => {
+    const client = new ScriptedApiClient([
+      { message: assistantMsg('completed reply'), usage: { input_tokens: 5, output_tokens: 3 } },
+    ])
+    const saver = new GuildhallAgent({
+      name: 'persisting-complete',
+      llm: { apiClient: client, modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [],
+      sessionPersistence: { cwd: projectCwd, sessionId: 'complete-session' },
+    })
+    await saver.generate('first user prompt')
+
+    const reloader = new GuildhallAgent({
+      name: 'reload',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [],
+    })
+    const found = reloader.loadSession({
+      cwd: projectCwd,
+      sessionId: 'complete-session',
+      onlyPending: true,
+    })
+    expect(found).toBe(false)
+    expect(reloader.messages).toHaveLength(0)
+    expect(reloader.totalUsage).toEqual({ input_tokens: 0, output_tokens: 0 })
+  })
+
+  it('persists a recoverable snapshot when generate stops on max turns', async () => {
+    const client = new ScriptedApiClient([
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'tu-1', name: 'shell', input: { command: 'echo hi' } },
+          ],
+        },
+        usage: { input_tokens: 5, output_tokens: 3 },
+      },
+    ])
+    const agent = new GuildhallAgent({
+      name: 'persisting-error',
+      llm: { apiClient: client, modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [shellTool],
+      maxTurns: 1,
+      sessionPersistence: { cwd: projectCwd, sessionId: 'max-turn' },
+    })
+
+    await expect(agent.generate('run a command')).rejects.toThrow('Exceeded maximum turn limit (1)')
+
+    const reloader = new GuildhallAgent({
+      name: 'reload',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [shellTool],
+    })
+    expect(reloader.loadSession({ cwd: projectCwd, sessionId: 'max-turn' })).toBe(true)
+    expect(reloader.messages).toHaveLength(3)
+    expect(reloader.hasPendingContinuation()).toBe(true)
+  })
+
   it('loadSession returns false when no snapshot exists', () => {
     const agent = new GuildhallAgent({
       name: 'cold',
@@ -600,7 +759,7 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
     ])
     const resumer = new GuildhallAgent({
       name: 'resumer',
-      llm: { apiClient: client, modelId: 'test-model' },
+      llm: { apiClient: client, modelId: 'm' },
       systemPrompt: 'sys',
       tools: [shellTool],
     })
@@ -630,11 +789,34 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
 
     const reloader = new GuildhallAgent({
       name: 'reload',
-      llm: { apiClient: new ScriptedApiClient([]), modelId: 'm' },
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'test-model' },
       systemPrompt: '',
       tools: [],
     })
     expect(reloader.loadSession({ cwd: projectCwd, sessionId: 'manual-id' })).toBe(true)
     expect(reloader.messages).toHaveLength(2)
+  })
+
+  it('loadSession refuses snapshots saved for a different model', async () => {
+    const client = new ScriptedApiClient([
+      { message: assistantMsg('old-model reply'), usage: { input_tokens: 1, output_tokens: 1 } },
+    ])
+    const saver = new GuildhallAgent({
+      name: 'saver',
+      llm: { apiClient: client, modelId: 'old-model' },
+      systemPrompt: 'sys',
+      tools: [],
+      sessionPersistence: { cwd: projectCwd, sessionId: 'model-bound' },
+    })
+    await saver.generate('hello')
+
+    const reloader = new GuildhallAgent({
+      name: 'reload',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'new-model' },
+      systemPrompt: 'sys',
+      tools: [],
+    })
+    expect(reloader.loadSession({ cwd: projectCwd, sessionId: 'model-bound' })).toBe(false)
+    expect(reloader.messages).toHaveLength(0)
   })
 })

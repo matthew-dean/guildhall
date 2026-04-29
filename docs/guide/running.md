@@ -13,6 +13,7 @@ guildhall run                    # run the default workspace
 guildhall run my-app             # run a specific workspace by id
 guildhall run --domain ui        # only the ui domain
 guildhall run --max-ticks 10     # stop after 10 ticks (for testing)
+guildhall run --one-task         # finish one task, then stop
 ```
 
 `guildhall run` blocks until Ctrl-C or until there are no ticks left. Progress is appended to `memory/PROGRESS.md`, events are streamed to `memory/events.ndjson`, and the full transcript per task lives under `memory/transcripts/`.
@@ -23,7 +24,7 @@ guildhall run --max-ticks 10     # stop after 10 ticks (for testing)
 guildhall serve
 ```
 
-Opens the dashboard at <http://localhost:7842>. The **Run** control on the project page starts and stops the orchestrator with the same semantics as the CLI.
+Opens the dashboard at `http://localhost:7842`. The **Run** control on the project page starts and stops the orchestrator with the same semantics as the CLI.
 
 ## Fanout
 

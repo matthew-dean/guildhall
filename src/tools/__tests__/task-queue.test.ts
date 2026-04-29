@@ -131,6 +131,37 @@ describe('updateTask', () => {
     ])
   })
 
+  it('ignores empty optional strings so broad model calls do not erase existing spec state', async () => {
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      spec: 'Existing spec',
+      blockReason: 'Existing block reason',
+      humanJudgment: 'Existing human note',
+      completedAt: '2026-04-29T00:00:00.000Z',
+      assignedTo: 'worker-agent',
+    })
+
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      status: 'review',
+      spec: '',
+      blockReason: '',
+      humanJudgment: '',
+      completedAt: '',
+      assignedTo: '',
+    })
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].status).toBe('review')
+    expect(raw.tasks[0].spec).toBe('Existing spec')
+    expect(raw.tasks[0].blockReason).toBe('Existing block reason')
+    expect(raw.tasks[0].humanJudgment).toBe('Existing human note')
+    expect(raw.tasks[0].completedAt).toBe('2026-04-29T00:00:00.000Z')
+    expect(raw.tasks[0].assignedTo).toBeUndefined()
+  })
+
   it('updates updatedAt timestamp', async () => {
     const before = seedQueue.tasks[0]!.updatedAt
     await new Promise((r) => setTimeout(r, 5))
@@ -145,6 +176,12 @@ describe('updateTask', () => {
     expect(result.error).toContain('nonexistent')
   })
 
+  it('returns error when no mutation is provided', async () => {
+    const result = await updateTask({ tasksPath, taskId: 'task-001' })
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('No task mutation provided')
+  })
+
   it('sets blockReason when blocking a task', async () => {
     await updateTask({
       tasksPath,
@@ -155,6 +192,33 @@ describe('updateTask', () => {
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
     expect(raw.tasks[0].status).toBe('blocked')
     expect(raw.tasks[0].blockReason).toBe('Spec ambiguous — awaiting human input')
+  })
+
+  it('records gate results for review packets and gate audit', async () => {
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      gateResults: [
+        {
+          gateId: 'test',
+          type: 'hard',
+          passed: true,
+          output: 'ok',
+          checkedAt: '2026-04-29T00:00:00.000Z',
+        },
+      ],
+    })
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].gateResults).toEqual([
+      {
+        gateId: 'test',
+        type: 'hard',
+        passed: true,
+        output: 'ok',
+        checkedAt: '2026-04-29T00:00:00.000Z',
+      },
+    ])
   })
 })
 
@@ -210,6 +274,37 @@ describe('engine tool wrappers', () => {
     )
     expect(result.is_error).toBe(false)
     expect(result.metadata?.success).toBe(true)
+  })
+
+  it('updateTaskTool exposes a usable JSON schema for model tool calls', () => {
+    expect(updateTaskTool.jsonSchema.properties).toMatchObject({
+      tasksPath: { type: 'string' },
+      status: { type: 'string' },
+      note: { type: 'object' },
+      gateResults: { type: 'array' },
+    })
+    expect(updateTaskTool.jsonSchema.required).toEqual(['tasksPath'])
+  })
+
+  it('updateTaskTool infers the task id when exactly one task is active', async () => {
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'in_progress' })
+    const result = await updateTaskTool.execute(
+      {
+        tasksPath,
+        status: 'review',
+        note: {
+          agentId: 'worker-agent',
+          role: 'worker',
+          content: 'Self-critique complete',
+        },
+      },
+      ctx,
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.metadata?.taskId).toBe('task-001')
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].status).toBe('review')
+    expect(raw.tasks[0].notes[0].content).toBe('Self-critique complete')
   })
 
   it('addTaskTool adds via engine interface', async () => {

@@ -94,6 +94,14 @@ async function setTaskSpec(id: string, spec: string): Promise<void> {
   await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
 }
 
+async function setTaskSpecForReview(id: string, spec: string): Promise<void> {
+  const queue = await readQueue()
+  const task = queue.tasks.find((t) => t.id === id)!
+  task.spec = spec
+  task.status = 'spec_review'
+  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+}
+
 interface StubAgent {
   readonly name: string
   calls: { prompt: string }[]
@@ -178,8 +186,9 @@ describe('E2E AC-03: task lifecycle exploring → done', () => {
     const initialTask = initialQueue.tasks.find((t) => t.id === intake.taskId)!
     expect(initialTask.status).toBe('exploring')
 
-    // Human approves the spec → exploring → spec_review.
-    await setTaskSpec(
+    // Spec Agent finishes the draft → spec_review; human approval then
+    // advances it to ready for the deterministic claimer.
+    await setTaskSpecForReview(
       intake.taskId,
       '## Summary\nAdd a ghost button variant.\n## AC\n1. renders.',
     )
@@ -189,20 +198,16 @@ describe('E2E AC-03: task lifecycle exploring → done', () => {
       approvalNote: 'LGTM',
     })
     expect(specApproval.success).toBe(true)
-    expect(specApproval.newStatus).toBe('spec_review')
+    expect(specApproval.newStatus).toBe('ready')
 
-    // Scripted agents drive the remaining transitions. Each agent reads the
-    // current status from disk and advances it by one state.
+    // Scripted agents drive the remaining transitions. Ready claiming is now
+    // deterministic and orchestrator-owned; agents only handle implementation,
+    // review, and gates.
     const coord = stubAgent('looma-coordinator', async () => {
       const q = await readQueue()
       const t = q.tasks.find((x) => x.id === intake.taskId)!
       if (t.status === 'spec_review') {
         await mutateTask(intake.taskId, { status: 'ready' })
-      } else if (t.status === 'ready') {
-        await mutateTask(intake.taskId, {
-          status: 'in_progress',
-          assignedTo: 'worker-agent',
-        })
       }
     })
     const worker = stubAgent('worker-agent', async () => {
@@ -238,10 +243,10 @@ describe('E2E AC-03: task lifecycle exploring → done', () => {
       if (outcome.kind === 'idle' && outcome.allDone) break
     }
 
-    // The spine claim: every intermediate state is visited in order, ending
-    // in `done`. `exploring` and `spec_review` are asserted above (pre-orch).
+    // The spine claim: every orchestrator-owned intermediate state is visited
+    // in order, ending in `done`. `exploring`, `spec_review`, and `ready` are
+    // asserted above (pre-orch).
     expect(observedStatuses).toEqual([
-      'ready',
       'in_progress',
       'review',
       'gate_check',
@@ -328,18 +333,18 @@ coordinators:
 
     // 5. Simulate the Spec Agent drafting a spec on the orchestrator's next
     //    tick, then approve it via FR-12 approveSpec.
-    await setTaskSpec(intake.taskId, '## Summary\nAdd a ghost button variant.\n## AC\n1. renders.')
+    await setTaskSpecForReview(intake.taskId, '## Summary\nAdd a ghost button variant.\n## AC\n1. renders.')
     const specApproval = await approveSpec({
       memoryDir,
       taskId: intake.taskId,
       approvalNote: 'LGTM',
     })
     expect(specApproval.success).toBe(true)
-    expect(specApproval.newStatus).toBe('spec_review')
+    expect(specApproval.newStatus).toBe('ready')
 
     // 6. Stand up the orchestrator with real config + stub agents that drive
-    //    the task forward through spec_review → ready → in_progress → review
-    //    → gate_check → done.
+    //    the task forward through ready → in_progress → review → gate_check
+    //    → done. The ready claim is orchestrator-owned.
     const config = resolveBootstrapped()
 
     // Coordinator stub: read the current task status from disk (just like a
@@ -349,8 +354,6 @@ coordinators:
       const t = q.tasks.find((x) => x.id === intake.taskId)!
       if (t.status === 'spec_review') {
         await mutateTask(intake.taskId, { status: 'ready' })
-      } else if (t.status === 'ready') {
-        await mutateTask(intake.taskId, { status: 'in_progress', assignedTo: 'worker-agent' })
       }
     })
     const worker = stubAgent('worker-agent', async () => {
@@ -388,7 +391,6 @@ coordinators:
     }
 
     expect(observedStatuses).toEqual([
-      'ready',
       'in_progress',
       'review',
       'gate_check',
@@ -402,9 +404,11 @@ coordinators:
     expect(progress).toContain('gate_check → done')
     expect(progress).toContain('looma')
 
-    // 8. Every agent that acted should have been asked for FULL_AUTO by the
-    //    orchestrator (no permissionMode override on the task).
-    expect(coord.modeCalls).toContain(PermissionMode.FULL_AUTO)
+    // 8. Every model-backed agent that acted should have been asked for
+    //    FULL_AUTO by the orchestrator (no permissionMode override on the
+    //    task). The coordinator does not act on the ready claim anymore; the
+    //    orchestrator owns ready -> in_progress directly.
+    expect(coord.modeCalls).toEqual([])
     expect(worker.modeCalls).toContain(PermissionMode.FULL_AUTO)
     expect(reviewer.modeCalls).toContain(PermissionMode.FULL_AUTO)
     expect(gateChecker.modeCalls).toContain(PermissionMode.FULL_AUTO)

@@ -24,6 +24,7 @@ import {
 } from '@guildhall/core'
 import {
   readProjectConfig,
+  readGlobalConfig,
   updateProjectConfig,
   migrateProjectProvidersToGlobal,
   resolveGlobalCredentials,
@@ -62,6 +63,7 @@ import {
   agentIssueToBackendEvent,
 } from './wire-events.js'
 import type { BackendEvent } from '@guildhall/backend-host'
+import type { StreamEvent } from '@guildhall/protocol'
 import {
   authorizeAction,
   buildRemediationContext,
@@ -152,6 +154,99 @@ function friendlyRuntimeAgentName(agentName: string): string {
   }
 }
 
+function streamEventToBackendEvent(
+  event: StreamEvent,
+  context: { taskId: string; agentName: string },
+): BackendEvent | null {
+  switch (event.type) {
+    case 'assistant_text_delta':
+      return {
+        type: 'assistant_delta',
+        task_id: context.taskId,
+        agent_name: context.agentName,
+        message: event.text,
+      }
+    case 'assistant_turn_complete': {
+      const text = streamMessageText(event.message).trim()
+      return {
+        type: 'assistant_complete',
+        task_id: context.taskId,
+        agent_name: context.agentName,
+        message: text,
+        item: { role: 'assistant', text },
+      }
+    }
+    case 'tool_execution_started':
+      return {
+        type: 'tool_started',
+        task_id: context.taskId,
+        agent_name: context.agentName,
+        tool_name: event.tool_name,
+        tool_input: event.tool_input,
+        item: {
+          role: 'tool',
+          text: `${event.tool_name} ${JSON.stringify(event.tool_input ?? {})}`,
+          tool_name: event.tool_name,
+          tool_input: event.tool_input,
+        },
+      }
+    case 'tool_execution_completed':
+      return {
+        type: 'tool_completed',
+        task_id: context.taskId,
+        agent_name: context.agentName,
+        tool_name: event.tool_name,
+        output: event.output,
+        is_error: event.is_error,
+        item: {
+          role: 'tool_result',
+          text: event.output,
+          tool_name: event.tool_name,
+          is_error: event.is_error,
+        },
+      }
+    case 'status':
+      return {
+        type: 'line_complete',
+        task_id: context.taskId,
+        agent_name: context.agentName,
+        message: event.message,
+      }
+    case 'error':
+      return {
+        type: 'error',
+        task_id: context.taskId,
+        agent_name: context.agentName,
+        message: event.message,
+      }
+    case 'compact_progress':
+      return {
+        type: 'compact_progress',
+        task_id: context.taskId,
+        agent_name: context.agentName,
+        message: event.message,
+        compact_phase: event.phase,
+        compact_trigger: event.trigger,
+        attempt: event.attempt,
+        compact_checkpoint: event.checkpoint,
+        compact_metadata: event.metadata,
+      }
+  }
+}
+
+function streamMessageText(message: { content?: unknown }): string {
+  if (typeof message.content === 'string') return message.content
+  if (!Array.isArray(message.content)) return ''
+  const parts: string[] = []
+  for (const block of message.content) {
+    if (block && typeof block === 'object' && 'type' in block && block.type === 'text') {
+      const text = (block as { text?: unknown }).text
+      if (typeof text === 'string') parts.push(text)
+    }
+  }
+  return parts.join('')
+}
+
 function findMetaIntakeDraftText(result: AgentGenerateResult): string | null {
   const candidates = [
     result.text,
@@ -210,6 +305,14 @@ export interface OrchestratorAgent {
     text: string
     messages?: Array<{ role?: string; content?: unknown }>
   }>
+  generateWithEvents?(
+    prompt: string,
+    onEvent: (event: StreamEvent) => void | Promise<void>,
+    opts?: { signal?: AbortSignal | undefined },
+  ): Promise<{
+    text: string
+    messages?: Array<{ role?: string; content?: unknown }>
+  }>
   /**
    * FR-15: optional hook called by the orchestrator before `generate()` when
    * the task carries a `permissionMode` override. Agents that ignore this
@@ -244,6 +347,45 @@ export type ReviewerFanoutRunner = (input: {
 
 export type { TickOutcome } from './tick-outcome.js'
 import type { TickOutcome } from './tick-outcome.js'
+
+export interface OrchestratorRunOptions {
+  maxTicks?: number
+  tickDelayMs?: number
+  stopAfterOneTask?: boolean
+}
+
+interface OrchestratorTickOptions {
+  dispatchLimit?: FanoutCapacity
+}
+
+const ONE_TASK_STOP_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
+  ...(TERMINAL_TASK_STATUSES as readonly TaskStatus[]),
+  'pending_pr',
+])
+
+function shouldStopOneTaskRun(outcome: TickOutcome): boolean {
+  switch (outcome.kind) {
+    case 'processed':
+      return ONE_TASK_STOP_STATUSES.has(outcome.afterStatus)
+    case 'proposal-decided':
+    case 'pre-rejection-applied':
+      return ONE_TASK_STOP_STATUSES.has(outcome.newStatus)
+    case 'blocked-max-revisions':
+    case 'no-coordinator':
+    case 'agent-error':
+    case 'escalated':
+    case 'bootstrap-required':
+      return true
+    case 'idle':
+    case 'batch':
+      return false
+  }
+}
+
+function describeOneTaskStop(outcome: TickOutcome): string {
+  if ('taskId' in outcome) return `task ${outcome.taskId} (${outcome.kind})`
+  return outcome.kind
+}
 
 export interface OrchestratorOptions {
   config: ResolvedConfig
@@ -292,6 +434,11 @@ export interface OrchestratorOptions {
    * supervisor doesn't want to cancel an in-flight `generate()` call.
    */
   stopSignal?: { stopRequested: boolean }
+  /**
+   * Abort signal used for in-flight model/tool turns. Unlike stopSignal,
+   * this can interrupt a provider fetch while a tick is still active.
+   */
+  abortSignal?: AbortSignal | undefined
   /**
    * FR-24 / FR-25: git driver used for worktree + merge operations. Defaults
    * to `NodeGitDriver` (shells out to `git` + `gh`). Tests inject
@@ -396,9 +543,13 @@ export class Orchestrator {
    * Agents run concurrently in fanout; queue writes are serialized via
    * `withQueueWriteLock` so concurrent dispatches never clobber one another.
    */
-  async tick(): Promise<TickOutcome> {
+  async tick(opts: OrchestratorTickOptions = {}): Promise<TickOutcome> {
     const queueBefore = await this.readQueue()
-    const capacity = await this.resolveCapacity()
+    const resolvedCapacity = await this.resolveCapacity()
+    const capacity =
+      opts.dispatchLimit === undefined
+        ? resolvedCapacity
+        : Math.max(1, Math.min(resolvedCapacity, opts.dispatchLimit))
     const picks = pickNextTasks({
       queue: queueBefore,
       capacity,
@@ -434,13 +585,27 @@ export class Orchestrator {
       return await this.dispatchOne(picks[0]!, queueBefore)
     }
 
-    // Fanout path: run each pick concurrently. `dispatchOne` catches its own
-    // agent errors, so Promise.all is sufficient — any rejection here is a
-    // true bug and should surface as a throw on the tick caller.
-    const outcomes = await Promise.all(
-      picks.map((t) => this.dispatchOne(t, queueBefore)),
-    )
-    return { kind: 'batch', outcomes }
+    // Fanout path: reserve runtime slots for the selected batch before any
+    // individual dispatch can race ahead and release/reuse slot 0. The
+    // per-dispatch allocation call is idempotent, so dispatchOne still sees
+    // the same task-owned slot when composing the worker prompt.
+    for (const task of picks) {
+      await this.allocateSlotForTask(task)
+    }
+
+    try {
+      // `dispatchOne` catches its own agent errors, so Promise.all is
+      // sufficient — any rejection here is a true bug and should surface as a
+      // throw on the tick caller.
+      const outcomes = await Promise.all(
+        picks.map((t) => this.dispatchOne(t, queueBefore)),
+      )
+      return { kind: 'batch', outcomes }
+    } finally {
+      for (const task of picks) {
+        this.slotAllocator?.release(task.id)
+      }
+    }
   }
 
   /**
@@ -463,6 +628,13 @@ export class Orchestrator {
     // via the same pure-policy path.
     if (needsPreRejectionPolicy(task)) {
       return await this.applyPreRejectionPolicy(task, queueBefore)
+    }
+
+    // One-task finisher pivot: a `ready` task has already passed approval.
+    // Claiming it for the worker is a deterministic state transition, not
+    // something worth spending a coordinator model call on.
+    if (task.status === 'ready') {
+      return await this.claimReadyTaskInline(task)
     }
 
     // Guild deterministic-check pre-pass at `gate_check`: each applicable
@@ -644,6 +816,8 @@ export class Orchestrator {
       '',
       `**Tasks file (for tool calls):** ${tasksPath}`,
       `**Memory dir (for tool calls):** ${this.opts.config.memoryDir}`,
+      `**Current task ID (for task tools):** ${task.id}`,
+      'When a tool requires taskId, use the current task ID exactly. Never use placeholders such as [TASK_ID], <task-id>, or TODO.',
       ...(activeWorktreePath !== this.opts.config.projectPath
         ? [`**Worktree (for code edits):** ${activeWorktreePath}`]
         : []),
@@ -671,11 +845,27 @@ export class Orchestrator {
       from_status: beforeStatus,
       message: `${agent.name} is working on ${task.title}`,
     })
+    this.livenessTracker.touch(agent.name)
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: task.id,
+      agent_name: agent.name,
+      message: 'Waiting for the local model to respond.',
+    })
 
     let generatedText = ''
     let generatedMetaIntakeDraft: string | null = null
     try {
-      const result = await agent.generate(prompt)
+      const result = typeof agent.generateWithEvents === 'function'
+        ? await agent.generateWithEvents(prompt, async (event) => {
+            this.livenessTracker.touch(agent.name)
+            const backendEvent = streamEventToBackendEvent(event, {
+              taskId: task.id,
+              agentName: agent.name,
+            })
+            if (backendEvent) await this.emitBackendEvent(backendEvent)
+          }, this.opts.abortSignal ? { signal: this.opts.abortSignal } : undefined)
+        : await agent.generate(prompt)
       generatedText = result.text
       if (task.id === META_INTAKE_TASK_ID) {
         generatedMetaIntakeDraft = findMetaIntakeDraftText(result)
@@ -748,29 +938,29 @@ export class Orchestrator {
       from_status: beforeStatus,
       message: `${agent.name} finished its current step on ${task.title}`,
     })
-    if (slot) this.slotAllocator?.release(task.id)
 
     // Post-generate queue work is serialized across concurrent dispatches so
     // no two fanout workers clobber each other's writes.
-    return await this.withQueueWriteLock(async () => {
-      const queueAfter = await this.readQueue()
-      const taskAfter = queueAfter.tasks.find((t) => t.id === task.id) ?? task
-      let afterStatus = taskAfter.status
-      let transitioned = beforeStatus !== afterStatus
+    try {
+      return await this.withQueueWriteLock(async () => {
+        const queueAfter = await this.readQueue()
+        const taskAfter = queueAfter.tasks.find((t) => t.id === task.id) ?? task
+        let afterStatus = taskAfter.status
+        let transitioned = beforeStatus !== afterStatus
 
-      if (
-        task.id === META_INTAKE_TASK_ID &&
-        !taskAfter.spec &&
-        generatedMetaIntakeDraft
-      ) {
-        taskAfter.spec = generatedMetaIntakeDraft
-        if (taskAfter.status === 'exploring') taskAfter.status = 'spec_review'
-        taskAfter.updatedAt = this.now()
-        queueAfter.lastUpdated = this.now()
-        await this.writeQueue(queueAfter)
-        afterStatus = taskAfter.status
-        transitioned = true
-      }
+        if (
+          task.id === META_INTAKE_TASK_ID &&
+          !taskAfter.spec &&
+          generatedMetaIntakeDraft
+        ) {
+          taskAfter.spec = generatedMetaIntakeDraft
+          if (taskAfter.status === 'exploring') taskAfter.status = 'spec_review'
+          taskAfter.updatedAt = this.now()
+          queueAfter.lastUpdated = this.now()
+          await this.writeQueue(queueAfter)
+          afterStatus = taskAfter.status
+          transitioned = true
+        }
 
       // FR-27 / AC-18: record LLM verdict when a review actually ran.
       if (beforeStatus === 'review') {
@@ -881,6 +1071,7 @@ export class Orchestrator {
         transitioned,
         ...(transitioned ? {} : { note: 'no transition' }),
       })
+      await this.maybeWriteReviewPacket(taskAfter)
 
       // FR-24: teardown on terminal transitions. `pending_pr` is preserved —
       // the human still needs the branch alive to merge the PR externally.
@@ -895,15 +1086,18 @@ export class Orchestrator {
         transitioned,
         revisionCount,
       }
-    })
+      })
+    } finally {
+      if (slot) this.slotAllocator?.release(task.id)
+    }
   }
 
   /**
    * Loop `tick()` until max ticks or idle shutdown. Logs a heartbeat banner
    * at start; each tick self-reports to PROGRESS.md.
    */
-  async run(opts: { maxTicks?: number; tickDelayMs?: number } = {}): Promise<void> {
-    const { maxTicks = Infinity, tickDelayMs = 2000 } = opts
+  async run(opts: OrchestratorRunOptions = {}): Promise<void> {
+    const { maxTicks = Infinity, tickDelayMs = 2000, stopAfterOneTask = false } = opts
     const idleLimit = this.opts.idleShutdownAfterTicks ?? DEFAULT_IDLE_SHUTDOWN
 
     this.banner()
@@ -982,7 +1176,7 @@ export class Orchestrator {
     let tick = 0
     while (tick < maxTicks) {
       tick++
-      const raw = await this.tick()
+      const raw = await this.tick(stopAfterOneTask ? { dispatchLimit: 1 } : {})
 
       // FR-24: flatten batch outcomes from fanout dispatch so the logging /
       // backend-event paths keep their one-entry-per-task shape.
@@ -1049,6 +1243,14 @@ export class Orchestrator {
               )
             }
           }
+        }
+
+        if (stopAfterOneTask && shouldStopOneTaskRun(outcome)) {
+          console.log(
+            `[guildhall] stopAfterOneTask reached ${describeOneTaskStop(outcome)}. Shutting down.`,
+          )
+          shouldStop = true
+          break
         }
       }
 
@@ -1416,6 +1618,70 @@ export class Orchestrator {
           promptSuffix: 'No action required.',
         }
     }
+  }
+
+  /**
+   * Deterministic claim for approved ready work. This replaces the old
+   * coordinator "assign this to worker-agent" prompt with a pure queue
+   * mutation so a task spends one tick moving from ready to active and the
+   * next tick goes straight to the worker.
+   */
+  private async claimReadyTaskInline(task: Task): Promise<TickOutcome> {
+    return await this.withQueueWriteLock(async () => {
+      const queue = await this.readQueue()
+      const target = queue.tasks.find((t) => t.id === task.id)
+      if (!target) {
+        return {
+          kind: 'agent-error',
+          taskId: task.id,
+          agent: 'task-claimer',
+          error: `Task ${task.id} not found during ready claim`,
+        }
+      }
+
+      const beforeStatus = target.status
+      if (beforeStatus !== 'ready') {
+        return {
+          kind: 'processed',
+          taskId: target.id,
+          agent: 'task-claimer',
+          beforeStatus,
+          afterStatus: target.status,
+          transitioned: false,
+          revisionCount: target.revisionCount,
+        }
+      }
+
+      target.status = 'in_progress'
+      target.assignedTo = 'worker-agent'
+      target.notes.push({
+        agentId: 'task-claimer',
+        role: 'orchestrator',
+        content: 'Claimed ready task for worker-agent.',
+        timestamp: this.now(),
+      })
+      target.updatedAt = this.now()
+      queue.lastUpdated = this.now()
+      await this.writeQueue(queue)
+
+      await this.logTickProgress({
+        task: target,
+        agent: 'task-claimer',
+        beforeStatus,
+        afterStatus: target.status,
+        transitioned: true,
+      })
+
+      return {
+        kind: 'processed',
+        taskId: target.id,
+        agent: 'task-claimer',
+        beforeStatus,
+        afterStatus: target.status,
+        transitioned: true,
+        revisionCount: target.revisionCount,
+      }
+    })
   }
 
   /**
@@ -2556,6 +2822,120 @@ export class Orchestrator {
     atomicWriteText(this.tasksPath(), JSON.stringify(queue, null, 2) + '\n')
   }
 
+  private async maybeWriteReviewPacket(task: Task): Promise<void> {
+    if (!ONE_TASK_STOP_STATUSES.has(task.status)) return
+
+    const taskDir = path.join(this.opts.config.memoryDir, 'tasks', task.id)
+    await fs.mkdir(taskDir, { recursive: true })
+    atomicWriteText(
+      path.join(taskDir, 'review-packet.md'),
+      this.renderReviewPacket(task),
+    )
+  }
+
+  private renderReviewPacket(task: Task): string {
+    const lines = [
+      `# Review packet: ${task.title}`,
+      '',
+      `- Task: ${task.id}`,
+      `- Domain: ${task.domain}`,
+      `- Status: ${task.status}`,
+      `- Updated: ${task.updatedAt}`,
+      '',
+      '## Acceptance Criteria',
+      ...this.renderAcceptanceCriteria(task),
+      '',
+      '## Changed Files',
+      '- Not recorded by the current runtime.',
+      '',
+      '## Commands And Gates',
+      ...this.renderGateResults(task),
+      '',
+      '## Reviewer Verdicts',
+      ...this.renderReviewVerdicts(task),
+      '',
+      '## Merge',
+      ...this.renderMergeRecord(task),
+      '',
+      '## Unresolved Items',
+      ...this.renderUnresolvedItems(task),
+      '',
+      '## Safe Next Action',
+      this.safeNextAction(task),
+      '',
+    ]
+
+    return lines.join('\n')
+  }
+
+  private renderAcceptanceCriteria(task: Task): string[] {
+    if (task.acceptanceCriteria.length === 0) return ['- None recorded.']
+    return task.acceptanceCriteria.map((criterion) => {
+      const mark = criterion.met ? 'x' : ' '
+      const command = criterion.command ? `; command: \`${criterion.command}\`` : ''
+      return `- [${mark}] ${criterion.id}: ${criterion.description} (${criterion.verifiedBy}${command})`
+    })
+  }
+
+  private renderGateResults(task: Task): string[] {
+    if (task.gateResults.length === 0) return ['- None recorded.']
+    return task.gateResults.map((gate) => {
+      const mark = gate.passed ? 'pass' : 'fail'
+      const output = gate.output ? ` — ${gate.output.trim()}` : ''
+      return `- ${mark}: ${gate.gateId} (${gate.type}, ${gate.checkedAt})${output}`
+    })
+  }
+
+  private renderReviewVerdicts(task: Task): string[] {
+    if (task.reviewVerdicts.length === 0) return ['- None recorded.']
+    return task.reviewVerdicts.map((verdict) =>
+      `- ${verdict.verdict}: ${verdict.reason} (${verdict.reviewerPath}, ${verdict.recordedAt})`,
+    )
+  }
+
+  private renderMergeRecord(task: Task): string[] {
+    const record = task.mergeRecord
+    if (!record) return ['- None recorded.']
+    const detail = record.detail ? ` — ${record.detail}` : ''
+    const sha = record.commitSha ? ` (${record.commitSha})` : ''
+    const pr = record.prUrl ? `; PR: ${record.prUrl}` : ''
+    return [
+      `- ${record.result}: ${record.fromBranch} -> ${record.toBranch} via ${record.strategy}${sha}; ${record.mergedAt}${pr}${detail}`,
+    ]
+  }
+
+  private renderUnresolvedItems(task: Task): string[] {
+    const items: string[] = []
+    if (task.blockReason) items.push(`- Block reason: ${task.blockReason}`)
+    for (const escalation of task.escalations.filter((e) => !e.resolvedAt)) {
+      items.push(`- Open escalation ${escalation.id}: ${escalation.summary}`)
+    }
+    for (const issue of task.agentIssues.filter((i) => !i.resolvedAt)) {
+      items.push(`- Open issue ${issue.id}: ${issue.detail}`)
+    }
+    return items.length > 0 ? items : ['- None recorded.']
+  }
+
+  private safeNextAction(task: Task): string {
+    switch (task.status) {
+      case 'done':
+        if (task.mergeRecord?.result === 'merged' || task.mergeRecord?.result === 'pushed') {
+          return `Task is complete and ${task.mergeRecord.result}.`
+        }
+        return 'Task is complete. Review the diff and commit or ship if policy allows.'
+      case 'pending_pr':
+        return task.mergeRecord?.prUrl
+          ? `Review and merge the pending PR: ${task.mergeRecord.prUrl}`
+          : 'Review and merge the pending PR.'
+      case 'blocked':
+        return 'Resolve the block or escalation, then resume the task.'
+      case 'shelved':
+        return 'Leave shelved unless a human explicitly unshelves or rewrites the task.'
+      default:
+        return 'Continue the task from its current status.'
+    }
+  }
+
   /**
    * Append a FR-09 typed progress entry. Classification:
    *   - milestone : task reached `done` (all gates passed)
@@ -2697,9 +3077,11 @@ export async function runOrchestrator(
   opts: {
     maxTicks?: number
     tickDelayMs?: number
+    stopAfterOneTask?: boolean
     domainFilter?: string
     onBackendEvent?: (event: BackendEvent) => void | Promise<void>
     stopSignal?: { stopRequested: boolean }
+    abortSignal?: AbortSignal | undefined
   } = {},
 ): Promise<void> {
   // Provider selection reads project-local config (`.guildhall/config.yaml`)
@@ -2707,6 +3089,7 @@ export async function runOrchestrator(
   // Studio URL) actually take effect at orchestrator boot. Keys in env vars
   // still win as ambient defaults; values from disk override them when set.
   const projectCfg = readProjectConfig(config.projectPath)
+  const globalCfg = readGlobalConfig()
   // When no explicit preferredProvider is configured, infer one from the
   // role→model assignment so a project that wires up qwen/deepseek locally
   // doesn't silently fall through to whichever cloud OAuth happens to be
@@ -2729,6 +3112,9 @@ export async function runOrchestrator(
   const creds = resolveGlobalCredentials()
   const selection = await selectApiClient({
     ...(preferredProvider ? { preferredProvider } : {}),
+    ...((projectCfg.allowPaidProviderFallback ?? globalCfg.allowPaidProviderFallback)
+      ? { allowPaidProviderFallback: true }
+      : {}),
     ...(creds.anthropicApiKey ? { anthropicApiKey: creds.anthropicApiKey } : {}),
     ...(creds.openaiApiKey ? { openaiApiKey: creds.openaiApiKey } : {}),
     ...(creds.llamaCppUrl ? { llamaCppUrl: creds.llamaCppUrl } : {}),
@@ -2800,6 +3186,7 @@ export async function runOrchestrator(
   const baseAgentOpts = {
     skills,
     compactor,
+    cwd: config.projectPath,
     extraTools: mcpTools,
     ...(hookExecutor ? { hookExecutor } : {}),
   }
@@ -2846,6 +3233,7 @@ export async function runOrchestrator(
     const rehydrated = agent.loadSession({
       cwd: config.projectPath,
       sessionId: sessionIdFor(label),
+      onlyPending: true,
     })
     if (rehydrated) {
       console.log(`[guildhall] Resumed ${label} agent from prior snapshot.`)
@@ -2873,12 +3261,14 @@ export async function runOrchestrator(
     ...(hookExecutor ? { hookExecutor } : {}),
     ...(opts.onBackendEvent ? { onBackendEvent: opts.onBackendEvent } : {}),
     ...(opts.stopSignal ? { stopSignal: opts.stopSignal } : {}),
+    ...(opts.abortSignal ? { abortSignal: opts.abortSignal } : {}),
   })
 
   try {
     await orchestrator.run({
       ...(opts.maxTicks !== undefined ? { maxTicks: opts.maxTicks } : {}),
       ...(opts.tickDelayMs !== undefined ? { tickDelayMs: opts.tickDelayMs } : {}),
+      ...(opts.stopAfterOneTask !== undefined ? { stopAfterOneTask: opts.stopAfterOneTask } : {}),
     })
   } finally {
     await mcpManager.close()

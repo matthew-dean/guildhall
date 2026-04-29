@@ -88,6 +88,7 @@ export function createGateCheckerAgent(
     skills?: readonly SkillDefinition[]
     hookExecutor?: HookExecutor
     compactor?: Compactor
+    cwd?: string
     sessionPersistence?: { cwd: string; sessionId?: string }
     /** Optional tools appended to the factory's built-in set (e.g. MCP adapters). */
     extraTools?: readonly AnyTool[]
@@ -104,6 +105,7 @@ export function createGateCheckerAgent(
     name: 'gate-checker-agent',
     llm,
     systemPrompt: buildPrompt(opts.successGates),
+    ...(opts.cwd ? { cwd: opts.cwd } : {}),
     tools: [runGatesTool, shellTool, readTasksTool, updateTaskTool, logDecisionTool, logProgressTool, raiseEscalationTool, ...(opts.extraTools ?? [])],
     ...(opts.skills ? { skills: opts.skills } : {}),
     ...(opts.hookExecutor ? { hookExecutor: opts.hookExecutor } : {}),

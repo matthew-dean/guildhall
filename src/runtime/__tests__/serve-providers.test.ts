@@ -12,11 +12,29 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => TMP_HOME }
 })
 
-const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig } =
+const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig, updateProjectConfig } =
   await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
 
 let tmpProject: string
+
+function sseResponse(frames: string[]): Response {
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const frame of frames) controller.enqueue(encoder.encode(frame))
+      controller.close()
+    },
+  })
+  return new Response(stream, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+  })
+}
+
+function dataFrame(payload: unknown): string {
+  return `data: ${JSON.stringify(payload)}\n\n`
+}
 
 beforeEach(async () => {
   // Clean env vars so env-precedence doesn't mask the global store.
@@ -61,6 +79,24 @@ describe('GET /api/setup/providers', () => {
 })
 
 describe('POST /api/setup/providers/config', () => {
+  it('does not seed workspace model assignments during identity setup', async () => {
+    const freshProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-identity-proj-'))
+    try {
+      const { app } = buildServeApp({ projectPath: freshProject })
+      const res = await app.fetch(
+        new Request('http://localhost/api/setup/identity', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: 'Fresh Project', id: 'fresh-project' }),
+        }),
+      )
+      expect(res.status).toBe(200)
+      expect(readWorkspaceConfig(freshProject).models).toBeUndefined()
+    } finally {
+      await fs.rm(freshProject, { recursive: true, force: true })
+    }
+  })
+
   it('writes a pasted Anthropic key to the GLOBAL store, not the project file', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
@@ -101,7 +137,7 @@ describe('POST /api/setup/providers/config', () => {
     expect(raw).toMatch(/preferredProvider:\s*anthropic-api/)
   })
 
-  it('updates local role models to the loaded LM Studio model when saving llama-cpp', async () => {
+  it('does not update model assignments when saving llama-cpp provider settings', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -124,13 +160,107 @@ describe('POST /api/setup/providers/config', () => {
     )
     expect(res.status).toBe(200)
     const workspace = readWorkspaceConfig(tmpProject)
-    expect(workspace.models).toEqual({
+    expect(workspace.models).toBeUndefined()
+    expect(readGlobalConfig().models).toBeUndefined()
+  })
+
+  it('sets global model defaults only through the explicit model config endpoint', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request('http://localhost/api/config/models', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'global',
+          role: 'worker',
+          model: 'qwen/qwen3.6-35b-a3b',
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(readGlobalConfig().models?.worker).toBe('qwen/qwen3.6-35b-a3b')
+    expect(readWorkspaceConfig(tmpProject).models).toBeUndefined()
+  })
+
+  it('can set a global split-model preset in one request', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request('http://localhost/api/config/models', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'global',
+          models: {
+            spec: 'qwen/qwen3.6-35b-a3b',
+            coordinator: 'qwen/qwen3.6-35b-a3b',
+            worker: 'qwen/qwen3.6-35b-a3b',
+            reviewer: 'qwen/qwen2.5-coder-14b',
+            gateChecker: 'qwen/qwen2.5-coder-14b',
+          },
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(readGlobalConfig().models).toMatchObject({
       spec: 'qwen/qwen3.6-35b-a3b',
       coordinator: 'qwen/qwen3.6-35b-a3b',
       worker: 'qwen/qwen3.6-35b-a3b',
-      reviewer: 'qwen/qwen3.6-35b-a3b',
-      gateChecker: 'qwen/qwen3.6-35b-a3b',
+      reviewer: 'qwen/qwen2.5-coder-14b',
+      gateChecker: 'qwen/qwen2.5-coder-14b',
     })
+    expect(readWorkspaceConfig(tmpProject).models).toBeUndefined()
+  })
+
+  it('includes loaded LM Studio models in the model catalog', async () => {
+    setProvider('llama-cpp', { url: 'http://localhost:1234/v1' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ data: [{ id: 'qwen/qwen3.6-35b-a3b' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(new Request('http://localhost/api/config/models'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      loadedModels?: string[]
+      catalog?: Array<{ id: string; notes?: string }>
+    }
+    expect(body.loadedModels).toContain('qwen/qwen3.6-35b-a3b')
+    expect(body.catalog?.some(item => item.id === 'qwen/qwen3.6-35b-a3b')).toBe(true)
+  })
+
+  it('can add and remove a project model override', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const setRes = await app.fetch(
+      new Request('http://localhost/api/config/models', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'project',
+          role: 'reviewer',
+          model: 'qwen/qwen2.5-coder-7b-instruct',
+        }),
+      }),
+    )
+    expect(setRes.status).toBe(200)
+    expect(readWorkspaceConfig(tmpProject).models?.reviewer).toBe('qwen/qwen2.5-coder-7b-instruct')
+
+    const unsetRes = await app.fetch(
+      new Request('http://localhost/api/config/models', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'global-default',
+          role: 'reviewer',
+        }),
+      }),
+    )
+    expect(unsetRes.status).toBe(200)
+    expect(readWorkspaceConfig(tmpProject).models).toBeUndefined()
   })
 
   it('rejects unknown preferredProvider values', async () => {
@@ -218,6 +348,7 @@ describe('POST /api/project/start preflight', () => {
 
   it('passes preflight and starts the supervisor when an Anthropic key is stored', async () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateProjectConfig(tmpProject, { allowPaidProviderFallback: true })
     const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
     try {
       const res = await app.fetch(
@@ -227,6 +358,69 @@ describe('POST /api/project/start preflight', () => {
       const body = (await res.json()) as { status?: string; provider?: string }
       expect(body.status).toBe('running')
       expect(body.provider).toBe('anthropic-api')
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
+  })
+
+  it('does not fall back to a paid provider unless project/global config opts in', async () => {
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateProjectConfig(tmpProject, { preferredProvider: 'llama-cpp' })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/start', { method: 'POST' }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { code?: string; error?: string }
+    expect(body.code).toBe('no_provider')
+    expect(body.error).toMatch(/Paid-provider fallback is disabled/)
+  })
+
+  it('surfaces the active provider when preferred provider falls back with opt-in', async () => {
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateProjectConfig(tmpProject, {
+      preferredProvider: 'llama-cpp',
+      allowPaidProviderFallback: true,
+    })
+    const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
+    try {
+      const res = await app.fetch(
+        new Request('http://localhost/api/project/start', { method: 'POST' }),
+      )
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        providerStatus?: {
+          preferredProvider?: string
+          activeProvider?: string
+          fallback?: boolean
+        }
+      }
+      expect(body.providerStatus).toMatchObject({
+        preferredProvider: 'llama-cpp',
+        activeProvider: 'anthropic-api',
+        fallback: true,
+      })
+
+      const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+      const projectBody = (await projectRes.json()) as {
+        providerStatus?: {
+          preferredProvider?: string
+          activeProvider?: string
+          fallback?: boolean
+        }
+        run?: {
+          providerStatus?: {
+            activeProvider?: string
+          }
+        }
+      }
+      expect(projectBody.providerStatus).toMatchObject({
+        preferredProvider: 'llama-cpp',
+        activeProvider: 'anthropic-api',
+        fallback: true,
+      })
+      expect(projectBody.run?.providerStatus?.activeProvider).toBe('anthropic-api')
     } finally {
       await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
     }
@@ -251,8 +445,37 @@ describe('POST /api/project/start preflight', () => {
     const body = (await res.json()) as { code?: string; error?: string; loadedModels?: string[]; missingModels?: string[] }
     expect(body.code).toBe('model_unavailable')
     expect(body.error).toMatch(/LM Studio/)
+    expect(body.error).toMatch(/will not JIT-load missing models/)
     expect(body.loadedModels).toContain('qwen/qwen3.6-35b-a3b')
-    expect(body.missingModels).toContain('qwen2.5-coder-32b-instruct')
+    expect(body.missingModels).toContain('qwen2.5-coder-7b-instruct')
+  })
+
+  it('checks global model defaults during LM Studio start preflight', async () => {
+    setProvider('llama-cpp', { url: 'http://localhost:1234/v1' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ data: [{ id: 'qwen/qwen3.6-35b-a3b' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    await app.fetch(
+      new Request('http://localhost/api/config/models', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scope: 'global', role: 'worker', model: 'missing-global-model' }),
+      }),
+    )
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/start', { method: 'POST' }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { code?: string; missingModels?: string[] }
+    expect(body.code).toBe('model_unavailable')
+    expect(body.missingModels).toContain('missing-global-model')
   })
 })
 
@@ -276,6 +499,7 @@ describe('POST /api/project/stop', () => {
 
   it('stops a running supervisor and reflects stopped status on refresh', async () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateProjectConfig(tmpProject, { allowPaidProviderFallback: true })
     const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
     try {
       const startRes = await app.fetch(
@@ -343,5 +567,50 @@ describe('POST /api/providers/test', () => {
     const body = (await res.json()) as { ok: boolean; error?: string }
     expect(body.ok).toBe(false)
     expect(body.error).toMatch(/model|url|llama|lm studio/i)
+  })
+
+  it('accepts reasoning-only LM Studio responses as a successful provider test', async () => {
+    setProvider('llama-cpp', { url: 'http://localhost:1234/v1' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url
+        if (url.endsWith('/models')) {
+          return new Response(JSON.stringify({ data: [{ id: 'qwen/qwen3.6-35b-a3b' }] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        if (url.endsWith('/chat/completions')) {
+          return sseResponse([
+            dataFrame({
+              choices: [
+                { delta: { reasoning_content: 'I can answer with OK.' }, finish_reason: null },
+              ],
+            }),
+            dataFrame({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+            'data: [DONE]\n\n',
+          ])
+        }
+        return new Response('not found', { status: 404 })
+      }),
+    )
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request('http://localhost/api/providers/test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'llama-cpp' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; sample?: string }
+    expect(body.ok).toBe(true)
+    expect(body.sample).toBe('[reasoning response]')
+    expect(readGlobalProviders().providers['llama-cpp']?.verifiedAt).toBeTruthy()
   })
 })
