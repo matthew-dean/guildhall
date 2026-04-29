@@ -12,7 +12,7 @@
  *   2. Refuse to run on a dirty worktree or when not on `main` (override with
  *      `--allow-dirty` / `--allow-branch`).
  *   3. Bump the root `package.json` to the new version.
- *   4. Typecheck + tests + dep-cruise as the pre-publish gate.
+ *   4. Typecheck + docs build + tests + dep-cruise as the pre-publish gate.
  *   5. Rebuild `dist/` fresh.
  *   6. Verify package contents exclude raw docs/ but keep generated help.
  *   7. `npm publish` with `--access=public`.
@@ -20,7 +20,8 @@
  *
  * Flags:
  *   --dry-run             Print each step; run everything except `npm publish`
- *                         (uses `npm publish --dry-run`) and skip the commit/tag.
+ *                         (uses `npm publish --dry-run`), skip the commit/tag,
+ *                         and restore package.json before exit.
  *   --skip-tests          Skip step 4. Build still runs.
  *   --allow-dirty         Allow a dirty git tree (e.g. mid-release fix-up).
  *   --allow-branch        Allow publishing from a branch other than `main`.
@@ -60,6 +61,13 @@ const flags = {
   allowBranch: args.includes('--allow-branch'),
   tag: takeFlagValue('--tag') ?? 'latest',
 }
+const originalManifestText = readFileSync(MANIFEST, 'utf-8')
+let restoreManifestOnExit = false
+if (flags.dryRun) {
+  process.on('exit', () => {
+    if (restoreManifestOnExit) writeFileSync(MANIFEST, originalManifestText)
+  })
+}
 const versionArg = args.find((a) => !a.startsWith('--'))
 if (!versionArg) die('Missing version argument. Pass a semver or `patch`/`minor`/`major`.')
 
@@ -85,6 +93,7 @@ preflightGit()
 const manifest = readJson(MANIFEST)
 manifest.version = nextVersion
 writeJson(MANIFEST, manifest)
+restoreManifestOnExit = flags.dryRun
 log(`Bumped package.json to ${nextVersion}.`)
 
 // ---------------------------------------------------------------------------
@@ -92,8 +101,9 @@ log(`Bumped package.json to ${nextVersion}.`)
 // ---------------------------------------------------------------------------
 
 if (!flags.skipTests) {
-  log('Running typecheck, lint:deps, and tests…')
+  log('Running typecheck, docs build, lint:deps, and tests…')
   run('pnpm', ['typecheck'])
+  run('pnpm', ['docs:build'])
   run('pnpm', ['lint:deps'])
   run('pnpm', ['test'])
 } else {
@@ -129,7 +139,7 @@ run('npm', publishArgs)
 // ---------------------------------------------------------------------------
 
 if (flags.dryRun) {
-  warn('Dry-run: skipping git commit + tag. package.json is still bumped — revert with `git checkout -- package.json` if needed.')
+  warn('Dry-run: skipping git commit + tag and restoring package.json.')
   process.exit(0)
 }
 
@@ -152,7 +162,8 @@ Arguments:
   version            Explicit semver (e.g. 0.3.0) or keyword: patch | minor | major
 
 Flags:
-  --dry-run          Do everything except the real publish and the git commit/tag.
+  --dry-run          Do everything except the real publish and the git commit/tag;
+                     restore package.json before exit.
   --skip-tests       Skip the pre-publish gate. Build still runs. Use sparingly.
   --allow-dirty      Permit a dirty worktree.
   --allow-branch     Publish from a branch other than main.

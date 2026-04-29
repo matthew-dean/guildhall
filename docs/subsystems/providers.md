@@ -48,6 +48,27 @@ Most users configure providers through the Setup Wizard or the Providers page. U
 
 Override provider selection globally with `GUILDHALL_PROVIDER=claude|openai|codex|llama-cpp|lm-studio`.
 
+## Fallback Policy
+
+`preferredProvider` is a project-local preference. If that provider is
+unavailable, Guildhall may fall back to another configured local provider.
+Fallback to another paid/cloud provider is disabled by default so a stale local
+preference cannot silently spend money.
+
+Enable paid fallback globally:
+
+```yaml
+# ~/.guildhall/config.yaml
+allowPaidProviderFallback: true
+```
+
+Or for one project only:
+
+```yaml
+# <project>/.guildhall/config.yaml
+allowPaidProviderFallback: true
+```
+
 ## Errors
 
 Typed exceptions for each provider let callers distinguish transient from fatal:

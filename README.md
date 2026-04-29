@@ -138,9 +138,10 @@ Boundaries are enforced by [`.dependency-cruiser.cjs`](./.dependency-cruiser.cjs
 pnpm typecheck
 pnpm test
 pnpm lint:deps   # module-boundary check
+pnpm docs:build
 ```
 
-Current gate: **1175 tests, 83 test files, all passing** (plus 2 skipped integration tests requiring a live LM Studio endpoint). The `runtime/` module alone has 486 tests covering the orchestrator, fanout dispatch, worktree lifecycle, session resume, and the full lever matrix.
+Current gate: **1679 tests, 115 test files, all passing** (plus 2 skipped integration tests requiring a live LM Studio endpoint). The `runtime/` module covers the orchestrator, fanout dispatch, worktree lifecycle, session resume, and the full lever matrix.
 
 ## Publishing
 
@@ -148,8 +149,8 @@ Current gate: **1175 tests, 83 test files, all passing** (plus 2 skipped integra
 # Dry-run the whole pipeline (bumps the manifest, runs gates, packs the tarball, reverts):
 pnpm release:dry 0.3.0
 
-# Actual release: bumps package.json, runs typecheck + lint:deps + tests, builds,
-# publishes guildhall to npm, commits, tags v0.3.0.
+# Actual release: bumps package.json, runs typecheck + docs + lint:deps + tests,
+# builds, publishes guildhall to npm, commits, tags v0.3.0.
 pnpm release 0.3.0
 ```
 

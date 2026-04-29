@@ -43,6 +43,12 @@ export const ProjectGuildhallConfig = z.object({
   servePort: z.number().int().min(1024).max(65535).default(7777),
 
   /**
+   * Project override for falling back from an unavailable preferred provider
+   * to another paid/cloud provider. Omitted means "use global default".
+   */
+  allowPaidProviderFallback: z.boolean().optional(),
+
+  /**
    * Which provider the wizard chose last. Drives fallback order when
    * multiple providers are reachable.
    */

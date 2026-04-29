@@ -103,6 +103,31 @@ describe('pickNextTasks', () => {
     expect(picks.map((t) => t.id)).toEqual(['t1', 't2', 't3'])
   })
 
+  it('fills fanout capacity from active work before ready work', () => {
+    const q = queue([
+      task({ id: 't-ready-critical', status: 'ready', priority: 'critical' }),
+      task({ id: 't-review-low', status: 'review', priority: 'low' }),
+      task({ id: 't-progress-normal', status: 'in_progress', priority: 'normal' }),
+    ])
+    const picks = pickNextTasks({ queue: q, capacity: 2 })
+    expect(picks.map((t) => t.id)).toEqual(['t-review-low', 't-progress-normal'])
+  })
+
+  it('does not fill fanout capacity with dependency-blocked work', () => {
+    const q = queue([
+      task({ id: 'foundation', status: 'ready', priority: 'normal' }),
+      task({
+        id: 'dependent',
+        status: 'ready',
+        priority: 'critical',
+        dependsOn: ['foundation'],
+      }),
+      task({ id: 'independent', status: 'ready', priority: 'low' }),
+    ])
+    const picks = pickNextTasks({ queue: q, capacity: 3 })
+    expect(picks.map((t) => t.id)).toEqual(['foundation', 'independent'])
+  })
+
   it('honors excludeIds so a task already in flight is not re-picked', () => {
     const q = queue([
       task({ id: 't1', status: 'ready', priority: 'high' }),

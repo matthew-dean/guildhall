@@ -266,7 +266,11 @@ export async function editFile(input: EditFileInput): Promise<EditFileResult> {
   }
 
   if (input.oldString.length === 0) {
-    return { success: false, replacements: 0, error: 'oldString must not be empty' }
+    return {
+      success: false,
+      replacements: 0,
+      error: 'oldString must not be empty. Read the file, copy the exact existing text you want to replace, and pass it as oldString. If you intend to replace the entire file, use write-file instead.',
+    }
   }
 
   // Count occurrences up front so we can reject ambiguous single-edit calls
@@ -281,7 +285,7 @@ export async function editFile(input: EditFileInput): Promise<EditFileResult> {
     return {
       success: false,
       replacements: 0,
-      error: 'oldString was not found in the file',
+      error: 'oldString was not found in the file. Re-read the file and use an exact substring from the current contents.',
     }
   }
   if (!input.replaceAll && count > 1) {

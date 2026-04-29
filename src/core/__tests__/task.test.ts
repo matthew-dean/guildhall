@@ -12,6 +12,10 @@ describe('TaskStatus', () => {
   it('rejects unknown status', () => {
     expect(() => TaskStatus.parse('unknown')).toThrow()
   })
+
+  it('normalizes legacy pending status to ready', () => {
+    expect(TaskStatus.parse('pending')).toBe('ready')
+  })
 })
 
 describe('Task', () => {
@@ -38,6 +42,11 @@ describe('Task', () => {
     expect(result.id).toBe('task-001')
     expect(result.status).toBe('exploring')
     expect(result.revisionCount).toBe(0)
+  })
+
+  it('normalizes legacy pending tasks to ready', () => {
+    const result = Task.parse({ ...validTask, status: 'pending' })
+    expect(result.status).toBe('ready')
   })
 
   it('applies default priority of normal', () => {

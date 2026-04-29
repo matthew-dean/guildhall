@@ -7,7 +7,7 @@
   import { nav } from './nav.svelte.js'
   import Icon, { type IconName } from './Icon.svelte'
   import StatusLight from './StatusLight.svelte'
-  import { friendlyDomain } from './display.js'
+  import { friendlyDomain, friendlyStatus } from './display.js'
   import type { TaskLite } from './types.js'
 
   const ACTIVE_STATUSES = new Set([
@@ -23,11 +23,21 @@
   interface Props {
     task: TaskLite
     orchestratorRunning?: boolean
+    displayStatusLabel?: string
+    displayStatusTone?: StatusTone
+    displayStatusIcon?: IconName
   }
 
-  let { task, orchestratorRunning = false }: Props = $props()
+  let {
+    task,
+    orchestratorRunning = false,
+    displayStatusLabel,
+    displayStatusTone,
+    displayStatusIcon,
+  }: Props = $props()
 
   const status = $derived(task.status ?? 'unknown')
+  const statusLabel = $derived(displayStatusLabel ?? friendlyStatus(status))
   const isQueued = $derived(ACTIVE_STATUSES.has(status))
   const isActive = $derived(isQueued && orchestratorRunning)
   const prio = $derived(task.priority && task.priority !== 'normal' ? task.priority : '')
@@ -37,25 +47,26 @@
   )
 
   const statusTone = $derived<StatusTone>(
-    status === 'blocked'
-      ? 'danger'
-      : status === 'shelved'
-        ? 'warn'
-        : status === 'done'
-          ? 'ok'
-          : isActive
-            ? 'accent'
-            : 'neutral',
+    displayStatusTone ??
+      (status === 'blocked'
+        ? 'danger'
+        : status === 'shelved'
+          ? 'warn'
+          : status === 'done'
+            ? 'ok'
+            : isActive
+              ? 'accent'
+              : 'neutral'),
   )
 
   const statusIcon = $derived<IconName>(
-    status === 'blocked'
+    displayStatusIcon ?? (status === 'blocked'
       ? 'alert-triangle'
       : status === 'done'
         ? 'check-circle-2'
         : isActive
           ? 'loader'
-          : 'circle',
+          : 'circle'),
   )
 
   function open() {
@@ -87,7 +98,7 @@
       {:else}
         <Icon name={statusIcon} size={12} />
       {/if}
-      <span>{status}</span>
+      <span>{statusLabel}</span>
     </span>
     {#if isQueued && !orchestratorRunning}
       <span class="tc-queued" title="Queued — orchestrator is stopped">paused</span>

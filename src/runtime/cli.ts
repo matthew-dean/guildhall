@@ -51,6 +51,7 @@ function expandPath(p: string): string {
 //   guildhall run [id|path]             — run the orchestrator for a workspace
 //     --domain <id>                 — only process tasks for one coordinator domain
 //     --max-ticks <n>               — stop after N ticks (useful for testing)
+//     --one-task                    — stop after one task reaches a handoff point
 //   guildhall serve                     — start the web dashboard (all workspaces)
 //     --port <n>                    — override the dashboard port (default: 7777)
 //   guildhall config [id|path]          — re-run the init wizard on an existing workspace
@@ -101,6 +102,7 @@ Usage:
   guildhall run [id|path]            Run the orchestrator for a workspace
     --domain <id>                Filter to tasks in one coordinator domain
     --max-ticks <n>              Stop after N ticks (testing)
+    --one-task                   Stop after one task reaches terminal/PR/block
 
   guildhall serve                    Start the web dashboard for all workspaces
     --port <n>                   Override dashboard port (default: 7777)
@@ -244,6 +246,7 @@ async function cmdRun() {
   const idOrPath = pos[0]
   const domain = getFlag('--domain')
   const maxTicks = Number(getFlag('--max-ticks') ?? Infinity)
+  const oneTask = args.includes('--one-task')
 
   let workspace
   try {
@@ -266,6 +269,7 @@ async function cmdRun() {
   await runOrchestrator(workspace.config, {
     ...(domain ? { domainFilter: domain } : {}),
     maxTicks,
+    ...(oneTask ? { stopAfterOneTask: true } : {}),
   })
 }
 

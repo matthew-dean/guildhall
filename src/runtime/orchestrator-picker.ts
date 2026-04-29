@@ -31,7 +31,28 @@ export function needsPreRejectionPolicy(task: Task): boolean {
   )
 }
 
-/** Highest-priority actionable task. Status order defines the routing priority. */
+/**
+ * A dependency edge means "this task cannot start until that task is done."
+ * Missing dependencies are treated as unmet rather than silently ignored; the
+ * planner/UI can surface that as a queue hygiene problem, but the runtime
+ * should not dispatch blocked work.
+ */
+export function dependenciesSatisfied(queue: TaskQueue, task: Task): boolean {
+  if (task.dependsOn.length === 0) return true
+  return task.dependsOn.every((dependencyId) => {
+    const dependency = queue.tasks.find((candidate) => candidate.id === dependencyId)
+    return dependency?.status === 'done'
+  })
+}
+
+/**
+ * Highest-priority actionable task.
+ *
+ * The picker intentionally favors active work before fresh work: once a task
+ * has entered implementation/review/gates, the outer loop keeps driving that
+ * task toward a terminal state instead of claiming something new. This is the
+ * small "one-task finisher" rule borrowed from Ralph/Beads-style workflows.
+ */
 export function pickNextTask(
   queue: TaskQueue,
   domain?: string,
@@ -58,20 +79,22 @@ export function pickNextTask(
     if (task) return task
   }
 
-  const statuses: TaskStatus[] = [
+  const activeStatuses: TaskStatus[] = [
+    'gate_check',
+    'review',
+    'in_progress',
+  ]
+
+  const freshStatuses: TaskStatus[] = [
     // FR-21: proposals are cheapest to service (pure lever decision, no LLM)
-    // so they run first — keeps the board clear of unresolved proposals
-    // before exploratory or in-flight work consumes a tick.
+    // so they lead fresh-work intake after already-active work is cleared.
     'proposed',
     'exploring',
     'spec_review',
     'ready',
-    'in_progress',
-    'review',
-    'gate_check',
   ]
 
-  for (const status of statuses) {
+  for (const status of [...activeStatuses, ...freshStatuses]) {
     for (const p of priority) {
       const task = queue.tasks.find(
         (t) =>
@@ -79,6 +102,7 @@ export function pickNextTask(
           !(t.status === 'spec_review' && Boolean(t.spec?.trim())) &&
           t.priority === p &&
           (!domain || t.domain === domain) &&
+          dependenciesSatisfied(queue, t) &&
           // FR-10: halt any task with an unresolved escalation regardless of status
           !hasOpenEscalation(t) &&
           !isExcluded(t),

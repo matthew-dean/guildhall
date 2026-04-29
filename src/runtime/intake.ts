@@ -291,6 +291,11 @@ export interface ResumeExploringInput {
   resolution?: string
   /** The next human message to inject into the transcript */
   message?: string
+  /**
+   * For an already-dispatched task, a Thread reply is a steering note for the
+   * current worker/reviewer. It should not reopen spec intake.
+   */
+  preserveStatus?: boolean | undefined
 }
 
 /**
@@ -320,7 +325,14 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
     if (!result.success) return { success: false, error: result.error ?? 'unknown' }
   }
 
-  if (input.message) {
+  if (input.message && input.preserveStatus) {
+    task.notes.push({
+      agentId: 'human',
+      role: 'human',
+      content: input.message,
+      timestamp: new Date().toISOString(),
+    })
+  } else if (input.message) {
     await appendExploringTranscript({
       memoryDir: input.memoryDir,
       taskId: task.id,
@@ -329,8 +341,12 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
     })
   }
 
-  if (input.message && task.status !== 'blocked') {
+  if (input.message && !input.preserveStatus && task.status !== 'blocked') {
     task.status = 'exploring'
+    task.updatedAt = new Date().toISOString()
+    queue.lastUpdated = task.updatedAt
+    await writeQueue(input.memoryDir, queue)
+  } else if (input.message && input.preserveStatus) {
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = task.updatedAt
     await writeQueue(input.memoryDir, queue)

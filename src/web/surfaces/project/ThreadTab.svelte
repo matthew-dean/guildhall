@@ -30,15 +30,32 @@
   import Markdown from '../../lib/Markdown.svelte'
   import AgentQuestion from '../../lib/AgentQuestion.svelte'
   import StatusLight from '../../lib/StatusLight.svelte'
+  import StatusLine from '../../lib/StatusLine.svelte'
+  import StateSummary from '../../lib/StateSummary.svelte'
   import Help from '../../lib/Help.svelte'
+  import InteractionCardLayout from '../../lib/InteractionCardLayout.svelte'
   import { onEvent } from '../../lib/events.js'
   import { nav } from '../../lib/nav.svelte.js'
 
   // ---- Turn shape (mirrors src/runtime/thread.ts) ------------------------
-  type TurnPersona = 'intake' | 'spec' | 'worker' | 'coord' | 'system'
+  type TurnPersona = 'intake' | 'spec' | 'worker' | 'reviewer' | 'coord' | 'system'
   type TurnStatus = 'done' | 'active' | 'pending'
   type TurnPhase = 'setup' | 'intake' | 'spec' | 'ready' | 'inflight' | 'blocked' | 'done'
   type SetupAffordance = 'link' | 'inline-text' | 'inline-textarea' | 'inline-button' | 'inline-choice'
+  interface LiveAgent {
+    name: string
+    startedAt?: string | undefined
+    lastEventAt?: string | undefined
+    lastEventLabel?: string | undefined
+    silentMs?: number | undefined
+    stalled?: boolean | undefined
+  }
+  interface LiveActivity {
+    at?: string | undefined
+    label: string
+    tone: 'neutral' | 'running' | 'ok' | 'warn' | 'danger'
+    detail?: string | undefined
+  }
 
   interface SetupStepTurn {
     kind: 'setup_step'
@@ -57,14 +74,14 @@
       userJob?: string; successMetric?: string; successCriteria?: string
       antiPatterns?: string[]; rolloutPlan?: string; authoredBy?: string
     }
-    liveAgent?: { name: string; startedAt?: string | undefined } | undefined
+    liveAgent?: LiveAgent | undefined
     approvedAt?: string | null
   }
   interface AgentQuestionTurn {
     kind: 'agent_question'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string
-    liveAgent?: { name: string; startedAt?: string | undefined } | undefined
+    liveAgent?: LiveAgent | undefined
     question: {
       kind: 'confirm' | 'yesno' | 'choice' | 'text'
       id: string; askedBy: string; askedAt: string
@@ -91,12 +108,20 @@
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string; escalationId: string
     summary: string; details?: string
+    activity?: LiveActivity[] | undefined
+  }
+  interface ReviewFeedbackTurn {
+    kind: 'review_feedback'
+    id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
+    taskId: string; taskTitle: string
+    summary: string; feedback: string; revisionCount?: number | undefined
   }
   interface InFlightTurn {
     kind: 'inflight'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string; taskStatus?: string; summary: string
-    liveAgent?: { name: string; startedAt?: string } | undefined
+    liveAgent?: LiveAgent | undefined
+    activity?: LiveActivity[] | undefined
     checklist?: {
       title: string
       doneCount: number
@@ -115,6 +140,7 @@
     | BriefTurn
     | AgentQuestionTurn
     | SpecReviewTurn
+    | ReviewFeedbackTurn
     | EscalationTurn
     | InFlightTurn
 
@@ -180,6 +206,13 @@
       turns = j.turns ?? []
       activeTurnId = j.activeTurnId ?? null
       caughtUp = !!j.caughtUp
+      const nextSentReplies = { ...sentReplies }
+      for (const turn of turns) {
+        if (nextSentReplies[turn.id] && turnLiveAgent(turn)) {
+          delete nextSentReplies[turn.id]
+        }
+      }
+      sentReplies = nextSentReplies
       const nextValues = { ...setupValues }
       for (const turn of j.turns ?? []) {
         if (turn.kind !== 'setup_step') continue
@@ -230,6 +263,7 @@
       case 'intake': return 'Setup guide'
       case 'spec':   return 'Spec author'
       case 'worker': return 'Worker'
+      case 'reviewer': return 'Reviewer'
       case 'coord':  return 'Coordinator'
       case 'system': return 'Guildhall'
     }
@@ -250,7 +284,7 @@
     return t.status === 'active' && (t.kind === 'inflight' || Boolean(turnLiveAgent(t)))
   }
 
-  function turnLiveAgent(t: Turn): { name: string; startedAt?: string | undefined } | undefined {
+  function turnLiveAgent(t: Turn): LiveAgent | undefined {
     return 'liveAgent' in t ? t.liveAgent : undefined
   }
 
@@ -268,11 +302,43 @@
     return remainder > 0 ? `${minutes}m ${remainder}s elapsed` : `${minutes}m elapsed`
   }
 
-  function liveAgentMessage(startedAt: string | undefined): string {
-    const seconds = elapsedSeconds(startedAt)
-    if (seconds === null) return 'Model call in progress'
-    const prefix = seconds >= 90 ? 'Still waiting on model' : 'Model call in progress'
-    return `${prefix} · ${formatElapsed(seconds)}`
+  function shortElapsed(ms: number | undefined): string | null {
+    if (ms === undefined) return null
+    const seconds = Math.max(0, Math.floor(ms / 1000))
+    if (seconds < 60) return `${seconds}s ago`
+    return `${Math.floor(seconds / 60)}m ago`
+  }
+
+  function liveAgentMessage(agent: LiveAgent | undefined): string {
+    if (!agent) return 'Model call in progress'
+    const sinceActivity = shortElapsed(agent.silentMs)
+    const label = agent.lastEventLabel ?? 'Model call in progress'
+    if (label === 'Waiting for the local model to respond.' && (agent.silentMs ?? 0) >= 60_000) {
+      return `Still waiting for the local model${sinceActivity ? ` · ${sinceActivity}` : ''}`
+    }
+    if (agent.stalled) {
+      return `No activity${sinceActivity ? ` for ${sinceActivity.replace(' ago', '')}` : ''}`
+    }
+    if (sinceActivity) return `${label} · ${sinceActivity}`
+    const seconds = elapsedSeconds(agent.startedAt)
+    return seconds === null ? label : `${label} · ${formatElapsed(seconds)}`
+  }
+
+  function liveAgentTone(agent: LiveAgent | undefined): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
+    if (
+      agent?.lastEventLabel === 'Waiting for the local model to respond.' &&
+      (agent.silentMs ?? 0) >= 60_000
+    ) {
+      return 'warn'
+    }
+    return agent?.stalled ? 'danger' : 'running'
+  }
+
+  function activityElapsed(at: string | undefined): string | null {
+    if (!at) return null
+    const parsed = Date.parse(at)
+    if (!Number.isFinite(parsed)) return null
+    return shortElapsed(nowMs - parsed)
   }
 
   const phaseGroups = $derived.by(() => phaseOrder
@@ -364,7 +430,10 @@
       const r = await fetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/resume`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({
+          message,
+          ...(turn.kind === 'inflight' ? { preserveStatus: true } : {}),
+        }),
       })
       const j = await r.json().catch(() => ({})) as { error?: string }
       if (!r.ok || j.error) {
@@ -520,6 +589,28 @@
     }
   }
 
+  function taskStateDescription(turn: InFlightTurn): string {
+    if (
+      turn.liveAgent?.lastEventLabel === 'Waiting for the local model to respond.' &&
+      (turn.liveAgent.silentMs ?? 0) >= 60_000
+    ) {
+      return 'Local model is still loading or generating.'
+    }
+    return turn.summary
+  }
+
+  function taskStateTone(turn: InFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
+    if (turn.liveAgent) return 'running'
+    switch (turn.taskStatus) {
+      case 'ready': return 'accent'
+      case 'gate_check': return 'warn'
+      case 'review': return 'warn'
+      case 'exploring': return 'accent'
+      case 'in_progress': return 'neutral'
+      default: return 'neutral'
+    }
+  }
+
   // Group co-active agent_question turns by taskId so we can render the
   // section with ONE submit button at the bottom. Pure derivation off
   // `turns` — keeps render order intact.
@@ -602,98 +693,99 @@
               {#each group.turns as t (t.id)}
         <div class="turn turn-{t.status}" data-turn-id={t.id} use:captureTurn={t.id}>
           <Card tone={tone(t)}>
-            {#snippet actions()}
-              {#if isWorkingTurn(t)}
-                <StatusLight pulse />
-              {/if}
-              <Chip
-                label={t.status === 'done' ? 'done' : t.status === 'active' ? 'now' : 'next'}
-                tone={t.status === 'done' ? 'ok' : t.status === 'active' ? 'warn' : 'neutral'}
-              />
-            {/snippet}
-
-            <Stack gap="2">
-              <div class="meta">
-                <span class="persona">{personaLabel(t.persona)}</span>
-                {#if 'taskTitle' in t}
-                  {@const taskTitle = displayTaskTitle(t)}
-                  <button
-                    type="button"
-                    class="task-chip"
-                    title={taskTitle}
-                    onclick={() => nav(`/task/${encodeURIComponent(t.taskId)}`)}
-                  >
-                    <span class="task-chip-text">{taskTitle}</span>
-                  </button>
-                {/if}
-              </div>
-              {#if t.status === 'active' && turnLiveAgent(t)}
-                {@const live = turnLiveAgent(t)}
-                <div class="live-agent">
-                  <StatusLight tone="running" pulse={true} />
-                  <span>{liveAgentMessage(live?.startedAt)}</span>
+            <InteractionCardLayout>
+              {#snippet status()}
+                <Chip
+                  label={t.status === 'done' ? 'done' : t.status === 'active' ? 'now' : 'next'}
+                  tone={t.status === 'done' ? 'ok' : t.status === 'active' ? 'warn' : 'neutral'}
+                />
+              {/snippet}
+              {#snippet meta()}
+                <div class="meta">
+                  {#if 'taskTitle' in t}
+                    {@const taskTitle = displayTaskTitle(t)}
+                    <button
+                      type="button"
+                      class="task-chip"
+                      title={taskTitle}
+                      onclick={() => nav(`/task/${encodeURIComponent(t.taskId)}`)}
+                    >
+                      <span class="task-chip-text">{taskTitle}</span>
+                    </button>
+                  {/if}
+                  <span class="persona">{personaLabel(t.persona)}</span>
                 </div>
-              {/if}
-
-              {#if t.kind === 'setup_step'}
-                <h3 class="prompt"><Markdown source={t.title} inline /></h3>
-                <p class="why">{t.why}</p>
-                {#if t.status === 'active'}
-                  {#if t.affordance === 'link' && t.actionHref}
-                    <Row justify="end" gap="2">
-                      <Button variant="primary" onclick={() => nav(t.actionHref!)}>{t.actionLabel}</Button>
-                    </Row>
-                  {:else if t.affordance === 'inline-text'}
-                    <div class="setup-form">
-                      <Input
-                        value={setupValue(t.id)}
-                        placeholder={t.placeholder}
-                        disabled={busyTurnId === t.id}
-                        onchange={(v) => setSetupValue(t.id, v)}
-                        oninput={(v) => setSetupValue(t.id, v)}
-                      />
-                      <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
-                        {busyTurnId === t.id ? 'Saving…' : t.actionLabel}
-                      </Button>
-                    </div>
-                  {:else if t.affordance === 'inline-textarea'}
-                    <Stack gap="2">
-                      <Textarea
-                        value={setupValue(t.id)}
-                        placeholder={t.placeholder}
-                        rows={5}
-                        disabled={busyTurnId === t.id}
-                        oninput={(v) => setSetupValue(t.id, v)}
-                      />
-                      <Row justify="end">
+              {/snippet}
+              {#snippet live()}
+                {#if t.status === 'active' && turnLiveAgent(t)}
+                  {@const live = turnLiveAgent(t)}
+                  <StatusLine
+                    label={liveAgentMessage(live)}
+                    tone={liveAgentTone(live)}
+                    pulse
+                    loud
+                  />
+                {/if}
+              {/snippet}
+                {#if t.kind === 'setup_step'}
+                  <h3 class="prompt"><Markdown source={t.title} inline /></h3>
+                  <p class="why">{t.why}</p>
+                  {#if t.status === 'active'}
+                    {#if t.affordance === 'link' && t.actionHref}
+                      <Row justify="end" gap="2">
+                        <Button variant="primary" onclick={() => nav(t.actionHref!)}>{t.actionLabel}</Button>
+                      </Row>
+                    {:else if t.affordance === 'inline-text'}
+                      <div class="setup-form">
+                        <Input
+                          value={setupValue(t.id)}
+                          placeholder={t.placeholder}
+                          disabled={busyTurnId === t.id}
+                          onchange={(v) => setSetupValue(t.id, v)}
+                          oninput={(v) => setSetupValue(t.id, v)}
+                        />
                         <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
                           {busyTurnId === t.id ? 'Saving…' : t.actionLabel}
                         </Button>
+                      </div>
+                    {:else if t.affordance === 'inline-textarea'}
+                      <Stack gap="2">
+                        <Textarea
+                          value={setupValue(t.id)}
+                          placeholder={t.placeholder}
+                          rows={5}
+                          disabled={busyTurnId === t.id}
+                          oninput={(v) => setSetupValue(t.id, v)}
+                        />
+                        <Row justify="end">
+                          <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
+                            {busyTurnId === t.id ? 'Saving…' : t.actionLabel}
+                          </Button>
+                        </Row>
+                      </Stack>
+                    {:else if t.affordance === 'inline-button'}
+                      <Row justify="end" gap="2">
+                        <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
+                          {busyTurnId === t.id ? 'Verifying…' : t.actionLabel}
+                        </Button>
                       </Row>
-                    </Stack>
-                  {:else if t.affordance === 'inline-button'}
-                    <Row justify="end" gap="2">
-                      <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
-                        {busyTurnId === t.id ? 'Verifying…' : t.actionLabel}
-                      </Button>
-                    </Row>
-                  {:else if t.affordance === 'inline-choice'}
-                    <div class="setup-form">
-                      <Select
-                        value={setupValue(t.id)}
-                        options={t.choices ?? []}
-                        disabled={busyTurnId === t.id}
-                        onchange={(v) => setSetupValue(t.id, v)}
-                      />
-                      <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
-                        {busyTurnId === t.id ? 'Adding…' : t.actionLabel}
-                      </Button>
-                    </div>
+                    {:else if t.affordance === 'inline-choice'}
+                      <div class="setup-form">
+                        <Select
+                          value={setupValue(t.id)}
+                          options={t.choices ?? []}
+                          disabled={busyTurnId === t.id}
+                          onchange={(v) => setSetupValue(t.id, v)}
+                        />
+                        <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
+                          {busyTurnId === t.id ? 'Adding…' : t.actionLabel}
+                        </Button>
+                      </div>
+                    {/if}
+                    {#if setupErrors[t.id]}
+                      <p class="error">{setupErrors[t.id]}</p>
+                    {/if}
                   {/if}
-                  {#if setupErrors[t.id]}
-                    <p class="error">{setupErrors[t.id]}</p>
-                  {/if}
-                {/if}
 
               {:else if t.kind === 'brief_approval'}
                 <h3 class="prompt">Is this what you want?</h3>
@@ -896,14 +988,57 @@
                 <h3 class="prompt">Worker is stuck</h3>
                 <p class="why">{t.summary}</p>
                 {#if t.details}<p class="detail">{t.details}</p>{/if}
+                {#if t.activity?.length}
+                  <div class="live-activity" aria-label="Recent agent activity">
+                    {#each t.activity as item, index (`${item.at ?? 'event'}:${item.label}:${index}`)}
+                      <StatusLine
+                        label={item.label}
+                        detail={item.detail}
+                        time={activityElapsed(item.at)}
+                        tone={item.tone}
+                        pulse={item.tone === 'running'}
+                      />
+                    {/each}
+                  </div>
+                {/if}
                 {#if t.status === 'active'}
                   <Row justify="end">
                     <Button variant="primary" onclick={() => nav(`/task/${encodeURIComponent(t.taskId)}`)}>Open task</Button>
                   </Row>
                 {/if}
+              {:else if t.kind === 'review_feedback'}
+                <StateSummary
+                  label="Revision requested"
+                  description={t.summary}
+                  tone="warn"
+                />
+                <details class="review-feedback">
+                  <summary>
+                    Review feedback{t.revisionCount ? ` · pass ${t.revisionCount}` : ''}
+                  </summary>
+                  <div class="review-feedback-body">
+                    <Markdown source={t.feedback} />
+                  </div>
+                </details>
               {:else if t.kind === 'inflight'}
-                <h3 class="prompt">{taskStateLabel(t)}</h3>
-                <p class="why">{t.summary}</p>
+                <StateSummary
+                  label={taskStateLabel(t)}
+                  description={taskStateDescription(t)}
+                  tone={taskStateTone(t)}
+                />
+                {#if t.activity?.length}
+                  <div class="live-activity" aria-label="Recent agent activity">
+                    {#each t.activity as item, index (`${item.at ?? 'event'}:${item.label}:${index}`)}
+                      <StatusLine
+                        label={item.label}
+                        detail={item.detail}
+                        time={activityElapsed(item.at)}
+                        tone={item.tone}
+                        pulse={item.tone === 'running'}
+                      />
+                    {/each}
+                  </div>
+                {/if}
                 {#if t.checklist}
                   <div class="live-checklist">
                     <div class="live-checklist-head">
@@ -966,12 +1101,15 @@
                       Tell agent
                     </Button>
                   </Row>
+                  {#if sentReplies[t.id]}
+                    <p class="answer">Saved. The agent will read it on the next run.</p>
+                  {/if}
                   {#if replyErrors[t.id]}
                     <p class="error">{replyErrors[t.id]}</p>
                   {/if}
                 {/if}
               {/if}
-            </Stack>
+            </InteractionCardLayout>
           </Card>
         </div>
         {#if sectionFooterTurnId[t.id]}
@@ -1042,6 +1180,9 @@
   .phase-head:hover {
     background: var(--bg-raised-2);
   }
+  .turn :global(.card) {
+    padding: var(--s-3);
+  }
   .meta {
     display: flex;
     flex-direction: column;
@@ -1051,9 +1192,9 @@
     color: var(--text-muted);
   }
   .persona {
-    color: var(--text);
-    font-size: var(--fs-1);
-    font-weight: 550;
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    font-weight: 500;
     line-height: var(--lh-tight);
   }
   .task-chip {
@@ -1062,12 +1203,13 @@
     max-width: 100%;
     border: none;
     background: transparent;
-    color: var(--text-muted);
+    color: var(--text);
     padding: 0;
     border-radius: var(--r-1);
     cursor: pointer;
     font: inherit;
-    font-size: var(--fs-0);
+    font-size: var(--fs-2);
+    font-weight: 550;
     line-height: var(--lh-tight);
   }
   .task-chip:hover {
@@ -1178,15 +1320,37 @@
     border-radius: var(--r-2);
     background: var(--bg);
   }
-  .live-agent {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--s-2);
-    width: fit-content;
-    color: var(--warn);
-    font-size: var(--fs-1);
-    font-weight: 700;
-    text-transform: uppercase;
+  .live-activity {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-1);
+    padding: var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+  }
+  .review-feedback {
+    padding: var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+    color: var(--text-muted);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+  }
+  .review-feedback summary {
+    cursor: pointer;
+    color: var(--text);
+    font-weight: 550;
+  }
+  .review-feedback-body {
+    margin-top: var(--s-2);
+    max-height: 320px;
+    overflow: auto;
+  }
+  .review-feedback-body :global(.md) {
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
   }
   .live-checklist-head,
   .live-step {

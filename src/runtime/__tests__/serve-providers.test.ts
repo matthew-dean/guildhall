@@ -12,7 +12,7 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => TMP_HOME }
 })
 
-const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig } =
+const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig, updateProjectConfig } =
   await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
 
@@ -348,6 +348,7 @@ describe('POST /api/project/start preflight', () => {
 
   it('passes preflight and starts the supervisor when an Anthropic key is stored', async () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateProjectConfig(tmpProject, { allowPaidProviderFallback: true })
     const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
     try {
       const res = await app.fetch(
@@ -357,6 +358,69 @@ describe('POST /api/project/start preflight', () => {
       const body = (await res.json()) as { status?: string; provider?: string }
       expect(body.status).toBe('running')
       expect(body.provider).toBe('anthropic-api')
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
+  })
+
+  it('does not fall back to a paid provider unless project/global config opts in', async () => {
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateProjectConfig(tmpProject, { preferredProvider: 'llama-cpp' })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/start', { method: 'POST' }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { code?: string; error?: string }
+    expect(body.code).toBe('no_provider')
+    expect(body.error).toMatch(/Paid-provider fallback is disabled/)
+  })
+
+  it('surfaces the active provider when preferred provider falls back with opt-in', async () => {
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateProjectConfig(tmpProject, {
+      preferredProvider: 'llama-cpp',
+      allowPaidProviderFallback: true,
+    })
+    const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
+    try {
+      const res = await app.fetch(
+        new Request('http://localhost/api/project/start', { method: 'POST' }),
+      )
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        providerStatus?: {
+          preferredProvider?: string
+          activeProvider?: string
+          fallback?: boolean
+        }
+      }
+      expect(body.providerStatus).toMatchObject({
+        preferredProvider: 'llama-cpp',
+        activeProvider: 'anthropic-api',
+        fallback: true,
+      })
+
+      const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+      const projectBody = (await projectRes.json()) as {
+        providerStatus?: {
+          preferredProvider?: string
+          activeProvider?: string
+          fallback?: boolean
+        }
+        run?: {
+          providerStatus?: {
+            activeProvider?: string
+          }
+        }
+      }
+      expect(projectBody.providerStatus).toMatchObject({
+        preferredProvider: 'llama-cpp',
+        activeProvider: 'anthropic-api',
+        fallback: true,
+      })
+      expect(projectBody.run?.providerStatus?.activeProvider).toBe('anthropic-api')
     } finally {
       await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
     }
@@ -381,9 +445,9 @@ describe('POST /api/project/start preflight', () => {
     const body = (await res.json()) as { code?: string; error?: string; loadedModels?: string[]; missingModels?: string[] }
     expect(body.code).toBe('model_unavailable')
     expect(body.error).toMatch(/LM Studio/)
-    expect(body.error).toMatch(/choose a loaded model in Providers/)
+    expect(body.error).toMatch(/will not JIT-load missing models/)
     expect(body.loadedModels).toContain('qwen/qwen3.6-35b-a3b')
-    expect(body.missingModels).toContain('qwen2.5-coder-32b-instruct')
+    expect(body.missingModels).toContain('qwen2.5-coder-7b-instruct')
   })
 
   it('checks global model defaults during LM Studio start preflight', async () => {
@@ -435,6 +499,7 @@ describe('POST /api/project/stop', () => {
 
   it('stops a running supervisor and reflects stopped status on refresh', async () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateProjectConfig(tmpProject, { allowPaidProviderFallback: true })
     const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
     try {
       const startRes = await app.fetch(

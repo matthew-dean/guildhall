@@ -1,7 +1,9 @@
 import { EventEmitter } from 'node:events'
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { BackendEvent } from '@guildhall/backend-host'
 import { resolveConfig } from '@guildhall/config'
+import type { ResolvedConfig } from '@guildhall/config'
 import { runOrchestrator } from './orchestrator.js'
 import {
   ProcessRegistry,
@@ -32,6 +34,8 @@ export interface WorkspaceRun {
   recentEvents: SupervisorEvent[]
   /** Orchestrator's own stop-signal handle; supervisor flips it on stop(). */
   stopSignal: { stopRequested: boolean }
+  /** Interrupts an in-flight provider request while a tick is active. */
+  abortController: AbortController
   /** The run() promise — resolves when the orchestrator loop exits. */
   runPromise: Promise<void>
   /**
@@ -41,6 +45,19 @@ export interface WorkspaceRun {
   processRegistry: ProcessRegistry
   /** Absolute path to the workspace — so `stop()` can write the marker. */
   workspacePath: string
+  /** Dashboard/CLI run mode for operator-visible posture. */
+  mode: 'continuous' | 'one_task'
+  /** Provider selected by start preflight for this run. */
+  providerStatus?: ProviderRunStatus
+}
+
+export interface ProviderRunStatus {
+  preferredProvider?: string
+  activeProvider: string
+  fallback: boolean
+  allowPaidProviderFallback?: boolean
+  selectedAt: string
+  reason?: string
 }
 
 export interface SupervisorEvent {
@@ -61,13 +78,62 @@ export interface SupervisorLifecycleEvent {
 }
 
 const RECENT_EVENT_LIMIT = 200
+const PERSISTED_EVENT_FILE = 'recent-events.jsonl'
+
+type RunOrchestratorFn = typeof runOrchestrator
+type ResolveConfigFn = (opts: { workspacePath: string }) => ResolvedConfig
+
+function persistedEventPath(workspacePath: string): string {
+  return path.join(workspacePath, 'memory', PERSISTED_EVENT_FILE)
+}
+
+function readPersistedEvents(
+  workspacePath: string | undefined,
+  workspaceId: string,
+  limit = RECENT_EVENT_LIMIT,
+): SupervisorEvent[] {
+  if (!workspacePath) return []
+  const file = persistedEventPath(workspacePath)
+  if (!existsSync(file)) return []
+  try {
+    const lines = readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).slice(-limit * 2)
+    const events: SupervisorEvent[] = []
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line) as SupervisorEvent
+        if (parsed.workspaceId === workspaceId) events.push(parsed)
+      } catch {
+        /* skip malformed historical lines */
+      }
+    }
+    return events.slice(-limit)
+  } catch {
+    return []
+  }
+}
+
+function writePersistedEvent(workspacePath: string, event: SupervisorEvent): void {
+  try {
+    mkdirSync(path.dirname(persistedEventPath(workspacePath)), { recursive: true })
+    appendFileSync(persistedEventPath(workspacePath), `${JSON.stringify(event)}\n`, 'utf8')
+  } catch {
+    /* live UI should keep working even if persistence fails */
+  }
+}
 
 export class OrchestratorSupervisor {
   private runs = new Map<string, WorkspaceRun>()
   private emitter = new EventEmitter()
+  private readonly runOrchestratorImpl: RunOrchestratorFn
+  private readonly resolveConfigImpl: ResolveConfigFn
 
-  constructor() {
+  constructor(opts: {
+    runOrchestrator?: RunOrchestratorFn
+    resolveConfig?: ResolveConfigFn
+  } = {}) {
     this.emitter.setMaxListeners(0)
+    this.runOrchestratorImpl = opts.runOrchestrator ?? runOrchestrator
+    this.resolveConfigImpl = opts.resolveConfig ?? resolveConfig
   }
 
   /** Subscribe to all workspace events. Returns an unsubscribe function. */
@@ -77,13 +143,14 @@ export class OrchestratorSupervisor {
   }
 
   /** Snapshot of all runs (for GET /api/workspaces — "is it running?"). */
-  list(): Array<Pick<WorkspaceRun, 'workspaceId' | 'startedAt' | 'stoppedAt' | 'status' | 'error'>> {
+  list(): Array<Pick<WorkspaceRun, 'workspaceId' | 'startedAt' | 'stoppedAt' | 'status' | 'error' | 'providerStatus'>> {
     return Array.from(this.runs.values()).map(r => ({
       workspaceId: r.workspaceId,
       startedAt: r.startedAt,
       ...(r.stoppedAt ? { stoppedAt: r.stoppedAt } : {}),
       status: r.status,
       ...(r.error ? { error: r.error } : {}),
+      ...(r.providerStatus ? { providerStatus: r.providerStatus } : {}),
     }))
   }
 
@@ -96,9 +163,9 @@ export class OrchestratorSupervisor {
    * Recent events for a given workspace id. Dashboards call this on
    * reconnect so the user doesn't see an empty feed.
    */
-  recent(workspaceId: string, limit = RECENT_EVENT_LIMIT): SupervisorEvent[] {
+  recent(workspaceId: string, limit = RECENT_EVENT_LIMIT, workspacePath?: string): SupervisorEvent[] {
     const run = this.runs.get(workspaceId)
-    if (!run) return []
+    if (!run) return readPersistedEvents(workspacePath, workspaceId, limit)
     return run.recentEvents.slice(-limit)
   }
 
@@ -107,23 +174,32 @@ export class OrchestratorSupervisor {
    * already running for this workspace id, returns the existing entry
    * without starting a second loop.
    */
-  start(opts: { workspaceId: string; workspacePath: string }): WorkspaceRun {
+  start(opts: {
+    workspaceId: string
+    workspacePath: string
+    stopAfterOneTask?: boolean
+    providerStatus?: ProviderRunStatus
+  }): WorkspaceRun {
     const existing = this.runs.get(opts.workspaceId)
     if (existing && (existing.status === 'running' || existing.status === 'stopping')) {
       return existing
     }
 
     const stopSignal = { stopRequested: false }
+    const abortController = new AbortController()
     const startedAt = new Date().toISOString()
     const run: WorkspaceRun = {
       workspaceId: opts.workspaceId,
       startedAt,
       status: 'running',
-      recentEvents: [],
+      recentEvents: readPersistedEvents(opts.workspacePath, opts.workspaceId, RECENT_EVENT_LIMIT),
       stopSignal,
+      abortController,
       runPromise: Promise.resolve(),
       processRegistry: new ProcessRegistry(),
       workspacePath: opts.workspacePath,
+      mode: opts.stopAfterOneTask ? 'one_task' : 'continuous',
+      ...(opts.providerStatus ? { providerStatus: opts.providerStatus } : {}),
     }
     // Clear any stale marker from a previous run so a brand-new orchestrator
     // doesn't stop on its first tick.
@@ -140,6 +216,7 @@ export class OrchestratorSupervisor {
       if (run.recentEvents.length > RECENT_EVENT_LIMIT) {
         run.recentEvents.splice(0, run.recentEvents.length - RECENT_EVENT_LIMIT)
       }
+      writePersistedEvent(opts.workspacePath, supervisorEv)
       this.emitter.emit('event', supervisorEv)
     }
 
@@ -147,11 +224,13 @@ export class OrchestratorSupervisor {
 
     run.runPromise = (async () => {
       try {
-        const config = resolveConfig({ workspacePath: opts.workspacePath })
-        await runOrchestrator(config, {
+        const config = this.resolveConfigImpl({ workspacePath: opts.workspacePath })
+        await this.runOrchestratorImpl(config, {
           onBackendEvent: (event) => { recordAndEmit(event) },
           stopSignal,
+          abortSignal: abortController.signal,
           tickDelayMs: 2000,
+          ...(opts.stopAfterOneTask ? { stopAfterOneTask: true } : {}),
         })
         run.status = 'stopped'
         run.stoppedAt = new Date().toISOString()
@@ -179,10 +258,12 @@ export class OrchestratorSupervisor {
     const waitMs = opts.waitMs ?? 30_000
     const run = this.runs.get(workspaceId)
     if (!run) return false
-    if (run.status !== 'running') return true
+    if (run.status === 'stopped' || run.status === 'error') return true
+    if (run.status === 'stopping') return false
 
     run.status = 'stopping'
     run.stopSignal.stopRequested = true
+    run.abortController.abort(new DOMException('Stop requested.', 'AbortError'))
 
     // FR-28: also write the on-disk marker so external observers (a sibling
     // CLI process, a container orchestrator) see the stop request even if

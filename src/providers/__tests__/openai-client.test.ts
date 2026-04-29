@@ -94,6 +94,39 @@ describe('OpenAICompatibleClient', () => {
     }
   })
 
+  it('honors an external abort signal without reporting it as a timeout', async () => {
+    let signalSeen: AbortSignal | null = null
+    const controller = new AbortController()
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      signalSeen = init?.signal instanceof AbortSignal ? init.signal : null
+      controller.abort()
+      throw new DOMException('Request aborted.', 'AbortError')
+    }) as unknown as typeof fetch
+    const client = new OpenAICompatibleClient({
+      fetch: fakeFetch,
+      requestTimeoutMs: 12_000,
+    })
+
+    let caught: unknown = null
+    try {
+      await collect(
+        client.streamMessage({
+          model: 'llama-3',
+          messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+          max_tokens: 64,
+          tools: [],
+          signal: controller.signal,
+        }),
+      )
+    } catch (err) {
+      caught = err
+    }
+
+    expect(signalSeen).toBeInstanceOf(AbortSignal)
+    expect(caught).toBeInstanceOf(DOMException)
+    expect((caught as DOMException).name).toBe('AbortError')
+  })
+
   it('reassembles streamed tool_calls into a tool_use block', async () => {
     const frames = [
       dataFrame({

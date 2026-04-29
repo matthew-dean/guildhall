@@ -4,7 +4,7 @@ title: The dashboard
 
 # The dashboard
 
-The dashboard is a Svelte SPA served by `guildhall serve` at <http://localhost:7842>. It's a window into `memory/` — it doesn't store anything itself. You can edit `memory/*.yaml` with your editor and the dashboard will reflect the change on next refresh.
+The dashboard is a Svelte SPA served by `guildhall serve` at `http://localhost:7842`. It's a window into `memory/` — it doesn't store anything itself. You can edit `memory/*.yaml` with your editor and the dashboard will reflect the change on next refresh.
 
 ## Pages
 

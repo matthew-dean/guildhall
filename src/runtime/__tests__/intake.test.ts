@@ -369,6 +369,24 @@ describe('resumeExploring', () => {
     expect(queue.tasks[0]!.status).toBe('exploring')
   })
 
+  it('can add a human steering note without reopening spec intake', async () => {
+    let queue = await readQueue()
+    queue.tasks[0]!.status = 'in_progress'
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2))
+
+    const result = await resumeExploring({
+      memoryDir,
+      taskId: 'task-001',
+      message: 'Before editing more files, summarize the failing test.',
+      preserveStatus: true,
+    })
+    expect(result.success).toBe(true)
+
+    queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('in_progress')
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('summarize the failing test')
+  })
+
   it('resolves a pending escalation and returns task to exploring', async () => {
     await raiseEscalation({
       tasksPath,

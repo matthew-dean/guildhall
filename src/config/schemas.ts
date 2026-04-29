@@ -177,6 +177,11 @@ export const GlobalConfig = z.object({
 
   // Dashboard server port for `guildhall serve`
   servePort: z.number().int().min(1024).max(65535).default(7777),
+
+  // Whether a project whose preferred provider is unavailable may fall back
+  // to another paid/cloud provider. Default is deliberately false; projects
+  // can opt in through their local .guildhall/config.yaml.
+  allowPaidProviderFallback: z.boolean().default(false),
 })
 export type GlobalConfig = z.infer<typeof GlobalConfig>
 

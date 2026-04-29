@@ -18,7 +18,7 @@ From inside the project you want the guild to work on:
 npx guildhall init
 ```
 
-`init` writes a `guildhall.yaml` at the workspace root, creates `.guildhall/` for local-only state, adds `.guildhall/` to the repo `.gitignore`, and pops open the dashboard at <http://localhost:7777/setup>. The wizard walks you through:
+`init` writes a `guildhall.yaml` at the workspace root, creates `.guildhall/` for local-only state, adds `.guildhall/` to the repo `.gitignore`, and pops open the dashboard at `http://localhost:7777/setup`. The wizard walks you through:
 
 1. **Identity** — workspace name + slug
 2. **Provider** — pick how you'll call LLMs (auto-detects installed CLIs)

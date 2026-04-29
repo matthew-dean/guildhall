@@ -15,7 +15,7 @@ import { z } from 'zod'
 // Terminal states: `done`, `shelved`, `blocked`.
 // ---------------------------------------------------------------------------
 
-export const TaskStatus = z.enum([
+const TaskStatusValue = z.enum([
   'proposed',      // FR-21: agent-originated; awaiting promotion per lever `task_origination`
   'exploring',     // Conversational intake — Spec Agent is building the spec with the user (FR-12)
   'spec_review',   // Spec drafted; awaiting human or coordinator approval
@@ -28,6 +28,11 @@ export const TaskStatus = z.enum([
   'shelved',       // FR-22: worker pre-rejected (no_op/not_viable/low_value/duplicate/spec_wrong) — terminal
   'blocked',       // Cannot proceed — escalation required — terminal
 ])
+
+export const TaskStatus: z.ZodType<z.infer<typeof TaskStatusValue>, z.ZodTypeDef, unknown> = z.preprocess(
+  (value) => value === 'pending' ? 'ready' : value,
+  TaskStatusValue,
+)
 export type TaskStatus = z.infer<typeof TaskStatus>
 
 export const TERMINAL_TASK_STATUSES = ['done', 'shelved', 'blocked'] as const

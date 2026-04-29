@@ -278,10 +278,22 @@ describe('selectApiClient', () => {
     expect(result.providerName).toBe('codex-oauth')
   })
 
-  it('falls through to the normal chain when preferredProvider is unreachable', async () => {
+  it('does not fall through to a paid provider when preferredProvider is unreachable by default', async () => {
     await writeClaudeCred()
     const result = await selectApiClient({
       preferredProvider: 'llama-cpp',
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+    })
+    expect(result.providerName).toBe('none')
+    expect(result.reason).toMatch(/Paid-provider fallback is disabled/)
+  })
+
+  it('falls through to the normal chain when paid-provider fallback is enabled', async () => {
+    await writeClaudeCred()
+    const result = await selectApiClient({
+      preferredProvider: 'llama-cpp',
+      allowPaidProviderFallback: true,
       claudeCredentialPath: claudeCredPath,
       codexCredentialPath: codexCredPath,
     })

@@ -36,6 +36,7 @@ const ROLE_LABEL: Record<string, string> = {
   'spec-agent': 'Spec author',
   'reviewer-agent': 'Reviewer',
   'gate-checker': 'Gate checker',
+  'gate-checker-agent': 'Gate checker',
   'coordinator-agent': 'Coordinator',
   human: 'Human',
 }

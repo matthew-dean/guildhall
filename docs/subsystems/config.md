@@ -13,9 +13,9 @@ help_summary: |
 
 Three config layers, merged in order:
 
-1. **Global** — `~/.guildhall/config.yaml`. Provider credentials, default models, UI preferences. Overridable with `GUILDHALL_CONFIG_DIR`.
+1. **Global** — `~/.guildhall/config.yaml`. Provider credentials, default models, provider fallback policy, UI preferences. Overridable with `GUILDHALL_CONFIG_DIR`.
 2. **Workspace** — `guildhall.yaml` at the workspace root. Coordinators, domains, MCP servers, hooks, models.
-3. **Project** — `.guildhall/config.yaml` inside a repo. Mostly used for per-repo secrets that shouldn't be committed.
+3. **Project** — `.guildhall/config.yaml` inside a repo. Mostly used for per-repo secrets and provider policy that shouldn't be committed.
 
 Project overrides workspace overrides global.
 

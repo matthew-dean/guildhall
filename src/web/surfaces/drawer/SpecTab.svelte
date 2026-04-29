@@ -8,7 +8,8 @@
   import Row from '../../lib/Row.svelte'
   import Card from '../../lib/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
-  import { friendlyDomain } from '../../lib/display.js'
+  import { friendlyDomain, friendlyPriority, friendlyStatus } from '../../lib/display.js'
+  import { roleLabel } from '../../lib/escalation-labels.js'
   import Button from '../../lib/Button.svelte'
   import Field from '../../lib/Field.svelte'
   import Markdown from '../../lib/Markdown.svelte'
@@ -115,13 +116,13 @@
     <Stack gap="2">
       <Markdown source={task.description ?? '(no description)'} />
       <Row wrap gap="2">
-        <Chip label={task.status ?? 'unknown'} tone="neutral" />
+        <Chip label={friendlyStatus(task.status)} tone="neutral" />
         {#if task.domain}<Chip label={friendlyDomain(task.domain)} tone="neutral" />{/if}
-        {#if task.priority}<Chip label="priority: {task.priority}" tone="neutral" />{/if}
+        {#if task.priority}<Chip label="Priority: {friendlyPriority(task.priority)}" tone="neutral" />{/if}
         {#if (task.revisionCount ?? 0) > 0}
-          <Chip label="revisions: {task.revisionCount}" tone="neutral" />
+          <Chip label="Revisions: {task.revisionCount}" tone="neutral" />
         {/if}
-        {#if task.assignedTo}<Chip label="assigned: {task.assignedTo}" tone="neutral" />{/if}
+        {#if task.assignedTo}<Chip label="Assigned: {roleLabel(task.assignedTo)}" tone="neutral" />{/if}
       </Row>
     </Stack>
   </Card>

@@ -42,7 +42,12 @@ import {
   pickPrimaryEngineer,
 } from '@guildhall/guilds'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
-import { selectApiClient, type PreferredProviderKey } from './provider-selection.js'
+import {
+  normalizePreferredProvider,
+  inferPreferredProvider,
+  selectApiClient,
+  type PreferredProviderKey,
+} from './provider-selection.js'
 import {
   createExploringTask,
   approveSpec,
@@ -414,8 +419,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tasks = Array.isArray(raw) ? raw : Array.isArray(raw?.tasks) ? raw.tasks : []
       }
       const run = supervisor.get(project.id)
-      const recent = supervisor.recent(project.id)
+      const preferredProvider = readProjectConfig(project.path).preferredProvider
+      const preferredActiveProvider = preferredProvider
+        ? normalizePreferredProvider(preferredProvider)
+        : undefined
+      const recent = supervisor.recent(project.id, undefined, project.path)
       const bootstrapStatus = readBootstrapStatus(join(project.path, 'memory'))
+      const providerStatus = run?.providerStatus ?? (
+        preferredActiveProvider
+          ? {
+              preferredProvider,
+              activeProvider: null,
+              fallback: false,
+            }
+          : null
+      )
       return c.json({
         initializationNeeded: false,
         id: project.id,
@@ -427,11 +445,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         run: run
           ? {
               status: run.status,
+              mode: run.mode,
               startedAt: run.startedAt,
               stoppedAt: run.stoppedAt,
               error: run.error,
+              ...(run.providerStatus ? { providerStatus: run.providerStatus } : {}),
             }
           : null,
+        providerStatus,
         recentEvents: recent,
         ...(bootstrapStatus ? { bootstrapStatus } : {}),
       })
@@ -502,9 +523,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         /* best-effort */
       }
       const creds = resolveGlobalCredentials()
-      const preferred = projectCfg.preferredProvider
+      const globalCfg = readGlobalConfig()
+      const resolvedConfig = resolveConfig({ workspacePath: project.path })
+      const preferred = projectCfg.preferredProvider ?? inferPreferredProvider(resolvedConfig.models)
+      const allowPaidProviderFallback =
+        projectCfg.allowPaidProviderFallback ?? globalCfg.allowPaidProviderFallback
       const preflight = await selectApiClient({
         ...(preferred ? { preferredProvider: preferred } : {}),
+        ...(allowPaidProviderFallback ? { allowPaidProviderFallback: true } : {}),
         ...(creds.anthropicApiKey ? { anthropicApiKey: creds.anthropicApiKey } : {}),
         ...(creds.openaiApiKey ? { openaiApiKey: creds.openaiApiKey } : {}),
         ...(creds.llamaCppUrl ? { llamaCppUrl: creds.llamaCppUrl } : {}),
@@ -521,13 +547,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         )
       }
       if (preflight.providerName === 'llama-cpp' && creds.llamaCppUrl && project.config) {
-        const assignedModels = resolveConfig({ workspacePath: project.path }).models
+        const assignedModels = resolvedConfig.models
         const loadedModels = await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
         if (loadedModels.length === 0) {
           return c.json(
             {
               error:
-                'LM Studio is reachable, but Guildhall could not see a loaded model. Load a model in LM Studio, then start again.',
+                'LM Studio is reachable, but Guildhall could not see a loaded model. To avoid surprise memory pressure from JIT loading, load the model you want in LM Studio, then start again.',
               code: 'no_loaded_model',
               provider: 'llama-cpp',
             },
@@ -539,8 +565,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           return c.json(
             {
               error:
-                `LM Studio has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
-                'Load the configured model in LM Studio or choose a loaded model in Providers before starting.',
+                `LM Studio currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
+                'Guildhall will not JIT-load missing models automatically; load the configured model in LM Studio or choose a loaded model in Providers.',
               code: 'model_unavailable',
               provider: 'llama-cpp',
               loadedModels,
@@ -550,11 +576,35 @@ export function buildServeApp(opts: ServeOptions = {}): {
           )
         }
       }
-      const run = supervisor.start({ workspaceId: project.id, workspacePath: project.path })
+      const body = await c.req.json().catch(() => ({})) as {
+        mode?: string
+        stopAfterOneTask?: boolean
+      }
+      const stopAfterOneTask =
+        body.stopAfterOneTask === true || body.mode === 'one_task'
+      const normalizedPreferred = preferred
+        ? normalizePreferredProvider(preferred)
+        : undefined
+      const providerStatus = {
+        ...(preferred ? { preferredProvider: preferred } : {}),
+        activeProvider: preflight.providerName,
+        fallback: Boolean(normalizedPreferred && normalizedPreferred !== preflight.providerName),
+        allowPaidProviderFallback,
+        selectedAt: new Date().toISOString(),
+        ...(preflight.reason ? { reason: preflight.reason } : {}),
+      }
+      const run = supervisor.start({
+        workspaceId: project.id,
+        workspacePath: project.path,
+        ...(stopAfterOneTask ? { stopAfterOneTask: true } : {}),
+        providerStatus,
+      })
       return c.json({
         status: run.status,
+        mode: run.mode,
         startedAt: run.startedAt,
         provider: preflight.providerName,
+        providerStatus: run.providerStatus,
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -563,9 +613,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.post('/api/project/stop', async c => {
     try {
-      const stopped = await supervisor.stop(project.id)
-      if (!stopped) return c.json({ error: 'stop timed out' }, 504)
-      return c.json({ ok: true })
+      const stopped = await supervisor.stop(project.id, { waitMs: 1_000 })
+      return c.json({ ok: true, status: stopped ? 'stopped' : 'stopping' })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -1325,7 +1374,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const thread = buildThread({
         projectPath: project.path,
-        recentEvents: supervisor.recent(project.id),
+        recentEvents: supervisor.recent(project.id, undefined, project.path),
       })
       return c.json(thread)
     } catch (err) {
@@ -1555,7 +1604,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const id = c.req.param('id')
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
-      const recent = filterEventsForTask(supervisor.recent(project.id), id)
+      const recent = filterEventsForTask(supervisor.recent(project.id, undefined, project.path), id)
       return c.json({ task, recentEvents: recent })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -1751,6 +1800,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           message?: string
           resolveEscalationId?: string
           resolution?: string
+          preserveStatus?: boolean
         }
         if (!body.message && !body.resolveEscalationId) {
           return c.json({ error: 'Provide a message or an escalation to resolve' }, 400)
@@ -1761,6 +1811,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ...(body.message ? { message: body.message } : {}),
           ...(body.resolveEscalationId ? { resolveEscalationId: body.resolveEscalationId } : {}),
           ...(body.resolution ? { resolution: body.resolution } : {}),
+          ...(body.preserveStatus ? { preserveStatus: true } : {}),
         })
         if (!result.success) return c.json({ error: result.error ?? 'resume failed' }, 400)
         return c.json({ ok: true })
@@ -2714,7 +2765,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return 'gpt-4o-mini'
       case 'codex':
       case 'codex-oauth':
-        return 'gpt-5-codex'
+        return 'gpt-5.3-codex'
       case 'llama-cpp': {
         if (!llamaUrl) return undefined
         try {
@@ -2864,7 +2915,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/events', c => {
     return streamSSE(c, async stream => {
       await stream.writeSSE({ data: JSON.stringify({ type: 'connected', projectId: project.id }) })
-      for (const ev of supervisor.recent(project.id)) {
+      for (const ev of supervisor.recent(project.id, undefined, project.path)) {
         await stream.writeSSE({ data: JSON.stringify(ev) })
       }
       const unsubscribe = supervisor.subscribe(ev => {

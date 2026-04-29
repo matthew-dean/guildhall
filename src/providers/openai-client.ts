@@ -111,6 +111,7 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
       body.stream_options = { include_usage: true }
     }
 
+    const abort = composeAbortSignal(this.requestTimeoutMs, request.signal)
     let res: Response
     try {
       res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
@@ -121,9 +122,12 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
           accept: 'text/event-stream',
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.requestTimeoutMs),
+        signal: abort.signal,
       })
     } catch (err) {
+      if (request.signal?.aborted) {
+        throw new DOMException('Request aborted.', 'AbortError')
+      }
       if (isAbortError(err)) {
         throw new OpenAIApiError(
           `OpenAI-compatible API timed out after ${Math.round(this.requestTimeoutMs / 1000)}s`,
@@ -132,6 +136,8 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
         )
       }
       throw err
+    } finally {
+      abort.dispose()
     }
     if (!res.ok) {
       const text = await res.text().catch(() => '')
@@ -146,6 +152,32 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
     }
 
     yield* consumeOpenAiSse(res.body)
+  }
+}
+
+function composeAbortSignal(
+  timeoutMs: number,
+  external?: AbortSignal,
+): { signal: AbortSignal; dispose: () => void } {
+  const timeout = AbortSignal.timeout(timeoutMs)
+  if (!external) return { signal: timeout, dispose: () => {} }
+
+  const controller = new AbortController()
+  const abortFromTimeout = (): void => { controller.abort(timeout.reason) }
+  const abortFromExternal = (): void => { controller.abort(external.reason) }
+
+  if (external.aborted) controller.abort(external.reason)
+  else external.addEventListener('abort', abortFromExternal, { once: true })
+
+  if (timeout.aborted) controller.abort(timeout.reason)
+  else timeout.addEventListener('abort', abortFromTimeout, { once: true })
+
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      external.removeEventListener('abort', abortFromExternal)
+      timeout.removeEventListener('abort', abortFromTimeout)
+    },
   }
 }
 

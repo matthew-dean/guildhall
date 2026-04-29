@@ -31,7 +31,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
-import { readGlobalProviders, type ProviderKind } from '../config/global-providers.js'
+import { readGlobalProviders, type ProviderKind } from '@guildhall/config'
 
 // ---------------------------------------------------------------------------
 // Facts / snapshot

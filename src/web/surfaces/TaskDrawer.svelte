@@ -21,6 +21,7 @@
   import ResolveEscalationModal from './drawer/ResolveEscalationModal.svelte'
   import type { DrawerPayload, DrawerTab, Escalation } from '../lib/types.js'
   import { onEvent, eventTaskId } from '../lib/events.js'
+  import { project } from '../lib/project.svelte.js'
   import { onDestroy } from 'svelte'
 
   interface Props {
@@ -33,6 +34,8 @@
   let payload = $state<DrawerPayload | null>(null)
   let error = $state<string | null>(null)
   let busy = $state(false)
+  let runBusy = $state(false)
+  let runError = $state<string | null>(null)
   let activeTab = $state<DrawerTab>('spec')
 
   // Modal state
@@ -140,13 +143,39 @@
   }
 
   const task = $derived(payload?.task)
+  const runStatus = $derived(project.detail?.run?.status ?? 'stopped')
   const canPause = $derived(task && task.status !== 'done' && task.status !== 'shelved')
   const canShelve = $derived(task && task.status !== 'done')
   const isShelved = $derived(task?.status === 'shelved')
 
   $effect(() => {
     void load()
+    void project.refresh()
   })
+
+  async function runProject(action: 'start' | 'stop') {
+    runBusy = true
+    runError = null
+    try {
+      const res = await fetch(`/api/project/${action}`, {
+        method: 'POST',
+        headers: action === 'start' ? { 'content-type': 'application/json' } : undefined,
+        body: action === 'start' ? JSON.stringify({ mode: 'one_task' }) : undefined,
+      })
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}))
+        runError = b.error ?? `${action === 'start' ? 'Start' : 'Stop'} failed (HTTP ${res.status})`
+        return
+      }
+      await project.refresh()
+      setTimeout(() => void project.refresh(), 500)
+      setTimeout(() => void project.refresh(), 1800)
+    } catch (err) {
+      runError = friendlyFetchError(err)
+    } finally {
+      runBusy = false
+    }
+  }
 
   // Live updates: whenever the orchestrator emits an event for THIS task,
   // re-fetch the drawer payload so transitions, notes, escalations, and
@@ -232,6 +261,30 @@
 
   {#if payload && task}
     <footer class="gh-drawer-foot">
+      <div class="run-controls">
+        {#if runError}
+          <span class="run-error">{runError}</span>
+        {/if}
+        {#if runStatus === 'running'}
+          <Button
+            variant="danger"
+            size="sm"
+            disabled={runBusy}
+            onclick={() => runProject('stop')}
+          >
+            Stop
+          </Button>
+        {:else}
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={runBusy || runStatus === 'stopping'}
+            onclick={() => runProject('start')}
+          >
+            Finish one
+          </Button>
+        {/if}
+      </div>
       {#if canPause}
         <Button
           variant="secondary"
@@ -342,6 +395,22 @@
     padding: var(--s-3) var(--s-4);
     border-top: 1px solid var(--border);
     background: var(--bg-sunken, var(--bg));
+  }
+  .run-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    margin-right: auto;
+    min-width: 0;
+  }
+  .run-error {
+    color: var(--danger);
+    font-size: var(--fs-1);
+    line-height: var(--lh-tight);
+    max-width: 28ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .copy-link {
     color: var(--text-muted);

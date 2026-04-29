@@ -169,11 +169,15 @@
     nav(href)
   }
 
-  async function start() {
+  async function start(mode: 'continuous' | 'one_task' = 'continuous') {
     busy = true
     runError = null
     try {
-      const res = await fetch('/api/project/start', { method: 'POST' })
+      const res = await fetch('/api/project/start', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      })
       if (!res.ok) {
         try {
           const body = (await res.json()) as { error?: string; code?: string }
@@ -237,6 +241,33 @@
 
   const detail = $derived(project.detail)
   const runStatus = $derived(detail?.run?.status ?? 'stopped')
+  const providerStatus = $derived(detail?.providerStatus ?? detail?.run?.providerStatus ?? null)
+  function providerLabel(provider: string | null | undefined): string {
+    if (!provider) return 'Not selected'
+    const labels: Record<string, string> = {
+      'claude-oauth': 'Claude',
+      'codex-oauth': 'Codex',
+      codex: 'Codex',
+      'llama-cpp': 'LM Studio',
+      'anthropic-api': 'Anthropic',
+      'openai-api': 'OpenAI',
+      none: 'None',
+    }
+    return labels[provider] ?? provider
+  }
+  const activeProviderLabel = $derived(
+    providerLabel(providerStatus?.activeProvider ?? providerStatus?.preferredProvider),
+  )
+  const preferredProviderLabel = $derived(providerLabel(providerStatus?.preferredProvider))
+  const providerTitle = $derived(
+    providerStatus?.fallback
+      ? `Preferred ${preferredProviderLabel}; running ${activeProviderLabel}`
+      : providerStatus?.activeProvider
+        ? `Running ${activeProviderLabel}`
+        : providerStatus?.preferredProvider
+          ? `Preferred ${preferredProviderLabel}`
+          : 'Provider not selected',
+  )
   const failedBootstrapStep = $derived(
     detail?.bootstrapStatus?.success === false
       ? detail.bootstrapStatus.steps?.find(s => s.result === 'fail') ?? null
@@ -433,6 +464,22 @@
             <span>{inboxHighCount}</span>
           </button>
         {/if}
+        {#if providerStatus?.activeProvider || providerStatus?.preferredProvider}
+          <button
+            type="button"
+            class="provider-indicator"
+            class:fallback={providerStatus?.fallback}
+            onclick={() => go('/providers')}
+            title={providerTitle}
+            aria-label={providerTitle}
+          >
+            <Icon name="plug" size={14} />
+            <span>{activeProviderLabel}</span>
+            {#if providerStatus?.fallback}
+              <span class="provider-fallback">fallback</span>
+            {/if}
+          </button>
+        {/if}
         <span class="grow"></span>
         <Button
           variant="secondary"
@@ -447,7 +494,17 @@
         <Button
           variant="primary"
           disabled={busy || runStatus === 'running' || runStatus === 'stopping' || startDisabledReason !== null}
-          onclick={start}
+          onclick={() => start('one_task')}
+          ariaLabel={startDisabledReason ?? 'Finish one task'}
+        >
+          <span class="btn-inner" title={startDisabledReason ?? ''}>
+            <Icon name="check-circle-2" size={16} /> Finish one
+          </span>
+        </Button>
+        <Button
+          variant="secondary"
+          disabled={busy || runStatus === 'running' || runStatus === 'stopping' || startDisabledReason !== null}
+          onclick={() => start('continuous')}
           ariaLabel={startDisabledReason ?? 'Start orchestrator'}
         >
           <span class="btn-inner" title={startDisabledReason ?? ''}>
@@ -479,6 +536,13 @@
             <Icon name="alert-triangle" size={14} />
             <span>{bootstrapFailureText}</span>
             <a href="/settings/ready" onclick={(e) => { e.preventDefault(); nav('/settings/ready') }}>Open Ready</a>
+          </div>
+        {/if}
+        {#if providerStatus?.fallback}
+          <div class="provider-notice" role="status">
+            <Icon name="plug" size={14} />
+            <span>Preferred {preferredProviderLabel} is unavailable; Guildhall is running {activeProviderLabel}.</span>
+            <a href="/providers" onclick={(e) => { e.preventDefault(); nav('/providers') }}>Open Providers</a>
           </div>
         {/if}
         {#if currentView !== 'thread' && currentView !== 'inbox'}
@@ -651,7 +715,8 @@
   }
   .grow { flex: 1; }
   .tasks-indicator,
-  .inbox-indicator {
+  .inbox-indicator,
+  .provider-indicator {
     display: inline-flex;
     align-items: center;
     gap: 4px;
@@ -666,7 +731,8 @@
     line-height: 1;
   }
   .tasks-indicator:hover,
-  .inbox-indicator:hover {
+  .inbox-indicator:hover,
+  .provider-indicator:hover {
     color: var(--text);
     border-color: var(--border-strong);
     background: var(--bg-raised-2);
@@ -680,6 +746,19 @@
     color: var(--danger);
     border-color: var(--danger);
     font-weight: 600;
+  }
+  .provider-indicator {
+    color: var(--text-muted);
+  }
+  .provider-indicator.fallback {
+    color: var(--warn);
+    border-color: var(--warn);
+    font-weight: 600;
+  }
+  .provider-fallback {
+    font-size: var(--fs-0);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
   .btn-inner {
     display: inline-flex;
@@ -709,6 +788,22 @@
     color: var(--color-danger-fg, #8a1f1a);
     border-radius: var(--radius-md, 6px);
     font-size: 13px;
+  }
+  .provider-notice {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    padding: var(--s-2) var(--s-3);
+    border: 1px solid var(--warn);
+    background: color-mix(in srgb, var(--warn) 12%, var(--bg-raised));
+    color: var(--text);
+    border-radius: var(--radius-md, 6px);
+    font-size: 13px;
+  }
+  .provider-notice a {
+    color: inherit;
+    text-decoration: underline;
+    margin-left: auto;
   }
   .start-error a {
     color: inherit;
