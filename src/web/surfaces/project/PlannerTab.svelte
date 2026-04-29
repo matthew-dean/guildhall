@@ -35,10 +35,14 @@
     return task.status === 'pending' ? 'ready' : task.status ?? ''
   }
 
+  const statusById = $derived(
+    new Map(tasks.map(task => [task.id, statusOf(task)])),
+  )
+
   function dependenciesSatisfied(task: Task): boolean {
     const deps = task.dependsOn ?? []
     if (deps.length === 0) return true
-    return deps.every(id => tasks.find(t => t.id === id)?.status === 'done')
+    return deps.every(id => statusById.get(id) === 'done')
   }
 
   function isDependencyBlocked(task: Task): boolean {

@@ -609,6 +609,7 @@ describe('runQuery — unknown tool + invalid input', () => {
       }),
     )
     const client = new ScriptedApiClient([
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'in_progress' }, 'start-1') },
       {
         message: {
           role: 'assistant',
@@ -664,6 +665,86 @@ describe('runQuery — unknown tool + invalid input', () => {
     expect(called).toBe(true)
     expect(updateCompleted?.type === 'tool_execution_completed' ? updateCompleted.is_error : true).toBe(false)
     expect(updateCompleted?.type === 'tool_execution_completed' ? updateCompleted.output : '').toBe('updated')
+  })
+
+  it('does not allow stale handoff evidence from a previous task', async () => {
+    const registry = new ToolRegistry()
+    let reviewCalls = 0
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'export const x = 1', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'tests passed', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string(),
+          taskId: z.string(),
+          status: z.string(),
+        }),
+        execute: async (input) => {
+          if (input.status === 'review') reviewCalls += 1
+          return {
+            output: 'updated',
+            is_error: false,
+            metadata: { success: true, taskId: input.taskId },
+          }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'in_progress' }, 'start-1') },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/src/index.ts' },
+          'read-1',
+        ),
+      },
+      { message: assistantToolUse('shell', { command: 'pnpm test' }, 'shell-1') },
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'review' }, 'review-1') },
+      { message: assistantToolUse('update-task', { taskId: 'task-2', status: 'in_progress' }, 'start-2') },
+      { message: assistantToolUse('update-task', { taskId: 'task-2', status: 'review' }, 'review-2') },
+      { message: assistantText('ok') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 8,
+          toolMetadata: {},
+        },
+        messages,
+      ),
+    )
+    const completed = events.filter((e) => e.type === 'tool_execution_completed')
+    expect(reviewCalls).toBe(1)
+    expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.is_error : false).toBe(true)
+    expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.output : '').toContain('Blocked transition to review')
   })
 
   it('replaces relative project paths for task-state tools', async () => {

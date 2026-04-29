@@ -64,12 +64,21 @@
       providers = j.providers as Record<string, ProviderMeta>
       preferred = j.preferredProvider ?? null
       originalPreferred = preferred
-      const modelRes = await fetch('/api/config/models')
-      const modelJson = await modelRes.json()
-      if (!modelJson.error) models = modelJson as ModelConfig
+      await reloadModels()
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err)
     }
+  }
+
+  async function reloadModels(): Promise<boolean> {
+    const modelRes = await fetch('/api/config/models')
+    const modelJson = await modelRes.json().catch(() => ({}))
+    if (!modelRes.ok || modelJson.error) {
+      flash(modelJson.error ?? `Model reload failed (HTTP ${modelRes.status})`, true)
+      return false
+    }
+    models = modelJson as ModelConfig
+    return true
   }
 
   $effect(() => {
@@ -115,8 +124,8 @@
       })
       const j = await r.json()
       if (j.error) return flash(j.error, true)
-      const modelRes = await fetch('/api/config/models')
-      models = (await modelRes.json()) as ModelConfig
+      const reloaded = await reloadModels()
+      if (!reloaded) return
       flash(scope === 'global-default' ? 'Using global default' : 'Override saved', false)
     } finally {
       saving = false

@@ -484,25 +484,105 @@ function isMemoryTaskPath(path: string): boolean {
   return /(?:^|\/)memory\/TASKS\.json$/.test(path)
 }
 
-function hasReviewHandoffEvidence(toolMetadata: Record<string, unknown> | undefined): boolean {
-  const workLog = Array.isArray(toolMetadata?.['recent_work_log'])
-    ? toolMetadata['recent_work_log'] as unknown[]
-    : []
-  const readFiles = Array.isArray(toolMetadata?.['read_file_state'])
-    ? toolMetadata['read_file_state'] as unknown[]
-    : []
-  const inspectedImplementationFile = readFiles.some((entry) => {
-    if (!entry || typeof entry !== 'object') return false
-    const filePath = String((entry as Record<string, unknown>)['path'] ?? '')
-    return filePath.length > 0 && !isMemoryTaskPath(filePath)
+interface ReviewHandoffEvidence {
+  taskId: string
+  inspectedImplementationFile: boolean
+  changedOrVerified: boolean
+}
+
+function isReadToolName(name: string): boolean {
+  return name === 'read_file' || name === 'Read' || name === 'ReadFile' || name === 'read-file'
+}
+
+function isBashToolName(name: string): boolean {
+  return name === 'bash' || name === 'Bash' || name === 'shell'
+}
+
+function isWriteToolName(name: string): boolean {
+  return name === 'write-file' || name === 'Write'
+}
+
+function isEditToolName(name: string): boolean {
+  return name === 'edit-file' || name === 'Edit'
+}
+
+function reviewHandoffEvidence(
+  toolMetadata: Record<string, unknown> | undefined,
+): ReviewHandoffEvidence | null {
+  const raw = toolMetadata?.['review_handoff_evidence']
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const rec = raw as Record<string, unknown>
+  const taskId = String(rec['taskId'] ?? '').trim()
+  if (!taskId) return null
+  return {
+    taskId,
+    inspectedImplementationFile: rec['inspectedImplementationFile'] === true,
+    changedOrVerified: rec['changedOrVerified'] === true,
+  }
+}
+
+function setReviewHandoffEvidence(
+  toolMetadata: Record<string, unknown> | undefined,
+  evidence: ReviewHandoffEvidence,
+): void {
+  if (!toolMetadata) return
+  toolMetadata['review_handoff_evidence'] = evidence
+}
+
+function activeReviewTaskId(toolMetadata: Record<string, unknown> | undefined): string {
+  return String(toolMetadata?.['active_review_handoff_task_id'] ?? '').trim()
+}
+
+function resetReviewHandoffEvidence(
+  toolMetadata: Record<string, unknown> | undefined,
+  taskId: string,
+): void {
+  if (!toolMetadata || !taskId) return
+  toolMetadata['active_review_handoff_task_id'] = taskId
+  setReviewHandoffEvidence(toolMetadata, {
+    taskId,
+    inspectedImplementationFile: false,
+    changedOrVerified: false,
   })
-  const changedOrVerified = workLog.some((entry) => {
-    const text = String(entry ?? '')
-    return text.startsWith('Edited file ') ||
-      text.startsWith('Wrote file ') ||
-      text.startsWith('Ran bash:')
-  })
-  return inspectedImplementationFile && changedOrVerified
+}
+
+function recordReviewHandoffEvidence(
+  toolMetadata: Record<string, unknown> | undefined,
+  toolName: string,
+  filePath: string | null,
+): void {
+  const taskId = activeReviewTaskId(toolMetadata)
+  if (!toolMetadata || !taskId) return
+  const current = reviewHandoffEvidence(toolMetadata)
+  const evidence: ReviewHandoffEvidence = current?.taskId === taskId
+    ? current
+    : { taskId, inspectedImplementationFile: false, changedOrVerified: false }
+
+  if (isReadToolName(toolName) && filePath && !isMemoryTaskPath(filePath)) {
+    evidence.inspectedImplementationFile = true
+  }
+  if (isBashToolName(toolName) || isWriteToolName(toolName) || isEditToolName(toolName)) {
+    evidence.changedOrVerified = true
+  }
+
+  setReviewHandoffEvidence(toolMetadata, evidence)
+}
+
+function taskIdForReviewHandoff(
+  input: Record<string, unknown>,
+  toolMetadata: Record<string, unknown> | undefined,
+): string {
+  return String(input['taskId'] ?? activeReviewTaskId(toolMetadata)).trim()
+}
+
+function hasReviewHandoffEvidence(
+  toolMetadata: Record<string, unknown> | undefined,
+  taskId: string,
+): boolean {
+  const evidence = reviewHandoffEvidence(toolMetadata)
+  return evidence?.taskId === taskId &&
+    evidence.inspectedImplementationFile &&
+    evidence.changedOrVerified
 }
 
 function reviewHandoffGuardResult(
@@ -512,7 +592,8 @@ function reviewHandoffGuardResult(
   toolMetadata: Record<string, unknown> | undefined,
 ): ToolResultBlock | null {
   if (toolName !== 'update-task' || input['status'] !== 'review') return null
-  if (hasReviewHandoffEvidence(toolMetadata)) return null
+  const taskId = taskIdForReviewHandoff(input, toolMetadata)
+  if (taskId && hasReviewHandoffEvidence(toolMetadata, taskId)) return null
   return {
     type: 'tool_result',
     tool_use_id: toolUseId,
@@ -669,6 +750,14 @@ async function executeToolCall(
     isError: toolResult.is_error,
     resolvedFilePath: filePath,
   })
+
+  const resultMetadata = (result as { metadata?: Record<string, unknown> }).metadata ?? null
+  if (!toolResult.is_error && toolName === 'update-task' && toolInput['status'] === 'in_progress') {
+    const taskId = String(resultMetadata?.['taskId'] ?? toolInput['taskId'] ?? '').trim()
+    resetReviewHandoffEvidence(context.toolMetadata, taskId)
+  } else if (!toolResult.is_error) {
+    recordReviewHandoffEvidence(context.toolMetadata, toolName, filePath)
+  }
 
   if (context.hookExecutor != null) {
     await context.hookExecutor.execute(HookEvent.POST_TOOL_USE, {

@@ -1,5 +1,15 @@
 import { EventEmitter } from 'node:events'
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import path from 'node:path'
 import type { BackendEvent } from '@guildhall/backend-host'
 import { resolveConfig } from '@guildhall/config'
@@ -78,6 +88,8 @@ export interface SupervisorLifecycleEvent {
 }
 
 const RECENT_EVENT_LIMIT = 200
+const PERSISTED_EVENT_LINE_LIMIT = RECENT_EVENT_LIMIT * 5
+const PERSISTED_EVENT_READ_BYTES = 512 * 1024
 const PERSISTED_EVENT_FILE = 'recent-events.jsonl'
 
 type RunOrchestratorFn = typeof runOrchestrator
@@ -85,6 +97,26 @@ type ResolveConfigFn = (opts: { workspacePath: string }) => ResolvedConfig
 
 function persistedEventPath(workspacePath: string): string {
   return path.join(workspacePath, 'memory', PERSISTED_EVENT_FILE)
+}
+
+function readPersistedEventLines(file: string): string[] {
+  const size = statSync(file).size
+  if (size <= PERSISTED_EVENT_READ_BYTES) {
+    return readFileSync(file, 'utf8').trim().split('\n').filter(Boolean)
+  }
+
+  const fd = openSync(file, 'r')
+  try {
+    const start = Math.max(0, size - PERSISTED_EVENT_READ_BYTES)
+    const buffer = Buffer.alloc(size - start)
+    readSync(fd, buffer, 0, buffer.length, start)
+    const text = buffer.toString('utf8')
+    const lines = text.split('\n').filter(Boolean)
+    // If we started mid-line, discard the first partial record.
+    return start > 0 ? lines.slice(1) : lines
+  } finally {
+    closeSync(fd)
+  }
 }
 
 function readPersistedEvents(
@@ -96,7 +128,7 @@ function readPersistedEvents(
   const file = persistedEventPath(workspacePath)
   if (!existsSync(file)) return []
   try {
-    const lines = readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).slice(-limit * 2)
+    const lines = readPersistedEventLines(file).slice(-limit * 2)
     const events: SupervisorEvent[] = []
     for (const line of lines) {
       try {
@@ -112,10 +144,18 @@ function readPersistedEvents(
   }
 }
 
+function trimPersistedEvents(file: string): void {
+  const lines = readPersistedEventLines(file)
+  if (lines.length <= PERSISTED_EVENT_LINE_LIMIT) return
+  writeFileSync(file, `${lines.slice(-PERSISTED_EVENT_LINE_LIMIT).join('\n')}\n`, 'utf8')
+}
+
 function writePersistedEvent(workspacePath: string, event: SupervisorEvent): void {
   try {
-    mkdirSync(path.dirname(persistedEventPath(workspacePath)), { recursive: true })
-    appendFileSync(persistedEventPath(workspacePath), `${JSON.stringify(event)}\n`, 'utf8')
+    const file = persistedEventPath(workspacePath)
+    mkdirSync(path.dirname(file), { recursive: true })
+    appendFileSync(file, `${JSON.stringify(event)}\n`, 'utf8')
+    trimPersistedEvents(file)
   } catch {
     /* live UI should keep working even if persistence fails */
   }
@@ -281,7 +321,7 @@ export class OrchestratorSupervisor {
 
     const deadline = Date.now() + waitMs
     while (Date.now() < deadline) {
-      if (isTerminated()) return true
+      if (isTerminated()) break
       await new Promise(r => setTimeout(r, 250))
     }
 
