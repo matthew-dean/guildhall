@@ -113,6 +113,28 @@
     const note = approveSpecNote.trim()
     const body = note ? { approvalNote: note } : undefined
     approveSpecOpen = false
+    if (taskId === 'task-workspace-import') {
+      busy = true
+      try {
+        const res = await fetch('/api/project/workspace-import/approve', {
+          method: 'POST',
+          headers: body ? { 'content-type': 'application/json' } : undefined,
+          body: body ? JSON.stringify(body) : undefined,
+        })
+        if (!res.ok) {
+          const b = await res.json().catch(() => ({}))
+          error = b.error ?? `HTTP ${res.status}`
+          return
+        }
+        await load()
+        return
+      } catch (err) {
+        error = friendlyFetchError(err)
+        return
+      } finally {
+        busy = false
+      }
+    }
     await post('approve-spec', body)
   }
 

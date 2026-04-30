@@ -1916,6 +1916,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // approve-spec and resume have their own persistence (intake.ts owns the
       // write). Delegate to them so the exploring-transcript stays in sync.
       if (action === 'approve-spec') {
+        if (id === WORKSPACE_IMPORT_TASK_ID) {
+          return c.json(
+            {
+              error:
+                'Workspace import uses a dedicated approval flow. Use /api/project/workspace-import/approve instead.',
+            },
+            400,
+          )
+        }
         const body = await c.req.json().catch(() => ({})) as { approvalNote?: string }
         const result = await approveSpec({
           memoryDir,

@@ -412,6 +412,8 @@
     try {
       const endpoint = turn.taskId === 'task-meta-intake'
         ? '/api/project/meta-intake/approve'
+        : turn.taskId === 'task-workspace-import'
+          ? '/api/project/workspace-import/approve'
         : `/api/project/task/${encodeURIComponent(turn.taskId)}/approve-spec`
       await fetch(endpoint, { method: 'POST' })
       await load()

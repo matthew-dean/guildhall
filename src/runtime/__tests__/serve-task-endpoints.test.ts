@@ -183,6 +183,23 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     const body = (await res.json()) as Record<string, any>
     expect(body.error).toMatch(/spec_review/i)
   })
+
+  it('rejects approve-spec for the reserved workspace-import task', async () => {
+    await seedTask('task-workspace-import', {
+      status: 'spec_review',
+      domain: '_workspace_import',
+      spec: 'drafted import spec body',
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-workspace-import/approve-spec', {
+        method: 'POST',
+      }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.error).toMatch(/workspace import/i)
+  })
 })
 
 describe('POST /api/project/task/:id/resume', () => {

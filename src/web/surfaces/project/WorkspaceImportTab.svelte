@@ -16,6 +16,7 @@
   import Button from '../../lib/Button.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Markdown from '../../lib/Markdown.svelte'
+  import { project } from '../../lib/project.svelte.js'
   import { nav } from '../../lib/nav.svelte.js'
   import { toast } from 'svelte-sonner'
 
@@ -130,6 +131,7 @@
         `Imported ${j.tasksAdded ?? 0} tasks · ${j.goalsRecorded ?? 0} goals · ${j.milestonesLogged ?? 0} milestones`,
       )
       await load()
+      await project.refresh()
       // Bounce to planner so user sees the new tasks.
       setTimeout(() => nav('/planner'), 900)
     } catch (e) {
