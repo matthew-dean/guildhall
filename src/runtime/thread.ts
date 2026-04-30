@@ -947,7 +947,32 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     turn.phase = phaseForTurn(turn)
   }
 
-  const activeTurnId = turns.find(t => t.status === 'active')?.id ?? null
+  // Once there is live task work or a real task question/review, the thread
+  // should center that activity instead of keeping setup cards marked active.
+  const hasActiveTaskTurn = turns.some(
+    (turn) => turn.status === 'active' && turn.kind !== 'setup_step',
+  )
+  const hadOnlySetupActive =
+    !hasActiveTaskTurn && turns.some((turn) => turn.kind === 'setup_step' && turn.status === 'active')
+  if (hasActiveTaskTurn || hadOnlySetupActive) {
+    for (const turn of turns) {
+      if (turn.kind === 'setup_step' && turn.status === 'active') {
+        turn.status = 'pending'
+        turn.phase = 'setup'
+      }
+    }
+  }
+  if (hadOnlySetupActive) {
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      const turn = turns[index]
+      if (!turn || turn.kind === 'setup_step' || turn.status !== 'pending') continue
+      turn.status = 'active'
+      break
+    }
+  }
+
+  const activeTurns = turns.filter(t => t.status === 'active')
+  const activeTurnId = activeTurns.length > 0 ? activeTurns[activeTurns.length - 1]!.id : null
   const caughtUp = activeTurnId === null && turns.every(t => t.status === 'done')
 
   return { turns, activeTurnId, caughtUp }

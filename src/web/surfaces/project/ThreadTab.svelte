@@ -148,6 +148,7 @@
   let activeTurnId = $state<string | null>(null)
   let caughtUp = $state(false)
   let loaded = $state(false)
+  let loadError = $state<string | null>(null)
   let busyTurnId = $state<string | null>(null)
   let busyTaskId = $state<string | null>(null)
   let setupValues = $state<Record<string, string>>({})
@@ -224,8 +225,12 @@
         }
       }
       setupValues = nextValues
-    } catch {
-      /* surface as empty thread; Notifications handles the "broken" case */
+      loadError = null
+    } catch (err) {
+      loadError = err instanceof Error ? err.message : String(err)
+      turns = []
+      activeTurnId = null
+      caughtUp = false
     } finally {
       loaded = true
     }
@@ -671,6 +676,13 @@
 
   {#if !loaded}
     <p class="muted">Loading…</p>
+  {:else if loadError}
+    <Card title="Thread unavailable">
+      <p class="muted">Could not load the current thread: {loadError}</p>
+      <Row justify="end">
+        <Button variant="primary" onclick={() => void load()}>Retry</Button>
+      </Row>
+    </Card>
   {:else if turns.length === 0}
     <Card title="Nothing here yet">
       <p class="muted">Add a task to start the thread.</p>

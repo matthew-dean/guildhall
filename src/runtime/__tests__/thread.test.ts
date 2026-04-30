@@ -7,6 +7,62 @@ import { buildThread } from '../thread.js'
 import { emptyWizardsState, type ProjectSnapshot } from '../wizards.js'
 
 describe('buildThread', () => {
+  it('prefers active task work over setup cards when both exist', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Import workspace',
+              status: 'exploring',
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [],
+        },
+        hasProvider: false,
+        hasDirection: false,
+        workspaceImportReviewed: false,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [
+          {
+            at: new Date().toISOString(),
+            event: {
+              type: 'assistant_delta',
+              task_id: 'task-1',
+              agent_name: 'spec-agent',
+              message: 'Refining the import draft.',
+            },
+          },
+        ],
+      })
+
+      expect(thread.activeTurnId).toBe('inflight:task-1')
+      expect(thread.turns.some(t => t.kind === 'setup_step' && t.status === 'active')).toBe(false)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('projects last live-agent activity and stalled state onto in-flight turns', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

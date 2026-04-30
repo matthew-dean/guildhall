@@ -26,7 +26,12 @@ import {
   migrateProjectProvidersToGlobal,
   type ProviderKind,
 } from '@guildhall/config'
-import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT, type ModelAssignmentConfig } from '@guildhall/core'
+import {
+  MODEL_CATALOG,
+  DEFAULT_LOCAL_MODEL_ASSIGNMENT,
+  DEFAULT_CLOUD_MODEL_ASSIGNMENT,
+  type ModelAssignmentConfig,
+} from '@guildhall/core'
 import {
   loadLeverSettings,
   saveLeverSettings,
@@ -47,6 +52,7 @@ import {
   inferPreferredProvider,
   selectApiClient,
   type PreferredProviderKey,
+  type ProviderName,
 } from './provider-selection.js'
 import {
   createExploringTask,
@@ -419,6 +425,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tasks = Array.isArray(raw) ? raw : Array.isArray(raw?.tasks) ? raw.tasks : []
       }
       const run = supervisor.get(project.id)
+      const resolvedConfig = resolveConfig({ workspacePath: project.path })
       const preferredProvider = readProjectConfig(project.path).preferredProvider
       const preferredActiveProvider = preferredProvider
         ? normalizePreferredProvider(preferredProvider)
@@ -431,6 +438,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
               preferredProvider,
               activeProvider: null,
               fallback: false,
+              activeModel: resolvedConfig.models.worker,
+              models: resolvedConfig.models,
             }
           : null
       )
@@ -487,6 +496,92 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  const DEFAULT_OPENAI_MODEL_ASSIGNMENT: ModelAssignmentConfig = {
+    spec: 'gpt-4o',
+    coordinator: 'gpt-4o',
+    worker: 'gpt-4o',
+    reviewer: 'gpt-4o-mini',
+    gateChecker: 'gpt-4o-mini',
+  }
+
+  const DEFAULT_CODEX_MODEL_ASSIGNMENT: ModelAssignmentConfig = {
+    spec: 'gpt-5.3-codex',
+    coordinator: 'gpt-5.3-codex',
+    worker: 'gpt-5.3-codex',
+    reviewer: 'gpt-5.3-codex',
+    gateChecker: 'gpt-5.3-codex',
+  }
+
+  function modelLooksCompatibleWithProvider(provider: ProviderName, modelId: string): boolean {
+    const lower = modelId.trim().toLowerCase()
+    if (!lower) return false
+    switch (provider) {
+      case 'claude-oauth':
+      case 'anthropic-api':
+        return lower.startsWith('claude-')
+      case 'codex-oauth':
+        return lower === 'gpt-5-codex' || lower === 'gpt-5.3-codex'
+      case 'openai-api':
+        return /^(gpt-|o1-|o3-|o4-|chatgpt-)/.test(lower)
+      case 'llama-cpp':
+        return true
+      default:
+        return false
+    }
+  }
+
+  function assignmentMatchesProvider(
+    provider: ProviderName,
+    assignment: ModelAssignmentConfig,
+  ): boolean {
+    return [
+      assignment.spec,
+      assignment.coordinator,
+      assignment.worker,
+      assignment.reviewer,
+      assignment.gateChecker,
+    ].every(modelId => modelLooksCompatibleWithProvider(provider, modelId))
+  }
+
+  function defaultAssignmentForProvider(provider: ProviderName): ModelAssignmentConfig | null {
+    switch (provider) {
+      case 'claude-oauth':
+      case 'anthropic-api':
+        return DEFAULT_CLOUD_MODEL_ASSIGNMENT
+      case 'codex-oauth':
+        return DEFAULT_CODEX_MODEL_ASSIGNMENT
+      case 'openai-api':
+        return DEFAULT_OPENAI_MODEL_ASSIGNMENT
+      case 'llama-cpp':
+        return DEFAULT_LOCAL_MODEL_ASSIGNMENT
+      default:
+        return null
+    }
+  }
+
+  async function selectPaidFallbackProvider(opts: {
+    anthropicApiKey?: string
+    openaiApiKey?: string
+    llamaCppUrl?: string
+  }) {
+    const fallbackOrder: ProviderName[] = [
+      'codex-oauth',
+      'claude-oauth',
+      'anthropic-api',
+      'openai-api',
+    ]
+    for (const provider of fallbackOrder) {
+      const result = await selectApiClient({
+        provider,
+        ...(opts.anthropicApiKey ? { anthropicApiKey: opts.anthropicApiKey } : {}),
+        ...(opts.openaiApiKey ? { openaiApiKey: opts.openaiApiKey } : {}),
+        ...(opts.llamaCppUrl ? { llamaCppUrl: opts.llamaCppUrl } : {}),
+      })
+      if (result.providerName !== 'none') return result
+    }
+    return null
+  }
+
   function missingAssignedModels(
     assignment: ModelAssignmentConfig,
     loadedModels: string[],
@@ -528,7 +623,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const preferred = projectCfg.preferredProvider ?? inferPreferredProvider(resolvedConfig.models)
       const allowPaidProviderFallback =
         projectCfg.allowPaidProviderFallback ?? globalCfg.allowPaidProviderFallback
-      const preflight = await selectApiClient({
+      let preflight = await selectApiClient({
         ...(preferred ? { preferredProvider: preferred } : {}),
         ...(allowPaidProviderFallback ? { allowPaidProviderFallback: true } : {}),
         ...(creds.anthropicApiKey ? { anthropicApiKey: creds.anthropicApiKey } : {}),
@@ -546,34 +641,66 @@ export function buildServeApp(opts: ServeOptions = {}): {
           400,
         )
       }
+      let effectiveProvider = preflight.providerName
+      let effectiveModels = resolvedConfig.models
+      let fallbackReason = preflight.reason
       if (preflight.providerName === 'llama-cpp' && creds.llamaCppUrl && project.config) {
         const assignedModels = resolvedConfig.models
         const loadedModels = await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
         if (loadedModels.length === 0) {
-          return c.json(
-            {
-              error:
-                'LM Studio is reachable, but Guildhall could not see a loaded model. To avoid surprise memory pressure from JIT loading, load the model you want in LM Studio, then start again.',
-              code: 'no_loaded_model',
-              provider: 'llama-cpp',
-            },
-            400,
-          )
+          const paidFallback = allowPaidProviderFallback
+            ? await selectPaidFallbackProvider(creds)
+            : null
+          if (!paidFallback) {
+            return c.json(
+              {
+                error:
+                  'LM Studio is reachable, but Guildhall could not see a loaded model. To avoid surprise memory pressure from JIT loading, load the model you want in LM Studio, then start again.',
+                code: 'no_loaded_model',
+                provider: 'llama-cpp',
+              },
+              400,
+            )
+          }
+          preflight = paidFallback
+          effectiveProvider = paidFallback.providerName
+          effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
+          fallbackReason =
+            'Preferred LM Studio had no loaded model available, so Guildhall switched to a paid fallback provider.'
         }
-        const missingModels = missingAssignedModels(assignedModels, loadedModels)
-        if (missingModels.length > 0) {
-          return c.json(
-            {
-              error:
-                `LM Studio currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
-                'Guildhall will not JIT-load missing models automatically; load the configured model in LM Studio or choose a loaded model in Providers.',
-              code: 'model_unavailable',
-              provider: 'llama-cpp',
-              loadedModels,
-              missingModels,
-            },
-            400,
-          )
+        if (effectiveProvider === 'llama-cpp') {
+          const missingModels = missingAssignedModels(assignedModels, loadedModels)
+          if (missingModels.length > 0) {
+            const paidFallback = allowPaidProviderFallback
+              ? await selectPaidFallbackProvider(creds)
+              : null
+            if (!paidFallback) {
+              return c.json(
+                {
+                  error:
+                    `LM Studio currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
+                    'Guildhall will not JIT-load missing models automatically; load the configured model in LM Studio or choose a loaded model in Providers.',
+                  code: 'model_unavailable',
+                  provider: 'llama-cpp',
+                  loadedModels,
+                  missingModels,
+                },
+                400,
+              )
+            }
+            preflight = paidFallback
+            effectiveProvider = paidFallback.providerName
+            effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
+            fallbackReason =
+              'Preferred LM Studio did not have the configured models loaded, so Guildhall switched to a paid fallback provider.'
+          }
+        }
+      }
+      if (!assignmentMatchesProvider(effectiveProvider, effectiveModels)) {
+        effectiveModels = defaultAssignmentForProvider(effectiveProvider) ?? effectiveModels
+        if (effectiveProvider !== 'llama-cpp') {
+          fallbackReason ??=
+            `Guildhall swapped to models that ${effectiveProvider} can actually serve for this run.`
         }
       }
       const body = await c.req.json().catch(() => ({})) as {
@@ -587,23 +714,27 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : undefined
       const providerStatus = {
         ...(preferred ? { preferredProvider: preferred } : {}),
-        activeProvider: preflight.providerName,
-        fallback: Boolean(normalizedPreferred && normalizedPreferred !== preflight.providerName),
+        activeProvider: effectiveProvider,
+        fallback: Boolean(normalizedPreferred && normalizedPreferred !== effectiveProvider),
         allowPaidProviderFallback,
         selectedAt: new Date().toISOString(),
-        ...(preflight.reason ? { reason: preflight.reason } : {}),
+        activeModel: effectiveModels.worker,
+        models: effectiveModels,
+        ...(fallbackReason ? { reason: fallbackReason } : {}),
       }
       const run = supervisor.start({
         workspaceId: project.id,
         workspacePath: project.path,
         ...(stopAfterOneTask ? { stopAfterOneTask: true } : {}),
         providerStatus,
+        providerOverride: effectiveProvider,
+        modelAssignmentOverride: effectiveModels,
       })
       return c.json({
         status: run.status,
         mode: run.mode,
         startedAt: run.startedAt,
-        provider: preflight.providerName,
+        provider: effectiveProvider,
         providerStatus: run.providerStatus,
       })
     } catch (err) {

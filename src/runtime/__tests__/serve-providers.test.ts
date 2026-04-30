@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import { mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { Buffer } from 'node:buffer'
 
 // Redirect homedir so the global provider store lives under a per-test temp
 // directory — we must not read or write the user's real ~/.guildhall.
@@ -52,6 +53,30 @@ afterEach(async () => {
   if (existsSync(TMP_HOME)) rmSync(TMP_HOME, { recursive: true, force: true })
   await fs.rm(tmpProject, { recursive: true, force: true })
 })
+
+async function writeCodexCred(): Promise<void> {
+  const payload = {
+    'https://api.openai.com/auth': { chatgpt_account_id: 'acct-test-1234' },
+  }
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8')
+    .toString('base64')
+    .replace(/=+$/, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+  const fakeJwt = `header.${encoded}.sig`
+  await fs.mkdir(path.join(TMP_HOME, '.codex'), { recursive: true })
+  await fs.writeFile(
+    path.join(TMP_HOME, '.codex', 'auth.json'),
+    JSON.stringify({
+      tokens: {
+        access_token: fakeJwt,
+        refresh_token: 'rt-test',
+        account_id: 'acct-test-1234',
+      },
+    }),
+    'utf8',
+  )
+}
 
 describe('GET /api/setup/providers', () => {
   it('reports no credentials when the global store is empty', async () => {
@@ -400,6 +425,7 @@ describe('POST /api/project/start preflight', () => {
         preferredProvider: 'llama-cpp',
         activeProvider: 'anthropic-api',
         fallback: true,
+        activeModel: 'claude-sonnet-4-6',
       })
 
       const projectRes = await app.fetch(new Request('http://localhost/api/project'))
@@ -419,8 +445,55 @@ describe('POST /api/project/start preflight', () => {
         preferredProvider: 'llama-cpp',
         activeProvider: 'anthropic-api',
         fallback: true,
+        activeModel: 'claude-sonnet-4-6',
       })
       expect(projectBody.run?.providerStatus?.activeProvider).toBe('anthropic-api')
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
+  })
+
+  it('falls back to Codex when LM Studio is reachable but the configured models are unavailable', async () => {
+    await writeCodexCred()
+    setProvider('llama-cpp', { url: 'http://localhost:1234/v1' })
+    updateProjectConfig(tmpProject, {
+      preferredProvider: 'llama-cpp',
+      allowPaidProviderFallback: true,
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ data: [{ id: 'qwen/qwen3.6-35b-a3b' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
+    try {
+      const res = await app.fetch(
+        new Request('http://localhost/api/project/start', { method: 'POST' }),
+      )
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        providerStatus?: {
+          preferredProvider?: string
+          activeProvider?: string
+          fallback?: boolean
+          activeModel?: string
+          models?: { spec?: string; worker?: string }
+          reason?: string
+        }
+      }
+      expect(body.providerStatus).toMatchObject({
+        preferredProvider: 'llama-cpp',
+        activeProvider: 'codex-oauth',
+        fallback: true,
+        activeModel: 'gpt-5.3-codex',
+      })
+      expect(body.providerStatus?.models?.spec).toBe('gpt-5.3-codex')
+      expect(body.providerStatus?.models?.worker).toBe('gpt-5.3-codex')
+      expect(body.providerStatus?.reason).toMatch(/configured models loaded|switched to a paid fallback provider/i)
     } finally {
       await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
     }

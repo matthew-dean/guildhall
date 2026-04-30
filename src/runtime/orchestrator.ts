@@ -13,6 +13,7 @@ import { selectApiClient, inferPreferredProvider } from './provider-selection.js
 import {
   TaskQueue,
   TERMINAL_TASK_STATUSES,
+  type ModelAssignmentConfig,
   type AdjudicationRecord,
   type AgentIssue,
   type ReviewVerdict,
@@ -53,6 +54,7 @@ import { buildContext } from './context-builder.js'
 import { buildHookExecutor } from './hooks-loader.js'
 import { buildDefaultCompactor } from './compactor-builder.js'
 import { evaluateProposal, type PromotionAction } from './proposal-promotion.js'
+import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
 import {
   evaluatePreRejection,
   type PreRejectionAction,
@@ -361,6 +363,7 @@ interface OrchestratorTickOptions {
 const ONE_TASK_STOP_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
   ...(TERMINAL_TASK_STATUSES as readonly TaskStatus[]),
   'pending_pr',
+  'spec_review',
 ])
 
 function shouldStopOneTaskRun(outcome: TickOutcome): boolean {
@@ -490,6 +493,7 @@ export class Orchestrator {
    * edits.
    */
   private queueWriteChain: Promise<void> = Promise.resolve()
+  private readonly emptyAssistantRetries = new Map<string, number>()
 
   constructor(opts: OrchestratorOptions) {
     this.opts = opts
@@ -855,6 +859,7 @@ export class Orchestrator {
 
     let generatedText = ''
     let generatedMetaIntakeDraft: string | null = null
+    const retryKey = `${agent.name}:${task.id}`
     try {
       const result = typeof agent.generateWithEvents === 'function'
         ? await agent.generateWithEvents(prompt, async (event) => {
@@ -870,6 +875,7 @@ export class Orchestrator {
       if (task.id === META_INTAKE_TASK_ID) {
         generatedMetaIntakeDraft = findMetaIntakeDraftText(result)
       }
+      this.emptyAssistantRetries.delete(retryKey)
     } catch (err) {
       this.livenessTracker.unregister(agent.name)
       await this.emitBackendEvent({
@@ -902,6 +908,29 @@ export class Orchestrator {
         transitioned: false,
         note: `error: ${message}`,
       })
+      if (/Model returned an empty assistant message/.test(message)) {
+        const retries = (this.emptyAssistantRetries.get(retryKey) ?? 0) + 1
+        this.emptyAssistantRetries.set(retryKey, retries)
+        if (retries <= 2) {
+          await this.emitBackendEvent({
+            type: 'line_complete',
+            task_id: task.id,
+            agent_name: agent.name,
+            message: `Model returned an empty reply. Retrying (${retries}/2) without changing task state.`,
+          })
+          return {
+            kind: 'processed',
+            taskId: task.id,
+            agent: agent.name,
+            beforeStatus,
+            afterStatus: beforeStatus,
+            transitioned: false,
+            revisionCount: task.revisionCount,
+          }
+        }
+      } else {
+        this.emptyAssistantRetries.delete(retryKey)
+      }
       if (/Exceeded maximum turn limit/.test(message)) {
         const escalation = await raiseEscalation({
           tasksPath,
@@ -960,6 +989,20 @@ export class Orchestrator {
           await this.writeQueue(queueAfter)
           afterStatus = taskAfter.status
           transitioned = true
+        }
+
+        if (
+          task.id === WORKSPACE_IMPORT_TASK_ID &&
+          taskAfter.status === 'exploring' &&
+          typeof taskAfter.spec === 'string' &&
+          taskAfter.spec.trim().length > 0
+        ) {
+          taskAfter.status = 'spec_review'
+          taskAfter.updatedAt = this.now()
+          queueAfter.lastUpdated = this.now()
+          await this.writeQueue(queueAfter)
+          afterStatus = taskAfter.status
+          transitioned = beforeStatus !== afterStatus
         }
 
       // FR-27 / AC-18: record LLM verdict when a review actually ran.
@@ -3082,6 +3125,8 @@ export async function runOrchestrator(
     onBackendEvent?: (event: BackendEvent) => void | Promise<void>
     stopSignal?: { stopRequested: boolean }
     abortSignal?: AbortSignal | undefined
+    providerOverride?: string
+    modelAssignmentOverride?: ModelAssignmentConfig
   } = {},
 ): Promise<void> {
   // Provider selection reads project-local config (`.guildhall/config.yaml`)
@@ -3111,6 +3156,9 @@ export async function runOrchestrator(
   }
   const creds = resolveGlobalCredentials()
   const selection = await selectApiClient({
+    ...(opts.providerOverride
+      ? { provider: opts.providerOverride as Parameters<typeof selectApiClient>[0]['provider'] }
+      : {}),
     ...(preferredProvider ? { preferredProvider } : {}),
     ...((projectCfg.allowPaidProviderFallback ?? globalCfg.allowPaidProviderFallback)
       ? { allowPaidProviderFallback: true }
@@ -3126,7 +3174,9 @@ export async function runOrchestrator(
     console.log(`[guildhall] Provider: ${selection.providerName}${detail}`)
   }
   const apiClient = selection.apiClient
-  const models = buildModelSet(config.models, apiClient)
+  const effectiveModels = opts.modelAssignmentOverride ?? config.models
+  const effectiveConfig: ResolvedConfig = { ...config, models: effectiveModels }
+  const models = buildModelSet(effectiveModels, apiClient)
 
   // FR-17: load bundled + user + workspace skills once per run. Each agent
   // factory receives the same frozen skill list so the composed system prompt
@@ -3139,9 +3189,9 @@ export async function runOrchestrator(
   // counter in an HTTP hook's receiver) is consistent across roles, and the
   // orchestrator uses it for SESSION_START / SESSION_END.
   const hookExecutor = buildHookExecutor({
-    config,
+    config: effectiveConfig,
     apiClient,
-    defaultModel: config.models.worker,
+    defaultModel: effectiveModels.worker,
   })
 
   // FR-19: shared reactive compactor. The engine only invokes this when a
@@ -3150,7 +3200,7 @@ export async function runOrchestrator(
   // not a separate provider concept.
   const compactor = buildDefaultCompactor({
     apiClient,
-    model: config.models.worker,
+    model: effectiveModels.worker,
   })
 
   // FR-20: each agent gets auto-persisted snapshots under the project cwd so
@@ -3254,7 +3304,7 @@ export async function runOrchestrator(
   })
 
   const orchestrator = new Orchestrator({
-    config,
+    config: effectiveConfig,
     agents,
     reviewerFanout,
     ...(opts.domainFilter ? { domainFilter: opts.domainFilter } : {}),

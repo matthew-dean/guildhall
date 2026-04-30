@@ -22,7 +22,7 @@
   import type { DrawerPayload, DrawerTab, Escalation } from '../lib/types.js'
   import { onEvent, eventTaskId } from '../lib/events.js'
   import { project } from '../lib/project.svelte.js'
-  import { onDestroy } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
 
   interface Props {
     taskId: string
@@ -37,6 +37,7 @@
   let runBusy = $state(false)
   let runError = $state<string | null>(null)
   let activeTab = $state<DrawerTab>('spec')
+  let pollHandle: ReturnType<typeof setInterval> | null = null
 
   // Modal state
   let resolveModal = $state<{ escalation: Escalation; mode: 'retry' | 'resolve' } | null>(null)
@@ -153,6 +154,12 @@
     void project.refresh()
   })
 
+  onMount(() => {
+    pollHandle = setInterval(() => {
+      void load()
+    }, 4000)
+  })
+
   async function runProject(action: 'start' | 'stop') {
     runBusy = true
     runError = null
@@ -196,6 +203,10 @@
   })
   onDestroy(() => {
     offEvent()
+    if (pollHandle) {
+      clearInterval(pollHandle)
+      pollHandle = null
+    }
     if (refreshTimer) {
       clearTimeout(refreshTimer)
       refreshTimer = null
@@ -232,7 +243,10 @@
 
   <div class="gh-drawer-body">
     {#if error}
-      <p class="error">Error: {error}</p>
+      <div class="error-stack">
+        <p class="error">Error: {error}</p>
+        <Button variant="ghost" size="sm" onclick={() => void load()}>Retry</Button>
+      </div>
     {:else if !payload}
       <p class="loading">Loading…</p>
     {:else if activeTab === 'spec'}
@@ -417,6 +431,12 @@
     font-size: var(--fs-1);
     text-decoration: underline dotted;
     margin-left: var(--s-2);
+  }
+  .error-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--s-2);
   }
   .loading,
   .error {

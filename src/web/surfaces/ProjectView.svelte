@@ -28,7 +28,7 @@
   import { project } from '../lib/project.svelte.js'
   import { onEvent } from '../lib/events.js'
   import { path, nav } from '../lib/nav.svelte.js'
-  import type { ProjectView } from '../lib/types.js'
+  import type { ProjectView, ProviderStatus } from '../lib/types.js'
 
   interface Props {
     initialView?: ProjectView
@@ -42,6 +42,7 @@
   let busy = $state(false)
   let runError = $state<string | null>(null)
   let intakeOpen = $state(false)
+  let refreshHandle: ReturnType<typeof setInterval> | null = null
 
   // Inbox blockers drive disabled-state on top-bar actions so hard blockers
   // (e.g. bootstrap not verified) can't be bypassed by pressing Start.
@@ -92,6 +93,19 @@
 
   $effect(() => {
     void project.refresh()
+  })
+
+  $effect(() => {
+    if (refreshHandle) clearInterval(refreshHandle)
+    refreshHandle = setInterval(() => {
+      void project.refresh()
+    }, 5000)
+    return () => {
+      if (refreshHandle) {
+        clearInterval(refreshHandle)
+        refreshHandle = null
+      }
+    }
   })
 
   // Auto-forward to /setup if the project isn't initialized yet.
@@ -258,15 +272,49 @@
   const activeProviderLabel = $derived(
     providerLabel(providerStatus?.activeProvider ?? providerStatus?.preferredProvider),
   )
+  function compactModelLabel(model: string | null | undefined): string {
+    if (!model) return 'default'
+    const trimmed = model.trim()
+    if (!trimmed) return 'default'
+    const slash = trimmed.lastIndexOf('/')
+    return slash >= 0 ? trimmed.slice(slash + 1) : trimmed
+  }
+  function modelMixSummary(models: ProviderStatus['models']): string | null {
+    if (!models) return null
+    const roles: Array<[string, string | undefined]> = [
+      ['Spec', models.spec],
+      ['Coordinator', models.coordinator],
+      ['Worker', models.worker],
+      ['Reviewer', models.reviewer],
+      ['Gate', models.gateChecker],
+    ]
+    const values = roles.map(([, model]) => model).filter((model): model is string => Boolean(model))
+    if (values.length === 0) return null
+    if (new Set(values).size === 1) return null
+    return roles
+      .filter(([, model]) => Boolean(model))
+      .map(([label, model]) => `${label}: ${model}`)
+      .join('\n')
+  }
+  const activeModelLabel = $derived(compactModelLabel(providerStatus?.activeModel ?? providerStatus?.models?.worker))
+  const providerHeaderLabel = $derived(`${activeProviderLabel} | ${activeModelLabel}`)
   const preferredProviderLabel = $derived(providerLabel(providerStatus?.preferredProvider))
+  const mixedModelSummary = $derived(modelMixSummary(providerStatus?.models))
   const providerTitle = $derived(
     providerStatus?.fallback
-      ? `Preferred ${preferredProviderLabel}; running ${activeProviderLabel}`
+      ? `Preferred ${preferredProviderLabel}; running ${activeProviderLabel}${providerStatus?.activeModel ? ` | ${providerStatus.activeModel}` : ''}${mixedModelSummary ? `\n${mixedModelSummary}` : ''}`
       : providerStatus?.activeProvider
-        ? `Running ${activeProviderLabel}`
+        ? `Running ${activeProviderLabel}${providerStatus?.activeModel ? ` | ${providerStatus.activeModel}` : ''}${mixedModelSummary ? `\n${mixedModelSummary}` : ''}`
         : providerStatus?.preferredProvider
-          ? `Preferred ${preferredProviderLabel}`
+          ? `Preferred ${preferredProviderLabel}${providerStatus?.activeModel ? ` | ${providerStatus.activeModel}` : ''}${mixedModelSummary ? `\n${mixedModelSummary}` : ''}`
           : 'Provider not selected',
+  )
+  const providerNoticeText = $derived(
+    providerStatus?.fallback
+      ? runStatus === 'running'
+        ? `Preferred ${preferredProviderLabel} is unavailable; this run is using ${activeProviderLabel}.`
+        : `Preferred ${preferredProviderLabel} is unavailable; the current fallback engine is ${activeProviderLabel}.`
+      : null,
   )
   const failedBootstrapStep = $derived(
     detail?.bootstrapStatus?.success === false
@@ -474,7 +522,7 @@
             aria-label={providerTitle}
           >
             <Icon name="plug" size={14} />
-            <span>{activeProviderLabel}</span>
+            <span class="provider-summary">{providerHeaderLabel}</span>
             {#if providerStatus?.fallback}
               <span class="provider-fallback">fallback</span>
             {/if}
@@ -541,7 +589,7 @@
         {#if providerStatus?.fallback}
           <div class="provider-notice" role="status">
             <Icon name="plug" size={14} />
-            <span>Preferred {preferredProviderLabel} is unavailable; Guildhall is running {activeProviderLabel}.</span>
+            <span>{providerNoticeText}</span>
             <a href="/providers" onclick={(e) => { e.preventDefault(); nav('/providers') }}>Open Providers</a>
           </div>
         {/if}
@@ -749,11 +797,17 @@
   }
   .provider-indicator {
     color: var(--text-muted);
+    max-width: min(36ch, 30vw);
   }
   .provider-indicator.fallback {
     color: var(--warn);
     border-color: var(--warn);
     font-weight: 600;
+  }
+  .provider-summary {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .provider-fallback {
     font-size: var(--fs-0);

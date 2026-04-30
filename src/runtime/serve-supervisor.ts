@@ -68,6 +68,8 @@ export interface ProviderRunStatus {
   allowPaidProviderFallback?: boolean
   selectedAt: string
   reason?: string
+  activeModel?: string
+  models?: ResolvedConfig['models']
 }
 
 export interface SupervisorEvent {
@@ -219,6 +221,8 @@ export class OrchestratorSupervisor {
     workspacePath: string
     stopAfterOneTask?: boolean
     providerStatus?: ProviderRunStatus
+    providerOverride?: string
+    modelAssignmentOverride?: ResolvedConfig['models']
   }): WorkspaceRun {
     const existing = this.runs.get(opts.workspaceId)
     if (existing && (existing.status === 'running' || existing.status === 'stopping')) {
@@ -270,6 +274,8 @@ export class OrchestratorSupervisor {
           stopSignal,
           abortSignal: abortController.signal,
           tickDelayMs: 2000,
+          ...(opts.providerOverride ? { providerOverride: opts.providerOverride } : {}),
+          ...(opts.modelAssignmentOverride ? { modelAssignmentOverride: opts.modelAssignmentOverride } : {}),
           ...(opts.stopAfterOneTask ? { stopAfterOneTask: true } : {}),
         })
         run.status = 'stopped'

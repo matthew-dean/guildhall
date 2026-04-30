@@ -152,6 +152,14 @@ export interface ProviderStatus {
   allowPaidProviderFallback?: boolean
   selectedAt?: string
   reason?: string
+  activeModel?: string | null
+  models?: {
+    spec?: string
+    coordinator?: string
+    worker?: string
+    reviewer?: string
+    gateChecker?: string
+  } | null
 }
 
 export interface BootstrapStep {

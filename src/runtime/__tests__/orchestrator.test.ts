@@ -462,6 +462,36 @@ describe('Orchestrator.tick — routing', () => {
     expect(coord.calls).toHaveLength(0)
   })
 
+  it('routes workspace-import drafts to spec_review instead of looping in exploring', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'task-workspace-import',
+        title: 'Import existing workspace artifacts into TASKS.json',
+        domain: '_workspace_import',
+        status: 'exploring',
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      await mutateTask('task-workspace-import', {
+        spec: '```yaml\\ntasks:\\n  - id: imported\\n    title: Imported task\\n```',
+        updatedAt: '2026-04-01T00:05:00Z',
+      })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.taskId).toBe('task-workspace-import')
+      expect(out.afterStatus).toBe('spec_review')
+      expect(out.transitioned).toBe(true)
+    }
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('spec_review')
+  })
+
   it('reports no-coordinator when spec_review needs a missing domain coordinator', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'spec_review', domain: 'ghost' })])
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
@@ -486,6 +516,52 @@ describe('Orchestrator.tick — routing', () => {
     })
     const out = await orch.tick()
     if (out.kind === 'processed') expect(out.taskId).toBe('b')
+  })
+
+  it('retries empty assistant turns before surfacing an agent error', async () => {
+    await writeQueue([mkTask({ id: 'worker-task', status: 'in_progress' })])
+    let calls = 0
+    const worker = {
+      name: 'worker-agent',
+      calls: [] as Array<{ prompt: string }>,
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        calls += 1
+        if (calls < 3) {
+          throw new Error('Model returned an empty assistant message. The turn was ignored to keep the session healthy.')
+        }
+        await mutateTask('worker-task', {
+          status: 'done',
+          updatedAt: '2026-04-01T00:06:00Z',
+        })
+        return { text: 'ok' }
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const first = await orch.tick()
+    expect(first.kind).toBe('processed')
+    if (first.kind === 'processed') {
+      expect(first.afterStatus).toBe('in_progress')
+      expect(first.transitioned).toBe(false)
+    }
+
+    const second = await orch.tick()
+    expect(second.kind).toBe('processed')
+    if (second.kind === 'processed') {
+      expect(second.afterStatus).toBe('in_progress')
+      expect(second.transitioned).toBe(false)
+    }
+
+    const third = await orch.tick()
+    expect(third.kind).toBe('processed')
+    if (third.kind === 'processed') {
+      expect(third.afterStatus).toBe('done')
+      expect(third.transitioned).toBe(true)
+    }
   })
 })
 
