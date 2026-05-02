@@ -514,7 +514,21 @@ describe('agent factories', () => {
       expect(sys).toContain('`pnpm typecheck`')
       expect(sys).toContain('`pnpm test`')
       expect(sys).toContain('`cargo clippy -- -D warnings`')
-      expect(sys).toContain('verified `bootstrap.successGates`')
+      expect(sys).toContain('verified bootstrap gates from guildhall.yaml')
+      expect(sys).not.toContain('falling back to the TypeScript defaults')
+    })
+
+    it('createGateCheckerAgent treats an explicit empty bootstrap gate list as authoritative', async () => {
+      const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
+      const agent = createGateCheckerAgent(
+        { apiClient: client, modelId: 'm' },
+        { successGates: [] },
+      )
+      await agent.generate('go')
+      const sys = client.requests[0]?.system_prompt ?? ''
+      expect(sys).toContain('verified bootstrap gates from guildhall.yaml')
+      expect(sys).toContain('Do not invent extra gates beyond this list')
+      expect(sys).toContain('No verified shell gates are currently configured')
       expect(sys).not.toContain('falling back to the TypeScript defaults')
     })
 
@@ -717,6 +731,38 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
     expect(agent.saveSession()).toBeNull()
   })
 
+  it('resetConversation clears in-memory and persisted session state', async () => {
+    const client = new ScriptedApiClient([
+      { message: assistantMsg('first reply'), usage: { input_tokens: 5, output_tokens: 3 } },
+    ])
+    const agent = new GuildhallAgent({
+      name: 'resettable',
+      llm: { apiClient: client, modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [],
+      sessionPersistence: { cwd: projectCwd, sessionId: 'reset-session' },
+    })
+
+    await agent.generate('first user prompt')
+    expect(agent.messages).toHaveLength(2)
+    expect(agent.totalUsage).toEqual({ input_tokens: 5, output_tokens: 3 })
+
+    agent.resetConversation()
+
+    expect(agent.messages).toHaveLength(0)
+    expect(agent.totalUsage).toEqual({ input_tokens: 0, output_tokens: 0 })
+
+    const reloader = new GuildhallAgent({
+      name: 'reload',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [],
+    })
+    expect(reloader.loadSession({ cwd: projectCwd, sessionId: 'reset-session' })).toBe(true)
+    expect(reloader.messages).toHaveLength(0)
+    expect(reloader.totalUsage).toEqual({ input_tokens: 0, output_tokens: 0 })
+  })
+
   it('mid-turn resume: tool-result tail triggers continue() instead of a fresh prompt', async () => {
     // The engine considers a conversation "pending continuation" when the
     // tail is a user tool_result following an assistant tool_use. We simulate
@@ -771,6 +817,43 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
     // Final history: user prompt, assistant tool_use, user tool_result, assistant final
     expect(resumer.messages).toHaveLength(4)
     expect(resumer.messages[3]?.role).toBe('assistant')
+  })
+
+  it('returns the latest non-empty assistant prose when a later assistant message is tool-only', async () => {
+    const prose: ConversationMessage = {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Pick one target and I can draft the spec.' }],
+    }
+    const toolOnly: ConversationMessage = {
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: 'toolu_post-user-question', name: 'post-user-question', input: {} }],
+    }
+
+    const saver = new GuildhallAgent({
+      name: 'saver',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'm' },
+      systemPrompt: 'sys',
+      tools: [],
+      sessionPersistence: { cwd: projectCwd, sessionId: 'latest-prose' },
+    })
+    ;(saver as unknown as { engine: { loadMessages: (m: ConversationMessage[]) => void } }).engine.loadMessages([
+      { role: 'user', content: [{ type: 'text', text: 'help me spec this' }] },
+      prose,
+      { role: 'user', content: [{ type: 'text', text: 'nudge: use a tool now' }] },
+      toolOnly,
+    ])
+    saver.saveSession()
+
+    const resumer = new GuildhallAgent({
+      name: 'resumer',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'm' },
+      systemPrompt: 'sys',
+      tools: [],
+    })
+    expect(resumer.loadSession({ cwd: projectCwd, sessionId: 'latest-prose' })).toBe(true)
+    await expect(resumer.continue()).resolves.toMatchObject({
+      text: 'Pick one target and I can draft the spec.',
+    })
   })
 
   it('saveSession with overrides writes a snapshot even without ctor config', async () => {

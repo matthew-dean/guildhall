@@ -251,7 +251,11 @@
         type === 'agent_finished' ||
         type === 'task_transition' ||
         type === 'agent_issue' ||
-        type === 'escalation_raised'
+        type === 'escalation_raised' ||
+        type === 'tool_started' ||
+        type === 'tool_completed' ||
+        type === 'line_complete' ||
+        type === 'error'
       ) {
         void load()
       }

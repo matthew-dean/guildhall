@@ -7,10 +7,19 @@ import {
   Orchestrator,
   type OrchestratorAgentSet,
   type ReviewerFanoutRunner,
+  buildDefaultReviewerFanout,
 } from '../orchestrator.js'
 import type { ResolvedConfig } from '@guildhall/config'
 import type { Task, TaskQueue, DesignSystem } from '@guildhall/core'
 import type { PersonaVerdict } from '../reviewer-fanout.js'
+import { defineTool } from '@guildhall/engine'
+import type {
+  ApiMessageRequest,
+  ApiStreamEvent,
+  SupportsStreamingMessages,
+} from '@guildhall/engine'
+import type { ConversationMessage, UsageSnapshot } from '@guildhall/protocol'
+import { z } from 'zod'
 
 // ---------------------------------------------------------------------------
 // Integration test: reviewer fan-out at `review`. The Orchestrator, when
@@ -108,6 +117,40 @@ function stubAgent(name: string) {
   }
 }
 
+interface ScriptedTurn {
+  message: ConversationMessage
+  usage?: UsageSnapshot
+}
+
+class ScriptedApiClient implements SupportsStreamingMessages {
+  private index = 0
+
+  constructor(private readonly script: ScriptedTurn[]) {}
+
+  async *streamMessage(_request: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
+    const turn = this.script[this.index]
+    if (!turn) throw new Error(`ScriptedApiClient exhausted at ${this.index}`)
+    this.index += 1
+    yield {
+      type: 'message_complete',
+      message: turn.message,
+      usage: turn.usage ?? { input_tokens: 0, output_tokens: 0 },
+      stop_reason: null,
+    }
+  }
+}
+
+function assistantMsg(text: string): ConversationMessage {
+  return { role: 'assistant', content: [{ type: 'text', text }] }
+}
+
+function assistantToolUse(name: string, input: Record<string, unknown> = {}): ConversationMessage {
+  return {
+    role: 'assistant',
+    content: [{ type: 'tool_use', id: `toolu_${name}`, name, input }],
+  }
+}
+
 function agentSet(): OrchestratorAgentSet {
   return {
     spec: stubAgent('spec-agent'),
@@ -151,6 +194,57 @@ async function writeDesignSystem(ds: DesignSystem): Promise<void> {
 }
 
 describe('Orchestrator — reviewer fan-out at review', () => {
+  it('default fanout reviewers inspect files from the task projectPath', async () => {
+    let observedCwd: string | null = null
+    const cwdProbe = defineTool<Record<string, never>>({
+      name: 'cwd-probe',
+      description: 'records cwd',
+      inputSchema: z.object({}),
+      jsonSchema: { type: 'object', properties: {}, additionalProperties: false },
+      execute: async (_input, ctx) => {
+        observedCwd = ctx.cwd
+        return { output: 'ok', is_error: false }
+      },
+    })
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('cwd-probe') },
+      {
+        message: assistantMsg(
+          [
+            '**Rubric:**',
+            '- review: yes - checked',
+            '',
+            '**Verdict:** approve',
+            '',
+            '**Reasoning:** Project path was readable.',
+          ].join('\n'),
+        ),
+      },
+    ])
+    const runner = buildDefaultReviewerFanout(
+      { apiClient: client, modelId: 'm' },
+      { extraTools: [cwdProbe] },
+    )
+
+    const verdicts = await runner({
+      task: mkTask(),
+      personas: [
+        {
+          slug: 'project-manager',
+          name: 'The Project Manager',
+          principles: 'Check handoff quality.',
+          rubric: [{ id: 'review', question: 'Is the review packet usable?', weight: 1 }],
+        },
+      ],
+      context: 'Review the task.',
+      memoryDir,
+      projectPath: tmpDir,
+    })
+
+    expect(observedCwd).toBe(tmpDir)
+    expect(verdicts[0]?.verdict).toBe('approve')
+  })
+
   it('advances the task to gate_check when every persona approves', async () => {
     await writeDesignSystem(minimalDS)
     const task = mkTask()

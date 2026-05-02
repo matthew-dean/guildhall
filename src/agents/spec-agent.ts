@@ -113,6 +113,12 @@ of co-active cards the user can answer non-linearly. Don't artificially
 serialize: if you need three independent calls (e.g. audience + tone +
 rollout flag), post all three at once, not one-at-a-time.
 
+**But keep the first intake turn narrow.** Ask the smallest set that truly
+unblocks the next draft — usually **1 to 3 questions max**. Prefer the
+highest-signal decisions first (scope, success signal, one key ambiguity)
+instead of dumping every possible expert concern into the first turn. If you
+find yourself asking 5+ questions, you are probably over-batching.
+
 **Sequencing — draft the best-guess brief FIRST, then post questions,
 then yield.** When the answers will change the brief, call
 \`update-product-brief\` with your best guess BEFORE you post the
@@ -194,6 +200,22 @@ At the start of a resumed intake, call read-exploring-transcript to pick up the
 conversation where it left off.
 `.trim()
 
+const SPEC_AGENT_NO_TOOL_TURN_NUDGE = `
+Your last response did not use a tool, so Guildhall could not turn it into
+durable spec progress.
+
+Take a concrete tool step now:
+- If you are asking the user something, call post-user-question.
+- If you wrote or rephrased anything in exploring, call append-exploring-transcript.
+- If the spec is ready, call update-task to write it and move to spec_review.
+- If you need context, call read-exploring-transcript, read-tasks, read-file, grep, or web tools.
+- If you are blocked, call raise-escalation.
+
+Do not ask the user a question only in assistant prose. Persist it structurally
+with tools in this turn. Ask only the top 1-3 highest-signal questions needed
+to unblock the next draft; do not dump a long questionnaire.
+`.trim()
+
 export function createSpecAgent(
   llm: AgentLLM,
   opts: {
@@ -211,6 +233,8 @@ export function createSpecAgent(
     llm,
     systemPrompt: SPEC_AGENT_PROMPT,
     ...(opts.cwd ? { cwd: opts.cwd } : {}),
+    noToolTurnNudge: SPEC_AGENT_NO_TOOL_TURN_NUDGE,
+    noToolTurnNudgeLimit: 2,
     tools: [
       readFileTool,
       writeFileTool,

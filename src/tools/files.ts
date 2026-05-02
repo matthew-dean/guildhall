@@ -25,9 +25,9 @@
  *   - Default limit is 2000 lines (upstream 200) — Guildhall agents read
  *     whole files far more often than not, and the harness caps wide reads
  *     via compaction rather than truncating at the tool.
- *   - writeFileTool accepts absolute paths, ~-prefixed paths, and
- *     cwd-relative paths (upstream resolves via pathlib + ctx.cwd). The
- *     programmatic `writeFile()` helper takes an optional `{cwd}` option so
+ *   - writeFileTool and readFileTool accept absolute paths, ~-prefixed
+ *     paths, and cwd-relative paths (upstream resolves via pathlib +
+ *     ctx.cwd). The programmatic helpers take an optional `{cwd}` option so
  *     non-tool callers can opt in; callers that have always passed absolute
  *     paths keep working unchanged.
  */
@@ -41,7 +41,7 @@ import type { Dirent } from 'node:fs'
 const READ_FILE_DEFAULT_LIMIT = 2000
 
 const readFileInputSchema = z.object({
-  filePath: z.string().describe('Absolute path to the file'),
+  filePath: z.string().describe('Path to the file (absolute, ~-prefixed, or cwd-relative)'),
   offset: z
     .number()
     .int()
@@ -67,11 +67,15 @@ export interface ReadFileResult {
   isBinary?: boolean
 }
 
-export async function readFile(input: ReadFileInput): Promise<ReadFileResult> {
+export async function readFile(
+  input: ReadFileInput,
+  opts: { cwd?: string } = {},
+): Promise<ReadFileResult> {
+  const absPath = resolveFilePath(opts.cwd, input.filePath)
   try {
-    const stat = await fs.stat(input.filePath)
+    const stat = await fs.stat(absPath)
     if (stat.isDirectory()) return { content: '', exists: true, isDirectory: true }
-    const raw = await fs.readFile(input.filePath)
+    const raw = await fs.readFile(absPath)
     if (raw.includes(0)) return { content: '', exists: true, isBinary: true }
     return { content: raw.toString('utf-8'), exists: true }
   } catch {
@@ -97,12 +101,15 @@ function renderLineNumbered(content: string, offset: number, limit: number): str
 export const readFileTool = defineTool({
   name: 'read-file',
   description:
-    'Read a UTF-8 file from the filesystem. Returns line-numbered content (cat -n style) so edit tools can target specific lines. Supports offset/limit for partial reads on large files.',
+    'Read a UTF-8 file from the filesystem. Accepts absolute paths, ~-prefixed paths, or paths relative to the working directory. Returns line-numbered content (cat -n style) so edit tools can target specific lines. Supports offset/limit for partial reads on large files.',
   inputSchema: readFileInputSchema,
   jsonSchema: {
     type: 'object',
     properties: {
-      filePath: { type: 'string', description: 'Absolute path to the file' },
+      filePath: {
+        type: 'string',
+        description: 'Path to the file (absolute, ~-prefixed, or cwd-relative)',
+      },
       offset: {
         type: 'integer',
         minimum: 0,
@@ -118,25 +125,26 @@ export const readFileTool = defineTool({
     required: ['filePath'],
   },
   isReadOnly: () => true,
-  execute: async (input) => {
-    const result = await readFile(input)
+  execute: async (input, ctx) => {
+    const resolvedPath = resolveFilePath(ctx.cwd, input.filePath)
+    const result = await readFile(input, { cwd: ctx.cwd })
     if (!result.exists) {
       return {
-        output: `(file not found: ${input.filePath})`,
+        output: `(file not found: ${resolvedPath})`,
         is_error: true,
         metadata: result as unknown as Record<string, unknown>,
       }
     }
     if (result.isDirectory) {
       return {
-        output: `(cannot read directory: ${input.filePath})`,
+        output: `(cannot read directory: ${resolvedPath})`,
         is_error: true,
         metadata: result as unknown as Record<string, unknown>,
       }
     }
     if (result.isBinary) {
       return {
-        output: `(binary file, not read as text: ${input.filePath})`,
+        output: `(binary file, not read as text: ${resolvedPath})`,
         is_error: true,
         metadata: result as unknown as Record<string, unknown>,
       }
@@ -148,7 +156,7 @@ export const readFileTool = defineTool({
       output:
         body.length > 0
           ? body
-          : `(no content in selected range for ${input.filePath})`,
+          : `(no content in selected range for ${resolveFilePath(ctx.cwd, input.filePath)})`,
       is_error: false,
       metadata: result as unknown as Record<string, unknown>,
     }

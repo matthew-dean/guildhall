@@ -319,6 +319,10 @@ export async function* runQuery(
     }
 
     messages.push(finalMessage)
+    const assistantText = messageText(finalMessage).trim()
+    if (context.toolMetadata && assistantText.length > 0) {
+      context.toolMetadata['last_assistant_text'] = assistantText
+    }
     yield { event: { type: 'assistant_turn_complete', message: finalMessage, usage }, usage }
 
     const toolCalls = messageToolUses(finalMessage)
@@ -530,7 +534,11 @@ function setReviewHandoffEvidence(
 }
 
 function activeReviewTaskId(toolMetadata: Record<string, unknown> | undefined): string {
-  return String(toolMetadata?.['active_review_handoff_task_id'] ?? '').trim()
+  return String(
+    toolMetadata?.['active_review_handoff_task_id'] ??
+    toolMetadata?.['current_task_id'] ??
+    '',
+  ).trim()
 }
 
 function resetReviewHandoffEvidence(
@@ -539,6 +547,7 @@ function resetReviewHandoffEvidence(
 ): void {
   if (!toolMetadata || !taskId) return
   toolMetadata['active_review_handoff_task_id'] = taskId
+  toolMetadata['current_task_id'] = taskId
   setReviewHandoffEvidence(toolMetadata, {
     taskId,
     inspectedImplementationFile: false,
@@ -754,7 +763,17 @@ async function executeToolCall(
   const resultMetadata = (result as { metadata?: Record<string, unknown> }).metadata ?? null
   if (!toolResult.is_error && toolName === 'update-task' && toolInput['status'] === 'in_progress') {
     const taskId = String(resultMetadata?.['taskId'] ?? toolInput['taskId'] ?? '').trim()
-    resetReviewHandoffEvidence(context.toolMetadata, taskId)
+    const currentTaskId = activeReviewTaskId(context.toolMetadata)
+    const currentEvidence = reviewHandoffEvidence(context.toolMetadata)
+    const shouldReset =
+      taskId.length > 0 &&
+      (
+        currentTaskId !== taskId ||
+        currentEvidence?.taskId !== taskId ||
+        (currentEvidence.inspectedImplementationFile !== true &&
+          currentEvidence.changedOrVerified !== true)
+      )
+    if (shouldReset) resetReviewHandoffEvidence(context.toolMetadata, taskId)
   } else if (!toolResult.is_error) {
     recordReviewHandoffEvidence(context.toolMetadata, toolName, filePath)
   }

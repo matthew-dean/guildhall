@@ -11,6 +11,8 @@ export {
   ResolvedConfig,
   slugify,
   mergeModels,
+  resolveModelsForProvider,
+  writeModelsForProvider,
 } from './schemas.js'
 
 // Global config (~/.guildhall/config.yaml)
@@ -87,3 +89,4 @@ export type {
 // Config resolution (merged result)
 export { resolveConfig } from './resolve.js'
 export type { ResolveOptions } from './resolve.js'
+export type { ModelConfigInput, ProviderModelShortcut, ProviderModelAssignments } from './schemas.js'

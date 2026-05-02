@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
 import { z } from 'zod'
-import { ModelAssignmentConfig } from '@guildhall/core'
+import { ModelConfigInputSchema } from './schemas.js'
 
 // ---------------------------------------------------------------------------
 // Project-local Guildhall config — <project>/.guildhall/config.yaml
@@ -22,7 +22,7 @@ export const PROJECT_CONFIG_FILENAME = 'config.yaml'
 
 export const ProjectGuildhallConfig = z.object({
   /** Default model assignments (merged with per-workspace models) */
-  models: ModelAssignmentConfig.partial().optional(),
+  models: ModelConfigInputSchema.optional(),
 
   /** Default max revisions before a task is escalated */
   maxRevisions: z.number().int().positive().default(3),

@@ -25,9 +25,9 @@ import { atomicWriteText } from '@guildhall/sessions'
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
 const postUserQuestionInputSchema = z.object({
-  tasksPath: TASKS_PATH_SCHEMA,
-  taskId: z.string(),
-  askedBy: z.string().describe('Agent id posting the question (e.g. "spec-agent")'),
+  tasksPath: TASKS_PATH_SCHEMA.optional(),
+  taskId: z.string().optional(),
+  askedBy: z.string().optional().describe('Agent id posting the question (e.g. "spec-agent")'),
   /**
    * One of:
    *   confirm — restate user intent ("Here's what I think you want…")
@@ -35,9 +35,9 @@ const postUserQuestionInputSchema = z.object({
    *   choice  — 2..6 options; UI provides "Other…" textbox automatically
    *   text    — open-ended (use sparingly; multiple choice is almost always better)
    */
-  kind: z.enum(['confirm', 'yesno', 'choice', 'text']),
+  kind: z.enum(['confirm', 'yesno', 'choice', 'text']).optional(),
   /** For confirm: the restatement. For yesno/choice/text: the prompt. */
-  body: z.string().describe('Restatement (confirm) or prompt (yesno/choice/text)'),
+  body: z.string().optional().describe('Restatement (confirm) or prompt (yesno/choice/text)'),
   /** Required when kind=choice. 2..6 distinct options in the user's voice. */
   choices: z
     .array(z.string())
@@ -58,12 +58,201 @@ export interface PostUserQuestionResult {
   error?: string
 }
 
+interface InferredQuestion {
+  kind: 'confirm' | 'yesno' | 'choice' | 'text'
+  body: string
+  choices?: string[]
+  selectionMode?: 'single' | 'multiple'
+}
+
+const MAX_INFERRED_QUESTIONS = 3
+
+function cleanInferredOptionLabel(raw: string): string {
+  const trimmed = raw.trim()
+  const boldHeading = trimmed.match(/^\*\*(.+?)\*\*(?:\s*[—-]\s*.*)?$/)
+  if (boldHeading) return boldHeading[1]!.trim()
+  return trimmed
+}
+
+function parseStructuredOptionLine(line: string): string | null {
+  const trimmed = line.trim()
+  if (/^-\s+/.test(trimmed)) {
+    return trimmed.replace(/^-\s+/, '').replace(/^[A-Z][.)]\s*/, '').trim().replace(/\?$/, '')
+  }
+  if (/^[A-Z][.)]\s+/.test(trimmed)) {
+    return trimmed.replace(/^[A-Z][.)]\s+/, '').trim().replace(/\?$/, '')
+  }
+  return null
+}
+
+function resolveQuestionDefaults(
+  input: Pick<PostUserQuestionInput, 'tasksPath' | 'taskId' | 'askedBy'>,
+  metadata: Record<string, unknown>,
+): { tasksPath: string; taskId: string; askedBy: string } | { error: string } {
+  const tasksPath = String(input.tasksPath ?? metadata['tasks_path'] ?? '').trim()
+  const taskId = String(input.taskId ?? metadata['current_task_id'] ?? '').trim()
+  const askedBy = String(input.askedBy ?? metadata['current_agent_id'] ?? 'agent').trim()
+  if (!tasksPath) return { error: 'Missing tasksPath (or metadata.tasks_path)' }
+  if (!taskId) return { error: 'Missing taskId (or metadata.current_task_id)' }
+  if (!askedBy) return { error: 'Missing askedBy (or metadata.current_agent_id)' }
+  return { tasksPath, taskId, askedBy }
+}
+
+function inferQuestionsFromAssistantText(text: string): InferredQuestion[] {
+  const trimmed = text.trim()
+  if (!trimmed) return []
+
+  const simplePickOne = trimmed.match(/^pick one:\s*(.+)$/im)
+  if (simplePickOne) {
+    const body = simplePickOne[1]?.trim() ?? ''
+    const split = body.match(/^(.+?),\s*or\s+(.+?)\??$/i)
+    if (split) {
+      return [{
+        kind: 'choice',
+        body: 'Pick one',
+        choices: [split[1]!.trim(), split[2]!.trim().replace(/\?$/, '')],
+        selectionMode: 'single',
+      }]
+    }
+  }
+
+  const lines = trimmed.split('\n')
+  const inlinePromptQuestions: InferredQuestion[] = []
+  for (let i = 0; i < lines.length; i += 1) {
+    const promptLine = lines[i]?.trim() ?? ''
+    if (!promptLine) continue
+    const normalizedPromptLine = promptLine.replace(/^#{1,6}\s*/, '').trim()
+    const headingPrompt = normalizedPromptLine.match(/^\d+[.)]\s+(?:\*\*(.+?)\*\*|(.+))$/)
+    const promptBody = (headingPrompt?.[1] ?? headingPrompt?.[2] ?? normalizedPromptLine).trim()
+    const promptLike = /pick one\b|choose one\b|select one\b|\?$|:\s*$|success look like/i.test(promptBody)
+    if (!promptLike) continue
+    const summaryLike =
+      /i['’]ll draft the full spec with\b|i will draft the full spec with\b|once you (?:pick|answer).+i['’]ll draft\b/i
+        .test(promptBody)
+    if (summaryLike) continue
+
+    const choices: string[] = []
+    let mode: 'numbered' | 'bullets' | null = null
+    let invalidInlineGroup = false
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const optionLine = lines[j]?.trim() ?? ''
+      if (!optionLine) {
+        if (choices.length > 0) break
+        continue
+      }
+      const numberedOption = optionLine.match(/^\d+[.)]\s+(?:\*\*(.+?)\*\*|(.+))$/)
+      if (numberedOption) {
+        if (mode === 'bullets') break
+        mode = 'numbered'
+        choices.push(cleanInferredOptionLabel((numberedOption[1] ?? numberedOption[2] ?? '').trim()))
+        continue
+      }
+      const structuredOption = parseStructuredOptionLine(optionLine)
+      if (structuredOption) {
+        if (mode === 'numbered') {
+          invalidInlineGroup = true
+          break
+        }
+        mode = 'bullets'
+        choices.push(structuredOption)
+        continue
+      }
+      if (choices.length > 0) break
+    }
+
+    if (!invalidInlineGroup && choices.length >= 2 && choices.length <= 6) {
+      inlinePromptQuestions.push({
+        kind: 'choice',
+        body: promptBody.replace(/\s+/g, ' ').trim(),
+        choices,
+        selectionMode: /pick all|all that apply|select all|choose all/i.test(promptBody)
+          ? 'multiple'
+          : 'single',
+      })
+    }
+  }
+  if (inlinePromptQuestions.length > 0) return inlinePromptQuestions.slice(0, MAX_INFERRED_QUESTIONS)
+
+  const sections: Array<{ heading: string; lines: string[] }> = []
+  let current: { heading: string; lines: string[] } | null = null
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    const headingMatch = line.match(/^\d+[.)]\s+(?:\*\*(.+?)\*\*|(.+))$/)
+    if (headingMatch) {
+      if (current) sections.push(current)
+      current = { heading: (headingMatch[1] ?? headingMatch[2] ?? '').trim(), lines: [] }
+      continue
+    }
+    if (current) current.lines.push(rawLine)
+  }
+  if (current) sections.push(current)
+
+  const sectionQuestions = sections
+    .map<InferredQuestion | null>((section) => {
+      const choices = section.lines
+        .map((line) => parseStructuredOptionLine(line))
+        .filter(Boolean)
+        .map((line) => line as string)
+      if (choices.length < 2 || choices.length > 6) return null
+      const combined = [section.heading, ...section.lines.map((line) => line.trim())].join('\n')
+      return {
+        kind: 'choice',
+        body: section.heading,
+        choices,
+        selectionMode: /pick all|all that apply|select all|choose all/i.test(combined)
+          ? 'multiple'
+          : 'single',
+      }
+    })
+    .filter((question): question is InferredQuestion => question !== null)
+  if (sectionQuestions.length > 0) return sectionQuestions.slice(0, MAX_INFERRED_QUESTIONS)
+
+  if (trimmed.includes('?')) return [{ kind: 'text', body: trimmed }]
+  return []
+}
+
+function resolveQuestionPayload(
+  input: Pick<PostUserQuestionInput, 'kind' | 'body' | 'choices' | 'selectionMode'>,
+  metadata: Record<string, unknown>,
+): InferredQuestion | { error: string } {
+  if (input.kind && input.body) {
+    return {
+      kind: input.kind,
+      body: input.body,
+      ...(input.choices ? { choices: input.choices } : {}),
+      ...(input.selectionMode ? { selectionMode: input.selectionMode } : {}),
+    }
+  }
+
+  const bucketKey = 'inferred_post_user_questions'
+  const sourceKey = 'inferred_post_user_questions_source'
+  const assistantText = String(metadata['last_assistant_text'] ?? '').trim()
+  const existing = metadata[bucketKey]
+  const existingSource = String(metadata[sourceKey] ?? '')
+  let queue = Array.isArray(existing) ? [...existing] as InferredQuestion[] : []
+  if (!Array.isArray(existing) || existingSource !== assistantText) {
+    queue = inferQuestionsFromAssistantText(assistantText)
+    metadata[sourceKey] = assistantText
+  }
+  const next = queue.shift()
+  metadata[bucketKey] = queue
+  if (!next) {
+    return { error: 'Missing kind/body and could not infer a question from metadata.last_assistant_text' }
+  }
+  return next
+}
+
 export async function postUserQuestion(
   input: PostUserQuestionInput,
 ): Promise<PostUserQuestionResult> {
+  if (!input.kind) return { success: false, error: 'Missing kind' }
+  if (!input.body?.trim()) return { success: false, error: 'Missing body' }
   if (input.kind === 'choice' && (!input.choices || input.choices.length < 2)) {
     return { success: false, error: 'kind=choice requires 2..6 choices' }
   }
+  if (!input.tasksPath?.trim()) return { success: false, error: 'Missing tasksPath' }
+  if (!input.taskId?.trim()) return { success: false, error: 'Missing taskId' }
+  if (!input.askedBy?.trim()) return { success: false, error: 'Missing askedBy' }
   try {
     const raw = await fs.readFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
@@ -109,12 +298,31 @@ export const postUserQuestionTool = defineTool({
   inputSchema: postUserQuestionInputSchema,
   jsonSchema: { type: 'object' },
   isReadOnly: () => false,
-  execute: async input => {
-    const result = await postUserQuestion(input)
+  execute: async (input, ctx) => {
+    const resolved = resolveQuestionDefaults(input, ctx.metadata)
+    const payload = resolveQuestionPayload(input, ctx.metadata)
+    if ('error' in resolved || 'error' in payload) {
+      const error = 'error' in resolved ? resolved.error : payload.error
+      return {
+        output: `Error posting question: ${error}`,
+        is_error: true,
+        metadata: { success: false, error },
+      }
+    }
+    const result = await postUserQuestion({
+      ...input,
+      tasksPath: resolved.tasksPath,
+      taskId: resolved.taskId,
+      askedBy: resolved.askedBy,
+      kind: payload.kind,
+      body: payload.body,
+      ...(payload.choices ? { choices: payload.choices } : {}),
+      ...(payload.selectionMode ? { selectionMode: payload.selectionMode } : {}),
+    })
     return {
       output: result.success
-        ? `Posted ${input.kind} question (${result.questionId}) to ${input.taskId}. Yield now and wait for the user's answer.`
-        : `Error posting question to ${input.taskId}: ${result.error ?? 'unknown'}`,
+        ? `Posted ${payload.kind} question (${result.questionId}) to ${resolved.taskId}. Yield now and wait for the user's answer.`
+        : `Error posting question to ${resolved.taskId}: ${result.error ?? 'unknown'}`,
       is_error: !result.success,
       metadata: result as unknown as Record<string, unknown>,
     }

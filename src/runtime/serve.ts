@@ -24,7 +24,9 @@ import {
   markProviderVerified,
   resolveGlobalCredentials,
   migrateProjectProvidersToGlobal,
+  resolveModelsForProvider,
   type ProviderKind,
+  writeModelsForProvider,
 } from '@guildhall/config'
 import {
   MODEL_CATALOG,
@@ -49,11 +51,14 @@ import {
 import { OrchestratorSupervisor } from './serve-supervisor.js'
 import {
   normalizePreferredProvider,
-  inferPreferredProvider,
   selectApiClient,
   type PreferredProviderKey,
   type ProviderName,
 } from './provider-selection.js'
+import {
+  buildSelectApiClientOptions,
+  getRuntimeProviderConfig,
+} from './provider-runtime-config.js'
 import {
   createExploringTask,
   approveSpec,
@@ -94,6 +99,10 @@ import {
 } from './workspace-import/index.js'
 import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
 import { buildThread } from './thread.js'
+import {
+  buildCoordinatorProjectPathMap,
+  resolveTaskProjectPath,
+} from './task-project-path.js'
 import {
   buildSnapshot,
   listWizards,
@@ -280,6 +289,17 @@ function resolveProject(projectPath: string): ResolvedProject {
   return { path: projectPath, id, config, initializationNeeded: false }
 }
 
+function resolveTaskPathForDomain(
+  project: ResolvedProject,
+  domain: string,
+): string {
+  return resolveTaskProjectPath({
+    workspaceProjectPath: project.path,
+    domain,
+    coordinators: project.config?.coordinators ?? [],
+  })
+}
+
 /**
  * Filter a supervisor event buffer down to events for a specific task id.
  *
@@ -298,6 +318,38 @@ export function filterEventsForTask<T extends { event?: unknown }>(
     const t = inner?.task_id ?? inner?.taskId
     return t === taskId
   })
+}
+
+function noteMatchesCanonicalAcceptance(
+  note: Record<string, unknown>,
+  canonicalDescriptions: ReadonlySet<string>,
+): boolean {
+  const role = typeof note.role === 'string' ? note.role : ''
+  const content = typeof note.content === 'string' ? note.content.trim() : ''
+  if (role !== 'specifier') return true
+  const prefix = 'Added acceptance criterion: '
+  if (!content.startsWith(prefix)) return true
+  const description = content.slice(prefix.length).trim()
+  if (!description) return true
+  return canonicalDescriptions.has(description)
+}
+
+function normalizeTaskForDrawer(task: Record<string, unknown>): Record<string, unknown> {
+  const canonicalDescriptions = new Set(
+    Array.isArray(task.acceptanceCriteria)
+      ? task.acceptanceCriteria
+          .map((criterion) =>
+            typeof (criterion as { description?: unknown }).description === 'string'
+              ? (criterion as { description: string }).description.trim()
+              : '',
+          )
+          .filter(Boolean)
+      : [],
+  )
+  if (canonicalDescriptions.size === 0 || !Array.isArray(task.notes)) return task
+  const notes = (task.notes as Array<Record<string, unknown>>)
+    .filter((note) => noteMatchesCanonicalAcceptance(note, canonicalDescriptions))
+  return notes.length === task.notes.length ? task : { ...task, notes }
 }
 
 /**
@@ -522,7 +574,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       case 'codex-oauth':
         return lower === 'gpt-5-codex' || lower === 'gpt-5.3-codex'
       case 'openai-api':
-        return /^(gpt-|o1-|o3-|o4-|chatgpt-)/.test(lower)
+        return lower.length > 0
       case 'llama-cpp':
         return true
       default:
@@ -562,6 +614,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   async function selectPaidFallbackProvider(opts: {
     anthropicApiKey?: string
     openaiApiKey?: string
+    openaiBaseUrl?: string
     llamaCppUrl?: string
   }) {
     const fallbackOrder: ProviderName[] = [
@@ -571,12 +624,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       'openai-api',
     ]
     for (const provider of fallbackOrder) {
-      const result = await selectApiClient({
-        provider,
-        ...(opts.anthropicApiKey ? { anthropicApiKey: opts.anthropicApiKey } : {}),
-        ...(opts.openaiApiKey ? { openaiApiKey: opts.openaiApiKey } : {}),
-        ...(opts.llamaCppUrl ? { llamaCppUrl: opts.llamaCppUrl } : {}),
-      })
+      const result = await selectApiClient(buildSelectApiClientOptions({
+        providerOverride: provider,
+        credentials: opts,
+      }))
       if (result.providerName !== 'none') return result
     }
     return null
@@ -617,19 +668,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
       } catch {
         /* best-effort */
       }
-      const creds = resolveGlobalCredentials()
-      const globalCfg = readGlobalConfig()
       const resolvedConfig = resolveConfig({ workspacePath: project.path })
-      const preferred = projectCfg.preferredProvider ?? inferPreferredProvider(resolvedConfig.models)
-      const allowPaidProviderFallback =
-        projectCfg.allowPaidProviderFallback ?? globalCfg.allowPaidProviderFallback
-      let preflight = await selectApiClient({
-        ...(preferred ? { preferredProvider: preferred } : {}),
-        ...(allowPaidProviderFallback ? { allowPaidProviderFallback: true } : {}),
-        ...(creds.anthropicApiKey ? { anthropicApiKey: creds.anthropicApiKey } : {}),
-        ...(creds.openaiApiKey ? { openaiApiKey: creds.openaiApiKey } : {}),
-        ...(creds.llamaCppUrl ? { llamaCppUrl: creds.llamaCppUrl } : {}),
+      const runtimeProvider = getRuntimeProviderConfig({
+        projectPath: project.path,
+        models: resolvedConfig.models,
       })
+      const creds = runtimeProvider.credentials
+      const preferred = runtimeProvider.preferredProvider
+      const allowPaidProviderFallback = runtimeProvider.allowPaidProviderFallback
+      let preflight = await selectApiClient(runtimeProvider.selectOptions)
       if (preflight.providerName === 'none') {
         return c.json(
           {
@@ -774,7 +821,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         memoryDir: join(project.path, 'memory'),
         ask: body.ask,
         domain,
-        projectPath: project.path,
+        projectPath: resolveTaskPathForDomain(project, domain),
         ...(body.title ? { title: body.title } : {}),
       })
       return c.json(result)
@@ -820,7 +867,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       domain = domain ?? coordinators[0]!.domain
       const result = await createBugReportTask({
         memoryDir: join(project.path, 'memory'),
-        projectPath: project.path,
+        projectPath: resolveTaskPathForDomain(project, domain),
         title: body.title,
         body: body.body,
         ...(body.stackTrace ? { stackTrace: body.stackTrace } : {}),
@@ -1340,6 +1387,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const result = await approveWorkspaceImport({
         memoryDir,
         projectPath: project.path,
+        coordinatorProjectPaths: buildCoordinatorProjectPathMap(
+          project.path,
+          project.config?.coordinators ?? [],
+        ),
       })
       if (!result.success) {
         return c.json({ error: result.error ?? 'Approval failed' }, 400)
@@ -1736,7 +1787,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
       const recent = filterEventsForTask(supervisor.recent(project.id, undefined, project.path), id)
-      return c.json({ task, recentEvents: recent })
+      return c.json({ task: normalizeTaskForDrawer(task as Record<string, unknown>), recentEvents: recent })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -2635,6 +2686,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const configuredLlamaUrl = creds.llamaCppUrl ?? ''
       const llamaUrl = configuredLlamaUrl || defaultLlamaUrl
       const llamaReachable = llamaUrl.length > 0 ? await probeLlamaCpp(llamaUrl) : false
+      const configuredOpenAiBaseUrl = creds.openaiBaseUrl ?? ''
 
       const v = (kind: ProviderKind) => global.providers[kind]?.verifiedAt ?? null
 
@@ -2680,14 +2732,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
                 : 'Paste an API key to enable.',
           },
           'openai-api': {
-            label: 'OpenAI API key',
+            label: 'OpenAI-compatible API key',
             detected: Boolean(creds.openaiApiKey),
             verifiedAt: v('openai-api'),
+            baseUrl: configuredOpenAiBaseUrl || null,
             detail: global.providers['openai-api']?.apiKey
-              ? 'Stored in ~/.guildhall/providers.yaml'
+              ? configuredOpenAiBaseUrl
+                ? `Stored in ~/.guildhall/providers.yaml · ${configuredOpenAiBaseUrl}`
+                : 'Stored in ~/.guildhall/providers.yaml · defaults to https://api.openai.com/v1'
               : process.env.OPENAI_API_KEY
-                ? 'Picked up from $OPENAI_API_KEY'
-                : 'Paste an API key to enable.',
+                ? configuredOpenAiBaseUrl
+                  ? `Picked up from $OPENAI_API_KEY · ${configuredOpenAiBaseUrl}`
+                  : 'Picked up from $OPENAI_API_KEY · defaults to https://api.openai.com/v1'
+                : 'Paste an API key to enable. Leave base URL blank to use https://api.openai.com/v1.',
           },
         },
       })
@@ -2702,6 +2759,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         preferredProvider?: string
         anthropicApiKey?: string
         openaiApiKey?: string
+        openaiBaseUrl?: string
         lmStudioUrl?: string
       }
       const allowed = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api'] as const
@@ -2719,7 +2777,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
         setProvider('anthropic-api', { apiKey: body.anthropicApiKey.trim() })
       }
       if (typeof body.openaiApiKey === 'string' && body.openaiApiKey.trim().length > 0) {
-        setProvider('openai-api', { apiKey: body.openaiApiKey.trim() })
+        const existing = readGlobalProviders().providers['openai-api']
+        const baseUrl = (body.openaiBaseUrl ?? '').trim()
+        setProvider('openai-api', {
+          apiKey: body.openaiApiKey.trim(),
+          ...(baseUrl ? { baseUrl } : {}),
+          ...(existing?.verifiedAt ? { verifiedAt: existing.verifiedAt } : {}),
+        })
+      } else if (typeof body.openaiBaseUrl === 'string') {
+        const existing = readGlobalProviders().providers['openai-api']
+        if (existing?.apiKey) {
+          const baseUrl = body.openaiBaseUrl.trim()
+          setProvider('openai-api', {
+            apiKey: existing.apiKey,
+            ...(baseUrl ? { baseUrl } : {}),
+            ...(existing.verifiedAt ? { verifiedAt: existing.verifiedAt } : {}),
+          })
+        }
       }
       if (typeof body.lmStudioUrl === 'string' && body.lmStudioUrl.trim().length > 0) {
         const url = body.lmStudioUrl.trim()
@@ -2735,6 +2809,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       const global = readGlobalConfig()
       const workspace = readWorkspaceConfig(projectPath)
+      const projectCfg = readProjectConfig(projectPath)
+      const preferredProvider = projectCfg.preferredProvider
       const resolved = resolveConfig({ workspacePath: projectPath })
       const creds = resolveGlobalCredentials()
       const loadedModels = creds.llamaCppUrl
@@ -2744,8 +2820,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ? missingAssignedModels(resolved.models, loadedModels)
         : []
       return c.json({
-        globalModels: global.models ?? {},
-        projectModels: workspace.models ?? {},
+        globalModels: resolveModelsForProvider(global.models, preferredProvider),
+        projectModels: resolveModelsForProvider(workspace.models, preferredProvider),
         effectiveModels: resolved.models,
         loadedModels,
         missingModels,
@@ -2762,12 +2838,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
                 provider: m.provider,
                 notes: m.notes ?? '',
               })),
-              ...Object.values(global.models ?? {}).map(id => ({
+              ...Object.values(resolveModelsForProvider(global.models, preferredProvider)).map(id => ({
                 id,
                 provider: 'lm-studio',
                 notes: 'Global default',
               })),
-              ...Object.values(workspace.models ?? {}).map(id => ({
+              ...Object.values(resolveModelsForProvider(workspace.models, preferredProvider)).map(id => ({
                 id,
                 provider: 'lm-studio',
                 notes: 'Project override',
@@ -2791,6 +2867,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker']
       if (!body.scope) return c.json({ error: 'Missing "scope"' }, 400)
+      const projectCfg = readProjectConfig(projectPath)
+      const preferredProvider = projectCfg.preferredProvider
 
       const requestedModels = body.models && typeof body.models === 'object'
         ? Object.entries(body.models).filter((entry): entry is [keyof ModelAssignmentConfig, string] => {
@@ -2807,7 +2885,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
       if (body.scope === 'global') {
         const global = readGlobalConfig()
-        const nextModels = { ...(global.models ?? {}) }
+        const nextModels = { ...resolveModelsForProvider(global.models, preferredProvider) }
         if (requestedModels) {
           for (const [role, model] of requestedModels) {
             const trimmed = model.trim()
@@ -2821,13 +2899,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
         updateGlobalConfig({
           ...global,
-          models: nextModels,
+          models: writeModelsForProvider(global.models, preferredProvider, nextModels),
         })
         return c.json({ ok: true })
       }
 
       const workspace = readWorkspaceConfig(projectPath)
-      const nextModels = { ...(workspace.models ?? {}) }
+      const nextModels = { ...resolveModelsForProvider(workspace.models, preferredProvider) }
       if (body.scope === 'global-default') {
         if (requestedModels) {
           for (const [role] of requestedModels) delete nextModels[role]
@@ -2852,7 +2930,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
       const nextConfig = { ...workspace }
       if (Object.keys(nextModels).length > 0) {
-        nextConfig.models = nextModels
+        nextConfig.models = writeModelsForProvider(workspace.models, preferredProvider, nextModels)
       } else {
         delete nextConfig.models
       }
@@ -2897,15 +2975,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
     name: PreferredProviderKey,
     llamaUrl: string,
   ): Promise<string | undefined> {
+    const configured = resolveModelsForProvider(readGlobalConfig().models, name)
     switch (name) {
       case 'claude-oauth':
       case 'anthropic-api':
-        return 'claude-haiku-4-5-20251001'
+        return configured.worker ?? configured.spec ?? 'claude-haiku-4-5-20251001'
       case 'openai-api':
-        return 'gpt-4o-mini'
+        return configured.worker ?? configured.spec ?? 'gpt-4o-mini'
       case 'codex':
       case 'codex-oauth':
-        return 'gpt-5.3-codex'
+        return configured.worker ?? configured.spec ?? 'gpt-5.3-codex'
       case 'llama-cpp': {
         if (!llamaUrl) return undefined
         try {
@@ -2949,13 +3028,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
     let selected
     try {
-      const selectOpts: Parameters<typeof selectApiClient>[0] = {
-        provider: forcedInternal,
-      }
-      if (creds.anthropicApiKey) selectOpts.anthropicApiKey = creds.anthropicApiKey
-      if (creds.openaiApiKey) selectOpts.openaiApiKey = creds.openaiApiKey
-      if (creds.llamaCppUrl) selectOpts.llamaCppUrl = creds.llamaCppUrl
-      selected = await selectApiClient(selectOpts)
+      selected = await selectApiClient(buildSelectApiClientOptions({
+        providerOverride: forcedInternal,
+        credentials: creds,
+      }))
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }

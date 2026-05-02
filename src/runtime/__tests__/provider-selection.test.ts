@@ -226,6 +226,17 @@ describe('selectApiClient', () => {
     expect(result.reason).toMatch(/OpenAI API key/)
   })
 
+  it('reports the configured OpenAI-compatible base URL when one is provided', async () => {
+    const result = await selectApiClient({
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+      openaiApiKey: 'sk-openai-test',
+      openaiBaseUrl: 'https://integrate.api.nvidia.com/v1',
+    })
+    expect(result.providerName).toBe('openai-api')
+    expect(result.reason).toMatch(/integrate\.api\.nvidia\.com/)
+  })
+
   it('reads ANTHROPIC_API_KEY from the environment', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-env'
     const result = await selectApiClient({

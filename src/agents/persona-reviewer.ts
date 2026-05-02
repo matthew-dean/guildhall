@@ -71,6 +71,7 @@ export function createPersonaReviewerAgent(
   opts: {
     hookExecutor?: HookExecutor
     compactor?: Compactor
+    cwd?: string
     extraTools?: readonly AnyTool[]
   } = {},
 ): GuildhallAgent {
@@ -78,6 +79,7 @@ export function createPersonaReviewerAgent(
     name: `persona-reviewer:${guild.slug}`,
     llm,
     systemPrompt: personaReviewerSystemPrompt(guild),
+    ...(opts.cwd ? { cwd: opts.cwd } : {}),
     tools: [
       readFileTool,
       listFilesTool,

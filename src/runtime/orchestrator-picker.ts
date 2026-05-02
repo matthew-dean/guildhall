@@ -16,6 +16,10 @@
 import { type Task, type TaskQueue, type TaskStatus } from '@guildhall/core'
 import { hasOpenEscalation } from '@guildhall/tools'
 
+function hasUnansweredOpenQuestion(task: Task): boolean {
+  return (task.openQuestions ?? []).some((question) => !question.answeredAt)
+}
+
 /**
  * A worker-shelved task is "fresh" (needs `pre_rejection_policy` applied)
  * when its shelveReason records a worker pre-rejection the orchestrator has
@@ -100,6 +104,7 @@ export function pickNextTask(
         (t) =>
           t.status === status &&
           !(t.status === 'spec_review' && Boolean(t.spec?.trim())) &&
+          !(t.status === 'exploring' && hasUnansweredOpenQuestion(t)) &&
           t.priority === p &&
           (!domain || t.domain === domain) &&
           dependenciesSatisfied(queue, t) &&

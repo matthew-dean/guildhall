@@ -45,11 +45,12 @@ describe('global providers store', () => {
 
   it('setProvider preserves siblings — multi-provider is the common case', () => {
     setProvider('anthropic-api', { apiKey: 'a' })
-    setProvider('openai-api', { apiKey: 'o' })
+    setProvider('openai-api', { apiKey: 'o', baseUrl: 'https://integrate.api.nvidia.com/v1' })
     setProvider('llama-cpp', { url: 'http://localhost:1234/v1' })
     const g = readGlobalProviders()
     expect(g.providers['anthropic-api']?.apiKey).toBe('a')
     expect(g.providers['openai-api']?.apiKey).toBe('o')
+    expect(g.providers['openai-api']?.baseUrl).toBe('https://integrate.api.nvidia.com/v1')
     expect(g.providers['llama-cpp']?.url).toBe('http://localhost:1234/v1')
   })
 
@@ -103,6 +104,17 @@ describe('global providers store', () => {
     expect(mode & 0o004).toBe(0)
   })
 
+  it('writes commented placeholder keys so the file documents the schema', () => {
+    setProvider('llama-cpp', { url: 'http://minipc:1234/v1' })
+    const raw = readFileSync(globalProvidersPath(), 'utf8')
+    expect(raw).toMatch(/# anthropic-api:/)
+    expect(raw).toMatch(/#   apiKey: "sk-ant-\.\.\."/)
+    expect(raw).toMatch(/# openai-api:/)
+    expect(raw).toMatch(/#   apiKey: "sk-\.\.\."/)
+    expect(raw).toMatch(/#   baseUrl: "https:\/\/api\.openai\.com\/v1"/)
+    expect(raw).toMatch(/llama-cpp:\n    url: "http:\/\/minipc:1234\/v1"/)
+  })
+
   describe('resolveGlobalCredentials', () => {
     it('returns empty object when nothing configured and no env vars', () => {
       const r = resolveGlobalCredentials(readGlobalProviders(), {})
@@ -111,9 +123,12 @@ describe('global providers store', () => {
 
     it('reads from the global store when env vars are absent', () => {
       setProvider('anthropic-api', { apiKey: 'store-key' })
+      setProvider('openai-api', { apiKey: 'openai-key', baseUrl: 'https://integrate.api.nvidia.com/v1' })
       setProvider('llama-cpp', { url: 'http://localhost:8080/v1' })
       const r = resolveGlobalCredentials(readGlobalProviders(), {})
       expect(r.anthropicApiKey).toBe('store-key')
+      expect(r.openaiApiKey).toBe('openai-key')
+      expect(r.openaiBaseUrl).toBe('https://integrate.api.nvidia.com/v1')
       expect(r.llamaCppUrl).toBe('http://localhost:8080/v1')
     })
 
@@ -131,6 +146,15 @@ describe('global providers store', () => {
         ANTHROPIC_API_KEY: '   ',
       })
       expect(r.anthropicApiKey).toBe('store-key')
+    })
+
+    it('lets OPENAI_BASE_URL override the stored OpenAI-compatible base URL', () => {
+      setProvider('openai-api', { apiKey: 'store-key', baseUrl: 'https://integrate.api.nvidia.com/v1' })
+      const r = resolveGlobalCredentials(readGlobalProviders(), {
+        OPENAI_BASE_URL: 'https://api.openai.com/v1',
+      })
+      expect(r.openaiApiKey).toBe('store-key')
+      expect(r.openaiBaseUrl).toBe('https://api.openai.com/v1')
     })
 
     it('honors LM_STUDIO_BASE_URL as an alias for LLAMA_CPP_URL', () => {

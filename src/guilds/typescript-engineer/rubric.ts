@@ -27,13 +27,14 @@ export const TYPESCRIPT_ENGINEER_RUBRIC: SoftGateRubricItem[] = [
   },
   {
     id: 'ts-named-exports-only',
-    question: 'Does the change avoid introducing default exports on source modules?',
+    question:
+      'Does the change avoid introducing default exports on ordinary source modules, except where the framework or file-contract explicitly requires one?',
     weight: 0.5,
   },
   {
     id: 'ts-explicit-public-return-types',
     question:
-      'Do new exported functions declare explicit return types (not relying on inference for public API)?',
+      'Do new exported functions expose an explicit return type (via function signature or typed exported constant), rather than relying on inference for public API?',
     weight: 0.6,
   },
   {

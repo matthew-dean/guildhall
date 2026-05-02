@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { TaskQueue, type Task } from '@guildhall/core'
-import { updateProductBrief } from '../product-brief.js'
+import { updateProductBrief, updateProductBriefTool } from '../product-brief.js'
 
 let tmpDir: string
 let tasksPath: string
@@ -131,5 +131,36 @@ describe('updateProductBrief', () => {
     })
     expect(result.success).toBe(false)
     expect(result.error).toMatch(/not found/i)
+  })
+
+  it('tool execute infers a best-effort brief from metadata.last_assistant_text when called with {}', async () => {
+    const result = await updateProductBriefTool.execute(
+      {},
+      {
+        cwd: '/tmp',
+        metadata: {
+          tasks_path: tasksPath,
+          current_task_id: 'task-1',
+          current_agent_id: 'spec-agent',
+          last_assistant_text: [
+            'Great.',
+            '',
+            '### My best guess for task-1',
+            'You want to make the setup flow easier for first-time users so they can reach useful work faster.',
+            '',
+            "Don't add marketing copy.",
+          ].join('\n'),
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+
+    const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    expect(q.tasks[0]?.productBrief).toMatchObject({
+      userJob: 'You want to make the setup flow easier for first-time users so they can reach useful work faster.',
+      successMetric: 'Thread shows a drafted brief and actionable next step for "Build the onboarding screen".',
+      antiPatterns: ["Don't add marketing copy."],
+      authoredBy: 'spec-agent',
+    })
   })
 })

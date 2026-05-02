@@ -19,6 +19,10 @@
   import SpecFillChecklist from './SpecFillChecklist.svelte'
   import SuggestionCard from './SuggestionCard.svelte'
   import type { Task, Escalation } from '../../lib/types.js'
+  import {
+    escapeAngleBracketPlaceholders,
+    stripAcceptanceCriteriaSection,
+  } from '../../lib/spec-render.js'
 
   interface Props {
     task: Task
@@ -62,8 +66,13 @@
   )
   const brief = $derived(task.productBrief)
   const briefApproved = $derived(!!brief?.approvedAt)
-  const specText = $derived((task.spec ?? '').trim())
+  const rawSpecText = $derived((task.spec ?? '').trim())
   const acceptance = $derived(task.acceptanceCriteria ?? [])
+  const specText = $derived(
+    acceptance.length > 0
+      ? stripAcceptanceCriteriaSection(rawSpecText)
+      : rawSpecText,
+  )
   const exploring = $derived(task.status === 'exploring')
   const specApprovalPending = $derived(task.status === 'spec_review' && specText.length > 0)
   const needsAcceptance = $derived(exploring && briefApproved && acceptance.length === 0)
@@ -191,7 +200,7 @@
     <Card title="Acceptance criteria">
       <ul class="bullet">
         {#each acceptance as a}
-          <li><Markdown source={a.description ?? a.text ?? JSON.stringify(a)} inline /></li>
+          <li><Markdown source={escapeAngleBracketPlaceholders(a.description ?? a.text ?? JSON.stringify(a))} inline /></li>
         {/each}
       </ul>
     </Card>

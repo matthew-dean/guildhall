@@ -438,7 +438,10 @@ function personaForAgent(agentName: string | undefined): TurnPersona | null {
   }
 }
 
-function liveAgentsByTask(events: BuildThreadOptions['recentEvents']): Map<string, {
+function liveAgentsByTask(
+  events: BuildThreadOptions['recentEvents'],
+  cutoffs: ReadonlyMap<string, number>,
+): Map<string, {
   name: string
   startedAt?: string | undefined
   lastEventAt?: string | undefined
@@ -465,6 +468,8 @@ function liveAgentsByTask(events: BuildThreadOptions['recentEvents']): Map<strin
     const ev = envelope.event
     const taskId = typeof ev?.task_id === 'string' ? ev.task_id : null
     if (!taskId) continue
+    const cutoff = cutoffs.get(taskId)
+    if (cutoff && envelope.at && Date.parse(envelope.at) < cutoff) continue
     if (ev?.type === 'agent_started') {
       live.set(taskId, {
         name: typeof ev.agent_name === 'string' ? ev.agent_name : 'agent',
@@ -545,7 +550,15 @@ function liveEventTone(
   ev: NonNullable<BuildThreadOptions['recentEvents']>[number]['event'],
 ): 'neutral' | 'running' | 'ok' | 'warn' | 'danger' {
   const type = ev?.type ?? ''
+  if (
+    type === 'error' &&
+    /empty (assistant|model) reply|empty assistant message/i.test(String(ev?.message ?? ''))
+  ) return 'warn'
   if (type === 'error' || (type === 'tool_completed' && ev?.is_error)) return 'danger'
+  if (
+    type === 'line_complete' &&
+    /retrying|waiting for the local model to respond/i.test(String(ev?.message ?? ''))
+  ) return 'running'
   if (type === 'tool_started' || type === 'assistant_delta') return 'running'
   if (type === 'tool_completed' || type === 'assistant_complete') return 'ok'
   if (type === 'line_complete') return 'warn'
@@ -591,7 +604,37 @@ function trimActivityItems(items: LiveActivity[], limit = 6): LiveActivity[] {
   return [...stickyFailures, ...recent.slice(-(limit - stickyFailures.length))]
 }
 
-function activityByTask(events: BuildThreadOptions['recentEvents']): Map<string, LiveActivity[]> {
+function latestDangerActivityAt(
+  activity: LiveActivity[] | undefined,
+): number | null {
+  let newest: number | null = null
+  for (const item of activity ?? []) {
+    if (item.tone !== 'danger' || !item.at) continue
+    const at = Date.parse(item.at)
+    if (!Number.isFinite(at)) continue
+    newest = newest == null || at > newest ? at : newest
+  }
+  return newest
+}
+
+function currentActivityCutoffs(
+  tasks: ReadonlyArray<Task>,
+): Map<string, number> {
+  const cutoffs = new Map<string, number>()
+  for (const task of tasks) {
+    const updatedAt = typeof task.updatedAt === 'string'
+      ? Date.parse(task.updatedAt)
+      : NaN
+    if (!Number.isFinite(updatedAt)) continue
+    cutoffs.set(task.id, updatedAt)
+  }
+  return cutoffs
+}
+
+function activityByTask(
+  events: BuildThreadOptions['recentEvents'],
+  cutoffs: ReadonlyMap<string, number>,
+): Map<string, LiveActivity[]> {
   const activity = new Map<string, LiveActivity[]>()
   let lastAssistantDeltaTask: string | null = null
   const deltaTextByTask = new Map<string, string>()
@@ -599,6 +642,8 @@ function activityByTask(events: BuildThreadOptions['recentEvents']): Map<string,
     const ev = envelope.event
     const taskId = typeof ev?.task_id === 'string' ? ev.task_id : null
     if (!taskId) continue
+    const cutoff = cutoffs.get(taskId)
+    if (cutoff && envelope.at && Date.parse(envelope.at) < cutoff) continue
     const type = ev?.type ?? ''
     const include =
       type === 'line_complete' ||
@@ -643,8 +688,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
   const turns: ThreadTurn[] = []
   const tasksPath = join(opts.projectPath, 'memory', 'TASKS.json')
   const tasks = existsSync(tasksPath) ? tasksArray(readJsonSafe(tasksPath)) : []
-  const liveAgents = liveAgentsByTask(opts.recentEvents)
-  const liveActivity = activityByTask(opts.recentEvents)
+  const activityCutoffs = currentActivityCutoffs(tasks)
+  const liveAgents = liveAgentsByTask(opts.recentEvents, activityCutoffs)
+  const liveActivity = activityByTask(opts.recentEvents, activityCutoffs)
   const metaIntakeDraftReady = tasks.some((t) =>
     t.id === 'task-meta-intake' &&
     t.status === 'spec_review' &&
@@ -846,13 +892,23 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       if (role !== 'reviewer' && !agentId.includes('reviewer')) continue
       const isLatestReviewFeedback = reviewIndex === reviewerNotes.length - 1
       const at = typeof note.timestamp === 'string' ? note.timestamp : createdAt
+      const reviewAt = Date.parse(at)
+      const latestDangerAt = latestDangerActivityAt(liveActivity.get(taskId))
+      const failureHasMovedPastReview =
+        taskStatus === 'in_progress' &&
+        latestDangerAt != null &&
+        Number.isFinite(reviewAt) &&
+        latestDangerAt > reviewAt
       turns.push({
         kind: 'review_feedback',
         id: `review:${taskId}:${at}:${index}`,
         at,
         persona: 'reviewer',
         status: 'done',
-        phase: isLatestReviewFeedback && taskStatus !== 'done' && taskStatus !== 'shelved'
+        phase: isLatestReviewFeedback &&
+          taskStatus !== 'done' &&
+          taskStatus !== 'shelved' &&
+          !failureHasMovedPastReview
           ? 'inflight'
           : 'done',
         taskId,

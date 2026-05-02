@@ -110,10 +110,10 @@ export async function updateTask(input: UpdateTaskInput): Promise<UpdateTaskResu
     if (input.blockReason !== undefined && input.blockReason.trim() !== '') task.blockReason = input.blockReason
     if (input.humanJudgment !== undefined && input.humanJudgment.trim() !== '') task.humanJudgment = input.humanJudgment
     if (input.spec !== undefined && input.spec.trim() !== '') task.spec = input.spec
-    if (input.acceptanceCriteria !== undefined) {
+    if (input.acceptanceCriteria !== undefined && input.acceptanceCriteria.length > 0) {
       task.acceptanceCriteria = z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
     }
-    if (input.gateResults !== undefined) {
+    if (input.gateResults !== undefined && input.gateResults.length > 0) {
       task.gateResults = z.array(GateResult).parse(input.gateResults)
     }
     if (input.completedAt !== undefined && input.completedAt.trim() !== '') task.completedAt = input.completedAt

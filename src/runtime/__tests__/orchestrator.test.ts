@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { Orchestrator, pickNextTask, type OrchestratorAgentSet } from '../orchestrator.js'
+import {
+  Orchestrator,
+  pickNextTask,
+  shouldResumeAgentSession,
+  type OrchestratorAgentSet,
+} from '../orchestrator.js'
 import { LivenessTracker } from '../liveness.js'
 import type { ResolvedConfig } from '@guildhall/config'
 import type { Task, TaskQueue, TaskStatus } from '@guildhall/core'
@@ -106,6 +111,14 @@ async function readQueue(): Promise<TaskQueue> {
   return JSON.parse(raw)
 }
 
+function queueOf(tasks: Task[]): TaskQueue {
+  return {
+    version: 1,
+    lastUpdated: '2026-04-01T00:00:00Z',
+    tasks,
+  }
+}
+
 /**
  * Mutate a task on disk as if the real agent had called the update-task tool.
  */
@@ -121,6 +134,7 @@ interface StubAgent {
   readonly name: string
   calls: { prompt: string }[]
   generate(prompt: string): Promise<{ text: string }>
+  resetConversation?(): void
 }
 
 /**
@@ -177,6 +191,30 @@ describe('pickNextTask', () => {
       ],
     }
     expect(pickNextTask(q)?.id).toBe('t-gate')
+  })
+
+  it('does not redispatch exploring tasks that are waiting on unanswered user questions', async () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'now',
+      tasks: [
+        mkTask({
+          id: 't-exploring',
+          status: 'exploring',
+          openQuestions: [
+            {
+              kind: 'text',
+              id: 'q1',
+              askedBy: 'spec-agent',
+              askedAt: '2026-04-01T00:00:00Z',
+              prompt: 'Which scenario matters most?',
+            },
+          ],
+        }),
+        mkTask({ id: 't-ready', status: 'ready' }),
+      ],
+    }
+    expect(pickNextTask(q)?.id).toBe('t-ready')
   })
 
   it('prioritizes higher priority within the same status', async () => {
@@ -247,6 +285,45 @@ describe('pickNextTask', () => {
       ],
     }
     expect(pickNextTask(q)).toBeUndefined()
+  })
+})
+
+describe('shouldResumeAgentSession', () => {
+  it('does not resume a worker session when the task is no longer assigned to the worker', () => {
+    const queue = queueOf([
+      mkTask({ status: 'review' }),
+    ])
+    expect(shouldResumeAgentSession('worker', queue)).toBe(false)
+  })
+
+  it('resumes a worker session only for an in_progress task assigned to worker-agent', () => {
+    const queue = queueOf([
+      mkTask({ status: 'in_progress', assignedTo: 'worker-agent' }),
+    ])
+    expect(shouldResumeAgentSession('worker', queue)).toBe(true)
+  })
+
+  it('does not resume a reviewer session for unassigned review tasks', () => {
+    const queue = queueOf([
+      mkTask({ status: 'review' }),
+    ])
+    expect(shouldResumeAgentSession('reviewer', queue)).toBe(false)
+  })
+
+  it('resumes a spec session for active exploring work', () => {
+    const queue = queueOf([
+      mkTask({ status: 'exploring' }),
+    ])
+    expect(shouldResumeAgentSession('spec', queue)).toBe(true)
+  })
+
+  it('resumes a domain coordinator session only for matching domain review-prep work', () => {
+    const queue = queueOf([
+      mkTask({ domain: 'knit', status: 'spec_review', spec: 'draft' }),
+      mkTask({ domain: 'looma', status: 'spec_review', spec: 'draft' }),
+    ])
+    expect(shouldResumeAgentSession('coordinator-knit', queue)).toBe(true)
+    expect(shouldResumeAgentSession('coordinator-auth', queue)).toBe(false)
   })
 })
 
@@ -387,6 +464,532 @@ describe('Orchestrator.tick — routing', () => {
       expect(out.beforeStatus).toBe('exploring')
     }
     expect(spec.calls).toHaveLength(1)
+  })
+
+  it('escalates exploring tasks after repeated spec-agent no-change passes', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
+    const spec = stubAgent('spec-agent', undefined, '')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const first = await orch.tick()
+    const second = await orch.tick()
+    const third = await orch.tick()
+
+    expect(first.kind).toBe('processed')
+    expect(second.kind).toBe('processed')
+    expect(third.kind).toBe('escalated')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('blocked')
+    expect(task.blockReason).toMatch(/no visible progress/i)
+    expect(task.escalations).toHaveLength(1)
+    expect(task.escalations[0]!.reason).toBe('human_judgment_required')
+  })
+
+  it('persists plain-text spec-agent questions to transcript and openQuestions', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      'Pick one: should this cover only the happy path, or error cases too?',
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.openQuestions).toHaveLength(1)
+    expect(task.openQuestions?.[0]?.kind).toBe('text')
+    expect(task.openQuestions?.[0]?.prompt).toContain('Pick one')
+
+    const transcript = await fs.readFile(
+      path.join(memoryDir, 'exploring', 'a.md'),
+      'utf-8',
+    )
+    expect(transcript).toContain('Pick one: should this cover only the happy path')
+  })
+
+  it('authors a fallback product brief from spec-agent plain text when none exists yet', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Preserve last assistant text' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'Got it.',
+        '',
+        '### My best guess for this task',
+        'You want to preserve the last meaningful assistant text across tool-only turns so recovery paths keep the right context.',
+        '',
+        'Pick one: should this be test-only, or behavior + test?',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.productBrief).toMatchObject({
+      userJob:
+        'You want to preserve the last meaningful assistant text across tool-only turns so recovery paths keep the right context.',
+      successMetric: 'Thread shows a drafted brief and actionable next step for "Preserve last assistant text".',
+      authoredBy: 'spec-agent',
+    })
+  })
+
+  it('prefers the pre-nudge assistant question when later recovery prose would otherwise hide it', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
+    const calls: { prompt: string }[] = []
+    const spec: StubAgent = {
+      name: 'spec-agent',
+      calls,
+      async generate(prompt: string) {
+        calls.push({ prompt })
+        return {
+          text: "Understood. I'm blocked on tool-schema details and will inspect them next.",
+          messages: [
+            { role: 'user', content: [{ type: 'text', text: prompt }] },
+            {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'Pick one: happy path only, or error cases too?' }],
+            },
+            {
+              role: 'user',
+              content: [{
+                type: 'text',
+                text: 'Your last response did not use a tool, so Guildhall could not turn it into durable spec progress.',
+              }],
+            },
+            {
+              role: 'assistant',
+              content: [{
+                type: 'text',
+                text: "Understood. I'm blocked on tool-schema details and will inspect them next.",
+              }],
+            },
+          ],
+        }
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions).toHaveLength(1)
+    expect(task.openQuestions?.[0]?.kind).toBe('choice')
+    expect(task.openQuestions?.[0]?.prompt).toBe('Pick one')
+    expect(task.openQuestions?.[0]).toMatchObject({
+      choices: ['happy path only', 'error cases too'],
+      selectionMode: 'single',
+    })
+
+    const transcript = await fs.readFile(path.join(memoryDir, 'exploring', 'a.md'), 'utf-8')
+    expect(transcript).toContain('Pick one: happy path only, or error cases too?')
+    expect(transcript).not.toContain("I'm blocked on tool-schema details")
+  })
+
+  it('splits numbered plain-text spec questions into multiple structured choice cards', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'Pick one option for each:',
+        '',
+        '1) **Primary scenario to spec**',
+        '- A) Validation failure',
+        '- B) Empty assistant message',
+        '- C) Any of the above',
+        '',
+        '2) **What the fallback must do**',
+        '- A) Post one structured choice question, then stop turn',
+        '- B) Post structured question + transcript entry + stop turn',
+        '',
+        '3) **Out-of-scope guardrails**',
+        '- A) Don’t redesign the task state machine',
+        '- B) Don’t add new question kinds',
+        '- C) Don’t change Looma code',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions).toHaveLength(3)
+    expect(task.openQuestions?.map((q) => q.kind)).toEqual(['choice', 'choice', 'choice'])
+    expect(task.openQuestions?.[0]).toMatchObject({
+      prompt: 'Primary scenario to spec',
+      choices: ['Validation failure', 'Empty assistant message', 'Any of the above'],
+      selectionMode: 'single',
+    })
+    expect(task.openQuestions?.[1]).toMatchObject({
+      prompt: 'What the fallback must do',
+      choices: [
+        'Post one structured choice question, then stop turn',
+        'Post structured question + transcript entry + stop turn',
+      ],
+    })
+    expect(task.openQuestions?.[2]).toMatchObject({
+      prompt: 'Out-of-scope guardrails',
+      choices: [
+        'Don’t redesign the task state machine',
+        'Don’t add new question kinds',
+        'Don’t change Looma code',
+      ],
+    })
+  })
+
+  it('limits fallback questionnaire parsing to the top three structured questions', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'Pick one option for each:',
+        '',
+        '1) **First**',
+        '- A) one',
+        '- B) two',
+        '',
+        '2) **Second**',
+        '- A) one',
+        '- B) two',
+        '',
+        '3) **Third**',
+        '- A) one',
+        '- B) two',
+        '',
+        '4) **Fourth**',
+        '- A) one',
+        '- B) two',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions).toHaveLength(3)
+    expect(task.openQuestions?.map((q) => q.kind)).toEqual(['choice', 'choice', 'choice'])
+    expect(task.openQuestions?.map((q) => ('prompt' in q ? q.prompt : ''))).toEqual([
+      'First',
+      'Second',
+      'Third',
+    ])
+  })
+
+  it('prefers prompt-line plus numbered choices when spec prose mixes numbered options with a later success check', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'Got it — I’ll keep this first intake tight.',
+        '',
+        'To lock scope before I draft acceptance criteria, pick one:',
+        '',
+        '1. **Behavior spec only** — define what “narrowed first-turn batch” means.',
+        '2. **End-to-end feature spec** — behavior + storage/format expectations.',
+        '3. **Evaluation harness spec** — define test scenarios + pass/fail metrics.',
+        '4. **Other** — tell me your target in one line.',
+        '',
+        'Also, what should success look like in one concrete check?',
+        '- A) In first turn, agent asks at most N questions and yields.',
+        '- B) Task spec quality stays complete while first turn stays narrow.',
+        '- C) Both A and B.',
+        '- D) Other.',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions).toHaveLength(2)
+    expect(task.openQuestions?.[0]).toMatchObject({
+      prompt: 'To lock scope before I draft acceptance criteria, pick one:',
+      choices: [
+        'Behavior spec only',
+        'End-to-end feature spec',
+        'Evaluation harness spec',
+        'Other',
+      ],
+    })
+    expect(task.openQuestions?.[1]).toMatchObject({
+      prompt: 'Also, what should success look like in one concrete check?',
+      choices: [
+        'In first turn, agent asks at most N questions and yields.',
+        'Task spec quality stays complete while first turn stays narrow.',
+        'Both A and B.',
+        'Other.',
+      ],
+    })
+  })
+
+  it('backfills missing inferred questions when the agent only managed to post the first one', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
+    const generatedText = [
+      'Great, thanks — we’ve got 3 of 6 decisions locked.',
+      '',
+      'I still need 3 quick picks before I can draft a precise, testable spec:',
+      '',
+      '1) **Test level target (pick one)**',
+      '- A. Unit only',
+      '- B. Unit + integration',
+      '- C. Integration/e2e only',
+      '',
+      '2) **Coverage posture (pick one)**',
+      '- A. Cover only the new narrowed-intake paths',
+      '- B. Keep current project baseline (no new floor)',
+      '- C. Set explicit floor for touched files (reply with %)',
+      '',
+      '3) **If first-turn data is still insufficient (pick one)**',
+      '- A. Ask a second-turn follow-up batch (again narrow)',
+      '- B. Escalate immediately as spec ambiguous',
+      '- C. Draft best-effort spec with explicit open questions and pause for approval',
+      '',
+      'Once you pick these, I’ll draft the full spec with:',
+      '- numbered Given/When/Then acceptance criteria',
+      '- test mapping (which AC is unit vs integration)',
+      '- out-of-scope',
+      '- open questions (if any)',
+    ].join('\n')
+    const spec = stubAgent('spec-agent', async () => {
+      await mutateTask('a', {
+        openQuestions: [{
+          kind: 'choice',
+          id: 'q-1',
+          askedBy: 'spec-agent',
+          askedAt: new Date().toISOString(),
+          prompt: '1) **Test level target (pick one)**',
+          choices: ['Unit only', 'Unit + integration', 'Integration/e2e only'],
+          selectionMode: 'single',
+        }],
+      })
+    }, generatedText)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions).toHaveLength(3)
+    expect(task.openQuestions?.map((q) => ('prompt' in q ? q.prompt : ''))).toEqual([
+      '1) **Test level target (pick one)**',
+      '2) **Coverage posture (pick one)**',
+      '3) **If first-turn data is still insufficient (pick one)**',
+    ])
+  })
+
+  it('does not synthesize fallback questions after the agent already drafted the spec and moved to spec_review', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Draft spec' })])
+    const specText = [
+      'Perfect — that is enough to draft the spec.',
+      '',
+      'I’m going to:',
+      '- write the spec into the task,',
+      '- move the task to `spec_review`, and',
+      '- log progress.',
+    ].join('\n')
+    const spec = stubAgent('spec-agent', async () => {
+      await mutateTask('a', {
+        status: 'spec_review',
+        spec: '## Summary\\nDrafted spec.',
+        notes: [{
+          agentId: 'spec-agent',
+          role: 'spec',
+          content: 'Drafted spec.',
+          timestamp: new Date().toISOString(),
+        }],
+      })
+    }, specText)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('spec_review')
+    expect(task.spec).toContain('Summary')
+    expect(task.openQuestions ?? []).toHaveLength(0)
+  })
+
+  it('drops stale unanswered exploring questions once a drafted spec reaches spec_review', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
+    const spec = stubAgent('spec-agent', async () => {
+      await mutateTask('a', {
+        status: 'spec_review',
+        spec: '## Summary\\nDrafted spec.',
+        openQuestions: [{
+          kind: 'choice',
+          id: 'q-stale',
+          askedBy: 'spec-agent',
+          askedAt: new Date().toISOString(),
+          prompt: 'Old fallback question',
+          choices: ['one', 'two'],
+          selectionMode: 'single',
+        }],
+        notes: [{
+          agentId: 'spec-agent',
+          role: 'spec',
+          content: 'Drafted spec.',
+          timestamp: new Date().toISOString(),
+        }],
+      })
+    }, 'Draft complete.')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('spec_review')
+    expect((task.openQuestions ?? []).filter((q) => !q.answeredAt)).toHaveLength(0)
+  })
+
+  it('parses markdown-headed numbered questions and a "my read" brief into structured state', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Fallback recovery' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'Got it.',
+        '',
+        'My read of this task title is:',
+        '- We want to verify fallback brief creation and structured question recovery after spec-agent failures.',
+        '',
+        '### 1) Primary outcome',
+        '- A) Spec-agent flow only',
+        '- B) Shared orchestration recovery',
+        '- C) Both',
+        '',
+        '### 2) Test depth',
+        '- A) Unit only',
+        '- B) Unit + integration',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.productBrief).toMatchObject({
+      userJob:
+        'We want to verify fallback brief creation and structured question recovery after spec-agent failures.',
+      authoredBy: 'spec-agent',
+    })
+    expect(task.openQuestions).toHaveLength(2)
+    expect(task.openQuestions?.[0]).toMatchObject({
+      kind: 'choice',
+      prompt: 'Primary outcome',
+      choices: ['Spec-agent flow only', 'Shared orchestration recovery', 'Both'],
+    })
+    expect(task.openQuestions?.[1]).toMatchObject({
+      kind: 'choice',
+      prompt: 'Test depth',
+      choices: ['Unit only', 'Unit + integration'],
+    })
+  })
+
+  it('parses markdown-headed questions that use A/B/C option lines into multiple structured cards', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'Perfect — “all of the above” is clear.',
+        '',
+        '### 1) What should be the **primary success signal** for this task? (pick one)',
+        'A. Spec quality only: clear ACs + testing strategy, no implementation expectations',
+        'B. Implementation-ready: ACs are directly testable and mapped to unit/integration tests',
+        'C. End-to-end governance: includes ACs for behavior, tests, task-state transitions, and transcript persistence as release gates',
+        '',
+        '### 2) Coverage posture for the future implementation (pick one)',
+        'A. Standard floor only (existing project defaults; no extra target)',
+        'B. Elevated on touched intake modules (explicit higher expectation in spec)',
+        'C. Standard floor + explicit exemption note allowed for non-deterministic orchestration paths',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions).toHaveLength(2)
+    expect(task.openQuestions?.[0]).toMatchObject({
+      prompt: 'What should be the **primary success signal** for this task? (pick one)',
+      choices: [
+        'Spec quality only: clear ACs + testing strategy, no implementation expectations',
+        'Implementation-ready: ACs are directly testable and mapped to unit/integration tests',
+        'End-to-end governance: includes ACs for behavior, tests, task-state transitions, and transcript persistence as release gates',
+      ],
+    })
+    expect(task.openQuestions?.[1]).toMatchObject({
+      prompt: 'Coverage posture for the future implementation (pick one)',
+      choices: [
+        'Standard floor only (existing project defaults; no extra target)',
+        'Elevated on touched intake modules (explicit higher expectation in spec)',
+        'Standard floor + explicit exemption note allowed for non-deterministic orchestration paths',
+      ],
+    })
   })
 
   it('routes in_progress tasks to the worker agent', async () => {
@@ -563,6 +1166,53 @@ describe('Orchestrator.tick — routing', () => {
       expect(third.transitioned).toBe(true)
     }
   })
+
+  it('resets the agent conversation once after repeated empty assistant turns', async () => {
+    await writeQueue([mkTask({ id: 'worker-task', status: 'in_progress' })])
+    let calls = 0
+    let resets = 0
+    const worker: StubAgent = {
+      name: 'worker-agent',
+      calls: [],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        calls += 1
+        if (calls <= 3) {
+          throw new Error('Model returned an empty assistant message. The turn was ignored to keep the session healthy.')
+        }
+        await mutateTask('worker-task', {
+          status: 'done',
+          updatedAt: '2026-04-01T00:06:00Z',
+        })
+        return { text: 'ok' }
+      },
+      resetConversation() {
+        resets += 1
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    expect((await orch.tick()).kind).toBe('processed')
+    expect((await orch.tick()).kind).toBe('processed')
+
+    const third = await orch.tick()
+    expect(third.kind).toBe('processed')
+    if (third.kind === 'processed') {
+      expect(third.afterStatus).toBe('in_progress')
+      expect(third.transitioned).toBe(false)
+    }
+    expect(resets).toBe(1)
+
+    const fourth = await orch.tick()
+    expect(fourth.kind).toBe('processed')
+    if (fourth.kind === 'processed') {
+      expect(fourth.afterStatus).toBe('done')
+      expect(fourth.transitioned).toBe(true)
+    }
+  })
 })
 
 describe('Orchestrator.tick — feedback loop', () => {
@@ -644,6 +1294,7 @@ describe('Orchestrator.tick — revision counting', () => {
     if (out.kind === 'processed') expect(out.revisionCount).toBe(1)
     const q = await readQueue()
     expect(q.tasks[0]!.revisionCount).toBe(1)
+    expect(q.tasks[0]!.assignedTo).toBe('worker-agent')
   })
 
   it('increments revisionCount when gate_check bounces back to in_progress', async () => {
@@ -659,6 +1310,8 @@ describe('Orchestrator.tick — revision counting', () => {
     })
     const out = await orch.tick()
     if (out.kind === 'processed') expect(out.revisionCount).toBe(2)
+    const q = await readQueue()
+    expect(q.tasks[0]!.assignedTo).toBe('worker-agent')
   })
 
   it('does not increment revisionCount on forward transitions', async () => {
@@ -963,6 +1616,32 @@ describe('Orchestrator.run — full loops', () => {
     const q = await readQueue()
     expect(q.tasks.find((t) => t.id === 'a')?.status).toBe('done')
     expect(q.tasks.find((t) => t.id === 'b')?.status).toBe('ready')
+  })
+
+  it('stopAfterOneTask stops immediately when exploring work is waiting on the user', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', domain: 'knit' })])
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent(
+        'spec-agent',
+        undefined,
+        'Pick one: should I spec only the happy path, or the full failure matrix?',
+      ),
+      worker: stubAgent('worker-agent'),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+
+    const orch = new Orchestrator({ config: baseConfig(), agents })
+    await orch.run({ maxTicks: 20, tickDelayMs: 0, stopAfterOneTask: true })
+
+    expect(agents.spec.calls).toHaveLength(1)
+    const q = await readQueue()
+    const task = q.tasks.find((t) => t.id === 'a')!
+    expect(task.status).toBe('exploring')
+    expect(task.openQuestions).toHaveLength(1)
+    expect(task.openQuestions?.[0]?.answeredAt).toBeUndefined()
   })
 
   it('stops early when all tasks are terminal (done/blocked)', async () => {
@@ -2980,9 +3659,37 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
       }
       const t = (await readQueue()).tasks[0]!
       expect(t.status).toBe('in_progress')
+      expect(t.assignedTo).toBe('worker-agent')
       expect(t.revisionCount).toBe(1)
       expect(t.reviewVerdicts[0]!.verdict).toBe('revise')
       expect(t.reviewVerdicts[0]!.reviewerPath).toBe('deterministic')
+    },
+  )
+
+  it(
+    'records worker ownership again when the LLM reviewer sends a task back to in_progress',
+    async () => {
+      await writeReviewerMode('llm_with_deterministic_fallback')
+      await writeQueue([reviewReadyTask({ id: 't-llm-revise' })])
+
+      const revisingReviewer = stubAgent('reviewer-agent', async () => {
+        await mutateTask('t-llm-revise', { status: 'in_progress' })
+      })
+      const orch = new Orchestrator({
+        config: baseConfig(),
+        agents: agentSet({ reviewer: revisingReviewer }),
+      })
+      const out = await orch.tick()
+
+      expect(out.kind).toBe('processed')
+      if (out.kind === 'processed') {
+        expect(out.afterStatus).toBe('in_progress')
+      }
+      const t = (await readQueue()).tasks[0]!
+      expect(t.status).toBe('in_progress')
+      expect(t.assignedTo).toBe('worker-agent')
+      expect(t.reviewVerdicts[0]!.reviewerPath).toBe('llm')
+      expect(t.reviewVerdicts[0]!.verdict).toBe('revise')
     },
   )
 })

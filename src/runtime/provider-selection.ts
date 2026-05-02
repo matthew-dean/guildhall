@@ -114,6 +114,11 @@ export interface SelectApiClientOptions {
    * OpenAI API key. Falls back to `OPENAI_API_KEY`. Empty → skip.
    */
   openaiApiKey?: string
+  /**
+   * OpenAI-compatible base URL. Falls back to `OPENAI_BASE_URL`. When omitted,
+   * real OpenAI remains the default.
+   */
+  openaiBaseUrl?: string
 }
 
 export async function selectApiClient(
@@ -261,8 +266,9 @@ function tryAnthropicApi(opts: SelectApiClientOptions): Probe {
 function tryOpenAiApi(opts: SelectApiClientOptions): Probe {
   const key = (opts.openaiApiKey ?? process.env.OPENAI_API_KEY ?? '').trim()
   if (key.length === 0) return { ok: false }
+  const baseUrl = (opts.openaiBaseUrl ?? process.env.OPENAI_BASE_URL ?? '').trim()
   const apiClient = new OpenAICompatibleClient({
-    baseUrl: 'https://api.openai.com/v1',
+    baseUrl: baseUrl || 'https://api.openai.com/v1',
     apiKey: key,
   })
   return {
@@ -270,7 +276,7 @@ function tryOpenAiApi(opts: SelectApiClientOptions): Probe {
     result: {
       apiClient,
       providerName: 'openai-api',
-      reason: 'OpenAI API key',
+      reason: baseUrl ? `OpenAI-compatible API at ${baseUrl}` : 'OpenAI API key',
     },
   }
 }

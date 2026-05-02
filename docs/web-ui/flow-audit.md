@@ -28,6 +28,40 @@ state, jump across pages for a simple answer, or wait on a vague "agent is
 working" card, fix the flow. The user should be able to answer questions,
 correct the agent, and ask for direct action from Thread.
 
+## Current Follow-Ups
+
+- [x] Keep task-drawer transcript notes aligned with canonical acceptance
+  criteria so stale specifier notes do not contradict the real task.
+- [x] Refresh Thread immediately on runtime activity that matters for user
+  confidence, especially review back-to-work transitions and failed tools.
+- [x] Let hard verifier failures dominate the active operator view instead of
+  leaving softer reviewer guidance as the loudest signal.
+- [x] Restore worker ownership whenever review/gate/adjudication bounces a task
+  back to `in_progress`, so retries resume a coherent worker session.
+
+## Current 20-Item Push List
+
+- [x] Preserve the latest meaningful assistant prose across later tool-only turns.
+- [x] Stop empty tool-only assistant turns from wiping `last_assistant_text`.
+- [x] Let `append-exploring-transcript` recover from `{}` using runtime metadata.
+- [x] Let `post-user-question` recover from `{}` using runtime metadata.
+- [x] Teach `post-user-question` to infer structured choice payloads from prior assistant prose.
+- [x] Verify inferred `post-user-question` payloads can post multiple questions in sequence.
+- [x] Teach fallback question parsing to handle simple `Pick one: X or Y` prose.
+- [x] Teach fallback question parsing to split numbered questionnaire prose into multiple `choice` cards.
+- [x] Teach fallback question parsing to handle markdown-headed numbered sections.
+- [x] Stop gating fallback question creation on narrow phrase matching when structured drafts are inferable.
+- [x] Auto-persist plain spec-agent exploring prose into the exploring transcript.
+- [x] Add a fallback `productBrief` draft when spec-agent prose clearly states a “best read/guess”.
+- [x] Teach fallback brief parsing to understand “my read of this task title” phrasing.
+- [x] Normalize bulleted “my read” lines so fallback brief inference still works.
+- [x] Verify live Looma/Knit runs now preserve transcript plus structured questions after sloppy tool turns.
+- [x] Verify a live Looma/Knit run now preserves both a drafted brief and a structured question.
+- [x] Reduce over-batching when the inferred questionnaire is too broad for a first intake turn.
+- [x] Make spec-agent question inference prefer the highest-signal 1-3 questions instead of 6-8.
+- [ ] Add an explicit live/browser check that Thread renders the inferred brief and question cards coherently.
+- [ ] Re-run a real Knit task from intake toward implementation using the hardened exploring flow.
+
 ## Pass Checklist
 
 1. Setup
@@ -258,6 +292,23 @@ correct the agent, and ask for direct action from Thread.
   `selectionMode` support to agent questions, taught the spec-agent prompt to
   say `selectionMode: 'multiple'` for pick-all choices, and added a UI fallback
   so older "which of these should..." prompts render as multi-select.
+- Live Looma/Knit testing exposed a stale transcript problem: `Transcript`
+  could show old `Added acceptance criterion: ...` notes that no longer matched
+  the task's canonical `acceptanceCriteria`. Fixed the drawer endpoint to
+  filter specifier acceptance-note echoes against the live criteria list.
+- Thread updates lagged during active work because the surface only refreshed
+  on coarse lifecycle events. It now also reloads on `tool_started`,
+  `tool_completed`, `line_complete`, and `error`, which makes review bounces
+  and verifier failures show up fast enough to trust.
+- Review feedback could stay visually "in flight" even after a newer hard
+  verifier failure had become the more important operator signal. Thread now
+  demotes stale review-feedback cards once a later danger-level activity exists
+  for the same task, letting the failed verifier output dominate the active
+  card.
+- Review/gate/adjudication bounce paths could return a task to `in_progress`
+  without restoring `assignedTo='worker-agent'`, which encouraged no-op retry
+  loops and prevented clean worker session resume. Fixed every bounce path to
+  restore worker ownership before persisting the task.
 - `pnpm typecheck` passed.
 - `pnpm vitest run src/runtime/__tests__/serve-providers.test.ts src/core/__tests__/models.test.ts`
   passed: 40 tests.

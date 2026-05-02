@@ -7,7 +7,9 @@ import {
   readWorkspaceConfig,
   writeWorkspaceConfig,
   readGlobalConfig,
+  resolveModelsForProvider,
   updateGlobalConfig,
+  writeModelsForProvider,
   FORGE_YAML_FILENAME,
 } from '@guildhall/config'
 import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT, type ModelAssignmentConfig } from '@guildhall/core'
@@ -265,7 +267,7 @@ export async function runInit(opts: InitOptions): Promise<void> {
   if (projectPath) console.log(`  Project:      ${projectPath}`)
   console.log(`  Coordinators: ${coordinators.length > 0 ? coordinators.map(c => c.name).join(', ') : 'none'}`)
   if (modelScope === 'global-default') {
-    const globalModels = readGlobalConfig().models ?? {}
+    const globalModels = resolveModelsForProvider(readGlobalConfig().models)
     console.log(`  Models:       global defaults`)
     console.log(`  Worker:       ${globalModels.worker ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.worker}`)
     console.log(`  Spec:         ${globalModels.spec ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.spec}`)
@@ -305,10 +307,10 @@ export async function runInit(opts: InitOptions): Promise<void> {
     const global = readGlobalConfig()
     updateGlobalConfig({
       ...global,
-      models: {
-        ...(global.models ?? {}),
+      models: writeModelsForProvider(global.models, undefined, {
+        ...resolveModelsForProvider(global.models),
         ...models,
-      },
+      }),
     })
   }
 

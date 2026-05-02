@@ -16,6 +16,7 @@
     detected: boolean
     verifiedAt: string | null
     url?: string
+    baseUrl?: string | null
   }
   interface ModelCatalogItem {
     id: string
@@ -41,6 +42,7 @@
   // Editable fields (only for providers that accept a pasted credential).
   let anthropicKey = $state('')
   let openaiKey = $state('')
+  let openaiBaseUrl = $state('')
   let llamaUrl = $state('')
 
   const ORDER = ['claude-oauth', 'codex', 'anthropic-api', 'openai-api', 'llama-cpp']
@@ -62,6 +64,7 @@
       }
       providers = j.providers as Record<string, ProviderMeta>
       if (providers['llama-cpp']?.url && !llamaUrl) llamaUrl = providers['llama-cpp'].url
+      openaiBaseUrl = providers['openai-api']?.baseUrl ?? ''
       const modelRes = await fetch('/api/config/models')
       const modelJson = await modelRes.json()
       if (!modelJson.error) models = modelJson as ModelConfig
@@ -89,8 +92,10 @@
         if (!anthropicKey.trim()) return flash('Paste a key first', true)
         body.anthropicApiKey = anthropicKey.trim()
       } else if (key === 'openai-api') {
-        if (!openaiKey.trim()) return flash('Paste a key first', true)
-        body.openaiApiKey = openaiKey.trim()
+        const existingKey = providers?.['openai-api']?.detected ?? false
+        if (!openaiKey.trim() && !existingKey) return flash('Paste a key first', true)
+        if (openaiKey.trim()) body.openaiApiKey = openaiKey.trim()
+        body.openaiBaseUrl = openaiBaseUrl.trim()
       } else if (key === 'llama-cpp') {
         if (!llamaUrl.trim()) return flash('Enter a URL first', true)
         body.lmStudioUrl = llamaUrl.trim()
@@ -267,21 +272,27 @@
                 </Button>
               </div>
             {:else if key === 'openai-api'}
-              <div class="row-edit">
+              <div class="row-edit openai-edit">
                 <Input
                   type="password"
                   placeholder="sk-…"
                   value={openaiKey}
                   oninput={v => (openaiKey = v)}
                 />
+                <Input
+                  placeholder="https://api.openai.com/v1"
+                  value={openaiBaseUrl}
+                  oninput={v => (openaiBaseUrl = v)}
+                />
                 <Button
                   variant="primary"
-                  disabled={saving === key || !openaiKey.trim()}
+                  disabled={saving === key || (!openaiKey.trim() && !providers['openai-api']?.detected)}
                   onclick={() => saveCreds('openai-api')}
                 >
                   {saving === key ? 'Saving…' : 'Save'}
                 </Button>
               </div>
+              <p class="muted helper">Leave base URL blank to use real OpenAI.</p>
             {:else if key === 'llama-cpp'}
               <div class="row-edit">
                 <Input
@@ -418,6 +429,12 @@
   }
   .row-edit :global(input) {
     flex: 1;
+  }
+  .openai-edit {
+    flex-wrap: wrap;
+  }
+  .helper {
+    margin: calc(var(--s-1) * -1) 0 0;
   }
   .model-list {
     display: flex;

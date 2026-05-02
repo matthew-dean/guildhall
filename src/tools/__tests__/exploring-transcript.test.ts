@@ -207,4 +207,69 @@ describe('engine tool wrappers', () => {
     expect(result.is_error).toBe(false)
     expect(result.output).toContain('(no transcript yet at')
   })
+
+  it('defaults appendExploringTranscriptTool task context from metadata', async () => {
+    const result = await appendExploringTranscriptTool.execute(
+      {
+        role: 'spec-agent',
+        content: 'hello from metadata defaults',
+      },
+      {
+        cwd: '/tmp',
+        metadata: {
+          memory_dir: memoryDir,
+          current_task_id: 'task-meta',
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    const transcript = await fs.readFile(
+      path.join(memoryDir, 'exploring', 'task-meta.md'),
+      'utf-8',
+    )
+    expect(transcript).toContain('hello from metadata defaults')
+  })
+
+  it('infers transcript role/content from metadata when the model calls it with {}', async () => {
+    const result = await appendExploringTranscriptTool.execute(
+      {},
+      {
+        cwd: '/tmp',
+        metadata: {
+          memory_dir: memoryDir,
+          current_task_id: 'task-meta-inferred',
+          current_agent_id: 'spec-agent',
+          last_assistant_text: 'Please pick one of the structured options.',
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    const transcript = await fs.readFile(
+      path.join(memoryDir, 'exploring', 'task-meta-inferred.md'),
+      'utf-8',
+    )
+    expect(transcript).toContain('spec-agent')
+    expect(transcript).toContain('Please pick one of the structured options.')
+  })
+
+  it('defaults readExploringTranscriptTool task context from metadata', async () => {
+    await appendExploringTranscript({
+      memoryDir,
+      taskId: 'task-meta-read',
+      role: 'user',
+      content: 'persisted through metadata',
+    })
+    const result = await readExploringTranscriptTool.execute(
+      {},
+      {
+        cwd: '/tmp',
+        metadata: {
+          memory_dir: memoryDir,
+          current_task_id: 'task-meta-read',
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('persisted through metadata')
+  })
 })

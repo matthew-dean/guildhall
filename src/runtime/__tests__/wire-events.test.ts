@@ -129,6 +129,22 @@ describe('tickOutcomeToBackendEvent — FR-16 wire mapping', () => {
     expect(parsed.message).toMatch(/no action needed/i)
   })
 
+  it('humanizes empty model replies as provider hiccups instead of task failure', () => {
+    const outcome: TickOutcome = {
+      kind: 'agent-error',
+      taskId: 'task-001',
+      agent: 'worker-agent',
+      error: 'Model returned an empty assistant message. The turn was ignored to keep the session healthy.',
+    }
+    const evt = tickOutcomeToBackendEvent(outcome)
+    const parsed = backendEventSchema.parse(evt)
+    expect(parsed.type).toBe('error')
+    expect(parsed.message).not.toMatch(/failed/i)
+    expect(parsed.message).toMatch(/empty model reply/i)
+    expect(parsed.message).toMatch(/task state intact/i)
+    expect(parsed.message).toMatch(/retry the run or switch providers/i)
+  })
+
   it('maps no-coordinator to a wire error event', () => {
     const outcome: TickOutcome = {
       kind: 'no-coordinator',

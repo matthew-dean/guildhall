@@ -9,7 +9,8 @@ import {
   type GuildhallAgent,
   type AgentLLM,
 } from '@guildhall/agents'
-import { selectApiClient, inferPreferredProvider } from './provider-selection.js'
+import { selectApiClient } from './provider-selection.js'
+import { getRuntimeProviderConfig } from './provider-runtime-config.js'
 import {
   TaskQueue,
   TERMINAL_TASK_STATUSES,
@@ -25,10 +26,8 @@ import {
 } from '@guildhall/core'
 import {
   readProjectConfig,
-  readGlobalConfig,
   updateProjectConfig,
   migrateProjectProvidersToGlobal,
-  resolveGlobalCredentials,
   type ResolvedConfig,
 } from '@guildhall/config'
 import { PermissionMode, HookEvent, type HookExecutor } from '@guildhall/engine'
@@ -40,6 +39,7 @@ import {
   findReclaimTasks,
   loadReclaimCandidates,
   readCheckpoint,
+  ensureExploringTranscriptEntry,
   type ReclaimCandidate,
 } from '@guildhall/tools'
 import { pickNextTask, needsPreRejectionPolicy } from './orchestrator-picker.js'
@@ -133,6 +133,7 @@ import {
   type ReviewerFanoutPolicy,
 } from './reviewer-fanout.js'
 import fs from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
 /**
@@ -280,6 +281,36 @@ function messageContentText(content: unknown): string {
     .join('\n')
 }
 
+function isSyntheticRecoveryUserMessage(message: { role?: string; content?: unknown }): boolean {
+  if (message.role !== 'user') return false
+  const text = messageContentText(message.content)
+  if (!text) return false
+  return (
+    text.includes('Your last response did not use a tool, so Guildhall could not turn it into') ||
+    text.includes('Do not repeat that exact tool call again.')
+  )
+}
+
+function bestExploringAssistantFallbackText(
+  messages: ReadonlyArray<{ role?: string; content?: unknown }>,
+): string {
+  const preferred: string[] = []
+  const fallback: string[] = []
+  let sawSyntheticRecovery = false
+  for (const message of messages) {
+    if (isSyntheticRecoveryUserMessage(message)) {
+      sawSyntheticRecovery = true
+      continue
+    }
+    if (message.role !== 'assistant') continue
+    const text = messageContentText(message.content).trim()
+    if (!text) continue
+    fallback.push(text)
+    if (!sawSyntheticRecovery) preferred.push(text)
+  }
+  return preferred.at(-1) ?? fallback.at(-1) ?? ''
+}
+
 // ---------------------------------------------------------------------------
 // Forge Orchestrator
 //
@@ -321,6 +352,8 @@ export interface OrchestratorAgent {
    * (simple test fakes, etc.) stay at their baseline mode.
    */
   setPermissionMode?(mode: PermissionMode): PermissionMode
+  /** Optional recovery hook for clearing a poisoned conversation/session. */
+  resetConversation?(): void
 }
 
 export interface OrchestratorAgentSet {
@@ -365,11 +398,201 @@ const ONE_TASK_STOP_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
   'pending_pr',
   'spec_review',
 ])
+const EXPLORING_NO_PROGRESS_ESCALATION_AFTER = 3
+
+function looksLikePlaintextUserQuestion(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  if (trimmed.includes('?')) return true
+  return /(^|\n)\s*(pick one|pick all|please answer|reply with|choose|which|what|should|do you want)\b/i.test(trimmed)
+}
+
+type FallbackQuestionDraft =
+  | { kind: 'text'; prompt: string }
+  | { kind: 'choice'; prompt: string; choices: string[]; selectionMode?: 'single' | 'multiple' }
+
+interface FallbackBriefDraft {
+  userJob: string
+  successMetric: string
+  antiPatterns: string[]
+}
+
+const MAX_FALLBACK_QUESTIONS = 3
+
+function cleanFallbackOptionLabel(raw: string): string {
+  const trimmed = raw.trim()
+  const boldHeading = trimmed.match(/^\*\*(.+?)\*\*(?:\s*[—-]\s*.*)?$/)
+  if (boldHeading) return boldHeading[1]!.trim()
+  return trimmed
+}
+
+function parseFallbackOptionLine(line: string): string | null {
+  const trimmed = line.trim()
+  if (/^-\s+/.test(trimmed)) {
+    return trimmed.replace(/^-\s+/, '').replace(/^[A-Z][.)]\s*/, '').trim()
+  }
+  if (/^[A-Z][.)]\s+/.test(trimmed)) {
+    return trimmed.replace(/^[A-Z][.)]\s+/, '').trim()
+  }
+  return null
+}
+
+function inferFallbackQuestionsFromPlaintext(text: string): FallbackQuestionDraft[] {
+  const trimmed = text.trim()
+  if (!trimmed) return []
+
+  const simplePickOne = trimmed.match(/^pick one:\s*(.+)$/im)
+  if (simplePickOne) {
+    const body = simplePickOne[1]?.trim() ?? ''
+    const split = body.match(/^(.+?),\s*or\s+(.+?)\??$/i)
+    if (split) {
+      return [{
+        kind: 'choice',
+        prompt: 'Pick one',
+        choices: [split[1]!.trim(), split[2]!.trim()],
+        selectionMode: 'single',
+      }]
+    }
+  }
+
+  const lines = trimmed.split('\n')
+  const inlinePromptQuestions: FallbackQuestionDraft[] = []
+  for (let i = 0; i < lines.length; i += 1) {
+    const promptLine = lines[i]?.trim() ?? ''
+    if (!promptLine) continue
+    const normalizedPromptLine = promptLine.replace(/^#{1,6}\s*/, '').trim()
+    const headingPrompt = normalizedPromptLine.match(/^\d+[.)]\s+(?:\*\*(.+?)\*\*|(.+))$/)
+    const promptBody = (headingPrompt?.[1] ?? headingPrompt?.[2] ?? normalizedPromptLine).trim()
+    const promptLike = /pick one\b|choose one\b|select one\b|\?$|:\s*$|success look like/i.test(promptBody)
+    if (!promptLike) continue
+    const summaryLike =
+      /i['’]ll draft the full spec with\b|i will draft the full spec with\b|once you (?:pick|answer).+i['’]ll draft\b/i
+        .test(promptBody)
+    if (summaryLike) continue
+
+    const choices: string[] = []
+    let mode: 'numbered' | 'bullets' | null = null
+    let invalidInlineGroup = false
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const optionLine = lines[j]?.trim() ?? ''
+      if (!optionLine) {
+        if (choices.length > 0) break
+        continue
+      }
+      const numberedOption = optionLine.match(/^\d+[.)]\s+(?:\*\*(.+?)\*\*|(.+))$/)
+      if (numberedOption) {
+        if (mode === 'bullets') break
+        mode = 'numbered'
+        choices.push(cleanFallbackOptionLabel((numberedOption[1] ?? numberedOption[2] ?? '').trim()))
+        continue
+      }
+      const structuredOption = parseFallbackOptionLine(optionLine)
+      if (structuredOption) {
+        if (mode === 'numbered') {
+          invalidInlineGroup = true
+          break
+        }
+        mode = 'bullets'
+        choices.push(structuredOption)
+        continue
+      }
+      if (choices.length > 0) break
+    }
+
+    if (!invalidInlineGroup && choices.length >= 2 && choices.length <= 6) {
+      inlinePromptQuestions.push({
+        kind: 'choice',
+        prompt: promptBody.replace(/\s+/g, ' ').trim(),
+        choices,
+        selectionMode: /pick all|all that apply|select all|choose all/i.test(promptBody)
+          ? 'multiple'
+          : 'single',
+      })
+    }
+  }
+  if (inlinePromptQuestions.length > 0) return inlinePromptQuestions.slice(0, MAX_FALLBACK_QUESTIONS)
+
+  const sections: Array<{ heading: string; lines: string[] }> = []
+  let current: { heading: string; lines: string[] } | null = null
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    const normalizedLine = line.replace(/^#{1,6}\s*/, '')
+    const headingMatch = normalizedLine.match(/^\d+[.)]\s+(?:\*\*(.+?)\*\*|(.+))$/)
+    if (headingMatch) {
+      if (current) sections.push(current)
+      current = { heading: (headingMatch[1] ?? headingMatch[2] ?? '').trim(), lines: [] }
+      continue
+    }
+    if (current) current.lines.push(rawLine)
+  }
+  if (current) sections.push(current)
+
+  const inferred = sections
+    .map<FallbackQuestionDraft | null>((section) => {
+      const choices = section.lines
+        .map((line) => parseFallbackOptionLine(line))
+        .filter(Boolean)
+        .map((line) => line as string)
+      if (choices.length >= 2 && choices.length <= 6) {
+        const combined = [section.heading, ...section.lines.map((line) => line.trim()).filter((line) => line && !/^-/.test(line))]
+          .join('\n')
+          .trim()
+        const selectionMode = /pick all|all that apply|select all|choose all/i.test(combined)
+          ? 'multiple'
+          : 'single'
+        return {
+          kind: 'choice',
+          prompt: section.heading,
+          choices,
+          selectionMode,
+        }
+      }
+      return null
+    })
+    .filter((question): question is FallbackQuestionDraft => question !== null)
+
+  if (inferred.length > 0) return inferred.slice(0, MAX_FALLBACK_QUESTIONS)
+  if (!looksLikePlaintextUserQuestion(trimmed)) return []
+  return [{ kind: 'text', prompt: trimmed }]
+}
+
+function inferFallbackBriefFromPlaintext(text: string, taskTitle: string): FallbackBriefDraft | null {
+  const trimmed = text.trim()
+  if (!trimmed) return null
+  const guessMatch = trimmed.match(/my (?:best )?(?:guess|read)(?: of [^:\n]+| for [^:\n]+)?[:\s]*\n+([\s\S]+)/i)
+  const afterGuess = (guessMatch?.[1] ?? trimmed).trim()
+  const lines = afterGuess
+    .split('\n')
+    .map((line) => line.trim().replace(/^[*-]\s+/, ''))
+    .filter(Boolean)
+    .filter((line) => !/^\d+[.)]\s/.test(line))
+
+  const userJob = lines.find((line) =>
+    /^you want to\b/i.test(line) ||
+    /^this task is about\b/i.test(line) ||
+    /^the goal is to\b/i.test(line) ||
+    /^we want to\b/i.test(line) ||
+    /^my read of this task title\b/i.test(line) ||
+    /^from the title, my best read is:/i.test(line),
+  )
+  if (!userJob) return null
+
+  const antiPatterns = lines
+    .filter((line) => /^don't\b/i.test(line) || /^do not\b/i.test(line))
+    .map((line) => line.replace(/^[*-]\s*/, '').trim())
+
+  return {
+    userJob,
+    successMetric: `Thread shows a drafted brief and actionable next step for "${taskTitle}".`,
+    antiPatterns,
+  }
+}
 
 function shouldStopOneTaskRun(outcome: TickOutcome): boolean {
   switch (outcome.kind) {
     case 'processed':
-      return ONE_TASK_STOP_STATUSES.has(outcome.afterStatus)
+      return Boolean(outcome.waitingOnUser) || ONE_TASK_STOP_STATUSES.has(outcome.afterStatus)
     case 'proposal-decided':
     case 'pre-rejection-applied':
       return ONE_TASK_STOP_STATUSES.has(outcome.newStatus)
@@ -388,6 +611,61 @@ function shouldStopOneTaskRun(outcome: TickOutcome): boolean {
 function describeOneTaskStop(outcome: TickOutcome): string {
   if ('taskId' in outcome) return `task ${outcome.taskId} (${outcome.kind})`
   return outcome.kind
+}
+
+function taskHasDraftEvidence(task: Task): boolean {
+  return (
+    task.acceptanceCriteria.length > 0 ||
+    Boolean(task.productBrief) ||
+    task.notes.some(note => note.role === 'spec' || note.agentId === 'spec-agent')
+  )
+}
+
+function taskHasUnansweredUserQuestion(task: Task): boolean {
+  return (task.openQuestions ?? []).some((question) => !question.answeredAt)
+}
+
+export function shouldResumeAgentSession(
+  label: string,
+  queue: TaskQueue,
+): boolean {
+  if (label === 'spec') {
+    return queue.tasks.some((task) =>
+      task.status === 'exploring' ||
+      (task.status === 'spec_review' && !task.spec?.trim() && taskHasDraftEvidence(task)) ||
+      ((task.status === 'ready' || task.status === 'in_progress') &&
+        taskHasDraftEvidence(task) &&
+        !task.spec?.trim()),
+    )
+  }
+
+  if (label === 'worker') {
+    return queue.tasks.some((task) =>
+      task.status === 'in_progress' && task.assignedTo === 'worker-agent',
+    )
+  }
+
+  if (label === 'reviewer') {
+    return queue.tasks.some((task) =>
+      task.status === 'review' && task.assignedTo === 'reviewer-agent',
+    )
+  }
+
+  if (label === 'gate-checker') {
+    return queue.tasks.some((task) =>
+      task.status === 'gate_check' && task.assignedTo === 'gate-checker-agent',
+    )
+  }
+
+  if (label.startsWith('coordinator-')) {
+    const domain = label.slice('coordinator-'.length)
+    return queue.tasks.some((task) =>
+      task.domain === domain &&
+      (task.status === 'spec_review' || task.status === 'ready'),
+    )
+  }
+
+  return false
 }
 
 export interface OrchestratorOptions {
@@ -494,6 +772,8 @@ export class Orchestrator {
    */
   private queueWriteChain: Promise<void> = Promise.resolve()
   private readonly emptyAssistantRetries = new Map<string, number>()
+  private readonly emptyAssistantResets = new Map<string, number>()
+  private readonly exploringNoProgressCounts = new Map<string, number>()
 
   constructor(opts: OrchestratorOptions) {
     this.opts = opts
@@ -514,6 +794,16 @@ export class Orchestrator {
   /** FR-30: convenience — same as `this.liveness.scanStalls()`. */
   scanStalls(nowOverride?: number): StallFlag[] {
     return this.livenessTracker.scanStalls(nowOverride)
+  }
+
+  private clearExploringNoProgress(taskId: string): void {
+    this.exploringNoProgressCounts.delete(taskId)
+  }
+
+  private bumpExploringNoProgress(taskId: string): number {
+    const next = (this.exploringNoProgressCounts.get(taskId) ?? 0) + 1
+    this.exploringNoProgressCounts.set(taskId, next)
+    return next
   }
 
   /**
@@ -838,6 +1128,14 @@ export class Orchestrator {
         : PermissionMode.FULL_AUTO
       agent.setPermissionMode(requested)
     }
+    if (typeof agent.loadToolMetadata === 'function') {
+      agent.loadToolMetadata({
+        current_task_id: task.id,
+        current_agent_id: agent.name,
+        memory_dir: this.opts.config.memoryDir,
+        tasks_path: tasksPath,
+      })
+    }
 
     // FR-30: register the agent with the liveness tracker for the duration
     // of this generate() call.
@@ -860,6 +1158,7 @@ export class Orchestrator {
     let generatedText = ''
     let generatedMetaIntakeDraft: string | null = null
     const retryKey = `${agent.name}:${task.id}`
+    const priorMessageCount = Array.isArray(agent.messages) ? agent.messages.length : 0
     try {
       const result = typeof agent.generateWithEvents === 'function'
         ? await agent.generateWithEvents(prompt, async (event) => {
@@ -872,10 +1171,18 @@ export class Orchestrator {
           }, this.opts.abortSignal ? { signal: this.opts.abortSignal } : undefined)
         : await agent.generate(prompt)
       generatedText = result.text
+      if (agent.name === 'spec-agent' && beforeStatus === 'exploring') {
+        const turnMessages = Array.isArray(result.messages)
+          ? result.messages.slice(priorMessageCount)
+          : []
+        const fallbackText = bestExploringAssistantFallbackText(turnMessages)
+        if (fallbackText.trim().length > 0) generatedText = fallbackText
+      }
       if (task.id === META_INTAKE_TASK_ID) {
         generatedMetaIntakeDraft = findMetaIntakeDraftText(result)
       }
       this.emptyAssistantRetries.delete(retryKey)
+      this.emptyAssistantResets.delete(retryKey)
     } catch (err) {
       this.livenessTracker.unregister(agent.name)
       await this.emitBackendEvent({
@@ -928,8 +1235,33 @@ export class Orchestrator {
             revisionCount: task.revisionCount,
           }
         }
+        const resets = this.emptyAssistantResets.get(retryKey) ?? 0
+        if (resets < 1 && typeof agent.resetConversation === 'function') {
+          agent.resetConversation()
+          this.emptyAssistantResets.set(retryKey, resets + 1)
+          this.emptyAssistantRetries.set(retryKey, 0)
+          await this.emitBackendEvent({
+            type: 'line_complete',
+            task_id: task.id,
+            agent_name: agent.name,
+            message:
+              'Model kept returning empty replies. Resetting the agent conversation once and retrying cleanly.',
+          })
+          return {
+            kind: 'processed',
+            taskId: task.id,
+            agent: agent.name,
+            beforeStatus,
+            afterStatus: beforeStatus,
+            transitioned: false,
+            revisionCount: task.revisionCount,
+          }
+        }
+        this.emptyAssistantRetries.delete(retryKey)
+        this.emptyAssistantResets.delete(retryKey)
       } else {
         this.emptyAssistantRetries.delete(retryKey)
+        this.emptyAssistantResets.delete(retryKey)
       }
       if (/Exceeded maximum turn limit/.test(message)) {
         const escalation = await raiseEscalation({
@@ -976,6 +1308,7 @@ export class Orchestrator {
         const taskAfter = queueAfter.tasks.find((t) => t.id === task.id) ?? task
         let afterStatus = taskAfter.status
         let transitioned = beforeStatus !== afterStatus
+        const openQuestionCountBefore = task.openQuestions?.length ?? 0
 
         if (
           task.id === META_INTAKE_TASK_ID &&
@@ -1005,6 +1338,152 @@ export class Orchestrator {
           transitioned = beforeStatus !== afterStatus
         }
 
+        if (
+          beforeStatus === 'exploring' &&
+          taskAfter.status === 'spec_review' &&
+          typeof taskAfter.spec === 'string' &&
+          taskAfter.spec.trim().length > 0
+        ) {
+          const existingQuestions = Array.isArray(taskAfter.openQuestions) ? taskAfter.openQuestions : []
+          const retainedQuestions = existingQuestions.filter((question) => Boolean(question.answeredAt))
+          if (retainedQuestions.length !== existingQuestions.length) {
+            taskAfter.openQuestions = retainedQuestions
+            taskAfter.updatedAt = this.now()
+            queueAfter.lastUpdated = this.now()
+            await this.writeQueue(queueAfter)
+          }
+        }
+
+        let transcriptAppended = false
+        let fallbackBriefAuthored = false
+        let fallbackQuestionPosted = false
+        if (
+          agent.name === 'spec-agent' &&
+          beforeStatus === 'exploring' &&
+          generatedText.trim().length > 0
+        ) {
+          const transcriptResult = await ensureExploringTranscriptEntry({
+            memoryDir: this.opts.config.memoryDir,
+            taskId: task.id,
+            role: 'spec-agent',
+            content: generatedText.trim(),
+          })
+          transcriptAppended = transcriptResult.appended === true
+
+          if (!taskAfter.productBrief) {
+            const inferredBrief = inferFallbackBriefFromPlaintext(generatedText, taskAfter.title)
+            if (inferredBrief) {
+              const now = this.now()
+              taskAfter.productBrief = {
+                userJob: inferredBrief.userJob,
+                successMetric: inferredBrief.successMetric,
+                antiPatterns: inferredBrief.antiPatterns,
+                authoredBy: 'spec-agent',
+                authoredAt: now,
+              }
+              taskAfter.updatedAt = now
+              queueAfter.lastUpdated = now
+              await this.writeQueue(queueAfter)
+              fallbackBriefAuthored = true
+            }
+          }
+
+          const openQuestionCountAfter = taskAfter.openQuestions?.length ?? 0
+          const drafts = inferFallbackQuestionsFromPlaintext(generatedText)
+          const existingQuestionPrompts = new Set(
+            ((taskAfter.openQuestions ?? []) as Array<Record<string, unknown>>)
+              .map((question) => {
+                const prompt = question['prompt']
+                if (typeof prompt === 'string' && prompt.trim()) return prompt.trim()
+                const restatement = question['restatement']
+                return typeof restatement === 'string' && restatement.trim()
+                  ? restatement.trim()
+                  : ''
+              })
+              .filter(Boolean),
+          )
+          const missingDrafts = drafts.filter((draft) => !existingQuestionPrompts.has(draft.prompt.trim()))
+          if (
+            taskAfter.status === 'exploring' &&
+            (
+              (openQuestionCountAfter === openQuestionCountBefore && drafts.length > 0) ||
+              missingDrafts.length > 0 ||
+              (openQuestionCountAfter === openQuestionCountBefore && looksLikePlaintextUserQuestion(generatedText))
+            )
+          ) {
+            const now = this.now()
+            taskAfter.openQuestions = [
+              ...(taskAfter.openQuestions ?? []),
+              ...(missingDrafts.length > 0 ? missingDrafts : drafts).map((draft, index) =>
+                draft.kind === 'choice'
+                  ? {
+                      kind: 'choice' as const,
+                      id: `q-fallback-${task.id}-${Date.now().toString(36)}-${index}`,
+                      askedBy: 'spec-agent',
+                      askedAt: now,
+                      prompt: draft.prompt,
+                      choices: draft.choices,
+                      ...(draft.selectionMode ? { selectionMode: draft.selectionMode } : {}),
+                    }
+                  : {
+                      kind: 'text' as const,
+                      id: `q-fallback-${task.id}-${Date.now().toString(36)}-${index}`,
+                      askedBy: 'spec-agent',
+                      askedAt: now,
+                      prompt: draft.prompt,
+                    },
+              ),
+            ]
+            taskAfter.updatedAt = now
+            queueAfter.lastUpdated = now
+            await this.writeQueue(queueAfter)
+            fallbackQuestionPosted = true
+          }
+        }
+
+        const madeExploringProgress =
+          transitioned ||
+          taskAfter.updatedAt !== task.updatedAt ||
+          transcriptAppended ||
+          fallbackBriefAuthored ||
+          fallbackQuestionPosted
+
+        const repeatedExploringNoProgress =
+          agent.name === 'spec-agent' &&
+          beforeStatus === 'exploring' &&
+          afterStatus === 'exploring' &&
+          !madeExploringProgress
+        if (repeatedExploringNoProgress) {
+          const attempts = this.bumpExploringNoProgress(task.id)
+          if (attempts >= EXPLORING_NO_PROGRESS_ESCALATION_AFTER) {
+            const escalation = await raiseEscalation({
+              tasksPath: this.tasksPath(),
+              progressPath: this.progressPath(),
+              taskId: task.id,
+              agentId: agent.name,
+              reason: 'human_judgment_required',
+              summary:
+                `Spec agent made no visible progress after ${attempts} passes.`,
+              details:
+                `Task remained in exploring with no saved spec, note, or status transition. ` +
+                `Review the task ask/transcript or provider behavior before retrying.`,
+            })
+            this.clearExploringNoProgress(task.id)
+            await this.maybeCleanupWorktree(taskAfter, worktreeMode)
+            return {
+              kind: 'escalated',
+              taskId: task.id,
+              agent: agent.name,
+              reason:
+                `Spec agent made no visible progress after ${attempts} passes.`,
+              escalationId:
+                escalation.escalationId ?? `auto-exploring-stall-${task.id}`,
+            }
+          }
+        } else {
+          this.clearExploringNoProgress(task.id)
+        }
+
       // FR-27 / AC-18: record LLM verdict when a review actually ran.
       if (beforeStatus === 'review') {
         const llmVerdict = recordLlmVerdict({
@@ -1015,6 +1494,7 @@ export class Orchestrator {
           now: this.now(),
         })
         if (llmVerdict) {
+          if (afterStatus === 'in_progress') ensureWorkerOwnership(taskAfter)
           taskAfter.updatedAt = this.now()
           queueAfter.lastUpdated = this.now()
           await this.writeQueue(queueAfter)
@@ -1072,6 +1552,7 @@ export class Orchestrator {
 
       let revisionCount = taskAfter.revisionCount
       if (revisionTrigger) {
+        ensureWorkerOwnership(taskAfter)
         revisionCount = taskAfter.revisionCount + 1
         taskAfter.revisionCount = revisionCount
         taskAfter.updatedAt = this.now()
@@ -1128,6 +1609,7 @@ export class Orchestrator {
         afterStatus,
         transitioned,
         revisionCount,
+        ...(taskHasUnansweredUserQuestion(taskAfter) ? { waitingOnUser: true } : {}),
       }
       })
     } finally {
@@ -1565,10 +2047,7 @@ export class Orchestrator {
   private selectAgent(task: Task):
     | { kind: 'agent'; agent: OrchestratorAgent; promptSuffix: string }
     | { kind: 'no-coordinator' } {
-    const hasDraftEvidence =
-      task.acceptanceCriteria.length > 0 ||
-      Boolean(task.productBrief) ||
-      task.notes.some(note => note.role === 'spec' || note.agentId === 'spec-agent')
+    const hasDraftEvidence = taskHasDraftEvidence(task)
     if (
       task.id !== META_INTAKE_TASK_ID &&
       (task.status === 'ready' || task.status === 'in_progress') &&
@@ -2130,6 +2609,7 @@ export class Orchestrator {
         timestamp: this.now(),
       })
       t.status = 'in_progress'
+      ensureWorkerOwnership(t)
       t.revisionCount += 1
       t.updatedAt = this.now()
       queue.lastUpdated = this.now()
@@ -2211,6 +2691,7 @@ export class Orchestrator {
       )
       t.handoffStep = idx + 1
       t.status = 'in_progress'
+      ensureWorkerOwnership(t)
       t.updatedAt = now
       queue.lastUpdated = now
       await this.writeQueue(queue)
@@ -2363,6 +2844,7 @@ export class Orchestrator {
         timestamp: now,
       })
       t.status = 'in_progress'
+      ensureWorkerOwnership(t)
       t.revisionCount += 1
       t.updatedAt = now
       queue.lastUpdated = now
@@ -2522,6 +3004,7 @@ export class Orchestrator {
       timestamp: input.now,
     })
     input.task.status = 'in_progress'
+    ensureWorkerOwnership(input.task)
     input.task.revisionCount += 1
     input.task.updatedAt = input.now
     input.queue.lastUpdated = input.now
@@ -2591,6 +3074,7 @@ export class Orchestrator {
     // Revision counting mirrors the LLM path: review → in_progress is a revise.
     let revisionCount = taskAfter.revisionCount
     if (newStatus === 'in_progress') {
+      ensureWorkerOwnership(taskAfter)
       revisionCount = taskAfter.revisionCount + 1
       taskAfter.revisionCount = revisionCount
       taskAfter.updatedAt = this.now()
@@ -3071,6 +3555,25 @@ export class Orchestrator {
   }
 }
 
+function ensureWorkerOwnership(task: Task): void {
+  task.assignedTo = 'worker-agent'
+}
+
+function effectiveBootstrapGateCommands(
+  bootstrap: NonNullable<ResolvedConfig['bootstrap']>,
+): string[] {
+  if (bootstrap.successGates.length > 0) return [...bootstrap.successGates]
+  const ordered = [
+    bootstrap.gates?.typecheck,
+    bootstrap.gates?.build,
+    bootstrap.gates?.test,
+    bootstrap.gates?.lint,
+  ]
+  return ordered
+    .filter((gate): gate is NonNullable<typeof gate> => Boolean(gate?.available && gate.command.trim()))
+    .map((gate) => gate.command)
+}
+
 // `pickNextTask` / `needsPreRejectionPolicy` live in `./orchestrator-picker.ts`
 // so the fanout dispatcher (FR-24) can share the same priority/status order.
 export { pickNextTask, needsPreRejectionPolicy } from './orchestrator-picker.js'
@@ -3134,16 +3637,8 @@ export async function runOrchestrator(
   // Studio URL) actually take effect at orchestrator boot. Keys in env vars
   // still win as ambient defaults; values from disk override them when set.
   const projectCfg = readProjectConfig(config.projectPath)
-  const globalCfg = readGlobalConfig()
-  // When no explicit preferredProvider is configured, infer one from the
-  // role→model assignment so a project that wires up qwen/deepseek locally
-  // doesn't silently fall through to whichever cloud OAuth happens to be
-  // present (past incident: qwen/qwen3.6-35b-a3b routed to Codex, which
-  // rejected the model on every tick and left the session stuck).
-  const preferredProvider =
-    projectCfg.preferredProvider ?? inferPreferredProvider(config.models)
   // Credentials live in the global store (~/.guildhall/providers.yaml) —
-  // env vars still win (resolveGlobalCredentials honors that precedence).
+  // env vars still win during normalized runtime resolution.
   // Any legacy project-local keys are opportunistically migrated before we
   // read them, so pre-0.3 projects get cleaned up on first boot.
   try {
@@ -3154,19 +3649,14 @@ export async function runOrchestrator(
   } catch {
     /* best-effort — never block orchestrator boot on migration */
   }
-  const creds = resolveGlobalCredentials()
-  const selection = await selectApiClient({
+  const runtimeProvider = getRuntimeProviderConfig({
+    projectPath: config.projectPath,
+    models: config.models,
     ...(opts.providerOverride
-      ? { provider: opts.providerOverride as Parameters<typeof selectApiClient>[0]['provider'] }
+      ? { providerOverride: opts.providerOverride as Parameters<typeof selectApiClient>[0]['provider'] }
       : {}),
-    ...(preferredProvider ? { preferredProvider } : {}),
-    ...((projectCfg.allowPaidProviderFallback ?? globalCfg.allowPaidProviderFallback)
-      ? { allowPaidProviderFallback: true }
-      : {}),
-    ...(creds.anthropicApiKey ? { anthropicApiKey: creds.anthropicApiKey } : {}),
-    ...(creds.openaiApiKey ? { openaiApiKey: creds.openaiApiKey } : {}),
-    ...(creds.llamaCppUrl ? { llamaCppUrl: creds.llamaCppUrl } : {}),
   })
+  const selection = await selectApiClient(runtimeProvider.selectOptions)
   if (selection.providerName === 'none') {
     console.warn(`[guildhall] ${selection.reason}`)
   } else {
@@ -3256,8 +3746,8 @@ export async function runOrchestrator(
   const gateCheckerAgentInst = createGateCheckerAgent(models.gateChecker, {
     ...baseAgentOpts,
     sessionPersistence: persistFor('gate-checker'),
-    ...(config.bootstrap && config.bootstrap.successGates.length > 0
-      ? { successGates: config.bootstrap.successGates }
+    ...(config.bootstrap
+      ? { successGates: effectiveBootstrapGateCommands(config.bootstrap) }
       : {}),
   })
   const coordinators: Record<string, GuildhallAgent> = Object.fromEntries(
@@ -3270,6 +3760,14 @@ export async function runOrchestrator(
     ]),
   )
 
+  let resumeQueue: TaskQueue | null = null
+  try {
+    const raw = readFileSync(path.join(config.memoryDir, 'TASKS.json'), 'utf8')
+    resumeQueue = TaskQueue.parse(JSON.parse(raw))
+  } catch {
+    resumeQueue = null
+  }
+
   // FR-20: on startup, opportunistically rehydrate each agent's history from
   // its last snapshot. Agents with no snapshot stay cold — loadSession returns
   // false and we move on. This is a no-op for fresh projects.
@@ -3280,6 +3778,7 @@ export async function runOrchestrator(
     ['gate-checker', gateCheckerAgentInst],
     ...Object.entries(coordinators).map(([d, c]) => [`coordinator-${d}`, c] as const),
   ] as const) {
+    if (resumeQueue && !shouldResumeAgentSession(label, resumeQueue)) continue
     const rehydrated = agent.loadSession({
       cwd: config.projectPath,
       sessionId: sessionIdFor(label),
@@ -3458,15 +3957,21 @@ function taskModeToPermissionMode(mode: TaskPermissionMode): PermissionMode {
  */
 export function buildDefaultReviewerFanout(
   reviewerLlm: AgentLLM,
-  opts: { hookExecutor?: HookExecutor; concurrency?: number } = {},
+  opts: {
+    hookExecutor?: HookExecutor
+    concurrency?: number
+    extraTools?: readonly AnyTool[]
+  } = {},
 ): ReviewerFanoutRunner {
   const concurrency = Math.max(1, Math.floor(opts.concurrency ?? 1))
-  return async ({ task, personas, context }) => {
+  return async ({ task, personas, context, projectPath }) => {
     const { parsePersonaOutput } = await import('./reviewer-fanout.js')
 
     const runPersona = async (persona: GuildDefinition): Promise<PersonaVerdict> => {
       const agent = createPersonaReviewerAgent(persona, reviewerLlm, {
+        cwd: projectPath,
         ...(opts.hookExecutor ? { hookExecutor: opts.hookExecutor } : {}),
+        ...(opts.extraTools ? { extraTools: opts.extraTools } : {}),
       })
       const prompt = [
         context,

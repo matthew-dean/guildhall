@@ -13,7 +13,7 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => TMP_HOME }
 })
 
-const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig, updateProjectConfig } =
+const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig, resolveModelsForProvider, updateProjectConfig } =
   await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
 
@@ -41,6 +41,7 @@ beforeEach(async () => {
   // Clean env vars so env-precedence doesn't mask the global store.
   delete process.env.ANTHROPIC_API_KEY
   delete process.env.OPENAI_API_KEY
+  delete process.env.OPENAI_BASE_URL
   delete process.env.LLAMA_CPP_URL
   delete process.env.LM_STUDIO_BASE_URL
   mkdirSync(path.join(TMP_HOME, '.guildhall'), { recursive: true })
@@ -100,6 +101,21 @@ describe('GET /api/setup/providers', () => {
     }
     expect(body.providers['anthropic-api']!.detected).toBe(true)
     expect(body.providers['anthropic-api']!.detail).toMatch(/providers\.yaml/)
+  })
+
+  it('reports a stored OpenAI-compatible base URL and keeps blank meaning real OpenAI', async () => {
+    setProvider('openai-api', {
+      apiKey: 'sk-openai-global',
+      baseUrl: 'https://integrate.api.nvidia.com/v1',
+    })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(new Request('http://localhost/api/setup/providers'))
+    const body = (await res.json()) as {
+      providers: Record<string, { detected: boolean; detail: string; baseUrl?: string | null }>
+    }
+    expect(body.providers['openai-api']!.detected).toBe(true)
+    expect(body.providers['openai-api']!.baseUrl).toBe('https://integrate.api.nvidia.com/v1')
+    expect(body.providers['openai-api']!.detail).toMatch(/integrate\.api\.nvidia\.com/)
   })
 })
 
@@ -162,6 +178,46 @@ describe('POST /api/setup/providers/config', () => {
     expect(raw).toMatch(/preferredProvider:\s*anthropic-api/)
   })
 
+  it('writes an OpenAI-compatible base URL to the global store and preserves the key', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request('http://localhost/api/setup/providers/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          openaiApiKey: 'sk-openai-pasted',
+          openaiBaseUrl: 'https://integrate.api.nvidia.com/v1',
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const g = readGlobalProviders()
+    expect(g.providers['openai-api']?.apiKey).toBe('sk-openai-pasted')
+    expect(g.providers['openai-api']?.baseUrl).toBe('https://integrate.api.nvidia.com/v1')
+  })
+
+  it('clears the stored OpenAI-compatible base URL when blank is saved', async () => {
+    setProvider('openai-api', {
+      apiKey: 'sk-openai-pasted',
+      baseUrl: 'https://integrate.api.nvidia.com/v1',
+    })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request('http://localhost/api/setup/providers/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          openaiApiKey: 'sk-openai-pasted',
+          openaiBaseUrl: '',
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const g = readGlobalProviders()
+    expect(g.providers['openai-api']?.apiKey).toBe('sk-openai-pasted')
+    expect(g.providers['openai-api']?.baseUrl).toBeUndefined()
+  })
+
   it('does not update model assignments when saving llama-cpp provider settings', async () => {
     vi.stubGlobal(
       'fetch',
@@ -203,8 +259,39 @@ describe('POST /api/setup/providers/config', () => {
       }),
     )
     expect(res.status).toBe(200)
-    expect(readGlobalConfig().models?.worker).toBe('qwen/qwen3.6-35b-a3b')
+    expect(resolveModelsForProvider(readGlobalConfig().models).worker).toBe('qwen/qwen3.6-35b-a3b')
     expect(readWorkspaceConfig(tmpProject).models).toBeUndefined()
+  })
+
+  it('writes provider-scoped global models when the project prefers openai-api', async () => {
+    updateProjectConfig(tmpProject, { preferredProvider: 'openai-api' })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request('http://localhost/api/config/models', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'global',
+          models: {
+            spec: 'qwen/qwen3.5-122b-a10b',
+            coordinator: 'qwen/qwen3.5-122b-a10b',
+            worker: 'qwen/qwen3.5-122b-a10b',
+            reviewer: 'qwen/qwen3.5-122b-a10b',
+            gateChecker: 'qwen/qwen3.5-122b-a10b',
+          },
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(readGlobalConfig().models).toMatchObject({
+      'openai-api': {
+        spec: 'qwen/qwen3.5-122b-a10b',
+        coordinator: 'qwen/qwen3.5-122b-a10b',
+        worker: 'qwen/qwen3.5-122b-a10b',
+        reviewer: 'qwen/qwen3.5-122b-a10b',
+        gateChecker: 'qwen/qwen3.5-122b-a10b',
+      },
+    })
   })
 
   it('can set a global split-model preset in one request', async () => {
@@ -272,7 +359,7 @@ describe('POST /api/setup/providers/config', () => {
       }),
     )
     expect(setRes.status).toBe(200)
-    expect(readWorkspaceConfig(tmpProject).models?.reviewer).toBe('qwen/qwen2.5-coder-7b-instruct')
+    expect(resolveModelsForProvider(readWorkspaceConfig(tmpProject).models).reviewer).toBe('qwen/qwen2.5-coder-7b-instruct')
 
     const unsetRes = await app.fetch(
       new Request('http://localhost/api/config/models', {

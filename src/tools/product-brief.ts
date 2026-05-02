@@ -14,10 +14,10 @@ import { atomicWriteText } from '@guildhall/sessions'
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
 const updateProductBriefInputSchema = z.object({
-  tasksPath: TASKS_PATH_SCHEMA,
-  taskId: z.string(),
-  userJob: z.string().describe('Who the task serves and what job it does for them'),
-  successMetric: z.string().describe('How we\'ll know this worked — observable outcome'),
+  tasksPath: TASKS_PATH_SCHEMA.optional(),
+  taskId: z.string().optional(),
+  userJob: z.string().optional().describe('Who the task serves and what job it does for them'),
+  successMetric: z.string().optional().describe('How we\'ll know this worked — observable outcome'),
   antiPatterns: z
     .array(z.string())
     .default([])
@@ -28,6 +28,7 @@ const updateProductBriefInputSchema = z.object({
     .describe('Staging, flagging, migration notes, if any'),
   authoredBy: z
     .string()
+    .optional()
     .describe('Agent id or "human" — who is authoring the brief right now'),
 })
 
@@ -37,9 +38,108 @@ export interface UpdateProductBriefResult {
   error?: string
 }
 
+interface ResolvedBriefTarget {
+  tasksPath: string
+  taskId: string
+  authoredBy: string
+}
+
+interface ResolvedBriefContent {
+  userJob: string
+  successMetric: string
+  antiPatterns: string[]
+  rolloutPlan?: string
+}
+
+function resolveBriefTarget(
+  input: Pick<UpdateProductBriefInput, 'tasksPath' | 'taskId' | 'authoredBy'>,
+  metadata: Record<string, unknown>,
+): ResolvedBriefTarget | { error: string } {
+  const tasksPath = String(input.tasksPath ?? metadata['tasks_path'] ?? '').trim()
+  const taskId = String(input.taskId ?? metadata['current_task_id'] ?? '').trim()
+  const authoredBy = String(input.authoredBy ?? metadata['current_agent_id'] ?? 'agent').trim()
+  if (!tasksPath) return { error: 'Missing tasksPath (or metadata.tasks_path)' }
+  if (!taskId) return { error: 'Missing taskId (or metadata.current_task_id)' }
+  if (!authoredBy) return { error: 'Missing authoredBy (or metadata.current_agent_id)' }
+  return { tasksPath, taskId, authoredBy }
+}
+
+function firstMeaningfulParagraph(text: string): string | null {
+  const paragraphs = text
+    .split(/\n\s*\n/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !/^(#+|\d+[.)]\s|\-\s)/.test(part))
+  return paragraphs[0] ?? null
+}
+
+function inferBriefContentFromAssistantText(
+  text: string,
+  taskTitle: string,
+): ResolvedBriefContent | null {
+  const trimmed = text.trim()
+  if (!trimmed) return null
+
+  const guessMatch = trimmed.match(/my best guess(?: for [^:\n]+)?\s*\n+([\s\S]+)/i)
+  const afterGuess = guessMatch?.[1]?.trim() ?? trimmed
+  const lines = afterGuess
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const userJobLine = lines.find((line) =>
+    /^you want to\b/i.test(line) ||
+    /^this task is about\b/i.test(line) ||
+    /^the goal is to\b/i.test(line),
+  ) ?? firstMeaningfulParagraph(afterGuess)
+  if (!userJobLine) return null
+
+  const antiPatterns = lines
+    .filter((line) => /^don't\b/i.test(line) || /^do not\b/i.test(line))
+    .map((line) => line.replace(/^[*-]\s*/, '').trim())
+
+  return {
+    userJob: userJobLine.replace(/^[-*]\s*/, '').trim(),
+    successMetric: `Thread shows a drafted brief and actionable next step for "${taskTitle}".`,
+    antiPatterns,
+  }
+}
+
+function resolveBriefContent(
+  input: Pick<UpdateProductBriefInput, 'userJob' | 'successMetric' | 'antiPatterns' | 'rolloutPlan'>,
+  metadata: Record<string, unknown>,
+  taskTitle: string,
+): ResolvedBriefContent | { error: string } {
+  if (input.userJob?.trim() && input.successMetric?.trim()) {
+    return {
+      userJob: input.userJob.trim(),
+      successMetric: input.successMetric.trim(),
+      antiPatterns: input.antiPatterns ?? [],
+      ...(input.rolloutPlan?.trim() ? { rolloutPlan: input.rolloutPlan.trim() } : {}),
+    }
+  }
+
+  const inferred = inferBriefContentFromAssistantText(
+    String(metadata['last_assistant_text'] ?? ''),
+    taskTitle,
+  )
+  if (!inferred) {
+    return { error: 'Missing userJob/successMetric and could not infer a brief from metadata.last_assistant_text' }
+  }
+  return {
+    ...inferred,
+    antiPatterns: input.antiPatterns?.length ? input.antiPatterns : inferred.antiPatterns,
+    ...(input.rolloutPlan?.trim() ? { rolloutPlan: input.rolloutPlan.trim() } : {}),
+  }
+}
+
 export async function updateProductBrief(
   input: UpdateProductBriefInput,
 ): Promise<UpdateProductBriefResult> {
+  if (!input.tasksPath?.trim()) return { success: false, error: 'Missing tasksPath' }
+  if (!input.taskId?.trim()) return { success: false, error: 'Missing taskId' }
+  if (!input.userJob?.trim()) return { success: false, error: 'Missing userJob' }
+  if (!input.successMetric?.trim()) return { success: false, error: 'Missing successMetric' }
+  if (!input.authoredBy?.trim()) return { success: false, error: 'Missing authoredBy' }
   try {
     const raw = await fs.readFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
@@ -79,12 +179,46 @@ export const updateProductBriefTool = defineTool({
   inputSchema: updateProductBriefInputSchema,
   jsonSchema: { type: 'object' },
   isReadOnly: () => false,
-  execute: async (input) => {
-    const result = await updateProductBrief(input)
+  execute: async (input, ctx) => {
+    const target = resolveBriefTarget(input, ctx.metadata)
+    if ('error' in target) {
+      return {
+        output: `Error updating product brief: ${target.error}`,
+        is_error: true,
+        metadata: { success: false, error: target.error },
+      }
+    }
+    let taskTitle = target.taskId
+    try {
+      const raw = await fs.readFile(target.tasksPath, 'utf-8')
+      const queue = TaskQueue.parse(JSON.parse(raw))
+      const task = queue.tasks.find((t) => t.id === target.taskId)
+      if (task?.title?.trim()) taskTitle = task.title
+    } catch {
+      // keep fallback taskTitle
+    }
+    const content = resolveBriefContent(input, ctx.metadata, taskTitle)
+    if ('error' in content) {
+      return {
+        output: `Error updating product brief: ${content.error}`,
+        is_error: true,
+        metadata: { success: false, error: content.error },
+      }
+    }
+    const result = await updateProductBrief({
+      ...input,
+      tasksPath: target.tasksPath,
+      taskId: target.taskId,
+      authoredBy: target.authoredBy,
+      userJob: content.userJob,
+      successMetric: content.successMetric,
+      antiPatterns: content.antiPatterns,
+      ...(content.rolloutPlan !== undefined ? { rolloutPlan: content.rolloutPlan } : {}),
+    })
     return {
       output: result.success
-        ? `Updated product brief for ${input.taskId}`
-        : `Error updating product brief on ${input.taskId}: ${result.error ?? 'unknown'}`,
+        ? `Updated product brief for ${target.taskId}`
+        : `Error updating product brief on ${target.taskId}: ${result.error ?? 'unknown'}`,
       is_error: !result.success,
       metadata: result as unknown as Record<string, unknown>,
     }

@@ -10,6 +10,7 @@
     detail: string
     detected: boolean
     url?: string
+    baseUrl?: string | null
   }
 
   type Providers = Record<string, ProviderMeta>
@@ -20,8 +21,10 @@
     onselect: (key: string) => void
     /** Set only by the Providers page — the caller wants the API key / URL */
     apiKey?: string
+    openaiBaseUrl?: string
     llamaUrl?: string
     onApiKeyChange?: (v: string) => void
+    onOpenAiBaseUrlChange?: (v: string) => void
     onLlamaUrlChange?: (v: string) => void
   }
 
@@ -30,8 +33,10 @@
     selected,
     onselect,
     apiKey = '',
+    openaiBaseUrl = '',
     llamaUrl = '',
     onApiKeyChange,
+    onOpenAiBaseUrlChange,
     onLlamaUrlChange,
   }: Props = $props()
 
@@ -73,6 +78,17 @@
     value={apiKey}
     oninput={(v) => onApiKeyChange?.(v)}
   />
+  {#if selected === 'openai-api'}
+    <label class="field-label" for="pp-openai-url">
+      Base URL (optional; blank uses real OpenAI)
+    </label>
+    <Input
+      id="pp-openai-url"
+      placeholder="https://api.openai.com/v1"
+      value={openaiBaseUrl || providers['openai-api']?.baseUrl || ''}
+      oninput={(v) => onOpenAiBaseUrlChange?.(v)}
+    />
+  {/if}
 {:else if selected === 'llama-cpp'}
   <label class="field-label" for="pp-url">llama.cpp / LM Studio base URL</label>
   <Input

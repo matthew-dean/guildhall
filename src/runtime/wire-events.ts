@@ -125,6 +125,12 @@ function humanizeAgentError(agent: string, taskId: string, error: string): strin
       `The next orchestrator tick will pick up where it left off — no action needed.`
     )
   }
+  if (/Model returned an empty assistant message/.test(error)) {
+    return (
+      `${agent} got an empty model reply while working on ${taskId}. ` +
+      `Guildhall kept the task state intact; retry the run or switch providers if this keeps happening.`
+    )
+  }
   return `Agent ${agent} failed on ${taskId}: ${error}`
 }
 

@@ -220,6 +220,58 @@ describe('updateTask', () => {
       },
     ])
   })
+
+  it('ignores empty array fields so broad model calls do not erase existing review state', async () => {
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      acceptanceCriteria: [
+        {
+          id: 'ac-1',
+          description: 'Build passes',
+          verifiedBy: 'pnpm test',
+        },
+      ],
+      gateResults: [
+        {
+          gateId: 'test',
+          type: 'hard',
+          passed: true,
+          output: 'ok',
+          checkedAt: '2026-04-29T00:00:00.000Z',
+        },
+      ],
+    })
+
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      status: 'in_progress',
+      acceptanceCriteria: [],
+      gateResults: [],
+    })
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].status).toBe('in_progress')
+    expect(raw.tasks[0].acceptanceCriteria).toEqual([
+      {
+        id: 'ac-1',
+        description: 'Build passes',
+        verifiedBy: 'automated',
+        command: 'pnpm test',
+        met: false,
+      },
+    ])
+    expect(raw.tasks[0].gateResults).toEqual([
+      {
+        gateId: 'test',
+        type: 'hard',
+        passed: true,
+        output: 'ok',
+        checkedAt: '2026-04-29T00:00:00.000Z',
+      },
+    ])
+  })
 })
 
 describe('addTask', () => {

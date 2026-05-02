@@ -5,6 +5,7 @@
   import Stack from '../../lib/Stack.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import type { Task } from '../../lib/types.js'
+  import { escapeAngleBracketPlaceholders } from '../../lib/spec-render.js'
 
   interface Props {
     task: Task
@@ -25,7 +26,7 @@
           <span class="role">{n.role ?? n.agentId ?? 'agent'}</span>
           <time>{n.timestamp ?? ''}</time>
         </header>
-        <Markdown source={n.content ?? ''} />
+        <Markdown source={escapeAngleBracketPlaceholders(n.content ?? '')} />
       </article>
     {/each}
   </Stack>

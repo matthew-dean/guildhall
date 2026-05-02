@@ -196,6 +196,50 @@ describe('runQuery — single turn, no tools', () => {
     })
   })
 
+  it('preserves the last non-empty assistant text across a later tool-only turn', async () => {
+    const registry = new ToolRegistry()
+    let seenLastAssistantText = ''
+    registry.register(
+      defineTool({
+        name: 'capture-last-assistant-text',
+        description: 'captures metadata.last_assistant_text',
+        inputSchema: z.object({}),
+        execute: async (_input, ctx) => {
+          seenLastAssistantText = String(ctx.metadata['last_assistant_text'] ?? '')
+          return { output: 'captured', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantText('Pick one: happy path only, or error cases too?') },
+      { message: assistantToolUse('capture-last-assistant-text', {}) },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/tmp',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          noToolTurnNudge: 'Take a concrete tool step now.',
+          noToolTurnNudgeLimit: 1,
+          toolMetadata: {},
+        },
+        messages,
+      ),
+    )
+
+    expect(seenLastAssistantText).toBe('Pick one: happy path only, or error cases too?')
+  })
+
   it('does not nudge a final summary after a tool call has already run', async () => {
     const registry = new ToolRegistry()
     registry.register(
@@ -745,6 +789,195 @@ describe('runQuery — unknown tool + invalid input', () => {
     expect(reviewCalls).toBe(1)
     expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.is_error : false).toBe(true)
     expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.output : '').toContain('Blocked transition to review')
+  })
+
+  it('preserves handoff evidence when a worker writes self-critique before review', async () => {
+    const registry = new ToolRegistry()
+    let reviewCalls = 0
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'export const x = 1', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'tests passed', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string(),
+          taskId: z.string(),
+          status: z.string(),
+          note: z.object({
+            agentId: z.string(),
+            role: z.string(),
+            content: z.string(),
+          }).optional(),
+        }),
+        execute: async (input) => {
+          if (input.status === 'review') reviewCalls += 1
+          return {
+            output: 'updated',
+            is_error: false,
+            metadata: { success: true, taskId: input.taskId },
+          }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'in_progress' }, 'start-1') },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/src/index.ts' },
+          'read-1',
+        ),
+      },
+      { message: assistantToolUse('shell', { command: 'pnpm test' }, 'shell-1') },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-1',
+            status: 'in_progress',
+            note: {
+              agentId: 'worker-agent',
+              role: 'worker',
+              content: 'Self-critique: all good.',
+            },
+          },
+          'critique-1',
+        ),
+      },
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'review' }, 'review-1') },
+      { message: assistantText('ok') },
+    ])
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 8,
+          toolMetadata: {},
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+    const completed = events.filter((e) => e.type === 'tool_execution_completed')
+    expect(reviewCalls).toBe(1)
+    expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.is_error : true).toBe(false)
+    expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.output : '').toBe('updated')
+  })
+
+  it('allows review handoff for a resumed in-progress task when current task metadata is seeded', async () => {
+    const registry = new ToolRegistry()
+    let reviewCalls = 0
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'export const x = 1', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'typecheck passed', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string(),
+          taskId: z.string(),
+          status: z.string(),
+          note: z.object({
+            agentId: z.string(),
+            role: z.string(),
+            content: z.string(),
+          }).optional(),
+        }),
+        execute: async (input) => {
+          if (input.status === 'review') reviewCalls += 1
+          return {
+            output: 'updated',
+            is_error: false,
+            metadata: { success: true, taskId: input.taskId },
+          }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/src/index.ts' },
+          'read-1',
+        ),
+      },
+      { message: assistantToolUse('shell', { command: 'pnpm typecheck' }, 'shell-1') },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-1',
+            status: 'in_progress',
+            note: {
+              agentId: 'worker-agent',
+              role: 'worker',
+              content: 'Self-critique: verified and ready for review.',
+            },
+          },
+          'critique-1',
+        ),
+      },
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'review' }, 'review-1') },
+      { message: assistantText('ok') },
+    ])
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 8,
+          toolMetadata: { current_task_id: 'task-1' },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+    const completed = events.filter((e) => e.type === 'tool_execution_completed')
+    expect(reviewCalls).toBe(1)
+    expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.is_error : true).toBe(false)
+    expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.output : '').toBe('updated')
   })
 
   it('replaces relative project paths for task-state tools', async () => {

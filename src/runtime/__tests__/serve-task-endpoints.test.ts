@@ -62,6 +62,48 @@ describe('GET /api/project/task/:id', () => {
     expect(Array.isArray(body.recentEvents)).toBe(true)
   })
 
+  it('filters stale acceptance-note transcript entries that no longer match canonical criteria', async () => {
+    await seedTask('task-1', {
+      acceptanceCriteria: [
+        {
+          id: 'ac-1',
+          description: 'Redirects to /<slug> when membership resolves.',
+          verifiedBy: 'review',
+          met: false,
+        },
+      ],
+      notes: [
+        {
+          agentId: 'human',
+          role: 'specifier',
+          timestamp: new Date(Date.now() - 60_000).toISOString(),
+          content: 'Added acceptance criterion: Redirects to /.',
+        },
+        {
+          agentId: 'human',
+          role: 'specifier',
+          timestamp: new Date(Date.now() - 30_000).toISOString(),
+          content: 'Added acceptance criterion: Redirects to /<slug> when membership resolves.',
+        },
+        {
+          agentId: 'reviewer-agent',
+          role: 'reviewer',
+          timestamp: new Date().toISOString(),
+          content: 'Keep the /signup fallback explicit.',
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.task?.notes).toHaveLength(2)
+    expect(body.task?.notes?.map((note: Record<string, any>) => note.content)).toEqual([
+      'Added acceptance criterion: Redirects to /<slug> when membership resolves.',
+      'Keep the /signup fallback explicit.',
+    ])
+  })
+
   it('returns 404 when task id is unknown', async () => {
     await seedTask('task-1')
     const { app } = buildServeApp({ projectPath: tmpDir })

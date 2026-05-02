@@ -22,6 +22,7 @@ export type TickOutcome =
       afterStatus: TaskStatus
       transitioned: boolean
       revisionCount: number
+      waitingOnUser?: boolean
     }
   | { kind: 'blocked-max-revisions'; taskId: string; revisionCount: number }
   | { kind: 'no-coordinator'; taskId: string; domain: string }

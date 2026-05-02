@@ -198,6 +198,17 @@ describe('readFile', () => {
     expect(binResult.exists).toBe(true)
     expect(binResult.isBinary).toBe(true)
   })
+
+  it('resolves cwd-relative paths when cwd option is provided', async () => {
+    const file = path.join(dir, 'nested', 'hello.txt')
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, 'alpha\nbeta\n', 'utf-8')
+
+    const result = await readFile({ filePath: 'nested/hello.txt' }, { cwd: dir })
+
+    expect(result.exists).toBe(true)
+    expect(result.content).toBe('alpha\nbeta\n')
+  })
 })
 
 describe('writeFile', () => {
@@ -335,5 +346,20 @@ describe('readFileTool.execute', () => {
     )
     expect(result.is_error).toBe(true)
     expect(result.output).toContain('file not found')
+  })
+
+  it('resolves cwd-relative file paths from the tool context', async () => {
+    const file = path.join(dir, 'nested', 'hello.txt')
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, 'alpha\nbeta\n', 'utf-8')
+
+    const result = await readFileTool.execute(
+      { filePath: 'nested/hello.txt' },
+      { cwd: dir, metadata: {} },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('alpha')
+    expect(result.output).toContain('beta')
   })
 })

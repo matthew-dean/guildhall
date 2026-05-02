@@ -143,6 +143,10 @@ export class GuildhallAgent {
     return this.currentMode
   }
 
+  loadToolMetadata(metadata: Record<string, unknown>): void {
+    this.engine.loadToolMetadata(metadata)
+  }
+
   /**
    * FR-15: swap the QueryEngine's permission checker for the next conversation
    * turn. The requested mode is clamped to the agent's baseline — per-task
@@ -185,8 +189,7 @@ export class GuildhallAgent {
     }
     if (streamError) throw new Error(streamError)
     const messages = this.engine.messages
-    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
-    const text = lastAssistant ? extractText(lastAssistant) : ''
+    const text = extractLatestAssistantText(messages)
     return {
       text,
       messages,
@@ -263,9 +266,17 @@ export class GuildhallAgent {
     for await (const _event of this.engine.continuePending()) void _event
     this.persistSession()
     const messages = this.engine.messages
-    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
-    const text = lastAssistant ? extractText(lastAssistant) : ''
+    const text = extractLatestAssistantText(messages)
     return { text, messages, usage: this.engine.totalUsage }
+  }
+
+  /**
+   * Clear the in-memory conversation and persist the empty snapshot so later
+   * resumes do not reload a poisoned session.
+   */
+  resetConversation(): void {
+    this.engine.clear()
+    this.persistSession()
   }
 
   private persistSession(): void {
@@ -360,4 +371,13 @@ function extractText(message: ConversationMessage): string {
     }
   }
   return parts.join('')
+}
+
+function extractLatestAssistantText(messages: readonly ConversationMessage[]): string {
+  for (const message of [...messages].reverse()) {
+    if (message.role !== 'assistant') continue
+    const text = extractText(message)
+    if (text.trim().length > 0) return text
+  }
+  return ''
 }
