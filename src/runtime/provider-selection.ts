@@ -59,6 +59,15 @@ export function normalizePreferredProvider(key: PreferredProviderKey): ProviderN
   return key
 }
 
+export function normalizeProviderName(
+  key: ProviderName | PreferredProviderKey | 'lm-studio' | undefined,
+): ProviderName | undefined {
+  if (!key) return undefined
+  if (key === 'codex') return 'codex-oauth'
+  if (key === 'lm-studio') return 'llama-cpp'
+  return key
+}
+
 export interface SelectApiClientResult {
   apiClient: SupportsStreamingMessages
   /** Short name of the selected provider, for logs / banners. */
@@ -124,7 +133,9 @@ export interface SelectApiClientOptions {
 export async function selectApiClient(
   opts: SelectApiClientOptions = {},
 ): Promise<SelectApiClientResult> {
-  const forced = opts.provider ?? (process.env.GUILDHALL_PROVIDER as ProviderName | undefined)
+  const forced = normalizeProviderName(
+    opts.provider ?? (process.env.GUILDHALL_PROVIDER as ProviderName | 'lm-studio' | undefined),
+  )
   if (forced && forced !== 'none') {
     return selectForced(forced, opts)
   }
@@ -167,8 +178,8 @@ export async function selectApiClient(
 
   const reason =
     'No provider configured. Run `claude login` for Claude OAuth, `codex auth login` ' +
-    'for Codex OAuth, paste an Anthropic or OpenAI API key in the dashboard, or set ' +
-    'LLAMA_CPP_URL to point at a running llama.cpp / LM Studio server.'
+    'for Codex OAuth, paste an Anthropic-compatible or OpenAI-compatible API key in the dashboard, or set ' +
+    'LLAMA_CPP_URL to point at a running OpenAI-compatible local server such as LM Studio or llama.cpp.'
   return {
     apiClient: notImplementedApiClient(reason),
     providerName: 'none',
@@ -244,7 +255,7 @@ function tryLlama(opts: SelectApiClientOptions): Probe {
     result: {
       apiClient,
       providerName: 'llama-cpp',
-      reason: `llama.cpp/LM Studio at ${url}`,
+      reason: `OpenAI-compatible local server at ${url}`,
     },
   }
 }
@@ -308,7 +319,7 @@ async function selectForced(
     if (probe.ok) return probe.result
     return failForced(
       'openai-api',
-      'OpenAI API key missing. Paste one in the dashboard or set OPENAI_API_KEY.',
+      'OpenAI-compatible API key missing. Paste one in the dashboard or set OPENAI_API_KEY.',
     )
   }
   if (forced === 'llama-cpp') {
@@ -316,7 +327,7 @@ async function selectForced(
     if (probe.ok) return probe.result
     return failForced(
       'llama-cpp',
-      'llama.cpp selected but no URL provided. Set LLAMA_CPP_URL or pass llamaCppUrl.',
+      'OpenAI-compatible local server selected but no URL provided. Set LLAMA_CPP_URL or pass llamaCppUrl.',
     )
   }
   return failForced('none', `Unknown provider "${String(forced)}".`)

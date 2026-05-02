@@ -291,7 +291,7 @@
     {:else if activeTab === 'history'}
       <HistoryTab task={payload.task} />
     {:else if activeTab === 'provenance'}
-      <ProvenanceTab task={payload.task} />
+      <ProvenanceTab task={payload.task} contextDebug={payload.contextDebug ?? []} />
     {/if}
   </div>
 

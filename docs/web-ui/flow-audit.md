@@ -30,6 +30,12 @@ correct the agent, and ask for direct action from Thread.
 
 ## Current Follow-Ups
 
+- [x] Default workspace import to a single-project assumption unless the
+  workspace clearly presents multiple top-level project roots.
+- [x] Preserve nested subproject scope hints only when the workspace really is
+  multi-project, instead of treating any nested folder as its own project.
+- [x] Filter obvious placeholder/import-formatting debris like `(none)` and
+  spec-summary scaffold bullets before draft tasks are created.
 - [x] Keep task-drawer transcript notes aligned with canonical acceptance
   criteria so stale specifier notes do not contradict the real task.
 - [x] Refresh Thread immediately on runtime activity that matters for user
@@ -38,6 +44,74 @@ correct the agent, and ask for direct action from Thread.
   leaving softer reviewer guidance as the loudest signal.
 - [x] Restore worker ownership whenever review/gate/adjudication bounces a task
   back to `in_progress`, so retries resume a coherent worker session.
+- [x] Add bounded per-turn context manifests so we can inspect what each agent
+  saw without dumping entire raw prompts into the UI.
+- [x] Surface recent context manifests in the task drawer with section sizes,
+  prompt previews, and health warnings.
+- [x] Add context health checks for oversized prompts, missing phase context,
+  and subproject/worktree mismatches.
+- [x] Prune and cap context snapshots so debug visibility stays bounded instead
+  of growing without limit.
+
+## Automation Backlog
+
+- [x] `guildhall-automation-001` Reduce workspace-import noise and preserve
+  subproject scope.
+- [ ] `guildhall-automation-002` Shape importer output into a usable Guildhall
+  backlog.
+- [ ] `guildhall-automation-003` Get one real task from intake to spec review
+  without manual cleanup.
+- [ ] `guildhall-automation-004` Run implementation, review, and gates against
+  real project truth.
+- [ ] `guildhall-automation-005` Automate the PR and merge path for completed
+  tasks.
+- [ ] `guildhall-automation-006` Scale from one-task autonomy to unattended
+  queue throughput.
+
+## Architecture Backlog
+
+- [x] `guildhall-architecture-001` Reframe provider UX around authenticated
+  CLIs plus OpenAI-compatible / Anthropic-compatible custom providers.
+- [ ] `guildhall-architecture-002` Normalize effective provider runtime config
+  across preflight, orchestrator lanes, provider tests, and UI status.
+- [ ] `guildhall-architecture-003` Add provider capability manifests for
+  routing, fallback, and UI explainability.
+- [ ] `guildhall-architecture-004` Add a shared provider client pool with
+  bounded concurrency and provider-health events.
+- [ ] `guildhall-architecture-005` Add bounded lane scheduling for spec,
+  worker, review, and coordinator lanes.
+- [ ] `guildhall-architecture-006` Prove unattended throughput in stages:
+  finish one, finish three, then run until blocked or exhausted.
+
+## Task Log Rule
+
+- Update this checklist in the same turn that code or live-browser findings
+  change the real state of the work.
+- Treat this document as the canonical resume surface for ongoing Guildhall
+  debugging and Looma/Knit testing.
+
+## Latest Progress
+
+- `guildhall-automation-001` is complete.
+- Added a design note for protocol-first provider abstraction and bounded queue
+  throughput in `docs/design/provider-abstraction-and-throughput.md`.
+- Seeded a matching Guildhall architecture backlog covering provider taxonomy,
+  runtime normalization, capability manifests, shared client pooling, lane
+  scheduling, and staged throughput proof.
+- `guildhall-architecture-001` is complete: provider/setup docs and UI now
+  speak in protocol families instead of treating LM Studio as a first-class
+  provider concept.
+- `guildhall-architecture-002` is in progress: shared provider metadata and
+  preferred-provider family classification now exist in the runtime layer as
+  groundwork for fuller status/routing normalization.
+- Workspace import now defaults to a single-project interpretation and only
+  preserves subproject scope when multiple top-level project roots are clearly
+  present.
+- Importer heuristics now filter migration-guide/spec-template/group-header
+  junk, keep explanatory planning bullets as context, and fuzzily dedupe
+  near-identical tasks from the same planning file.
+- Live Looma/Knit draft improved from `677 / 583` to `312 / 219`
+  (`inputSignals / drafted`).
 
 ## Current 20-Item Push List
 

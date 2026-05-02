@@ -40,7 +40,7 @@
     onLlamaUrlChange,
   }: Props = $props()
 
-  const ORDER = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api']
+  const ORDER = ['claude-oauth', 'codex', 'anthropic-api', 'openai-api', 'llama-cpp']
 
   const rows = $derived(
     ORDER.filter(k => providers[k]).map(k => ({ key: k, meta: providers[k] })),
@@ -90,7 +90,7 @@
     />
   {/if}
 {:else if selected === 'llama-cpp'}
-  <label class="field-label" for="pp-url">llama.cpp / LM Studio base URL</label>
+  <label class="field-label" for="pp-url">OpenAI-compatible local server URL</label>
   <Input
     id="pp-url"
     value={llamaUrl || providers['llama-cpp']?.url || 'http://localhost:1234/v1'}

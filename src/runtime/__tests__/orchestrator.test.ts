@@ -168,6 +168,42 @@ function agentSet(partial: Partial<OrchestratorAgentSet> = {}): OrchestratorAgen
   }
 }
 
+describe('context debug records', () => {
+  it('writes a context record when dispatching a task', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'task-context',
+        status: 'ready',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'ship it',
+          verifiedBy: 'human',
+          met: false,
+        } as any],
+      }),
+    ])
+    const worker = stubAgent('worker-agent', async () => {
+      await mutateTask('task-context', { status: 'review' })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    await orch.tick()
+    await orch.tick()
+
+    const ledger = await fs.readFile(path.join(memoryDir, 'context-debug.jsonl'), 'utf8')
+    const records = ledger
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, any>)
+    expect(records.some((record) => record.taskId === 'task-context')).toBe(true)
+    expect(records.some((record) => typeof record.promptPreview === 'string' && record.promptPreview.length > 0)).toBe(true)
+  })
+})
+
 describe('pickNextTask', () => {
   it('continues active work before claiming fresh tasks', async () => {
     const q: TaskQueue = {
@@ -509,7 +545,7 @@ describe('Orchestrator.tick — routing', () => {
     const task = queue.tasks[0]!
     expect(task.status).toBe('exploring')
     expect(task.openQuestions).toHaveLength(1)
-    expect(task.openQuestions?.[0]?.kind).toBe('text')
+    expect(task.openQuestions?.[0]?.kind).toBe('choice')
     expect(task.openQuestions?.[0]?.prompt).toContain('Pick one')
 
     const transcript = await fs.readFile(
@@ -816,8 +852,8 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.openQuestions).toHaveLength(3)
     expect(task.openQuestions?.map((q) => ('prompt' in q ? q.prompt : ''))).toEqual([
       '1) **Test level target (pick one)**',
-      '2) **Coverage posture (pick one)**',
-      '3) **If first-turn data is still insufficient (pick one)**',
+      'Coverage posture (pick one)',
+      'If first-turn data is still insufficient (pick one)',
     ])
   })
 

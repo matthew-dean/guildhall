@@ -92,6 +92,17 @@ describe('GET /api/setup/providers', () => {
     expect(body.providers['anthropic-api']!.verifiedAt).toBeNull()
   })
 
+  it('uses protocol-first labels for compatible APIs and local servers', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(new Request('http://localhost/api/setup/providers'))
+    const body = (await res.json()) as {
+      providers: Record<string, { label: string }>
+    }
+    expect(body.providers['anthropic-api']!.label).toBe('Anthropic-compatible API key')
+    expect(body.providers['openai-api']!.label).toBe('OpenAI-compatible API key')
+    expect(body.providers['llama-cpp']!.label).toBe('OpenAI-compatible local server')
+  })
+
   it('reflects a stored Anthropic key from the global store (no project-level secret)', async () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-global' })
     const { app } = buildServeApp({ projectPath: tmpProject })
@@ -586,7 +597,7 @@ describe('POST /api/project/start preflight', () => {
     }
   })
 
-  it('rejects start when LM Studio does not have the configured project model loaded', async () => {
+  it('rejects start when the local server does not have the configured project model loaded', async () => {
     setProvider('llama-cpp', { url: 'http://localhost:1234/v1' })
     vi.stubGlobal(
       'fetch',
@@ -604,7 +615,7 @@ describe('POST /api/project/start preflight', () => {
     expect(res.status).toBe(400)
     const body = (await res.json()) as { code?: string; error?: string; loadedModels?: string[]; missingModels?: string[] }
     expect(body.code).toBe('model_unavailable')
-    expect(body.error).toMatch(/LM Studio/)
+    expect(body.error).toMatch(/configured local server/i)
     expect(body.error).toMatch(/will not JIT-load missing models/)
     expect(body.loadedModels).toContain('qwen/qwen3.6-35b-a3b')
     expect(body.missingModels).toContain('qwen2.5-coder-7b-instruct')

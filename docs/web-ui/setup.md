@@ -14,8 +14,8 @@ Lives at `/setup` and is rendered by `src/web/surfaces/SetupWizard.svelte`.
 ## Steps
 
 1. **Identity** — workspace name and slug. The slug becomes the workspace id used by `guildhall run <slug>`.
-2. **Provider detection** — `POST /api/setup/providers` scans for installed Claude Code CLI, Codex CLI, llama.cpp, LM Studio. Detected providers light up; undetected ones show an inline configuration prompt.
-3. **Credentials** — for hosted providers, either paste an API key or log in via the provider's CLI. Credentials land in `.guildhall/config.yaml` (gitignored).
+2. **Provider detection** — `POST /api/setup/providers` scans for authenticated CLIs plus configured OpenAI-compatible and Anthropic-compatible providers. Detected providers light up; undetected ones show an inline configuration prompt.
+3. **Credentials** — for hosted providers, either paste an API key or log in via the provider's CLI. Machine-scoped credentials land in `~/.guildhall/providers.yaml`; the project only stores its preferred provider in `.guildhall/config.yaml`.
 4. **Launch** — choose between "bootstrap via meta-intake" (recommended) or "skip to dashboard."
 
 ## Re-running

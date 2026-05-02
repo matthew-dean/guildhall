@@ -8,7 +8,7 @@ title: Quick start
 
 - Node.js ≥ 20
 - `git` on your `PATH`
-- One of: Claude Code CLI, Codex CLI, a local model server (llama.cpp or LM Studio), or an Anthropic / OpenAI API key
+- One of: Claude Code CLI, Codex CLI, an OpenAI-compatible local server (for example llama.cpp or LM Studio), or an Anthropic-compatible / OpenAI-compatible API key
 
 ## Install and initialize
 
@@ -47,7 +47,7 @@ Or just run `guildhall serve` and do everything from the dashboard.
 <workspace root>/
 ├─ guildhall.yaml                # workspace config (commit this)
 ├─ .gitignore                    # init adds .guildhall/ here
-├─ .guildhall/config.yaml        # local secrets (ignored automatically)
+├─ .guildhall/config.yaml        # project-local Guildhall settings
 └─ memory/
    ├─ TASKS.json                 # the work queue
    ├─ agent-settings.yaml        # every lever and its provenance

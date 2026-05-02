@@ -60,6 +60,48 @@ describe('GET /api/project/task/:id', () => {
     expect(body.task?.id).toBe('task-1')
     expect(body.task?.status).toBe('in_progress')
     expect(Array.isArray(body.recentEvents)).toBe(true)
+    expect(Array.isArray(body.contextDebug)).toBe(true)
+  })
+
+  it('returns recent context debug records for the task', async () => {
+    await seedTask('task-1')
+    const ledgerPath = path.join(memoryDir, 'context-debug.jsonl')
+    await fs.writeFile(
+      ledgerPath,
+      [
+        JSON.stringify({
+          id: 'older',
+          taskId: 'task-1',
+          agentName: 'worker-agent',
+          modelId: 'qwen/test',
+          promptPreview: 'older prompt',
+          at: '2026-05-02T00:00:00.000Z',
+          sections: [],
+          health: [],
+          reasons: [],
+        }),
+        JSON.stringify({
+          id: 'newer',
+          taskId: 'task-1',
+          agentName: 'reviewer-agent',
+          modelId: 'qwen/test',
+          promptPreview: 'newer prompt',
+          at: '2026-05-02T00:01:00.000Z',
+          sections: [],
+          health: [],
+          reasons: [],
+        }),
+      ].join('\n') + '\n',
+      'utf8',
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.contextDebug?.map((record: Record<string, any>) => record.id)).toEqual([
+      'newer',
+      'older',
+    ])
   })
 
   it('filters stale acceptance-note transcript entries that no longer match canonical criteria', async () => {

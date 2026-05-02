@@ -11,9 +11,11 @@ import {
   type ProviderName,
   type SelectApiClientOptions,
 } from './provider-selection.js'
+import { providerFamilyForPreferredKey, type ProviderFamily } from './provider-metadata.js'
 
 export interface RuntimeProviderConfig {
   preferredProvider?: PreferredProviderKey
+  preferredProviderFamily?: ProviderFamily
   allowPaidProviderFallback: boolean
   credentials: ResolvedProviderCredentials
   selectOptions: SelectApiClientOptions
@@ -50,6 +52,9 @@ export function getRuntimeProviderConfig(input: {
   const credentials = resolveGlobalCredentials()
   const preferredProvider =
     projectCfg.preferredProvider ?? inferPreferredProvider(input.models)
+  const preferredProviderFamily = preferredProvider
+    ? providerFamilyForPreferredKey(preferredProvider)
+    : undefined
   const allowPaidProviderFallback = Boolean(
     projectCfg.allowPaidProviderFallback ?? globalCfg.allowPaidProviderFallback,
   )
@@ -63,6 +68,7 @@ export function getRuntimeProviderConfig(input: {
 
   return {
     preferredProvider,
+    preferredProviderFamily,
     allowPaidProviderFallback,
     credentials,
     selectOptions,

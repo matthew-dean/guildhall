@@ -21,7 +21,7 @@ help_summary: |
 
 | Var | Purpose |
 |---|---|
-| `GUILDHALL_PROVIDER` | Force provider: `claude`, `openai`, `codex`, `llama-cpp`, `lm-studio`. |
+| `GUILDHALL_PROVIDER` | Force provider: `claude-oauth`, `codex-oauth`, `anthropic-api`, `openai-api`, `llama-cpp`. `lm-studio` is accepted as an alias for `llama-cpp`. |
 
 ## Credentials
 
@@ -36,9 +36,9 @@ help_summary: |
 
 | Var | Purpose |
 |---|---|
-| `LM_STUDIO_BASE_URL` | LM Studio server URL. |
-| `LLAMA_CPP_URL` | llama.cpp server URL. |
-| `LM_STUDIO_MODEL` | Default model name for LM Studio in tests. |
+| `LM_STUDIO_BASE_URL` | Compatibility env var for an OpenAI-compatible local server URL, often LM Studio. |
+| `LLAMA_CPP_URL` | OpenAI-compatible local server URL, commonly llama.cpp or LM Studio. |
+| `LM_STUDIO_MODEL` | Default model name for local-server tests. |
 
 ## CLI targeting
 

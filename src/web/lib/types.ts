@@ -107,9 +107,50 @@ export interface Task {
   dependsOn?: string[]
 }
 
+export interface ContextSectionStat {
+  key?: string
+  label?: string
+  chars?: number
+  included?: boolean
+}
+
+export interface ContextHealthWarning {
+  code?: string
+  severity?: 'info' | 'warn' | 'error' | string
+  message?: string
+}
+
+export interface ContextDebugRecord {
+  id?: string
+  at?: string
+  taskId?: string
+  taskTitle?: string
+  taskStatus?: string
+  domain?: string
+  agentName?: string
+  agentRole?: string
+  modelId?: string
+  workspacePath?: string
+  taskProjectPath?: string
+  activeWorktreePath?: string
+  promptChars?: number
+  contextChars?: number
+  promptPreview?: string
+  snapshotPath?: string
+  sections?: ContextSectionStat[]
+  health?: ContextHealthWarning[]
+  reasons?: string[]
+  applicableGuildSlugs?: string[]
+  reviewerSlugs?: string[]
+  primaryEngineerSlug?: string | null
+  openQuestionCount?: number
+  acceptanceCriteriaCount?: number
+}
+
 export interface DrawerPayload {
   task: Task
   recentEvents?: unknown[]
+  contextDebug?: ContextDebugRecord[]
 }
 
 export type DrawerTab = 'spec' | 'transcript' | 'experts' | 'history' | 'provenance'

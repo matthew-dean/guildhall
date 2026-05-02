@@ -7,6 +7,7 @@ import {
   readmeSource,
   agentsMdSource,
   roadmapSource,
+  planningDocsSource,
   todoCommentsSource,
   gitLogSource,
   BUILTIN_TASK_SOURCES,
@@ -166,6 +167,198 @@ describe('roadmapSource', () => {
     const sigs = await roadmapSource.detect({ projectPath: dir })
     expect(sigs).toHaveLength(1)
     expect(sigs[0]!.title).toBe('nested plan')
+  })
+})
+
+describe('planningDocsSource', () => {
+  let dir = ''
+  beforeEach(() => {
+    dir = makeTmp()
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('recurses nested project-state and roadmap docs instead of relying on root-only filenames', async () => {
+    mkdirSync(join(dir, 'knit', 'docs'), { recursive: true })
+    mkdirSync(join(dir, 'looma', 'docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'knit', 'PROJECT_STATE.md'),
+      `# Knit
+
+## Next Up
+- [ ] Add editor tests
+- [ ] Test auth callback flow
+`,
+    )
+    writeFileSync(
+      join(dir, 'knit', 'docs', 'feature-roadmap.md'),
+      `# Feature Roadmap
+
+## Parity gaps
+1. Inline comments
+2. Version diff UI
+`,
+    )
+    writeFileSync(
+      join(dir, 'looma', 'docs', 'editor-roadmap.md'),
+      `# Editor roadmap\n`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: [
+          'knit/PROJECT_STATE.md',
+          'knit/docs/feature-roadmap.md',
+          'looma/docs/editor-roadmap.md',
+        ].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs.some((s) => s.title === 'Add editor tests' && s.kind === 'open_work')).toBe(true)
+    expect(sigs.some((s) => s.title === 'Inline comments' && s.kind === 'open_work')).toBe(true)
+    expect(sigs.find((s) => s.title === 'Add editor tests')?.domainHint).toBe('knit')
+  })
+
+  it('treats nested specs as context signals', async () => {
+    mkdirSync(join(dir, 'knit', 'specs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'knit', 'specs', 'v1-editor.md'),
+      `# V1 Editor\n\nDetails\n`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['knit/specs/v1-editor.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toContainEqual(
+      expect.objectContaining({
+        source: 'planning-docs',
+        kind: 'context',
+        title: 'Spec: V1 Editor',
+      }),
+    )
+  })
+
+  it('dedupes spec prefixes and skips placeholder spec titles', async () => {
+    mkdirSync(join(dir, 'knit', 'specs'), { recursive: true })
+    writeFileSync(join(dir, 'knit', 'specs', 'page-editor.md'), `# Spec: Page Editor\n`)
+    writeFileSync(join(dir, 'knit', 'specs', 'template.md'), `# Spec: [Feature Name]\n`)
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['knit/specs/page-editor.md', 'knit/specs/template.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toContainEqual(
+      expect.objectContaining({
+        title: 'Spec: Page Editor',
+      }),
+    )
+    expect(sigs.some((s) => s.title.includes('[Feature Name]'))).toBe(false)
+  })
+
+  it('normalizes absolute rg --files output back to repo-relative paths', async () => {
+    mkdirSync(join(dir, 'knit'), { recursive: true })
+    const abs = join(dir, 'knit', 'PROJECT_STATE.md')
+    writeFileSync(
+      abs,
+      `# Knit\n\n## Next Up\n- [ ] Add integration tests\n`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: abs,
+        code: 0,
+      })),
+    })
+
+    expect(sigs.some((s) => s.title === 'Add integration tests')).toBe(true)
+  })
+
+  it('attaches domain hints for nested subprojects and ignores obvious placeholder bullets later in hypothesis', async () => {
+    mkdirSync(join(dir, 'looma', 'docs'), { recursive: true })
+    mkdirSync(join(dir, 'knit', 'docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'looma', 'docs', 'editor-bugs.md'),
+      `# Editor Bugs\n\n## Open defects\n- [ ] Fix selection drift\n- [ ] (none)\n`,
+    )
+    writeFileSync(join(dir, 'knit', 'docs', 'feature-roadmap.md'), `# Knit roadmap\n`)
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['looma/docs/editor-bugs.md', 'knit/docs/feature-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs.find((s) => s.title === 'Fix selection drift')?.domainHint).toBe('looma')
+    expect(sigs.some((s) => s.title === '(none)')).toBe(true)
+  })
+
+  it('defaults to no domain hint when the workspace looks like a single project', async () => {
+    mkdirSync(join(dir, 'docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'feature-roadmap.md'),
+      `# Feature Roadmap\n\n## Next Up\n- [ ] Add import review\n`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/feature-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs.find((s) => s.title === 'Add import review')?.domainHint).toBeUndefined()
+  })
+
+  it('does not treat arbitrary guide checklists as backlog tasks by default', async () => {
+    mkdirSync(join(dir, 'knit', 'supabase'), { recursive: true })
+    writeFileSync(
+      join(dir, 'knit', 'supabase', 'MIGRATION_GUIDE.md'),
+      `# Migration Guide\n\n- [ ] All CREATE statements use IF NOT EXISTS\n`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['knit/supabase/MIGRATION_GUIDE.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual([])
+  })
+
+  it('does not promote roadmap section headings into task signals without checklist content', async () => {
+    mkdirSync(join(dir, 'knit', 'docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'knit', 'docs', 'looma-migration-inventory.md'),
+      `# Inventory\n\n## Stage 1: V1 Release Hardening\n\nNarrative only.\n`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['knit/docs/looma-migration-inventory.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual([])
   })
 })
 

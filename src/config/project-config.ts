@@ -30,7 +30,7 @@ export const ProjectGuildhallConfig = z.object({
   /** Default heartbeat interval (seconds) */
   heartbeatInterval: z.number().int().positive().default(5),
 
-  /** llama.cpp / LM Studio base URL */
+  /** OpenAI-compatible local server URL */
   lmStudioUrl: z.string().url().default('http://localhost:1234/v1'),
 
   /** Anthropic API key (can also be set via ANTHROPIC_API_KEY env var) */
@@ -57,7 +57,7 @@ export const ProjectGuildhallConfig = z.object({
   /**
    * How many persona reviewer agents to run concurrently during
    * `review` fan-out. Default `1` (sequential) is safe for any provider
-   * — LM Studio / llama.cpp can't service concurrent requests on a
+   * — local OpenAI-compatible servers such as LM Studio / llama.cpp can't service concurrent requests on a
    * single session. Raise to 2–4 when the reviewer is a cloud provider
    * (Anthropic, OpenAI, Codex) whose rate limits comfortably exceed the
    * roster size — wall-clock review latency drops roughly linearly.

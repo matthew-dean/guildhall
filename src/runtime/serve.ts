@@ -60,6 +60,10 @@ import {
   getRuntimeProviderConfig,
 } from './provider-runtime-config.js'
 import {
+  providerLabelForSetupKey,
+  SETUP_PROVIDER_ORDER,
+} from './provider-metadata.js'
+import {
   createExploringTask,
   approveSpec,
   resumeExploring,
@@ -103,6 +107,7 @@ import {
   buildCoordinatorProjectPathMap,
   resolveTaskProjectPath,
 } from './task-project-path.js'
+import { readContextDebugForTask } from './context-observability.js'
 import {
   buildSnapshot,
   listWizards,
@@ -702,7 +707,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             return c.json(
               {
                 error:
-                  'LM Studio is reachable, but Guildhall could not see a loaded model. To avoid surprise memory pressure from JIT loading, load the model you want in LM Studio, then start again.',
+                  'The configured local server is reachable, but Guildhall could not see a loaded model. To avoid surprise memory pressure from JIT loading, load the model you want on that server, then start again.',
                 code: 'no_loaded_model',
                 provider: 'llama-cpp',
               },
@@ -713,7 +718,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           effectiveProvider = paidFallback.providerName
           effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
           fallbackReason =
-            'Preferred LM Studio had no loaded model available, so Guildhall switched to a paid fallback provider.'
+            'Preferred local server had no loaded model available, so Guildhall switched to a paid fallback provider.'
         }
         if (effectiveProvider === 'llama-cpp') {
           const missingModels = missingAssignedModels(assignedModels, loadedModels)
@@ -725,8 +730,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
               return c.json(
                 {
                   error:
-                    `LM Studio currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
-                    'Guildhall will not JIT-load missing models automatically; load the configured model in LM Studio or choose a loaded model in Providers.',
+                    `The configured local server currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
+                    'Guildhall will not JIT-load missing models automatically; load the configured model on that server or choose a loaded model in Providers.',
                   code: 'model_unavailable',
                   provider: 'llama-cpp',
                   loadedModels,
@@ -739,7 +744,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             effectiveProvider = paidFallback.providerName
             effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
             fallbackReason =
-              'Preferred LM Studio did not have the configured models loaded, so Guildhall switched to a paid fallback provider.'
+              'Preferred local server did not have the configured models loaded, so Guildhall switched to a paid fallback provider.'
           }
         }
       }
@@ -1774,7 +1779,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // slice of related context (recent events touching this task) so the UI
   // can show "what's happening right now" without a second round-trip.
   // -------------------------------------------------------------------------
-  app.get('/api/project/task/:id', c => {
+  app.get('/api/project/task/:id', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const tasksPath = join(project.path, 'memory', 'TASKS.json')
@@ -1787,7 +1792,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
       const recent = filterEventsForTask(supervisor.recent(project.id, undefined, project.path), id)
-      return c.json({ task: normalizeTaskForDrawer(task as Record<string, unknown>), recentEvents: recent })
+      const contextDebug = await readContextDebugForTask(join(project.path, 'memory'), id)
+      return c.json({
+        task: normalizeTaskForDrawer(task as Record<string, unknown>),
+        recentEvents: recent,
+        contextDebug,
+      })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -2694,7 +2704,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         preferredProvider: stored.preferredProvider ?? null,
         providers: {
           'claude-oauth': {
-            label: 'Claude Pro/Max (via Claude Code CLI)',
+            label: providerLabelForSetupKey('claude-oauth'),
             detected: claudeInstalled,
             verifiedAt: v('claude-oauth'),
             detail: claudeInstalled
@@ -2702,7 +2712,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               : 'Install Claude Code and run `claude auth login`.',
           },
           'codex': {
-            label: 'Codex (via Codex CLI)',
+            label: providerLabelForSetupKey('codex'),
             detected: codexInstalled,
             verifiedAt: v('codex-oauth'),
             detail: codexInstalled
@@ -2710,19 +2720,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
               : 'Install the Codex CLI and run `codex auth login`.',
           },
           'llama-cpp': {
-            label: 'Local llama.cpp / LM Studio',
+            label: providerLabelForSetupKey('llama-cpp'),
             detected: llamaReachable,
             verifiedAt: v('llama-cpp'),
             url: llamaReachable ? llamaUrl : configuredLlamaUrl || null,
             detail:
               configuredLlamaUrl.length === 0 && !llamaReachable
-                ? `Not reachable at ${defaultLlamaUrl}. Start LM Studio / llama.cpp or paste a server URL.`
+                ? `Not reachable at ${defaultLlamaUrl}. Start an OpenAI-compatible local server such as LM Studio or llama.cpp, or paste a server URL.`
                 : llamaReachable
                   ? `Reachable at ${llamaUrl}`
-                  : `Not reachable at ${llamaUrl}. Start LM Studio / llama.cpp and click refresh.`,
+                  : `Not reachable at ${llamaUrl}. Start an OpenAI-compatible local server such as LM Studio or llama.cpp and click refresh.`,
           },
           'anthropic-api': {
-            label: 'Anthropic API key',
+            label: providerLabelForSetupKey('anthropic-api'),
             detected: Boolean(creds.anthropicApiKey),
             verifiedAt: v('anthropic-api'),
             detail: global.providers['anthropic-api']?.apiKey
@@ -2732,7 +2742,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
                 : 'Paste an API key to enable.',
           },
           'openai-api': {
-            label: 'OpenAI-compatible API key',
+            label: providerLabelForSetupKey('openai-api'),
             detected: Boolean(creds.openaiApiKey),
             verifiedAt: v('openai-api'),
             baseUrl: configuredOpenAiBaseUrl || null,
@@ -2762,7 +2772,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         openaiBaseUrl?: string
         lmStudioUrl?: string
       }
-      const allowed = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api'] as const
+      const allowed = SETUP_PROVIDER_ORDER
       // preferredProvider lives in the project file (selection, not a secret).
       if (body.preferredProvider) {
         if (!(allowed as readonly string[]).includes(body.preferredProvider)) {
@@ -2830,8 +2840,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
             [
               ...loadedModels.map(id => ({
                 id,
-                provider: 'lm-studio',
-                notes: 'Loaded in LM Studio',
+                provider: 'openai-compatible',
+                notes: 'Loaded on the configured local server',
               })),
               ...MODEL_CATALOG.map(m => ({
                 id: m.id,
@@ -2840,12 +2850,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
               })),
               ...Object.values(resolveModelsForProvider(global.models, preferredProvider)).map(id => ({
                 id,
-                provider: 'lm-studio',
+                provider: 'openai-compatible',
                 notes: 'Global default',
               })),
               ...Object.values(resolveModelsForProvider(workspace.models, preferredProvider)).map(id => ({
                 id,
-                provider: 'lm-studio',
+                provider: 'openai-compatible',
                 notes: 'Project override',
               })),
             ].map(item => [item.id, item]),
@@ -3022,7 +3032,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ok: false,
         error:
           forced === 'llama-cpp'
-            ? 'No model loaded on the llama.cpp/LM Studio server. Load a model and try again.'
+            ? 'No model loaded on the configured OpenAI-compatible local server. Load a model and try again.'
             : `No default model known for ${forced}.`,
       }
     }
@@ -3076,7 +3086,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.post('/api/providers/test', async c => {
     try {
       const body = (await c.req.json().catch(() => ({}))) as { provider?: string }
-      const allowed = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api'] as const
+      const allowed = SETUP_PROVIDER_ORDER
       const name = body.provider
       if (!name || !(allowed as readonly string[]).includes(name)) {
         return c.json({ ok: false, error: `Unknown provider "${name ?? ''}"` }, 400)
@@ -3103,7 +3113,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.post('/api/providers/disconnect', async c => {
     try {
       const body = (await c.req.json().catch(() => ({}))) as { provider?: string }
-      const allowed = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api'] as const
+      const allowed = SETUP_PROVIDER_ORDER
       const name = body.provider
       if (!name || !(allowed as readonly string[]).includes(name)) {
         return c.json({ ok: false, error: `Unknown provider "${name ?? ''}"` }, 400)

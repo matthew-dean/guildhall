@@ -202,7 +202,7 @@
   }
 </script>
 
-<PageHeader title="LLM providers" helpTopic="web.providers" />
+<PageHeader title="Providers" helpTopic="web.providers" />
 
 <div class="page">
   {#if loadError}
@@ -327,7 +327,7 @@
           <div class="model-warning" role="status">
             <strong>Model not loaded.</strong>
             <span>
-              LM Studio reports {models.loadedModels.length ? models.loadedModels.join(', ') : 'no loaded models'}.
+              The configured local server reports {models.loadedModels.length ? models.loadedModels.join(', ') : 'no loaded models'}.
               Load {models.missingModels.join(', ')} or choose a loaded model here.
             </span>
           </div>

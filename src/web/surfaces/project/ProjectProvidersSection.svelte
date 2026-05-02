@@ -202,7 +202,7 @@
       <div class="model-warning" role="status">
         <strong>Model not loaded.</strong>
         <span>
-          LM Studio reports {models.loadedModels.length ? models.loadedModels.join(', ') : 'no loaded models'}.
+          The configured local server reports {models.loadedModels.length ? models.loadedModels.join(', ') : 'no loaded models'}.
           Load {models.missingModels.join(', ')} or override this project to a loaded model.
         </span>
       </div>

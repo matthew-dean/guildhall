@@ -88,6 +88,23 @@ function normalize(title: string): string {
     .trim()
 }
 
+function tokenSet(text: string): Set<string> {
+  return new Set(
+    normalize(text)
+      .split(' ')
+      .filter((token) => token.length >= 3),
+  )
+}
+
+function overlapRatio(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0
+  let shared = 0
+  for (const token of a) {
+    if (b.has(token)) shared += 1
+  }
+  return shared / Math.max(a.size, b.size)
+}
+
 function stableHash(input: string): string {
   let h = 0x811c9dc5
   for (const ch of input) {
@@ -128,6 +145,38 @@ function priorityFromConfidence(confidence: DraftConfidence): DraftTask['priorit
   return 'low'
 }
 
+function domainFromSignal(sig: WorkspaceSignal): string {
+  if (typeof sig.domainHint === 'string' && sig.domainHint.trim()) {
+    return sig.domainHint.trim()
+  }
+  return 'core'
+}
+
+function isFormattingDebris(sig: WorkspaceSignal): boolean {
+  if (sig.title.trim().endsWith(':')) return true
+  const title = normalize(sig.title)
+  if (!title) return true
+  if (title === 'none' || title === 'n a' || title === 'na' || title === 'tbd') return true
+  if (title === 'open questions if any' || title === 'out of scope') return true
+  if (title === 'numbered given when then acceptance criteria') return true
+  if (title === 'test mapping which ac is unit vs integration') return true
+  if (/^once you (pick|answer)\b/.test(title)) return true
+  if (/^i(?: |ll| will) draft the full spec\b/.test(title)) return true
+  return false
+}
+
+function isContextualOpenWork(sig: WorkspaceSignal): boolean {
+  const title = normalize(sig.title)
+  if (!title) return false
+  if (/^strong recurrence in\b/.test(title)) return true
+  if (/\buser must run\b/.test(title)) return true
+  if (/\bmust be enabled\b/.test(title)) return true
+  if (/\brequired for\b/.test(title)) return true
+  if (/\bneeds server side\b/.test(title)) return true
+  if (/\badmin api required\b/.test(title)) return true
+  return false
+}
+
 function isGenericTodo(sig: WorkspaceSignal): boolean {
   if (sig.source !== 'todo-comments' || sig.confidence !== 'low') return false
   const title = normalize(sig.title.replace(/^todo\s*:?\s*/i, ''))
@@ -149,7 +198,7 @@ function isBootstrapChore(sig: WorkspaceSignal): boolean {
 }
 
 function shouldSkipTaskSignal(sig: WorkspaceSignal): boolean {
-  return isGenericTodo(sig) || isBootstrapChore(sig)
+  return isGenericTodo(sig) || isBootstrapChore(sig) || isFormattingDebris(sig)
 }
 
 /**
@@ -177,7 +226,10 @@ export function formWorkspaceHypothesis(
 
   for (const sig of inventory.signals) {
     if (sig.kind === 'goal') addGoal(goalIndex, sig, bump)
-    else if (sig.kind === 'open_work') addTask(taskIndex, sig, bump)
+    else if (sig.kind === 'open_work') {
+      if (isContextualOpenWork(sig)) addContext(contextIndex, sig)
+      else addTask(taskIndex, sig, bump)
+    }
     else if (sig.kind === 'milestone') addMilestone(milestoneIndex, sig)
     else if (sig.kind === 'context') addContext(contextIndex, sig)
   }
@@ -239,15 +291,29 @@ function addTask(
   bump: (cur: { confidence: DraftConfidence } | undefined, next: DraftConfidence) => boolean,
 ): void {
   if (shouldSkipTaskSignal(sig)) return
-  const key = normalize(sig.title)
+  let key = normalize(sig.title)
   if (!key) return
+  if (!index.has(key)) {
+    const sigTokens = tokenSet(sig.title)
+    const sigRef = sig.references?.[0]
+    const sigDomain = domainFromSignal(sig)
+    for (const [existingKey, existing] of index.entries()) {
+      if (existing.domain !== sigDomain) continue
+      const existingRef = existing.references?.[0]
+      if (sigRef && existingRef && sigRef !== existingRef) continue
+      if (overlapRatio(sigTokens, tokenSet(existing.title)) >= 0.7) {
+        key = existingKey
+        break
+      }
+    }
+  }
   const existing = index.get(key)
   if (!existing) {
     index.set(key, {
       suggestedId: compactGeneratedId('task-import', sig.title, index.size + 1),
       title: sig.title,
       description: supportingText(sig.title, sig.evidence),
-      domain: 'core',
+      domain: domainFromSignal(sig),
       priority: priorityFromConfidence(sig.confidence),
       source: sig.source,
       ...(sig.references ? { references: sig.references } : {}),
@@ -259,6 +325,10 @@ function addTask(
   const merged: DraftTask = {
     ...existing,
     confidence: shouldBump ? sig.confidence : existing.confidence,
+    domain:
+      existing.domain === 'core' && domainFromSignal(sig) !== 'core'
+        ? domainFromSignal(sig)
+        : existing.domain,
     priority: shouldBump
       ? priorityFromConfidence(sig.confidence)
       : existing.priority,

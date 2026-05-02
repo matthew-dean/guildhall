@@ -93,7 +93,7 @@ export async function runInit(opts: InitOptions): Promise<void> {
   const modelStrategy = modelScope === 'global-default' ? 'skip' : await select({
     message: 'How are you running your LLMs?',
     choices: [
-      { name: 'LM Studio (local models — recommended for privacy)', value: 'local' },
+      { name: 'Local OpenAI-compatible server (for example LM Studio)', value: 'local' },
       { name: 'Mix: local workers, cloud reasoning (spec/coordinator)', value: 'mixed' },
       { name: 'Cloud only (Anthropic or OpenAI)', value: 'cloud' },
     ],

@@ -62,6 +62,7 @@ describe('getRuntimeProviderConfig', () => {
     })
 
     expect(result.preferredProvider).toBe('openai-api')
+    expect(result.preferredProviderFamily).toBe('openai-compatible')
     expect(result.allowPaidProviderFallback).toBe(true)
     expect(result.selectOptions).toMatchObject({
       preferredProvider: 'openai-api',

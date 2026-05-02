@@ -20,7 +20,7 @@ GuildHall is a layered system. Each layer has a single job; layers above build o
 ├─────────────────────────────────────────────────────────────────┤
 │ Protocol — wire types  │ Tools  │ Skills  │ Hooks  │ MCP        │
 ├─────────────────────────────────────────────────────────────────┤
-│ Providers — Claude / OpenAI-compatible / Codex / local          │
+│ Providers — auth'd CLIs / OpenAI-compatible / Anthropic-compat │
 ├─────────────────────────────────────────────────────────────────┤
 │ Core — Task, Gate, Goal, DesignSystem, models, workspace        │
 │ Config — load/merge global + project + workspace YAML           │

@@ -208,7 +208,7 @@ export const GlobalConfig = z.object({
   // Default heartbeat interval
   heartbeatInterval: z.number().int().positive().default(5),
 
-  // LM Studio base URL
+  // OpenAI-compatible local server base URL
   lmStudioUrl: z.string().url().default('http://localhost:1234/v1'),
 
   // Anthropic API key (can also be set via ANTHROPIC_API_KEY env var)

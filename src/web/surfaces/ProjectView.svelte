@@ -262,9 +262,9 @@
       'claude-oauth': 'Claude',
       'codex-oauth': 'Codex',
       codex: 'Codex',
-      'llama-cpp': 'LM Studio',
+      'llama-cpp': 'Local server',
       'anthropic-api': 'Anthropic',
-      'openai-api': 'OpenAI',
+      'openai-api': 'OpenAI-compatible',
       none: 'None',
     }
     return labels[provider] ?? provider

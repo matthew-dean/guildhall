@@ -51,6 +51,10 @@ import {
   type ProjectLevers,
 } from '@guildhall/levers'
 import { buildContext } from './context-builder.js'
+import {
+  modelForAgentName,
+  writeContextDebugRecord,
+} from './context-observability.js'
 import { buildHookExecutor } from './hooks-loader.js'
 import { buildDefaultCompactor } from './compactor-builder.js'
 import { evaluateProposal, type PromotionAction } from './proposal-promotion.js'
@@ -375,6 +379,7 @@ export interface OrchestratorAgentSet {
 export type ReviewerFanoutRunner = (input: {
   task: Task
   personas: GuildDefinition[]
+  builtContext: Awaited<ReturnType<typeof buildContext>>
   context: string
   memoryDir: string
   projectPath: string
@@ -424,6 +429,16 @@ function cleanFallbackOptionLabel(raw: string): string {
   const boldHeading = trimmed.match(/^\*\*(.+?)\*\*(?:\s*[—-]\s*.*)?$/)
   if (boldHeading) return boldHeading[1]!.trim()
   return trimmed
+}
+
+function normalizeFallbackQuestionPrompt(prompt: string): string {
+  return prompt
+    .trim()
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/^\d+[.)]\s*/, '')
+    .replace(/\*\*/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function parseFallbackOptionLine(line: string): string | null {
@@ -1119,6 +1134,20 @@ export class Orchestrator {
       '',
       promptSuffix,
     ].join('\n')
+    try {
+      await writeContextDebugRecord({
+        memoryDir: this.opts.config.memoryDir,
+        workspacePath: this.opts.config.projectPath,
+        ...(activeWorktreePath ? { activeWorktreePath } : {}),
+        task,
+        ctx,
+        agentName: agent.name,
+        modelId: modelForAgentName(agent.name, this.opts.config.models),
+        prompt,
+      })
+    } catch (err) {
+      console.warn('[guildhall] failed to record context debug snapshot:', err)
+    }
 
     // FR-15: per-task permission mode override; re-applied every dispatch so
     // narrowed modes don't stick on long-lived agents.
@@ -1394,15 +1423,19 @@ export class Orchestrator {
             ((taskAfter.openQuestions ?? []) as Array<Record<string, unknown>>)
               .map((question) => {
                 const prompt = question['prompt']
-                if (typeof prompt === 'string' && prompt.trim()) return prompt.trim()
+                if (typeof prompt === 'string' && prompt.trim()) {
+                  return normalizeFallbackQuestionPrompt(prompt)
+                }
                 const restatement = question['restatement']
                 return typeof restatement === 'string' && restatement.trim()
-                  ? restatement.trim()
+                  ? normalizeFallbackQuestionPrompt(restatement)
                   : ''
               })
               .filter(Boolean),
           )
-          const missingDrafts = drafts.filter((draft) => !existingQuestionPrompts.has(draft.prompt.trim()))
+          const missingDrafts = drafts.filter(
+            (draft) => !existingQuestionPrompts.has(normalizeFallbackQuestionPrompt(draft.prompt)),
+          )
           if (
             taskAfter.status === 'exploring' &&
             (
@@ -2753,10 +2786,11 @@ export class Orchestrator {
     try {
       verdicts = await runner({
         task,
+        builtContext: ctx,
         personas,
         context: ctx.formatted,
         memoryDir: this.opts.config.memoryDir,
-        projectPath: task.projectPath,
+        projectPath: task.projectPath || this.opts.config.projectPath,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -3800,6 +3834,10 @@ export async function runOrchestrator(
   const reviewerFanout = buildDefaultReviewerFanout(models.reviewer, {
     ...(hookExecutor ? { hookExecutor } : {}),
     concurrency: projectCfg.reviewerFanoutConcurrency,
+    contextDebug: {
+      memoryDir: effectiveConfig.memoryDir,
+      workspacePath: effectiveConfig.projectPath,
+    },
   })
 
   const orchestrator = new Orchestrator({
@@ -3961,10 +3999,14 @@ export function buildDefaultReviewerFanout(
     hookExecutor?: HookExecutor
     concurrency?: number
     extraTools?: readonly AnyTool[]
+    contextDebug?: {
+      memoryDir: string
+      workspacePath: string
+    }
   } = {},
 ): ReviewerFanoutRunner {
   const concurrency = Math.max(1, Math.floor(opts.concurrency ?? 1))
-  return async ({ task, personas, context, projectPath }) => {
+  return async ({ task, personas, builtContext, context, projectPath }) => {
     const { parsePersonaOutput } = await import('./reviewer-fanout.js')
 
     const runPersona = async (persona: GuildDefinition): Promise<PersonaVerdict> => {
@@ -3978,6 +4020,21 @@ export function buildDefaultReviewerFanout(
         '',
         `Task id: ${task.id}. Review this task through your lens alone and emit the required verdict format.`,
       ].join('\n')
+      if (opts.contextDebug) {
+        try {
+          await writeContextDebugRecord({
+            memoryDir: opts.contextDebug.memoryDir,
+            workspacePath: opts.contextDebug.workspacePath,
+            task,
+            ctx: builtContext,
+            agentName: `reviewer-persona-${persona.slug}`,
+            modelId: reviewerLlm.modelId,
+            prompt,
+          })
+        } catch (err) {
+          console.warn('[guildhall] failed to record reviewer context debug snapshot:', err)
+        }
+      }
       try {
         const result = await agent.generate(prompt)
         return parsePersonaOutput(persona, result.text)

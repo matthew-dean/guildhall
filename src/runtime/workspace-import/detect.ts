@@ -2,6 +2,7 @@ import type { TaskSource, TaskSourceContext, WorkspaceSignal } from './types.js'
 import { readmeSource } from './sources/readme.js'
 import { agentsMdSource } from './sources/agents-md.js'
 import { roadmapSource } from './sources/roadmap.js'
+import { planningDocsSource } from './sources/planning-docs.js'
 import { todoCommentsSource } from './sources/todo-comments.js'
 import { gitLogSource } from './sources/git-log.js'
 
@@ -14,6 +15,7 @@ export const BUILTIN_TASK_SOURCES: readonly TaskSource[] = [
   readmeSource,
   agentsMdSource,
   roadmapSource,
+  planningDocsSource,
   gitLogSource,
   todoCommentsSource,
 ]
