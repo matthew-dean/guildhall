@@ -51,16 +51,46 @@ export interface DeterministicVerdict {
   failingSignals: string[]
 }
 
+const GATE_LIKE_AUTOMATED_ACCEPTANCE = /\b(?:pnpm|npm|yarn|playwright|vitest|jest|pytest|typecheck|build|lint|test(?:\s+file|\s+runner)?|runner runs|passes with zero errors|zero console violations)\b/i
+
+function effectiveAcceptanceCriteria(task: Task) {
+  return task.acceptanceCriteria.length > 0
+    ? task.acceptanceCriteria
+    : parseAcceptanceCriteriaFromSpec(task.spec)
+}
+
 export function shouldAdvanceToGateCheckPendingHardGates(
   task: Task,
   failingSignals: string[],
 ): boolean {
   if (failingSignals.some((signal) => signal !== 'no-regressions')) return false
-  const acs = task.acceptanceCriteria.length > 0
-    ? task.acceptanceCriteria
-    : parseAcceptanceCriteriaFromSpec(task.spec)
+  const acs = effectiveAcceptanceCriteria(task)
   if (acs.length === 0 || !acs.every((criterion) => criterion.met)) return false
   return !task.gateResults.some((gate) => gate.type === 'hard')
+}
+
+export function shouldAdvanceToGateCheckPendingAutomatedVerification(
+  task: Task,
+): boolean {
+  if (task.gateResults.some((gate) => gate.type === 'hard')) return false
+  const acs = effectiveAcceptanceCriteria(task)
+  if (acs.length === 0) return false
+
+  let pendingAutomatedCount = 0
+  let metCount = 0
+  for (const criterion of acs) {
+    if (criterion.met) {
+      metCount += 1
+      continue
+    }
+    if (criterion.verifiedBy !== 'automated') return false
+    const command = typeof criterion.command === 'string' ? criterion.command.trim() : ''
+    const description = criterion.description?.trim() ?? ''
+    if (!command && !GATE_LIKE_AUTOMATED_ACCEPTANCE.test(description)) return false
+    pendingAutomatedCount += 1
+  }
+
+  return pendingAutomatedCount > 0 && metCount > 0
 }
 
 /**
@@ -87,13 +117,17 @@ export function deterministicReview(task: Task): DeterministicVerdict {
   const failing: string[] = []
   const trace: string[] = []
 
-  const acs = task.acceptanceCriteria.length > 0
-    ? task.acceptanceCriteria
-    : parseAcceptanceCriteriaFromSpec(task.spec)
+  const acs = effectiveAcceptanceCriteria(task)
   const acsAllMet = acs.length > 0 && acs.every((a) => a.met)
-  if (acsAllMet) {
+  const pendingAutomatedVerification =
+    !acsAllMet && shouldAdvanceToGateCheckPendingAutomatedVerification(task)
+  if (acsAllMet || pendingAutomatedVerification) {
     weighted += rubric['acceptance-criteria-met']
-    trace.push(`acceptance-criteria-met: +${rubric['acceptance-criteria-met'].toFixed(1)} (${acs.length} AC(s), all met)`)
+    trace.push(
+      acsAllMet
+        ? `acceptance-criteria-met: +${rubric['acceptance-criteria-met'].toFixed(1)} (${acs.length} AC(s), all met)`
+        : `acceptance-criteria-met: +${rubric['acceptance-criteria-met'].toFixed(1)} (${acs.length} AC(s), only automated hard-verification checks remain unmet)`,
+    )
   } else {
     failing.push('acceptance-criteria-met')
     const unmet = acs.filter((a) => !a.met).map((a) => a.id)
@@ -139,12 +173,15 @@ export function deterministicReview(task: Task): DeterministicVerdict {
   trace.push(`documented: +${rubric.documented.toFixed(1)} (no deterministic signal — credited)`)
 
   const score = weighted / totalWeight
-  const advanceToGateCheck = shouldAdvanceToGateCheckPendingHardGates(task, failing)
+  const advanceToGateCheck =
+    pendingAutomatedVerification || shouldAdvanceToGateCheckPendingHardGates(task, failing)
   const verdict: DeterministicVerdict['verdict'] =
     advanceToGateCheck || score >= DETERMINISTIC_PASS_THRESHOLD ? 'approve' : 'revise'
 
-  const reason = advanceToGateCheck
-    ? 'Deterministic review: acceptance criteria are met and hard gates have not run yet; advance to gate_check.'
+  const reason = pendingAutomatedVerification
+    ? 'Deterministic review: remaining unmet acceptance criteria are automated hard-verification steps; advance to gate_check.'
+    : advanceToGateCheck
+      ? 'Deterministic review: acceptance criteria are met and hard gates have not run yet; advance to gate_check.'
     : verdict === 'approve'
       ? `Deterministic review: score ${score.toFixed(2)} \u2265 ${DETERMINISTIC_PASS_THRESHOLD}`
       : `Deterministic review: score ${score.toFixed(2)} < ${DETERMINISTIC_PASS_THRESHOLD}; failing signals: ${failing.join(', ') || '(none recorded)'}`
@@ -153,8 +190,10 @@ export function deterministicReview(task: Task): DeterministicVerdict {
     `Rubric walkthrough (weighted /${totalWeight.toFixed(1)}):`,
     ...trace.map((t) => `  - ${t}`),
     `Total: ${weighted.toFixed(2)} / ${totalWeight.toFixed(1)} = ${score.toFixed(3)}`,
-    advanceToGateCheck
-      ? 'Special-case handoff: all acceptance criteria are met, and no hard gates have run yet. Advance to gate_check so hard verification decides no-regressions.'
+    pendingAutomatedVerification
+      ? 'Special-case handoff: the only unmet acceptance criteria are automated hard-verification checks, and no hard gates have run yet. Advance to gate_check so the runner decides those remaining criteria.'
+      : advanceToGateCheck
+        ? 'Special-case handoff: all acceptance criteria are met, and no hard gates have run yet. Advance to gate_check so hard verification decides no-regressions.'
       : `Threshold: ${DETERMINISTIC_PASS_THRESHOLD} → ${verdict === 'approve' ? 'APPROVE' : 'REVISE'}`,
   ].join('\n')
 

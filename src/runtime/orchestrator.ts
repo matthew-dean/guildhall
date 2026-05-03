@@ -139,6 +139,7 @@ import {
   applyDeterministicVerdict,
   recordLlmVerdict,
   DETERMINISTIC_PASS_THRESHOLD,
+  shouldAdvanceToGateCheckPendingAutomatedVerification,
   shouldAdvanceToGateCheckPendingHardGates,
   type DeterministicVerdict,
   type ReviewerMode,
@@ -1197,6 +1198,21 @@ export class Orchestrator {
     if (task.status === 'review' && hasPendingHandoffStep(task)) {
       const handoffOutcome = await this.advanceHandoffStepInline(task)
       if (handoffOutcome) return handoffOutcome
+    }
+
+    // If review's only remaining uncertainty is automated hard verification,
+    // do not spend LLM/persona review budget on qualitative debate. Hand the
+    // task straight to gate_check so the hard runner decides the remaining
+    // truth.
+    if (
+      task.status === 'review' &&
+      shouldAdvanceToGateCheckPendingAutomatedVerification(task)
+    ) {
+      return await this.applyReviewVerdictInline({
+        task,
+        queue: queueBefore,
+        llmError: undefined,
+      })
     }
 
     // Reviewer fan-out at `review`: each applicable persona (Component
@@ -3901,6 +3917,18 @@ export class Orchestrator {
       typeof task.productBrief.userJob === 'string' &&
       task.productBrief.userJob.trim().length > 0
     const hasOpenQuestion = (task.openQuestions ?? []).some((question) => !question.answeredAt)
+    if (
+      input.beforeStatus === 'exploring' &&
+      task.status === 'exploring' &&
+      hasSpec &&
+      !hasOpenQuestion
+    ) {
+      task.status = 'spec_review'
+      task.updatedAt = this.now()
+      queue.lastUpdated = task.updatedAt
+      await this.writeQueue(queue)
+    }
+
     const transitioned = task.status !== input.beforeStatus
     const durableExploringProgress =
       input.beforeStatus === 'exploring' && (hasSpec || hasBrief || hasOpenQuestion)

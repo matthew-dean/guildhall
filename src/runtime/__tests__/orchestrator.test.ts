@@ -1780,6 +1780,53 @@ describe('Orchestrator.tick — error handling', () => {
     expect(q.tasks[0]!.spec).toContain('Already drafted')
     expect(q.tasks[0]!.escalations).toHaveLength(0)
   })
+
+  it('promotes durable spec progress to spec_review when turn limit hits after all questions are answered', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'exploring',
+        spec: '## Summary\nReady for review.',
+        openQuestions: [
+          {
+            id: 'q-1',
+            kind: 'choice',
+            askedBy: 'spec-agent',
+            askedAt: '2026-05-03T21:00:00.000Z',
+            answeredAt: '2026-05-03T21:01:00.000Z',
+            answer: 'Use bootstrapWorkspaceSession',
+            prompt: 'Which auth path should this E2E use?',
+            choices: [
+              'Use bootstrapWorkspaceSession',
+              'Drive the full login UI',
+            ],
+            selectionMode: 'single',
+          },
+        ],
+      }),
+    ])
+    const spec = {
+      name: 'spec-agent',
+      async generate() {
+        throw new Error('Exceeded maximum turn limit (8)')
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.afterStatus).toBe('spec_review')
+      expect(out.transitioned).toBe(true)
+    }
+
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('spec_review')
+    expect(q.tasks[0]!.spec).toContain('Ready for review')
+    expect(q.tasks[0]!.escalations).toHaveLength(0)
+  })
 })
 
 describe('Orchestrator.run — full loops', () => {
@@ -4309,6 +4356,44 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
     expect(task.status).toBe('gate_check')
     expect(task.reviewVerdicts.at(-1)?.verdict).toBe('approve')
     expect(task.reviewVerdicts.at(-1)?.reason).toContain('advance to gate_check')
+  })
+
+  it('bypasses reviewer LLM work when only automated hard-verification criteria remain', async () => {
+    await writeReviewerMode('llm_only')
+    await writeQueue([
+      reviewReadyTask({
+        acceptanceCriteria: [
+          { id: 'ac-1', description: 'workspace page opens', verifiedBy: 'review', met: true },
+          {
+            id: 'ac-2',
+            description:
+              'Playwright runner runs against the new file and passes with zero console violations',
+            verifiedBy: 'automated',
+            met: false,
+          },
+        ],
+        gateResults: [],
+      }),
+    ])
+
+    const reviewer = stubAgent('reviewer-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer }),
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('reviewer-deterministic')
+      expect(out.afterStatus).toBe('gate_check')
+    }
+    expect(reviewer.calls).toHaveLength(0)
+
+    const task = (await readQueue()).tasks[0]!
+    expect(task.status).toBe('gate_check')
+    expect(task.reviewVerdicts.at(-1)?.reviewerPath).toBe('deterministic')
+    expect(task.reviewVerdicts.at(-1)?.reason).toContain('automated hard-verification steps')
   })
 
   it('llm_only: LLM outage still surfaces as an agent-error (no fallback)', async () => {

@@ -164,6 +164,25 @@ function findUniqueRelativeFile(rootDir: string, needle: string): string | null 
   return matches.length === 1 ? normalizeCommand(matches[0]!) : null
 }
 
+function candidateNeedles(raw: string): string[] {
+  const trimmed = raw.trim().replace(/^`|`$/g, '')
+  if (!trimmed) return []
+  const candidates = new Set<string>([trimmed, path.basename(trimmed)])
+  const parts = trimmed.split('/').filter(Boolean)
+  for (let i = 1; i < parts.length; i += 1) {
+    candidates.add(parts.slice(i).join('/'))
+  }
+  return [...candidates]
+}
+
+function resolveRelativeFileFromDescription(rootDir: string, raw: string): string | null {
+  for (const needle of candidateNeedles(raw)) {
+    const resolved = findUniqueRelativeFile(rootDir, needle)
+    if (resolved) return resolved
+  }
+  return null
+}
+
 function maybeRewritePnpmVitestCommand(
   pkg: WorkspacePackage,
   script: string,
@@ -185,6 +204,64 @@ function maybeRewritePnpmVitestCommand(
   return pkg.relativeDir === '.'
     ? normalizeCommand(`pnpm vitest --run ${resolvedTarget}`)
     : normalizeCommand(`cd ${pkg.relativeDir} && pnpm vitest --run ${resolvedTarget}`)
+}
+
+function owningPackageForRelativeFile(
+  packages: readonly WorkspacePackage[],
+  relativeFile: string,
+): WorkspacePackage | null {
+  const normalized = normalizeCommand(relativeFile)
+  const owners = packages
+    .filter((pkg) => normalized === pkg.relativeDir || normalized.startsWith(`${pkg.relativeDir}/`))
+    .sort((a, b) => b.relativeDir.length - a.relativeDir.length)
+  return owners[0] ?? null
+}
+
+function inferCommandFromAutomatedAcceptanceDescription(
+  description: string,
+  projectPath: string,
+): string | null {
+  const normalizedDescription = normalizeCommand(description)
+  if (!normalizedDescription) return null
+
+  const workspacePackages = readWorkspacePackages(projectPath)
+  const fileMatch = description.match(
+    /`([^`]+\.(?:spec|test)\.[a-z0-9]+)`|([A-Za-z0-9_./-]+\.(?:spec|test)\.[A-Za-z0-9]+)/i,
+  )
+  const relativeFile = fileMatch
+    ? resolveRelativeFileFromDescription(projectPath, fileMatch[1] ?? fileMatch[2] ?? '')
+    : null
+
+  if (/\b(?:playwright|e2e|e2e_base_url)\b/i.test(normalizedDescription) && relativeFile) {
+    const owner = owningPackageForRelativeFile(workspacePackages, relativeFile)
+    if (owner) {
+      const relativeToOwner = normalizeCommand(
+        path.relative(owner.dir, path.join(projectPath, relativeFile)),
+      )
+      return normalizeCommand(
+        `pnpm --dir ${owner.relativeDir} exec playwright test ${relativeToOwner}`,
+      )
+    }
+    return normalizeCommand(`pnpm exec playwright test ${relativeFile}`)
+  }
+
+  if (/\btypecheck\b/i.test(normalizedDescription)) {
+    return validateOrNormalizePnpmCommand('pnpm typecheck', projectPath)
+  }
+  if (/\bbuild\b/i.test(normalizedDescription)) {
+    return validateOrNormalizePnpmCommand('pnpm build', projectPath)
+  }
+  if (/\blint\b/i.test(normalizedDescription)) {
+    return validateOrNormalizePnpmCommand('pnpm lint', projectPath)
+  }
+  if (/\b(?:vitest|jest|pytest|test runner|test file|tests?)\b/i.test(normalizedDescription) && relativeFile) {
+    return validateOrNormalizePnpmCommand(
+      `pnpm test -- --run ${path.basename(relativeFile)}`,
+      projectPath,
+    )
+  }
+
+  return null
 }
 
 function validateOrNormalizePnpmCommand(command: string, projectPath: string): string | null {
@@ -301,8 +378,13 @@ function deriveAutomatedAcceptanceCommands(
   const buckets = new Map<GateCommandKind, string[]>()
   for (const criterion of task.acceptanceCriteria ?? []) {
     if (criterion.verifiedBy !== 'automated') continue
-    if (typeof criterion.command !== 'string' || criterion.command.trim().length === 0) continue
-    const command = validateOrNormalizePnpmCommand(criterion.command, projectPath)
+    const explicitCommand = typeof criterion.command === 'string' ? criterion.command.trim() : ''
+    const command = explicitCommand.length > 0
+      ? validateOrNormalizePnpmCommand(explicitCommand, projectPath)
+      : inferCommandFromAutomatedAcceptanceDescription(
+          criterion.description ?? '',
+          projectPath,
+        )
     if (!command) continue
     const kind = classifyGateCommand(command)
     const existing = buckets.get(kind) ?? []

@@ -397,7 +397,7 @@
       "description": "Prove that a grounded project task can move from fuzzy ask through spec shaping and land in clean spec_review or a clean waiting-on-user state without silent loops or stale task residue.",
       "domain": "runtime",
       "projectPath": ".",
-      "status": "pending",
+      "status": "done",
       "priority": "high",
       "dependsOn": [
         "guildhall-automation-002"
@@ -410,14 +410,22 @@
           "id": "ac-1",
           "description": "A real imported task consistently lands in spec_review or a clear user-question state with durable transcript and task state",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         }
       ],
-      "notes": [],
+      "notes": [
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-03T22:07:40Z",
+          "content": "Grounded Looma/Knit intake now lands cleanly without manual cleanup. The spec lane preserves durable progress after turn-limit churn, answered questions no longer strand tasks in exploring, and task-006 moved from a fresh ask through structured questions into spec_review on the live server."
+        }
+      ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-02T16:01:41Z",
-      "updatedAt": "2026-05-02T16:01:41Z"
+      "completedAt": "2026-05-03T22:07:40Z",
+      "updatedAt": "2026-05-03T22:07:40Z"
     },
     {
       "id": "guildhall-automation-004",
@@ -484,7 +492,7 @@
       "description": "Once a task is genuinely done, Guildhall should be able to push branch state through review packaging and merge without human bookkeeping.",
       "domain": "runtime",
       "projectPath": ".",
-      "status": "in_progress",
+      "status": "done",
       "priority": "high",
       "dependsOn": [
         "guildhall-automation-004"
@@ -497,7 +505,7 @@
           "id": "ac-1",
           "description": "One real task reaches a merged state without manual PR bookkeeping",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         }
       ],
       "notes": [
@@ -524,12 +532,19 @@
           "role": "worker",
           "timestamp": "2026-05-03T19:47:15.000Z",
           "content": "Publication hardening now covers the next truthful blocker too: if a target subrepo is already dirty when worktree isolation is on, Guildhall stops before minting a task branch and surfaces an explicit repo-dirty worktree error. For Looma/Knit, that means the next live publication proof needs either a clean knit/ repo or an intentional publication pass for the already-dirty auth work."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-03T22:13:36Z",
+          "content": "Publication proof now exists for a grounded Looma/Knit task. Task-006 ran in a dedicated task worktree on knit/, replayed through narrowed task-scoped gates, and recorded a successful local ff-only merge record back to main without manual PR bookkeeping."
         }
       ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-02T16:01:41Z",
-      "updatedAt": "2026-05-03T19:47:15.000Z"
+      "completedAt": "2026-05-03T22:13:36Z",
+      "updatedAt": "2026-05-03T22:13:36Z"
     },
     {
       "id": "guildhall-automation-006",
@@ -798,7 +813,7 @@
       "description": "Grow the one-task finisher into a bounded multi-lane scheduler: a narrow spec lane, a capped worker lane, bounded review/gate fanout, and a serialized coordinator lane.",
       "domain": "runtime",
       "projectPath": ".",
-      "status": "in_progress",
+      "status": "done",
       "priority": "critical",
       "dependsOn": [
         "guildhall-automation-005",
@@ -813,13 +828,13 @@
           "id": "ac-1",
           "description": "Queue execution can run more than one eligible task at a time without violating worktree-slot ownership or reviewer/gate ordering guarantees",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         },
         {
           "id": "ac-2",
           "description": "Lane-level concurrency settings exist for spec, worker, review, and coordinator lanes",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         }
       ],
       "notes": [

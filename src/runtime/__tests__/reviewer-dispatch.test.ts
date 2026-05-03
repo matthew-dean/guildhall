@@ -6,6 +6,7 @@ import {
   recordLlmVerdict,
   extractLlmReviewerReasoning,
   shouldAdvanceToGateCheckPendingHardGates,
+  shouldAdvanceToGateCheckPendingAutomatedVerification,
   SOFT_GATE_RUBRIC,
   DETERMINISTIC_PASS_THRESHOLD,
 } from '../reviewer-dispatch.js'
@@ -102,6 +103,43 @@ describe('deterministicReview', () => {
       gateResults: [],
     })
     expect(shouldAdvanceToGateCheckPendingHardGates(unmetAc, ['acceptance-criteria-met', 'no-regressions'])).toBe(false)
+  })
+
+  it('treats unmet automated gate-style acceptance criteria as pending hard verification', () => {
+    const task = mkTask({
+      acceptanceCriteria: [
+        { id: 'ac-1', description: 'workspace page opens', verifiedBy: 'review', met: true },
+        {
+          id: 'ac-2',
+          description: 'Playwright runner runs against the new file and passes with zero console violations',
+          verifiedBy: 'automated',
+          met: false,
+        },
+      ],
+      gateResults: [],
+    })
+    expect(shouldAdvanceToGateCheckPendingAutomatedVerification(task)).toBe(true)
+
+    const verdict = deterministicReview(task)
+    expect(verdict.verdict).toBe('approve')
+    expect(verdict.reason).toContain('automated hard-verification steps')
+    expect(verdict.reasoning).toContain('only unmet acceptance criteria are automated hard-verification checks')
+  })
+
+  it('does not treat ordinary unmet automated work as pending hard verification', () => {
+    const task = mkTask({
+      acceptanceCriteria: [
+        {
+          id: 'ac-1',
+          description: 'Search index is populated for the new document',
+          verifiedBy: 'automated',
+          met: false,
+        },
+      ],
+      gateResults: [],
+    })
+    expect(shouldAdvanceToGateCheckPendingAutomatedVerification(task)).toBe(false)
+    expect(deterministicReview(task).verdict).toBe('revise')
   })
 
   it('uses acceptance criteria derived from spec markdown when structured ACs are missing', () => {

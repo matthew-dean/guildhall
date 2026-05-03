@@ -85,11 +85,11 @@ correct the agent, and ask for direct action from Thread.
   subproject scope.
 - [ ] `guildhall-automation-002` Shape importer output into a usable Guildhall
   backlog.
-- [ ] `guildhall-automation-003` Get one real task from intake to spec review
+- [x] `guildhall-automation-003` Get one real task from intake to spec review
   without manual cleanup.
-- [ ] `guildhall-automation-004` Run implementation, review, and gates against
+- [x] `guildhall-automation-004` Run implementation, review, and gates against
   real project truth.
-- [ ] `guildhall-automation-005` Automate the PR and merge path for completed
+- [x] `guildhall-automation-005` Automate the PR and merge path for completed
   tasks.
 - [ ] `guildhall-automation-006` Scale from one-task autonomy to unattended
   queue throughput.
@@ -208,6 +208,11 @@ correct the agent, and ask for direct action from Thread.
   for long-lived background refresh because its injected async fetch layer can
   error after the node-repl exec frame ends, so `guildhall-architecture-006`
   stays open until we prove the same behavior in a cleaner live browser pass.
+- Seeded a fresh grounded Looma/Knit task for the next autonomy proof:
+  `task-006` — `Add E2E login -> create page -> edit -> search flow`.
+  This task is scoped to `/Users/matthew/git/oss/looma-knit/knit`, starts in
+  `exploring`, and is meant to exercise the newly cleaned publication lane on
+  a real product-facing happy path rather than another helper-only test.
 - A new grounded Looma/Knit autonomy run exposed a different intake stall:
   the spec-agent had enough repo context and did use tools, but it spent too
   many turns on read-only research and then hit the max-turn limit without
@@ -334,6 +339,19 @@ correct the agent, and ask for direct action from Thread.
   empty-root bootstrap fallback.
   immediately, with `Loading…` gone and the repeated escalation titles rendered
   safely.
+- `guildhall-automation-003` is now complete in the live Looma/Knit flow. The
+  spec lane preserves durable progress after turn-limit churn, answered intake
+  questions no longer strand a task in `exploring`, and grounded `task-006`
+  moved from a fresh ask through structured questioning into `spec_review`
+  without manual queue cleanup.
+- Review handoff is stricter now too: when the only remaining unmet acceptance
+  criteria are automated hard-verification steps, Guildhall bypasses persona
+  review churn and hands the task straight to `gate_check` instead of treating
+  runnable verification as implementation debt.
+- `guildhall-automation-005` is now complete too. Grounded Looma/Knit
+  `task-006` ran in a dedicated task worktree on `knit/`, replayed through
+  narrowed task-scoped gates, and recorded a successful local ff-only merge
+  back to `main` without manual PR bookkeeping.
 - Thread column width now uses a real target width again. The column had been
   using `max-width: 680px`, which let it shrink unexpectedly; it now uses
   `width: 680px; max-width: 100%` so desktop stays stable while smaller

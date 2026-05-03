@@ -170,4 +170,69 @@ describe('resolveEffectiveTaskSuccessGates', () => {
 
     expect(result).toEqual(['pnpm typecheck', 'pnpm build', 'pnpm test'])
   })
+
+  it('infers a task-scoped playwright command from automated acceptance prose when command is missing', async () => {
+    const webDir = path.join(tmpDir, 'web')
+    await fs.mkdir(path.join(webDir, 'tests/e2e'), { recursive: true })
+    await fs.writeFile(
+      path.join(webDir, 'package.json'),
+      JSON.stringify({
+        name: 'web',
+        scripts: {
+          build: 'nuxt build',
+          typecheck: 'nuxt typecheck',
+          'test:e2e': 'playwright test',
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(webDir, 'tests/e2e/authoring-flow.spec.ts'),
+      '// playwright placeholder\n',
+      'utf8',
+    )
+
+    const result = resolveEffectiveTaskSuccessGates({
+      task: {
+        projectPath: tmpDir,
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description:
+              'Given the new test file exists at knit/web/tests/e2e/authoring-flow.spec.ts, when the Playwright runner runs against this file, then it passes with zero errors and zero console violations.',
+            verifiedBy: 'automated',
+            met: false,
+          },
+          {
+            id: 'ac-2',
+            description: 'Given pnpm typecheck runs in knit/web, then it passes with zero errors related to the new test file.',
+            verifiedBy: 'automated',
+            met: true,
+          },
+        ],
+      } as any,
+      workspaceProjectPath: tmpDir,
+      workspaceBootstrap: {
+        commands: [],
+        successGates: ['pnpm typecheck', 'pnpm build', 'pnpm test', 'pnpm lint'],
+        timeoutMs: 300_000,
+        verifiedAt: '2026-05-03T00:00:00Z',
+        packageManager: 'pnpm',
+        install: { command: 'pnpm install', status: 'ok' },
+        gates: {
+          typecheck: { command: 'pnpm typecheck', available: true },
+          build: { command: 'pnpm build', available: true },
+          test: { command: 'pnpm test', available: true },
+          lint: { command: 'pnpm lint', available: true },
+        },
+      } as any,
+    })
+
+    expect(result).toEqual([
+      'pnpm --dir web typecheck',
+      'pnpm build',
+      'pnpm --dir web exec playwright test tests/e2e/authoring-flow.spec.ts',
+      'pnpm lint',
+    ])
+  })
 })
