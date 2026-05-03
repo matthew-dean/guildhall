@@ -210,6 +210,21 @@ correct the agent, and ask for direct action from Thread.
   is no longer stale session contamination; it is the local model/provider
   path still failing to convert a real intake into durable output from a cold
   start.
+- Root cause on `task-006` is now sharper: the cold-start local model *did*
+  try to write durable progress, but it sent near-miss tool payloads like
+  `append-exploring-transcript { item: ... }` and `update-product-brief
+  { productBrief: ... }`. The next hardening slice is to make those tools
+  recover from common nested/stringified payload shapes instead of rejecting
+  them and burning the turn budget.
+- That hardening landed, and a follow-up runtime guard now refuses repeated
+  read-only research tool turns after Guildhall has already nudged the
+  spec-agent to record durable progress. Fresh Looma/Knit intake `task-008`
+  then reached `spec_review` on the NVIDIA provider in a single `one_task`
+  pass.
+- Remaining polish from that live pass: the fallback brief path was too happy
+  to treat an evidence preamble ("Based on the grep results...") as the
+  userJob. Tightened the inference to fall back to a cleaner verification /
+  remaining-delta framing when the assistant prose is just narrating evidence.
 - Thread column width now uses a real target width again. The column had been
   using `max-width: 680px`, which let it shrink unexpectedly; it now uses
   `width: 680px; max-width: 100%` so desktop stays stable while smaller

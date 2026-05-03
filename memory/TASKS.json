@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-04-11T00:00:00Z",
+  "lastUpdated": "2026-05-03T00:24:25.551Z",
   "tasks": [
     {
       "id": "looma-001",
@@ -64,7 +64,9 @@
       "projectPath": "../looma",
       "status": "pending",
       "priority": "normal",
-      "dependsOn": ["looma-001"],
+      "dependsOn": [
+        "looma-001"
+      ],
       "outOfScope": [
         "Presence/realtime data binding (stays in Knit)",
         "Any Knit-specific avatar naming or workspace vocabulary in the API"
@@ -163,7 +165,9 @@
       "projectPath": "../knit",
       "status": "pending",
       "priority": "normal",
-      "dependsOn": ["looma-001"],
+      "dependsOn": [
+        "looma-001"
+      ],
       "outOfScope": [
         "Resolve comments (separate follow-up task)",
         "Comment notifications",
@@ -353,7 +357,9 @@
       "projectPath": ".",
       "status": "done",
       "priority": "high",
-      "dependsOn": ["guildhall-automation-001"],
+      "dependsOn": [
+        "guildhall-automation-001"
+      ],
       "outOfScope": [
         "Task execution reliability after approval",
         "External issue tracker sync"
@@ -393,7 +399,9 @@
       "projectPath": ".",
       "status": "pending",
       "priority": "high",
-      "dependsOn": ["guildhall-automation-002"],
+      "dependsOn": [
+        "guildhall-automation-002"
+      ],
       "outOfScope": [
         "Implementation/gate/merge behavior after spec approval"
       ],
@@ -419,7 +427,9 @@
       "projectPath": ".",
       "status": "pending",
       "priority": "critical",
-      "dependsOn": ["guildhall-automation-003"],
+      "dependsOn": [
+        "guildhall-automation-003"
+      ],
       "outOfScope": [
         "Multi-task throughput tuning"
       ],
@@ -451,7 +461,9 @@
       "projectPath": ".",
       "status": "pending",
       "priority": "high",
-      "dependsOn": ["guildhall-automation-004"],
+      "dependsOn": [
+        "guildhall-automation-004"
+      ],
       "outOfScope": [
         "Batch queue scheduling beyond one task at a time"
       ],
@@ -477,7 +489,9 @@
       "projectPath": ".",
       "status": "pending",
       "priority": "high",
-      "dependsOn": ["guildhall-automation-005"],
+      "dependsOn": [
+        "guildhall-automation-005"
+      ],
       "outOfScope": [
         "Cross-project fleet orchestration"
       ],
@@ -509,7 +523,9 @@
       "projectPath": ".",
       "status": "done",
       "priority": "high",
-      "dependsOn": ["guildhall-automation-002"],
+      "dependsOn": [
+        "guildhall-automation-002"
+      ],
       "outOfScope": [
         "Deep scheduler changes",
         "Multi-connection persistence beyond the first safe slice"
@@ -550,7 +566,9 @@
       "projectPath": ".",
       "status": "done",
       "priority": "critical",
-      "dependsOn": ["guildhall-architecture-001"],
+      "dependsOn": [
+        "guildhall-architecture-001"
+      ],
       "outOfScope": [
         "Shared transport pooling",
         "Queue throughput changes by themselves"
@@ -604,7 +622,9 @@
       "projectPath": ".",
       "status": "done",
       "priority": "high",
-      "dependsOn": ["guildhall-architecture-002"],
+      "dependsOn": [
+        "guildhall-architecture-002"
+      ],
       "outOfScope": [
         "Distributed workers",
         "Provider marketplace features"
@@ -657,7 +677,9 @@
       "projectPath": ".",
       "status": "done",
       "priority": "high",
-      "dependsOn": ["guildhall-architecture-003"],
+      "dependsOn": [
+        "guildhall-architecture-003"
+      ],
       "outOfScope": [
         "Scheduler-wide multi-task execution policy",
         "Remote worker infrastructure"
@@ -728,7 +750,10 @@
       "projectPath": ".",
       "status": "in_progress",
       "priority": "critical",
-      "dependsOn": ["guildhall-automation-005", "guildhall-architecture-004"],
+      "dependsOn": [
+        "guildhall-automation-005",
+        "guildhall-architecture-004"
+      ],
       "outOfScope": [
         "Unlimited swarm behavior",
         "Cross-project fleet orchestration"
@@ -775,7 +800,10 @@
       "projectPath": ".",
       "status": "in_progress",
       "priority": "high",
-      "dependsOn": ["guildhall-architecture-005", "guildhall-automation-006"],
+      "dependsOn": [
+        "guildhall-architecture-005",
+        "guildhall-automation-006"
+      ],
       "outOfScope": [
         "Marketing claims about agent swarms",
         "Infinite or self-scaling worker pools"
@@ -866,12 +894,18 @@
           "role": "worker",
           "timestamp": "2026-05-02T23:58:00Z",
           "content": "Small shell cleanup on top: Thread width is stable again. The column had been styled with only max-width, which allowed it to collapse narrower than intended; it now uses a fixed 680px target with max-width: 100% so the desktop reading width stays consistent without breaking mobile."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-03T00:24:25.550Z",
+          "content": "Recovered the next cold-start intake failure shape on the NVIDIA-backed Looma/Knit path. First, the spec-agent was sending near-miss tool payloads like append-exploring-transcript { item: ... } and update-product-brief { productBrief: ... }, so those tools now recover nested/stringified payloads instead of rejecting them. Then, after the model still burned turns on repeated read-only research, the query loop was hardened to refuse further read-only tool calls once a durable-progress nudge has already been issued. Live proof: fresh Looma/Knit task-008 reached spec_review in one one_task pass on qwen/qwen3.5-122b-a10b. Remaining polish: fallback brief inference needed to stop treating evidence preambles as the userJob, so that heuristic was tightened too."
         }
       ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-02T17:45:00Z",
-      "updatedAt": "2026-05-02T23:58:00Z"
+      "updatedAt": "2026-05-03T00:24:25.551Z"
     }
   ]
 }

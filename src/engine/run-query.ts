@@ -187,6 +187,16 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === 'AbortError'
 }
 
+function isReadOnlyToolCall(context: QueryContext, toolName: string, input: Record<string, unknown>): boolean {
+  const tool = context.toolRegistry.get(toolName)
+  if (!tool) return false
+  try {
+    return tool.isReadOnly(input)
+  } catch {
+    return false
+  }
+}
+
 /**
  * Run the conversation loop until the model stops requesting tools.
  *
@@ -366,6 +376,54 @@ export async function* runQuery(
       noProgressToolTurns = 0
     } else if (progressToolNames.size > 0) {
       noProgressToolTurns += 1
+    }
+    const shouldRefuseFurtherReadOnlyResearch =
+      progressToolNames.size > 0 &&
+      !hadProgressToolCall &&
+      noProgressTurnNudges > 0 &&
+      toolCalls.length > 0 &&
+      toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input))
+
+    if (shouldRefuseFurtherReadOnlyResearch) {
+      const toolResults: ToolResultBlock[] = toolCalls.map((tc) => ({
+        type: 'tool_result',
+        tool_use_id: tc.id,
+        content:
+          'Research budget exhausted for this intake turn. Do not call more read-only tools now. ' +
+          'Use update-product-brief, post-user-question, update-task, or raise-escalation instead.',
+        is_error: true,
+      }))
+      for (let i = 0; i < toolCalls.length; i++) {
+        const tc = toolCalls[i]!
+        const result = toolResults[i]!
+        yield {
+          event: {
+            type: 'tool_execution_started',
+            tool_name: tc.name,
+            tool_input: tc.input,
+          },
+          usage: null,
+        }
+        yield {
+          event: {
+            type: 'tool_execution_completed',
+            tool_name: tc.name,
+            output: result.content,
+            is_error: true,
+          },
+          usage: null,
+        }
+      }
+      messages.push({ role: 'user', content: toolResults })
+      yield {
+        event: {
+          type: 'status',
+          message:
+            'Assistant kept researching after an explicit durable-progress nudge; refusing more read-only tool calls for this turn.',
+        },
+        usage: null,
+      }
+      continue
     }
 
     if (toolCalls.length === 1) {

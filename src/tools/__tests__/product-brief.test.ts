@@ -163,4 +163,62 @@ describe('updateProductBrief', () => {
       authoredBy: 'spec-agent',
     })
   })
+
+  it('tool execute recovers a nested serialized productBrief payload from a near-miss model call', async () => {
+    const result = await updateProductBriefTool.execute(
+      {
+        productBrief: JSON.stringify({
+          userJob: 'You want the editor table primitives available in Knit without forking Looma behavior.',
+          successMetric: 'A developer can render and edit shared table primitives in Knit using the Looma-backed implementation.',
+          antiPatterns: ['Do not copy the editor implementation into a Knit-only fork.'],
+        }),
+      },
+      {
+        cwd: '/tmp',
+        metadata: {
+          tasks_path: tasksPath,
+          current_task_id: 'task-1',
+          current_agent_id: 'spec-agent',
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+
+    const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    expect(q.tasks[0]?.productBrief).toMatchObject({
+      userJob: 'You want the editor table primitives available in Knit without forking Looma behavior.',
+      successMetric: 'A developer can render and edit shared table primitives in Knit using the Looma-backed implementation.',
+      antiPatterns: ['Do not copy the editor implementation into a Knit-only fork.'],
+      authoredBy: 'spec-agent',
+    })
+  })
+
+  it('skips evidence-preamble prose when inferring a fallback brief from assistant text', async () => {
+    const result = await updateProductBriefTool.execute(
+      {},
+      {
+        cwd: '/tmp',
+        metadata: {
+          tasks_path: tasksPath,
+          current_task_id: 'task-1',
+          current_agent_id: 'spec-agent',
+          last_assistant_text: [
+            'Based on the grep results and the evidence from previous tasks, I have sufficient evidence to proceed.',
+            '',
+            'The grep clearly shows:',
+            '1. Knit imports the shared table primitives.',
+            '',
+            'The integration appears complete. Let me write the product brief and spec for task-1.',
+          ].join('\n'),
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+
+    const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    expect(q.tasks[0]?.productBrief).toMatchObject({
+      userJob: 'I want to verify whether Build the onboarding screen is already done and, if not, capture only the remaining delta.',
+      authoredBy: 'spec-agent',
+    })
+  })
 })

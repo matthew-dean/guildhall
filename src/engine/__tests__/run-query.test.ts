@@ -366,6 +366,84 @@ describe('runQuery — single turn, no tools', () => {
       ],
     })
   })
+
+  it('refuses further read-only tool calls after a durable-progress nudge has already been issued', async () => {
+    const registry = new ToolRegistry()
+    let readOnlyCalls = 0
+    let durableCalls = 0
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: 'reads a file',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async (input) => {
+          readOnlyCalls += 1
+          return { output: `read ${input.filePath}`, is_error: false }
+        },
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: 'writes the task spec',
+        inputSchema: z.object({ status: z.string().optional() }),
+        execute: async () => {
+          durableCalls += 1
+          return { output: 'task updated', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('read-file', { filePath: 'a.md' }, 'toolu_1') },
+      { message: assistantToolUse('read-file', { filePath: 'b.md' }, 'toolu_2') },
+      { message: assistantToolUse('read-file', { filePath: 'c.md' }, 'toolu_3') },
+      { message: assistantToolUse('update-task', { status: 'spec_review' }, 'toolu_4') },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/tmp',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 8,
+          noProgressToolNames: ['update-task'],
+          noProgressTurnNudge:
+            'Stop researching and write the spec, ask the question, or escalate now.',
+          noProgressTurnNudgeLimit: 1,
+          noProgressTurnThreshold: 2,
+        },
+        messages,
+      ),
+    )
+
+    expect(readOnlyCalls).toBe(2)
+    expect(durableCalls).toBe(1)
+    expect(events.some((event) =>
+      event.type === 'status' &&
+      event.message.includes('refusing more read-only tool calls for this turn'),
+    )).toBe(true)
+    const rejectedRead = messages.find((message) =>
+      message.role === 'user' &&
+      Array.isArray(message.content) &&
+      message.content.some((part) =>
+        typeof part === 'object' &&
+        part !== null &&
+        'type' in part &&
+        part.type === 'tool_result' &&
+        String(part.content).includes('Research budget exhausted for this intake turn'),
+      ),
+    )
+    expect(rejectedRead).toBeTruthy()
+  })
 })
 
 describe('runQuery — tool loop', () => {

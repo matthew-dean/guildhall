@@ -252,6 +252,32 @@ describe('engine tool wrappers', () => {
     expect(transcript).toContain('Please pick one of the structured options.')
   })
 
+  it('recovers transcript content from a nested stringified item payload', async () => {
+    const result = await appendExploringTranscriptTool.execute(
+      {
+        item: JSON.stringify({
+          message: 'I think the remaining question is whether Knit should expose Looma tables unchanged.',
+          role: 'spec-agent',
+        }),
+      },
+      {
+        cwd: '/tmp',
+        metadata: {
+          memory_dir: memoryDir,
+          current_task_id: 'task-meta-item',
+          current_agent_id: 'spec-agent',
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    const transcript = await fs.readFile(
+      path.join(memoryDir, 'exploring', 'task-meta-item.md'),
+      'utf-8',
+    )
+    expect(transcript).toContain('spec-agent')
+    expect(transcript).toContain('I think the remaining question is whether Knit should expose Looma tables unchanged.')
+  })
+
   it('defaults readExploringTranscriptTool task context from metadata', async () => {
     await appendExploringTranscript({
       memoryDir,

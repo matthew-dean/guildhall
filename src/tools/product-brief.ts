@@ -30,6 +30,18 @@ const updateProductBriefInputSchema = z.object({
     .string()
     .optional()
     .describe('Agent id or "human" — who is authoring the brief right now'),
+  productBrief: z
+    .union([
+      z.string(),
+      z.object({
+        userJob: z.string().optional(),
+        successMetric: z.string().optional(),
+        antiPatterns: z.array(z.string()).optional(),
+        rolloutPlan: z.string().optional(),
+      }).passthrough(),
+    ])
+    .optional()
+    .describe('Optional nested/serialized brief payload recovered from near-miss model calls.'),
 })
 
 export type UpdateProductBriefInput = z.input<typeof updateProductBriefInputSchema>
@@ -48,6 +60,13 @@ interface ResolvedBriefContent {
   userJob: string
   successMetric: string
   antiPatterns: string[]
+  rolloutPlan?: string
+}
+
+interface BriefLikePayload {
+  userJob?: string
+  successMetric?: string
+  antiPatterns?: string[]
   rolloutPlan?: string
 }
 
@@ -89,32 +108,81 @@ function inferBriefContentFromAssistantText(
   const userJobLine = lines.find((line) =>
     /^you want to\b/i.test(line) ||
     /^this task is about\b/i.test(line) ||
+    /^this task\b/i.test(line) ||
     /^the goal is to\b/i.test(line),
   ) ?? firstMeaningfulParagraph(afterGuess)
-  if (!userJobLine) return null
+  const normalizedUserJob = userJobLine?.replace(/^[-*]\s*/, '').trim() ?? ''
+  const looksLikeEvidencePreamble =
+    /^based on\b/i.test(normalizedUserJob) ||
+    /^the grep clearly shows\b/i.test(normalizedUserJob) ||
+    /^i have sufficient evidence\b/i.test(normalizedUserJob) ||
+    /^the integration appears complete\b/i.test(normalizedUserJob) ||
+    /^let me write\b/i.test(normalizedUserJob)
+  const fallbackUserJob =
+    looksLikeEvidencePreamble || !normalizedUserJob
+      ? `I want to verify whether ${taskTitle.replace(/\.$/, '')} is already done and, if not, capture only the remaining delta.`
+      : normalizedUserJob
+  if (!fallbackUserJob) return null
 
   const antiPatterns = lines
     .filter((line) => /^don't\b/i.test(line) || /^do not\b/i.test(line))
     .map((line) => line.replace(/^[*-]\s*/, '').trim())
 
   return {
-    userJob: userJobLine.replace(/^[-*]\s*/, '').trim(),
+    userJob: fallbackUserJob,
     successMetric: `Thread shows a drafted brief and actionable next step for "${taskTitle}".`,
     antiPatterns,
   }
 }
 
+function parseBriefLikePayload(raw: unknown): BriefLikePayload | null {
+  if (!raw) return null
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!trimmed) return null
+    try {
+      const parsed = JSON.parse(trimmed) as unknown
+      return parseBriefLikePayload(parsed)
+    } catch {
+      return null
+    }
+  }
+  if (typeof raw !== 'object') return null
+  const obj = raw as Record<string, unknown>
+  const antiPatterns = Array.isArray(obj.antiPatterns)
+    ? obj.antiPatterns.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean)
+    : undefined
+  const userJob = typeof obj.userJob === 'string' ? obj.userJob.trim() : undefined
+  const successMetric = typeof obj.successMetric === 'string' ? obj.successMetric.trim() : undefined
+  const rolloutPlan = typeof obj.rolloutPlan === 'string' ? obj.rolloutPlan.trim() : undefined
+  if (!userJob && !successMetric && !antiPatterns?.length && !rolloutPlan) return null
+  return {
+    ...(userJob ? { userJob } : {}),
+    ...(successMetric ? { successMetric } : {}),
+    ...(antiPatterns ? { antiPatterns } : {}),
+    ...(rolloutPlan ? { rolloutPlan } : {}),
+  }
+}
+
 function resolveBriefContent(
-  input: Pick<UpdateProductBriefInput, 'userJob' | 'successMetric' | 'antiPatterns' | 'rolloutPlan'>,
+  input: Pick<UpdateProductBriefInput, 'userJob' | 'successMetric' | 'antiPatterns' | 'rolloutPlan' | 'productBrief'>,
   metadata: Record<string, unknown>,
   taskTitle: string,
 ): ResolvedBriefContent | { error: string } {
-  if (input.userJob?.trim() && input.successMetric?.trim()) {
+  const nested = parseBriefLikePayload(input.productBrief)
+  const userJob = input.userJob?.trim() || nested?.userJob?.trim()
+  const successMetric = input.successMetric?.trim() || nested?.successMetric?.trim()
+  const antiPatterns = input.antiPatterns?.length
+    ? input.antiPatterns
+    : nested?.antiPatterns ?? []
+  const rolloutPlan = input.rolloutPlan?.trim() || nested?.rolloutPlan?.trim()
+
+  if (userJob && successMetric) {
     return {
-      userJob: input.userJob.trim(),
-      successMetric: input.successMetric.trim(),
-      antiPatterns: input.antiPatterns ?? [],
-      ...(input.rolloutPlan?.trim() ? { rolloutPlan: input.rolloutPlan.trim() } : {}),
+      userJob,
+      successMetric,
+      antiPatterns,
+      ...(rolloutPlan ? { rolloutPlan } : {}),
     }
   }
 
@@ -127,8 +195,8 @@ function resolveBriefContent(
   }
   return {
     ...inferred,
-    antiPatterns: input.antiPatterns?.length ? input.antiPatterns : inferred.antiPatterns,
-    ...(input.rolloutPlan?.trim() ? { rolloutPlan: input.rolloutPlan.trim() } : {}),
+    antiPatterns: antiPatterns.length ? antiPatterns : inferred.antiPatterns,
+    ...(rolloutPlan ? { rolloutPlan } : {}),
   }
 }
 

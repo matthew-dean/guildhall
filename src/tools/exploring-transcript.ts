@@ -32,6 +32,18 @@ const appendExploringTranscriptInputSchema = z.object({
   taskId: z.string().optional().describe('The task being explored'),
   role: TranscriptRole.optional(),
   content: z.string().optional(),
+  message: z.string().optional().describe('Alias for content used by some near-miss model calls.'),
+  item: z
+    .union([
+      z.string(),
+      z.object({
+        content: z.string().optional(),
+        message: z.string().optional(),
+        role: z.string().optional(),
+      }).passthrough(),
+    ])
+    .optional()
+    .describe('Optional nested or stringified transcript payload recovered from near-miss model calls.'),
 })
 
 export type AppendExploringTranscriptInput = z.input<
@@ -65,14 +77,46 @@ function resolveTranscriptTarget(
 }
 
 function resolveTranscriptEntryDefaults(
-  input: Pick<AppendExploringTranscriptInput, 'role' | 'content'>,
+  input: Pick<AppendExploringTranscriptInput, 'role' | 'content' | 'message' | 'item'>,
   metadata: Record<string, unknown>,
 ): { role: TranscriptRole; content: string } | { error: string } {
   const agentId = String(metadata['current_agent_id'] ?? '').trim()
-  const role = input.role ?? (agentId === 'spec-agent' ? 'spec-agent' : 'system')
-  const content = String(input.content ?? metadata['last_assistant_text'] ?? '').trim()
+  const recovered = recoverTranscriptAliases(input.item)
+  const rawRole = input.role ?? recovered?.role
+  const role = rawRole === 'user' || rawRole === 'spec-agent' || rawRole === 'system'
+    ? rawRole
+    : (agentId === 'spec-agent' ? 'spec-agent' : 'system')
+  const content = String(
+    input.content ??
+    input.message ??
+    recovered?.content ??
+    metadata['last_assistant_text'] ??
+    '',
+  ).trim()
   if (!content) return { error: 'Missing content (and no metadata.last_assistant_text)' }
   return { role, content }
+}
+
+function recoverTranscriptAliases(
+  raw: AppendExploringTranscriptInput['item'],
+): { role?: string; content?: string } | null {
+  if (!raw) return null
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!trimmed) return null
+    try {
+      return recoverTranscriptAliases(JSON.parse(trimmed) as AppendExploringTranscriptInput['item'])
+    } catch {
+      return { content: trimmed }
+    }
+  }
+  if (typeof raw !== 'object') return null
+  const role = typeof raw.role === 'string' ? raw.role.trim() : undefined
+  const content = typeof raw.content === 'string'
+    ? raw.content.trim()
+    : (typeof raw.message === 'string' ? raw.message.trim() : undefined)
+  if (!role && !content) return null
+  return { ...(role ? { role } : {}), ...(content ? { content } : {}) }
 }
 
 export async function appendExploringTranscript(
