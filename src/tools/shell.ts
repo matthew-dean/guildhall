@@ -6,13 +6,7 @@
  * Upstream SHA at port time: 559ba76f237db957a1a21453170df8500479dc7d
  *
  * Changes from upstream:
- *   - Stays synchronous via `execSync` rather than spawning an async
- *     subprocess. Upstream runs in a long-lived Python agent loop where
- *     blocking would starve other coroutines; Guildhall runs shell tools
- *     inside already-async agent executors where blocking a single worker
- *     fiber is fine, and converting `runShell` → async would cascade
- *     through `runBootstrap` and every orchestrator call site.
- *   - PTY branch is dropped — `execSync` has no PTY mode, and Guildhall
+ *   - PTY branch is dropped — our async spawn path has no PTY mode, and Guildhall
  *     has not added a PTY dependency. This is only a loss for tools that
  *     auto-detect a TTY; the non-interactive preflight below catches the
  *     most common case (scaffolding CLIs).
@@ -22,7 +16,7 @@
 
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
-import { execSync } from 'node:child_process'
+import { execSync, spawn } from 'node:child_process'
 
 const OUTPUT_TRUNCATE_LIMIT = 12_000
 
@@ -129,7 +123,17 @@ function formatTimeoutOutput(raw: string, command: string, timeoutMs: number): s
   return parts.join('\n')
 }
 
-export function runShell(input: ShellInput): ShellResult {
+function normalizeExecErrorOutput(err: {
+  stdout?: string | Buffer
+  stderr?: string | Buffer
+}): string {
+  return [err.stdout, err.stderr]
+    .map((b) => (typeof b === 'string' ? b : b?.toString('utf-8') ?? ''))
+    .filter((s) => s.length > 0)
+    .join('\n')
+}
+
+export function runShellSync(input: ShellInput): ShellResult {
   const { command, cwd, timeoutMs = 120_000 } = input
 
   const blocked = preflightInteractive(command)
@@ -157,11 +161,7 @@ export function runShell(input: ShellInput): ShellResult {
       status?: number | null
       signal?: NodeJS.Signals | null
     }
-    const rawOut =
-      [execErr.stdout, execErr.stderr]
-        .map((b) => (typeof b === 'string' ? b : b?.toString('utf-8') ?? ''))
-        .filter((s) => s.length > 0)
-        .join('\n')
+    const rawOut = normalizeExecErrorOutput(execErr)
 
     // Node's execSync signals timeout via signal=SIGTERM + status=null.
     const timedOut = execErr.signal === 'SIGTERM' && execErr.status == null
@@ -180,6 +180,78 @@ export function runShell(input: ShellInput): ShellResult {
       exitCode: execErr.status ?? 1,
     }
   }
+}
+
+export async function runShell(input: ShellInput): Promise<ShellResult> {
+  const { command, cwd, timeoutMs = 120_000 } = input
+
+  const blocked = preflightInteractive(command)
+  if (blocked) {
+    return {
+      success: false,
+      output: blocked,
+      exitCode: -1,
+      interactiveRequired: true,
+    }
+  }
+
+  return await new Promise<ShellResult>((resolve) => {
+    const child = spawn('sh', ['-c', command], {
+      cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: process.env,
+    })
+
+    let stdout = ''
+    let stderr = ''
+    let timedOut = false
+    let settled = false
+
+    const settle = (result: ShellResult) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(result)
+    }
+
+    child.stdout?.setEncoding('utf8')
+    child.stderr?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk: string) => { stdout += chunk })
+    child.stderr?.on('data', (chunk: string) => { stderr += chunk })
+
+    child.on('error', (err) => {
+      settle({
+        success: false,
+        output: formatOutput(String(err)),
+        exitCode: 1,
+      })
+    })
+
+    child.on('close', (code, signal) => {
+      const rawOut = [stdout, stderr].filter(Boolean).join('\n')
+      if (timedOut || (signal === 'SIGTERM' && timedOut)) {
+        settle({
+          success: false,
+          output: formatTimeoutOutput(rawOut, command, timeoutMs),
+          exitCode: -1,
+          timedOut: true,
+        })
+        return
+      }
+      settle({
+        success: code === 0,
+        output: formatOutput(rawOut),
+        exitCode: code ?? 1,
+      })
+    })
+
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGTERM')
+      setTimeout(() => child.kill('SIGKILL'), 1000).unref()
+    }, timeoutMs)
+    timer.unref()
+  })
 }
 
 /**
@@ -208,7 +280,7 @@ export const shellTool = defineTool({
   },
   isReadOnly: () => false,
   execute: async (input) => {
-    const result = runShell(input)
+    const result = await runShell(input)
     return {
       output: result.output,
       is_error: !result.success,

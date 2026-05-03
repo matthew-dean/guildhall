@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { runShell, shellTool } from '../shell.js'
+import { runShell, runShellSync, shellTool } from '../shell.js'
 
 // ---------------------------------------------------------------------------
 // Shell tool tests (AC-06 — gate runner pass/fail logic)
@@ -9,35 +9,35 @@ import { runShell, shellTool } from '../shell.js'
 
 const ctx = { cwd: '/tmp', metadata: {} }
 
-describe('runShell — success cases', () => {
+describe('runShellSync — success cases', () => {
   it('returns success=true for a command that exits 0', () => {
-    const result = runShell({ command: 'echo hello', cwd: '/tmp', timeoutMs: 5000 })
+    const result = runShellSync({ command: 'echo hello', cwd: '/tmp', timeoutMs: 5000 })
     expect(result.success).toBe(true)
     expect(result.exitCode).toBe(0)
     expect(result.output).toContain('hello')
   })
 
   it('captures stdout in output', () => {
-    const result = runShell({ command: 'echo "forge test output"', cwd: '/tmp', timeoutMs: 5000 })
+    const result = runShellSync({ command: 'echo "forge test output"', cwd: '/tmp', timeoutMs: 5000 })
     expect(result.output).toContain('forge test output')
   })
 
   it('runs commands in the specified working directory', () => {
-    const result = runShell({ command: 'pwd', cwd: '/tmp', timeoutMs: 5000 })
+    const result = runShellSync({ command: 'pwd', cwd: '/tmp', timeoutMs: 5000 })
     expect(result.success).toBe(true)
     expect(result.output).toContain('/tmp')
   })
 })
 
-describe('runShell — failure cases', () => {
+describe('runShellSync — failure cases', () => {
   it('returns success=false for a command that exits non-zero', () => {
-    const result = runShell({ command: 'exit 1', cwd: '/tmp', timeoutMs: 5000 })
+    const result = runShellSync({ command: 'exit 1', cwd: '/tmp', timeoutMs: 5000 })
     expect(result.success).toBe(false)
     expect(result.exitCode).not.toBe(0)
   })
 
   it('returns success=false for a command that does not exist', () => {
-    const result = runShell({
+    const result = runShellSync({
       command: 'nonexistent-command-xyz-abc',
       cwd: '/tmp',
       timeoutMs: 5000,
@@ -46,7 +46,7 @@ describe('runShell — failure cases', () => {
   })
 
   it('captures stderr output on failure', () => {
-    const result = runShell({
+    const result = runShellSync({
       command: 'ls /nonexistent-path-xyz',
       cwd: '/tmp',
       timeoutMs: 5000,
@@ -56,7 +56,7 @@ describe('runShell — failure cases', () => {
   })
 
   it('returns success=false when working directory does not exist', () => {
-    const result = runShell({
+    const result = runShellSync({
       command: 'echo hello',
       cwd: '/nonexistent-dir-xyz',
       timeoutMs: 5000,
@@ -65,20 +65,20 @@ describe('runShell — failure cases', () => {
   })
 
   it('returns success=false on timeout', () => {
-    const result = runShell({ command: 'sleep 10', cwd: '/tmp', timeoutMs: 100 })
+    const result = runShellSync({ command: 'sleep 10', cwd: '/tmp', timeoutMs: 100 })
     expect(result.success).toBe(false)
   })
 })
 
-describe('runShell — gate-specific scenarios', () => {
+describe('runShellSync — gate-specific scenarios', () => {
   it('correctly detects a passing typecheck-like command', () => {
-    const result = runShell({ command: 'node --version', cwd: '/tmp', timeoutMs: 10_000 })
+    const result = runShellSync({ command: 'node --version', cwd: '/tmp', timeoutMs: 10_000 })
     expect(result.success).toBe(true)
     expect(result.output).toMatch(/^v\d+/)
   })
 
   it('correctly detects a failing gate — non-zero exit is always a hard failure', () => {
-    const result = runShell({
+    const result = runShellSync({
       command: 'node -e "process.exit(2)"',
       cwd: '/tmp',
       timeoutMs: 5000,
@@ -88,7 +88,7 @@ describe('runShell — gate-specific scenarios', () => {
   })
 
   it('captures multi-line output for gate failure diagnosis', () => {
-    const result = runShell({
+    const result = runShellSync({
       command: 'node -e "console.error(\'line1\\nline2\\nline3\'); process.exit(1)"',
       cwd: '/tmp',
       timeoutMs: 5000,
@@ -124,9 +124,9 @@ describe('shellTool — engine-tool interface', () => {
   })
 })
 
-describe('runShell — interactive-scaffold preflight', () => {
+describe('runShellSync — interactive-scaffold preflight', () => {
   it('blocks `npm create vite` without a non-interactive flag', () => {
-    const result = runShell({
+    const result = runShellSync({
       command: 'npm create vite my-app',
       cwd: '/tmp',
       timeoutMs: 5000,
@@ -138,7 +138,7 @@ describe('runShell — interactive-scaffold preflight', () => {
   })
 
   it('passes `npm create vite --yes` through to the shell', () => {
-    const result = runShell({
+    const result = runShellSync({
       command: 'npm create vite --yes --help',
       cwd: '/tmp',
       timeoutMs: 5000,
@@ -149,14 +149,14 @@ describe('runShell — interactive-scaffold preflight', () => {
   })
 
   it('does not flag unrelated commands', () => {
-    const result = runShell({ command: 'echo hello', cwd: '/tmp', timeoutMs: 5000 })
+    const result = runShellSync({ command: 'echo hello', cwd: '/tmp', timeoutMs: 5000 })
     expect(result.interactiveRequired).toBeUndefined()
   })
 })
 
-describe('runShell — output formatting', () => {
+describe('runShellSync — output formatting', () => {
   it('normalizes CRLF to LF', () => {
-    const result = runShell({
+    const result = runShellSync({
       command: "node -e \"process.stdout.write('a\\r\\nb\\r\\nc')\"",
       cwd: '/tmp',
       timeoutMs: 5000,
@@ -167,7 +167,7 @@ describe('runShell — output formatting', () => {
 
   it('truncates output over 12000 chars with a marker', () => {
     // Print 15000 x'es — well over the 12000-char cap.
-    const result = runShell({
+    const result = runShellSync({
       command: "node -e \"process.stdout.write('x'.repeat(15000))\"",
       cwd: '/tmp',
       timeoutMs: 5000,
@@ -179,15 +179,34 @@ describe('runShell — output formatting', () => {
   })
 
   it('returns the "(no output)" sentinel for successful silent commands', () => {
-    const result = runShell({ command: 'true', cwd: '/tmp', timeoutMs: 5000 })
+    const result = runShellSync({ command: 'true', cwd: '/tmp', timeoutMs: 5000 })
     expect(result.success).toBe(true)
     expect(result.output).toBe('(no output)')
   })
 })
 
-describe('runShell — timeout with partial output', () => {
+describe('runShellSync — timeout with partial output', () => {
   it('marks timedOut and includes a timeout banner', () => {
-    const result = runShell({
+    const result = runShellSync({
+      command: "node -e \"console.log('before'); setTimeout(() => {}, 5000)\"",
+      cwd: '/tmp',
+      timeoutMs: 500,
+    })
+    expect(result.success).toBe(false)
+    expect(result.timedOut).toBe(true)
+    expect(result.output).toContain('timed out')
+  })
+})
+
+describe('runShell — async tool path', () => {
+  it('returns success=true for a command that exits 0 without blocking the tool contract', async () => {
+    const result = await runShell({ command: 'echo hello', cwd: '/tmp', timeoutMs: 5000 })
+    expect(result.success).toBe(true)
+    expect(result.output).toContain('hello')
+  })
+
+  it('returns timeout metadata from the async execution path', async () => {
+    const result = await runShell({
       command: "node -e \"console.log('before'); setTimeout(() => {}, 5000)\"",
       cwd: '/tmp',
       timeoutMs: 500,

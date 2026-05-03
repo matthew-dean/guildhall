@@ -225,6 +225,14 @@ correct the agent, and ask for direct action from Thread.
   to treat an evidence preamble ("Based on the grep results...") as the
   userJob. Tightened the inference to fall back to a cleaner verification /
   remaining-delta framing when the assistant prose is just narrating evidence.
+- The next unattended-run blocker appeared immediately after that: once
+  `task-008` moved from `ready` to `in_progress`, `/api/project` timed out
+  while the worker was running. Sampling the live process showed the server
+  blocked inside a synchronous child-process spawn from the shell tool.
+- Fixed that by making the worker-facing `shell` tool run asynchronously via
+  spawn instead of `execSync`, while leaving the bootstrap runner on its
+  existing sync helper for now. The next live check is to confirm a running
+  worker no longer freezes project/status API reads.
 - Thread column width now uses a real target width again. The column had been
   using `max-width: 680px`, which let it shrink unexpectedly; it now uses
   `width: 680px; max-width: 100%` so desktop stays stable while smaller
