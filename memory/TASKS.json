@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-05-03T00:33:54.082Z",
+  "lastUpdated": "2026-05-03T00:45:18Z",
   "tasks": [
     {
       "id": "looma-001",
@@ -906,12 +906,30 @@
           "role": "worker",
           "timestamp": "2026-05-03T00:33:54.082Z",
           "content": "Live unattended-run proof exposed a shell-level throughput bug: when a worker task entered in_progress and started using the shell tool, /api/project timed out because the Node server was blocked inside a synchronous child-process spawn. Fixed the shell tool to execute asynchronously via spawn so worker/gate commands no longer freeze the serve loop, while keeping the bootstrap runner on a separate sync helper for now. Added async shell coverage alongside the existing sync behavior tests; next live check is that project status remains responsive during an active worker turn."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-03T00:39:46Z",
+          "content": "Tracked down a Notifications route crash on Looma/Knit. The inbox endpoint itself was healthy, but InboxTab keyed rows by kind+title, and several open escalations shared the same title. Svelte threw each_key_duplicate, which left the route showing Loading forever. Inbox row keys now include escalation/task identity, and a small web-lib regression test covers duplicate-title escalations."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-03T00:42:24Z",
+          "content": "The same Notifications debugging pass exposed stale local-shell caching: after a rebuild/restart, the browser could still reuse an older /web/app.js and replay already-fixed client crashes. Tightened the SPA shell and web-asset responses to no-store/no-cache and appended a build-derived ?v= stamp to app.js/app.css in dashboardHtml so reloads pick up the live bundle."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-03T00:45:18Z",
+          "content": "Finished the Notifications repair in the live Looma/Knit shell. InboxTab now reuses the shell's already-fetched inbox state instead of maintaining a second fetch lifecycle, so the badge count and page body stay in sync. Verified at /notifications: Loading is gone, repeated escalation titles render safely, and the inbox rows appear immediately."
         }
       ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-02T17:45:00Z",
-      "updatedAt": "2026-05-03T00:33:54.082Z"
+      "updatedAt": "2026-05-03T00:45:18Z"
     }
   ]
 }

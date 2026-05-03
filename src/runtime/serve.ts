@@ -3518,7 +3518,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // -------------------------------------------------------------------------
   // SPA (catch-all)
   // -------------------------------------------------------------------------
-  app.get('*', c => c.html(dashboardHtml()))
+  app.get('*', c => {
+    c.header('Cache-Control', 'no-store, no-cache, must-revalidate')
+    c.header('Pragma', 'no-cache')
+    return c.html(dashboardHtml())
+  })
 
   return { app, supervisor, projectPath }
 }
@@ -3595,6 +3599,14 @@ const WEB_DIR = (() => {
   return resolve(here, '..', '..', 'dist', 'web')
 })()
 
+const WEB_ASSET_VERSION = (() => {
+  try {
+    return String(Math.floor(statSync(join(WEB_DIR, 'app.js')).mtimeMs))
+  } catch {
+    return 'dev'
+  }
+})()
+
 async function serveWebAsset(
   c: Context,
   filename: string,
@@ -3606,7 +3618,11 @@ async function serveWebAsset(
   }
   const body = await fsp.readFile(path)
   return new Response(body, {
-    headers: { 'content-type': contentType, 'cache-control': 'no-cache' },
+    headers: {
+      'content-type': contentType,
+      'cache-control': 'no-store, no-cache, must-revalidate',
+      pragma: 'no-cache',
+    },
   })
 }
 
@@ -3621,7 +3637,7 @@ function dashboardHtml(): string {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Guildhall</title>
-  <link rel="stylesheet" href="/web/app.css" />
+  <link rel="stylesheet" href="/web/app.css?v=${WEB_ASSET_VERSION}" />
 </head>
 <body>
   <div id="svelte-root"></div>
@@ -3630,7 +3646,7 @@ function dashboardHtml(): string {
       Guildhall requires JavaScript. Enable it and reload.
     </p>
   </noscript>
-  <script type="module" src="/web/app.js"></script>
+  <script type="module" src="/web/app.js?v=${WEB_ASSET_VERSION}"></script>
 </body>
 </html>`
 }

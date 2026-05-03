@@ -6,49 +6,50 @@
 <script lang="ts">
   import Card from '../../lib/Card.svelte'
   import Icon, { type IconName } from '../../lib/Icon.svelte'
+  import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
   import { nav } from '../../lib/nav.svelte.js'
 
-  type Severity = 'high' | 'medium' | 'low'
-
-  interface InboxItem {
-    kind:
-      | 'bootstrap_missing'
-      | 'workspace_import_pending'
-      | 'brief_approval'
-      | 'spec_approval'
-      | 'open_escalation'
-      | 'lever_questions'
-    severity: Severity
-    title: string
-    detail: string
-    actionHref?: string
-    taskId?: string
-    escalationId?: string
-    signals?: string[]
-    defaultCount?: number
-    /** If present, POST to this path to dismiss the item (stays reachable elsewhere). */
-    dismissEndpoint?: string
+  interface Props {
+    items?: InboxItem[]
+    loaded?: boolean
+    error?: string | null
+    refresh?: (() => Promise<void>) | null
   }
 
-  let items = $state<InboxItem[]>([])
-  let loaded = $state(false)
-  let error = $state<string | null>(null)
+  let {
+    items: suppliedItems = undefined,
+    loaded: suppliedLoaded = false,
+    error: suppliedError = null,
+    refresh = null,
+  }: Props = $props()
+
+  let localItems = $state<InboxItem[]>([])
+  let localLoaded = $state(false)
+  let localError = $state<string | null>(null)
   // Which item (by list index) is currently being handled by an agent action.
   // We key by index so optimistic state doesn't collide across kinds.
   let handlingIndex = $state<number | null>(null)
   let handlingMessage = $state<string | null>(null)
 
+  const items = $derived(suppliedItems ?? localItems)
+  const loaded = $derived(suppliedItems ? suppliedLoaded : localLoaded)
+  const error = $derived(suppliedItems ? suppliedError : localError)
+
   async function load(): Promise<void> {
+    if (refresh) {
+      await refresh()
+      return
+    }
     try {
       const r = await fetch('/api/project/inbox')
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const j = (await r.json()) as { items?: InboxItem[] }
-      items = j.items ?? []
-      error = null
+      localItems = j.items ?? []
+      localError = null
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e)
+      localError = e instanceof Error ? e.message : String(e)
     } finally {
-      loaded = true
+      localLoaded = true
     }
   }
 
@@ -116,6 +117,7 @@
     spec_approval: 'file-check',
     open_escalation: 'alert-triangle',
     lever_questions: 'sliders',
+    spec_fill_pending: 'help-circle',
   }
 
   const VERBS: Record<InboxItem['kind'], string> = {
@@ -125,6 +127,7 @@
     spec_approval: 'Review',
     open_escalation: 'Resolve',
     lever_questions: 'Review',
+    spec_fill_pending: 'Review',
   }
 
   function goTo(item: InboxItem): void {
@@ -163,7 +166,7 @@
 
     {#if priorityItems.length > 0}
       <ul class="list">
-        {#each priorityItems as item, i (item.kind + ':' + item.title)}
+        {#each priorityItems as item, i (inboxItemKey(item))}
           {@const handling = handlingIndex === items.indexOf(item)}
           {@const handler = AGENT_HANDLERS[item.kind]}
           <li>
@@ -218,7 +221,7 @@
           <span class="count">({housekeepingItems.length})</span>
         </header>
         <ul class="list list-housekeeping">
-          {#each housekeepingItems as item (item.kind + ':' + item.title)}
+          {#each housekeepingItems as item (inboxItemKey(item))}
             <li>
               <div class="row row-{item.severity}">
                 <button

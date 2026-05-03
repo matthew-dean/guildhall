@@ -233,6 +233,23 @@ correct the agent, and ask for direct action from Thread.
   spawn instead of `execSync`, while leaving the bootstrap runner on its
   existing sync helper for now. The next live check is to confirm a running
   worker no longer freezes project/status API reads.
+- Notifications `Loading…` on Looma/Knit turned out to be a client-side crash,
+  not a hung inbox endpoint. `/api/project/inbox` returned immediately, but
+  InboxTab keyed rows by `kind + title`, and multiple escalations shared that
+  tuple. Svelte threw `each_key_duplicate`, leaving Notifications stuck at
+  Loading until refresh. Inbox row keys now include escalation/task identity,
+  with a small web-lib regression test for duplicate-title escalations.
+- The same pass exposed stale-shell caching during local restarts: after a
+  successful rebuild/restart, the browser could still reuse an older
+  `/web/app.js`, replaying already-fixed client crashes. The SPA shell and web
+  assets now send no-store headers, and dashboardHtml appends a build-derived
+  `?v=` stamp to `app.js` and `app.css` so fresh reloads pick up the actual
+  current bundle.
+- Notifications now reuses the shell's already-loaded inbox state instead of
+  maintaining a second independent fetch lifecycle. Live Looma/Knit verification
+  on `http://localhost:7844/notifications` now shows the real inbox rows
+  immediately, with `Loading…` gone and the repeated escalation titles rendered
+  safely.
 - Thread column width now uses a real target width again. The column had been
   using `max-width: 680px`, which let it shrink unexpectedly; it now uses
   `width: 680px; max-width: 100%` so desktop stays stable while smaller

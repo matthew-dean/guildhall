@@ -28,6 +28,7 @@
   import { project } from '../lib/project.svelte.js'
   import { onEvent } from '../lib/events.js'
   import { path, nav } from '../lib/nav.svelte.js'
+  import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { ProjectView, ProviderStatus } from '../lib/types.js'
 
   interface Props {
@@ -49,19 +50,26 @@
   interface Blockers { bootstrap: boolean; workspaceImport: boolean }
   let blockers = $state<Blockers>({ bootstrap: false, workspaceImport: false })
   let inboxHighCount = $state(0)
+  let inboxItems = $state<InboxItem[]>([])
+  let inboxLoaded = $state(false)
+  let inboxError = $state<string | null>(null)
 
   async function loadInbox(): Promise<void> {
     try {
       const r = await fetch('/api/project/inbox', { cache: 'no-store' })
-      if (!r.ok) return
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const j = (await r.json()) as {
-        items?: Array<{ severity?: string }>
+        items?: InboxItem[]
         blockers?: Blockers
       }
+      inboxItems = j.items ?? []
       if (j.blockers) blockers = j.blockers
-      inboxHighCount = (j.items ?? []).filter(i => i.severity === 'high').length
-    } catch {
-      /* leave prior values intact */
+      inboxHighCount = inboxItems.filter(i => i.severity === 'high').length
+      inboxError = null
+    } catch (err) {
+      inboxError = err instanceof Error ? err.message : String(err)
+    } finally {
+      inboxLoaded = true
     }
   }
 
@@ -709,7 +717,7 @@
           {#if currentView === 'thread'}
             <ThreadTab />
           {:else if currentView === 'inbox'}
-            <InboxTab />
+            <InboxTab items={inboxItems} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
           {:else if currentView === 'workspace-import'}
             <WorkspaceImportTab />
           {:else if currentView === 'work'}
