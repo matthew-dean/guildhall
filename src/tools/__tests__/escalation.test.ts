@@ -8,6 +8,7 @@ import {
   raiseEscalationTool,
   resolveEscalationTool,
   hasOpenEscalation,
+  resolveSupersededEscalations,
 } from '../escalation.js'
 import { readTasks } from '../task-queue.js'
 import type { Task } from '@guildhall/core'
@@ -336,6 +337,56 @@ describe('hasOpenEscalation', () => {
       ],
     })
     expect(hasOpenEscalation(task)).toBe(false)
+  })
+
+  it('returns false when an unresolved escalation was superseded by later task progress', () => {
+    const task = seedTask({
+      status: 'gate_check',
+      updatedAt: '2026-05-03T19:10:00.000Z',
+      escalations: [
+        {
+          id: 'esc-1',
+          taskId: 'task-001',
+          agentId: 'a',
+          reason: 'gate_hard_failure',
+          summary: 'old blocker',
+          raisedAt: '2026-05-03T19:00:00.000Z',
+        },
+      ],
+    })
+    expect(hasOpenEscalation(task)).toBe(false)
+  })
+})
+
+describe('resolveSupersededEscalations', () => {
+  it('materializes superseded escalations as resolved and clears stale block reason', () => {
+    const task = seedTask({
+      status: 'gate_check',
+      blockReason: 'gate_hard_failure: stale blocker',
+      updatedAt: '2026-05-03T19:10:00.000Z',
+      escalations: [
+        {
+          id: 'esc-1',
+          taskId: 'task-001',
+          agentId: 'a',
+          reason: 'gate_hard_failure',
+          summary: 'old blocker',
+          raisedAt: '2026-05-03T19:00:00.000Z',
+        },
+      ],
+    })
+
+    expect(
+      resolveSupersededEscalations(task, {
+        now: '2026-05-03T19:10:00.000Z',
+        resolvedBy: 'system',
+        resolution: 'Superseded by resumed gate_check.',
+      }),
+    ).toEqual(['esc-1'])
+    expect(task.escalations[0]?.resolvedAt).toBe('2026-05-03T19:10:00.000Z')
+    expect(task.escalations[0]?.resolvedBy).toBe('system')
+    expect(task.escalations[0]?.resolution).toBe('Superseded by resumed gate_check.')
+    expect(task.blockReason).toBeUndefined()
   })
 })
 

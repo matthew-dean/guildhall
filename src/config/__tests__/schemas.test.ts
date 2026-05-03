@@ -101,6 +101,15 @@ describe('resolveModelsForProvider', () => {
     })
     expect(result.worker).toBe('only-model')
   })
+
+  it('does not bleed a single other-provider block into an explicit preferred provider', () => {
+    const result = resolveModelsForProvider({
+      'llama-cpp': {
+        all: 'local-only-model',
+      },
+    }, 'openai-api')
+    expect(result).toEqual({})
+  })
 })
 
 describe('writeModelsForProvider', () => {

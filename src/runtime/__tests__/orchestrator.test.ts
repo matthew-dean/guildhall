@@ -6,6 +6,7 @@ import {
   Orchestrator,
   pickNextTask,
   shouldResumeAgentSession,
+  isSessionSnapshotFreshForTask,
   type OrchestratorAgentSet,
 } from '../orchestrator.js'
 import { LivenessTracker } from '../liveness.js'
@@ -18,6 +19,7 @@ import {
   type DomainLevers,
   type LeverSettings,
 } from '@guildhall/levers'
+import { InMemoryGitDriver } from '../git-driver.js'
 
 // ---------------------------------------------------------------------------
 // Orchestrator feedback-loop tests
@@ -364,6 +366,55 @@ describe('shouldResumeAgentSession', () => {
     ])
     expect(shouldResumeAgentSession('coordinator-knit', queue)).toBe(true)
     expect(shouldResumeAgentSession('coordinator-auth', queue)).toBe(false)
+  })
+})
+
+describe('isSessionSnapshotFreshForTask', () => {
+  it('rejects snapshots whose task id does not match the current task', () => {
+    const task = mkTask({ id: 'task-009', updatedAt: '2026-05-03T16:15:45.000Z' })
+    const snapshot = {
+      created_at: Date.parse('2026-05-03T16:15:50.000Z') / 1000,
+      tool_metadata: { current_task_id: 'task-008' },
+    }
+    expect(isSessionSnapshotFreshForTask(snapshot as never, task)).toBe(false)
+  })
+
+  it('rejects snapshots older than the current task state', () => {
+    const task = mkTask({ id: 'task-009', updatedAt: '2026-05-03T16:15:45.000Z' })
+    const snapshot = {
+      created_at: Date.parse('2026-05-03T16:15:40.000Z') / 1000,
+      tool_metadata: { current_task_id: 'task-009' },
+    }
+    expect(isSessionSnapshotFreshForTask(snapshot as never, task)).toBe(false)
+  })
+
+  it('accepts snapshots for the same task when they are at least as new as the task state', () => {
+    const task = mkTask({ id: 'task-009', updatedAt: '2026-05-03T16:15:45.000Z' })
+    const snapshot = {
+      created_at: Date.parse('2026-05-03T16:15:45.000Z') / 1000,
+      tool_metadata: { current_task_id: 'task-009' },
+    }
+    expect(isSessionSnapshotFreshForTask(snapshot as never, task)).toBe(true)
+  })
+
+  it('rejects snapshots when the effective gate list has changed', () => {
+    const task = mkTask({ id: 'task-009', updatedAt: '2026-05-03T16:15:45.000Z' })
+    const snapshot = {
+      created_at: Date.parse('2026-05-03T16:15:50.000Z') / 1000,
+      tool_metadata: {
+        current_task_id: 'task-009',
+        current_task_project_path: '/workspace/knit',
+        current_task_success_gates: ['pnpm --dir web test -- --run login-callback-index.flow.test.ts'],
+      },
+    }
+    expect(
+      isSessionSnapshotFreshForTask(snapshot as never, task, {
+        expectedTaskProjectPath: '/workspace/knit',
+        expectedSuccessGates: [
+          'pnpm --dir web vitest --run tests/unit/pages/login-callback-index.flow.test.ts',
+        ],
+      }),
+    ).toBe(false)
   })
 })
 
@@ -1102,6 +1153,65 @@ describe('Orchestrator.tick — routing', () => {
     expect(gc.calls).toHaveLength(1)
   })
 
+  it('injects task-scoped hard gates for nested project paths during gate_check', async () => {
+    const knitDir = path.join(tmpDir, 'knit')
+    await fs.mkdir(knitDir, { recursive: true })
+    await fs.writeFile(
+      path.join(knitDir, 'package.json'),
+      JSON.stringify({
+        name: 'knit',
+        packageManager: 'pnpm@10.19.0',
+        scripts: {
+          typecheck: 'tsc --noEmit',
+          test: 'vitest',
+        },
+      }),
+      'utf8',
+    )
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'gate_check',
+        projectPath: knitDir,
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'targeted callback tests pass',
+            verifiedBy: 'automated',
+            command: 'pnpm test --filter @knit-app -- --run login-callback-index.flow.test.ts',
+            met: true,
+          },
+        ],
+      }),
+    ])
+    const gc = stubAgent('gate-checker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig({
+        bootstrap: {
+          commands: [],
+          successGates: [],
+          timeoutMs: 300_000,
+          verifiedAt: '2026-05-03T01:00:00Z',
+          packageManager: 'none',
+          install: { command: '', status: 'ok' },
+          gates: {
+            lint: { command: '', available: false, unavailableReason: 'no package.json' },
+            typecheck: { command: '', available: false, unavailableReason: 'no package.json' },
+            build: { command: '', available: false, unavailableReason: 'no package.json' },
+            test: { command: '', available: false, unavailableReason: 'no package.json' },
+          },
+        } as any,
+      }),
+      agents: agentSet({ gateChecker: gc }),
+    })
+    await orch.tick()
+    expect(gc.calls).toHaveLength(1)
+    expect(gc.calls[0]!.prompt).toContain(`Run hard gates against \`${knitDir}\``)
+    expect(gc.calls[0]!.prompt).toContain('`pnpm typecheck`')
+    expect(gc.calls[0]!.prompt).toContain('`pnpm test`')
+    expect(gc.calls[0]!.prompt).not.toContain('No verified shell gates are currently configured for this task path.')
+  })
+
   it('claims ready tasks deterministically without a coordinator call', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: 'approved spec' })])
     const coord = stubAgent('ghost-coordinator')
@@ -1562,6 +1672,49 @@ describe('Orchestrator.tick — error handling', () => {
     }
   })
 
+  it('preserves gate_check on retryable provider throttling instead of surfacing agent-error', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'gate_check',
+        blockReason: 'gate_hard_failure: stale blocker',
+        updatedAt: '2026-05-03T19:10:00.000Z',
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'gate-checker-agent',
+            reason: 'gate_hard_failure',
+            summary: 'stale blocker',
+            raisedAt: '2026-05-03T19:00:00.000Z',
+          },
+        ],
+      }),
+    ])
+    const gateChecker = {
+      name: 'gate-checker-agent',
+      async generate() {
+        throw new Error('OpenAI-compatible API HTTP 429: {"status":429,"title":"Too Many Requests"}')
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker }),
+    })
+    const out = await orch.tick()
+    expect(out.kind).toBe('provider-backoff')
+    if (out.kind === 'provider-backoff') {
+      expect(out.status).toBe('gate_check')
+      expect(out.agent).toBe('gate-checker-agent')
+    }
+
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('gate_check')
+    expect(q.tasks[0]!.blockReason).toBeUndefined()
+    expect(q.tasks[0]!.escalations[0]!.resolvedAt).toBeTruthy()
+    expect(q.tasks[0]!.escalations[0]!.resolvedBy).toBe('system')
+  })
+
   it('logs agent errors to PROGRESS.md', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
     const worker = {
@@ -1692,6 +1845,191 @@ describe('Orchestrator.run — full loops', () => {
     expect(packet).toContain('## Merge')
     expect(packet).toContain('- merged: guildhall/task-a -> main via ff_only_local (abc123); 2026-04-29T00:00:00.000Z')
     expect(packet).toContain('Task is complete and merged.')
+  })
+
+  it('records a skipped merge when worktree isolation is disabled', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'ready',
+        domain: 'looma',
+        spec: 'approved spec',
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'Thing is done',
+            verifiedBy: 'automated',
+            command: 'pnpm test',
+            met: true,
+          },
+        ],
+      }),
+    ])
+
+    const advance = (next: TaskStatus) => async () => {
+      await mutateTask('a', { status: next })
+    }
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', advance('review')),
+      reviewer: stubAgent('reviewer-agent', advance('gate_check')),
+      gateChecker: stubAgent('gate-checker-agent', advance('done')),
+      coordinators: {},
+    }
+
+    const orch = new Orchestrator({ config: baseConfig(), agents })
+    await orch.run({ maxTicks: 20, tickDelayMs: 0 })
+
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('done')
+    expect(q.tasks[0]!.mergeRecord).toMatchObject({
+      result: 'skipped',
+      detail: 'worktree isolation disabled — merge skipped',
+      fromBranch: '<unknown>',
+      toBranch: '<unknown>',
+    })
+  })
+
+  it('uses the task project repo for worktree and merge operations in multi-repo workspaces', async () => {
+    const subrepo = path.join(tmpDir, 'knit')
+    await fs.mkdir(subrepo, { recursive: true })
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'ready',
+        domain: 'knit',
+        projectPath: subrepo,
+        spec: 'approved spec',
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'Thing is done',
+            verifiedBy: 'automated',
+            command: 'pnpm test',
+            met: true,
+          },
+        ],
+      }),
+    ])
+
+    const advance = (next: TaskStatus) => async () => {
+      await mutateTask('a', { status: next })
+    }
+
+    class RecordingGitDriver extends InMemoryGitDriver {
+      readonly currentBranchRoots: string[] = []
+      readonly createRoots: string[] = []
+      readonly mergeRoots: string[] = []
+      readonly removeRoots: string[] = []
+
+      override async currentBranch(repoRoot: string): Promise<string> {
+        this.currentBranchRoots.push(repoRoot)
+        return super.currentBranch(repoRoot)
+      }
+
+      override async createWorktree(repoRoot: string, opts: any): Promise<void> {
+        this.createRoots.push(repoRoot)
+        return super.createWorktree(repoRoot, opts)
+      }
+
+      override async fastForwardMerge(repoRoot: string, branch: string, baseBranch: string) {
+        this.mergeRoots.push(repoRoot)
+        return super.fastForwardMerge(repoRoot, branch, baseBranch)
+      }
+
+      override async removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {
+        this.removeRoots.push(repoRoot)
+        return super.removeWorktree(repoRoot, worktreePath)
+      }
+    }
+
+    const gitDriver = new RecordingGitDriver()
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', advance('review')),
+      reviewer: stubAgent('reviewer-agent', advance('gate_check')),
+      gateChecker: stubAgent('gate-checker-agent', advance('done')),
+      coordinators: {},
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig({ projectPath: tmpDir }),
+      agents,
+      gitDriver,
+    })
+    await orch.run({ maxTicks: 20, tickDelayMs: 0 })
+
+    expect(gitDriver.currentBranchRoots).toEqual([subrepo])
+    expect(gitDriver.createRoots).toEqual([subrepo])
+    expect(gitDriver.mergeRoots).toEqual([subrepo])
+    expect(gitDriver.removeRoots).toEqual([subrepo])
+
+    const q = await readQueue()
+    expect(q.tasks[0]!.mergeRecord?.result).toBe('merged')
+  })
+
+  it('surfaces a clear agent-error when the target repo is dirty before worktree creation', async () => {
+    const subrepo = path.join(tmpDir, 'knit')
+    await fs.mkdir(subrepo, { recursive: true })
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        domain: 'knit',
+        projectPath: subrepo,
+        spec: 'approved spec',
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: false })
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent'),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig({ projectPath: tmpDir }),
+      agents,
+      gitDriver,
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('agent-error')
+    if (out.kind === 'agent-error') {
+      expect(out.error).toContain(`base repo has uncommitted changes at ${subrepo}`)
+    }
   })
 
   it('stopAfterOneTask stops after one active task reaches terminal status', async () => {
@@ -2003,6 +2341,28 @@ describe('Orchestrator.tick — FR-10 escalations', () => {
     })
     const picked = pickNextTask(await readQueue())
     expect(picked?.id).toBe('task-001')
+  })
+
+  it('resumes routing once later task progress supersedes an older unresolved escalation', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'gate_check',
+        updatedAt: '2026-05-03T19:10:00.000Z',
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'gate-checker-agent',
+            reason: 'gate_hard_failure',
+            summary: 'old gate failure',
+            raisedAt: '2026-05-03T19:00:00.000Z',
+          },
+        ],
+      }),
+    ])
+    const picked = pickNextTask(await readQueue())
+    expect(picked?.id).toBe('a')
   })
 
   it('routes max-revisions block through the structured escalation protocol', async () => {
@@ -3755,6 +4115,123 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
   )
 
   it(
+    'llm_with_deterministic_fallback: reviewer throttle advances verified work to gate_check before hard gates exist',
+    async () => {
+      await writeReviewerMode('llm_with_deterministic_fallback')
+      await writeQueue([
+        reviewReadyTask({
+          acceptanceCriteria: [
+            { id: 'ac-1', description: 'ghost button renders', verifiedBy: 'review', met: false },
+            { id: 'ac-2', description: 'build passes', verifiedBy: 'automated', command: 'pnpm build', met: false },
+          ],
+          gateResults: [],
+          notes: [
+            {
+              agentId: 'worker-agent',
+              role: 'worker',
+              content: [
+                '**Self-critique:**',
+                '1. **Ghost button renders:** Met — Verified in source.',
+                '2. **Build passes:** Met — Verified via pnpm build.',
+                '',
+                'Out-of-scope changes introduced: None.',
+                'Uncertainties: None.',
+              ].join('\n'),
+              timestamp: '2026-04-21T00:00:00Z',
+            },
+          ],
+        }),
+      ])
+
+      const throwingReviewer: StubAgent = {
+        name: 'reviewer-agent',
+        calls: [],
+        async generate(prompt: string) {
+          this.calls.push({ prompt })
+          throw new Error('OpenAI-compatible API HTTP 429: {"status":429,"title":"Too Many Requests"}')
+        },
+      }
+
+      const orch = new Orchestrator({
+        config: baseConfig(),
+        agents: agentSet({ reviewer: throwingReviewer }),
+      })
+      const out = await orch.tick()
+
+      expect(out.kind).toBe('processed')
+      if (out.kind === 'processed') {
+        expect(out.afterStatus).toBe('gate_check')
+        expect(out.agent).toBe('reviewer-deterministic-fallback')
+      }
+
+      const task = (await readQueue()).tasks[0]!
+      expect(task.status).toBe('gate_check')
+      expect(task.acceptanceCriteria.every((criterion) => criterion.met)).toBe(true)
+      expect(task.reviewVerdicts.at(-1)?.verdict).toBe('approve')
+      expect(task.reviewVerdicts.at(-1)?.llmError).toContain('Too Many Requests')
+    },
+  )
+
+  it(
+    'llm_with_deterministic_fallback: derives acceptance criteria from spec before reconciling worker self-critique',
+    async () => {
+      await writeReviewerMode('llm_with_deterministic_fallback')
+      await writeQueue([
+        reviewReadyTask({
+          acceptanceCriteria: [],
+          spec: [
+            '## Summary',
+            'Integrate Looma editor table primitives into Knit.',
+            '',
+            '## Acceptance Criteria',
+            '1. Looma table primitives are wired into Knit.',
+            '2. `pnpm -F web build` passes.',
+          ].join('\n'),
+          gateResults: [],
+          notes: [
+            {
+              agentId: 'worker-agent',
+              role: 'worker',
+              content: [
+                '**Self-critique:**',
+                '1. **Looma table primitives are wired into Knit:** Met — Verified in source.',
+                '2. **`pnpm -F web build` passes:** Met — Verified via pnpm -F web build.',
+              ].join('\n'),
+              timestamp: '2026-04-21T00:00:00Z',
+            },
+          ],
+        }),
+      ])
+
+      const throwingReviewer: StubAgent = {
+        name: 'reviewer-agent',
+        calls: [],
+        async generate(prompt: string) {
+          this.calls.push({ prompt })
+          throw new Error('OpenAI-compatible API HTTP 429: {"status":429,"title":"Too Many Requests"}')
+        },
+      }
+
+      const orch = new Orchestrator({
+        config: baseConfig(),
+        agents: agentSet({ reviewer: throwingReviewer }),
+      })
+      const out = await orch.tick()
+
+      expect(out.kind).toBe('processed')
+      if (out.kind === 'processed') {
+        expect(out.afterStatus).toBe('gate_check')
+        expect(out.agent).toBe('reviewer-deterministic-fallback')
+      }
+
+      const task = (await readQueue()).tasks[0]!
+      expect(task.acceptanceCriteria).toHaveLength(2)
+      expect(task.acceptanceCriteria.every((criterion) => criterion.met)).toBe(true)
+      expect(task.reviewVerdicts.at(-1)?.verdict).toBe('approve')
+    },
+  )
+
+  it(
     'llm_with_deterministic_fallback: when the LLM reviewer succeeds, the verdict is recorded as reviewerPath=llm',
     async () => {
       await writeReviewerMode('llm_with_deterministic_fallback')
@@ -3804,6 +4281,34 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
     const t = (await readQueue()).tasks[0]!
     expect(t.reviewVerdicts[0]!.reviewerPath).toBe('deterministic')
     expect(t.reviewVerdicts[0]!.llmError).toBeUndefined()
+  })
+
+  it('deterministic_only: hands verified work to gate_check even before hard gates have run', async () => {
+    await writeReviewerMode('deterministic_only')
+    await writeQueue([
+      reviewReadyTask({
+        gateResults: [],
+      }),
+    ])
+
+    const reviewer = stubAgent('reviewer-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer }),
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('reviewer-deterministic')
+      expect(out.afterStatus).toBe('gate_check')
+    }
+    expect(reviewer.calls).toHaveLength(0)
+
+    const task = (await readQueue()).tasks[0]!
+    expect(task.status).toBe('gate_check')
+    expect(task.reviewVerdicts.at(-1)?.verdict).toBe('approve')
+    expect(task.reviewVerdicts.at(-1)?.reason).toContain('advance to gate_check')
   })
 
   it('llm_only: LLM outage still surfaces as an agent-error (no fallback)', async () => {

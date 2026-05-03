@@ -119,6 +119,16 @@ describe('shellTool — engine-tool interface', () => {
     expect(result.metadata).toMatchObject({ success: false, exitCode: 3 })
   })
 
+  it('uses ctx.cwd when the model omits cwd', async () => {
+    const result = await shellTool.execute(
+      { command: 'pwd', timeoutMs: 5000 },
+      ctx,
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('/tmp')
+    expect(result.metadata).toMatchObject({ success: true, exitCode: 0 })
+  })
+
   it('is not declared read-only (shell can mutate state)', () => {
     expect(shellTool.isReadOnly({ command: 'echo', cwd: '/tmp', timeoutMs: 1000 })).toBe(false)
   })

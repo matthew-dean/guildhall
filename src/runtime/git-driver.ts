@@ -48,6 +48,8 @@ export interface PullRequestResult {
 export interface GitDriver {
   /** Current branch name in the repo root (e.g. `main`, `master`). */
   currentBranch(repoRoot: string): Promise<string>
+  /** True when the repo root has no uncommitted changes. */
+  isClean(repoRoot: string): Promise<boolean>
   /** Create a new worktree at `worktreePath` with a fresh branch off `baseBranch`. */
   createWorktree(repoRoot: string, opts: CreateWorktreeOptions): Promise<void>
   /** Remove a worktree (and its branch ref). Safe to call on missing paths. */
@@ -77,6 +79,13 @@ export class NodeGitDriver implements GitDriver {
       cwd: repoRoot,
     })
     return stdout.trim()
+  }
+
+  async isClean(repoRoot: string): Promise<boolean> {
+    const { stdout } = await execFileP('git', ['status', '--porcelain'], {
+      cwd: repoRoot,
+    })
+    return stdout.trim().length === 0
   }
 
   async createWorktree(
@@ -177,6 +186,7 @@ export interface InMemoryGitDriverState {
 
 export interface InMemoryGitDriverOptions {
   currentBranch?: string
+  clean?: boolean
   /** If set, the next `fastForwardMerge` call returns this result then clears. */
   nextMergeResult?: MergeResult
   /** If set, the next `push` call returns this result then clears. */
@@ -187,6 +197,7 @@ export interface InMemoryGitDriverOptions {
 
 export class InMemoryGitDriver implements GitDriver {
   readonly state: InMemoryGitDriverState
+  private clean: boolean
   private nextMerge: MergeResult | undefined
   private nextPush: PushResult | undefined
   private nextPr: PullRequestResult | undefined
@@ -200,6 +211,7 @@ export class InMemoryGitDriver implements GitDriver {
       pushes: [],
       prs: [],
     }
+    this.clean = opts.clean ?? true
     this.nextMerge = opts.nextMergeResult
     this.nextPush = opts.nextPushResult
     this.nextPr = opts.nextPrResult
@@ -215,9 +227,16 @@ export class InMemoryGitDriver implements GitDriver {
   setNextPrResult(r: PullRequestResult): void {
     this.nextPr = r
   }
+  setClean(clean: boolean): void {
+    this.clean = clean
+  }
 
   async currentBranch(_repoRoot: string): Promise<string> {
     return this.state.currentBranch
+  }
+
+  async isClean(_repoRoot: string): Promise<boolean> {
+    return this.clean
   }
 
   async createWorktree(

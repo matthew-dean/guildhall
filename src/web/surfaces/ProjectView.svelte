@@ -28,6 +28,7 @@
   import { project } from '../lib/project.svelte.js'
   import { onEvent } from '../lib/events.js'
   import { path, nav } from '../lib/nav.svelte.js'
+  import { activeEscalations } from '../lib/escalation.js'
   import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { ProjectView, ProviderStatus } from '../lib/types.js'
 
@@ -473,8 +474,7 @@
   )
   const stuckCount = $derived(
     taskList.filter(t => {
-      const escs = (t as { escalations?: Array<{ resolvedAt?: unknown }> }).escalations
-      return Array.isArray(escs) && escs.some(e => !e.resolvedAt)
+      return activeEscalations(t).length > 0
     }).length,
   )
 

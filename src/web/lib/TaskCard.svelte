@@ -8,6 +8,7 @@
   import Icon, { type IconName } from './Icon.svelte'
   import StatusLight from './StatusLight.svelte'
   import { friendlyDomain, friendlyStatus } from './display.js'
+  import { activeEscalations } from './escalation.js'
   import type { TaskLite } from './types.js'
 
   const ACTIVE_STATUSES = new Set([
@@ -43,7 +44,7 @@
   const prio = $derived(task.priority && task.priority !== 'normal' ? task.priority : '')
   const domainLabel = $derived(friendlyDomain(task.domain))
   const hasEscalations = $derived(
-    Array.isArray(task.escalations) && task.escalations.some(e => !e.resolvedAt),
+    activeEscalations(task).length > 0,
   )
 
   const statusTone = $derived<StatusTone>(

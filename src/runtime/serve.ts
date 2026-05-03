@@ -40,7 +40,7 @@ import {
   defaultAgentSettingsPath,
   makeDefaultSettings,
 } from '@guildhall/levers'
-import { resolveEscalation, updateDesignSystem } from '@guildhall/tools'
+import { activeEscalations, resolveEscalation, updateDesignSystem } from '@guildhall/tools'
 import { DesignSystem, summarizeDesignSystem } from '@guildhall/core'
 import {
   loadProjectGuildRoster,
@@ -2854,9 +2854,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           const br = (t as { blockReason?: string }).blockReason
           blockedByAgent.push({ id, title, ...(br ? { reason: br } : {}) })
         }
-        const escs = (t as { escalations?: Array<{ id: string; reason: string; summary: string; resolvedAt?: string }> }).escalations ?? []
-        for (const e of escs) {
-          if (!e.resolvedAt) openEscalations.push({
+        for (const e of activeEscalations(t)) {
+          openEscalations.push({
             taskId: id,
             taskTitle: title,
             escalationId: e.id,

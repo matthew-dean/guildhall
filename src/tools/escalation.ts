@@ -241,10 +241,60 @@ export const resolveEscalationTool = defineTool({
   },
 })
 
+type TaskEscalation = Task['escalations'][number]
+
+export function isEscalationActive(task: Task, escalation: TaskEscalation): boolean {
+  if (escalation.resolvedAt) return false
+  if (task.status === 'blocked') return true
+
+  const raisedAt = Date.parse(escalation.raisedAt)
+  const updatedAt = Date.parse(task.updatedAt)
+  if (Number.isFinite(raisedAt) && Number.isFinite(updatedAt) && updatedAt > raisedAt) {
+    return false
+  }
+
+  return true
+}
+
+export function activeEscalations(task: Task): TaskEscalation[] {
+  return task.escalations.filter((escalation) => isEscalationActive(task, escalation))
+}
+
+export function resolveSupersededEscalations(
+  task: Task,
+  opts: {
+    now?: string
+    resolvedBy?: string
+    resolution?: string
+  } = {},
+): string[] {
+  const now = opts.now ?? task.updatedAt
+  const resolvedBy = opts.resolvedBy ?? 'system'
+  const resolution =
+    opts.resolution ??
+    `Superseded after task continued in ${task.status}.`
+
+  const resolvedIds: string[] = []
+  for (const escalation of task.escalations) {
+    if (escalation.resolvedAt) continue
+    if (isEscalationActive(task, escalation)) continue
+    escalation.resolvedAt = now
+    escalation.resolvedBy = resolvedBy
+    escalation.resolution = resolution
+    resolvedIds.push(escalation.id)
+  }
+
+  if (resolvedIds.length > 0 && activeEscalations(task).length === 0) {
+    delete task.blockReason
+  }
+
+  return resolvedIds
+}
+
 /**
  * Returns true if the task has at least one unresolved escalation. Used by the
  * orchestrator to halt routing regardless of surface status.
  */
 export function hasOpenEscalation(task: Task): boolean {
-  return task.escalations.some((e) => !e.resolvedAt)
+  return activeEscalations(task).length > 0
 }

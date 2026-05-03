@@ -16,6 +16,7 @@ import {
   resolveReviewerFanoutPolicy,
 } from './provider-runtime-config.js'
 import {
+  parseAcceptanceCriteriaFromSpec,
   TaskQueue,
   TERMINAL_TASK_STATUSES,
   type ModelAssignmentConfig,
@@ -44,7 +45,9 @@ import {
   loadReclaimCandidates,
   readCheckpoint,
   ensureExploringTranscriptEntry,
+  activeEscalations,
   hasOpenEscalation,
+  resolveSupersededEscalations,
   type ReclaimCandidate,
 } from '@guildhall/tools'
 import {
@@ -69,6 +72,12 @@ import { buildHookExecutor } from './hooks-loader.js'
 import { buildDefaultCompactor } from './compactor-builder.js'
 import { evaluateProposal, type PromotionAction } from './proposal-promotion.js'
 import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
+import {
+  effectiveBootstrapGateCommands,
+  renderTaskScopedGateInstructions,
+  resolveEffectiveTaskProjectPath,
+  resolveEffectiveTaskSuccessGates,
+} from './task-gates.js'
 import {
   evaluatePreRejection,
   type PreRejectionAction,
@@ -113,7 +122,7 @@ import {
   resolveMergePolicy,
   type MergePolicy,
 } from './merge-dispatcher.js'
-import { atomicWriteText, loadSessionById } from '@guildhall/sessions'
+import { atomicWriteText, loadSessionById, type SessionSnapshot } from '@guildhall/sessions'
 import {
   pickNextTasks,
   resolveFanoutCapacity,
@@ -129,6 +138,9 @@ import {
   deterministicReview,
   applyDeterministicVerdict,
   recordLlmVerdict,
+  DETERMINISTIC_PASS_THRESHOLD,
+  shouldAdvanceToGateCheckPendingHardGates,
+  type DeterministicVerdict,
   type ReviewerMode,
 } from './reviewer-dispatch.js'
 import { runGuildGates } from './guild-gate-runner.js'
@@ -640,6 +652,7 @@ function shouldStopOneTaskRun(outcome: TickOutcome): boolean {
     case 'blocked-max-revisions':
     case 'no-coordinator':
     case 'agent-error':
+    case 'provider-backoff':
     case 'escalated':
     case 'bootstrap-required':
       return true
@@ -650,6 +663,9 @@ function shouldStopOneTaskRun(outcome: TickOutcome): boolean {
 }
 
 function describeOneTaskStop(outcome: TickOutcome): string {
+  if (outcome.kind === 'provider-backoff') {
+    return `task ${outcome.taskId} (provider_backoff)`
+  }
   if ('taskId' in outcome) return `task ${outcome.taskId} (${outcome.kind})`
   return outcome.kind
 }
@@ -752,6 +768,44 @@ export function shouldResumeAgentSession(
   queue: TaskQueue,
 ): boolean {
   return resumableTaskIdsForLabel(label, queue).length > 0
+}
+
+export function isSessionSnapshotFreshForTask(
+  snapshot: SessionSnapshot | null | undefined,
+  task: Task | null | undefined,
+  opts: {
+    expectedTaskProjectPath?: string
+    expectedSuccessGates?: readonly string[]
+  } = {},
+): boolean {
+  if (!snapshot || !task) return false
+  const snapshotTaskId = String(snapshot.tool_metadata?.['current_task_id'] ?? '').trim()
+  if (!snapshotTaskId || snapshotTaskId !== task.id) return false
+
+  const taskUpdatedMs = Date.parse(task.updatedAt)
+  const snapshotCreatedMs = snapshot.created_at * 1000
+  if (Number.isFinite(taskUpdatedMs) && Number.isFinite(snapshotCreatedMs) && snapshotCreatedMs < taskUpdatedMs) {
+    return false
+  }
+
+  if (opts.expectedTaskProjectPath) {
+    const snapshotTaskProjectPath = String(
+      snapshot.tool_metadata?.['current_task_project_path'] ?? '',
+    ).trim()
+    if (snapshotTaskProjectPath !== opts.expectedTaskProjectPath) return false
+  }
+
+  if (opts.expectedSuccessGates !== undefined) {
+    const snapshotSuccessGates = Array.isArray(snapshot.tool_metadata?.['current_task_success_gates'])
+      ? (snapshot.tool_metadata?.['current_task_success_gates'] as unknown[])
+          .filter((value): value is string => typeof value === 'string')
+      : []
+    if (JSON.stringify(snapshotSuccessGates) !== JSON.stringify([...opts.expectedSuccessGates])) {
+      return false
+    }
+  }
+
+  return true
 }
 
 export interface OrchestratorOptions {
@@ -1187,14 +1241,38 @@ export class Orchestrator {
     // the agent runs. On first creation, persist the path/branch/base on the
     // task so subsequent ticks reuse them. Skipped when mode is `none`.
     const worktreeMode = await this.resolveWorktreeModeSafe()
-    let activeWorktreePath = this.opts.config.projectPath
+    const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(
+      task,
+      this.opts.config.projectPath,
+    )
+    let activeWorktreePath = effectiveTaskProjectPath
     if (worktreeMode !== 'none') {
-      const baseBranch = await this.resolveBaseBranch()
+      if (!task.worktreePath) {
+        const repoClean = await this.gitDriver.isClean(effectiveTaskProjectPath)
+        if (!repoClean) {
+          const message = `base repo has uncommitted changes at ${effectiveTaskProjectPath}`
+          await this.logTickProgress({
+            task,
+            agent: agent.name,
+            beforeStatus,
+            afterStatus: beforeStatus,
+            transitioned: false,
+            note: `error: worktree setup blocked — ${message}`,
+          })
+          return {
+            kind: 'agent-error',
+            taskId: task.id,
+            agent: agent.name,
+            error: `worktree setup blocked: ${message}`,
+          }
+        }
+      }
+      const baseBranch = await this.resolveBaseBranch(effectiveTaskProjectPath)
       try {
         const ensured = await ensureWorktreeForDispatch({
           task,
           mode: worktreeMode,
-          projectPath: this.opts.config.projectPath,
+          projectPath: effectiveTaskProjectPath,
           baseBranch,
           gitDriver: this.gitDriver,
         })
@@ -1251,7 +1329,7 @@ export class Orchestrator {
     if (
       wtBootstrap &&
       wtBootstrap.commands.length > 0 &&
-      activeWorktreePath !== this.opts.config.projectPath
+      activeWorktreePath !== effectiveTaskProjectPath
     ) {
       const wtMemoryDir = path.join(activeWorktreePath, '.guildhall')
       const needed = bootstrapNeeded(
@@ -1292,6 +1370,16 @@ export class Orchestrator {
 
     const ctx = await buildContext(task, this.opts.config.memoryDir)
     const tasksPath = this.tasksPath()
+    const effectiveTaskSuccessGates =
+      beforeStatus === 'gate_check'
+        ? resolveEffectiveTaskSuccessGates({
+            task,
+            workspaceProjectPath: this.opts.config.projectPath,
+            ...(this.opts.config.bootstrap
+              ? { workspaceBootstrap: this.opts.config.bootstrap }
+              : {}),
+          })
+        : undefined
 
     // FR-24: slot allocation shapes the prompt + env for the worker. Slot is
     // released after the agent returns (or throws).
@@ -1305,8 +1393,15 @@ export class Orchestrator {
       `**Memory dir (for tool calls):** ${this.opts.config.memoryDir}`,
       `**Current task ID (for task tools):** ${task.id}`,
       'When a tool requires taskId, use the current task ID exactly. Never use placeholders such as [TASK_ID], <task-id>, or TODO.',
-      ...(activeWorktreePath !== this.opts.config.projectPath
+      `**Task project path:** ${effectiveTaskProjectPath}`,
+      ...(activeWorktreePath !== effectiveTaskProjectPath
         ? [`**Worktree (for code edits):** ${activeWorktreePath}`]
+        : []),
+      ...(beforeStatus === 'gate_check'
+        ? ['', renderTaskScopedGateInstructions({
+            projectPath: effectiveTaskProjectPath,
+            successGates: effectiveTaskSuccessGates,
+          })]
         : []),
       ...(slotPromptRule ? ['', slotPromptRule] : []),
       '',
@@ -1341,6 +1436,10 @@ export class Orchestrator {
         current_agent_id: agent.name,
         memory_dir: this.opts.config.memoryDir,
         tasks_path: tasksPath,
+        current_task_project_path: effectiveTaskProjectPath,
+        ...(effectiveTaskSuccessGates !== undefined
+          ? { current_task_success_gates: effectiveTaskSuccessGates }
+          : {}),
       })
     }
 
@@ -1418,10 +1517,17 @@ export class Orchestrator {
         task,
         agent: agent.name,
         beforeStatus,
-        afterStatus: beforeStatus,
-        transitioned: false,
-        note: `error: ${message}`,
-      })
+          afterStatus: beforeStatus,
+          transitioned: false,
+          note: `error: ${message}`,
+        })
+      if (beforeStatus === 'gate_check' && isInfrastructureLikeReviewerError(message)) {
+        return await this.preserveGateCheckOnRetryableProviderError({
+          taskId: task.id,
+          agentName: agent.name,
+          error: message,
+        })
+      }
       if (/Model returned an empty assistant message/.test(message)) {
         const retries = (this.emptyAssistantRetries.get(retryKey) ?? 0) + 1
         this.emptyAssistantRetries.set(retryKey, retries)
@@ -1736,31 +1842,41 @@ export class Orchestrator {
       // may move the task to `pending_pr` (manual_pr path) or `blocked` (with
       // a fixup task queued) — `afterStatus` is updated so the post-merge
       // cleanup / progress logging see the final state.
-      if (
-        afterStatus === 'done' &&
-        beforeStatus !== 'done' &&
-        worktreeMode !== 'none' &&
-        taskAfter.branchName &&
-        taskAfter.baseBranch
-      ) {
+      if (afterStatus === 'done' && beforeStatus !== 'done') {
         const mergePolicy = await this.resolveMergePolicySafe()
-        const mergeOutcome = await dispatchMerge({
-          task: taskAfter,
-          policy: mergePolicy,
-          projectPath: this.opts.config.projectPath,
-          memoryDir: this.opts.config.memoryDir,
-          gitDriver: this.gitDriver,
-          now: this.now(),
-        })
-        taskAfter.mergeRecord = mergeOutcome.record
-        taskAfter.status = mergeOutcome.newStatus
+        if (worktreeMode === 'none' || !taskAfter.branchName || !taskAfter.baseBranch) {
+          if (!taskAfter.mergeRecord) {
+            taskAfter.mergeRecord = {
+              fromBranch: taskAfter.branchName ?? '<unknown>',
+              toBranch: taskAfter.baseBranch ?? '<unknown>',
+              strategy: mergePolicy,
+              result: 'skipped',
+              mergedAt: this.now(),
+              detail:
+                worktreeMode === 'none'
+                  ? 'worktree isolation disabled — merge skipped'
+                  : 'branch metadata missing — merge skipped',
+            }
+          }
+        } else {
+          const mergeOutcome = await dispatchMerge({
+            task: taskAfter,
+            policy: mergePolicy,
+            projectPath: effectiveTaskProjectPath,
+            memoryDir: this.opts.config.memoryDir,
+            gitDriver: this.gitDriver,
+            now: this.now(),
+          })
+          taskAfter.mergeRecord = mergeOutcome.record
+          taskAfter.status = mergeOutcome.newStatus
+          if (mergeOutcome.fixupTask) {
+            appendFixupTask(queueAfter, mergeOutcome.fixupTask, this.now())
+          }
+          afterStatus = mergeOutcome.newStatus
+        }
         taskAfter.updatedAt = this.now()
         queueAfter.lastUpdated = this.now()
-        if (mergeOutcome.fixupTask) {
-          appendFixupTask(queueAfter, mergeOutcome.fixupTask, this.now())
-        }
         await this.writeQueue(queueAfter)
-        afterStatus = mergeOutcome.newStatus
         transitioned = beforeStatus !== afterStatus
       }
 
@@ -1968,6 +2084,10 @@ export class Orchestrator {
         } else if (outcome.kind === 'agent-error') {
           console.error(
             `[guildhall] tick ${tick}: ${outcome.agent} failed on ${outcome.taskId}: ${outcome.error}`,
+          )
+        } else if (outcome.kind === 'provider-backoff') {
+          console.warn(
+            `[guildhall] tick ${tick}: ${outcome.agent} hit retryable provider backoff on ${outcome.taskId}; preserving ${outcome.status}.`,
           )
         } else if (outcome.kind === 'escalated') {
           console.warn(
@@ -3031,6 +3151,28 @@ export class Orchestrator {
     }
     if (verdicts.length === 0) return null
 
+    const substantiveVerdicts = verdicts.filter(
+      (verdict) => !isInfrastructureOnlyFanoutFailure(verdict),
+    )
+    const hasSubstantiveRevise = substantiveVerdicts.some(
+      (verdict) => verdict.verdict === 'revise',
+    )
+    if (
+      substantiveVerdicts.length === 0 ||
+      (!hasSubstantiveRevise && substantiveVerdicts.length < verdicts.length)
+    ) {
+      await this.logTickProgress({
+        task,
+        agent: 'reviewer-fanout',
+        beforeStatus: 'review',
+        afterStatus: 'review',
+        transitioned: false,
+        note:
+          'reviewer fan-out inconclusive: provider/turn failures dominated persona review — falling through to single reviewer',
+      })
+      return null
+    }
+
     // Policy selection + prior-rounds extraction for same-persona-repeat
     // dissent detection. When the lever is
     // `coordinator_adjudicates_on_conflict`, `aggregate.needsAdjudication`
@@ -3315,7 +3457,24 @@ export class Orchestrator {
   }): Promise<TickOutcome> {
     const { task, queue, llmError } = opts
     const beforeStatus = task.status
-    const verdict = deterministicReview(task)
+    const taskForVerdict = queue.tasks.find((t) => t.id === task.id) ?? task
+    reconcileAcceptanceCriteriaFromLatestWorkerSelfCritique(taskForVerdict)
+    let verdict = deterministicReview(taskForVerdict)
+    if (shouldAdvanceInfraFallbackToGateCheck(taskForVerdict, verdict, llmError)) {
+      verdict = {
+        verdict: 'approve',
+        reason:
+          'Deterministic fallback: reviewer was unavailable, acceptance criteria are already met, and hard gates have not run yet; advance to gate_check.',
+        reasoning: [
+          'Reviewer fallback override:',
+          `  - LLM reviewer failed with infrastructure error: ${llmError}`,
+          '  - Acceptance criteria were reconciled as met from the latest worker self-critique.',
+          '  - No hard gates have run yet, so review should hand off to gate_check instead of bouncing back to the worker.',
+        ].join('\n'),
+        score: DETERMINISTIC_PASS_THRESHOLD,
+        failingSignals: [],
+      }
+    }
     const { newStatus } = applyDeterministicVerdict({
       queue,
       taskId: task.id,
@@ -3509,18 +3668,19 @@ export class Orchestrator {
    * Cached after the first lookup — the default branch of a repo does not
    * change during an orchestrator run.
    */
-  private cachedBaseBranch: string | undefined
-  private async resolveBaseBranch(): Promise<string> {
-    if (this.cachedBaseBranch) return this.cachedBaseBranch
+  private readonly cachedBaseBranches = new Map<string, string>()
+  private async resolveBaseBranch(projectPath: string): Promise<string> {
+    const cached = this.cachedBaseBranches.get(projectPath)
+    if (cached) return cached
     try {
-      this.cachedBaseBranch = await this.gitDriver.currentBranch(
-        this.opts.config.projectPath,
-      )
+      const branch = await this.gitDriver.currentBranch(projectPath)
+      this.cachedBaseBranches.set(projectPath, branch)
+      return branch
     } catch {
       // Best-effort default — InMemoryGitDriver in tests defaults to 'main'.
-      this.cachedBaseBranch = 'main'
+      this.cachedBaseBranches.set(projectPath, 'main')
+      return 'main'
     }
-    return this.cachedBaseBranch
   }
 
   /**
@@ -3538,11 +3698,15 @@ export class Orchestrator {
       task.status === 'blocked'
     const preservingForPr = task.status === 'pending_pr'
     if (!isTerminal && !preservingForPr) return
+    const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(
+      task,
+      this.opts.config.projectPath,
+    )
     try {
       await cleanupWorktreeForTerminal({
         task,
         mode,
-        projectPath: this.opts.config.projectPath,
+        projectPath: effectiveTaskProjectPath,
         gitDriver: this.gitDriver,
         preserveForPendingPr: preservingForPr,
       })
@@ -3693,7 +3857,7 @@ export class Orchestrator {
   private renderUnresolvedItems(task: Task): string[] {
     const items: string[] = []
     if (task.blockReason) items.push(`- Block reason: ${task.blockReason}`)
-    for (const escalation of task.escalations.filter((e) => !e.resolvedAt)) {
+    for (const escalation of activeEscalations(task)) {
       items.push(`- Open escalation ${escalation.id}: ${escalation.summary}`)
     }
     for (const issue of task.agentIssues.filter((i) => !i.resolvedAt)) {
@@ -3759,6 +3923,61 @@ export class Orchestrator {
       afterStatus: task.status,
       transitioned,
       revisionCount: task.revisionCount,
+    }
+  }
+
+  private async preserveGateCheckOnRetryableProviderError(input: {
+    taskId: string
+    agentName: string
+    error: string
+  }): Promise<TickOutcome> {
+    const queue = await this.readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === input.taskId)
+    if (!task) {
+      return {
+        kind: 'agent-error',
+        taskId: input.taskId,
+        agent: input.agentName,
+        error: input.error,
+      }
+    }
+
+    task.status = 'gate_check'
+    task.updatedAt = this.now()
+    queue.lastUpdated = this.now()
+    resolveSupersededEscalations(task, {
+      now: task.updatedAt,
+      resolvedBy: 'system',
+      resolution:
+        'Superseded after Guildhall preserved gate_check during a retryable provider throttle.',
+    })
+    await this.writeQueue(queue)
+
+    const note =
+      `provider backoff: ${input.error}. Preserving gate_check so the task can resume gate verification without rework.`
+
+    await this.logTickProgress({
+      task,
+      agent: input.agentName,
+      beforeStatus: 'gate_check',
+      afterStatus: 'gate_check',
+      transitioned: false,
+      note,
+    })
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: task.id,
+      agent_name: input.agentName,
+      message:
+        'Gate verification hit a retryable provider throttle. Guildhall is preserving gate_check so the run can resume once the provider is available again.',
+    })
+
+    return {
+      kind: 'provider-backoff',
+      taskId: task.id,
+      agent: input.agentName,
+      status: 'gate_check',
+      error: input.error,
     }
   }
 
@@ -3856,21 +4075,6 @@ export class Orchestrator {
 
 function ensureWorkerOwnership(task: Task): void {
   task.assignedTo = 'worker-agent'
-}
-
-function effectiveBootstrapGateCommands(
-  bootstrap: NonNullable<ResolvedConfig['bootstrap']>,
-): string[] {
-  if (bootstrap.successGates.length > 0) return [...bootstrap.successGates]
-  const ordered = [
-    bootstrap.gates?.typecheck,
-    bootstrap.gates?.build,
-    bootstrap.gates?.test,
-    bootstrap.gates?.lint,
-  ]
-  return ordered
-    .filter((gate): gate is NonNullable<typeof gate> => Boolean(gate?.available && gate.command.trim()))
-    .map((gate) => gate.command)
 }
 
 // `pickNextTask` / `needsPreRejectionPolicy` live in `./orchestrator-picker.ts`
@@ -4082,8 +4286,28 @@ export async function runOrchestrator(
     const sessionId = sessionIdFor(label)
     if (resumeQueue) {
       const snapshot = loadSessionById(config.projectPath, sessionId)
-      const snapshotTaskId = String(snapshot?.tool_metadata?.['current_task_id'] ?? '').trim()
-      if (!snapshotTaskId || !resumableTaskIds.includes(snapshotTaskId)) continue
+      const resumableTask = snapshot
+        ? resumeQueue.tasks.find((task) => task.id === String(snapshot.tool_metadata?.['current_task_id'] ?? '').trim())
+        : undefined
+      if (!resumableTask || !resumableTaskIds.includes(resumableTask.id)) continue
+      const expectedTaskProjectPath = resolveEffectiveTaskProjectPath(
+        resumableTask,
+        config.projectPath,
+      )
+      const expectedSuccessGates =
+        resumableTask.status === 'gate_check'
+          ? resolveEffectiveTaskSuccessGates({
+              task: resumableTask,
+              workspaceProjectPath: config.projectPath,
+              ...(config.bootstrap ? { workspaceBootstrap: config.bootstrap } : {}),
+            })
+          : undefined
+      if (
+        !isSessionSnapshotFreshForTask(snapshot, resumableTask, {
+          expectedTaskProjectPath,
+          expectedSuccessGates,
+        })
+      ) continue
     }
     const rehydrated = agent.loadSession({
       cwd: config.projectPath,
@@ -4238,6 +4462,62 @@ function guessSlugFromReason(reason: string): string | null {
   )
   if (!m) return null
   return m[1]!.toLowerCase().replace(/\s+/g, '-')
+}
+
+function reconcileAcceptanceCriteriaFromLatestWorkerSelfCritique(task: Task): void {
+  if (task.acceptanceCriteria.length === 0) {
+    const derivedCriteria = parseAcceptanceCriteriaFromSpec(task.spec)
+    if (derivedCriteria.length > 0) task.acceptanceCriteria = derivedCriteria
+  }
+  if (!Array.isArray(task.acceptanceCriteria) || task.acceptanceCriteria.length === 0) return
+  const latestWorkerNote = [...task.notes]
+    .reverse()
+    .find((note) => (note.agentId === 'worker-agent' || note.role === 'worker') && /self-critique/i.test(note.content))
+  if (!latestWorkerNote) return
+
+  const criteriaById = new Map(task.acceptanceCriteria.map((criterion) => [criterion.id.toLowerCase(), criterion]))
+  let positionalIndex = 0
+  for (const rawLine of latestWorkerNote.content.split('\n')) {
+    const line = rawLine.trim()
+    if (!/^(?:[-*]|\d+[.)])\s+/.test(line)) continue
+
+    const explicitIdMatch = /\b(ac[-_][a-z0-9_-]+|AC\d+)\b/i.exec(line)
+    const stateMatch = /\b(Not met|Met)\b/i.exec(line)
+    if (!stateMatch) continue
+    const met = !/^not met$/i.test(stateMatch[1]!)
+
+    if (explicitIdMatch) {
+      const criterion = criteriaById.get(explicitIdMatch[1]!.toLowerCase())
+      if (criterion) criterion.met = met
+      continue
+    }
+
+    const criterion = task.acceptanceCriteria[positionalIndex]
+    positionalIndex += 1
+    if (criterion) criterion.met = met
+  }
+}
+
+function isInfrastructureLikeReviewerError(text: string | undefined): boolean {
+  if (!text) return false
+  return /HTTP 429|Too Many Requests|rate limit|provider timeout|connection refused|Exceeded maximum turn limit \(\d+\)|temporarily unavailable|service unavailable/i.test(text)
+}
+
+function shouldAdvanceInfraFallbackToGateCheck(
+  task: Task,
+  verdict: DeterministicVerdict,
+  llmError: string | undefined,
+): boolean {
+  if (!isInfrastructureLikeReviewerError(llmError)) return false
+  if (verdict.verdict !== 'revise') return false
+  return shouldAdvanceToGateCheckPendingHardGates(task, verdict.failingSignals)
+}
+
+function isInfrastructureOnlyFanoutFailure(verdict: PersonaVerdict): boolean {
+  if (verdict.verdict !== 'revise') return false
+  const text = `${verdict.reasoning}\n${verdict.rawOutput}`
+  if (!/failed to produce a verdict/i.test(text)) return false
+  return isInfrastructureLikeReviewerError(text)
 }
 
 /** FR-15: map the zod-enum task field onto the engine's PermissionMode enum. */

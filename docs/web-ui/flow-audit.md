@@ -30,6 +30,9 @@ correct the agent, and ask for direct action from Thread.
 
 ## Current Follow-Ups
 
+- [x] Delete stale Looma/Knit spec-stall tasks when they surface as false
+  `Needs you` items, instead of merely shelving them and leaving inbox noise
+  behind.
 - [x] Default workspace import to a single-project assumption unless the
   workspace clearly presents multiple top-level project roots.
 - [x] Preserve nested subproject scope hints only when the workspace really is
@@ -52,6 +55,29 @@ correct the agent, and ask for direct action from Thread.
   and subproject/worktree mismatches.
 - [x] Prune and cap context snapshots so debug visibility stays bounded instead
   of growing without limit.
+- [x] Let reviewer fallback treat provider throttling as infra noise, not a
+  fake revision request, when work is already verified and the remaining truth
+  should be decided in `gate_check`.
+- [x] Let deterministic review itself treat “all ACs met, no hard gates yet”
+  as a handoff to `gate_check` instead of a fake revise loop back to the
+  worker.
+- [x] Skip same-task agent snapshot resumes when the task has been updated more
+  recently than the saved session, so review/worker lanes do not wake up
+  inside stale conversations.
+- [x] Normalize deterministic review handoffs so `gate_check` tasks are
+  assigned to `gate-checker-agent` and revision bounces return to
+  `worker-agent`.
+- [x] Keep worker verification turns from sleeping after a successful shell
+  tool return; a completed command should stay completed.
+- [x] Derive structured acceptance criteria from the saved spec when a task
+  reaches review with good markdown but an empty `acceptanceCriteria` array.
+- [x] Let worker self-critique reconcile against spec-derived criteria so
+  deterministic reviewer fallback grades the task’s real contract.
+- [x] Accept `prompt` / `restatement` aliases on `post-user-question` and
+  expose a real tool schema so spec intake does not die on first-turn naming
+  mismatches.
+- [x] Make retryable gate-provider throttles clear stale escalation residue, so
+  resumed `gate_check` tasks do not still halt later runs as falsely escalated.
 
 ## Automation Backlog
 
@@ -210,6 +236,19 @@ correct the agent, and ask for direct action from Thread.
   is no longer stale session contamination; it is the local model/provider
   path still failing to convert a real intake into durable output from a cold
   start.
+- Live Looma/Knit proof advanced meaningfully: `task-008` reached `done`
+  through Guildhall, but the remaining trust gap is still real gate truth.
+  The workspace-root bootstrap snapshot says `no package.json`, while the
+  task itself belongs to `/Users/matthew/git/oss/looma-knit/knit`, which has
+  the real package manager and gate scripts. The next fix is to make
+  `gate_check` derive authoritative gates from the task's own project path
+  instead of blindly inheriting the outer workspace bootstrap block.
+- Provider-scoped model resolution exposed another real config bug during the
+  DeepInfra switch: if a workspace had exactly one provider-scoped model block
+  left (for example only `llama-cpp`), Guildhall would wrongly reuse that lone
+  block for an explicit different preferred provider. Fixed by making
+  provider-specific resolution return empty when the requested provider has no
+  matching block, instead of falling through to the sole unrelated entry.
 - Root cause on `task-006` is now sharper: the cold-start local model *did*
   try to write durable progress, but it sent near-miss tool payloads like
   `append-exploring-transcript { item: ... }` and `update-product-brief
@@ -233,6 +272,24 @@ correct the agent, and ask for direct action from Thread.
   spawn instead of `execSync`, while leaving the bootstrap runner on its
   existing sync helper for now. The next live check is to confirm a running
   worker no longer freezes project/status API reads.
+- DeepInfra/Qwen3.6 bring-up exposed one more shell-tool brittleness: the
+  worker could issue a correct command but omit `cwd`, and the tool would fail
+  before execution even though runtime context already knew the task project
+  path. The shell tool now defaults `cwd` from the active tool context so
+  real task runs do not die on that omission.
+- Another live Looma/Knit review leak surfaced right after that: `task-005`
+  had a good saved markdown spec with acceptance criteria, but its structured
+  `acceptanceCriteria` array was empty, so deterministic reviewer fallback
+  graded it like "no contract defined" and bounced verified work back to
+  `in_progress`. Guildhall now derives criteria from `## Acceptance Criteria`
+  in the saved spec when structured ACs are missing, and worker self-critique
+  can reconcile against those derived criteria before fallback review runs.
+- Fresh DeepInfra/Qwen3.6 intake on `task-009` surfaced a cleaner spec-lane
+  contract bug: the model tried to post a structured user question with a
+  natural `prompt` field, but `post-user-question` only accepted `body` and
+  advertised an empty JSON schema, so the turn died and escalated. The tool
+  now accepts `prompt` / `restatement` aliases and exposes the real argument
+  shape to models.
 - Notifications `Loading…` on Looma/Knit turned out to be a client-side crash,
   not a hung inbox endpoint. `/api/project/inbox` returned immediately, but
   InboxTab keyed rows by `kind + title`, and multiple escalations shared that
@@ -248,6 +305,33 @@ correct the agent, and ask for direct action from Thread.
 - Notifications now reuses the shell's already-loaded inbox state instead of
   maintaining a second independent fetch lifecycle. Live Looma/Knit verification
   on `http://localhost:7844/notifications` now shows the real inbox rows
+- Latest Looma/Knit proof on `task-008` got further again: review no longer
+  collapses immediately into bogus persona dissent, and `/api/project` stays
+  responsive during worker turns. The next truthful blockers are narrower:
+  reviewer fallback still bounces already-verified work back to `in_progress`
+  when provider 429s arrive before gate data exists, and the worker can still
+  waste turns by narrating that a finished shell command might be "still
+  running" and then calling `sleep`.
+- That runtime slice is now fixed. Review fallback reconciles acceptance
+  criteria from the latest worker self-critique and, on reviewer
+  infrastructure failures, can advance already-verified work to `gate_check`
+  instead of fabricating a worker revision. The worker no longer gets a
+  `sleep` tool, so it cannot burn turns pretending a completed shell command
+  might still be running.
+- Fresh Looma/Knit proof on `task-008` confirmed the new behavior live:
+  `review -> gate_check via reviewer-deterministic-fallback`. The remaining
+  blocker moved one lane later: `gate-checker-agent` still hard-fails the run
+  on NVIDIA `429 Too Many Requests`, leaving the task correctly parked in
+  `gate_check` but stopping the one-task run with an agent-error outcome.
+- Gate-check backoff is now being hardened the same way: retryable provider
+  throttling during `gate_check` is being converted from a generic agent-error
+  into a resumable provider-backoff state so one-task runs stop honestly while
+  preserving `gate_check` as the source of truth.
+- Fresh Looma/Knit rerun from `gate_check` finished cleanly: `task-008` reached
+  `done` in a one-task run on the NVIDIA path. So the immediate review →
+  gate-check → completion proof now exists for a real grounded task, even
+  though the project still needs better explicit gate truth than the current
+  empty-root bootstrap fallback.
   immediately, with `Loading…` gone and the repeated escalation titles rendered
   safely.
 - Thread column width now uses a real target width again. The column had been
@@ -569,3 +653,87 @@ correct the agent, and ask for direct action from Thread.
 - The latest run ended in `error` after the spec agent exhausted its 8-step
   budget again; with TASKS.json repaired, restart the server on the rebuilt
   Guildhall before continuing.
+- Live Looma/Knit cleanup: deleted stale false-positive human-input tasks
+  `task-003`, `task-004`, `task-006`, and `task-007` from `memory/TASKS.json`,
+  removed their exploring transcripts, and filtered their stale history from
+  `memory/PROGRESS.md` and `memory/recent-events.jsonl` so Notifications stops
+  surfacing bogus `Needs you` work.
+- Fixed another false-positive inbox path: `brief_approval` now only surfaces
+  while a task is still in intake (`exploring` / `awaiting_human`), so `review`
+  and `done` tasks with an old draft brief no longer pollute Notifications.
+- Fixed review/gate assignment normalization at the task-queue write boundary:
+  tasks moved into `review` now default to `assignedTo='reviewer-agent'`, and
+  tasks moved into `gate_check` default to `assignedTo='gate-checker-agent'`,
+  which prevents finished worker tasks from getting stranded in `review` under
+  `worker-agent` ownership.
+- Hardened the worker's revise-followup loop: the task context now surfaces a
+  dedicated `Latest Required Revisions` block from the newest reviewer note,
+  and the worker prompt explicitly treats concrete reviewer change requests as
+  binding unless it raises a spec conflict. This targets the live `task-009`
+  failure where the worker kept re-verifying finished code instead of adding
+  the missing tests the reviewer requested.
+- Deterministic review now treats “all ACs met, no hard gates yet” as a
+  handoff to `gate_check` instead of a fake revise loop back to the worker,
+  which let Looma/Knit `task-009` move past the old review dead-end.
+- Startup session hydration now skips same-task snapshots when the task has
+  been updated more recently than the saved session, which stopped worker and
+  reviewer lanes from reviving stale conversations after human resets.
+- Deterministic review handoffs now normalize ownership too: approved review
+  passes assign `gate-checker-agent`, and revise outcomes assign
+  `worker-agent`, so `gate_check` no longer strands under reviewer ownership.
+- Live Looma/Knit proof is now blocked by truthful project gate state rather
+  than orchestration confusion: `task-009` reached `gate_check`, ran the real
+  test gate, and escalated because the workspace-wide `pnpm test` suite has
+  unrelated pre-existing failures outside the task's scope.
+- `guildhall-automation-004` is now actively on the narrow gate-truth fix:
+  when a task carries explicit automated acceptance-criteria commands,
+  Guildhall now treats those commands as the authoritative hard gates for that
+  category and only falls back to broader project defaults for categories the
+  task did not specify. That lets `task-009` keep its targeted callback test
+  gate instead of regressing to the broader repo test suite by default.
+- Follow-on hardening for `guildhall-automation-004` is now partly landed too:
+  pnpm-based automated gate commands are normalized before use, including
+  `pnpm <script> --filter ...` reordering and single-child-package fallback to
+  `pnpm --dir <pkg> <script> ...` when the filter token does not resolve.
+  Rerun hygiene is now better too: an unresolved escalation stops counting as
+  active once the task has clearly moved forward after it was raised and is no
+  longer blocked, so stale gate escalations stop freezing reruns or inflating
+  `Needs you` / `stuck` UI surfaces. The remaining live blocker is command
+  trust: some agent-authored automated commands still need runtime validation
+  against the repo layout before they should be treated as authoritative hard
+  gates.
+- The next command-trust slice is now in place too. When a pnpm `test` script
+  is really just `vitest`, and an automated gate carries a unique file token
+  like `login-callback-index.flow.test.ts`, Guildhall now rewrites the hard
+  gate to the exact single-file Vitest invocation that the repo actually
+  honors. That keeps task-scoped callback gates from silently widening back
+  into the whole test suite.
+- Latest live blocker is narrower now: the gate checker can finish the real
+  targeted test work, but `update-task` was still failing when the model
+  omitted `taskId`. Guildhall now lets `update-task` infer
+  `metadata.current_task_id`, matching the rest of the task tools, so review
+  and gate turns can persist state without having to restate the active task
+  id perfectly.
+- Live Looma/Knit proof moved again in the good direction: after the
+  `update-task` metadata fix and the gate-command freshness checks, `task-009`
+  replayed from `gate_check` and reached `done` in a single fresh `one_task`
+  run on DeepInfra Qwen 3.6. The saved gate results now reflect the real
+  narrowed task contract: `pnpm --dir web typecheck`, `pnpm build`, a direct
+  single-file Vitest run for `login-callback-index.flow.test.ts`, and
+  `pnpm lint`.
+- The next autonomy gap is now explicit instead of implicit: Looma/Knit is not
+  currently allocating task branches/worktrees, so `task-009` reached `done`
+  without any merge/publication record. Guildhall now records a
+  `mergeRecord.result = skipped` entry whenever a task finishes while merge
+  dispatch is unavailable because worktree isolation or branch metadata never
+  existed, so the shell stops implying that PR/merge automation already ran.
+- The real multi-repo publication bug is now fixed too. Looma/Knit’s workspace
+  root is not itself a git repo — `knit/` and `looma/` are. Guildhall now
+  routes worktree setup, base-branch lookup, merge dispatch, and worktree
+  cleanup through the task’s effective project repo instead of always using
+  the workspace root, so subproject tasks can actually reach the branch/merge
+  lane they belong to.
+- Publication truth is tighter now too: when worktree isolation is enabled but
+  the target repo already has uncommitted changes, Guildhall now stops before
+  minting a task worktree and surfaces a clear repo-dirty error instead of
+  silently blending prior local edits into a supposedly autonomous task run.

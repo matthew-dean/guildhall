@@ -315,6 +315,12 @@ export async function buildContext(
   // for the reviewer dispatcher.
   void collectGuildRubrics
   const reviewRubrics = coreRubrics
+  const latestRevisionFeedback = [...task.notes]
+    .reverse()
+    .find((note) =>
+      (note.agentId === 'reviewer-fanout' || note.agentId === 'reviewer-agent') &&
+      note.role === 'reviewer',
+    )?.content ?? ''
 
   const taskSummary = [
     `## Current Task: ${task.id}`,
@@ -331,6 +337,9 @@ export async function buildContext(
       : '',
     task.outOfScope.length > 0
       ? `\n### Out of Scope\n${task.outOfScope.map(s => `- ${s}`).join('\n')}`
+      : '',
+    latestRevisionFeedback
+      ? `\n### Latest Required Revisions\n${latestRevisionFeedback}`
       : '',
     task.notes.length > 0
       ? `\n### Agent Notes\n${task.notes.slice(-5).map(n => `**${n.agentId} (${n.role})** ${n.timestamp}:\n${n.content}`).join('\n\n')}`

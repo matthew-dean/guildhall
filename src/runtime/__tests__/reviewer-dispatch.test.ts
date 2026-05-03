@@ -5,6 +5,7 @@ import {
   applyDeterministicVerdict,
   recordLlmVerdict,
   extractLlmReviewerReasoning,
+  shouldAdvanceToGateCheckPendingHardGates,
   SOFT_GATE_RUBRIC,
   DETERMINISTIC_PASS_THRESHOLD,
 } from '../reviewer-dispatch.js'
@@ -71,7 +72,7 @@ describe('deterministicReview', () => {
     expect(v.failingSignals).toContain('acceptance-criteria-met')
   })
 
-  it('revises when no hard gates have run (can\u2019t confirm no regressions)', () => {
+  it('approves into gate_check when ACs are met and hard gates have not run yet', () => {
     const task = mkTask({
       acceptanceCriteria: [
         { id: 'ac-1', description: 'ghost renders', verifiedBy: 'review', met: true },
@@ -79,9 +80,48 @@ describe('deterministicReview', () => {
       gateResults: [],
     })
     const v = deterministicReview(task)
-    expect(v.failingSignals).toContain('no-regressions')
-    // ACs met (1.0) + conventions (0.7, no lint gate \u2192 credit) + scope (0.8) + docs (0.6) = 3.1 / 4.1 \u2248 0.76
-    expect(v.verdict).toBe('revise')
+    expect(v.verdict).toBe('approve')
+    expect(v.failingSignals).toEqual([])
+    expect(v.reason).toContain('advance to gate_check')
+    expect(v.reasoning).toContain('Special-case handoff')
+  })
+
+  it('shared pending-hard-gates helper only fires when no-regressions is the lone missing signal', () => {
+    const readyForGates = mkTask({
+      acceptanceCriteria: [
+        { id: 'ac-1', description: 'ghost renders', verifiedBy: 'review', met: true },
+      ],
+      gateResults: [],
+    })
+    expect(shouldAdvanceToGateCheckPendingHardGates(readyForGates, ['no-regressions'])).toBe(true)
+
+    const unmetAc = mkTask({
+      acceptanceCriteria: [
+        { id: 'ac-1', description: 'ghost renders', verifiedBy: 'review', met: false },
+      ],
+      gateResults: [],
+    })
+    expect(shouldAdvanceToGateCheckPendingHardGates(unmetAc, ['acceptance-criteria-met', 'no-regressions'])).toBe(false)
+  })
+
+  it('uses acceptance criteria derived from spec markdown when structured ACs are missing', () => {
+    const task = mkTask({
+      acceptanceCriteria: [],
+      spec: [
+        '## Summary',
+        'Add ghost button.',
+        '',
+        '## Acceptance Criteria',
+        '1. Ghost button renders.',
+        '2. Build passes.',
+      ].join('\n'),
+      gateResults: [
+        { gateId: 'typecheck', type: 'hard', passed: true, checkedAt: 'now' },
+      ],
+    })
+    const v = deterministicReview(task)
+    expect(v.failingSignals).toContain('acceptance-criteria-met')
+    expect(v.reasoning).toContain('unmet: ac-1, ac-2')
   })
 
   it('revises when the lint hard gate failed', () => {
@@ -133,6 +173,7 @@ describe('applyDeterministicVerdict', () => {
     })
     expect(result.newStatus).toBe('gate_check')
     expect(q.tasks[0]!.status).toBe('gate_check')
+    expect(q.tasks[0]!.assignedTo).toBe('gate-checker-agent')
     expect(q.tasks[0]!.reviewVerdicts).toHaveLength(1)
     expect(q.tasks[0]!.reviewVerdicts[0]!.reviewerPath).toBe('deterministic')
     expect(q.tasks[0]!.reviewVerdicts[0]!.verdict).toBe('approve')
@@ -159,6 +200,7 @@ describe('applyDeterministicVerdict', () => {
       now: '2026-04-21T00:00:00Z',
     })
     expect(result.newStatus).toBe('in_progress')
+    expect(q.tasks[0]!.assignedTo).toBe('worker-agent')
     expect(q.tasks[0]!.reviewVerdicts[0]!.verdict).toBe('revise')
     expect(q.tasks[0]!.reviewVerdicts[0]!.failingSignals.length).toBeGreaterThan(0)
   })

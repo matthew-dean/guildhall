@@ -532,6 +532,7 @@ export function resolveModelsForProvider(
     if (direct) return expandProviderShortcut(direct)
     if (normalized === 'codex-oauth' && input.codex) return expandProviderShortcut(input.codex)
     if (normalized === 'codex' && input['codex-oauth']) return expandProviderShortcut(input['codex-oauth'])
+    return {}
   }
   const entries = Object.entries(input).filter(([, value]) => value && typeof value === 'object')
   if (entries.length === 1) {

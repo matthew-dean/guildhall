@@ -16,7 +16,6 @@ import {
   webSearchTool,
   skillTool,
   notebookEditTool,
-  sleepTool,
   briefTool,
 } from '@guildhall/tools'
 import { GuildhallAgent } from './guildhall-agent.js'
@@ -49,6 +48,15 @@ You are a Worker Agent in the Guildhall multi-agent system. You implement tasks.
 - Prefer edit-file (targeted string replacement) over write-file when
   modifying existing source. Rewriting a whole file with write-file risks
   clobbering unrelated content and makes the diff harder to review.
+- When a shell tool call returns to you without an error flag, the command has
+  completed. Treat the returned output as final; do not poll with sleep or
+  rerun the same command just because the output is terse or lacks a friendly
+  success banner.
+- If a verification command exits successfully but prints warnings unrelated
+  to the task's acceptance criteria, note the warning and continue the handoff.
+- If verification shows the task is already complete and no code changes are
+  needed, write the self-critique and move the task to review. Do not keep
+  re-verifying the same already-met criteria.
 - Do not refactor, rename, or improve things outside the task scope.
 - If you encounter an ambiguity not addressed by the spec, add a note to the task
   and continue with the most conservative interpretation. Do NOT block on ambiguity
@@ -56,6 +64,13 @@ You are a Worker Agent in the Guildhall multi-agent system. You implement tasks.
 - If the ambiguity WOULD fundamentally change the implementation, or if you discover
   the spec is wrong, use raise-escalation (reason='decision_required' or
   'spec_ambiguous'). Do not push work forward on a bad spec.
+- If the task is returning from review and the latest reviewer feedback includes
+  explicit required changes, treat that feedback as binding for the next pass.
+  Do not simply argue with it in your self-critique. Either make the requested
+  change, or raise an escalation explaining the spec conflict.
+- If acceptance criteria and out-of-scope notes appear to conflict, acceptance
+  criteria win unless you raise an escalation. Do not mark a criterion as met
+  while declining the work needed to verify it.
 - Run shell commands (build, typecheck) incrementally to catch errors early.
 
 ## No plan-only turns
@@ -138,7 +153,6 @@ export function createWorkerAgent(
       webSearchTool,
       skillTool,
       notebookEditTool,
-      sleepTool,
       briefTool,
       ...(opts.extraTools ?? []),
     ],

@@ -77,6 +77,34 @@ describe('postUserQuestionTool', () => {
     expect(queue.tasks[0]?.openQuestions?.[0]?.prompt).toBe('Pick one')
   })
 
+  it('accepts prompt as an alias for body on choice questions', async () => {
+    const result = await postUserQuestionTool.execute(
+      {
+        kind: 'choice',
+        prompt: 'Pick one',
+        choices: ['A', 'B'],
+        selectionMode: 'single',
+      },
+      {
+        cwd: '/tmp',
+        metadata: {
+          tasks_path: tasksPath,
+          current_task_id: 'task-001',
+          current_agent_id: 'spec-agent',
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+
+    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
+      tasks: Array<{ openQuestions?: Array<{ prompt?: string; choices?: string[] }> }>
+    }
+    expect(queue.tasks[0]?.openQuestions?.[0]).toMatchObject({
+      prompt: 'Pick one',
+      choices: ['A', 'B'],
+    })
+  })
+
   it('infers structured choice questions from last_assistant_text when the model calls it with {}', async () => {
     const metadata: Record<string, unknown> = {
       tasks_path: tasksPath,
@@ -113,6 +141,19 @@ describe('postUserQuestionTool', () => {
       kind: 'choice',
       prompt: 'Stop behavior',
       choices: ['Stop immediately', 'Allow a batch, then stop'],
+    })
+  })
+
+  it('exposes a usable JSON schema so models see the real argument shape', () => {
+    expect(postUserQuestionTool.jsonSchema).toMatchObject({
+      type: 'object',
+      properties: {
+        kind: { type: 'string' },
+        body: { type: 'string' },
+        prompt: { type: 'string' },
+        choices: { type: 'array' },
+        selectionMode: { type: 'string' },
+      },
     })
   })
 

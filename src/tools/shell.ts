@@ -22,7 +22,7 @@ const OUTPUT_TRUNCATE_LIMIT = 12_000
 
 const shellInputSchema = z.object({
   command: z.string().describe('The shell command to run'),
-  cwd: z.string().describe('Absolute path to the working directory'),
+  cwd: z.string().optional().describe('Absolute path to the working directory. Defaults to the active project directory when omitted.'),
   timeoutMs: z.number().default(120_000).describe('Timeout in milliseconds'),
 })
 
@@ -35,6 +35,14 @@ export interface ShellResult {
   interactiveRequired?: boolean
   /** True when the child was killed by the timeout watchdog. */
   timedOut?: boolean
+}
+
+function resolveShellCwd(inputCwd: string | undefined, fallbackCwd: string | undefined): string {
+  const cwd = inputCwd?.trim() || fallbackCwd?.trim()
+  if (!cwd) {
+    throw new Error('Shell tool requires a working directory, but none was provided or available from runtime context.')
+  }
+  return cwd
 }
 
 const SCAFFOLD_MARKERS = [
@@ -134,7 +142,8 @@ function normalizeExecErrorOutput(err: {
 }
 
 export function runShellSync(input: ShellInput): ShellResult {
-  const { command, cwd, timeoutMs = 120_000 } = input
+  const { command, timeoutMs = 120_000 } = input
+  const cwd = resolveShellCwd(input.cwd, undefined)
 
   const blocked = preflightInteractive(command)
   if (blocked) {
@@ -183,7 +192,8 @@ export function runShellSync(input: ShellInput): ShellResult {
 }
 
 export async function runShell(input: ShellInput): Promise<ShellResult> {
-  const { command, cwd, timeoutMs = 120_000 } = input
+  const { command, timeoutMs = 120_000 } = input
+  const cwd = resolveShellCwd(input.cwd, undefined)
 
   const blocked = preflightInteractive(command)
   if (blocked) {
@@ -273,14 +283,18 @@ export const shellTool = defineTool({
     type: 'object',
     properties: {
       command: { type: 'string', description: 'The shell command to run' },
-      cwd: { type: 'string', description: 'Absolute path to the working directory' },
+      cwd: { type: 'string', description: 'Absolute path to the working directory. Defaults to the active project directory when omitted.' },
       timeoutMs: { type: 'number', description: 'Timeout in milliseconds', default: 120_000 },
     },
-    required: ['command', 'cwd'],
+    required: ['command'],
   },
   isReadOnly: () => false,
-  execute: async (input) => {
-    const result = await runShell(input)
+  execute: async (input, ctx) => {
+    const normalizedInput: ShellInput = {
+      ...input,
+      cwd: input.cwd ?? ctx.cwd,
+    }
+    const result = await runShell(normalizedInput)
     return {
       output: result.output,
       is_error: !result.success,

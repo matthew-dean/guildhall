@@ -99,6 +99,29 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).not.toContain('Note number 1')
     expect(ctx.taskSummary).not.toContain('Note number 2')
   })
+
+  it('surfaces the latest reviewer revision note as dedicated required feedback', async () => {
+    const taskWithReviewNote: Task = {
+      ...baseTask,
+      notes: [
+        {
+          agentId: 'worker-agent',
+          role: 'worker',
+          content: 'Initial implementation finished.',
+          timestamp: '2026-04-11T00:00:00Z',
+        },
+        {
+          agentId: 'reviewer-fanout',
+          role: 'reviewer',
+          content: 'What must change:\n- Add the missing login redirect tests.',
+          timestamp: '2026-04-11T01:00:00Z',
+        },
+      ],
+    }
+    const ctx = await buildContext(taskWithReviewNote, tmpDir)
+    expect(ctx.taskSummary).toContain('### Latest Required Revisions')
+    expect(ctx.taskSummary).toContain('Add the missing login redirect tests')
+  })
 })
 
 describe('buildContext — memory extraction', () => {

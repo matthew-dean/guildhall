@@ -20,6 +20,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { activeEscalations } from '@guildhall/tools'
 import {
   buildSnapshot,
   buildTaskSnapshot,
@@ -965,11 +966,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     }
 
     // Open escalations
-    const escalations = Array.isArray(t.escalations)
-      ? (t.escalations as Array<Record<string, unknown>>)
-      : []
-    for (const esc of escalations) {
-      if (esc.resolvedAt) continue
+    for (const esc of activeEscalations(t)) {
       const escId = typeof esc.id === 'string' ? esc.id : ''
       const at = typeof esc.raisedAt === 'string' ? esc.raisedAt : createdAt
       const summary =

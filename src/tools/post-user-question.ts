@@ -38,6 +38,8 @@ const postUserQuestionInputSchema = z.object({
   kind: z.enum(['confirm', 'yesno', 'choice', 'text']).optional(),
   /** For confirm: the restatement. For yesno/choice/text: the prompt. */
   body: z.string().optional().describe('Restatement (confirm) or prompt (yesno/choice/text)'),
+  prompt: z.string().optional().describe('Alias for body when posting yesno/choice/text questions.'),
+  restatement: z.string().optional().describe('Alias for body when posting confirm questions.'),
   /** Required when kind=choice. 2..6 distinct options in the user's voice. */
   choices: z
     .array(z.string())
@@ -212,13 +214,16 @@ function inferQuestionsFromAssistantText(text: string): InferredQuestion[] {
 }
 
 function resolveQuestionPayload(
-  input: Pick<PostUserQuestionInput, 'kind' | 'body' | 'choices' | 'selectionMode'>,
+  input: Pick<PostUserQuestionInput, 'kind' | 'body' | 'prompt' | 'restatement' | 'choices' | 'selectionMode'>,
   metadata: Record<string, unknown>,
 ): InferredQuestion | { error: string } {
-  if (input.kind && input.body) {
+  const resolvedBody = input.body
+    ?? (input.kind === 'confirm' ? input.restatement : input.prompt)
+
+  if (input.kind && resolvedBody) {
     return {
       kind: input.kind,
-      body: input.body,
+      body: resolvedBody,
       ...(input.choices ? { choices: input.choices } : {}),
       ...(input.selectionMode ? { selectionMode: input.selectionMode } : {}),
     }
@@ -296,7 +301,30 @@ export const postUserQuestionTool = defineTool({
   description:
     "Post an asynchronous structured question to the user on this task. Use this whenever you need human judgment to proceed — the question lands in the user's Thread feed with a kind-specific affordance, and you should yield (end your turn) so the orchestrator can resume you when an answer arrives. PREFER `kind: 'choice'` whenever the answer space is small and discrete (it always degrades to Other… free-text). For choice questions, set `selectionMode: 'multiple'` when more than one answer may apply; otherwise set `selectionMode: 'single'` or omit it. Use `confirm` to restate intent before committing. Use `yesno` only for genuinely binary calls. Use `text` sparingly — usually a multiple choice with the question phrased as the prompt is better. NEVER bury questions in productBrief.userJob — that field is for what you think the user wants, not for asking them.",
   inputSchema: postUserQuestionInputSchema,
-  jsonSchema: { type: 'object' },
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      tasksPath: { type: 'string', description: 'Absolute path to TASKS.json. Optional when injected via runtime metadata.' },
+      taskId: { type: 'string', description: 'Current task id. Optional when injected via runtime metadata.' },
+      askedBy: { type: 'string', description: 'Agent id posting the question. Optional when injected via runtime metadata.' },
+      kind: { type: 'string', enum: ['confirm', 'yesno', 'choice', 'text'] },
+      body: { type: 'string', description: 'Restatement for confirm, or prompt for yesno/choice/text.' },
+      prompt: { type: 'string', description: 'Alias for body on yesno/choice/text questions.' },
+      restatement: { type: 'string', description: 'Alias for body on confirm questions.' },
+      choices: {
+        type: 'array',
+        items: { type: 'string' },
+        minItems: 2,
+        maxItems: 6,
+        description: 'Required when kind=choice.',
+      },
+      selectionMode: {
+        type: 'string',
+        enum: ['single', 'multiple'],
+        description: 'For choice questions: pick one or pick all that apply.',
+      },
+    },
+  },
   isReadOnly: () => false,
   execute: async (input, ctx) => {
     const resolved = resolveQuestionDefaults(input, ctx.metadata)

@@ -245,6 +245,38 @@ describe('buildInbox', () => {
     expect(hit.actionHref).toBe('/task/task-a')
   })
 
+  it('brief_approval: not emitted once the task has moved beyond intake', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-review',
+          title: 'Already underway',
+          status: 'review',
+          productBrief: {
+            userJob: 'fix the handoff',
+            successMetric: 'tests pass again',
+          },
+        },
+        {
+          id: 'task-done',
+          title: 'Already shipped',
+          status: 'done',
+          productBrief: {
+            userJob: 'audit the integration',
+            successMetric: 'no local fork remains',
+          },
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.find(i => i.kind === 'brief_approval')).toBeUndefined()
+  })
+
   it('spec_approval: emitted for tasks in status=spec_review', async () => {
     await writeCompleteBootstrap()
     await writeJson('memory/workspace-goals.json', { goals: [] })

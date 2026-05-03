@@ -9,6 +9,7 @@
   import Card from '../../lib/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
   import { friendlyDomain, friendlyPriority, friendlyStatus } from '../../lib/display.js'
+  import { activeEscalations } from '../../lib/escalation.js'
   import { roleLabel } from '../../lib/escalation-labels.js'
   import Button from '../../lib/Button.svelte'
   import Field from '../../lib/Field.svelte'
@@ -57,7 +58,7 @@
   // surface. Past-context here is for inspection only.
 
   const openEscalations = $derived(
-    (task.escalations ?? []).filter((e) => !e.resolvedAt),
+    activeEscalations(task),
   )
   const stuck = $derived(
     task.status === 'blocked' ||

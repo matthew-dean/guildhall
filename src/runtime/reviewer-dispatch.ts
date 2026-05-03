@@ -1,4 +1,4 @@
-import type { Task, TaskQueue, TaskStatus, ReviewVerdict } from '@guildhall/core'
+import { parseAcceptanceCriteriaFromSpec, type Task, type TaskQueue, type TaskStatus, type ReviewVerdict } from '@guildhall/core'
 
 // ---------------------------------------------------------------------------
 // FR-27 / AC-18: reviewer dispatch with deterministic fallback.
@@ -51,6 +51,18 @@ export interface DeterministicVerdict {
   failingSignals: string[]
 }
 
+export function shouldAdvanceToGateCheckPendingHardGates(
+  task: Task,
+  failingSignals: string[],
+): boolean {
+  if (failingSignals.some((signal) => signal !== 'no-regressions')) return false
+  const acs = task.acceptanceCriteria.length > 0
+    ? task.acceptanceCriteria
+    : parseAcceptanceCriteriaFromSpec(task.spec)
+  if (acs.length === 0 || !acs.every((criterion) => criterion.met)) return false
+  return !task.gateResults.some((gate) => gate.type === 'hard')
+}
+
 /**
  * Rubric-driven verdict from observable task state alone. No LLM call, no
  * side effects. Mapping from rubric questions to integer signals keyed off
@@ -75,7 +87,9 @@ export function deterministicReview(task: Task): DeterministicVerdict {
   const failing: string[] = []
   const trace: string[] = []
 
-  const acs = task.acceptanceCriteria
+  const acs = task.acceptanceCriteria.length > 0
+    ? task.acceptanceCriteria
+    : parseAcceptanceCriteriaFromSpec(task.spec)
   const acsAllMet = acs.length > 0 && acs.every((a) => a.met)
   if (acsAllMet) {
     weighted += rubric['acceptance-criteria-met']
@@ -125,11 +139,13 @@ export function deterministicReview(task: Task): DeterministicVerdict {
   trace.push(`documented: +${rubric.documented.toFixed(1)} (no deterministic signal — credited)`)
 
   const score = weighted / totalWeight
+  const advanceToGateCheck = shouldAdvanceToGateCheckPendingHardGates(task, failing)
   const verdict: DeterministicVerdict['verdict'] =
-    score >= DETERMINISTIC_PASS_THRESHOLD ? 'approve' : 'revise'
+    advanceToGateCheck || score >= DETERMINISTIC_PASS_THRESHOLD ? 'approve' : 'revise'
 
-  const reason =
-    verdict === 'approve'
+  const reason = advanceToGateCheck
+    ? 'Deterministic review: acceptance criteria are met and hard gates have not run yet; advance to gate_check.'
+    : verdict === 'approve'
       ? `Deterministic review: score ${score.toFixed(2)} \u2265 ${DETERMINISTIC_PASS_THRESHOLD}`
       : `Deterministic review: score ${score.toFixed(2)} < ${DETERMINISTIC_PASS_THRESHOLD}; failing signals: ${failing.join(', ') || '(none recorded)'}`
 
@@ -137,10 +153,18 @@ export function deterministicReview(task: Task): DeterministicVerdict {
     `Rubric walkthrough (weighted /${totalWeight.toFixed(1)}):`,
     ...trace.map((t) => `  - ${t}`),
     `Total: ${weighted.toFixed(2)} / ${totalWeight.toFixed(1)} = ${score.toFixed(3)}`,
-    `Threshold: ${DETERMINISTIC_PASS_THRESHOLD} → ${verdict === 'approve' ? 'APPROVE' : 'REVISE'}`,
+    advanceToGateCheck
+      ? 'Special-case handoff: all acceptance criteria are met, and no hard gates have run yet. Advance to gate_check so hard verification decides no-regressions.'
+      : `Threshold: ${DETERMINISTIC_PASS_THRESHOLD} → ${verdict === 'approve' ? 'APPROVE' : 'REVISE'}`,
   ].join('\n')
 
-  return { verdict, reason, reasoning, score, failingSignals: failing }
+  return {
+    verdict,
+    reason,
+    reasoning,
+    score,
+    failingSignals: advanceToGateCheck ? [] : failing,
+  }
 }
 
 export interface ApplyDeterministicVerdictInput {
@@ -155,6 +179,17 @@ export interface ApplyDeterministicVerdictInput {
 export interface ApplyDeterministicVerdictResult {
   record: ReviewVerdict
   newStatus: TaskStatus
+}
+
+function assigneeForReviewOutcome(status: TaskStatus): string | undefined {
+  switch (status) {
+    case 'gate_check':
+      return 'gate-checker-agent'
+    case 'in_progress':
+      return 'worker-agent'
+    default:
+      return undefined
+  }
 }
 
 /**
@@ -185,6 +220,8 @@ export function applyDeterministicVerdict(
 
   const newStatus: TaskStatus = input.verdict.verdict === 'approve' ? 'gate_check' : 'in_progress'
   task.status = newStatus
+  const assignee = assigneeForReviewOutcome(newStatus)
+  if (assignee) task.assignedTo = assignee
   task.updatedAt = input.now
   input.queue.lastUpdated = input.now
 

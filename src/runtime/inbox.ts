@@ -14,6 +14,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
+import { activeEscalations } from '@guildhall/tools'
 import type { BootstrapStatus } from './bootstrap-runner.js'
 import {
   buildTaskSnapshot,
@@ -251,7 +252,13 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     if (!id) continue
 
     const brief = t.productBrief as { approvedAt?: unknown } | undefined
-    if (brief && typeof brief === 'object' && !brief.approvedAt) {
+    const status = typeof t.status === 'string' ? t.status : ''
+    const briefNeedsHuman =
+      brief &&
+      typeof brief === 'object' &&
+      !brief.approvedAt &&
+      (status === 'exploring' || status === 'awaiting_human')
+    if (briefNeedsHuman) {
       items.push({
         kind: 'brief_approval',
         severity: 'medium',
@@ -322,11 +329,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
       }
     }
 
-    const escalations = Array.isArray(t.escalations)
-      ? (t.escalations as Array<Record<string, unknown>>)
-      : []
-    for (const esc of escalations) {
-      if (esc.resolvedAt) continue
+    for (const esc of activeEscalations(t)) {
       const escId = typeof esc.id === 'string' ? esc.id : ''
       const summary =
         typeof esc.summary === 'string' && esc.summary.trim()

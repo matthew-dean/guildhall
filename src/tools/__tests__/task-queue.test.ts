@@ -87,6 +87,31 @@ describe('updateTask', () => {
     expect(raw.tasks[0].status).toBe('spec_review')
   })
 
+  it('normalizes reviewer ownership when a task moves into review', async () => {
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'review' })
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].status).toBe('review')
+    expect(raw.tasks[0].assignedTo).toBe('reviewer-agent')
+  })
+
+  it('normalizes gate-checker ownership when a task moves into gate_check', async () => {
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'gate_check' })
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].status).toBe('gate_check')
+    expect(raw.tasks[0].assignedTo).toBe('gate-checker-agent')
+  })
+
+  it('preserves an explicitly supplied assignee when provided alongside a status', async () => {
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      status: 'review',
+      assignedTo: 'custom-review-owner',
+    })
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].assignedTo).toBe('custom-review-owner')
+  })
+
   it('updates task title', async () => {
     await updateTask({ tasksPath, taskId: 'task-001', title: 'Write a clear implementation spec' })
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
@@ -140,6 +165,37 @@ describe('updateTask', () => {
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
     expect(raw.tasks[0].status).toBe('spec_review')
     expect(raw.tasks[0].spec).toContain('Build the thing')
+  })
+
+  it('derives structured acceptance criteria from the spec when none are provided explicitly', async () => {
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      spec: [
+        '## Summary',
+        'Build the thing.',
+        '',
+        '## Acceptance Criteria',
+        '1. The table menu renders.',
+        '2. `pnpm -F web build` passes.',
+      ].join('\n'),
+    })
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].acceptanceCriteria).toEqual([
+      {
+        id: 'ac-1',
+        description: 'The table menu renders.',
+        verifiedBy: 'review',
+        met: false,
+      },
+      {
+        id: 'ac-2',
+        description: '`pnpm -F web build` passes.',
+        verifiedBy: 'review',
+        met: false,
+      },
+    ])
   })
 
   it('ignores empty optional strings so broad model calls do not erase existing spec state', async () => {
@@ -282,6 +338,25 @@ describe('updateTask', () => {
         checkedAt: '2026-04-29T00:00:00.000Z',
       },
     ])
+  })
+
+  it('infers taskId from runtime metadata when a single active task cannot be inferred', async () => {
+    const result = await updateTask(
+      {
+        tasksPath,
+        status: 'review',
+      },
+      {
+        current_task_id: 'task-001',
+      },
+    )
+
+    expect(result.success).toBe(true)
+    expect(result.taskId).toBe('task-001')
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].status).toBe('review')
+    expect(raw.tasks[0].assignedTo).toBe('reviewer-agent')
   })
 })
 

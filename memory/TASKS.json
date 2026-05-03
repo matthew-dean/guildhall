@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-05-03T00:45:18Z",
+  "lastUpdated": "2026-05-03T19:10:00.000Z",
   "tasks": [
     {
       "id": "looma-001",
@@ -425,7 +425,7 @@
       "description": "Make Guildhall finish work against the target project's actual verification contract. Tasks should fail or block for real project reasons, not weak bootstrap stand-ins or stale runtime assumptions.",
       "domain": "runtime",
       "projectPath": ".",
-      "status": "pending",
+      "status": "done",
       "priority": "critical",
       "dependsOn": [
         "guildhall-automation-003"
@@ -438,20 +438,45 @@
           "id": "ac-1",
           "description": "Task completion uses real project-specific gates where they exist",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         },
         {
           "id": "ac-2",
           "description": "Guildhall surfaces explicit blocked-state reasons for unrelated repo failures or missing human input",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         }
       ],
-      "notes": [],
+      "notes": [
+        {
+          "agentId": "human",
+          "role": "coordinator",
+          "timestamp": "2026-05-03T18:50:00.000Z",
+          "content": "Live Looma/Knit gate-check proved the next real blocker is task-vs-project gate truth. Guildhall is now being updated so explicit automated acceptance-criteria commands become the authoritative hard gates for their category, with broader project defaults only filling in missing categories."
+        },
+        {
+          "agentId": "human",
+          "role": "coordinator",
+          "timestamp": "2026-05-03T19:03:00.000Z",
+          "content": "Task-scoped automated gates now narrow the live run correctly, and pnpm commands get basic normalization before they become hard gates. The remaining blocker is command trust plus escalation hygiene: stale open gate escalations can stop a rerun before gate_check replays, and some agent-authored commands still need runtime validation against the repo layout before they should be treated as authoritative."
+        },
+        {
+          "agentId": "human",
+          "role": "coordinator",
+          "timestamp": "2026-05-03T19:10:00.000Z",
+          "content": "Stale unresolved escalations no longer block reruns once the task has clearly moved forward after the escalation was raised and is no longer in blocked status. The same supersede rule now drives the orchestrator, inbox, thread, and stuck-state UI so false Needs-you noise drops with the runtime fix."
+        },
+        {
+          "agentId": "human",
+          "role": "coordinator",
+          "timestamp": "2026-05-03T19:32:30.000Z",
+          "content": "Live Looma/Knit task-009 now completed through gate_check under the hardened task-scoped gate contract. Guildhall persisted the done transition cleanly after narrowing the test gate to the targeted callback file, invalidating stale gate-check sessions, and letting update-task infer current_task_id from runtime metadata."
+        }
+      ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-02T16:01:41Z",
-      "updatedAt": "2026-05-02T16:01:41Z"
+      "updatedAt": "2026-05-03T19:32:30.000Z"
     },
     {
       "id": "guildhall-automation-005",
@@ -459,7 +484,7 @@
       "description": "Once a task is genuinely done, Guildhall should be able to push branch state through review packaging and merge without human bookkeeping.",
       "domain": "runtime",
       "projectPath": ".",
-      "status": "pending",
+      "status": "in_progress",
       "priority": "high",
       "dependsOn": [
         "guildhall-automation-004"
@@ -475,11 +500,36 @@
           "met": false
         }
       ],
-      "notes": [],
+      "notes": [
+        {
+          "agentId": "human",
+          "role": "coordinator",
+          "timestamp": "2026-05-03T19:32:30.000Z",
+          "content": "Automation-004 is now effectively satisfied by a real Looma/Knit task reaching done under real narrowed gates. The next autonomy gap is PR and merge packaging: inspect Guildhall's done-task publication path and make one grounded task move through branch/PR bookkeeping without manual cleanup."
+        },
+        {
+          "agentId": "human",
+          "role": "coordinator",
+          "timestamp": "2026-05-03T19:35:45.000Z",
+          "content": "The next publication blocker is now crisp: task-009 reached done under real narrowed gates, but Looma/Knit did not allocate a task branch/worktree, so there was no mergeRecord and no PR path to run. Guildhall now records an explicit skipped merge when publication was never attempted; the next slice is enabling or truthfully configuring the branch/publication lane for a real project."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-03T19:42:45.000Z",
+          "content": "The next publication blocker is now sharper and partially cleared: the multi-repo workspace root was never a git repo, so Guildhall was pointing worktree and merge operations at the wrong path for Looma/Knit tasks. The runtime now routes branch/worktree/merge cleanup through the task's effective project repo (for example `knit/`), which makes a real PR/merge proof possible on the next grounded subproject task."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-03T19:47:15.000Z",
+          "content": "Publication hardening now covers the next truthful blocker too: if a target subrepo is already dirty when worktree isolation is on, Guildhall stops before minting a task branch and surfaces an explicit repo-dirty worktree error. For Looma/Knit, that means the next live publication proof needs either a clean knit/ repo or an intentional publication pass for the already-dirty auth work."
+        }
+      ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-02T16:01:41Z",
-      "updatedAt": "2026-05-02T16:01:41Z"
+      "updatedAt": "2026-05-03T19:47:15.000Z"
     },
     {
       "id": "guildhall-automation-006",
@@ -924,12 +974,48 @@
           "role": "worker",
           "timestamp": "2026-05-03T00:45:18Z",
           "content": "Finished the Notifications repair in the live Looma/Knit shell. InboxTab now reuses the shell's already-fetched inbox state instead of maintaining a second fetch lifecycle, so the badge count and page body stay in sync. Verified at /notifications: Loading is gone, repeated escalation titles render safely, and the inbox rows appear immediately."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-03T01:14:00Z",
+          "content": "Live Looma/Knit proof on task-008 now confirms the review-fallback hardening: reviewer throttling no longer fabricates a worker revision. The task advanced review -> gate_check via reviewer-deterministic-fallback, and the latest worker self-critique was enough to reconcile acceptanceCriteria as met. The next blocker is one lane later: gate-checker-agent still stops the one-task run on NVIDIA HTTP 429 instead of preserving gate_check as a retryable provider-throttle state."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-03T01:18:00Z",
+          "content": "Followed the live task-008 proof one step further. Reviewer throttling is now handled well enough to preserve review truth and advance into gate_check, so the next hardening slice is gate-checker behavior under the same NVIDIA 429 pressure. The runtime is being updated so retryable provider throttles during gate_check become a resumable provider-backoff outcome rather than a generic agent-error, keeping gate_check as the truthful task state and making one-task stop summaries less alarming."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-03T01:21:00Z",
+          "content": "The live Looma/Knit proof finally crossed the next bar. After the reviewer-fallback hardening, task-008 was able to replay from gate_check and finish a one-task run to done on the NVIDIA provider. This is now a real grounded task that reached spec/review/gate/done through Guildhall, though the remaining trust gap is still project gate truth: the workspace root bootstrap has no authoritative hard gates, so completion currently relies on the empty gate list rather than knit/web-specific verification commands."
+        },
+        {
+          "agentId": "human",
+          "role": "coordinator",
+          "timestamp": "2026-05-03T18:50:00.000Z",
+          "content": "The unattended-throughput proof has moved from runtime noise to truthful blocked-state handling. Task-009 reached gate_check cleanly, and the next hardening slice is distinguishing task-scoped green verification from unrelated repo-wide red tests so longer unattended runs can skip honest project blockers instead of treating them as task failures."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-03T19:32:30.000Z",
+          "content": "Latest live throughput proof crossed another milestone: Looma/Knit task-009 replayed from gate_check to done in one fresh one_task run on DeepInfra Qwen 3.6 after the gate-check session freshness fix, narrowed gate normalization, and update-task metadata inference landed together."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-03T19:42:45.000Z",
+          "content": "The staged throughput proof now covers another real-world shape: multi-repo workspaces where the workspace root is not the git root. The orchestrator now drives worktree setup, base-branch lookup, merge dispatch, and cleanup through the task's effective project repo, which is a prerequisite for truthful unattended publication in Looma/Knit-style installs."
         }
       ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-02T17:45:00Z",
-      "updatedAt": "2026-05-03T00:45:18Z"
+      "updatedAt": "2026-05-03T19:42:45.000Z"
     }
   ]
 }

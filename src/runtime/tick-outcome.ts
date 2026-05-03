@@ -54,6 +54,13 @@ export type TickOutcome =
   | { kind: 'blocked-max-revisions'; taskId: string; revisionCount: number }
   | { kind: 'no-coordinator'; taskId: string; domain: string }
   | { kind: 'agent-error'; taskId: string; agent: string; error: string }
+  | {
+      kind: 'provider-backoff'
+      taskId: string
+      agent: string
+      status: TaskStatus
+      error: string
+    }
   /** FR-10: an agent raised an escalation — task is halted until resolved. */
   | {
       kind: 'escalated'

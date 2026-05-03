@@ -514,7 +514,8 @@ describe('agent factories', () => {
       expect(sys).toContain('`pnpm typecheck`')
       expect(sys).toContain('`pnpm test`')
       expect(sys).toContain('`cargo clippy -- -D warnings`')
-      expect(sys).toContain('verified bootstrap gates from guildhall.yaml')
+      expect(sys).toContain("project's currently known hard gates")
+      expect(sys).toContain('task-scoped project detection for a nested subproject')
       expect(sys).not.toContain('falling back to the TypeScript defaults')
     })
 
@@ -526,8 +527,8 @@ describe('agent factories', () => {
       )
       await agent.generate('go')
       const sys = client.requests[0]?.system_prompt ?? ''
-      expect(sys).toContain('verified bootstrap gates from guildhall.yaml')
-      expect(sys).toContain('Do not invent extra gates beyond this list')
+      expect(sys).toContain("project's currently known hard gates")
+      expect(sys).toContain('Do not invent extra gates beyond the authoritative list')
       expect(sys).toContain('No verified shell gates are currently configured')
       expect(sys).not.toContain('falling back to the TypeScript defaults')
     })

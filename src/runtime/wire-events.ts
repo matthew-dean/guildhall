@@ -61,6 +61,17 @@ export function tickOutcomeToBackendEvent(outcome: TickOutcome): BackendEvent | 
         agent_name: outcome.agent,
       }
 
+    case 'provider-backoff':
+      return {
+        type: 'error',
+        message:
+          `${outcome.agent} hit a retryable provider throttle on ${outcome.taskId}. ` +
+          `Guildhall kept the task in ${outcome.status} so the next run can resume gate verification without rework.`,
+        task_id: outcome.taskId,
+        agent_name: outcome.agent,
+        reason: 'provider_backoff',
+      }
+
     case 'proposal-decided':
       // FR-21: promotions present as a task_transition so subscribers already
       // rendering transitions pick them up without a schema extension. The

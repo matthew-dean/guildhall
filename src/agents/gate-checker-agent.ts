@@ -38,8 +38,8 @@ function buildPrompt(gates: readonly string[] | undefined): string {
   const { descriptions, source } = renderGateDescriptions(gates)
   const sourceLine =
     source === 'project-bootstrap'
-      ? "These are the project's verified bootstrap gates from guildhall.yaml. They were empirically established during meta-intake or bootstrap verification and are the authoritative list for this project. Do not invent extra gates beyond this list."
-      : 'No project-level gates configured — falling back to the TypeScript defaults. When in doubt, run typecheck and build at minimum.'
+      ? "These are the project's currently known hard gates. They may come from workspace bootstrap verification or from task-scoped project detection for a nested subproject. If the current task prompt supplies task-scoped hard gates, those override any generic defaults below. Do not invent extra gates beyond the authoritative list you were given for this task."
+      : 'No project-level gates configured — falling back to the TypeScript defaults unless the current task prompt supplies a more specific task-scoped gate list. When in doubt, run typecheck and build at minimum.'
   return `
 You are the Gate Checker Agent in the Guildhall multi-agent system.
 You run automated hard gates to verify that completed work actually passes.

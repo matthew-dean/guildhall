@@ -346,6 +346,50 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     expect(after.status).toBe('review')
   })
 
+  it('falls through to the legacy single reviewer when fanout only produces infra failures', async () => {
+    await writeDesignSystem(minimalDS)
+    const task = mkTask()
+    await writeQueue([task])
+    const approvingReviewer = stubAgent('reviewer-agent')
+    approvingReviewer.generate = async function (prompt: string) {
+      this.calls.push({ prompt })
+      const q = await readQueue()
+      q.tasks[0]!.status = 'gate_check'
+      q.tasks[0]!.updatedAt = '2026-04-01T00:00:02Z'
+      q.lastUpdated = '2026-04-01T00:00:02Z'
+      await fs.writeFile(tasksPath, JSON.stringify(q, null, 2), 'utf-8')
+      return { text: 'ok' }
+    }
+    const agents = {
+      ...agentSet(),
+      reviewer: approvingReviewer,
+    }
+
+    const runner: ReviewerFanoutRunner = async ({ personas }) =>
+      personas.map(
+        (persona): PersonaVerdict => ({
+          guildSlug: persona.slug,
+          guildName: persona.name,
+          verdict: 'revise',
+          reasoning:
+            `${persona.name} failed to produce a verdict (API error: OpenAI-compatible API HTTP 429: {"status":429,"title":"Too Many Requests"}). Treating as revise per strict-all policy.`,
+          revisionItems: [],
+          rawOutput: '**Verdict:** revise',
+        }),
+      )
+
+    const orch = new Orchestrator({ config: baseConfig(), agents, reviewerFanout: runner })
+    await orch.tick()
+
+    expect(approvingReviewer.calls).toHaveLength(1)
+    const q = await readQueue()
+    const after = q.tasks[0]!
+    expect(after.status).toBe('gate_check')
+    expect(after.reviewVerdicts).toHaveLength(1)
+    expect(after.reviewVerdicts[0]!.reviewerPath).toBe('llm')
+    expect(after.reviewVerdicts[0]!.verdict).toBe('approve')
+  })
+
   it('raises escalation when fan-out keeps rejecting past maxRevisions', async () => {
     await writeDesignSystem(minimalDS)
     const task = mkTask({ revisionCount: 3 }) // already at maxRevisions
