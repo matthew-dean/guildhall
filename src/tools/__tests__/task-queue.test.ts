@@ -131,6 +131,17 @@ describe('updateTask', () => {
     ])
   })
 
+  it('promotes exploring tasks to spec_review when a non-empty spec is written without an explicit status', async () => {
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      spec: '## Summary\nBuild the thing.',
+    })
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].status).toBe('spec_review')
+    expect(raw.tasks[0].spec).toContain('Build the thing')
+  })
+
   it('ignores empty optional strings so broad model calls do not erase existing spec state', async () => {
     await updateTask({
       tasksPath,

@@ -154,6 +154,10 @@ export interface QueryContext {
    */
   noToolTurnNudge?: string | undefined
   noToolTurnNudgeLimit?: number | undefined
+  noProgressToolNames?: readonly string[] | undefined
+  noProgressTurnNudge?: string | undefined
+  noProgressTurnNudgeLimit?: number | undefined
+  noProgressTurnThreshold?: number | undefined
   abortSignal?: AbortSignal | undefined
 }
 
@@ -199,8 +203,11 @@ export async function* runQuery(
   // do the real work; for now, the branch yields an error and bails.
   let reactiveCompactAttempted = false
   let noToolTurnNudges = 0
+  let noProgressTurnNudges = 0
+  let noProgressToolTurns = 0
   let sawToolCall = false
   const repeatedToolCallCounts = new Map<string, number>()
+  const progressToolNames = new Set(context.noProgressToolNames ?? [])
 
   while (context.maxTurns == null || turnCount < context.maxTurns) {
     turnCount += 1
@@ -327,6 +334,7 @@ export async function* runQuery(
 
     const toolCalls = messageToolUses(finalMessage)
     if (toolCalls.length === 0) {
+      noProgressToolTurns = 0
       if (
         !sawToolCall &&
         context.noToolTurnNudge &&
@@ -352,6 +360,13 @@ export async function* runQuery(
       return
     }
     sawToolCall = true
+    const hadProgressToolCall =
+      progressToolNames.size > 0 && toolCalls.some((tc) => progressToolNames.has(tc.name))
+    if (hadProgressToolCall) {
+      noProgressToolTurns = 0
+    } else if (progressToolNames.size > 0) {
+      noProgressToolTurns += 1
+    }
 
     if (toolCalls.length === 1) {
       const tc = toolCalls[0]!
@@ -442,6 +457,26 @@ export async function* runQuery(
           usage: null,
         }
       }
+    }
+
+    if (
+      progressToolNames.size > 0 &&
+      !hadProgressToolCall &&
+      context.noProgressTurnNudge &&
+      noProgressToolTurns >= (context.noProgressTurnThreshold ?? 2) &&
+      noProgressTurnNudges < (context.noProgressTurnNudgeLimit ?? 1)
+    ) {
+      noProgressTurnNudges += 1
+      messages.push(userMessageFromText(context.noProgressTurnNudge))
+      yield {
+        event: {
+          type: 'status',
+          message:
+            'Assistant kept researching without recording durable progress; asking it to write the brief, question, spec, or escalation now.',
+        },
+        usage: null,
+      }
+      continue
     }
   }
 

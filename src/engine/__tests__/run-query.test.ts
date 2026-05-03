@@ -284,6 +284,88 @@ describe('runQuery — single turn, no tools', () => {
     expect(client.requests).toHaveLength(2)
     expect(messages.filter((m) => m.role === 'user')).toHaveLength(2)
   })
+
+  it('nudges after repeated read-only tool turns and continues to a durable progress tool', async () => {
+    const registry = new ToolRegistry()
+    let readOnlyCalls = 0
+    let durableCalls = 0
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: 'reads a file',
+        inputSchema: z.object({ filePath: z.string() }),
+        execute: async (input) => {
+          readOnlyCalls += 1
+          return { output: `read ${input.filePath}`, is_error: false }
+        },
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: 'writes the task spec',
+        inputSchema: z.object({ status: z.string().optional() }),
+        execute: async () => {
+          durableCalls += 1
+          return { output: 'task updated', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('read-file', { filePath: 'a.md' }, 'toolu_1') },
+      { message: assistantToolUse('read-file', { filePath: 'b.md' }, 'toolu_2') },
+      { message: assistantToolUse('update-task', { status: 'spec_review' }, 'toolu_3') },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/tmp',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 6,
+          noProgressToolNames: ['update-task'],
+          noProgressTurnNudge:
+            'Stop researching and write the spec, ask the question, or escalate now.',
+          noProgressTurnNudgeLimit: 1,
+          noProgressTurnThreshold: 2,
+        },
+        messages,
+      ),
+    )
+
+    expect(readOnlyCalls).toBe(2)
+    expect(durableCalls).toBe(1)
+    expect(events.map((e) => e.type)).toEqual([
+      'assistant_turn_complete',
+      'tool_execution_started',
+      'tool_execution_completed',
+      'assistant_turn_complete',
+      'tool_execution_started',
+      'tool_execution_completed',
+      'status',
+      'assistant_turn_complete',
+      'tool_execution_started',
+      'tool_execution_completed',
+      'assistant_turn_complete',
+    ])
+    expect(messages[5]).toEqual({
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: 'Stop researching and write the spec, ask the question, or escalate now.',
+        },
+      ],
+    })
+  })
 })
 
 describe('runQuery — tool loop', () => {

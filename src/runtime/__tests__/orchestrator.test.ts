@@ -9,7 +9,7 @@ import {
   type OrchestratorAgentSet,
 } from '../orchestrator.js'
 import { LivenessTracker } from '../liveness.js'
-import type { ResolvedConfig } from '@guildhall/config'
+import { updateProjectConfig, type ResolvedConfig } from '@guildhall/config'
 import type { Task, TaskQueue, TaskStatus } from '@guildhall/core'
 import {
   AGENT_SETTINGS_FILENAME,
@@ -103,7 +103,9 @@ async function writeQueue(tasks: Task[]): Promise<void> {
     lastUpdated: '2026-04-01T00:00:00Z',
     tasks,
   }
-  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+  const tmpPath = `${tasksPath}.tmp`
+  await fs.writeFile(tmpPath, JSON.stringify(queue, null, 2), 'utf-8')
+  await fs.rename(tmpPath, tasksPath)
 }
 
 async function readQueue(): Promise<TaskQueue> {
@@ -127,7 +129,9 @@ async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
   const t = q.tasks.find((t) => t.id === id)
   if (!t) throw new Error(`No task ${id}`)
   Object.assign(t, patch)
-  await fs.writeFile(tasksPath, JSON.stringify(q, null, 2), 'utf-8')
+  const tmpPath = `${tasksPath}.tmp`
+  await fs.writeFile(tmpPath, JSON.stringify(q, null, 2), 'utf-8')
+  await fs.rename(tmpPath, tasksPath)
 }
 
 interface StubAgent {
@@ -375,6 +379,13 @@ describe('Orchestrator.tick — idle handling', () => {
     if (out.kind === 'idle') {
       expect(out.allDone).toBe(true)
       expect(out.consecutiveIdleTicks).toBe(1)
+      expect(out.summary).toMatchObject({
+        reason: 'all_terminal',
+        counts: {
+          done: 1,
+          blocked: 1,
+        },
+      })
     }
   })
 
@@ -405,6 +416,35 @@ describe('Orchestrator.tick — idle handling', () => {
     const out = await orch.tick()
     expect(out.kind).toBe('idle')
     if (out.kind === 'idle') expect(out.consecutiveIdleTicks).toBe(1)
+  })
+
+  it('returns an awaiting-human stop summary when the queue is only waiting on user input', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'exploring',
+        openQuestions: [
+          {
+            kind: 'text',
+            id: 'q-1',
+            askedBy: 'spec-agent',
+            askedAt: '2026-05-02T00:00:00Z',
+            prompt: 'Clarify the target flow',
+          },
+        ],
+      }),
+    ])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      idleShutdownAfterTicks: 0,
+    })
+    const result = await orch.run({ maxTicks: 2, tickDelayMs: 0 })
+    expect(result).toMatchObject({
+      stopReason: 'awaiting_human',
+    })
+    expect(result.stopMessage).toMatch(/waiting on user answers/i)
+    expect(result.idleSummary?.counts.waitingOnUser).toBe(1)
   })
 })
 
@@ -1558,6 +1598,35 @@ describe('Orchestrator.tick — error handling', () => {
     expect(q.tasks[0]!.status).toBe('blocked')
     expect(q.tasks[0]!.escalations[0]!.summary).toContain('Worker stopped')
   })
+
+  it('preserves durable spec progress instead of escalating when turn limit hits after update-task work', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
+    const spec = {
+      name: 'spec-agent',
+      async generate() {
+        await mutateTask('a', {
+          status: 'spec_review',
+          spec: '## Summary\nAlready drafted.',
+        })
+        throw new Error('Exceeded maximum turn limit (8)')
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.afterStatus).toBe('spec_review')
+      expect(out.transitioned).toBe(true)
+    }
+
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('spec_review')
+    expect(q.tasks[0]!.spec).toContain('Already drafted')
+    expect(q.tasks[0]!.escalations).toHaveLength(0)
+  })
 })
 
 describe('Orchestrator.run — full loops', () => {
@@ -1631,11 +1700,14 @@ describe('Orchestrator.run — full loops', () => {
       mkTask({ id: 'b', status: 'ready', domain: 'looma', spec: 'approved spec' }),
     ])
 
+    let writeChain = Promise.resolve()
     const mutateCurrentTask = (next: TaskStatus) => async (prompt: string) => {
       const match = prompt.match(/\*\*Current task ID \(for task tools\):\*\* ([^\n]+)/)
       const taskId = match?.[1]
       if (!taskId) throw new Error('missing current task id in prompt')
-      await mutateTask(taskId, { status: next })
+      const run = writeChain.then(() => mutateTask(taskId, { status: next }))
+      writeChain = run.catch(() => {})
+      await run
     }
 
     const agents: OrchestratorAgentSet = {
@@ -1734,6 +1806,101 @@ describe('Orchestrator.run — full loops', () => {
     // Should have exited within a couple of ticks of the marker appearing,
     // not run to the maxTicks=20 ceiling.
     expect(ticks).toBeLessThan(10)
+  })
+
+  it('processes three unblocked tasks in one unattended run', async () => {
+    await writeQueue([
+      mkTask({ id: 'a', status: 'ready', spec: 'approved spec', domain: 'looma' }),
+      mkTask({ id: 'b', status: 'ready', spec: 'approved spec', domain: 'looma' }),
+      mkTask({ id: 'c', status: 'ready', spec: 'approved spec', domain: 'looma' }),
+    ])
+
+    const mutateCurrentTask = (next: TaskStatus) => async (prompt: string) => {
+      const match = prompt.match(/\*\*Current task ID \(for task tools\):\*\* ([^\n]+)/)
+      const taskId = match?.[1]
+      if (!taskId) throw new Error('missing current task id in prompt')
+      await mutateTask(taskId, { status: next })
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: {
+        spec: stubAgent('spec-agent'),
+        worker: stubAgent('worker-agent', mutateCurrentTask('review')),
+        reviewer: stubAgent('reviewer-agent', mutateCurrentTask('gate_check')),
+        gateChecker: stubAgent('gate-checker-agent', mutateCurrentTask('done')),
+        coordinators: {},
+      },
+    })
+
+    const result = await orch.run({ maxTicks: 20, tickDelayMs: 0 })
+
+    const q = await readQueue()
+    expect(q.tasks.map((task) => task.status)).toEqual(['done', 'done', 'done'])
+    expect(result.stopReason).toBe('all_terminal')
+    expect(result.idleSummary?.counts.done).toBe(3)
+  })
+
+  it('stops with explicit blocked accounting when unattended work runs into a human question', async () => {
+    const settings: LeverSettings = makeDefaultSettings(new Date('2026-05-02T00:00:00Z'))
+    settings.project.concurrent_task_dispatch = {
+      position: { kind: 'fanout', n: 2 },
+      rationale: 'test fanout',
+      setAt: '2026-05-02T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+    updateProjectConfig(tmpDir, {
+      workerLaneConcurrency: 2,
+    })
+    await writeQueue([
+      mkTask({ id: 'done-ish', status: 'ready', spec: 'approved spec', domain: 'looma' }),
+      mkTask({
+        id: 'question',
+        status: 'exploring',
+        domain: 'looma',
+        openQuestions: [
+          {
+            kind: 'text',
+            id: 'q-1',
+            askedBy: 'spec-agent',
+            askedAt: '2026-05-02T00:00:00Z',
+            prompt: 'Which environment should I target?',
+          },
+        ],
+      }),
+    ])
+
+    const mutateCurrentTask = (next: TaskStatus) => async (prompt: string) => {
+      const match = prompt.match(/\*\*Current task ID \(for task tools\):\*\* ([^\n]+)/)
+      const taskId = match?.[1]
+      if (!taskId) throw new Error('missing current task id in prompt')
+      await mutateTask(taskId, { status: next })
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: {
+        spec: stubAgent('spec-agent'),
+        worker: stubAgent('worker-agent', mutateCurrentTask('review')),
+        reviewer: stubAgent('reviewer-agent', mutateCurrentTask('gate_check')),
+        gateChecker: stubAgent('gate-checker-agent', mutateCurrentTask('done')),
+        coordinators: {},
+      },
+      idleShutdownAfterTicks: 0,
+    })
+
+    const result = await orch.run({ maxTicks: 20, tickDelayMs: 0 })
+
+    const q = await readQueue()
+    expect(q.tasks.find((task) => task.id === 'done-ish')?.status).toBe('done')
+    expect(q.tasks.find((task) => task.id === 'question')?.status).toBe('exploring')
+    expect(result.stopReason).toBe('awaiting_human')
+    expect(result.idleSummary?.counts.done).toBe(1)
+    expect(result.idleSummary?.counts.waitingOnUser).toBe(1)
   })
 })
 

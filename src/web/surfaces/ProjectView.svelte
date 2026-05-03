@@ -52,7 +52,7 @@
 
   async function loadInbox(): Promise<void> {
     try {
-      const r = await fetch('/api/project/inbox')
+      const r = await fetch('/api/project/inbox', { cache: 'no-store' })
       if (!r.ok) return
       const j = (await r.json()) as {
         items?: Array<{ severity?: string }>
@@ -76,7 +76,8 @@
         t.startsWith('task_') ||
         t.startsWith('escalation_') ||
         t.startsWith('bootstrap_') ||
-        t.startsWith('supervisor_')
+        t.startsWith('supervisor_') ||
+        t === 'provider_health_changed'
       ) {
         void loadInbox()
       }
@@ -118,7 +119,7 @@
   $effect(() => {
     const off = onEvent(ev => {
       const t = ev.event?.type ?? ''
-      if (t.startsWith('supervisor_')) void project.refresh()
+      if (t.startsWith('supervisor_') || t === 'provider_health_changed') void project.refresh()
     })
     return off
   })
@@ -270,7 +271,8 @@
     return labels[provider] ?? provider
   }
   const activeProviderLabel = $derived(
-    providerLabel(providerStatus?.activeProvider ?? providerStatus?.preferredProvider),
+    providerStatus?.activeProviderLabel ??
+      providerLabel(providerStatus?.activeProvider ?? providerStatus?.preferredProvider),
   )
   function compactModelLabel(model: string | null | undefined): string {
     if (!model) return 'default'
@@ -298,24 +300,105 @@
   }
   const activeModelLabel = $derived(compactModelLabel(providerStatus?.activeModel ?? providerStatus?.models?.worker))
   const providerHeaderLabel = $derived(`${activeProviderLabel} | ${activeModelLabel}`)
-  const preferredProviderLabel = $derived(providerLabel(providerStatus?.preferredProvider))
+  const preferredProviderLabel = $derived(
+    providerStatus?.preferredProviderLabel ?? providerLabel(providerStatus?.preferredProvider),
+  )
   const mixedModelSummary = $derived(modelMixSummary(providerStatus?.models))
+  const providerDetailsText = $derived(
+    `${providerStatus?.activeModel ? ` | ${providerStatus.activeModel}` : ''}${mixedModelSummary ? `\n${mixedModelSummary}` : ''}${providerStatus?.decisions?.length ? `\n${providerStatus.decisions.map((entry) => entry.message).join('\n')}` : ''}`,
+  )
   const providerTitle = $derived(
     providerStatus?.fallback
-      ? `Preferred ${preferredProviderLabel}; running ${activeProviderLabel}${providerStatus?.activeModel ? ` | ${providerStatus.activeModel}` : ''}${mixedModelSummary ? `\n${mixedModelSummary}` : ''}`
+      ? runStatus === 'running' || runStatus === 'stopping'
+        ? `Preferred ${preferredProviderLabel}; running ${activeProviderLabel}${providerDetailsText}`
+        : `Preferred ${preferredProviderLabel}; last run used ${activeProviderLabel}${providerDetailsText}`
       : providerStatus?.activeProvider
-        ? `Running ${activeProviderLabel}${providerStatus?.activeModel ? ` | ${providerStatus.activeModel}` : ''}${mixedModelSummary ? `\n${mixedModelSummary}` : ''}`
+        ? runStatus === 'running' || runStatus === 'stopping'
+          ? `Running ${activeProviderLabel}${providerDetailsText}`
+          : `Preferred ${preferredProviderLabel}${providerDetailsText}`
         : providerStatus?.preferredProvider
-          ? `Preferred ${preferredProviderLabel}${providerStatus?.activeModel ? ` | ${providerStatus.activeModel}` : ''}${mixedModelSummary ? `\n${mixedModelSummary}` : ''}`
+          ? `Preferred ${preferredProviderLabel}${providerDetailsText}`
           : 'Provider not selected',
+  )
+  const providerDecisionText = $derived(
+    providerStatus?.decisions?.[0]?.message ?? providerStatus?.reason ?? null,
+  )
+  const providerDecisionSeverity = $derived(
+    providerStatus?.decisions?.[0]?.severity ?? 'info',
   )
   const providerNoticeText = $derived(
     providerStatus?.fallback
-      ? runStatus === 'running'
-        ? `Preferred ${preferredProviderLabel} is unavailable; this run is using ${activeProviderLabel}.`
-        : `Preferred ${preferredProviderLabel} is unavailable; the current fallback engine is ${activeProviderLabel}.`
+      ? providerDecisionText ??
+        (runStatus === 'running'
+          ? `Preferred ${preferredProviderLabel} is unavailable; this run is using ${activeProviderLabel}.`
+          : `Preferred ${preferredProviderLabel} is unavailable; the current fallback engine is ${activeProviderLabel}.`)
       : null,
   )
+  const providerWarningText = $derived(
+    providerStatus?.warnings?.[0]?.message ?? null,
+  )
+  const providerWarningSeverity = $derived(
+    providerStatus?.warnings?.[0]?.severity ?? 'info',
+  )
+  const providerHealthText = $derived(
+    providerStatus?.health?.state === 'degraded'
+      ? `${activeProviderLabel} has seen ${providerStatus.health.consecutiveFailures} consecutive pooled failures${providerStatus.health.lastError ? ` (${providerStatus.health.lastError})` : ''}.`
+      : null,
+  )
+  const runStopSummary = $derived.by(() => {
+    if (detail?.run?.stopSummary) return detail.run.stopSummary
+    const latestStop = [...(detail?.recentEvents ?? [])]
+      .reverse()
+      .find((entry) => entry.event?.type === 'supervisor_stopped')
+    if (!latestStop?.event?.message) return null
+    return {
+      stopReason: latestStop.event.reason,
+      stopMessage: latestStop.event.message,
+    }
+  })
+  const runStopSummarySeverity = $derived<'info' | 'warn' | 'error'>(() => {
+    const reason = runStopSummary?.stopReason
+    if (!reason) return 'info'
+    if (reason === 'awaiting_human' || reason === 'blocked_only' || reason === 'dependency_blocked') return 'warn'
+    return 'info'
+  })
+  const runStopSummaryText = $derived.by(() => {
+    if (runStatus === 'running' || runStatus === 'stopping') return null
+    const summary = runStopSummary
+    if (!summary?.stopMessage) return null
+    const counts = summary.idleSummary?.counts
+    if (!counts) return summary.stopMessage
+    switch (summary.stopReason) {
+      case 'all_terminal':
+        return counts.done ? `Run finished: ${counts.done} done.` : 'Run finished.'
+      case 'awaiting_human': {
+        const fragments: string[] = []
+        if (counts.waitingOnUser) fragments.push(`${counts.waitingOnUser} waiting on you`)
+        if (counts.awaitingApproval) fragments.push(`${counts.awaitingApproval} awaiting approval`)
+        return fragments.length > 0 ? `Waiting on input: ${fragments.join(' · ')}.` : 'Waiting on input.'
+      }
+      case 'blocked_only':
+        return counts.escalated
+          ? `Blocked: ${counts.escalated} escalated.`
+          : counts.blocked
+            ? `Blocked: ${counts.blocked} task${counts.blocked === 1 ? '' : 's'}.`
+            : 'Blocked.'
+      case 'dependency_blocked':
+        return counts.dependencyBlocked
+          ? `Blocked on dependencies: ${counts.dependencyBlocked}.`
+          : 'Blocked on dependencies.'
+      default: {
+        const fragments: string[] = []
+        if (counts.done) fragments.push(`${counts.done} done`)
+        if (counts.blocked) fragments.push(`${counts.blocked} blocked`)
+        if (counts.waitingOnUser) fragments.push(`${counts.waitingOnUser} waiting on you`)
+        if (counts.awaitingApproval) fragments.push(`${counts.awaitingApproval} awaiting approval`)
+        if (counts.dependencyBlocked) fragments.push(`${counts.dependencyBlocked} dependency-blocked`)
+        if (counts.escalated) fragments.push(`${counts.escalated} escalated`)
+        return fragments.length > 0 ? `${summary.stopMessage} (${fragments.join(' · ')})` : summary.stopMessage
+      }
+    }
+  })
   const failedBootstrapStep = $derived(
     detail?.bootstrapStatus?.success === false
       ? detail.bootstrapStatus.steps?.find(s => s.result === 'fail') ?? null
@@ -587,10 +670,35 @@
           </div>
         {/if}
         {#if providerStatus?.fallback}
-          <div class="provider-notice" role="status">
+          <div class={`provider-notice ${providerDecisionSeverity}`} role="status">
             <Icon name="plug" size={14} />
             <span>{providerNoticeText}</span>
             <a href="/providers" onclick={(e) => { e.preventDefault(); nav('/providers') }}>Open Providers</a>
+          </div>
+        {/if}
+        {#if providerWarningText}
+          <div class={`provider-notice ${providerWarningSeverity}`} role="status">
+            <Icon name="alert-triangle" size={14} />
+            <span>{providerWarningText}</span>
+            <a href="/settings/providers" onclick={(e) => { e.preventDefault(); nav('/settings/providers') }}>Open Settings</a>
+          </div>
+        {/if}
+        {#if providerHealthText}
+          <div class="provider-notice warn" role="status">
+            <Icon name="activity" size={14} />
+            <span>{providerHealthText}</span>
+            <a href="/settings/providers" onclick={(e) => { e.preventDefault(); nav('/settings/providers') }}>Open Settings</a>
+          </div>
+        {/if}
+        {#if runStopSummaryText}
+          <div class={`provider-notice ${runStopSummarySeverity}`} role="status">
+            <Icon name="pause-circle" size={14} />
+            <span>{runStopSummaryText}</span>
+            {#if runStopSummary?.stopReason === 'awaiting_human'}
+              <a href="/thread" onclick={(e) => { e.preventDefault(); nav('/thread') }}>Open Thread</a>
+            {:else if runStopSummary?.stopReason === 'blocked_only'}
+              <a href="/notifications" onclick={(e) => { e.preventDefault(); nav('/notifications') }}>Open Notifications</a>
+            {/if}
           </div>
         {/if}
         {#if currentView !== 'thread' && currentView !== 'inbox'}
@@ -848,11 +956,19 @@
     align-items: center;
     gap: var(--s-2);
     padding: var(--s-2) var(--s-3);
-    border: 1px solid var(--warn);
-    background: color-mix(in srgb, var(--warn) 12%, var(--bg-raised));
+    border: 1px solid var(--line);
+    background: var(--bg-raised);
     color: var(--text);
     border-radius: var(--radius-md, 6px);
     font-size: 13px;
+  }
+  .provider-notice.warn {
+    border-color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 12%, var(--bg-raised));
+  }
+  .provider-notice.info {
+    border-color: color-mix(in srgb, var(--accent, #4f46e5) 45%, var(--line));
+    background: color-mix(in srgb, var(--accent, #4f46e5) 8%, var(--bg-raised));
   }
   .provider-notice a {
     color: inherit;

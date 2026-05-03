@@ -13,7 +13,34 @@ import type { PreRejectionAction } from './pre-rejection-policy.js'
  * the type import).
  */
 export type TickOutcome =
-  | { kind: 'idle'; consecutiveIdleTicks: number; allDone: boolean }
+  | {
+      kind: 'idle'
+      consecutiveIdleTicks: number
+      allDone: boolean
+      summary?: {
+        reason:
+          | 'all_terminal'
+          | 'awaiting_human'
+          | 'blocked_only'
+          | 'dependency_blocked'
+          | 'no_eligible_tasks'
+        message: string
+        counts: {
+          total: number
+          actionable: number
+          terminal: number
+          done: number
+          blocked: number
+          shelved: number
+          waitingOnUser: number
+          awaitingApproval: number
+          dependencyBlocked: number
+          escalated: number
+          active: number
+          fresh: number
+        }
+      }
+    }
   | {
       kind: 'processed'
       taskId: string

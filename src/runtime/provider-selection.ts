@@ -32,6 +32,12 @@ import {
 } from '@guildhall/providers'
 import { notImplementedApiClient } from '@guildhall/agents'
 import { findModel, type ModelAssignmentConfig } from '@guildhall/core'
+import {
+  anthropicCompatiblePoolKey,
+  getOrCreateProviderClient,
+  openAiCompatiblePoolKey,
+} from './provider-client-pool.js'
+import { providerCapabilitiesForAnyKey } from './provider-metadata.js'
 
 export type ProviderName =
   | 'claude-oauth'
@@ -214,11 +220,12 @@ type Probe =
 
 async function tryClaude(opts: SelectApiClientOptions): Promise<Probe> {
   try {
-    const credential = await readClaudeCredentials(
+    await readClaudeCredentials(
       opts.claudeCredentialPath ? { path: opts.claudeCredentialPath } : {},
     )
     const apiClient = new ClaudeOauthClient({
-      credential,
+      loadCredential: () =>
+        readClaudeCredentials(opts.claudeCredentialPath ? { path: opts.claudeCredentialPath } : {}),
       persistOnRefresh: true,
     })
     return { ok: true, result: { apiClient, providerName: 'claude-oauth' } }
@@ -230,10 +237,13 @@ async function tryClaude(opts: SelectApiClientOptions): Promise<Probe> {
 
 async function tryCodex(opts: SelectApiClientOptions): Promise<Probe> {
   try {
-    const credential = await readCodexCredentials(
+    await readCodexCredentials(
       opts.codexCredentialPath ? { path: opts.codexCredentialPath } : {},
     )
-    const apiClient = new CodexClient({ credential })
+    const apiClient = new CodexClient({
+      loadCredential: () =>
+        readCodexCredentials(opts.codexCredentialPath ? { path: opts.codexCredentialPath } : {}),
+    })
     return { ok: true, result: { apiClient, providerName: 'codex-oauth' } }
   } catch (err) {
     if (err instanceof CodexCredentialMissingError) return { ok: false }
@@ -249,7 +259,16 @@ function tryLlama(opts: SelectApiClientOptions): Probe {
     ''
   ).trim()
   if (url.length === 0) return { ok: false }
-  const apiClient = new OpenAICompatibleClient({ baseUrl: url })
+  const apiClient = getOrCreateProviderClient(
+    openAiCompatiblePoolKey({
+      provider: 'llama-cpp',
+      baseUrl: url,
+    }),
+    {
+      maxConcurrency: providerCapabilitiesForAnyKey('llama-cpp')?.recommendedConcurrency,
+    },
+    () => new OpenAICompatibleClient({ baseUrl: url }),
+  )
   return {
     ok: true,
     result: {
@@ -263,7 +282,13 @@ function tryLlama(opts: SelectApiClientOptions): Probe {
 function tryAnthropicApi(opts: SelectApiClientOptions): Probe {
   const key = (opts.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY ?? '').trim()
   if (key.length === 0) return { ok: false }
-  const apiClient = new AnthropicApiClient({ apiKey: key })
+  const apiClient = getOrCreateProviderClient(
+    anthropicCompatiblePoolKey(key),
+    {
+      maxConcurrency: providerCapabilitiesForAnyKey('anthropic-api')?.recommendedConcurrency,
+    },
+    () => new AnthropicApiClient({ apiKey: key }),
+  )
   return {
     ok: true,
     result: {
@@ -278,10 +303,22 @@ function tryOpenAiApi(opts: SelectApiClientOptions): Probe {
   const key = (opts.openaiApiKey ?? process.env.OPENAI_API_KEY ?? '').trim()
   if (key.length === 0) return { ok: false }
   const baseUrl = (opts.openaiBaseUrl ?? process.env.OPENAI_BASE_URL ?? '').trim()
-  const apiClient = new OpenAICompatibleClient({
-    baseUrl: baseUrl || 'https://api.openai.com/v1',
-    apiKey: key,
-  })
+  const resolvedBaseUrl = baseUrl || 'https://api.openai.com/v1'
+  const apiClient = getOrCreateProviderClient(
+    openAiCompatiblePoolKey({
+      provider: 'openai-api',
+      baseUrl: resolvedBaseUrl,
+      apiKey: key,
+    }),
+    {
+      maxConcurrency: providerCapabilitiesForAnyKey('openai-api')?.recommendedConcurrency,
+    },
+    () =>
+      new OpenAICompatibleClient({
+        baseUrl: resolvedBaseUrl,
+        apiKey: key,
+      }),
+  )
   return {
     ok: true,
     result: {

@@ -157,6 +157,22 @@ During elicitation:
   pagination decision inside a prose paragraph if the API Designer will check
   for it.
 
+## When repo evidence says the task may already be partly or fully done
+
+Do not keep spelunking indefinitely once you have enough evidence to say
+"this is already wired" or "only a smaller delta remains."
+
+Within the next turn or two, you MUST do one of these:
+- write a best-guess product brief via \`update-product-brief\`
+- ask the one focused user question that resolves the remaining ambiguity via
+  \`post-user-question\`
+- write the spec for the remaining delta via \`update-task\`
+- or raise a scoped escalation if the ask and the repo reality genuinely
+  conflict
+
+\`append-exploring-transcript\` is useful for preserving the conversation, but
+it does NOT count as finishing intake by itself.
+
 ## Propose a handoff sequence when the work spans specialist lanes
 
 When a task naturally splits into phases each owned by a different engineer
@@ -235,6 +251,16 @@ export function createSpecAgent(
     ...(opts.cwd ? { cwd: opts.cwd } : {}),
     noToolTurnNudge: SPEC_AGENT_NO_TOOL_TURN_NUDGE,
     noToolTurnNudgeLimit: 2,
+    noProgressToolNames: [
+      'update-task',
+      'update-product-brief',
+      'post-user-question',
+      'raise-escalation',
+    ],
+    noProgressTurnNudge:
+      'You have enough evidence. Stop researching and record durable intake progress now: write the best-guess brief, ask the top 1 focused user question, draft the remaining-delta spec, or raise a scoped escalation. append-exploring-transcript alone is not enough.',
+    noProgressTurnNudgeLimit: 2,
+    noProgressTurnThreshold: 2,
     tools: [
       readFileTool,
       writeFileTool,

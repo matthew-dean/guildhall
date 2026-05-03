@@ -371,7 +371,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
         kind: 'lever_questions',
         severity: 'low',
         title: `${defaultCount} levers at system defaults`,
-        detail: 'Policy positions not yet confirmed for this project.',
+        detail: 'Defaults are still in effect for some project policies.',
         defaultCount,
         actionHref: '/settings/advanced',
       })

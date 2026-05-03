@@ -182,6 +182,10 @@
     blocked: 'Blocked',
     done: 'Done',
   }
+  const optionalSetupOnly = $derived.by(() => {
+    const setupTurns = turns.filter(t => t.phase === 'setup')
+    return setupTurns.length > 0 && setupTurns.every(t => t.kind === 'setup_step' && t.skippable)
+  })
 
   // Staged answers for co-active agent_question turns. Keyed by question id.
   // Submitted as a batch (per-task) via POST /answer-questions so the agent
@@ -353,7 +357,13 @@
   const phaseGroups = $derived.by(() => phaseOrder
     .map(phase => ({
       phase,
-      label: phaseLabels[phase],
+      label:
+        phase === 'setup' &&
+        turns
+          .filter(t => t.phase === 'setup')
+          .every(t => t.kind === 'setup_step' && t.skippable)
+          ? 'Optional'
+          : phaseLabels[phase],
       turns: turns.filter(t => t.phase === phase),
     }))
     .filter(group => group.turns.length > 0))
@@ -389,6 +399,11 @@
     if (!active) return
     expandOnly(active.phase)
     lastExpandedForId = activeTurnId
+  })
+
+  $effect(() => {
+    if (!loaded || activeTurnId || caughtUp || !optionalSetupOnly || !expandedPhases.setup) return
+    expandedPhases = { ...expandedPhases, setup: false }
   })
 
   $effect(() => {
@@ -677,7 +692,7 @@
 <div class="thread">
   <header class="thread-head">
     <h1>Thread</h1>
-    <p class="lede">Structured project interactions: decisions, questions, and live agent updates. Active work stays near the bottom.</p>
+    <p class="lede">Decisions, questions, and live task updates.</p>
   </header>
 
   {#if !loaded}
@@ -746,7 +761,12 @@
                 {/if}
               {/snippet}
                 {#if t.kind === 'setup_step'}
-                  <h3 class="prompt"><Markdown source={t.title} inline /></h3>
+                  <div class="setup-title">
+                    <h3 class="prompt"><Markdown source={t.title} inline /></h3>
+                    {#if t.skippable}
+                      <Chip label="optional" tone="neutral" />
+                    {/if}
+                  </div>
                   <p class="why">{t.why}</p>
                   {#if t.status === 'active'}
                     {#if t.affordance === 'link' && t.actionHref}
@@ -1162,7 +1182,8 @@
 
 <style>
   .thread {
-    max-width: 680px;
+    width: 680px;
+    max-width: 100%;
     margin: 0 auto;
     padding: var(--s-3) var(--s-4) var(--s-6);
   }
@@ -1243,6 +1264,12 @@
     white-space: nowrap;
   }
   .prompt { margin: 0; font-size: var(--fs-3); font-weight: 550; line-height: var(--lh-tight); }
+  .setup-title {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+  }
   .prompt-row {
     display: flex;
     align-items: center;

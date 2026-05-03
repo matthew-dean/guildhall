@@ -16,6 +16,7 @@ vi.mock('node:os', async (importOriginal) => {
 const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig, resolveModelsForProvider, updateProjectConfig } =
   await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
+const { clearProviderClientPool } = await import('../provider-client-pool.js')
 
 let tmpProject: string
 
@@ -38,6 +39,7 @@ function dataFrame(payload: unknown): string {
 }
 
 beforeEach(async () => {
+  clearProviderClientPool()
   // Clean env vars so env-precedence doesn't mask the global store.
   delete process.env.ANTHROPIC_API_KEY
   delete process.env.OPENAI_API_KEY
@@ -50,6 +52,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  clearProviderClientPool()
   vi.unstubAllGlobals()
   if (existsSync(TMP_HOME)) rmSync(TMP_HOME, { recursive: true, force: true })
   await fs.rm(tmpProject, { recursive: true, force: true })
@@ -515,13 +518,29 @@ describe('POST /api/project/start preflight', () => {
       const body = (await res.json()) as {
         providerStatus?: {
           preferredProvider?: string
+          preferredProviderFamily?: string
+          preferredProviderLabel?: string
           activeProvider?: string
+          activeProviderFamily?: string
+          activeProviderLabel?: string
           fallback?: boolean
         }
       }
       expect(body.providerStatus).toMatchObject({
         preferredProvider: 'llama-cpp',
+        preferredProviderFamily: 'openai-compatible',
+        preferredProviderLabel: 'OpenAI-compatible local server',
+        preferredCapabilities: {
+          recommendedConcurrency: 1,
+          localServer: true,
+        },
         activeProvider: 'anthropic-api',
+        activeProviderFamily: 'anthropic-compatible',
+        activeProviderLabel: 'Anthropic-compatible API',
+        activeCapabilities: {
+          recommendedConcurrency: 4,
+          localServer: false,
+        },
         fallback: true,
         activeModel: 'claude-sonnet-4-6',
       })
@@ -530,7 +549,9 @@ describe('POST /api/project/start preflight', () => {
       const projectBody = (await projectRes.json()) as {
         providerStatus?: {
           preferredProvider?: string
+          preferredProviderFamily?: string
           activeProvider?: string
+          activeProviderFamily?: string
           fallback?: boolean
         }
         run?: {
@@ -541,7 +562,9 @@ describe('POST /api/project/start preflight', () => {
       }
       expect(projectBody.providerStatus).toMatchObject({
         preferredProvider: 'llama-cpp',
+        preferredProviderFamily: 'openai-compatible',
         activeProvider: 'anthropic-api',
+        activeProviderFamily: 'anthropic-compatible',
         fallback: true,
         activeModel: 'claude-sonnet-4-6',
       })
@@ -579,6 +602,7 @@ describe('POST /api/project/start preflight', () => {
           activeProvider?: string
           fallback?: boolean
           activeModel?: string
+          decisions?: Array<{ code?: string; basis?: string; message?: string }>
           models?: { spec?: string; worker?: string }
           reason?: string
         }
@@ -592,9 +616,127 @@ describe('POST /api/project/start preflight', () => {
       expect(body.providerStatus?.models?.spec).toBe('gpt-5.3-codex')
       expect(body.providerStatus?.models?.worker).toBe('gpt-5.3-codex')
       expect(body.providerStatus?.reason).toMatch(/configured models loaded|switched to a paid fallback provider/i)
+      expect(body.providerStatus?.decisions?.[0]).toMatchObject({
+        code: 'preferred_provider_missing_assigned_models',
+        basis: 'compatibility',
+      })
+      expect(body.providerStatus?.decisions?.[0]?.message).toMatch(/assigned models loaded/i)
     } finally {
       await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
     }
+  })
+
+  it('surfaces normalized preferred-provider family and label even before a run starts', async () => {
+    updateProjectConfig(tmpProject, {
+      preferredProvider: 'openai-api',
+      allowPaidProviderFallback: true,
+    })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(new Request('http://localhost/api/project'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      providerStatus?: {
+        preferredProvider?: string
+        preferredProviderFamily?: string
+        preferredProviderLabel?: string
+        allowPaidProviderFallback?: boolean
+      } | null
+    }
+    expect(body.providerStatus).toMatchObject({
+      preferredProvider: 'openai-api',
+      preferredProviderFamily: 'openai-compatible',
+      preferredProviderLabel: 'OpenAI-compatible API',
+      preferredCapabilities: {
+        streaming: true,
+        toolCalls: true,
+        reasoningSideChannel: 'compatible',
+      },
+      allowPaidProviderFallback: true,
+    })
+  })
+
+  it('warns when reviewer fanout concurrency exceeds the provider recommendation', async () => {
+    updateProjectConfig(tmpProject, {
+      preferredProvider: 'llama-cpp',
+      workerLaneConcurrency: 5,
+      reviewerFanoutConcurrency: 3,
+    })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(new Request('http://localhost/api/project'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      providerStatus?: {
+        laneConcurrency?: {
+          spec?: {
+            requested?: number
+            effective?: number
+            recommended?: number | null
+            clamped?: boolean
+          }
+          worker?: {
+            requested?: number
+            effective?: number
+            recommended?: number | null
+            clamped?: boolean
+          }
+          review?: {
+            requested?: number
+            effective?: number
+            recommended?: number | null
+            clamped?: boolean
+          }
+          coordinator?: {
+            requested?: number
+            effective?: number
+            recommended?: number | null
+            clamped?: boolean
+          }
+          reviewerFanout?: {
+            requested?: number
+            effective?: number
+            recommended?: number | null
+            clamped?: boolean
+          }
+        }
+        warnings?: Array<{ code?: string; severity?: string; message?: string }>
+      } | null
+    }
+    expect(body.providerStatus?.laneConcurrency?.reviewerFanout).toMatchObject({
+      requested: 3,
+      effective: 1,
+      recommended: 1,
+      clamped: true,
+    })
+    expect(body.providerStatus?.laneConcurrency?.spec).toMatchObject({
+      requested: 1,
+      effective: 1,
+      recommended: 1,
+      clamped: false,
+    })
+    expect(body.providerStatus?.laneConcurrency?.worker).toMatchObject({
+      requested: 5,
+      effective: 1,
+      recommended: 1,
+      clamped: true,
+    })
+    expect(body.providerStatus?.laneConcurrency?.review).toMatchObject({
+      requested: 1,
+      effective: 1,
+      recommended: 1,
+      clamped: false,
+    })
+    expect(body.providerStatus?.laneConcurrency?.coordinator).toMatchObject({
+      requested: 1,
+      effective: 1,
+      recommended: 1,
+      clamped: false,
+    })
+    expect(body.providerStatus?.warnings?.[0]).toMatchObject({
+      code: 'reviewer_concurrency_clamped_to_provider_recommendation',
+      severity: 'info',
+    })
+    expect(body.providerStatus?.warnings?.[0]?.message).toMatch(/configured as 3/i)
+    expect(body.providerStatus?.warnings?.[0]?.message).toMatch(/capped at 1/i)
   })
 
   it('rejects start when the local server does not have the configured project model loaded', async () => {

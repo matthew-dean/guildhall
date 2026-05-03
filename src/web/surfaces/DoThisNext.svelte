@@ -104,8 +104,8 @@
         }
       case 'lever_questions':
         return {
-          verb: 'Confirm your policy levers',
-          why: item.detail ?? 'Some policies are still at system defaults.',
+          verb: 'Review project policies',
+          why: item.detail ?? 'Defaults are still in effect for some project policies.',
           button: 'Open advanced',
           href: item.actionHref ?? '/settings/advanced',
         }
@@ -151,10 +151,13 @@
       ? []
       : prescribedItems.filter(({ prescription }) => routeOnly(prescription.href) !== path.value),
   )
+  const actionableItems = $derived.by(() =>
+    visibleItems.filter(({ item }) => item.severity !== 'low'),
+  )
   const source = $derived<TopSource | null>(
-    visibleItems[0]
+    actionableItems[0]
         ? (() => {
-            const top = visibleItems[0]!
+            const top = actionableItems[0]!
             return {
               verb: top.prescription.verb,
               why: top.prescription.why,

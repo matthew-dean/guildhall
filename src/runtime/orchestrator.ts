@@ -10,7 +10,11 @@ import {
   type AgentLLM,
 } from '@guildhall/agents'
 import { selectApiClient } from './provider-selection.js'
-import { getRuntimeProviderConfig } from './provider-runtime-config.js'
+import {
+  getRuntimeProviderConfig,
+  resolveLaneConcurrencyPlan,
+  resolveReviewerFanoutPolicy,
+} from './provider-runtime-config.js'
 import {
   TaskQueue,
   TERMINAL_TASK_STATUSES,
@@ -40,9 +44,15 @@ import {
   loadReclaimCandidates,
   readCheckpoint,
   ensureExploringTranscriptEntry,
+  hasOpenEscalation,
   type ReclaimCandidate,
 } from '@guildhall/tools'
-import { pickNextTask, needsPreRejectionPolicy } from './orchestrator-picker.js'
+import {
+  pickNextTask,
+  needsPreRejectionPolicy,
+  dependenciesSatisfied,
+  taskHasUnansweredOpenQuestion,
+} from './orchestrator-picker.js'
 import {
   AGENT_SETTINGS_FILENAME,
   loadLeverSettings,
@@ -394,6 +404,22 @@ export interface OrchestratorRunOptions {
   stopAfterOneTask?: boolean
 }
 
+export interface OrchestratorRunResult {
+  ticks: number
+  stopReason:
+    | 'all_terminal'
+    | 'awaiting_human'
+    | 'blocked_only'
+    | 'dependency_blocked'
+    | 'idle_limit'
+    | 'stop_requested'
+    | 'stop_marker'
+    | 'max_ticks'
+    | 'one_task'
+  stopMessage: string
+  idleSummary?: NonNullable<Extract<TickOutcome, { kind: 'idle' }>['summary']>
+}
+
 interface OrchestratorTickOptions {
   dispatchLimit?: FanoutCapacity
 }
@@ -628,6 +654,43 @@ function describeOneTaskStop(outcome: TickOutcome): string {
   return outcome.kind
 }
 
+function stopResultFromIdle(
+  outcome: Extract<TickOutcome, { kind: 'idle' }>,
+  idleLimit: number,
+): OrchestratorRunResult {
+  if (outcome.allDone) {
+    return {
+      ticks: 0,
+      stopReason: outcome.summary?.reason === 'all_terminal' ? 'all_terminal' : 'blocked_only',
+      stopMessage: outcome.summary?.message ?? 'No actionable tasks remain.',
+      ...(outcome.summary ? { idleSummary: outcome.summary } : {}),
+    }
+  }
+  if (outcome.consecutiveIdleTicks > idleLimit) {
+    return {
+      ticks: 0,
+      stopReason:
+        outcome.summary?.reason === 'awaiting_human'
+          ? 'awaiting_human'
+          : outcome.summary?.reason === 'dependency_blocked'
+            ? 'dependency_blocked'
+            : outcome.summary?.reason === 'blocked_only'
+              ? 'blocked_only'
+              : 'idle_limit',
+      stopMessage:
+        outcome.summary?.message ??
+        `No actionable tasks for ${idleLimit} ticks. Shutting down.`,
+      ...(outcome.summary ? { idleSummary: outcome.summary } : {}),
+    }
+  }
+  return {
+    ticks: 0,
+    stopReason: 'idle_limit',
+    stopMessage: `No actionable tasks for ${idleLimit} ticks. Shutting down.`,
+    ...(outcome.summary ? { idleSummary: outcome.summary } : {}),
+  }
+}
+
 function taskHasDraftEvidence(task: Task): boolean {
   return (
     task.acceptanceCriteria.length > 0 ||
@@ -640,47 +703,55 @@ function taskHasUnansweredUserQuestion(task: Task): boolean {
   return (task.openQuestions ?? []).some((question) => !question.answeredAt)
 }
 
-export function shouldResumeAgentSession(
-  label: string,
-  queue: TaskQueue,
-): boolean {
+function resumableTaskIdsForLabel(label: string, queue: TaskQueue): string[] {
   if (label === 'spec') {
-    return queue.tasks.some((task) =>
-      task.status === 'exploring' ||
-      (task.status === 'spec_review' && !task.spec?.trim() && taskHasDraftEvidence(task)) ||
-      ((task.status === 'ready' || task.status === 'in_progress') &&
-        taskHasDraftEvidence(task) &&
-        !task.spec?.trim()),
-    )
+    return queue.tasks
+      .filter((task) =>
+        task.status === 'exploring' ||
+        (task.status === 'spec_review' && !task.spec?.trim() && taskHasDraftEvidence(task)) ||
+        ((task.status === 'ready' || task.status === 'in_progress') &&
+          taskHasDraftEvidence(task) &&
+          !task.spec?.trim()),
+      )
+      .map((task) => task.id)
   }
 
   if (label === 'worker') {
-    return queue.tasks.some((task) =>
-      task.status === 'in_progress' && task.assignedTo === 'worker-agent',
-    )
+    return queue.tasks
+      .filter((task) => task.status === 'in_progress' && task.assignedTo === 'worker-agent')
+      .map((task) => task.id)
   }
 
   if (label === 'reviewer') {
-    return queue.tasks.some((task) =>
-      task.status === 'review' && task.assignedTo === 'reviewer-agent',
-    )
+    return queue.tasks
+      .filter((task) => task.status === 'review' && task.assignedTo === 'reviewer-agent')
+      .map((task) => task.id)
   }
 
   if (label === 'gate-checker') {
-    return queue.tasks.some((task) =>
-      task.status === 'gate_check' && task.assignedTo === 'gate-checker-agent',
-    )
+    return queue.tasks
+      .filter((task) => task.status === 'gate_check' && task.assignedTo === 'gate-checker-agent')
+      .map((task) => task.id)
   }
 
   if (label.startsWith('coordinator-')) {
     const domain = label.slice('coordinator-'.length)
-    return queue.tasks.some((task) =>
-      task.domain === domain &&
-      (task.status === 'spec_review' || task.status === 'ready'),
-    )
+    return queue.tasks
+      .filter((task) =>
+        task.domain === domain &&
+        (task.status === 'spec_review' || task.status === 'ready'),
+      )
+      .map((task) => task.id)
   }
 
-  return false
+  return []
+}
+
+export function shouldResumeAgentSession(
+  label: string,
+  queue: TaskQueue,
+): boolean {
+  return resumableTaskIdsForLabel(label, queue).length > 0
 }
 
 export interface OrchestratorOptions {
@@ -843,6 +914,100 @@ export class Orchestrator {
     }
   }
 
+  private summarizeIdleQueue(queue: TaskQueue): NonNullable<Extract<TickOutcome, { kind: 'idle' }>['summary']> {
+    const counts = {
+      total: queue.tasks.length,
+      actionable: 0,
+      terminal: 0,
+      done: 0,
+      blocked: 0,
+      shelved: 0,
+      waitingOnUser: 0,
+      awaitingApproval: 0,
+      dependencyBlocked: 0,
+      escalated: 0,
+      active: 0,
+      fresh: 0,
+    }
+    for (const task of queue.tasks) {
+      if ((TERMINAL_TASK_STATUSES as readonly TaskStatus[]).includes(task.status)) {
+        counts.terminal += 1
+        if (task.status === 'done') counts.done += 1
+        if (task.status === 'blocked') counts.blocked += 1
+        if (task.status === 'shelved') counts.shelved += 1
+        continue
+      }
+      if (hasOpenEscalation(task)) {
+        counts.escalated += 1
+        continue
+      }
+      if (!dependenciesSatisfied(queue, task)) {
+        counts.dependencyBlocked += 1
+        continue
+      }
+      if (task.status === 'exploring' && taskHasUnansweredOpenQuestion(task)) {
+        counts.waitingOnUser += 1
+        continue
+      }
+      if (task.status === 'spec_review' && Boolean(task.spec?.trim())) {
+        counts.awaitingApproval += 1
+        continue
+      }
+      if (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
+        counts.active += 1
+      } else if (
+        task.status === 'proposed' ||
+        task.status === 'exploring' ||
+        task.status === 'spec_review' ||
+        task.status === 'ready'
+      ) {
+        counts.fresh += 1
+      }
+      counts.actionable += 1
+    }
+
+    if (counts.terminal === counts.total) {
+      return {
+        reason: 'all_terminal',
+        message:
+          `No actionable tasks remain: ${counts.done} done, ${counts.blocked} blocked, ${counts.shelved} shelved.`,
+        counts,
+      }
+    }
+    if (counts.waitingOnUser > 0 || counts.awaitingApproval > 0) {
+      return {
+        reason: 'awaiting_human',
+        message:
+          `No actionable tasks remain right now: ${counts.waitingOnUser} waiting on user answers and ` +
+          `${counts.awaitingApproval} awaiting approval.`,
+        counts,
+      }
+    }
+    if (counts.escalated > 0 && counts.actionable === 0) {
+      return {
+        reason: 'blocked_only',
+        message:
+          `No actionable tasks remain right now: ${counts.escalated} task(s) are halted on open escalations.`,
+        counts,
+      }
+    }
+    if (counts.dependencyBlocked > 0 && counts.actionable === 0) {
+      return {
+        reason: 'dependency_blocked',
+        message:
+          `No actionable tasks remain right now: ${counts.dependencyBlocked} task(s) are waiting on dependencies.`,
+        counts,
+      }
+    }
+    return {
+      reason: 'no_eligible_tasks',
+      message:
+        `No actionable tasks remain right now: ${counts.active} active, ${counts.fresh} fresh, ` +
+        `${counts.escalated} escalated, ${counts.dependencyBlocked} dependency-blocked.`,
+      counts,
+    }
+  }
+
   /**
    * Single orchestrator step. Reads the queue, picks 1..N actionable tasks
    * per the `concurrent_task_dispatch` lever, and dispatches each through
@@ -859,9 +1024,20 @@ export class Orchestrator {
       opts.dispatchLimit === undefined
         ? resolvedCapacity
         : Math.max(1, Math.min(resolvedCapacity, opts.dispatchLimit))
+    const lanePlan = resolveLaneConcurrencyPlan({
+      projectPath: this.opts.config.projectPath,
+      provider: this.opts.activeProvider ?? this.opts.providerName ?? 'none',
+      dispatchCapacity: capacity,
+    })
     const picks = pickNextTasks({
       queue: queueBefore,
       capacity,
+      laneCapacities: {
+        spec: lanePlan.spec.effectiveConcurrency,
+        worker: lanePlan.worker.effectiveConcurrency,
+        review: lanePlan.review.effectiveConcurrency,
+        coordinator: lanePlan.coordinator.effectiveConcurrency,
+      },
       ...(this.opts.domainFilter ? { domainFilter: this.opts.domainFilter } : {}),
     })
 
@@ -882,10 +1058,12 @@ export class Orchestrator {
       const allDone = queueBefore.tasks.every((t) =>
         (TERMINAL_TASK_STATUSES as readonly TaskStatus[]).includes(t.status),
       )
+      const summary = this.summarizeIdleQueue(queueBefore)
       return {
         kind: 'idle',
         consecutiveIdleTicks: this.consecutiveIdleTicks,
         allDone,
+        summary,
       }
     }
     this.consecutiveIdleTicks = 0
@@ -1293,6 +1471,14 @@ export class Orchestrator {
         this.emptyAssistantResets.delete(retryKey)
       }
       if (/Exceeded maximum turn limit/.test(message)) {
+        const preserved = await this.preserveDurableProgressAfterTurnLimit({
+          taskId: task.id,
+          agentName: agent.name,
+          beforeStatus,
+        })
+        if (preserved) {
+          return preserved
+        }
         const escalation = await raiseEscalation({
           tasksPath,
           progressPath: this.progressPath(),
@@ -1654,9 +1840,10 @@ export class Orchestrator {
    * Loop `tick()` until max ticks or idle shutdown. Logs a heartbeat banner
    * at start; each tick self-reports to PROGRESS.md.
    */
-  async run(opts: OrchestratorRunOptions = {}): Promise<void> {
+  async run(opts: OrchestratorRunOptions = {}): Promise<OrchestratorRunResult> {
     const { maxTicks = Infinity, tickDelayMs = 2000, stopAfterOneTask = false } = opts
     const idleLimit = this.opts.idleShutdownAfterTicks ?? DEFAULT_IDLE_SHUTDOWN
+    let finalResult: OrchestratorRunResult | null = null
 
     this.banner()
 
@@ -1672,7 +1859,11 @@ export class Orchestrator {
         console.warn(
           `[guildhall] SESSION_START hook blocked startup: ${pre.reason ?? '(no reason)'}`,
         )
-        return
+        return {
+          ticks: 0,
+          stopReason: 'blocked_only',
+          stopMessage: `SESSION_START blocked startup: ${pre.reason ?? '(no reason)'}`,
+        }
       }
     }
 
@@ -1703,7 +1894,13 @@ export class Orchestrator {
           console.error(
             `[guildhall] bootstrap failed on ${failed?.kind ?? 'step'} \`${failed?.command ?? ''}\` (exit ${failed?.exitCode ?? '?'}). See memory/bootstrap.json.`,
           )
-          return
+          return {
+            ticks: 0,
+            stopReason: 'blocked_only',
+            stopMessage:
+              `Bootstrap failed on ${failed?.kind ?? 'step'} \`${failed?.command ?? ''}\` ` +
+              `(exit ${failed?.exitCode ?? '?'}).`,
+          }
         }
         console.log(`[guildhall] bootstrap passed (${res.steps.length} steps).`)
       }
@@ -1745,14 +1942,14 @@ export class Orchestrator {
       for (const outcome of allOutcomes) {
         if (outcome.kind === 'idle') {
           if (outcome.allDone) {
-            console.log('[guildhall] All tasks complete or blocked. Shutting down.')
+            finalResult = stopResultFromIdle(outcome, idleLimit)
+            console.log(`[guildhall] ${finalResult.stopMessage} Shutting down.`)
             shouldStop = true
             break
           }
           if (outcome.consecutiveIdleTicks > idleLimit) {
-            console.log(
-              `[guildhall] No actionable tasks for ${idleLimit} ticks. Shutting down.`,
-            )
+            finalResult = stopResultFromIdle(outcome, idleLimit)
+            console.log(`[guildhall] ${finalResult.stopMessage} Shutting down.`)
             shouldStop = true
             break
           }
@@ -1804,8 +2001,13 @@ export class Orchestrator {
         }
 
         if (stopAfterOneTask && shouldStopOneTaskRun(outcome)) {
+          finalResult = {
+            ticks: 0,
+            stopReason: 'one_task',
+            stopMessage: `stopAfterOneTask reached ${describeOneTaskStop(outcome)}.`,
+          }
           console.log(
-            `[guildhall] stopAfterOneTask reached ${describeOneTaskStop(outcome)}. Shutting down.`,
+            `[guildhall] ${finalResult.stopMessage} Shutting down.`,
           )
           shouldStop = true
           break
@@ -1836,7 +2038,12 @@ export class Orchestrator {
       }
 
       if (this.opts.stopSignal?.stopRequested) {
-        console.log(`[guildhall] Stop requested after tick ${tick}. Shutting down.`)
+        finalResult = {
+          ticks: 0,
+          stopReason: 'stop_requested',
+          stopMessage: `Stop requested after tick ${tick}.`,
+        }
+        console.log(`[guildhall] ${finalResult.stopMessage} Shutting down.`)
         break
       }
 
@@ -1844,7 +2051,12 @@ export class Orchestrator {
       // process) may write the marker file directly. Treat it the same as an
       // in-memory stopSignal flip so operators don't need signal delivery.
       if (isStopRequested(path.join(this.opts.config.projectPath, 'memory'))) {
-        console.log(`[guildhall] Stop marker detected after tick ${tick}. Shutting down.`)
+        finalResult = {
+          ticks: 0,
+          stopReason: 'stop_marker',
+          stopMessage: `Stop marker detected after tick ${tick}.`,
+        }
+        console.log(`[guildhall] ${finalResult.stopMessage} Shutting down.`)
         if (this.opts.stopSignal) this.opts.stopSignal.stopRequested = true
         break
       }
@@ -1852,7 +2064,18 @@ export class Orchestrator {
       await sleep(tickDelayMs)
     }
 
-    console.log(`[guildhall] Orchestrator stopped after ${tick} ticks.`)
+    if (!finalResult) {
+      finalResult = {
+        ticks: 0,
+        stopReason: 'max_ticks',
+        stopMessage: `Reached maxTicks (${maxTicks}).`,
+      }
+    }
+    finalResult.ticks = tick
+
+    console.log(
+      `[guildhall] Orchestrator stopped after ${tick} ticks (${finalResult.stopReason}).`,
+    )
 
     // FR-18: SESSION_END fires after the loop exits for any reason (idle
     // shutdown, all-done, max-ticks). We do not honor a `blocked` result here
@@ -1864,6 +2087,8 @@ export class Orchestrator {
         ticks: tick,
       })
     }
+
+    return finalResult
   }
 
   /**
@@ -3497,6 +3722,46 @@ export class Orchestrator {
     }
   }
 
+  private async preserveDurableProgressAfterTurnLimit(input: {
+    taskId: string
+    agentName: string
+    beforeStatus: TaskStatus
+  }): Promise<TickOutcome | null> {
+    const queue = await this.readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === input.taskId)
+    if (!task) return null
+
+    const hasSpec = typeof task.spec === 'string' && task.spec.trim().length > 0
+    const hasBrief =
+      !!task.productBrief &&
+      typeof task.productBrief.userJob === 'string' &&
+      task.productBrief.userJob.trim().length > 0
+    const hasOpenQuestion = (task.openQuestions ?? []).some((question) => !question.answeredAt)
+    const transitioned = task.status !== input.beforeStatus
+    const durableExploringProgress =
+      input.beforeStatus === 'exploring' && (hasSpec || hasBrief || hasOpenQuestion)
+
+    if (!transitioned && !durableExploringProgress) return null
+
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: task.id,
+      agent_name: input.agentName,
+      message:
+        'The model hit its turn limit after writing durable task state, so Guildhall is preserving that progress instead of escalating over it.',
+    })
+
+    return {
+      kind: 'processed',
+      taskId: task.id,
+      agent: input.agentName,
+      beforeStatus: input.beforeStatus,
+      afterStatus: task.status,
+      transitioned,
+      revisionCount: task.revisionCount,
+    }
+  }
+
   /**
    * Append a FR-09 typed progress entry. Classification:
    *   - milestone : task reached `done` (all gates passed)
@@ -3665,7 +3930,7 @@ export async function runOrchestrator(
     providerOverride?: string
     modelAssignmentOverride?: ModelAssignmentConfig
   } = {},
-): Promise<void> {
+): Promise<OrchestratorRunResult> {
   // Provider selection reads project-local config (`.guildhall/config.yaml`)
   // so the setup wizard's choices (preferredProvider, pasted API keys, LM
   // Studio URL) actually take effect at orchestrator boot. Keys in env vars
@@ -3812,10 +4077,17 @@ export async function runOrchestrator(
     ['gate-checker', gateCheckerAgentInst],
     ...Object.entries(coordinators).map(([d, c]) => [`coordinator-${d}`, c] as const),
   ] as const) {
-    if (resumeQueue && !shouldResumeAgentSession(label, resumeQueue)) continue
+    const resumableTaskIds = resumeQueue ? resumableTaskIdsForLabel(label, resumeQueue) : []
+    if (resumeQueue && resumableTaskIds.length === 0) continue
+    const sessionId = sessionIdFor(label)
+    if (resumeQueue) {
+      const snapshot = loadSessionById(config.projectPath, sessionId)
+      const snapshotTaskId = String(snapshot?.tool_metadata?.['current_task_id'] ?? '').trim()
+      if (!snapshotTaskId || !resumableTaskIds.includes(snapshotTaskId)) continue
+    }
     const rehydrated = agent.loadSession({
       cwd: config.projectPath,
-      sessionId: sessionIdFor(label),
+      sessionId,
       onlyPending: true,
     })
     if (rehydrated) {
@@ -3833,7 +4105,10 @@ export async function runOrchestrator(
 
   const reviewerFanout = buildDefaultReviewerFanout(models.reviewer, {
     ...(hookExecutor ? { hookExecutor } : {}),
-    concurrency: projectCfg.reviewerFanoutConcurrency,
+    concurrency: resolveReviewerFanoutPolicy({
+      provider: selection.providerName,
+      requestedConcurrency: projectCfg.reviewerFanoutConcurrency,
+    }).effectiveConcurrency,
     contextDebug: {
       memoryDir: effectiveConfig.memoryDir,
       workspacePath: effectiveConfig.projectPath,
@@ -3852,7 +4127,7 @@ export async function runOrchestrator(
   })
 
   try {
-    await orchestrator.run({
+    return await orchestrator.run({
       ...(opts.maxTicks !== undefined ? { maxTicks: opts.maxTicks } : {}),
       ...(opts.tickDelayMs !== undefined ? { tickDelayMs: opts.tickDelayMs } : {}),
       ...(opts.stopAfterOneTask !== undefined ? { stopAfterOneTask: opts.stopAfterOneTask } : {}),

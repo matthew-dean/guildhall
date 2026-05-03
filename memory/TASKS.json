@@ -351,7 +351,7 @@
       "description": "Collapse raw workspace-import signals into backlog units a human can approve quickly: task-sized work, milestone summaries, and context docs without overwhelming quantity.",
       "domain": "runtime",
       "projectPath": ".",
-      "status": "in_progress",
+      "status": "done",
       "priority": "high",
       "dependsOn": ["guildhall-automation-001"],
       "outOfScope": [
@@ -363,13 +363,13 @@
           "id": "ac-1",
           "description": "Workspace import draft groups work into sane task-sized backlog items instead of raw fragment lists",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         },
         {
           "id": "ac-2",
           "description": "Imported preview clearly distinguishes backlog tasks, milestones, and context",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         }
       ],
       "notes": [
@@ -548,7 +548,7 @@
       "description": "Use one canonical runtime resolver for preflight, orchestrator lanes, provider tests, and UI status so provider family, base URL, auth source, model preset, fallback policy, and capability hints stay aligned.",
       "domain": "runtime",
       "projectPath": ".",
-      "status": "in_progress",
+      "status": "done",
       "priority": "critical",
       "dependsOn": ["guildhall-architecture-001"],
       "outOfScope": [
@@ -560,14 +560,14 @@
           "id": "ac-1",
           "description": "Preflight, worker/reviewer/coordinator dispatch, provider test actions, and project-status UI all resolve the same effective provider runtime record",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         },
         {
           "id": "ac-2",
           "description": "Focused tests cover provider-family resolution, protocol-specific defaults, and fallback consistency",
           "verifiedBy": "automated",
           "command": "pnpm vitest run src/runtime/__tests__/provider-runtime-config.test.ts src/runtime/__tests__/serve-providers.test.ts",
-          "met": false
+          "met": true
         }
       ],
       "notes": [
@@ -576,12 +576,25 @@
           "role": "worker",
           "timestamp": "2026-05-02T16:43:00Z",
           "content": "Started runtime normalization by adding shared provider metadata, provider-family classification, a normalized provider-name alias path, and a preferredProviderFamily field on RuntimeProviderConfig. Remaining work is to drive that effective runtime record more explicitly through all status/reporting surfaces and capability routing."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T16:45:00Z",
+          "content": "Extended the normalized runtime record into the serve-layer status path. /api/project and live run providerStatus now include provider family and label fields for both preferred and active providers, and the Project view can consume those directly instead of re-deriving display labels ad hoc."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T16:55:00Z",
+          "content": "Finished the runtime-normalization slice by routing reviewer fanout through the same provider-aware policy helper in both orchestrator dispatch and provider-status snapshots. Reviewer lane concurrency is now resolved once from provider capabilities and surfaced back to the UI as requested vs effective concurrency."
         }
       ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-02T17:45:00Z",
-      "updatedAt": "2026-05-02T16:43:00Z"
+      "updatedAt": "2026-05-02T16:55:00Z",
+      "completedAt": "2026-05-02T16:55:00Z"
     },
     {
       "id": "guildhall-architecture-003",
@@ -589,7 +602,7 @@
       "description": "Represent provider abilities and limits explicitly so lane routing, fallback, and UI status can rely on capability truth instead of hand-coded provider names.",
       "domain": "runtime",
       "projectPath": ".",
-      "status": "pending",
+      "status": "done",
       "priority": "high",
       "dependsOn": ["guildhall-architecture-002"],
       "outOfScope": [
@@ -601,20 +614,40 @@
           "id": "ac-1",
           "description": "Resolved provider runtime includes a compact capability manifest covering streaming, tool calls, reasoning behavior, resumable sessions, and recommended concurrency",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         },
         {
           "id": "ac-2",
           "description": "Project/task UI can surface why a provider was selected or rejected using capability-based reasons",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         }
       ],
-      "notes": [],
+      "notes": [
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T16:49:00Z",
+          "content": "Started the provider capability-manifest slice. Added a static capability record per provider family/key and threaded preferred/active capability snapshots into RuntimeProviderConfig, ProviderRunStatus, /api/project, and the UI types. This is groundwork for capability-based routing and clearer operator messaging."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T16:55:00Z",
+          "content": "Capability manifests now affect real runtime behavior: reviewer fanout is clamped through a shared provider-aware policy, and provider status explains requested vs effective reviewer concurrency instead of only issuing a generic warning."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T17:02:00Z",
+          "content": "Finished the provider-capability slice by replacing loose fallback reason strings with structured routing decisions in provider status. The Project view now surfaces capability- and compatibility-based provider selection decisions directly, so operators can see why a provider was chosen or rejected."
+        }
+      ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-02T17:45:00Z",
-      "updatedAt": "2026-05-02T17:45:00Z"
+      "updatedAt": "2026-05-02T17:02:00Z",
+      "completedAt": "2026-05-02T17:02:00Z"
     },
     {
       "id": "guildhall-architecture-004",
@@ -622,7 +655,7 @@
       "description": "Create pooled transport clients keyed by normalized provider runtime identity so worker, reviewer, and coordinator agents reuse connections and respect concurrency limits centrally.",
       "domain": "runtime",
       "projectPath": ".",
-      "status": "pending",
+      "status": "done",
       "priority": "high",
       "dependsOn": ["guildhall-architecture-003"],
       "outOfScope": [
@@ -634,20 +667,58 @@
           "id": "ac-1",
           "description": "Equivalent lane dispatches reuse pooled provider clients instead of constructing ad hoc transport instances",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         },
         {
           "id": "ac-2",
           "description": "The pool enforces provider-level concurrency and exposes provider-health events for repeated transient/fatal failures",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         }
       ],
-      "notes": [],
+      "notes": [
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T17:02:00Z",
+          "content": "Next slice is the shared provider client pool. Capability-based runtime identity is now stable enough that we can key pooled transport clients by normalized provider runtime instead of provider-name special cases."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T17:08:00Z",
+          "content": "Started the client-pool implementation with a module-local provider client pool. Equivalent OpenAI-compatible and local-server runtime configs now reuse pooled clients, while Claude OAuth intentionally stays unpooled for now because it carries resumable session identity that should not bleed across runs."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T17:14:00Z",
+          "content": "Added provider-health tracking at the pool boundary. Pooled clients now record last success/failure, consecutive failures, retryable vs fatal counts, and degraded state; provider status can surface that health and the Project view warns when a pooled provider is degrading."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T17:20:00Z",
+          "content": "Provider health now propagates into the live runtime surface. The pool publishes health-change notifications, the supervisor maps them onto matching runs, and the workspace event stream emits provider_health_changed events so active runs can refresh degraded-provider state without waiting for a manual reload."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T17:27:00Z",
+          "content": "Degraded pooled clients now affect runtime behavior instead of just observability. After repeated retryable failures or any fatal failure, the next equivalent pooled acquisition recycles the stateless client so Guildhall stops reusing a poisoned transport instance."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T17:31:00Z",
+          "content": "Finished the shared-client-pool slice by enforcing provider-level concurrency inside pooled stateless clients. The pool now combines reuse, bounded concurrency, health tracking, live provider_health_changed events, and degraded-client recycling in one normalized layer."
+        }
+      ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-02T17:45:00Z",
-      "updatedAt": "2026-05-02T17:45:00Z"
+      "updatedAt": "2026-05-02T17:31:00Z",
+      "completedAt": "2026-05-02T17:31:00Z"
     },
     {
       "id": "guildhall-architecture-005",
@@ -655,7 +726,7 @@
       "description": "Grow the one-task finisher into a bounded multi-lane scheduler: a narrow spec lane, a capped worker lane, bounded review/gate fanout, and a serialized coordinator lane.",
       "domain": "runtime",
       "projectPath": ".",
-      "status": "pending",
+      "status": "in_progress",
       "priority": "critical",
       "dependsOn": ["guildhall-automation-005", "guildhall-architecture-004"],
       "outOfScope": [
@@ -676,11 +747,25 @@
           "met": false
         }
       ],
-      "notes": [],
+      "notes": [
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T17:31:00Z",
+          "content": "With provider runtime normalization and the shared client pool in place, the next slice is bounded lane scheduling. The scheduler can now assume provider reuse/concurrency/health are handled below it and focus on task-lane policy rather than transport plumbing."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T18:00:00Z",
+          "content": "Finished the bounded-lane slice. Guildhall now resolves explicit spec/worker/review/coordinator lane settings from project config, clamps them against dispatch capacity and provider policy, uses those budgets during task selection, and surfaces the effective lane plan in provider status."
+        }
+      ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-02T17:45:00Z",
-      "updatedAt": "2026-05-02T17:45:00Z"
+      "completedAt": "2026-05-02T18:00:00Z",
+      "updatedAt": "2026-05-02T18:00:00Z"
     },
     {
       "id": "guildhall-architecture-006",
@@ -688,7 +773,7 @@
       "description": "After provider/runtime and lane scheduling are trustworthy, prove Guildhall can continue through a queue in stages: one real task merged, three tasks processed without manual restart, then a longer run that stops only when blocked or exhausted.",
       "domain": "runtime",
       "projectPath": ".",
-      "status": "pending",
+      "status": "in_progress",
       "priority": "high",
       "dependsOn": ["guildhall-architecture-005", "guildhall-automation-006"],
       "outOfScope": [
@@ -709,11 +794,84 @@
           "met": false
         }
       ],
-      "notes": [],
+      "notes": [
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T18:00:00Z",
+          "content": "Lane scheduling is now explicit and test-covered. The next stage is proving staged unattended throughput: one grounded task merged cleanly, then a short bounded multi-task run that stops with explicit blocked/exhausted accounting instead of silent drift."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T18:23:00Z",
+          "content": "Added an explicit stop-summary contract for unattended runs. Idle shutdown now explains whether the queue is all terminal, waiting on humans, blocked on escalations, or dependency-stalled; the supervisor persists that summary onto the run and emits it with supervisor_stopped so the UI can explain why the run ended."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T18:34:00Z",
+          "content": "Surfaced unattended stop summaries in the live shell. ProjectView now shows paused-state run summaries with the key counts, and recent-event summaries for supervisor_stopped include the structured stop reason instead of a generic stop line."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T18:49:00Z",
+          "content": "Hardened the live shell against stale run state: /api responses now send no-store cache headers, shared project/inbox fetches opt out of cache reuse, and the shared project store ignores out-of-order refresh responses so an older running snapshot cannot clobber a newer stopped one. Verified the backend stop summary live on /api/project against Looma/Knit; browser-use remains a noisy verifier for long-lived background refresh, so the staged throughput proof stays open."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T18:54:00Z",
+          "content": "Did a shell clarity pass on top of the runtime hardening. Thread copy is shorter, setup direction wording is plainer, and paused stop notices now summarize outcomes in operator language instead of replaying verbose orchestrator sentences with duplicated counts."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T21:13:00Z",
+          "content": "Removed another source of shell anxiety: setup phases made only of skippable steps now present as Optional, and skippable setup cards carry an explicit optional chip instead of looking like blocking prerequisites."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T21:17:00Z",
+          "content": "Quieted low-value nags further by keeping low-severity lever/policy cleanup out of the Do this next banner. Those items still exist in Notifications/Settings, but they no longer claim the primary home-shell CTA when nothing urgent is actually blocking work."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T21:23:00Z",
+          "content": "Notifications now separates urgent coordinator work from optional cleanup. High and medium items stay under Needs you; low-severity items move to Housekeeping, and the surface explicitly says nothing is blocked when optional cleanup is all that remains."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T21:27:00Z",
+          "content": "Thread now gets optional setup out of the first viewport. If setup only contains skippable steps, that phase collapses by default instead of opening as though it were blocking work."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T23:05:00Z",
+          "content": "A grounded Looma/Knit task exposed a different unattended-throughput blocker: the spec-agent had enough context and did use tools, but spent too many turns on read-only repo research and hit the max-turn limit without producing a brief, question, spec, or scoped escalation. Added a shared query-engine guardrail for repeated research-only tool turns, and wired the spec-agent to treat update-task, update-product-brief, post-user-question, and raise-escalation as the durable outcomes it must reach once evidence is sufficient."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T23:50:00Z",
+          "content": "Follow-up hardening landed in two more places. First, if a spec turn hits the max-turn limit after already writing durable task state, Guildhall now preserves that progress instead of escalating over it; writing a spec from exploring without an explicit status now promotes the task to spec_review. Second, startup session hydration is now stricter: a fresh task no longer resumes an old pending spec conversation unless the persisted snapshot names the same task id. Live Looma/Knit restart confirmed the cross-task spec-session bleed is gone, but a cold-start local NVIDIA run on task-006 still hit the spec turn limit with no durable output, so the next blocker is the model/provider path itself on fresh intake."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-02T23:58:00Z",
+          "content": "Small shell cleanup on top: Thread width is stable again. The column had been styled with only max-width, which allowed it to collapse narrower than intended; it now uses a fixed 680px target with max-width: 100% so the desktop reading width stays consistent without breaking mobile."
+        }
+      ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-02T17:45:00Z",
-      "updatedAt": "2026-05-02T17:45:00Z"
+      "updatedAt": "2026-05-02T23:58:00Z"
     }
   ]
 }

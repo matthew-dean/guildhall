@@ -183,12 +183,98 @@ export interface ProjectRun {
   startedAt?: string
   stoppedAt?: string
   error?: string
+  stopSummary?: {
+    ticks?: number
+    stopReason?: string
+    stopMessage?: string
+    idleSummary?: {
+      reason?: string
+      message?: string
+      counts?: Record<string, number>
+    }
+  }
   providerStatus?: ProviderStatus
 }
 
 export interface ProviderStatus {
+  health?: {
+    pooled: boolean
+    state: 'idle' | 'healthy' | 'degraded'
+    lastUsedAt?: string
+    lastSuccessAt?: string
+    lastFailureAt?: string
+    consecutiveFailures: number
+    retryableFailures: number
+    fatalFailures: number
+    lastError?: string
+  } | null
+  decisions?: Array<{
+    code: string
+    severity: 'info' | 'warn' | 'error'
+    basis: 'availability' | 'capability' | 'compatibility'
+    message: string
+  }>
+  laneConcurrency?: {
+    spec: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    worker: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    review: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    coordinator: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    reviewerFanout: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+  }
+  preferredCapabilities?: {
+    streaming: boolean
+    toolCalls: boolean
+    resumableSessions: boolean
+    reasoningSideChannel: 'none' | 'compatible'
+    browserAppControl: boolean
+    recommendedConcurrency: number
+    localServer: boolean
+  } | null
   preferredProvider?: string | null
+  preferredProviderFamily?: string | null
+  preferredProviderLabel?: string | null
   activeProvider?: string | null
+  activeCapabilities?: {
+    streaming: boolean
+    toolCalls: boolean
+    resumableSessions: boolean
+    reasoningSideChannel: 'none' | 'compatible'
+    browserAppControl: boolean
+    recommendedConcurrency: number
+    localServer: boolean
+  } | null
+  activeProviderFamily?: string | null
+  activeProviderLabel?: string | null
+  warnings?: Array<{
+    code: string
+    severity: 'info' | 'warn' | 'error'
+    message: string
+  }>
   fallback?: boolean
   allowPaidProviderFallback?: boolean
   selectedAt?: string

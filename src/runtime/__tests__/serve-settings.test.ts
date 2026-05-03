@@ -374,4 +374,16 @@ describe('GET /api/project — bootstrap status', () => {
     expect(body.bootstrapStatus?.steps?.[0]?.command).toBe('pnpm run build')
     expect(body.bootstrapStatus?.steps?.[0]?.result).toBe('fail')
   })
+
+  it('marks dynamic project payloads as non-cacheable', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+    expect(projectRes.headers.get('cache-control')).toBe('no-store, no-cache, must-revalidate')
+    expect(projectRes.headers.get('pragma')).toBe('no-cache')
+
+    const inboxRes = await app.fetch(new Request('http://localhost/api/project/inbox'))
+    expect(inboxRes.headers.get('cache-control')).toBe('no-store, no-cache, must-revalidate')
+    expect(inboxRes.headers.get('pragma')).toBe('no-cache')
+  })
 })

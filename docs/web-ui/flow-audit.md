@@ -72,13 +72,13 @@ correct the agent, and ask for direct action from Thread.
 
 - [x] `guildhall-architecture-001` Reframe provider UX around authenticated
   CLIs plus OpenAI-compatible / Anthropic-compatible custom providers.
-- [ ] `guildhall-architecture-002` Normalize effective provider runtime config
+- [x] `guildhall-architecture-002` Normalize effective provider runtime config
   across preflight, orchestrator lanes, provider tests, and UI status.
-- [ ] `guildhall-architecture-003` Add provider capability manifests for
+- [x] `guildhall-architecture-003` Add provider capability manifests for
   routing, fallback, and UI explainability.
-- [ ] `guildhall-architecture-004` Add a shared provider client pool with
+- [x] `guildhall-architecture-004` Add a shared provider client pool with
   bounded concurrency and provider-health events.
-- [ ] `guildhall-architecture-005` Add bounded lane scheduling for spec,
+- [x] `guildhall-architecture-005` Add bounded lane scheduling for spec,
   worker, review, and coordinator lanes.
 - [ ] `guildhall-architecture-006` Prove unattended throughput in stages:
   finish one, finish three, then run until blocked or exhausted.
@@ -104,6 +104,120 @@ correct the agent, and ask for direct action from Thread.
 - `guildhall-architecture-002` is in progress: shared provider metadata and
   preferred-provider family classification now exist in the runtime layer as
   groundwork for fuller status/routing normalization.
+- `guildhall-architecture-002` now also drives a shared provider-status
+  snapshot into `/api/project` and live run status, including provider family
+  and label fields for preferred and active providers.
+- `guildhall-architecture-002` is now complete: reviewer fanout resolves
+  through the same provider-aware runtime policy in both orchestrator dispatch
+  and provider status, so requested vs effective reviewer concurrency is
+  normalized instead of guessed independently.
+- `guildhall-architecture-003` is now complete: provider status carries a
+  capability manifest for preferred and active providers, including
+  streaming/tool-call support, resumability, reasoning-side-channel shape, and
+  recommended concurrency.
+- `guildhall-architecture-003` also uses those manifests for real routing and
+  explainability:
+  reviewer fanout is clamped through provider-aware policy, and structured
+  routing decisions now explain why a provider was selected, rejected, or had
+  its model assignment swapped.
+- `guildhall-architecture-004` is now in progress: next step is replacing
+  bespoke provider-client construction with a shared pool keyed by normalized
+  runtime identity.
+- `guildhall-architecture-004` has started landing in code: equivalent
+  OpenAI-compatible and local-server runtime configs now reuse pooled clients,
+  while resumable-session providers like Claude remain intentionally unpooled
+  until we add session-aware pool semantics.
+- `guildhall-architecture-004` now also has provider-health tracking at the
+  pool boundary: pooled clients record recent success/failure state and
+  consecutive failures, and the Project view can warn when a pooled provider
+  has degraded.
+- `guildhall-architecture-004` now also emits provider health into the live
+  workspace runtime: pooled-provider health changes update active run status
+  and appear on the event stream as `provider_health_changed`, so the UI can
+  react without waiting for a full refresh cycle.
+- `guildhall-architecture-004` now also makes degraded stateless clients
+  operationally matter: after repeated retryable failures or a fatal failure,
+  the next equivalent pooled acquisition recycles that client instead of
+  reusing the same poisoned transport instance forever.
+- `guildhall-architecture-004` is now complete: the shared pool handles
+  stateless client reuse, provider-level concurrency limits, health tracking,
+  live `provider_health_changed` events, and degraded-client recycling.
+- `guildhall-architecture-005` is now complete: Guildhall resolves explicit
+  spec/worker/review/coordinator lane settings, clamps them against dispatch
+  capacity and provider policy, uses those budgets during task selection, and
+  exposes the effective lane plan in provider status.
+- `guildhall-architecture-006` is now in progress: next step is staged
+  unattended-throughput proof on top of the bounded lane scheduler.
+- `guildhall-architecture-006` now has a real stop-summary contract:
+  unattended runs no longer just go idle and disappear; they can now report
+  whether they stopped because the queue is all terminal, waiting on humans,
+  blocked on escalations, dependency-stalled, or explicitly stopped.
+- The paused shell now surfaces that stop summary directly in ProjectView, so
+  operators can see why a run ended without digging through raw event lines.
+- Hardened the live shell against stale run state: dynamic `/api/*` responses
+  now send `Cache-Control: no-store`, the shared project/inbox fetches opt out
+  of cache reuse, and the shared project store now ignores out-of-order refresh
+  responses so a late "still running" fetch cannot overwrite a newer stopped
+  snapshot.
+- Did a shell clarity pass too: Thread copy is shorter, setup direction
+  language is plainer, and paused-stop notices now summarize outcomes in
+  operator language (`Run finished`, `Waiting on input`, `Blocked`) instead of
+  echoing full orchestrator sentences with duplicated counts.
+- Optional setup no longer masquerades as a blocker. In Thread, a setup phase
+  made only of skippable steps now labels itself `Optional`, and skippable
+  setup cards carry an explicit `optional` chip instead of reading like hard
+  prerequisites.
+- Low-severity policy cleanup is now quieter. `Do this next` ignores inbox
+  items that are only low severity, so the home shell can go calm when the
+  only remaining work is optional/project-policy housekeeping.
+- Notifications now mirrors that calmer model: high/medium items stay in the
+  main `Needs you` list, while low-severity items move to a separate
+  `Housekeeping` section with a clear “nothing is blocked right now” state
+  when only optional cleanup remains.
+- Thread now defaults optional setup out of the way. When the only setup turns
+  are skippable, the setup phase collapses by default so the first viewport is
+  not dominated by advisory cleanup.
+- Live Looma/Knit verification confirmed the backend stop summary on
+  `/api/project` after unattended runs. Browser-use remains a noisy verifier
+  for long-lived background refresh because its injected async fetch layer can
+  error after the node-repl exec frame ends, so `guildhall-architecture-006`
+  stays open until we prove the same behavior in a cleaner live browser pass.
+- A new grounded Looma/Knit autonomy run exposed a different intake stall:
+  the spec-agent had enough repo context and did use tools, but it spent too
+  many turns on read-only research and then hit the max-turn limit without
+  writing a brief, posting a question, drafting a spec, or raising a scoped
+  escalation.
+- Hardened the shared query engine against that failure mode. Roles can now
+  declare "durable progress" tools; after repeated research-only tool turns,
+  Guildhall injects a corrective nudge that tells the agent to stop
+  researching and record a brief, question, spec, or escalation instead of
+  drifting into turn-limit exhaustion.
+- The spec-agent now uses that new guardrail and its prompt explicitly says
+  that once repo evidence shows the task may already be partly or fully done,
+  it must convert that evidence into a brief, focused question, remaining
+  delta spec, or scoped escalation within the next turn or two.
+- Preserved-progress hardening landed too: if a spec turn hits the max-turn
+  limit after already writing durable task state, Guildhall now preserves that
+  state instead of blindly escalating over it. Writing a spec from `exploring`
+  without an explicit status now promotes the task to `spec_review`.
+- Tightened startup session hydration so a fresh task no longer resumes an old
+  pending spec conversation unless the persisted snapshot names the same task
+  id. Live Looma/Knit restart confirmed the noisy `Resumed spec agent from
+  prior snapshot` cross-task bleed is gone on a fresh task.
+- Cold-start local-model reality check: even with the cross-task resume bug
+  fixed, a fresh grounded Looma/Knit task (`task-006`) still hit the spec
+  turn limit with no brief, question, or spec written. So the next bottleneck
+  is no longer stale session contamination; it is the local model/provider
+  path still failing to convert a real intake into durable output from a cold
+  start.
+- Thread column width now uses a real target width again. The column had been
+  using `max-width: 680px`, which let it shrink unexpectedly; it now uses
+  `width: 680px; max-width: 100%` so desktop stays stable while smaller
+  viewports still collapse safely.
+- `guildhall-architecture-003` now also uses those manifests for a real routing
+  decision: provider capability policy can clamp reviewer fanout to a safe
+  effective concurrency, and the UI surfaces that adjustment as an info notice
+  instead of a vague warning.
 - Workspace import now defaults to a single-project interpretation and only
   preserves subproject scope when multiple top-level project roots are clearly
   present.

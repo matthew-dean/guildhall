@@ -60,6 +60,10 @@ export interface QueryEngineOptions {
   compactor?: Compactor
   noToolTurnNudge?: string | undefined
   noToolTurnNudgeLimit?: number | undefined
+  noProgressToolNames?: readonly string[] | undefined
+  noProgressTurnNudge?: string | undefined
+  noProgressTurnNudgeLimit?: number | undefined
+  noProgressTurnThreshold?: number | undefined
 }
 
 export class QueryEngine {
@@ -79,6 +83,10 @@ export class QueryEngine {
   private readonly compactor: Compactor | undefined
   private readonly noToolTurnNudge: string | undefined
   private readonly noToolTurnNudgeLimit: number | undefined
+  private readonly noProgressToolNames: readonly string[] | undefined
+  private readonly noProgressTurnNudge: string | undefined
+  private readonly noProgressTurnNudgeLimit: number | undefined
+  private readonly noProgressTurnThreshold: number | undefined
   private readonly toolMetadata: Record<string, unknown>
   private messagesInternal: ConversationMessage[] = []
   private totalUsageInternal: UsageSnapshot = { ...emptyUsage }
@@ -100,6 +108,10 @@ export class QueryEngine {
     this.compactor = options.compactor
     this.noToolTurnNudge = options.noToolTurnNudge
     this.noToolTurnNudgeLimit = options.noToolTurnNudgeLimit
+    this.noProgressToolNames = options.noProgressToolNames
+    this.noProgressTurnNudge = options.noProgressTurnNudge
+    this.noProgressTurnNudgeLimit = options.noProgressTurnNudgeLimit
+    this.noProgressTurnThreshold = options.noProgressTurnThreshold
     this.toolMetadata = options.toolMetadata ?? {}
     // Plan-mode tools call this callback to swap the engine's permission
     // checker. Effect is "next turn onward" — mid-turn evaluations continue
@@ -274,6 +286,18 @@ export class QueryEngine {
       ...(this.noToolTurnNudge !== undefined ? { noToolTurnNudge: this.noToolTurnNudge } : {}),
       ...(this.noToolTurnNudgeLimit !== undefined
         ? { noToolTurnNudgeLimit: this.noToolTurnNudgeLimit }
+        : {}),
+      ...(this.noProgressToolNames !== undefined
+        ? { noProgressToolNames: this.noProgressToolNames }
+        : {}),
+      ...(this.noProgressTurnNudge !== undefined
+        ? { noProgressTurnNudge: this.noProgressTurnNudge }
+        : {}),
+      ...(this.noProgressTurnNudgeLimit !== undefined
+        ? { noProgressTurnNudgeLimit: this.noProgressTurnNudgeLimit }
+        : {}),
+      ...(this.noProgressTurnThreshold !== undefined
+        ? { noProgressTurnThreshold: this.noProgressTurnThreshold }
         : {}),
       ...(abortSignal ? { abortSignal } : {}),
       toolMetadata: this.toolMetadata,

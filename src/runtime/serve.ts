@@ -49,6 +49,7 @@ import {
   pickPrimaryEngineer,
 } from '@guildhall/guilds'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
+import { resolveFanoutCapacity } from './fanout-dispatcher.js'
 import {
   normalizePreferredProvider,
   selectApiClient,
@@ -58,8 +59,18 @@ import {
 import {
   buildSelectApiClientOptions,
   getRuntimeProviderConfig,
+  resolveLaneConcurrencyPlan,
+  resolveReviewerFanoutPolicy,
 } from './provider-runtime-config.js'
 import {
+  anthropicCompatiblePoolKey,
+  openAiCompatiblePoolKey,
+  providerClientHealth,
+} from './provider-client-pool.js'
+import {
+  providerCapabilitiesForAnyKey,
+  providerFamilyForAnyKey,
+  providerLabelForAnyKey,
   providerLabelForSetupKey,
   SETUP_PROVIDER_ORDER,
 } from './provider-metadata.js'
@@ -373,6 +384,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
   const supervisor = new OrchestratorSupervisor()
   const app = new Hono()
 
+  // Dynamic API surfaces should never be cached. The dashboard depends on
+  // `/api/project`, inbox state, and SSE-adjacent status reads reflecting the
+  // latest orchestrator tick immediately after a stop/start transition.
+  app.use('/api/*', async (c, next) => {
+    await next()
+    c.header('Cache-Control', 'no-store, no-cache, must-revalidate')
+    c.header('Pragma', 'no-cache')
+    c.header('Expires', '0')
+  })
+
   // -------------------------------------------------------------------------
   // API: runtime version (shown next to the "Guildhall" wordmark)
   // -------------------------------------------------------------------------
@@ -466,7 +487,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // -------------------------------------------------------------------------
   // API: project
   // -------------------------------------------------------------------------
-  app.get('/api/project', c => {
+  app.get('/api/project', async c => {
     try {
       if (project.initializationNeeded) {
         return c.json({
@@ -489,15 +510,34 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : undefined
       const recent = supervisor.recent(project.id, undefined, project.path)
       const bootstrapStatus = readBootstrapStatus(join(project.path, 'memory'))
+      const runtimeProvider = getRuntimeProviderConfig({
+        projectPath: project.path,
+        models: resolvedConfig.models,
+      })
+      const preferredHealth = providerHealthForRun({
+        credentials: runtimeProvider.credentials,
+        activeProvider: preferredActiveProvider ?? null,
+      })
       const providerStatus = run?.providerStatus ?? (
         preferredActiveProvider
-          ? {
+          ? buildProviderStatusSnapshot({
               preferredProvider,
               activeProvider: null,
               fallback: false,
+              health: preferredHealth,
+              allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
               activeModel: resolvedConfig.models.worker,
               models: resolvedConfig.models,
-            }
+              laneConcurrency: await providerLaneConcurrencyForRun({
+                projectPath: project.path,
+                activeProvider: preferredActiveProvider ?? null,
+              }),
+              warnings: await providerWarningsForRun({
+                projectPath: project.path,
+                activeProvider: preferredActiveProvider ?? null,
+                health: preferredHealth,
+              }),
+            })
           : null
       )
       return c.json({
@@ -515,6 +555,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               startedAt: run.startedAt,
               stoppedAt: run.stoppedAt,
               error: run.error,
+              ...(run.stopSummary ? { stopSummary: run.stopSummary } : {}),
               ...(run.providerStatus ? { providerStatus: run.providerStatus } : {}),
             }
           : null,
@@ -616,6 +657,263 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  function buildProviderStatusSnapshot(input: {
+    preferredProvider?: string | null
+    activeProvider?: string | null
+    health?: {
+      pooled: boolean
+      state: 'idle' | 'healthy' | 'degraded'
+      lastUsedAt?: string
+      lastSuccessAt?: string
+      lastFailureAt?: string
+      consecutiveFailures: number
+      retryableFailures: number
+      fatalFailures: number
+      lastError?: string
+    } | null
+    allowPaidProviderFallback?: boolean
+    selectedAt?: string
+    reason?: string
+    activeModel?: string | null
+    models?: ModelAssignmentConfig | null
+    fallback?: boolean
+    decisions?: Array<{
+      code: string
+      severity: 'info' | 'warn' | 'error'
+      basis: 'availability' | 'capability' | 'compatibility'
+      message: string
+    }>
+    laneConcurrency?: {
+      spec: {
+        requested: number
+        effective: number
+        recommended: number | null
+        clamped: boolean
+      }
+      worker: {
+        requested: number
+        effective: number
+        recommended: number | null
+        clamped: boolean
+      }
+      review: {
+        requested: number
+        effective: number
+        recommended: number | null
+        clamped: boolean
+      }
+      coordinator: {
+        requested: number
+        effective: number
+        recommended: number | null
+        clamped: boolean
+      }
+      reviewerFanout: {
+        requested: number
+        effective: number
+        recommended: number | null
+        clamped: boolean
+      }
+    }
+    warnings?: Array<{
+      code: string
+      severity: 'info' | 'warn' | 'error'
+      message: string
+    }>
+  }) {
+    const preferredProvider = input.preferredProvider ?? null
+    const activeProvider = input.activeProvider ?? null
+    return {
+      ...(preferredProvider ? {
+        preferredCapabilities: providerCapabilitiesForAnyKey(preferredProvider),
+        preferredProvider,
+        preferredProviderFamily: providerFamilyForAnyKey(preferredProvider),
+        preferredProviderLabel: providerLabelForAnyKey(preferredProvider),
+      } : {}),
+      ...(activeProvider ? {
+        activeCapabilities: providerCapabilitiesForAnyKey(activeProvider),
+        activeProvider,
+        activeProviderFamily: providerFamilyForAnyKey(activeProvider),
+        activeProviderLabel: providerLabelForAnyKey(activeProvider),
+      } : {}),
+      ...(input.health !== undefined ? { health: input.health } : {}),
+      fallback: Boolean(input.fallback),
+      ...(input.allowPaidProviderFallback !== undefined
+        ? { allowPaidProviderFallback: input.allowPaidProviderFallback }
+        : {}),
+      ...(input.selectedAt ? { selectedAt: input.selectedAt } : {}),
+      ...(input.reason ? { reason: input.reason } : {}),
+      ...(input.activeModel ? { activeModel: input.activeModel } : {}),
+      ...(input.models ? { models: input.models } : {}),
+      ...(input.decisions && input.decisions.length > 0 ? { decisions: input.decisions } : {}),
+      ...(input.laneConcurrency ? { laneConcurrency: input.laneConcurrency } : {}),
+      ...(input.warnings && input.warnings.length > 0 ? { warnings: input.warnings } : {}),
+    }
+  }
+
+  async function dispatchCapacityForProject(projectPath: string): Promise<number> {
+    try {
+      const settings = await loadLeverSettings({
+        path: defaultAgentSettingsPath(projectPath),
+      })
+      return resolveFanoutCapacity(settings.project)
+    } catch {
+      return readProjectConfig(projectPath).workerLaneConcurrency
+    }
+  }
+
+  async function providerWarningsForRun(input: {
+    projectPath: string
+    activeProvider: string | null | undefined
+    health?: ReturnType<typeof providerHealthForRun>
+  }) {
+    const warnings: Array<{
+      code: string
+      severity: 'info' | 'warn' | 'error'
+      message: string
+    }> = []
+    const projectCfg = readProjectConfig(input.projectPath)
+    const reviewerFanout = resolveReviewerFanoutPolicy({
+      provider: input.activeProvider,
+      requestedConcurrency: projectCfg.reviewerFanoutConcurrency,
+    })
+    if (reviewerFanout.clamped) {
+      warnings.push({
+        code: 'reviewer_concurrency_clamped_to_provider_recommendation',
+        severity: 'info',
+        message:
+          `Reviewer fanout concurrency is configured as ${reviewerFanout.requestedConcurrency}, but ` +
+          `${providerLabelForAnyKey(input.activeProvider)} is capped at ${reviewerFanout.effectiveConcurrency} ` +
+          `for this run (recommended ${reviewerFanout.recommendedConcurrency}).`,
+      })
+    }
+    const workerDispatchCapacity = await dispatchCapacityForProject(input.projectPath)
+    const lanePlan = resolveLaneConcurrencyPlan({
+      projectPath: input.projectPath,
+      provider: input.activeProvider,
+      dispatchCapacity: workerDispatchCapacity,
+    })
+    for (const [lane, policy] of Object.entries(lanePlan)) {
+      if (lane === 'reviewerFanout') continue
+      if (!policy.clamped) continue
+      warnings.push({
+        code: `${lane}_lane_concurrency_clamped`,
+        severity: 'info',
+        message:
+          `${lane[0]!.toUpperCase()}${lane.slice(1)} lane concurrency is configured as ${policy.requestedConcurrency}, ` +
+          `but this run is capped at ${policy.effectiveConcurrency}` +
+          `${policy.recommendedConcurrency ? ` (recommended ${policy.recommendedConcurrency})` : ''}.`,
+      })
+    }
+    if (input.health?.state === 'degraded') {
+      warnings.push({
+        code: 'provider_pool_health_degraded',
+        severity: 'warn',
+        message:
+          `${providerLabelForAnyKey(input.activeProvider)} has seen ${input.health.consecutiveFailures} consecutive pooled failures` +
+          `${input.health.lastError ? ` (${input.health.lastError})` : ''}.`,
+      })
+    }
+    return warnings
+  }
+
+  function providerHealthForRun(input: {
+    credentials: {
+      anthropicApiKey?: string
+      openaiApiKey?: string
+      openaiBaseUrl?: string
+      llamaCppUrl?: string
+    }
+    activeProvider: string | null | undefined
+  }) {
+    const key = providerHealthKeyForRun(input)
+    if (!key) return null
+    return providerClientHealth(key)
+  }
+
+  function providerHealthKeyForRun(input: {
+    credentials: {
+      anthropicApiKey?: string
+      openaiApiKey?: string
+      openaiBaseUrl?: string
+      llamaCppUrl?: string
+    }
+    activeProvider: string | null | undefined
+  }) {
+    switch (input.activeProvider) {
+      case 'llama-cpp': {
+        const url = input.credentials.llamaCppUrl?.trim()
+        if (!url) return null
+        return openAiCompatiblePoolKey({
+          provider: 'llama-cpp',
+          baseUrl: url,
+        })
+      }
+      case 'openai-api': {
+        const key = input.credentials.openaiApiKey?.trim()
+        if (!key) return null
+        return openAiCompatiblePoolKey({
+          provider: 'openai-api',
+          baseUrl: input.credentials.openaiBaseUrl?.trim() || 'https://api.openai.com/v1',
+          apiKey: key,
+        })
+      }
+      case 'anthropic-api': {
+        const key = input.credentials.anthropicApiKey?.trim()
+        if (!key) return null
+        return anthropicCompatiblePoolKey(key)
+      }
+      default:
+        return null
+    }
+  }
+
+  async function providerLaneConcurrencyForRun(input: {
+    projectPath: string
+    activeProvider: string | null | undefined
+    dispatchCapacity?: number
+  }) {
+    const dispatchCapacity =
+      input.dispatchCapacity ?? await dispatchCapacityForProject(input.projectPath)
+    const lanePlan = resolveLaneConcurrencyPlan({
+      projectPath: input.projectPath,
+      provider: input.activeProvider,
+      dispatchCapacity,
+    })
+    return {
+      spec: {
+        requested: lanePlan.spec.requestedConcurrency,
+        effective: lanePlan.spec.effectiveConcurrency,
+        recommended: lanePlan.spec.recommendedConcurrency,
+        clamped: lanePlan.spec.clamped,
+      },
+      worker: {
+        requested: lanePlan.worker.requestedConcurrency,
+        effective: lanePlan.worker.effectiveConcurrency,
+        recommended: lanePlan.worker.recommendedConcurrency,
+        clamped: lanePlan.worker.clamped,
+      },
+      review: {
+        requested: lanePlan.review.requestedConcurrency,
+        effective: lanePlan.review.effectiveConcurrency,
+        recommended: lanePlan.review.recommendedConcurrency,
+        clamped: lanePlan.review.clamped,
+      },
+      coordinator: {
+        requested: lanePlan.coordinator.requestedConcurrency,
+        effective: lanePlan.coordinator.effectiveConcurrency,
+        recommended: lanePlan.coordinator.recommendedConcurrency,
+        clamped: lanePlan.coordinator.clamped,
+      },
+      reviewerFanout: {
+        requested: lanePlan.reviewerFanout.requestedConcurrency,
+        effective: lanePlan.reviewerFanout.effectiveConcurrency,
+        recommended: lanePlan.reviewerFanout.recommendedConcurrency,
+        clamped: lanePlan.reviewerFanout.clamped,
+      },
+    }
+  }
+
   async function selectPaidFallbackProvider(opts: {
     anthropicApiKey?: string
     openaiApiKey?: string
@@ -696,6 +994,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
       let effectiveProvider = preflight.providerName
       let effectiveModels = resolvedConfig.models
       let fallbackReason = preflight.reason
+      const routingDecisions: Array<{
+        code: string
+        severity: 'info' | 'warn' | 'error'
+        basis: 'availability' | 'capability' | 'compatibility'
+        message: string
+      }> = []
       if (preflight.providerName === 'llama-cpp' && creds.llamaCppUrl && project.config) {
         const assignedModels = resolvedConfig.models
         const loadedModels = await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
@@ -719,6 +1023,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
           effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
           fallbackReason =
             'Preferred local server had no loaded model available, so Guildhall switched to a paid fallback provider.'
+          routingDecisions.push({
+            code: 'preferred_provider_missing_loaded_model',
+            severity: 'info',
+            basis: 'availability',
+            message:
+              'The preferred local server had no loaded model available, so Guildhall selected a fallback provider for this run.',
+          })
         }
         if (effectiveProvider === 'llama-cpp') {
           const missingModels = missingAssignedModels(assignedModels, loadedModels)
@@ -745,6 +1056,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
             effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
             fallbackReason =
               'Preferred local server did not have the configured models loaded, so Guildhall switched to a paid fallback provider.'
+            routingDecisions.push({
+              code: 'preferred_provider_missing_assigned_models',
+              severity: 'info',
+              basis: 'compatibility',
+              message:
+                'The preferred local server did not have this project’s assigned models loaded, so Guildhall selected a fallback provider for this run.',
+            })
           }
         }
       }
@@ -753,6 +1071,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (effectiveProvider !== 'llama-cpp') {
           fallbackReason ??=
             `Guildhall swapped to models that ${effectiveProvider} can actually serve for this run.`
+          routingDecisions.push({
+            code: 'model_assignment_swapped_for_provider_compatibility',
+            severity: 'info',
+            basis: 'compatibility',
+            message:
+              `Guildhall swapped to models that ${providerLabelForAnyKey(effectiveProvider)} can actually serve for this run.`,
+          })
         }
       }
       const body = await c.req.json().catch(() => ({})) as {
@@ -764,21 +1089,41 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const normalizedPreferred = preferred
         ? normalizePreferredProvider(preferred)
         : undefined
-      const providerStatus = {
-        ...(preferred ? { preferredProvider: preferred } : {}),
+      const activeHealth = providerHealthForRun({
+        credentials: creds,
         activeProvider: effectiveProvider,
+      })
+      const activeHealthKey = providerHealthKeyForRun({
+        credentials: creds,
+        activeProvider: effectiveProvider,
+      })
+      const providerStatus = buildProviderStatusSnapshot({
+        preferredProvider: preferred ?? null,
+        activeProvider: effectiveProvider,
+        health: activeHealth,
         fallback: Boolean(normalizedPreferred && normalizedPreferred !== effectiveProvider),
         allowPaidProviderFallback,
         selectedAt: new Date().toISOString(),
         activeModel: effectiveModels.worker,
         models: effectiveModels,
+        decisions: routingDecisions,
+        laneConcurrency: await providerLaneConcurrencyForRun({
+          projectPath: project.path,
+          activeProvider: effectiveProvider,
+        }),
+        warnings: await providerWarningsForRun({
+          projectPath: project.path,
+          activeProvider: effectiveProvider,
+          health: activeHealth,
+        }),
         ...(fallbackReason ? { reason: fallbackReason } : {}),
-      }
+      })
       const run = supervisor.start({
         workspaceId: project.id,
         workspacePath: project.path,
         ...(stopAfterOneTask ? { stopAfterOneTask: true } : {}),
         providerStatus,
+        ...(activeHealthKey ? { providerHealthKey: activeHealthKey } : {}),
         providerOverride: effectiveProvider,
         modelAssignmentOverride: effectiveModels,
       })
@@ -786,6 +1131,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         status: run.status,
         mode: run.mode,
         startedAt: run.startedAt,
+        ...(run.stopSummary ? { stopSummary: run.stopSummary } : {}),
         provider: effectiveProvider,
         providerStatus: run.providerStatus,
       })

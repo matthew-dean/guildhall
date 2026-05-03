@@ -15,6 +15,8 @@ import type { BackendEvent } from '@guildhall/backend-host'
 import { resolveConfig } from '@guildhall/config'
 import type { ResolvedConfig } from '@guildhall/config'
 import { runOrchestrator } from './orchestrator.js'
+import type { OrchestratorRunResult } from './orchestrator.js'
+import { subscribeProviderClientHealth, type ProviderClientHealthSnapshot } from './provider-client-pool.js'
 import {
   ProcessRegistry,
   writeStopRequested,
@@ -57,13 +59,91 @@ export interface WorkspaceRun {
   workspacePath: string
   /** Dashboard/CLI run mode for operator-visible posture. */
   mode: 'continuous' | 'one_task'
+  stopSummary?: OrchestratorRunResult
   /** Provider selected by start preflight for this run. */
   providerStatus?: ProviderRunStatus
+  providerHealthKey?: string
 }
 
 export interface ProviderRunStatus {
+  health?: {
+    pooled: boolean
+    state: 'idle' | 'healthy' | 'degraded'
+    lastUsedAt?: string
+    lastSuccessAt?: string
+    lastFailureAt?: string
+    consecutiveFailures: number
+    retryableFailures: number
+    fatalFailures: number
+    lastError?: string
+  } | null
+  decisions?: Array<{
+    code: string
+    severity: 'info' | 'warn' | 'error'
+    basis: 'availability' | 'capability' | 'compatibility'
+    message: string
+  }>
+  laneConcurrency?: {
+    spec: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    worker: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    review: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    coordinator: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    reviewerFanout: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+  }
+  preferredCapabilities?: {
+    streaming: boolean
+    toolCalls: boolean
+    resumableSessions: boolean
+    reasoningSideChannel: 'none' | 'compatible'
+    browserAppControl: boolean
+    recommendedConcurrency: number
+    localServer: boolean
+  } | null
   preferredProvider?: string
+  preferredProviderFamily?: string | null
+  preferredProviderLabel?: string | null
   activeProvider: string
+  activeCapabilities?: {
+    streaming: boolean
+    toolCalls: boolean
+    resumableSessions: boolean
+    reasoningSideChannel: 'none' | 'compatible'
+    browserAppControl: boolean
+    recommendedConcurrency: number
+    localServer: boolean
+  } | null
+  activeProviderFamily?: string | null
+  activeProviderLabel?: string | null
+  warnings?: Array<{
+    code: string
+    severity: 'info' | 'warn' | 'error'
+    message: string
+  }>
   fallback: boolean
   allowPaidProviderFallback?: boolean
   selectedAt: string
@@ -85,8 +165,11 @@ export interface SupervisorEvent {
  * them uniformly.
  */
 export interface SupervisorLifecycleEvent {
-  type: 'supervisor_started' | 'supervisor_stopped' | 'supervisor_error'
+  type: 'supervisor_started' | 'supervisor_stopped' | 'supervisor_error' | 'provider_health_changed'
   message?: string
+  reason?: string
+  provider?: string
+  health?: ProviderClientHealthSnapshot
 }
 
 const RECENT_EVENT_LIMIT = 200
@@ -176,6 +259,30 @@ export class OrchestratorSupervisor {
     this.emitter.setMaxListeners(0)
     this.runOrchestratorImpl = opts.runOrchestrator ?? runOrchestrator
     this.resolveConfigImpl = opts.resolveConfig ?? resolveConfig
+    subscribeProviderClientHealth((event) => {
+      for (const run of this.runs.values()) {
+        if (run.providerHealthKey !== event.key) continue
+        if (run.providerStatus) run.providerStatus.health = event.snapshot
+        const supervisorEv: SupervisorEvent = {
+          at: new Date().toISOString(),
+          workspaceId: run.workspaceId,
+          event: {
+            type: 'provider_health_changed',
+            message:
+              `${run.providerStatus?.activeProviderLabel ?? run.providerStatus?.activeProvider ?? 'Provider'} is now ${event.snapshot.state}` +
+              `${event.snapshot.lastError ? ` (${event.snapshot.lastError})` : ''}`,
+            provider: run.providerStatus?.activeProvider,
+            health: event.snapshot,
+          },
+        }
+        run.recentEvents.push(supervisorEv)
+        if (run.recentEvents.length > RECENT_EVENT_LIMIT) {
+          run.recentEvents.splice(0, run.recentEvents.length - RECENT_EVENT_LIMIT)
+        }
+        writePersistedEvent(run.workspacePath, supervisorEv)
+        this.emitter.emit('event', supervisorEv)
+      }
+    })
   }
 
   /** Subscribe to all workspace events. Returns an unsubscribe function. */
@@ -185,13 +292,14 @@ export class OrchestratorSupervisor {
   }
 
   /** Snapshot of all runs (for GET /api/workspaces — "is it running?"). */
-  list(): Array<Pick<WorkspaceRun, 'workspaceId' | 'startedAt' | 'stoppedAt' | 'status' | 'error' | 'providerStatus'>> {
+  list(): Array<Pick<WorkspaceRun, 'workspaceId' | 'startedAt' | 'stoppedAt' | 'status' | 'error' | 'providerStatus' | 'stopSummary'>> {
     return Array.from(this.runs.values()).map(r => ({
       workspaceId: r.workspaceId,
       startedAt: r.startedAt,
       ...(r.stoppedAt ? { stoppedAt: r.stoppedAt } : {}),
       status: r.status,
       ...(r.error ? { error: r.error } : {}),
+      ...(r.stopSummary ? { stopSummary: r.stopSummary } : {}),
       ...(r.providerStatus ? { providerStatus: r.providerStatus } : {}),
     }))
   }
@@ -221,6 +329,7 @@ export class OrchestratorSupervisor {
     workspacePath: string
     stopAfterOneTask?: boolean
     providerStatus?: ProviderRunStatus
+    providerHealthKey?: string
     providerOverride?: string
     modelAssignmentOverride?: ResolvedConfig['models']
   }): WorkspaceRun {
@@ -244,6 +353,7 @@ export class OrchestratorSupervisor {
       workspacePath: opts.workspacePath,
       mode: opts.stopAfterOneTask ? 'one_task' : 'continuous',
       ...(opts.providerStatus ? { providerStatus: opts.providerStatus } : {}),
+      ...(opts.providerHealthKey ? { providerHealthKey: opts.providerHealthKey } : {}),
     }
     // Clear any stale marker from a previous run so a brand-new orchestrator
     // doesn't stop on its first tick.
@@ -269,7 +379,7 @@ export class OrchestratorSupervisor {
     run.runPromise = (async () => {
       try {
         const config = this.resolveConfigImpl({ workspacePath: opts.workspacePath })
-        await this.runOrchestratorImpl(config, {
+        const result = await this.runOrchestratorImpl(config, {
           onBackendEvent: (event) => { recordAndEmit(event) },
           stopSignal,
           abortSignal: abortController.signal,
@@ -278,9 +388,14 @@ export class OrchestratorSupervisor {
           ...(opts.modelAssignmentOverride ? { modelAssignmentOverride: opts.modelAssignmentOverride } : {}),
           ...(opts.stopAfterOneTask ? { stopAfterOneTask: true } : {}),
         })
+        run.stopSummary = result
         run.status = 'stopped'
         run.stoppedAt = new Date().toISOString()
-        recordAndEmit({ type: 'supervisor_stopped' })
+        recordAndEmit({
+          type: 'supervisor_stopped',
+          reason: result.stopReason,
+          message: result.stopMessage,
+        })
       } catch (err) {
         run.status = 'error'
         run.error = err instanceof Error ? err.message : String(err)

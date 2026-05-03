@@ -67,6 +67,10 @@ export interface GuildhallAgentOptions {
   compactor?: Compactor
   noToolTurnNudge?: string | undefined
   noToolTurnNudgeLimit?: number | undefined
+  noProgressToolNames?: readonly string[] | undefined
+  noProgressTurnNudge?: string | undefined
+  noProgressTurnNudgeLimit?: number | undefined
+  noProgressTurnThreshold?: number | undefined
   /**
    * FR-20: automatic session persistence. When set, a snapshot is written
    * after every successful `generate()` turn so the agent can resume from
@@ -135,6 +139,18 @@ export class GuildhallAgent {
         : {}),
       ...(options.noToolTurnNudgeLimit !== undefined
         ? { noToolTurnNudgeLimit: options.noToolTurnNudgeLimit }
+        : {}),
+      ...(options.noProgressToolNames !== undefined
+        ? { noProgressToolNames: options.noProgressToolNames }
+        : {}),
+      ...(options.noProgressTurnNudge !== undefined
+        ? { noProgressTurnNudge: options.noProgressTurnNudge }
+        : {}),
+      ...(options.noProgressTurnNudgeLimit !== undefined
+        ? { noProgressTurnNudgeLimit: options.noProgressTurnNudgeLimit }
+        : {}),
+      ...(options.noProgressTurnThreshold !== undefined
+        ? { noProgressTurnThreshold: options.noProgressTurnThreshold }
         : {}),
     })
   }

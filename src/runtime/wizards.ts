@@ -216,7 +216,7 @@ const onboardSteps: readonly WizardStep[] = [
     id: 'direction',
     title: 'Give the project direction',
     why:
-      'Guildhall can draft a starting guess from the repo. Review it here so future tasks inherit the right product intent.',
+      'Start with a brief. Guildhall will use it when it drafts future tasks and specs.',
     skippable: true,
     status: snap => (snap.hasDirection ? 'done' : 'pending'),
   },
