@@ -174,6 +174,15 @@ correct the agent, and ask for direct action from Thread.
   exposes the effective lane plan in provider status.
 - `guildhall-architecture-006` is now in progress: next step is staged
   unattended-throughput proof on top of the bounded lane scheduler.
+- Gate execution is now stricter than the model. When a task has an
+  authoritative `current_task_success_gates` list, the `run-gates` tool
+  reconciles or overrides stale model-supplied commands instead of trusting
+  copied bootstrap/spec text. This closes the live bug where `task-006`
+  reached `done` with `No projects matched the filters...` stored for
+  typecheck/build even though the real `knit/web` commands passed.
+- Repaired `task-006`'s stored Looma/Knit gate record so its persisted
+  typecheck/build outputs now reflect the real `pnpm --dir web ...` commands
+  that pass on `knit/main`, rather than the earlier stale filter-based output.
 - `guildhall-architecture-006` now has a real stop-summary contract:
   unattended runs no longer just go idle and disappear; they can now report
   whether they stopped because the queue is all terminal, waiting on humans,

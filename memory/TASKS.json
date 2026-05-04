@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "lastUpdated": "2026-05-03T19:10:00.000Z",
+  "lastUpdated": "2026-05-03T23:12:30.000Z",
   "tasks": [
     {
       "id": "looma-001",
@@ -159,8 +159,8 @@
     },
     {
       "id": "knit-001",
-      "title": "Implement inline comments — schema exists, API + UI to do",
-      "description": "The comments table already exists in the Supabase schema. This task implements the API endpoints and UI for inline/page comments: select text → add comment, thread replies, show comments on page. This is item #5 in the Knit feature roadmap parity list.",
+      "title": "Implement inline comments \u2014 schema exists, API + UI to do",
+      "description": "The comments table already exists in the Supabase schema. This task implements the API endpoints and UI for inline/page comments: select text \u2192 add comment, thread replies, show comments on page. This is item #5 in the Knit feature roadmap parity list.",
       "domain": "knit",
       "projectPath": "../knit",
       "status": "pending",
@@ -574,11 +574,18 @@
           "met": false
         }
       ],
-      "notes": [],
+      "notes": [
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-03T23:12:30.000Z",
+          "content": "Before scaling unattended queue throughput, gate execution now enforces the authoritative task-scoped gate list at tool runtime. This prevents one bad model turn from reintroducing broad or stale commands and poisoning the historical pass/fail record."
+        }
+      ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-02T16:01:41Z",
-      "updatedAt": "2026-05-02T16:01:41Z"
+      "updatedAt": "2026-05-03T23:12:30.000Z"
     },
     {
       "id": "guildhall-architecture-001",
@@ -1025,12 +1032,18 @@
           "role": "worker",
           "timestamp": "2026-05-03T19:42:45.000Z",
           "content": "The staged throughput proof now covers another real-world shape: multi-repo workspaces where the workspace root is not the git root. The orchestrator now drives worktree setup, base-branch lookup, merge dispatch, and cleanup through the task's effective project repo, which is a prerequisite for truthful unattended publication in Looma/Knit-style installs."
+        },
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-03T23:12:30.000Z",
+          "content": "Closed a truthfulness gap before the next throughput proof: run-gates now treats the task-scoped current_task_success_gates list as authoritative at execution time, so stale model-copied bootstrap/spec commands cannot sneak back into gate_check and produce false-pass records."
         }
       ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-02T17:45:00Z",
-      "updatedAt": "2026-05-03T19:42:45.000Z"
+      "updatedAt": "2026-05-03T23:12:30.000Z"
     }
   ]
 }
