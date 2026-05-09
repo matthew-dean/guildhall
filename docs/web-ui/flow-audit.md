@@ -140,6 +140,11 @@ correct the agent, and ask for direct action from Thread.
   initialization inside the nested project shell, per-project start/stop, and
   a selected project that still surfaces the proven narrow automation lane as
   terminal success from inside the new service/project structure.
+- Added repo-local dev installer ergonomics for the macOS packaged artifact.
+  `pnpm dev:install` now builds the current branch artifact, runs the real
+  installer against it, verifies the installed CLI, and surfaces the resolved
+  `guildhall` path. `pnpm dev:uninstall` stops the service, removes the
+  LaunchAgent and packaged runtime, and preserves user project registry/state.
 
 - Closed the retry-window failure family with live proof on `task-016`.
   Resolved `max_revisions_exceeded` retries now start a persisted fresh
