@@ -39,7 +39,7 @@
 </script>
 
 <header class="app-header">
-  <button type="button" class="brand" onclick={goHome} aria-label="Workspace home">
+  <button type="button" class="brand" onclick={goHome} aria-label="Projects home">
     Guildhall
   </button>
   {#if version}

@@ -388,6 +388,30 @@ export interface ProjectDetail {
   error?: string
 }
 
+export interface ServiceProjectSummary {
+  id: string
+  path: string
+  name: string
+  initializationNeeded?: boolean
+  selected?: boolean
+  taskCounts?: {
+    total: number
+    active: number
+    blocked: number
+    done: number
+    shelved: number
+  }
+  run?: ProjectRun | null
+}
+
+export interface ServiceDetail {
+  pid?: number
+  preferredProjectPath?: string | null
+  selectedProject?: Pick<ServiceProjectSummary, 'id' | 'path' | 'name' | 'initializationNeeded'> | null
+  foregroundProject?: Pick<ServiceProjectSummary, 'id' | 'path' | 'name' | 'initializationNeeded'> | null
+  projects?: ServiceProjectSummary[]
+}
+
 export interface EventInner {
   type?: string
   task_id?: string

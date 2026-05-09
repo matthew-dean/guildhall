@@ -205,6 +205,22 @@ interface ServiceProjectSummary {
   path: string
   name: string
   initializationNeeded: boolean
+  selected?: boolean
+  taskCounts?: {
+    total: number
+    active: number
+    blocked: number
+    done: number
+    shelved: number
+  }
+  run?: {
+    status?: string
+    startedAt?: string
+    stoppedAt?: string
+    error?: string
+    stopSummary?: unknown
+    providerStatus?: unknown
+  }
 }
 
 function isReviewOwnershipMismatch(task: Record<string, unknown>): boolean {
@@ -449,6 +465,27 @@ function summarizeProject(project: ResolvedProject): ServiceProjectSummary {
   }
 }
 
+function summarizeTaskCounts(tasks: Array<Record<string, unknown>>): ServiceProjectSummary['taskCounts'] {
+  let active = 0
+  let blocked = 0
+  let done = 0
+  let shelved = 0
+  for (const task of tasks) {
+    const status = typeof task.status === 'string' ? task.status : ''
+    if (status === 'done') done++
+    else if (status === 'blocked') blocked++
+    else if (status === 'shelved') shelved++
+    else if (status) active++
+  }
+  return {
+    total: tasks.length,
+    active,
+    blocked,
+    done,
+    shelved,
+  }
+}
+
 function resolveTaskPathForDomain(
   project: ResolvedProject,
   domain: string,
@@ -687,11 +724,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
     ?? registeredProjects[0]?.path
     ?? process.cwd()
   const projectPath = resolve(fallbackProjectPath)
+  let selectedProjectPath = explicitProjectPath
   let selectedProject = explicitProjectPath ? resolveProject(explicitProjectPath) : null
   let project = resolveProject(projectPath)
   const refreshProject = (path = project.path): ResolvedProject => {
     project = resolveProject(path)
     if (selectedProject?.path === project.path) selectedProject = project
+    return project
+  }
+  const selectForegroundProject = (path: string): ResolvedProject => {
+    const resolvedPath = resolve(path)
+    selectedProjectPath = resolvedPath
+    selectedProject = resolveProject(resolvedPath)
+    project = selectedProject
     return project
   }
 
@@ -744,18 +789,67 @@ export function buildServeApp(opts: ServeOptions = {}): {
     return c.json({ version: readRuntimeVersion() })
   })
 
-  app.get('/api/service', c => {
+  app.get('/api/service', async c => {
+    const runsById = new Map(supervisor.list().map(run => [run.workspaceId, run]))
+    const projects = await Promise.all(
+      registeredProjects.map(async (entry) => {
+        const resolved = resolveProject(entry.path)
+        let taskCounts: ServiceProjectSummary['taskCounts'] = {
+          total: 0,
+          active: 0,
+          blocked: 0,
+          done: 0,
+          shelved: 0,
+        }
+        try {
+          const tasks = await readTasksFileNormalized(join(entry.path, 'memory', 'TASKS.json'))
+          taskCounts = summarizeTaskCounts(tasks)
+        } catch {
+          // leave zeroed summary for missing/unreadable task files
+        }
+        const run = runsById.get(resolved.id)
+        return {
+          ...summarizeProject(resolved),
+          selected: resolved.path === project.path,
+          taskCounts,
+          ...(run
+            ? {
+                run: {
+                  status: run.status,
+                  startedAt: run.startedAt,
+                  stoppedAt: run.stoppedAt,
+                  error: run.error,
+                  stopSummary: run.stopSummary,
+                  providerStatus: run.providerStatus,
+                },
+              }
+            : {}),
+        } satisfies ServiceProjectSummary
+      }),
+    )
     return c.json({
       pid: process.pid,
-      preferredProjectPath: explicitProjectPath,
+      preferredProjectPath: selectedProjectPath,
       selectedProject: selectedProject ? summarizeProject(selectedProject) : null,
       foregroundProject: summarizeProject(project),
-      projects: registeredProjects.map((entry) => ({
-        id: entry.id,
-        path: entry.path,
-        name: entry.name,
-      })),
+      projects,
     })
+  })
+
+  app.post('/api/service/select-project', async c => {
+    const body = await c.req.json().catch(() => ({})) as { projectId?: string; path?: string }
+    const selectedPath =
+      (body.projectId ? registeredProjects.find((entry) => entry.id === body.projectId)?.path : undefined)
+      ?? body.path
+    if (!selectedPath) {
+      return c.json({ error: 'projectId or path is required' }, 400)
+    }
+    const entry = registeredProjects.find((item) => resolve(item.path) === resolve(selectedPath))
+    if (!entry) {
+      return c.json({ error: 'Project is not registered with this local Guildhall service.' }, 404)
+    }
+    const next = selectForegroundProject(entry.path)
+    return c.json({ ok: true, selectedProject: summarizeProject(next) })
   })
 
   // -------------------------------------------------------------------------

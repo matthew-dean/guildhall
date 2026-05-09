@@ -142,46 +142,46 @@
   const needsMeta = $derived(coordinators.length === 0)
 
   const entries = $derived<NavEntry[]>([
-    { id: 'thread', label: 'Thread', icon: 'sparkles', path: '/thread' },
-    { id: 'inbox', label: 'Notifications', icon: 'inbox', path: '/notifications' },
-    { id: 'work', label: 'Work', icon: 'activity', path: '/work' },
-    { id: 'planner', label: 'Planner', icon: 'list-checks', path: '/planner' },
+    { id: 'thread', label: 'Thread', icon: 'sparkles', path: '/project/thread' },
+    { id: 'inbox', label: 'Notifications', icon: 'inbox', path: '/project/notifications' },
+    { id: 'work', label: 'Work', icon: 'activity', path: '/project/work' },
+    { id: 'planner', label: 'Planner', icon: 'list-checks', path: '/project/planner' },
     {
       id: 'coordinators',
       label: 'Coordinators',
       icon: 'users',
-      path: '/coordinators',
+      path: '/project/coordinators',
       subs: [
-        { id: 'all', label: 'All', path: '/coordinators' },
+        { id: 'all', label: 'All', path: '/project/coordinators' },
         ...coordinators.map(c => ({
           id: (c.id ?? c.name ?? '').toString(),
           label: c.name ?? c.id ?? '—',
-          path: '/coordinators/' + encodeURIComponent(c.id ?? c.name ?? ''),
+          path: '/project/coordinators/' + encodeURIComponent(c.id ?? c.name ?? ''),
         })),
       ],
     },
-    { id: 'timeline', label: 'Timeline', icon: 'clock', path: '/timeline' },
+    { id: 'timeline', label: 'Timeline', icon: 'clock', path: '/project/timeline' },
     {
       id: 'release',
       label: 'Release',
       icon: 'rocket',
-      path: '/release',
+      path: '/project/release',
       subs: [
-        { id: 'verdict', label: 'Verdict', path: '/release' },
-        { id: 'criteria', label: 'Criteria', path: '/release/criteria' },
+        { id: 'verdict', label: 'Verdict', path: '/project/release' },
+        { id: 'criteria', label: 'Criteria', path: '/project/release/criteria' },
       ],
     },
     {
       id: 'settings',
       label: 'Settings',
       icon: 'settings',
-      path: '/settings',
+      path: '/project/settings',
       subs: [
-        { id: 'ready', label: 'Ready', path: '/settings' },
-        { id: 'coordinators', label: 'Coordinators', path: '/settings/coordinators' },
-        { id: 'providers', label: 'Providers', path: '/settings/providers' },
-        { id: 'facts', label: 'Facts', path: '/settings/facts' },
-        { id: 'advanced', label: 'Advanced', path: '/settings/advanced' },
+        { id: 'ready', label: 'Ready', path: '/project/settings' },
+        { id: 'coordinators', label: 'Coordinators', path: '/project/settings/coordinators' },
+        { id: 'providers', label: 'Providers', path: '/project/settings/providers' },
+        { id: 'facts', label: 'Facts', path: '/project/settings/facts' },
+        { id: 'advanced', label: 'Advanced', path: '/project/settings/advanced' },
       ],
     },
   ])
@@ -604,12 +604,22 @@
     <div class="main">
       <header class="topbar">
         <div class="topbar-leading">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="toolbar-btn toolbar-btn--back"
+            onclick={() => go('/')}
+            ariaLabel="Back to Projects"
+            title="Back to Projects"
+          >
+            <span class="toolbar-btn-label">Projects</span>
+          </Button>
           {#if activeCount > 0 || awaitingApprovalCount > 0 || stuckCount > 0}
             <button
               type="button"
               class="tasks-indicator"
               class:has-stuck={stuckCount > 0}
-              onclick={() => go('/work')}
+              onclick={() => go('/project/work')}
               title="Jump to Work"
               aria-label="{activeCount} {activeCountLabel}, {awaitingApprovalCount} awaiting approval, {stuckCount} stuck"
             >
@@ -627,7 +637,7 @@
               type="button"
               class="inbox-indicator"
               class:warn-only={!inboxHasHighSeverity}
-              onclick={() => go('/notifications')}
+              onclick={() => go('/project/notifications')}
               title="Jump to Notifications"
               aria-label="{inboxActionableCount} notifications need you"
             >
@@ -723,7 +733,7 @@
           <div class="start-error" role="alert">
             <Icon name="alert-triangle" size={14} />
             <span>{bootstrapFailureText}</span>
-            <a href="/settings/ready" onclick={(e) => { e.preventDefault(); nav('/settings/ready') }}>Open Ready</a>
+            <a href="/project/settings/ready" onclick={(e) => { e.preventDefault(); nav('/project/settings/ready') }}>Open Ready</a>
           </div>
         {/if}
         {#if providerStatus?.fallback}
@@ -737,14 +747,14 @@
           <div class={`provider-notice ${providerWarningSeverity}`} role="status">
             <Icon name="alert-triangle" size={14} />
             <span>{providerWarningText}</span>
-            <a href="/settings/providers" onclick={(e) => { e.preventDefault(); nav('/settings/providers') }}>Open Settings</a>
+            <a href="/project/settings/providers" onclick={(e) => { e.preventDefault(); nav('/project/settings/providers') }}>Open Settings</a>
           </div>
         {/if}
         {#if providerHealthText}
           <div class="provider-notice warn" role="status">
             <Icon name="activity" size={14} />
             <span>{providerHealthText}</span>
-            <a href="/settings/providers" onclick={(e) => { e.preventDefault(); nav('/settings/providers') }}>Open Settings</a>
+            <a href="/project/settings/providers" onclick={(e) => { e.preventDefault(); nav('/project/settings/providers') }}>Open Settings</a>
           </div>
         {/if}
         {#if runStopSummaryText}
@@ -752,9 +762,9 @@
             <Icon name="pause-circle" size={14} />
             <span>{runStopSummaryText}</span>
             {#if runStopSummary?.stopReason === 'awaiting_human'}
-              <a href="/thread" onclick={(e) => { e.preventDefault(); nav('/thread') }}>Open Thread</a>
+              <a href="/project/thread" onclick={(e) => { e.preventDefault(); nav('/project/thread') }}>Open Thread</a>
             {:else if runStopSummary?.stopReason === 'blocked_only'}
-              <a href="/notifications" onclick={(e) => { e.preventDefault(); nav('/notifications') }}>Open Notifications</a>
+              <a href="/project/notifications" onclick={(e) => { e.preventDefault(); nav('/project/notifications') }}>Open Notifications</a>
             {/if}
           </div>
         {/if}

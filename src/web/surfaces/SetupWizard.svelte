@@ -220,7 +220,7 @@
   }
 
   function skipToDashboard() {
-    nav('/')
+    nav('/project')
   }
 
   async function startBootstrap() {
@@ -328,7 +328,7 @@
         if (j.status === 'approved') {
           bootstrapWatchActive = false
           bootstrapLive = false
-          setTimeout(() => nav('/'), 400)
+          setTimeout(() => nav('/project'), 400)
           return
         }
       } catch {
@@ -382,7 +382,7 @@
         approvalError = j.error
         return
       }
-      setTimeout(() => nav('/'), 500)
+      setTimeout(() => nav('/project'), 500)
     } finally {
       approving = false
     }
@@ -424,7 +424,7 @@
         </Stack>
       </Card>
       <Row justify="end" gap="2">
-        <Button variant="secondary" onclick={() => nav('/')}>Cancel</Button>
+        <Button variant="secondary" onclick={() => nav('/project')}>Cancel</Button>
         <Button variant="primary" disabled={busy} onclick={saveIdentity}>
           Save and continue →
         </Button>
