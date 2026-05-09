@@ -14,6 +14,8 @@
     disabled?: boolean
     type?: 'button' | 'submit'
     ariaLabel?: string
+    title?: string
+    className?: string
     onclick?: (e: MouseEvent) => void
     children?: Snippet
   }
@@ -24,17 +26,20 @@
     disabled = false,
     type = 'button',
     ariaLabel,
+    title,
+    className = '',
     onclick,
     children,
   }: Props = $props()
 </script>
 
 <button
-  class="btn v-{variant} s-{size}"
+  class={`btn v-${variant} s-${size} ${className}`.trim()}
   {type}
   {disabled}
   {onclick}
   aria-label={ariaLabel}
+  {title}
 >
   {@render children?.()}
 </button>

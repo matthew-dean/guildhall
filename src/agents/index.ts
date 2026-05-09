@@ -17,6 +17,7 @@ export {
 export {
   buildModelSet,
   modelForRole,
+  temperatureForRole,
   notImplementedApiClient,
   type AgentLLM,
   type ModelSet,

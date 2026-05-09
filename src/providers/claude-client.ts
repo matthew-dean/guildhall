@@ -201,6 +201,7 @@ function buildRequestBody(
   return {
     model: request.model,
     max_tokens: request.max_tokens,
+    ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     stream: true,
     system,
     messages: request.messages.map((m) => ({

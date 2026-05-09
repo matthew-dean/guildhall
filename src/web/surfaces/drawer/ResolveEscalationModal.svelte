@@ -92,7 +92,7 @@
               { value: 'in_progress', label: 'In progress (keep working)' },
               { value: 'review', label: 'Review (send to reviewer)' },
               { value: 'exploring', label: 'Exploring (re-investigate)' },
-              { value: 'spec_review', label: 'Spec review' },
+              { value: 'spec_review', label: 'Awaiting approval' },
             ]}
           />
         </Field>

@@ -79,6 +79,7 @@ describe('writeContextDebugRecord', () => {
       ctx: mkContext(),
       agentName: 'worker-agent',
       modelId: 'qwen/test',
+      temperature: 0.1,
       prompt,
     })
 
@@ -88,10 +89,12 @@ describe('writeContextDebugRecord', () => {
     const snapshot = await fs.readFile(record.snapshotPath, 'utf8')
     expect(snapshot).toContain('[truncated')
     expect(snapshot.length).toBeLessThan(prompt.length)
+    expect(snapshot).toContain('Temperature: 0.1')
 
     const loaded = await readContextDebugForTask(memoryDir, 'task-ctx')
     expect(loaded).toHaveLength(1)
     expect(loaded[0]?.id).toBe(record.id)
+    expect(loaded[0]?.temperature).toBe(0.1)
   })
 
   it('warns when a subproject task is mismatched to the active worktree', async () => {

@@ -59,37 +59,36 @@ export const ProjectGuildhallConfig = z.object({
    * conversational intake surface focused; raise it only when you want Guildhall
    * shaping multiple unrelated asks in parallel.
    */
-  specLaneConcurrency: z.number().int().positive().max(16).default(1),
+  specLaneConcurrency: z.number().int().positive().max(16).optional(),
 
   /**
    * How many worker tasks may run at once. The effective value is also capped
    * by the `concurrent_task_dispatch` lever and any runtime slot limits.
    */
-  workerLaneConcurrency: z.number().int().positive().max(16).default(1),
+  workerLaneConcurrency: z.number().int().positive().max(16).optional(),
 
   /**
-   * How many persona reviewer agents to run concurrently during
-   * `review` fan-out. Default `1` (sequential) is safe for any provider
-   * — local OpenAI-compatible servers such as LM Studio / llama.cpp can't service concurrent requests on a
-   * single session. Raise to 2–4 when the reviewer is a cloud provider
-   * (Anthropic, OpenAI, Codex) whose rate limits comfortably exceed the
-   * roster size — wall-clock review latency drops roughly linearly.
+   * Advanced override for persona reviewer fan-out within one `review` pass.
+   *
+   * Omit this in normal use. Guildhall auto-derives reviewer concurrency from
+   * the active provider's capacity (`1` for local servers, higher for hosted
+   * providers). This knob remains as an escape hatch for unusual repos.
    */
-  reviewerFanoutConcurrency: z.number().int().positive().max(16).default(1),
+  reviewerFanoutConcurrency: z.number().int().positive().max(16).optional(),
 
   /**
    * How many distinct review/gate tasks may run at once. This is separate from
    * `reviewerFanoutConcurrency`, which controls persona fan-out *within* one
    * review task.
    */
-  reviewLaneConcurrency: z.number().int().positive().max(16).default(1),
+  reviewLaneConcurrency: z.number().int().positive().max(16).optional(),
 
   /**
    * How many coordinator/policy tasks may run at once. Default `1` keeps
    * adjudication and proposal/policy handling serialized unless a workspace
    * explicitly opts into more parallel judgment.
    */
-  coordinatorLaneConcurrency: z.number().int().positive().max(16).default(1),
+  coordinatorLaneConcurrency: z.number().int().positive().max(16).optional(),
 })
 export type ProjectGuildhallConfig = z.infer<typeof ProjectGuildhallConfig>
 

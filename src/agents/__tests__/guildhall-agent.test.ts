@@ -295,7 +295,11 @@ describe('FR-17 skill composition', () => {
     const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
     const llm = { apiClient: client, modelId: 'm' }
     const agent = createSpecAgent(llm, { skills: [skillA] })
-    await agent.generate('go')
+    try {
+      await agent.generate('go')
+    } catch (err) {
+      if (!(err instanceof Error) || !/ScriptedApiClient exhausted/.test(err.message)) throw err
+    }
     const sys = client.requests[0]?.system_prompt ?? ''
     expect(sys).toContain('## Skills')
     expect(sys).toContain('### coding-conventions')
@@ -351,7 +355,11 @@ describe('FR-18 hookExecutor forwarding', () => {
       { apiClient: client, modelId: 'm' },
       { hookExecutor },
     )
-    await agent.generate('go')
+    try {
+      await agent.generate('go')
+    } catch (err) {
+      if (!(err instanceof Error) || !/ScriptedApiClient exhausted/.test(err.message)) throw err
+    }
     expect(events).toContain('user_prompt_submit')
   })
 })
@@ -383,6 +391,20 @@ describe('agent factories', () => {
     expect(prompt).toContain('## No plan-only turns')
     expect(prompt).toContain('Every assistant turn must make observable progress')
     expect(prompt).toContain('If you know the next step, take it with a tool call')
+  })
+
+  it('createWorkerAgent requires a minimum-scope self-review before handoff', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('Minimum-scope check:')
+    expect(prompt).toContain('Smallest useful change?')
+    expect(prompt).toContain('Anything to revert before review?')
+  })
+
+  it('createWorkerAgent treats shell verification as durable progress', async () => {
+    const a = createWorkerAgent(llm)
+    const engine = (a as unknown as { engine: { noProgressToolNames?: readonly string[] } }).engine
+    expect(engine.noProgressToolNames).toContain('shell')
   })
 
   it('createReviewerAgent', () => {
@@ -554,7 +576,10 @@ describe('agent factories', () => {
     })
 
     it('createCoordinatorAgent does not instruct coordinators to claim ready work', async () => {
-      const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
+      const client = new ScriptedApiClient([
+        { message: assistantToolUse('read-file', { filePath: '/tmp/coord-prompt-check.txt' }) },
+        { message: assistantMsg('ok') },
+      ])
       const domain: CoordinatorDomain = {
         id: 'looma',
         name: 'Looma',
@@ -572,6 +597,33 @@ describe('agent factories', () => {
       const sys = client.requests[0]?.system_prompt ?? ''
       expect(sys).not.toContain("Assign 'ready' tasks to worker agents")
       expect(sys).toContain("Review specs (tasks in 'spec_review')")
+    })
+
+    it('createCoordinatorAgent enables durable-decision nudges', () => {
+      const domain: CoordinatorDomain = {
+        id: 'looma',
+        name: 'Looma',
+        mandate: 'UI quality.',
+        projectPaths: [],
+        concerns: [],
+        autonomousDecisions: [],
+        escalationTriggers: [],
+      }
+      const agent = createCoordinatorAgent(
+        domain,
+        { apiClient: new ScriptedApiClient([]), modelId: 'm' },
+      )
+      const engine = (agent as unknown as {
+        engine: {
+          noToolTurnNudge?: string
+          noProgressToolNames?: readonly string[]
+          noProgressTurnNudge?: string
+        }
+      }).engine
+      expect(engine.noToolTurnNudge).toContain('coordinator decision')
+      expect(engine.noProgressToolNames).toContain('update-task')
+      expect(engine.noProgressToolNames).toContain('log-decision')
+      expect(engine.noProgressTurnNudge).toContain('record the decision durably')
     })
   })
 

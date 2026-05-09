@@ -18,7 +18,7 @@
 
 import type { Task, TaskQueue } from '@guildhall/core'
 import type { ProjectLevers } from '@guildhall/levers'
-import { pickNextTask, type TaskLane } from './orchestrator-picker.js'
+import { laneForTask, pickNextTask, type TaskLane } from './orchestrator-picker.js'
 
 export type FanoutCapacity = number
 
@@ -65,20 +65,25 @@ export function pickNextTasks(input: PickNextTasksInput): Task[] {
       coordinator: Math.max(0, Math.floor(laneCaps.coordinator ?? 0)),
       spec: Math.max(0, Math.floor(laneCaps.spec ?? 0)),
     }
-    const laneOrder: TaskLane[] = ['review', 'worker', 'coordinator', 'spec']
-    let madeProgress = true
-    while (picks.length < input.capacity && madeProgress) {
-      madeProgress = false
-      for (const lane of laneOrder) {
-        if (picks.length >= input.capacity) break
-        if (remainingByLane[lane] <= 0) continue
-        const next = pickNextTask(input.queue, input.domainFilter, excluded, lane)
-        if (!next) continue
-        picks.push(next)
-        excluded.add(next.id)
-        remainingByLane[lane] -= 1
-        madeProgress = true
+    while (picks.length < input.capacity) {
+      const attemptExcluded = new Set(excluded)
+      let next: Task | undefined
+      while (true) {
+        const candidate = pickNextTask(input.queue, input.domainFilter, attemptExcluded)
+        if (!candidate) break
+        const lane = laneForTask(candidate)
+        if (lane && remainingByLane[lane] > 0) {
+          next = candidate
+          break
+        }
+        attemptExcluded.add(candidate.id)
       }
+      if (!next) break
+      const lane = laneForTask(next)
+      if (!lane) break
+      picks.push(next)
+      excluded.add(next.id)
+      remainingByLane[lane] -= 1
     }
     return picks
   }

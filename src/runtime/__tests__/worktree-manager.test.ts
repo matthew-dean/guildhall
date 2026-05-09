@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import type { Task } from '@guildhall/core'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import {
   computeBranchName,
   computeWorktreePath,
@@ -113,6 +116,39 @@ describe('ensureWorktreeForDispatch', () => {
     expect(driver.state.createdWorktrees).toHaveLength(0)
   })
 
+  it('backfills runtime links when reusing an existing worktree', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-runtime-reuse-'))
+    const projectPath = path.join(tmp, 'knit')
+    const worktreePath = path.join(projectPath, '.guildhall', 'worktrees', 'abc')
+    await fs.mkdir(path.join(projectPath, 'node_modules'), { recursive: true })
+    await fs.mkdir(path.join(projectPath, 'web', 'node_modules'), { recursive: true })
+    await fs.writeFile(path.join(projectPath, 'web', 'package.json'), '{}')
+    await fs.mkdir(worktreePath, { recursive: true })
+
+    const driver = new InMemoryGitDriver()
+    const seeded = task({
+      id: 'abc',
+      projectPath,
+      worktreePath,
+      branchName: 'guildhall/task-abc',
+      baseBranch: 'main',
+    })
+    const result = await ensureWorktreeForDispatch({
+      task: seeded,
+      mode: 'per_task',
+      projectPath,
+      baseBranch: 'main',
+      gitDriver: driver,
+    })
+    expect(result.created).toBe(false)
+    expect(await fs.readlink(path.join(worktreePath, 'node_modules'))).toBe(
+      path.relative(path.join(worktreePath), path.join(projectPath, 'node_modules')),
+    )
+    expect(await fs.readlink(path.join(worktreePath, 'web', 'node_modules'))).toBe(
+      path.relative(path.join(worktreePath, 'web'), path.join(projectPath, 'web', 'node_modules')),
+    )
+  })
+
   it('creates a new per_attempt worktree when revision bumps', async () => {
     const driver = new InMemoryGitDriver()
     const seeded = task({
@@ -131,6 +167,53 @@ describe('ensureWorktreeForDispatch', () => {
     })
     expect(r.created).toBe(true)
     expect(r.branchName).toBe('guildhall/task-abc/attempt-1')
+  })
+
+  it('creates sibling repo symlinks for nested multi-repo worktrees', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-worktree-'))
+    const workspacePath = path.join(tmp, 'workspace')
+    const knitPath = path.join(workspacePath, 'knit')
+    const loomaPath = path.join(workspacePath, 'looma')
+    await fs.mkdir(knitPath, { recursive: true })
+    await fs.mkdir(loomaPath, { recursive: true })
+    await fs.writeFile(path.join(knitPath, '.git'), '')
+    await fs.writeFile(path.join(loomaPath, 'package.json'), '{}')
+
+    const driver = new InMemoryGitDriver()
+    await ensureWorktreeForDispatch({
+      task: task({ id: 'abc', projectPath: knitPath }),
+      mode: 'per_task',
+      projectPath: knitPath,
+      workspacePath,
+      baseBranch: 'main',
+      gitDriver: driver,
+    })
+
+    const linkPath = path.join(knitPath, '.guildhall', 'worktrees', 'looma')
+    expect(await fs.readlink(linkPath)).toBe(path.relative(path.dirname(linkPath), loomaPath))
+  })
+
+  it('mirrors project node_modules into the task worktree for runnable package commands', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-runtime-links-'))
+    const projectPath = path.join(tmp, 'knit')
+    const webPath = path.join(projectPath, 'web')
+    await fs.mkdir(path.join(projectPath, 'node_modules'), { recursive: true })
+    await fs.mkdir(path.join(webPath, 'node_modules'), { recursive: true })
+    await fs.writeFile(path.join(webPath, 'package.json'), '{}')
+
+    const driver = new InMemoryGitDriver()
+    const result = await ensureWorktreeForDispatch({
+      task: task({ id: 'runtime-links', projectPath }),
+      mode: 'per_task',
+      projectPath,
+      baseBranch: 'main',
+      gitDriver: driver,
+    })
+
+    const rootLink = path.join(result.worktreePath, 'node_modules')
+    const webLink = path.join(result.worktreePath, 'web', 'node_modules')
+    expect(await fs.readlink(rootLink)).toBe(path.relative(path.dirname(rootLink), path.join(projectPath, 'node_modules')))
+    expect(await fs.readlink(webLink)).toBe(path.relative(path.dirname(webLink), path.join(webPath, 'node_modules')))
   })
 })
 

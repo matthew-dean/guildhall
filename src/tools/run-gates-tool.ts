@@ -1,13 +1,21 @@
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import { runGates } from './gate-runner.js'
+import fs from 'node:fs/promises'
 import type { HardGate } from '@guildhall/core'
+import {
+  parseAuthoritativeCommands,
+  reconcileRequestedGatesWithAuthority,
+} from './gate-command-authority.js'
+import { summarizeScopedHardGateDisposition } from './gate-scope-exceptions.js'
 
-// ---------------------------------------------------------------------------
-// run-gates engine tool — lets a gate-checker agent execute hard gates and
-// receive structured pass/fail results. For deterministic callers (the
-// orchestrator, tests) use runGates() directly from gate-runner.ts.
-// ---------------------------------------------------------------------------
+export { reconcileRequestedGatesWithAuthority } from './gate-command-authority.js'
+
+function metadataStringArray(metadata: Record<string, unknown>, key: string): string[] {
+  return Array.isArray(metadata[key])
+    ? (metadata[key] as unknown[]).filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : []
+}
 
 const hardGateSchema = z.object({
   id: z.string(),
@@ -28,94 +36,51 @@ const runGatesInputSchema = z.object({
 
 export type RunGatesToolInput = z.input<typeof runGatesInputSchema>
 
-function normalizeCommand(command: string): string {
-  return command.trim().replace(/\s+/g, ' ')
-}
+async function persistGateResultsForCurrentTask(input: {
+  metadata: Record<string, unknown>
+  results: Array<{ gateId: string; type: 'hard' | 'soft'; passed: boolean; output?: string; checkedAt: string }>
+}): Promise<boolean> {
+  const taskId = typeof input.metadata['current_task_id'] === 'string'
+    ? input.metadata['current_task_id']
+    : ''
+  const tasksPath = typeof input.metadata['tasks_path'] === 'string'
+    ? input.metadata['tasks_path']
+    : ''
+  if (!taskId || !tasksPath) return false
 
-function classifyGateCommand(command: string): 'typecheck' | 'build' | 'test' | 'lint' | 'other' {
-  const normalized = normalizeCommand(command).toLowerCase()
-  if (/\b(typecheck|tsc(?:\s|$)|tsgo\b)/.test(normalized)) return 'typecheck'
-  if (/\bbuild\b/.test(normalized)) return 'build'
-  if (/\b(test|vitest|jest|playwright|pytest)\b/.test(normalized)) return 'test'
-  if (/\blint\b/.test(normalized)) return 'lint'
-  return 'other'
-}
+  try {
+    const raw = await fs.readFile(tasksPath, 'utf8')
+    const queue = JSON.parse(raw) as {
+      version: number
+      lastUpdated: string
+      tasks: Array<Record<string, unknown>>
+    }
+    const task = queue.tasks.find((candidate) => candidate['id'] === taskId)
+    if (!task) return false
 
-function defaultGateId(command: string, usedIds: Set<string>): string {
-  const kind = classifyGateCommand(command)
-  const preferred =
-    kind === 'test' && /\bplaywright\b/i.test(command)
-      ? 'playwright-e2e'
-      : kind
-  let id = preferred
-  let suffix = 2
-  while (usedIds.has(id)) {
-    id = `${preferred}-${suffix}`
-    suffix += 1
+    const resultIds = new Set(input.results.map((result) => result.gateId))
+    const existing = Array.isArray(task['gateResults']) ? task['gateResults'] : []
+    task['gateResults'] = [
+      ...existing.filter((entry) => {
+        if (!entry || typeof entry !== 'object') return true
+        const gateId = typeof (entry as Record<string, unknown>)['gateId'] === 'string'
+          ? (entry as Record<string, unknown>)['gateId'] as string
+          : ''
+        const type = typeof (entry as Record<string, unknown>)['type'] === 'string'
+          ? (entry as Record<string, unknown>)['type'] as string
+          : ''
+        return !(type === 'hard' && resultIds.has(gateId))
+      }),
+      ...input.results,
+    ]
+    const now = new Date().toISOString()
+    task['updatedAt'] = now
+    queue.lastUpdated = now
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+    return true
+  } catch {
+    return false
   }
-  usedIds.add(id)
-  return id
-}
-
-function defaultGateLabel(command: string): string {
-  const kind = classifyGateCommand(command)
-  if (kind === 'typecheck') return 'TypeScript typecheck'
-  if (kind === 'build') return 'Build'
-  if (kind === 'lint') return 'Lint'
-  if (kind === 'test' && /\bplaywright\b/i.test(command)) return 'Playwright E2E test'
-  if (kind === 'test') return 'Test'
-  return command
-}
-
-function parseAuthoritativeCommands(metadata: Record<string, unknown>): string[] | null {
-  const raw = metadata['current_task_success_gates']
-  if (!Array.isArray(raw)) return null
-  const commands = raw
-    .filter((entry): entry is string => typeof entry === 'string')
-    .map(normalizeCommand)
-    .filter((entry) => entry.length > 0)
-  return commands.length > 0 ? commands : []
-}
-
-export function reconcileRequestedGatesWithAuthority(
-  requested: readonly HardGate[],
-  authoritativeCommands: readonly string[] | null,
-): { gates: HardGate[]; usedAuthority: boolean } {
-  if (authoritativeCommands == null) {
-    return { gates: [...requested], usedAuthority: false }
-  }
-  if (authoritativeCommands.length === 0) {
-    return { gates: [], usedAuthority: true }
-  }
-
-  const remaining = [...requested]
-  const usedIds = new Set<string>()
-  const gates = authoritativeCommands.map((command) => {
-    const normalized = normalizeCommand(command)
-    const exactIdx = remaining.findIndex((gate) => normalizeCommand(gate.command) === normalized)
-    const kind = classifyGateCommand(normalized)
-    const fallbackIdx =
-      exactIdx >= 0
-        ? -1
-        : remaining.findIndex((gate) => classifyGateCommand(gate.command) === kind)
-    const match = exactIdx >= 0
-      ? remaining.splice(exactIdx, 1)[0]
-      : fallbackIdx >= 0
-        ? remaining.splice(fallbackIdx, 1)[0]
-        : undefined
-    const id = match?.id && match.id.trim().length > 0
-      ? match.id
-      : defaultGateId(normalized, usedIds)
-    usedIds.add(id)
-    return {
-      id,
-      label: match?.label?.trim() ? match.label : defaultGateLabel(normalized),
-      command: normalized,
-      timeoutMs: match?.timeoutMs ?? 120_000,
-    } satisfies HardGate
-  })
-
-  return { gates, usedAuthority: true }
 }
 
 export const runGatesTool = defineTool({
@@ -164,10 +129,32 @@ export const runGatesTool = defineTool({
       failFast: input.failFast ?? false,
       ...(input.maxOutputBytes !== undefined ? { maxOutputBytes: input.maxOutputBytes } : {}),
     })
+    const scopeDisposition = summarizeScopedHardGateDisposition(
+      {
+        projectPath:
+          typeof ctx.metadata['current_task_project_path'] === 'string'
+            ? ctx.metadata['current_task_project_path']
+            : input.cwd,
+        likelyTargetFiles: metadataStringArray(ctx.metadata, 'current_task_likely_target_files'),
+        resolvedDecisionTexts: metadataStringArray(ctx.metadata, 'current_task_resolved_scope_decisions'),
+      },
+      summary.results,
+    )
+    const persistedTaskGateResults = await persistGateResultsForCurrentTask({
+      metadata: ctx.metadata,
+      results: summary.results,
+    })
+    const effectiveAllPassed = scopeDisposition?.shouldPass ?? summary.allPassed
 
     const lines = [
       ...(effective.usedAuthority ? ['Using authoritative task-scoped hard gates.', ''] : []),
-      `Gates: ${summary.allPassed ? 'ALL PASS' : 'SOME FAIL'} (${summary.results.filter((r) => r.passed).length}/${summary.results.length})`,
+      ...(scopeDisposition?.exemptedFailures.length
+        ? [
+            `Scoped exception: ${scopeDisposition.exemptedFailures.map((gate) => gate.gateId).join(', ')} failed only outside the task target files and is exempt from blocking this task.`,
+            '',
+          ]
+        : []),
+      `Gates: ${effectiveAllPassed ? 'ALL PASS' : 'SOME FAIL'} (${summary.results.filter((r) => r.passed).length}/${summary.results.length} raw)`,
       ...summary.results.map(
         (r) => `- ${r.gateId}: ${r.passed ? 'pass' : 'FAIL'}${r.output ? `\n  ${r.output.split('\n').slice(0, 3).join('\n  ')}` : ''}`,
       ),
@@ -175,11 +162,14 @@ export const runGatesTool = defineTool({
 
     return {
       output: lines.join('\n'),
-      is_error: !summary.allPassed,
+      is_error: !effectiveAllPassed,
       metadata: {
         ...(summary as unknown as Record<string, unknown>),
         effectiveGates: effective.gates as unknown as Record<string, unknown>,
         usedAuthoritativeTaskGates: effective.usedAuthority,
+        persistedTaskGateResults,
+        effectiveAllPassed,
+        scopeExemptFailures: scopeDisposition?.exemptedFailures as unknown as Record<string, unknown>,
       },
     }
   },

@@ -431,7 +431,7 @@ export const Task = z.object({
   dependsOn: z.array(z.string()).default([]),
 
   // Which agent is currently working on this
-  assignedTo: z.string().optional(),
+  assignedTo: z.string().nullable().optional(),
 
   // Running notes from all agents involved
   notes: z.array(AgentNote).default([]),
@@ -461,6 +461,16 @@ export const Task = z.object({
 
   // How many times this task has been sent back for revision
   revisionCount: z.number().default(0),
+
+  // When a human resolves a max-revisions escalation and explicitly retries
+  // the task, we preserve the historical raw `revisionCount` for audit but
+  // start a fresh counting window for future auto-block decisions.
+  retryWindow: z
+    .object({
+      startedAt: z.string(),
+      baseRevisionCount: z.number().int().nonnegative(),
+    })
+    .optional(),
 
   // FR-32: count of coordinator remediation decisions recorded against this
   // task. Used as input to the *next* remediation context so the coordinator

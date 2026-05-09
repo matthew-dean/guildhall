@@ -178,6 +178,40 @@ describe('deterministicReview', () => {
     expect(v.verdict).toBe('revise')
   })
 
+  it('credits no-regressions when the only failing hard gate is scoped unrelated repo-red', () => {
+    const task = mkTask({
+      title: 'Clean unused restore handler binding',
+      projectPath: '/repo/.guildhall/worktrees/task-016',
+      acceptanceCriteria: [
+        { id: 'ac-1', description: 'unused binding removed', verifiedBy: 'review', met: true },
+      ],
+      gateResults: [
+        { gateId: 'typecheck', type: 'hard', passed: true, checkedAt: 'now' },
+        { gateId: 'build', type: 'hard', passed: true, checkedAt: 'now' },
+        {
+          gateId: 'gate-3',
+          type: 'hard',
+          passed: false,
+          checkedAt: 'now',
+          output: [
+            '> web@0.0.0 test /repo/.guildhall/worktrees/task-016/web',
+            'FAIL tests/unit/components/SomeOtherThing.test.ts',
+          ].join('\n'),
+        },
+      ],
+    })
+
+    const v = deterministicReview(task, {
+      projectPath: task.projectPath,
+      likelyTargetFiles: ['/repo/.guildhall/worktrees/task-016/web/server/api/pages/[id]/restore.post.ts'],
+      resolvedDecisionTexts: [],
+    })
+
+    expect(v.verdict).toBe('approve')
+    expect(v.failingSignals).toEqual([])
+    expect(v.reasoning).toContain('scoped unrelated repo-red')
+  })
+
   it('rubric weights sum to the documented total', () => {
     const total = Object.values(SOFT_GATE_RUBRIC).reduce((a, b) => a + b, 0)
     expect(total).toBeCloseTo(4.1, 5)
@@ -279,28 +313,32 @@ describe('recordLlmVerdict', () => {
 
   it('appends an approve verdict with reviewerPath=llm on review \u2192 gate_check', () => {
     const q = baseQueue()
-    const record = recordLlmVerdict({
+    const result = recordLlmVerdict({
       queue: q,
       taskId: 'task-001',
       beforeStatus: 'review',
       afterStatus: 'gate_check',
       now: 'now',
     })
+    const record = result?.record
     expect(record?.verdict).toBe('approve')
     expect(record?.reviewerPath).toBe('llm')
+    expect(result?.normalizedStatus).toBe('gate_check')
     expect(q.tasks[0]!.reviewVerdicts).toHaveLength(1)
   })
 
   it('appends a revise verdict on review \u2192 in_progress', () => {
     const q = baseQueue()
-    const record = recordLlmVerdict({
+    const result = recordLlmVerdict({
       queue: q,
       taskId: 'task-001',
       beforeStatus: 'review',
       afterStatus: 'in_progress',
       now: 'now',
     })
+    const record = result?.record
     expect(record?.verdict).toBe('revise')
+    expect(result?.normalizedStatus).toBe('in_progress')
   })
 
   it('returns undefined when beforeStatus is not review', () => {
@@ -314,6 +352,25 @@ describe('recordLlmVerdict', () => {
     })
     expect(record).toBeUndefined()
     expect(q.tasks[0]!.reviewVerdicts).toHaveLength(0)
+  })
+
+  it('trusts an explicit Approved verdict in reviewer reasoning over a conflicting transition', () => {
+    const q = baseQueue()
+    q.tasks[0]!.notes.push({
+      agentId: 'reviewer-agent',
+      role: 'reviewer',
+      content: '**Verdict:** Approved\n\n**Reasoning:** narrow cleanup is good.',
+      timestamp: 't1',
+    })
+    const result = recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'in_progress',
+      now: 'now',
+    })
+    expect(result?.record.verdict).toBe('approve')
+    expect(result?.normalizedStatus).toBe('gate_check')
   })
 })
 
@@ -466,9 +523,9 @@ describe('recordLlmVerdict — reasoning persistence', () => {
       afterStatus: 'gate_check',
       now: 'now',
     })
-    expect(record?.reasoning).toContain('ghost variant renders')
-    expect(record?.reasoning).toContain('Button.tsx:23')
-    expect(q.tasks[0]!.reviewVerdicts[0]!.reasoning).toBe(record?.reasoning)
+    expect(record?.record.reasoning).toContain('ghost variant renders')
+    expect(record?.record.reasoning).toContain('Button.tsx:23')
+    expect(q.tasks[0]!.reviewVerdicts[0]!.reasoning).toBe(record?.record.reasoning)
   })
 
   it('explicit reasoning argument wins over note extraction', () => {
@@ -496,7 +553,7 @@ describe('recordLlmVerdict — reasoning persistence', () => {
       now: 'now',
       reasoning: 'explicit trace from structured LLM output',
     })
-    expect(record?.reasoning).toBe('explicit trace from structured LLM output')
+    expect(record?.record.reasoning).toBe('explicit trace from structured LLM output')
   })
 
   it('leaves reasoning undefined when the reviewer produced no note', () => {
@@ -512,6 +569,6 @@ describe('recordLlmVerdict — reasoning persistence', () => {
       afterStatus: 'gate_check',
       now: 'now',
     })
-    expect(record?.reasoning).toBeUndefined()
+    expect(record?.record.reasoning).toBeUndefined()
   })
 })

@@ -30,6 +30,7 @@ import {
 } from '@guildhall/config'
 import {
   MODEL_CATALOG,
+  type Checkpoint,
   DEFAULT_LOCAL_MODEL_ASSIGNMENT,
   DEFAULT_CLOUD_MODEL_ASSIGNMENT,
   type ModelAssignmentConfig,
@@ -40,7 +41,13 @@ import {
   defaultAgentSettingsPath,
   makeDefaultSettings,
 } from '@guildhall/levers'
-import { activeEscalations, resolveEscalation, updateDesignSystem } from '@guildhall/tools'
+import {
+  activeEscalations,
+  latestResolvedRetryEscalationAt,
+  readCheckpoint,
+  resolveEscalation,
+  updateDesignSystem,
+} from '@guildhall/tools'
 import { DesignSystem, summarizeDesignSystem } from '@guildhall/core'
 import {
   loadProjectGuildRoster,
@@ -60,7 +67,6 @@ import {
   buildSelectApiClientOptions,
   getRuntimeProviderConfig,
   resolveLaneConcurrencyPlan,
-  resolveReviewerFanoutPolicy,
 } from './provider-runtime-config.js'
 import {
   anthropicCompatiblePoolKey,
@@ -186,6 +192,122 @@ interface ResolvedProject {
   /** Null if guildhall.yaml is missing — wizard handles this case. */
   config: ReturnType<typeof readWorkspaceConfig> | null
   initializationNeeded: boolean
+}
+
+function isReviewOwnershipMismatch(task: Record<string, unknown>): boolean {
+  const handoffSequence = Array.isArray(task.handoffSequence) ? task.handoffSequence : []
+  const handoffStep =
+    typeof task.handoffStep === 'number' && Number.isFinite(task.handoffStep)
+      ? task.handoffStep
+      : 0
+  const hasPendingHandoffStep = handoffSequence.length > 0 && handoffStep + 1 < handoffSequence.length
+  return (
+    task.status === 'review' &&
+    task.assignedTo !== 'reviewer-agent' &&
+    !hasPendingHandoffStep
+  )
+}
+
+function isWorkerOwnershipMismatch(task: Record<string, unknown>): boolean {
+  return task.status === 'in_progress' && task.assignedTo !== 'worker-agent'
+}
+
+function isGateCheckOwnershipMismatch(task: Record<string, unknown>): boolean {
+  return task.status === 'gate_check' && task.assignedTo !== 'gate-checker-agent'
+}
+
+function isSpecReviewOwnershipMismatch(task: Record<string, unknown>): boolean {
+  return task.status === 'spec_review' && task.assignedTo != null
+}
+
+function isTerminalOwnershipMismatch(task: Record<string, unknown>): boolean {
+  return (
+    (task.status === 'done' || task.status === 'blocked' || task.status === 'shelved') &&
+    task.assignedTo != null
+  )
+}
+
+  async function readTasksFileNormalized(
+  tasksPath: string,
+): Promise<Array<Record<string, unknown>>> {
+  if (!existsSync(tasksPath)) return []
+  const rawText = await fsp.readFile(tasksPath, 'utf8')
+  const parsed = JSON.parse(rawText) as
+    | { tasks?: Array<Record<string, unknown>>; version?: unknown; lastUpdated?: unknown }
+    | Array<Record<string, unknown>>
+  const tasks = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tasks) ? parsed.tasks : []
+  let changed = false
+  for (const task of tasks) {
+    if (isWorkerOwnershipMismatch(task)) {
+      task.assignedTo = 'worker-agent'
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    } else if (isReviewOwnershipMismatch(task)) {
+      task.assignedTo = 'reviewer-agent'
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    } else if (isGateCheckOwnershipMismatch(task)) {
+      task.assignedTo = 'gate-checker-agent'
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    } else if (isSpecReviewOwnershipMismatch(task)) {
+      task.assignedTo = null
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    } else if (isTerminalOwnershipMismatch(task)) {
+      task.assignedTo = null
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    }
+  }
+  if (!changed) return tasks
+
+  const rewritten = Array.isArray(parsed)
+    ? tasks
+    : {
+        ...parsed,
+        tasks,
+        lastUpdated: new Date().toISOString(),
+      }
+  await atomicWriteText(tasksPath, JSON.stringify(rewritten, null, 2))
+  return tasks
+}
+
+async function buildProjectInboxSnapshot(input: {
+  projectPath: string
+  initializationNeeded: boolean
+  coordinatorCount: number
+}) {
+  if (input.initializationNeeded) {
+    return { items: [], blockers: { bootstrap: false, workspaceImport: false } }
+  }
+  // Self-healing scan: if the workspace has signals but nobody has run
+  // the scanner yet, kick it off implicitly. The user shouldn't have to
+  // press "Scan" — once a coordinator exists, the agent discovers
+  // existing goals/tasks on its own and surfaces them for review.
+  // No-op if already seeded, off, or not needed.
+  try {
+    const memoryDir = join(input.projectPath, 'memory')
+    const goalsPath = join(memoryDir, 'workspace-goals.json')
+    if (!existsSync(goalsPath) && input.coordinatorCount > 0) {
+      await maybeSeedWorkspaceImport({ memoryDir, projectPath: input.projectPath })
+    }
+  } catch {
+    /* never let self-healing break an inbox read */
+  }
+  const items = buildInbox({ projectPath: input.projectPath })
+  const blockers = buildInboxBlockers(items)
+  return { items, blockers }
 }
 
 // ---------------------------------------------------------------------------
@@ -368,6 +490,164 @@ function normalizeTaskForDrawer(task: Record<string, unknown>): Record<string, u
   return notes.length === task.notes.length ? task : { ...task, notes }
 }
 
+function latestTaskNoteContent(
+  task: Record<string, unknown>,
+  predicate: (note: Record<string, unknown>) => boolean,
+): string | null {
+  const notes = Array.isArray(task.notes) ? task.notes as Array<Record<string, unknown>> : []
+  const match = [...notes]
+    .reverse()
+    .find((note) => {
+      const content = typeof note.content === 'string' ? note.content.trim() : ''
+      return content.length > 0 && predicate(note)
+    })
+  const content = typeof match?.content === 'string' ? match.content.trim() : ''
+  return content || null
+}
+
+function isWorkerSelfCritiqueNote(note: Record<string, unknown>): boolean {
+  const role = typeof note.role === 'string' ? note.role.trim().toLowerCase() : ''
+  const agentId = typeof note.agentId === 'string' ? note.agentId.trim().toLowerCase() : ''
+  const content = typeof note.content === 'string' ? note.content : ''
+  if (content.trim().length === 0 || !/self-critique/i.test(content)) return false
+  if (role === 'self-critique') return true
+  if (agentId === 'worker-agent') return true
+  return role === 'implementation' || role === 'implementer' || role === 'worker'
+}
+
+function taskHasWorkerSelfCritique(task: Record<string, unknown>): boolean {
+  const notes = Array.isArray(task.notes) ? (task.notes as Array<Record<string, unknown>>) : []
+  return [...notes].reverse().some((note) => isWorkerSelfCritiqueNote(note))
+}
+
+function normalizedCheckpointNextPlannedAction(
+  task: Record<string, unknown>,
+  checkpoint: Checkpoint | null,
+): string | null {
+  const nextAction = checkpoint?.nextPlannedAction?.trim() ?? ''
+  if (!nextAction) return null
+  if (
+    taskHasWorkerSelfCritique(task) &&
+    /write or refresh self-critique note|write or refresh the self-critique note/i.test(nextAction)
+  ) {
+    return "Resume from the latest self-critique and recorded verification evidence, then hand off to review."
+  }
+  return nextAction
+}
+
+function buildTerminalSummary(
+  task: Record<string, unknown>,
+): { headline: string; detail?: string } | undefined {
+  const status = typeof task.status === 'string' ? task.status : ''
+  const mergeRecord =
+    task.mergeRecord && typeof task.mergeRecord === 'object'
+      ? (task.mergeRecord as Record<string, unknown>)
+      : null
+
+  if (mergeRecord) {
+    const result = typeof mergeRecord.result === 'string' ? mergeRecord.result : ''
+    const toBranch =
+      typeof mergeRecord.toBranch === 'string' && mergeRecord.toBranch.trim().length > 0
+        ? mergeRecord.toBranch.trim()
+        : 'the base branch'
+    const detail =
+      typeof mergeRecord.detail === 'string' && mergeRecord.detail.trim().length > 0
+        ? mergeRecord.detail.trim()
+        : undefined
+    const prUrl =
+      typeof mergeRecord.prUrl === 'string' && mergeRecord.prUrl.trim().length > 0
+        ? mergeRecord.prUrl.trim()
+        : ''
+
+    switch (result) {
+      case 'merged':
+        return { headline: `Merged locally into ${toBranch}.` }
+      case 'pushed':
+        return { headline: `Merged and pushed to ${toBranch}.` }
+      case 'push_failed_degraded':
+        return {
+          headline: `Merged locally into ${toBranch}; push did not complete.`,
+          ...(detail ? { detail } : {}),
+        }
+      case 'pending_pr':
+        return {
+          headline: prUrl ? 'PR opened and awaiting human merge.' : 'Awaiting human PR merge.',
+          ...(prUrl ? { detail: prUrl } : detail ? { detail } : {}),
+        }
+      case 'skipped':
+        return {
+          headline: 'Task completed without an automatic merge.',
+          ...(detail ? { detail } : {}),
+        }
+      case 'conflict':
+        return {
+          headline: `Merge into ${toBranch} hit a conflict.`,
+          ...(detail ? { detail } : {}),
+        }
+      default:
+        break
+    }
+  }
+
+  if (status === 'done') return { headline: 'Task completed.' }
+  if (status === 'pending_pr') return { headline: 'Awaiting human PR merge.' }
+  return undefined
+}
+
+async function enrichTaskForServe(
+  projectPath: string,
+  task: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const normalized = normalizeTaskForDrawer(task)
+  const taskId = typeof normalized.id === 'string' ? normalized.id : ''
+  const memoryDir = join(projectPath, 'memory')
+  const checkpoint = taskId ? await readCheckpoint(memoryDir, taskId) : null
+  const reviewerFeedbackCutoffMs = (() => {
+    const cutoff = latestResolvedRetryEscalationAt(normalized as import('@guildhall/core').Task)
+    const parsed = cutoff ? Date.parse(cutoff) : Number.NaN
+    return Number.isFinite(parsed) ? parsed : null
+  })()
+  const latestReviewerSummary = latestTaskNoteContent(
+    normalized,
+    (note) => {
+      const agentId = typeof note.agentId === 'string' ? note.agentId : ''
+      const role = typeof note.role === 'string' ? note.role : ''
+      if (!(agentId === 'reviewer-fanout' || agentId === 'reviewer-agent' || role === 'reviewer')) {
+        return false
+      }
+      if (reviewerFeedbackCutoffMs === null) return true
+      const timestamp = typeof note.timestamp === 'string' ? Date.parse(note.timestamp) : Number.NaN
+      return Number.isFinite(timestamp) && timestamp > reviewerFeedbackCutoffMs
+    },
+  )
+  const latestSelfCritique = latestTaskNoteContent(
+    normalized,
+    (note) => isWorkerSelfCritiqueNote(note),
+  )
+  const terminalSummary = buildTerminalSummary(normalized)
+
+  return {
+    ...normalized,
+    ...(latestReviewerSummary ? { latestReviewerSummary } : {}),
+    ...(latestSelfCritique ? { latestSelfCritique } : {}),
+    ...(terminalSummary ? { terminalSummary } : {}),
+    ...(checkpoint
+      ? {
+          latestCheckpoint: {
+            step: checkpoint.step,
+            agentId: checkpoint.agentId,
+            intent: checkpoint.intent,
+            nextPlannedAction:
+              normalizedCheckpointNextPlannedAction(normalized, checkpoint) ??
+              checkpoint.nextPlannedAction,
+            filesTouched: checkpoint.filesTouched,
+            writtenAt: checkpoint.writtenAt,
+          },
+        }
+      : {}),
+  }
+}
+
 /**
  * Build the Hono app for a project without binding to a port. Exposed for
  * integration tests that want to call `app.fetch(new Request(...))` directly;
@@ -497,11 +777,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       }
       const tasksPath = join(project.path, 'memory', 'TASKS.json')
-      let tasks: unknown[] = []
-      if (existsSync(tasksPath)) {
-        const raw = JSON.parse(readFileSync(tasksPath, 'utf8'))
-        tasks = Array.isArray(raw) ? raw : Array.isArray(raw?.tasks) ? raw.tasks : []
-      }
+      const rawTasks = await readTasksFileNormalized(tasksPath)
+      const tasks = await Promise.all(rawTasks.map((task) => enrichTaskForServe(project.path, task)))
       const run = supervisor.get(project.id)
       const resolvedConfig = resolveConfig({ workspacePath: project.path })
       const preferredProvider = readProjectConfig(project.path).preferredProvider
@@ -510,6 +787,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : undefined
       const recent = supervisor.recent(project.id, undefined, project.path)
       const bootstrapStatus = readBootstrapStatus(join(project.path, 'memory'))
+      const inbox = await buildProjectInboxSnapshot({
+        projectPath: project.path,
+        initializationNeeded: project.initializationNeeded,
+        coordinatorCount: project.config?.coordinators?.length ?? 0,
+      })
       const runtimeProvider = getRuntimeProviderConfig({
         projectPath: project.path,
         models: resolvedConfig.models,
@@ -548,6 +830,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tags: project.config?.tags ?? [],
         config: project.config,
         tasks,
+        inbox,
         run: run
           ? {
               status: run.status,
@@ -658,8 +941,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
   }
 
   function buildProviderStatusSnapshot(input: {
-    preferredProvider?: string | null
-    activeProvider?: string | null
+    preferredProvider?: PreferredProviderKey | ProviderName | null
+    activeProvider?: ProviderName | null
     health?: {
       pooled: boolean
       state: 'idle' | 'healthy' | 'degraded'
@@ -722,17 +1005,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }>
   }) {
     const preferredProvider = input.preferredProvider ?? null
-    const activeProvider = input.activeProvider ?? null
+    const activeProvider = input.activeProvider ?? 'none'
     return {
+      activeProvider,
       ...(preferredProvider ? {
         preferredCapabilities: providerCapabilitiesForAnyKey(preferredProvider),
         preferredProvider,
         preferredProviderFamily: providerFamilyForAnyKey(preferredProvider),
         preferredProviderLabel: providerLabelForAnyKey(preferredProvider),
       } : {}),
-      ...(activeProvider ? {
+      ...(activeProvider !== 'none' ? {
         activeCapabilities: providerCapabilitiesForAnyKey(activeProvider),
-        activeProvider,
         activeProviderFamily: providerFamilyForAnyKey(activeProvider),
         activeProviderLabel: providerLabelForAnyKey(activeProvider),
       } : {}),
@@ -741,7 +1024,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ...(input.allowPaidProviderFallback !== undefined
         ? { allowPaidProviderFallback: input.allowPaidProviderFallback }
         : {}),
-      ...(input.selectedAt ? { selectedAt: input.selectedAt } : {}),
+      selectedAt: input.selectedAt ?? new Date().toISOString(),
       ...(input.reason ? { reason: input.reason } : {}),
       ...(input.activeModel ? { activeModel: input.activeModel } : {}),
       ...(input.models ? { models: input.models } : {}),
@@ -758,13 +1041,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       return resolveFanoutCapacity(settings.project)
     } catch {
-      return readProjectConfig(projectPath).workerLaneConcurrency
+      return readProjectConfig(projectPath).workerLaneConcurrency ?? 1
     }
   }
 
   async function providerWarningsForRun(input: {
     projectPath: string
-    activeProvider: string | null | undefined
+    activeProvider: ProviderName | null | undefined
     health?: ReturnType<typeof providerHealthForRun>
   }) {
     const warnings: Array<{
@@ -772,39 +1055,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
       severity: 'info' | 'warn' | 'error'
       message: string
     }> = []
-    const projectCfg = readProjectConfig(input.projectPath)
-    const reviewerFanout = resolveReviewerFanoutPolicy({
-      provider: input.activeProvider,
-      requestedConcurrency: projectCfg.reviewerFanoutConcurrency,
-    })
-    if (reviewerFanout.clamped) {
-      warnings.push({
-        code: 'reviewer_concurrency_clamped_to_provider_recommendation',
-        severity: 'info',
-        message:
-          `Reviewer fanout concurrency is configured as ${reviewerFanout.requestedConcurrency}, but ` +
-          `${providerLabelForAnyKey(input.activeProvider)} is capped at ${reviewerFanout.effectiveConcurrency} ` +
-          `for this run (recommended ${reviewerFanout.recommendedConcurrency}).`,
-      })
-    }
-    const workerDispatchCapacity = await dispatchCapacityForProject(input.projectPath)
-    const lanePlan = resolveLaneConcurrencyPlan({
-      projectPath: input.projectPath,
-      provider: input.activeProvider,
-      dispatchCapacity: workerDispatchCapacity,
-    })
-    for (const [lane, policy] of Object.entries(lanePlan)) {
-      if (lane === 'reviewerFanout') continue
-      if (!policy.clamped) continue
-      warnings.push({
-        code: `${lane}_lane_concurrency_clamped`,
-        severity: 'info',
-        message:
-          `${lane[0]!.toUpperCase()}${lane.slice(1)} lane concurrency is configured as ${policy.requestedConcurrency}, ` +
-          `but this run is capped at ${policy.effectiveConcurrency}` +
-          `${policy.recommendedConcurrency ? ` (recommended ${policy.recommendedConcurrency})` : ''}.`,
-      })
-    }
     if (input.health?.state === 'degraded') {
       warnings.push({
         code: 'provider_pool_health_degraded',
@@ -824,7 +1074,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       openaiBaseUrl?: string
       llamaCppUrl?: string
     }
-    activeProvider: string | null | undefined
+    activeProvider: ProviderName | null | undefined
   }) {
     const key = providerHealthKeyForRun(input)
     if (!key) return null
@@ -838,7 +1088,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       openaiBaseUrl?: string
       llamaCppUrl?: string
     }
-    activeProvider: string | null | undefined
+    activeProvider: ProviderName | null | undefined
   }) {
     switch (input.activeProvider) {
       case 'llama-cpp': {
@@ -870,7 +1120,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   async function providerLaneConcurrencyForRun(input: {
     projectPath: string
-    activeProvider: string | null | undefined
+    activeProvider: ProviderName | null | undefined
     dispatchCapacity?: number
   }) {
     const dispatchCapacity =
@@ -1019,6 +1269,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
             )
           }
           preflight = paidFallback
+          if (paidFallback.providerName === 'none') {
+            return c.json(
+              { error: paidFallback.reason ?? 'No fallback provider available.', code: 'fallback_unavailable' },
+              400,
+            )
+          }
           effectiveProvider = paidFallback.providerName
           effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
           fallbackReason =
@@ -1052,6 +1308,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
               )
             }
             preflight = paidFallback
+            if (paidFallback.providerName === 'none') {
+              return c.json(
+                { error: paidFallback.reason ?? 'No fallback provider available.', code: 'fallback_unavailable' },
+                400,
+              )
+            }
             effectiveProvider = paidFallback.providerName
             effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
             fallbackReason =
@@ -1838,7 +2100,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         coordinators: {
           count: cfg?.coordinators?.length ?? 0,
           list: (cfg?.coordinators ?? []).map(c => ({ id: c.id, name: c.name })),
-          editHref: '/coordinators',
+          editHref: '/settings/coordinators',
         },
         designSystem: {
           summary: designSummary,
@@ -1872,29 +2134,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/project/inbox', async c => {
     try {
-      if (project.initializationNeeded) {
-        return c.json({ items: [], blockers: { bootstrap: false, workspaceImport: false } })
-      }
-      // Self-healing scan: if the workspace has signals but nobody has run
-      // the scanner yet, kick it off implicitly. The user shouldn't have to
-      // press "Scan" — once a coordinator exists, the agent discovers
-      // existing goals/tasks on its own and surfaces them for review.
-      // No-op if already seeded, off, or not needed.
-      try {
-        const memoryDir = join(project.path, 'memory')
-        const goalsPath = join(memoryDir, 'workspace-goals.json')
-        if (
-          !existsSync(goalsPath) &&
-          (project.config?.coordinators?.length ?? 0) > 0
-        ) {
-          await maybeSeedWorkspaceImport({ memoryDir, projectPath: project.path })
-        }
-      } catch {
-        /* never let self-healing break the inbox read */
-      }
-      const items = buildInbox({ projectPath: project.path })
-      const blockers = buildInboxBlockers(items)
-      return c.json({ items, blockers })
+      const inbox = await buildProjectInboxSnapshot({
+        projectPath: project.path,
+        initializationNeeded: project.initializationNeeded,
+        coordinatorCount: project.config?.coordinators?.length ?? 0,
+      })
+      return c.json(inbox)
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -2130,17 +2375,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const tasksPath = join(project.path, 'memory', 'TASKS.json')
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
-        | { tasks?: Array<Record<string, unknown>> }
-        | Array<Record<string, unknown>>
-      const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
+      const tasks = await readTasksFileNormalized(tasksPath)
       const id = c.req.param('id')
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
       const recent = filterEventsForTask(supervisor.recent(project.id, undefined, project.path), id)
       const contextDebug = await readContextDebugForTask(join(project.path, 'memory'), id)
       return c.json({
-        task: normalizeTaskForDrawer(task as Record<string, unknown>),
+        task: await enrichTaskForServe(project.path, task as Record<string, unknown>),
         recentEvents: recent,
         contextDebug,
       })
@@ -2854,7 +3096,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           const br = (t as { blockReason?: string }).blockReason
           blockedByAgent.push({ id, title, ...(br ? { reason: br } : {}) })
         }
-        for (const e of activeEscalations(t)) {
+        for (const e of activeEscalations(t as import('@guildhall/core').Task)) {
           openEscalations.push({
             taskId: id,
             taskTitle: title,

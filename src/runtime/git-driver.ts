@@ -85,7 +85,16 @@ export class NodeGitDriver implements GitDriver {
     const { stdout } = await execFileP('git', ['status', '--porcelain'], {
       cwd: repoRoot,
     })
-    return stdout.trim().length === 0
+    const lines = stdout
+      .split('\n')
+      .map((line) => line.trimEnd())
+      .filter((line) => line.trim().length > 0)
+    const meaningful = lines.filter((line) => {
+      if (!line.startsWith('?? ')) return true
+      const file = line.slice(3).trim()
+      return !(file === '.guildhall/' || file.startsWith('.guildhall/'))
+    })
+    return meaningful.length === 0
   }
 
   async createWorktree(

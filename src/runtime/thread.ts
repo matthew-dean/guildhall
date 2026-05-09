@@ -20,6 +20,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { Task } from '@guildhall/core'
 import { activeEscalations } from '@guildhall/tools'
 import {
   buildSnapshot,
@@ -242,10 +243,10 @@ function readJsonSafe(path: string): unknown {
   }
 }
 
-function tasksArray(raw: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(raw)) return raw as Array<Record<string, unknown>>
+function tasksArray(raw: unknown): Task[] {
+  if (Array.isArray(raw)) return raw as Task[]
   if (raw && typeof raw === 'object' && Array.isArray((raw as { tasks?: unknown }).tasks)) {
-    return (raw as { tasks: Array<Record<string, unknown>> }).tasks
+    return (raw as { tasks: Task[] }).tasks
   }
   return []
 }
@@ -258,6 +259,36 @@ function stripMarkdown(value: string): string {
     .replace(/[*_~#>]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function firstSentence(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  const match = trimmed.match(/^(.+?[.!?])(?:\s|$)/)
+  return (match?.[1] ?? trimmed).trim()
+}
+
+function compactEscalationDetails(value: string | undefined): string | undefined {
+  if (!value) return undefined
+  const cleaned = stripMarkdown(value)
+  if (!cleaned) return undefined
+
+  const mustChangeMatch = cleaned.match(/What must change:\s*[-•]?\s*(.+?)(?=(?:[-•]\s+[A-Z]|\bReviewer availability notes\b|$))/i)
+  const primaryAction = firstSentence(mustChangeMatch?.[1] ?? '')
+  const timeoutCount = (cleaned.match(/timed out after \d+ms/gi) ?? []).length
+
+  const parts: string[] = []
+  if (primaryAction) {
+    parts.push(primaryAction)
+  } else {
+    parts.push(firstSentence(cleaned))
+  }
+  if (timeoutCount > 0) {
+    parts.push(`${timeoutCount} reviewer${timeoutCount === 1 ? '' : 's'} timed out.`)
+  }
+
+  const summary = parts.join(' ')
+  return summary.length > 220 ? `${summary.slice(0, 217).trimEnd()}…` : summary
 }
 
 function guessedProjectDirection(projectPath: string): string {
@@ -942,7 +973,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
           : taskStatus === 'exploring'
             ? 'The spec author is shaping this task.'
             : taskStatus === 'ready'
-              ? 'Ready for a worker.'
+              ? 'Approved and queued for work.'
               : taskStatus === 'gate_check'
                 ? 'Gate checks are next.'
                 : taskStatus === 'review'
@@ -988,7 +1019,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         taskTitle,
         escalationId: escId,
         summary,
-        details: typeof esc.details === 'string' ? esc.details : undefined,
+        details: compactEscalationDetails(
+          typeof esc.details === 'string' ? esc.details : undefined,
+        ),
         activity: liveActivity.get(taskId),
       })
     }

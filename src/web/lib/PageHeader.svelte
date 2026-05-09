@@ -66,7 +66,7 @@
     background: var(--bg-raised);
     position: sticky;
     top: 0;
-    z-index: 5;
+    z-index: var(--z-sticky-local);
   }
   .gh-page-head-left {
     justify-self: start;

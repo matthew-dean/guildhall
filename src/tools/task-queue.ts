@@ -55,7 +55,7 @@ const updateTaskInputSchema = z.object({
   taskId: z.string().optional(),
   title: z.string().optional(),
   status: TaskStatus.optional(),
-  assignedTo: z.string().optional(),
+  assignedTo: z.string().nullable().optional(),
   note: z
     .object({
       agentId: z.string(),
@@ -113,7 +113,7 @@ export async function updateTask(
     const explicitStatus = input.status ? TaskStatus.parse(input.status) : undefined
     if (explicitStatus) task.status = explicitStatus
     if (input.assignedTo !== undefined) {
-      if (input.assignedTo.trim() === '') delete task.assignedTo
+      if ((input.assignedTo ?? '').trim() === '') delete task.assignedTo
       else task.assignedTo = input.assignedTo
     }
     if (input.blockReason !== undefined && input.blockReason.trim() !== '') task.blockReason = input.blockReason
@@ -279,8 +279,8 @@ export const updateTaskTool = defineTool({
     required: ['tasksPath'],
   },
   isReadOnly: () => false,
-  execute: async (input, ctx = {}) => {
-    const result = await updateTask(input, (ctx as { metadata?: Record<string, unknown> }).metadata ?? {})
+  execute: async (input, ctx) => {
+    const result = await updateTask(input, ctx.metadata ?? {})
     return {
       output: result.success
         ? `Updated task ${result.taskId ?? input.taskId ?? '(inferred task)'}`

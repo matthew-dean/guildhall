@@ -37,20 +37,23 @@
     initialSub?: string | null
   }
 
-  let { initialView = 'thread', initialSub = null }: Props = $props()
+  const props = $props<Props>()
 
-  let currentView = $state<ProjectView>(initialView)
-  let currentSub = $state<string | null>(initialSub)
+  const currentView = $derived<ProjectView>(props.initialView ?? 'thread')
+  const currentSub = $derived<string | null>(props.initialSub ?? null)
   let busy = $state(false)
   let runError = $state<string | null>(null)
   let intakeOpen = $state(false)
   let refreshHandle: ReturnType<typeof setInterval> | null = null
+  let actionsMenuEl = $state<HTMLDivElement | null>(null)
+  let actionsMenuOpen = $state(false)
 
   // Inbox blockers drive disabled-state on top-bar actions so hard blockers
   // (e.g. bootstrap not verified) can't be bypassed by pressing Start.
   interface Blockers { bootstrap: boolean; workspaceImport: boolean }
   let blockers = $state<Blockers>({ bootstrap: false, workspaceImport: false })
-  let inboxHighCount = $state(0)
+  let inboxActionableCount = $state(0)
+  let inboxHasHighSeverity = $state(false)
   let inboxItems = $state<InboxItem[]>([])
   let inboxLoaded = $state(false)
   let inboxError = $state<string | null>(null)
@@ -65,7 +68,8 @@
       }
       inboxItems = j.items ?? []
       if (j.blockers) blockers = j.blockers
-      inboxHighCount = inboxItems.filter(i => i.severity === 'high').length
+      inboxActionableCount = inboxItems.filter(i => i.severity !== 'low').length
+      inboxHasHighSeverity = inboxItems.some(i => i.severity === 'high')
       inboxError = null
     } catch (err) {
       inboxError = err instanceof Error ? err.message : String(err)
@@ -92,13 +96,6 @@
       }
     })
     return off
-  })
-
-  $effect(() => {
-    currentView = initialView
-  })
-  $effect(() => {
-    currentSub = initialSub
   })
 
   $effect(() => {
@@ -191,6 +188,23 @@
 
   function go(href: string) {
     nav(href)
+  }
+
+  function closeActionsMenu(): void {
+    actionsMenuOpen = false
+  }
+
+  function toggleActionsMenu(event: MouseEvent): void {
+    event.stopPropagation()
+    actionsMenuOpen = !actionsMenuOpen
+  }
+
+  function handleDocumentClick(event: MouseEvent): void {
+    const target = event.target
+    if (!(target instanceof Node)) return
+    if (!actionsMenuEl?.contains(target)) {
+      actionsMenuOpen = false
+    }
   }
 
   async function start(mode: 'continuous' | 'one_task' = 'continuous') {
@@ -307,12 +321,17 @@
       .map(([label, model]) => `${label}: ${model}`)
       .join('\n')
   }
-  const activeModelLabel = $derived(compactModelLabel(providerStatus?.activeModel ?? providerStatus?.models?.worker))
+  const mixedModelSummary = $derived(modelMixSummary(providerStatus?.models))
+  const hasMixedModels = $derived(Boolean(mixedModelSummary))
+  const activeModelLabel = $derived(
+    hasMixedModels
+      ? 'Mixed models'
+      : compactModelLabel(providerStatus?.activeModel ?? providerStatus?.models?.worker),
+  )
   const providerHeaderLabel = $derived(`${activeProviderLabel} | ${activeModelLabel}`)
   const preferredProviderLabel = $derived(
     providerStatus?.preferredProviderLabel ?? providerLabel(providerStatus?.preferredProvider),
   )
-  const mixedModelSummary = $derived(modelMixSummary(providerStatus?.models))
   const providerDetailsText = $derived(
     `${providerStatus?.activeModel ? ` | ${providerStatus.activeModel}` : ''}${mixedModelSummary ? `\n${mixedModelSummary}` : ''}${providerStatus?.decisions?.length ? `\n${providerStatus.decisions.map((entry) => entry.message).join('\n')}` : ''}`,
   )
@@ -469,8 +488,14 @@
   const activeCount = $derived(
     taskList.filter(t => {
       const s = (t as { status?: string }).status
-      return s && !['done', 'blocked', 'cancelled', 'archived'].includes(s)
+      return s && !['done', 'blocked', 'cancelled', 'archived', 'spec_review'].includes(s)
     }).length,
+  )
+  const activeCountLabel = $derived(
+    runStatus === 'running' || runStatus === 'stopping' ? 'active' : 'paused',
+  )
+  const awaitingApprovalCount = $derived(
+    taskList.filter(t => (t as { status?: string }).status === 'spec_review').length,
   )
   const stuckCount = $derived(
     taskList.filter(t => {
@@ -495,6 +520,8 @@
         : null,
   )
 </script>
+
+<svelte:document onclick={handleDocumentClick} />
 
 {#if detail?.initializationNeeded}
   <div class="page-centered">
@@ -576,87 +603,109 @@
 
     <div class="main">
       <header class="topbar">
-        {#if activeCount > 0 || stuckCount > 0}
-          <button
-            type="button"
-            class="tasks-indicator"
-            class:has-stuck={stuckCount > 0}
-            onclick={() => go('/work')}
-            title="Jump to Work"
-            aria-label="{activeCount} active, {stuckCount} stuck"
+        <div class="topbar-leading">
+          {#if activeCount > 0 || awaitingApprovalCount > 0 || stuckCount > 0}
+            <button
+              type="button"
+              class="tasks-indicator"
+              class:has-stuck={stuckCount > 0}
+              onclick={() => go('/work')}
+              title="Jump to Work"
+              aria-label="{activeCount} {activeCountLabel}, {awaitingApprovalCount} awaiting approval, {stuckCount} stuck"
+            >
+              <span class="tasks-count">{activeCount} {activeCountLabel}</span>
+              {#if awaitingApprovalCount > 0}
+                <span class="tasks-approval">· {awaitingApprovalCount} awaiting approval</span>
+              {/if}
+              {#if stuckCount > 0}
+                <span class="tasks-stuck">· {stuckCount} stuck</span>
+              {/if}
+            </button>
+          {/if}
+          {#if inboxActionableCount > 0}
+            <button
+              type="button"
+              class="inbox-indicator"
+              class:warn-only={!inboxHasHighSeverity}
+              onclick={() => go('/notifications')}
+              title="Jump to Notifications"
+              aria-label="{inboxActionableCount} notifications need you"
+            >
+              <Icon name="inbox" size={14} />
+              <span>{inboxActionableCount}</span>
+            </button>
+          {/if}
+          {#if providerStatus?.activeProvider || providerStatus?.preferredProvider}
+            <button
+              type="button"
+              class="provider-indicator"
+              class:fallback={providerStatus?.fallback}
+              onclick={() => go('/providers')}
+              title={providerTitle}
+              aria-label={providerTitle}
+            >
+              <Icon name="plug" size={14} />
+              <span class="provider-summary">{providerHeaderLabel}</span>
+              {#if providerStatus?.fallback}
+                <span class="provider-fallback">fallback</span>
+              {/if}
+            </button>
+          {/if}
+        </div>
+        <div class="topbar-actions">
+          <Button
+            variant="secondary"
+            size="sm"
+            className="toolbar-btn toolbar-btn--new-task"
+            disabled={busy || newTaskDisabledReason !== null}
+            onclick={newTask}
+            ariaLabel={newTaskDisabledReason ?? 'New task'}
+            title={newTaskDisabledReason ?? 'New task'}
           >
-            <span class="tasks-count">{activeCount} active</span>
-            {#if stuckCount > 0}
-              <span class="tasks-stuck">· {stuckCount} stuck</span>
+            <Icon name="plus" size={16} />
+            <span class="toolbar-btn-label">New task</span>
+          </Button>
+          <Button
+            variant={runStatus === 'running' ? 'danger' : 'primary'}
+            size="sm"
+            className="toolbar-btn toolbar-btn--primary"
+            disabled={busy || (runStatus !== 'running' && (runStatus === 'stopping' || startDisabledReason !== null))}
+            onclick={runStatus === 'running' ? stop : () => start('continuous')}
+            ariaLabel={runStatus === 'running' ? 'Stop orchestrator' : (startDisabledReason ?? 'Start orchestrator')}
+            title={runStatus === 'running' ? 'Stop orchestrator' : (startDisabledReason ?? 'Start orchestrator')}
+          >
+            <span class="btn-inner">
+              <Icon name={runStatus === 'running' ? 'square' : 'play'} size={16} />
+              {runStatus === 'running' ? 'Stop' : 'Start'}
+            </span>
+          </Button>
+          <div class="actions-menu" bind:this={actionsMenuEl}>
+            <Button
+              variant="secondary"
+              size="sm"
+              className={`toolbar-btn toolbar-btn--icon ${actionsMenuOpen ? 'toolbar-btn--menu-open' : ''}`}
+              ariaLabel="Open actions menu"
+              title="Open actions menu"
+              onclick={toggleActionsMenu}
+            >
+              <Icon name="ellipsis" size={16} />
+            </Button>
+            {#if actionsMenuOpen}
+              <div class="actions-menu-panel">
+                <button
+                  type="button"
+                  class="actions-menu-item"
+                  disabled={busy || startDisabledReason !== null || runStatus === 'running' || runStatus === 'stopping'}
+                  title={startDisabledReason ?? ''}
+                  onclick={() => { closeActionsMenu(); start('one_task') }}
+                >
+                  <Icon name="check-circle-2" size={16} />
+                  <span>Finish one</span>
+                </button>
+              </div>
             {/if}
-          </button>
-        {/if}
-        {#if inboxHighCount > 0}
-          <button
-            type="button"
-            class="inbox-indicator"
-            onclick={() => go('/notifications')}
-            title="Jump to Notifications"
-            aria-label="{inboxHighCount} notifications need you"
-          >
-            <Icon name="inbox" size={14} />
-            <span>{inboxHighCount}</span>
-          </button>
-        {/if}
-        {#if providerStatus?.activeProvider || providerStatus?.preferredProvider}
-          <button
-            type="button"
-            class="provider-indicator"
-            class:fallback={providerStatus?.fallback}
-            onclick={() => go('/providers')}
-            title={providerTitle}
-            aria-label={providerTitle}
-          >
-            <Icon name="plug" size={14} />
-            <span class="provider-summary">{providerHeaderLabel}</span>
-            {#if providerStatus?.fallback}
-              <span class="provider-fallback">fallback</span>
-            {/if}
-          </button>
-        {/if}
-        <span class="grow"></span>
-        <Button
-          variant="secondary"
-          disabled={busy || newTaskDisabledReason !== null}
-          onclick={newTask}
-          ariaLabel={newTaskDisabledReason ?? 'New task'}
-        >
-          <span class="btn-inner" title={newTaskDisabledReason ?? ''}>
-            <Icon name="plus" size={16} /> New Task
-          </span>
-        </Button>
-        <Button
-          variant="primary"
-          disabled={busy || runStatus === 'running' || runStatus === 'stopping' || startDisabledReason !== null}
-          onclick={() => start('one_task')}
-          ariaLabel={startDisabledReason ?? 'Finish one task'}
-        >
-          <span class="btn-inner" title={startDisabledReason ?? ''}>
-            <Icon name="check-circle-2" size={16} /> Finish one
-          </span>
-        </Button>
-        <Button
-          variant="secondary"
-          disabled={busy || runStatus === 'running' || runStatus === 'stopping' || startDisabledReason !== null}
-          onclick={() => start('continuous')}
-          ariaLabel={startDisabledReason ?? 'Start orchestrator'}
-        >
-          <span class="btn-inner" title={startDisabledReason ?? ''}>
-            <Icon name="play" size={16} /> Start
-          </span>
-        </Button>
-        <Button
-          variant="danger"
-          disabled={busy || runStatus !== 'running'}
-          onclick={stop}
-        >
-          <span class="btn-inner"><Icon name="square" size={16} /> Stop</span>
-        </Button>
+          </div>
+        </div>
       </header>
 
       <div class="page">
@@ -749,7 +798,7 @@
   .shell {
     display: grid;
     grid-template-columns: 220px 1fr;
-    min-height: calc(100vh - 44px);
+    min-height: calc(100dvh - var(--app-header-h));
     background: var(--bg-base);
   }
   .rail {
@@ -761,8 +810,10 @@
     gap: var(--s-2);
     min-width: 0;
     position: sticky;
-    top: 0;
-    height: 100vh;
+    top: var(--app-header-h);
+    align-self: start;
+    min-height: calc(100dvh - var(--app-header-h));
+    max-height: calc(100dvh - var(--app-header-h));
     overflow-y: auto;
   }
   .rail-nav {
@@ -851,10 +902,30 @@
   .topbar {
     display: flex;
     align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
     gap: var(--s-2);
     padding: var(--s-3) var(--s-4);
     border-bottom: 1px solid var(--border);
     background: var(--bg-raised);
+    position: sticky;
+    top: var(--app-header-h);
+    z-index: var(--z-topbar);
+  }
+  .topbar-leading {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+    flex: 1 1 360px;
+    min-width: min(100%, 280px);
+  }
+  .topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    flex: 0 1 auto;
+    margin-left: auto;
   }
   .rail-head {
     padding: var(--s-3) var(--s-3) var(--s-4) var(--s-3);
@@ -877,7 +948,6 @@
   .rail-status {
     display: flex;
   }
-  .grow { flex: 1; }
   .tasks-indicator,
   .inbox-indicator,
   .provider-indicator {
@@ -911,9 +981,14 @@
     border-color: var(--danger);
     font-weight: 600;
   }
+  .inbox-indicator.warn-only {
+    color: var(--warn);
+    border-color: var(--warn);
+  }
   .provider-indicator {
     color: var(--text-muted);
-    max-width: min(36ch, 30vw);
+    max-width: min(100%, 42ch);
+    min-width: 0;
   }
   .provider-indicator.fallback {
     color: var(--warn);
@@ -924,6 +999,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
   }
   .provider-fallback {
     font-size: var(--fs-0);
@@ -934,6 +1010,95 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
+  }
+  .toolbar-btn {
+    min-height: 40px;
+    padding: 0 14px;
+    border-radius: 10px;
+    flex: none;
+  }
+  .toolbar-btn--primary {
+    min-width: 116px;
+  }
+  .toolbar-btn--new-task {
+    min-width: 118px;
+  }
+  .toolbar-btn--icon {
+    width: 40px;
+    min-width: 40px;
+    padding: 0;
+    border-radius: 999px;
+  }
+  .toolbar-btn--menu-open {
+    background: var(--bg-elevated);
+    border-color: var(--border-strong);
+  }
+  .actions-menu {
+    position: relative;
+  }
+  .actions-menu-panel {
+    position: absolute;
+    right: 0;
+    top: calc(100% + var(--s-2));
+    z-index: var(--z-popover);
+    min-width: 180px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: var(--bg-elevated);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+  }
+  .actions-menu-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 34px;
+    padding: 0 var(--s-2);
+    border: 1px solid transparent;
+    border-radius: var(--r-1);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: var(--fs-2);
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+  }
+  .actions-menu-item:hover:not(:disabled) {
+    background: var(--bg-raised-2);
+  }
+  .actions-menu-item:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  @media (max-width: 1180px) {
+    .topbar {
+      align-items: stretch;
+    }
+    .topbar-leading,
+    .topbar-actions {
+      flex-basis: 100%;
+    }
+    .topbar-actions {
+      justify-content: flex-start;
+    }
+  }
+
+  @media (max-width: 900px) {
+    .toolbar-btn-label {
+      display: none;
+    }
+    .toolbar-btn--new-task {
+      width: 40px;
+      min-width: 40px;
+      padding: 0;
+      border-radius: 999px;
+    }
   }
 
   .page {

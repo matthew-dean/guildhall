@@ -153,8 +153,10 @@ describe('specFillWizard.progress', () => {
     expect(specFillWizard.applicable(snap({ status: 'done' }))).toBe(false)
     expect(specFillWizard.applicable(snap({ status: 'cancelled' }))).toBe(false)
     expect(specFillWizard.applicable(snap({ status: 'archived' }))).toBe(false)
+    expect(specFillWizard.applicable(snap({ status: 'blocked' }))).toBe(false)
+    expect(specFillWizard.applicable(snap({ status: 'shelved' }))).toBe(false)
     expect(specFillWizard.applicable(snap({ status: 'exploring' }))).toBe(true)
-    expect(specFillWizard.applicable(snap({ status: 'in_progress' }))).toBe(true)
+    expect(specFillWizard.applicable(snap({ status: 'in_progress' }))).toBe(false)
   })
 })
 

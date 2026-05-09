@@ -16,7 +16,6 @@
     'review',
     'gate_check',
     'exploring',
-    'spec_review',
   ])
 
   type StatusTone = 'danger' | 'warn' | 'ok' | 'accent' | 'neutral'
@@ -46,6 +45,62 @@
   const hasEscalations = $derived(
     activeEscalations(task).length > 0,
   )
+  const reviewerBlurb = $derived.by(() => {
+    const raw = typeof task.latestReviewerSummary === 'string' ? task.latestReviewerSummary : ''
+    if (!raw) return ''
+    const cleaned = raw
+      .replace(/\*\*/g, '')
+      .replace(/^#+\s*/gm, '')
+      .replace(/^- /gm, '')
+      .replace(/\n+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!cleaned) return ''
+    return cleaned.length > 180 ? `${cleaned.slice(0, 177).trimEnd()}…` : cleaned
+  })
+  const checkpointBlurb = $derived.by(() => {
+    const next = typeof task.latestCheckpoint?.nextPlannedAction === 'string'
+      ? task.latestCheckpoint.nextPlannedAction.trim()
+      : ''
+    if (!next) return ''
+    return next.length > 140 ? `${next.slice(0, 137).trimEnd()}…` : next
+  })
+  const terminalHeadline = $derived.by(() => {
+    const raw = typeof task.terminalSummary?.headline === 'string'
+      ? task.terminalSummary.headline.trim()
+      : ''
+    if (!raw) return ''
+    return raw.length > 140 ? `${raw.slice(0, 137).trimEnd()}…` : raw
+  })
+  const terminalDetail = $derived.by(() => {
+    const raw = typeof task.terminalSummary?.detail === 'string'
+      ? task.terminalSummary.detail.trim()
+      : ''
+    if (!raw) return ''
+    return raw.length > 140 ? `${raw.slice(0, 137).trimEnd()}…` : raw
+  })
+  const summaryLabel = $derived.by(() => {
+    if (
+      reviewerBlurb &&
+      (task.revisionCount ?? 0) > 0 &&
+      ['review', 'gate_check', 'blocked'].includes(status)
+    ) return 'Latest review'
+    if (checkpointBlurb && status === 'in_progress') return 'Next'
+    if (terminalHeadline && ['done', 'pending_pr'].includes(status)) return 'Outcome'
+    return ''
+  })
+  const summaryText = $derived.by(() => {
+    if (
+      reviewerBlurb &&
+      (task.revisionCount ?? 0) > 0 &&
+      ['review', 'gate_check', 'blocked'].includes(status)
+    ) return reviewerBlurb
+    if (checkpointBlurb && status === 'in_progress') return checkpointBlurb
+    if (terminalHeadline && ['done', 'pending_pr'].includes(status)) {
+      return terminalDetail ? `${terminalHeadline} ${terminalDetail}` : terminalHeadline
+    }
+    return ''
+  })
 
   const statusTone = $derived<StatusTone>(
     displayStatusTone ??
@@ -53,6 +108,8 @@
         ? 'danger'
         : status === 'shelved'
           ? 'warn'
+          : status === 'pending_pr'
+            ? 'warn'
           : status === 'done'
             ? 'ok'
             : isActive
@@ -118,6 +175,12 @@
       <span class="tc-rev">r{task.revisionCount}</span>
     {/if}
   </div>
+  {#if summaryText}
+    <div class="tc-summary">
+      <span class="tc-summary-label">{summaryLabel}:</span>
+      <span>{summaryText}</span>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -146,10 +209,12 @@
     background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised));
   }
   .st-done {
-    opacity: 0.6;
+    background: color-mix(in srgb, var(--accent-2) 6%, var(--bg-raised));
+    border-color: color-mix(in srgb, var(--accent-2) 24%, var(--border-strong));
   }
   .st-shelved {
-    opacity: 0.6;
+    background: color-mix(in srgb, var(--warn) 6%, var(--bg-raised));
+    border-color: color-mix(in srgb, var(--warn) 24%, var(--border-strong));
   }
   .st-blocked-bold {
     background: color-mix(in srgb, var(--danger) 8%, var(--bg-raised));
@@ -216,6 +281,36 @@
     display: flex;
     gap: var(--s-2);
     align-items: center;
+  }
+  .tc-summary {
+    font-size: var(--fs-1);
+    color: color-mix(in srgb, var(--text) 78%, var(--text-muted));
+    line-height: var(--lh-body);
+    display: grid;
+    gap: 2px;
+    overflow: hidden;
+  }
+  .tc-summary > span:last-child {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+    word-break: break-word;
+  }
+  .tc-summary-label {
+    font-size: var(--fs-0);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+    color: var(--text-dim);
+  }
+  .st-done .tc-title,
+  .st-shelved .tc-title {
+    color: color-mix(in srgb, var(--text) 88%, var(--text-muted));
+  }
+  .st-done .tc-meta,
+  .st-shelved .tc-meta {
+    color: color-mix(in srgb, var(--text-muted) 88%, var(--text-dim));
   }
   .tc-rev {
     font-family: 'SF Mono', monospace;

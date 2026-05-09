@@ -260,6 +260,7 @@ describe('GlobalConfig', () => {
     expect(config.heartbeatInterval).toBe(5)
     expect(config.lmStudioUrl).toBe('http://localhost:1234/v1')
     expect(config.servePort).toBe(7777)
+    expect(config.reviewerFanoutConcurrency).toBeUndefined()
   })
 
   it('validates servePort range', () => {

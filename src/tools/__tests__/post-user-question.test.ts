@@ -292,4 +292,34 @@ describe('postUserQuestionTool', () => {
       ],
     })
   })
+
+  it('does not infer fake user questions from planning prose about what the agent will do next', async () => {
+    const metadata: Record<string, unknown> = {
+      tasks_path: tasksPath,
+      current_task_id: 'task-001',
+      current_agent_id: 'spec-agent',
+      last_assistant_text: [
+        'Thanks — I’ve resumed this cleanly.',
+        '',
+        'I’m going to do one quick pass over these two files next so I can write the spec with concrete, testable ACs (not guesses):',
+        '',
+        '- `web/app/composables/use-collections.ts`',
+        '- `web/tests/unit/composables/use-collections-auth.test.ts`',
+        '',
+        'Then I’ll draft:',
+        '1) summary',
+        '2) numbered acceptance criteria',
+        '3) out-of-scope',
+        '4) open questions (only if needed)',
+      ].join('\n'),
+    }
+
+    const result = await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
+    expect(result.is_error).toBe(true)
+
+    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
+      tasks: Array<{ openQuestions?: Array<unknown> }>
+    }
+    expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
+  })
 })

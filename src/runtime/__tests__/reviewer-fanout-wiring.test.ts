@@ -140,6 +140,12 @@ class ScriptedApiClient implements SupportsStreamingMessages {
   }
 }
 
+class HangingApiClient implements SupportsStreamingMessages {
+  async *streamMessage(_request: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
+    await new Promise((_resolve, _reject) => {})
+  }
+}
+
 function assistantMsg(text: string): ConversationMessage {
   return { role: 'assistant', content: [{ type: 'text', text }] }
 }
@@ -245,6 +251,34 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     expect(verdicts[0]?.verdict).toBe('approve')
   })
 
+  it('times out a hanging persona call instead of stalling review forever', async () => {
+    const runner = buildDefaultReviewerFanout(
+      { apiClient: new HangingApiClient(), modelId: 'm' },
+      { personaTimeoutMs: 25 },
+    )
+
+    const startedAt = Date.now()
+    const verdicts = await runner({
+      task: mkTask(),
+      personas: [
+        {
+          slug: 'project-manager',
+          name: 'The Project Manager',
+          principles: 'Check handoff quality.',
+          rubric: [{ id: 'review', question: 'Is the review packet usable?', weight: 1 }],
+        },
+      ],
+      context: 'Review the task.',
+      memoryDir,
+      projectPath: tmpDir,
+    })
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000)
+    expect(verdicts).toHaveLength(1)
+    expect(verdicts[0]?.verdict).toBe('revise')
+    expect(verdicts[0]?.reasoning).toContain('timed out')
+  })
+
   it('advances the task to gate_check when every persona approves', async () => {
     await writeDesignSystem(minimalDS)
     const task = mkTask()
@@ -342,8 +376,9 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     expect((agents.reviewer as ReturnType<typeof stubAgent>).calls.length).toBeGreaterThan(0)
     const q = await readQueue()
     const after = q.tasks[0]!
-    // Legacy reviewer didn't transition (stub doesn't mutate task) — status unchanged.
-    expect(after.status).toBe('review')
+    // Legacy reviewer fell back to the deterministic review path when the
+    // stub returned prose without a task-state mutation.
+    expect(after.status).toBe('in_progress')
   })
 
   it('falls through to the legacy single reviewer when fanout only produces infra failures', async () => {
@@ -419,5 +454,55 @@ describe('Orchestrator — reviewer fan-out at review', () => {
       return false
     }
     expect(hasBlocked(outcome)).toBe(true)
+  })
+
+  it('does not immediately re-escalate fan-out dissent after a resolved max-revisions retry', async () => {
+    await writeDesignSystem(minimalDS)
+    const task = mkTask({
+      revisionCount: 8,
+      escalations: [
+        {
+          id: 'esc-task-001-1',
+          taskId: 'task-001',
+          agentId: 'reviewer-fanout',
+          reason: 'max_revisions_exceeded',
+          summary: 'Exceeded maxRevisions (3). Reviewer fan-out keeps rejecting.',
+          raisedAt: '2026-04-01T00:00:00Z',
+          resolvedAt: '2026-04-01T01:00:00Z',
+          resolvedBy: 'human',
+          resolution: 'Retry after guardrail fix.',
+        },
+      ],
+    })
+    await writeQueue([task])
+    const agents = agentSet()
+
+    const runner: ReviewerFanoutRunner = async ({ personas }) =>
+      personas.map(
+        (persona): PersonaVerdict => ({
+          guildSlug: persona.slug,
+          guildName: persona.name,
+          verdict: 'revise',
+          reasoning: `${persona.name} still wants a change.`,
+          revisionItems: ['Fix it.'],
+          riskItems: [],
+          followUpItems: [],
+          rawOutput: '**Verdict:** revise',
+        }),
+      )
+
+    const orch = new Orchestrator({ config: baseConfig(), agents, reviewerFanout: runner })
+    const outcome = await orch.tick()
+
+    expect(outcome.kind).toBe('processed')
+    const q = await readQueue()
+    const after = q.tasks[0]!
+    expect(after.status).toBe('in_progress')
+    expect(after.retryWindow).toEqual({
+      startedAt: '2026-04-01T01:00:00Z',
+      baseRevisionCount: 8,
+    })
+    expect(after.escalations).toHaveLength(1)
+    expect(after.escalations[0]!.resolvedAt).toBe('2026-04-01T01:00:00Z')
   })
 })

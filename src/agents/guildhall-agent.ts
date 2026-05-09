@@ -132,6 +132,9 @@ export class GuildhallAgent {
       cwd: options.cwd ?? process.cwd(),
       maxTurns: options.maxTurns ?? 8,
       maxTokens: options.maxTokens ?? 4096,
+      ...(options.llm.temperature !== undefined
+        ? { temperature: options.llm.temperature }
+        : {}),
       ...(options.hookExecutor ? { hookExecutor: options.hookExecutor } : {}),
       ...(options.compactor ? { compactor: options.compactor } : {}),
       ...(options.noToolTurnNudge !== undefined
@@ -328,6 +331,10 @@ export class GuildhallAgent {
 
   get totalUsage(): UsageSnapshot {
     return this.engine.totalUsage
+  }
+
+  getToolMetadata(): Record<string, unknown> {
+    return this.engine.getToolMetadata()
   }
 }
 

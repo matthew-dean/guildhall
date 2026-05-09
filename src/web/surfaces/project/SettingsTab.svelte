@@ -17,7 +17,6 @@
   import Button from '../../lib/Button.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Input from '../../lib/Input.svelte'
-  import Markdown from '../../lib/Markdown.svelte'
   import Byline from '../../lib/Byline.svelte'
   import LogViewer from '../../lib/LogViewer.svelte'
   import DefinitionList from '../../lib/DefinitionList.svelte'
@@ -104,6 +103,8 @@
     detail?: string
   }
   let providerStatus = $state<ProviderStatus | null>(null)
+  let metaIntakeBusy = $state(false)
+  let metaIntakeError = $state<string | null>(null)
 
   $effect(() => {
     fetch('/api/setup/status')
@@ -246,6 +247,54 @@
   }
 
   const coordinators = $derived(project.detail?.config?.coordinators ?? [])
+  const workspaceConfigPath = $derived(
+    project.detail?.path ? `${project.detail.path}/guildhall.yaml` : 'guildhall.yaml',
+  )
+  const coordinatorExplainer = [
+    'Coordinators are review lanes, not just folders.',
+    'Each task belongs to one coordinator domain.',
+    'A coordinator defines what work it protects, what it can approve autonomously, and what must escalate.',
+  ]
+  function scopeLabel(path?: string): string {
+    return path?.trim() ? path.trim() : 'workspace root'
+  }
+
+  function summarizeMandate(value?: string, limit = 220): string {
+    const text = (value ?? '').replace(/\s+/g, ' ').trim()
+    if (!text) return ''
+    return text.length > limit ? text.slice(0, limit - 1).trimEnd() + '…' : text
+  }
+
+  async function ensureOrchestratorRunning(): Promise<boolean> {
+    try {
+      const detail = await fetch('/api/project', { cache: 'no-store' }).then(r => r.json())
+      if (detail?.run?.status === 'running') return true
+      const r = await fetch('/api/project/start', { method: 'POST' })
+      return r.ok
+    } catch {
+      return false
+    }
+  }
+
+  async function startMetaIntake() {
+    if (metaIntakeBusy) return
+    metaIntakeBusy = true
+    metaIntakeError = null
+    try {
+      const r = await fetch('/api/project/meta-intake', { method: 'POST' })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j?.error) {
+        metaIntakeError = j?.error ?? `HTTP ${r.status}`
+        return
+      }
+      await ensureOrchestratorRunning()
+      nav('/thread')
+    } catch (err) {
+      metaIntakeError = err instanceof Error ? err.message : String(err)
+    } finally {
+      metaIntakeBusy = false
+    }
+  }
 
   const bootstrapReady = $derived(
     Boolean(bootstrapInfo?.configured && bootstrapInfo?.status?.success),
@@ -374,22 +423,104 @@
 
   {#if section === 'coordinators'}
     <!-- SECONDARY: Coordinators summary -->
-    <Card title="Coordinators">
-      {#if coordinators.length === 0}
-        <p class="muted">None yet — run meta-intake to bootstrap.</p>
-      {:else}
-        <div class="coord-list">
-          {#each coordinators as c, i (c.id ?? c.name ?? i)}
-            <div class="coord">
-              <div class="coord-title">
-                <strong>{c.name ?? c.id}</strong>
-                <span class="muted"> · {c.domain ?? ''}</span>
-              </div>
-              {#if c.mandate}<Markdown source={c.mandate} />{/if}
-            </div>
-          {/each}
+    <Card title="Coordinators" titleTag="h2">
+      <Stack gap="3">
+        <div class="coord-intro">
+          <p class="coord-lede">
+            Coordinators are the project&apos;s domain owners. This page explains what they mean.
+            The <strong>Coordinators</strong> board shows how work is currently flowing through them.
+          </p>
+          <ul class="coord-bullets">
+            {#each coordinatorExplainer as item (item)}
+              <li>{item}</li>
+            {/each}
+          </ul>
         </div>
-      {/if}
+
+        <div class="coord-grid">
+          <div class="coord-info-card">
+            <div class="coord-info-label">Created via</div>
+            <ul class="coord-bullets compact">
+              <li>Meta-intake drafts them for a new project.</li>
+              <li><code>guildhall init</code> can create them manually.</li>
+              <li>The setup flow can seed simple archetypes.</li>
+              <li>Direct <code>guildhall.yaml</code> edits are still the source of truth.</li>
+            </ul>
+          </div>
+          <div class="coord-info-card">
+            <div class="coord-info-label">Field semantics</div>
+            <dl class="coord-fields">
+              <dt><code>domain</code></dt>
+              <dd>Required. This is the task-routing lane.</dd>
+              <dt><code>path</code></dt>
+              <dd>Optional. Use it when one coordinator should scope to a subproject or folder.</dd>
+              <dt><code>guildhall.yaml</code></dt>
+              <dd>Current source of truth. The UI summarizes and inspects; it is not a full editor yet.</dd>
+            </dl>
+          </div>
+        </div>
+
+        <div class="coord-source">
+          <div class="coord-source-label">Source of truth</div>
+          <code class="coord-source-path">{workspaceConfigPath}</code>
+        </div>
+
+        <div class="coord-nav-row">
+          <span class="muted">Use the live board to inspect domain ownership and recent task flow.</span>
+          <button type="button" class="linkbtn" onclick={() => nav('/coordinators')}>
+            Open live board →
+          </button>
+        </div>
+
+      {#if coordinators.length === 0}
+          <div class="coord-empty">
+            <p class="muted">
+              No coordinators yet. Start with meta-intake if you want Guildhall to propose a first
+              domain split from the repo, then review it in Thread.
+            </p>
+            <div class="coord-empty-actions">
+              <Button variant="primary" onclick={startMetaIntake} disabled={metaIntakeBusy}>
+                {metaIntakeBusy ? 'Starting…' : 'Start meta-intake'}
+              </Button>
+              <Button variant="secondary" onclick={() => nav('/thread')}>Open Thread</Button>
+            </div>
+            {#if metaIntakeError}
+              <p class="error">{metaIntakeError}</p>
+            {/if}
+          </div>
+      {:else}
+          <div class="coord-list">
+            {#each coordinators as c, i (c.id ?? c.name ?? i)}
+              <div class="coord">
+                <div class="coord-title">
+                  <div class="coord-heading">
+                    <strong>{c.name ?? c.id}</strong>
+                    <span class="muted"> · {c.domain ?? ''}</span>
+                  </div>
+                  <div class="coord-scope">
+                    <span class="coord-chip">Scope: {scopeLabel(c.path)}</span>
+                  </div>
+                </div>
+                <p class="coord-summary">{summarizeMandate(c.mandate)}</p>
+                <dl class="coord-meta">
+                  <div>
+                    <dt>Concerns</dt>
+                    <dd>{c.concerns?.length ?? 0}</dd>
+                  </div>
+                  <div>
+                    <dt>Auto</dt>
+                    <dd>{c.autonomousDecisions?.length ?? 0}</dd>
+                  </div>
+                  <div>
+                    <dt>Escalates</dt>
+                    <dd>{c.escalationTriggers?.length ?? 0}</dd>
+                  </div>
+                </dl>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </Stack>
     </Card>
   {/if}
 
@@ -688,6 +819,75 @@
     flex-direction: column;
     gap: var(--s-2);
   }
+  .coord-intro {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .coord-lede {
+    margin: 0;
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+    color: var(--text);
+    max-width: 72ch;
+  }
+  .coord-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--s-2);
+  }
+  .coord-info-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    padding: var(--s-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .coord-info-label {
+    font-size: var(--fs-0);
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+  }
+  .coord-bullets {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+    color: var(--text);
+  }
+  .coord-bullets.compact {
+    gap: 4px;
+  }
+  .coord-fields {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px var(--s-2);
+    margin: 0;
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+  }
+  .coord-fields dt {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .coord-fields dd {
+    margin: 0;
+    color: var(--text-muted);
+  }
+  .coord-nav-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+  }
   .coord {
     background: var(--bg);
     border: 1px solid var(--border);
@@ -697,6 +897,96 @@
     flex-direction: column;
     gap: var(--s-1);
     font-size: var(--fs-2);
+  }
+  .coord-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+  }
+  .coord-heading {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .coord-scope {
+    display: flex;
+    align-items: center;
+  }
+  .coord-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-size: var(--fs-0);
+    font-weight: 700;
+    border: 1px solid var(--border);
+    background: var(--bg-raised-2);
+    color: var(--text-muted);
+  }
+  .coord-source {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: var(--s-2) 0 0 0;
+  }
+  .coord-source-label {
+    font-size: var(--fs-0);
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+  }
+  .coord-source-path {
+    display: inline-block;
+    width: fit-content;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .coord-empty {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    padding-top: var(--s-1);
+  }
+  .coord-empty-actions {
+    display: flex;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+  }
+  .coord-summary {
+    margin: 0;
+    color: var(--text);
+    line-height: var(--lh-body);
+  }
+  .coord-meta {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--s-2);
+    margin: var(--s-1) 0 0 0;
+  }
+  .coord-meta div {
+    background: var(--bg-raised-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    padding: 8px 10px;
+  }
+  .coord-meta dt {
+    margin: 0;
+    font-size: var(--fs-0);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+    color: var(--text-muted);
+  }
+  .coord-meta dd {
+    margin: 4px 0 0 0;
+    font-size: var(--fs-2);
+    font-weight: 600;
+    color: var(--text);
   }
   .advanced-body {
     margin-top: var(--s-3);

@@ -32,6 +32,17 @@
     ['Depends on', task.dependsOn?.length ? task.dependsOn.join(', ') : null],
   ])
 
+  const mergeLines = $derived<Array<readonly [string, string | null]>>([
+    ['Outcome', task.mergeRecord?.result ?? null],
+    ['Strategy', task.mergeRecord?.strategy ?? null],
+    ['From branch', task.mergeRecord?.fromBranch ?? null],
+    ['Into branch', task.mergeRecord?.toBranch ?? null],
+    ['Merged at', task.mergeRecord?.mergedAt ?? null],
+    ['Commit', task.mergeRecord?.commitSha ?? null],
+    ['PR URL', task.mergeRecord?.prUrl ?? null],
+    ['Detail', task.mergeRecord?.detail ?? null],
+  ])
+
   function toneForWarnings(warnings: ContextHealthWarning[]): 'default' | 'warn' | 'danger' {
     if (warnings.some((warning) => warning.severity === 'error')) return 'danger'
     if (warnings.some((warning) => warning.severity === 'warn')) return 'warn'
@@ -43,6 +54,22 @@
   <Card title="Provenance trail">
     <DefinitionList items={lines} />
   </Card>
+
+  {#if task.terminalSummary || task.mergeRecord}
+    <Card title="Terminal outcome" tone={task.status === 'pending_pr' ? 'warn' : 'default'}>
+      <Stack gap="3">
+        {#if task.terminalSummary?.headline}
+          <p>{task.terminalSummary.headline}</p>
+        {/if}
+        {#if task.terminalSummary?.detail && task.terminalSummary.detail !== task.mergeRecord?.prUrl}
+          <p>{task.terminalSummary.detail}</p>
+        {/if}
+        {#if task.mergeRecord}
+          <DefinitionList items={mergeLines} />
+        {/if}
+      </Stack>
+    </Card>
+  {/if}
 
   {#if task.shelveReason}
     <Card title="Shelve reason" tone="warn">

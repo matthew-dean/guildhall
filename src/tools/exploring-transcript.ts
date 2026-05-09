@@ -178,7 +178,7 @@ export async function ensureExploringTranscriptEntry(
   try {
     const existing = await fs.readFile(filePath, 'utf-8')
     const last = lastTranscriptEntry(existing)
-    if (last && last.role === input.role && last.body === input.content.trim()) {
+    if (last && last.role === input.role && last.body === (input.content ?? '').trim()) {
       return { success: true, path: filePath, created: false, appended: false }
     }
   } catch (err) {
@@ -202,7 +202,7 @@ export const appendExploringTranscriptTool = defineTool({
     const resolved = resolveTranscriptTarget(input, ctx.metadata)
     const entry = resolveTranscriptEntryDefaults(input, ctx.metadata)
     if ('error' in resolved || 'error' in entry) {
-      const error = 'error' in resolved ? resolved.error : entry.error
+      const error = 'error' in resolved ? resolved.error : ('error' in entry ? entry.error : 'Unknown transcript error')
       return {
         output: `Error appending transcript: ${error}`,
         is_error: true,

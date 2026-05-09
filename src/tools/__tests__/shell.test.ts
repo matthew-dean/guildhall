@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { runShell, runShellSync, shellTool } from '../shell.js'
 
 // ---------------------------------------------------------------------------
@@ -8,6 +11,15 @@ import { runShell, runShellSync, shellTool } from '../shell.js'
 // ---------------------------------------------------------------------------
 
 const ctx = { cwd: '/tmp', metadata: {} }
+
+function makeTaskScopedDirs(): { projectPath: string; worktreePath: string } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guildhall-shell-'))
+  const projectPath = path.join(root, 'project')
+  const worktreePath = path.join(root, '.guildhall', 'worktrees', 'task-012')
+  fs.mkdirSync(path.join(projectPath, 'web'), { recursive: true })
+  fs.mkdirSync(path.join(worktreePath, 'web'), { recursive: true })
+  return { projectPath, worktreePath }
+}
 
 describe('runShellSync — success cases', () => {
   it('returns success=true for a command that exits 0', () => {
@@ -127,6 +139,178 @@ describe('shellTool — engine-tool interface', () => {
     expect(result.is_error).toBe(false)
     expect(result.output).toContain('/tmp')
     expect(result.metadata).toMatchObject({ success: true, exitCode: 0 })
+  })
+
+  it('keeps omitted shell cwd inside the current task worktree', async () => {
+    const { projectPath, worktreePath } = makeTaskScopedDirs()
+    const result = await shellTool.execute(
+      { command: 'pwd', timeoutMs: 5000 },
+      {
+        cwd: worktreePath,
+        metadata: {
+          current_task_project_path: projectPath,
+          current_task_worktree_path: worktreePath,
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain(worktreePath)
+    expect(result.metadata).toMatchObject({
+      success: true,
+      requestedCwd: worktreePath,
+      executedCwd: worktreePath,
+    })
+  })
+
+  it('remaps explicit project-root shell cwd into the task worktree', async () => {
+    const { projectPath, worktreePath } = makeTaskScopedDirs()
+    const result = await shellTool.execute(
+      { command: 'pwd', cwd: path.join(projectPath, 'web'), timeoutMs: 5000 },
+      {
+        cwd: worktreePath,
+        metadata: {
+          current_task_project_path: projectPath,
+          current_task_worktree_path: worktreePath,
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain(path.join(worktreePath, 'web'))
+    expect(result.metadata).toMatchObject({
+      success: true,
+      requestedCwd: path.join(projectPath, 'web'),
+      executedCwd: path.join(worktreePath, 'web'),
+    })
+  })
+
+  it('reconciles verification-shaped commands to authoritative task-scoped gates', async () => {
+    const result = await shellTool.execute(
+      { command: 'echo test-stale', cwd: '/tmp', timeoutMs: 5000 },
+      {
+        cwd: '/tmp',
+        metadata: {
+          current_task_success_gates: ['echo test-corrected'],
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('test-corrected')
+    expect(result.metadata).toMatchObject({
+      requestedCommand: 'echo test-stale',
+      executedCommand: 'echo test-corrected',
+      usedAuthoritativeCommand: true,
+    })
+  })
+
+  it('prefers worker verification commands over broader hard gates when both are present', async () => {
+    const result = await shellTool.execute(
+      { command: 'echo lint-stale', cwd: '/tmp', timeoutMs: 5000 },
+      {
+        cwd: '/tmp',
+        metadata: {
+          current_task_success_gates: ['echo test-broad'],
+          current_task_verification_commands: ['echo lint-focused'],
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('lint-focused')
+    expect(result.metadata).toMatchObject({
+      requestedCommand: 'echo lint-stale',
+      executedCommand: 'echo lint-focused',
+      usedAuthoritativeCommand: true,
+    })
+  })
+
+  it('blocks verification-shaped shell commands that are outside the authoritative verification list', async () => {
+    const result = await shellTool.execute(
+      { command: 'pnpm -F web test', cwd: '/tmp', timeoutMs: 5000 },
+      {
+        cwd: '/tmp',
+        metadata: {
+          current_task_verification_commands: [
+            'pnpm lint',
+            'pnpm typecheck',
+          ],
+        },
+      },
+    )
+    expect(result.is_error).toBe(true)
+    expect(result.output).toContain('authoritative verification commands')
+    expect(result.output).toContain('pnpm lint')
+    expect(result.output).toContain('pnpm typecheck')
+    expect(result.metadata).toMatchObject({
+      requestedCommand: 'pnpm -F web test',
+      usedAuthoritativeCommand: false,
+      blockedUnauthorizedVerificationCommand: true,
+    })
+  })
+
+  it('does not rewrite non-verification shell commands from authoritative gates', async () => {
+    const result = await shellTool.execute(
+      { command: 'echo hello', cwd: '/tmp', timeoutMs: 5000 },
+      {
+        cwd: '/tmp',
+        metadata: {
+          current_task_success_gates: ['echo test-corrected'],
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('hello')
+    expect(result.metadata).toMatchObject({
+      requestedCommand: 'echo hello',
+      executedCommand: 'echo hello',
+      usedAuthoritativeCommand: false,
+    })
+  })
+
+  it('blocks shell-based file writes when an active coding task already has file-tool context', async () => {
+    const result = await shellTool.execute(
+      {
+        command: 'cat <<\'EOF\' > web/tests/unit/composables/use-collections.test.ts\nhello\nEOF',
+        cwd: '/tmp',
+        timeoutMs: 5000,
+      },
+      {
+        cwd: '/tmp',
+        metadata: {
+          current_task_worktree_path: '/tmp/.guildhall/worktrees/task-007',
+          current_task_likely_target_files: [
+            '/tmp/.guildhall/worktrees/task-007/web/tests/unit/composables/use-collections.test.ts',
+          ],
+        },
+      },
+    )
+    expect(result.is_error).toBe(true)
+    expect(result.output).toContain('Shell-based file writes are blocked')
+    expect(result.output).toContain('write-file or edit-file')
+    expect(result.metadata).toMatchObject({
+      success: false,
+      blockedDirectFileWrite: true,
+      exitCode: 2,
+    })
+  })
+
+  it('still allows shell verification commands for active coding tasks', async () => {
+    const { projectPath, worktreePath } = makeTaskScopedDirs()
+    const result = await shellTool.execute(
+      { command: 'echo verify', cwd: projectPath, timeoutMs: 5000 },
+      {
+        cwd: worktreePath,
+        metadata: {
+          current_task_project_path: projectPath,
+          current_task_worktree_path: worktreePath,
+          current_task_likely_target_files: [
+            path.join(worktreePath, 'web/tests/unit/composables/use-collections.test.ts'),
+          ],
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('verify')
+    expect(result.metadata).toMatchObject({ success: true })
+    expect((result.metadata as Record<string, unknown>).blockedDirectFileWrite).toBeUndefined()
   })
 
   it('is not declared read-only (shell can mutate state)', () => {

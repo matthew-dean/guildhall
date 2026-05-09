@@ -49,6 +49,15 @@ export interface LaneConcurrencyPlan {
   reviewerFanout: ReviewerFanoutPolicy
 }
 
+const DEFAULT_SINGLE_LANE_CONCURRENCY = 1
+
+function pickAdvancedConcurrencyOverride(
+  projectValue: number | undefined,
+  globalValue: number | undefined,
+): number | undefined {
+  return projectValue ?? globalValue
+}
+
 export function buildSelectApiClientOptions(input: {
   credentials: ResolvedProviderCredentials
   preferredProvider?: PreferredProviderKey
@@ -109,11 +118,14 @@ export function getRuntimeProviderConfig(input: {
 
 export function resolveReviewerFanoutPolicy(input: {
   provider: PreferredProviderKey | ProviderName | 'none' | null | undefined
-  requestedConcurrency: number
+  requestedConcurrency?: number
 }): ReviewerFanoutPolicy {
-  const requestedConcurrency = Math.max(1, Math.floor(input.requestedConcurrency))
   const caps = providerCapabilitiesForAnyKey(input.provider)
   const recommendedConcurrency = caps?.recommendedConcurrency ?? null
+  const requestedConcurrency = Math.max(
+    1,
+    Math.floor(input.requestedConcurrency ?? recommendedConcurrency ?? DEFAULT_SINGLE_LANE_CONCURRENCY),
+  )
   if (!recommendedConcurrency) {
     return {
       requestedConcurrency,
@@ -135,11 +147,14 @@ export function resolveReviewerFanoutPolicy(input: {
 }
 
 function clampLanePolicy(input: {
-  requestedConcurrency: number
+  requestedConcurrency?: number
   ceiling: number
   recommendedConcurrency: number | null
 }): LaneConcurrencyPolicy {
-  const requestedConcurrency = Math.max(1, Math.floor(input.requestedConcurrency))
+  const requestedConcurrency = Math.max(
+    1,
+    Math.floor(input.requestedConcurrency ?? input.recommendedConcurrency ?? DEFAULT_SINGLE_LANE_CONCURRENCY),
+  )
   const ceiling = Math.max(1, Math.floor(input.ceiling))
   const recommendedConcurrency = input.recommendedConcurrency == null
     ? null
@@ -166,6 +181,7 @@ export function resolveLaneConcurrencyPlan(input: {
   dispatchCapacity: number
 }): LaneConcurrencyPlan {
   const projectCfg = readProjectConfig(input.projectPath)
+  const globalCfg = readGlobalConfig()
   const dispatchCapacity = Math.max(1, Math.floor(input.dispatchCapacity))
   return {
     spec: clampLanePolicy({
@@ -190,7 +206,10 @@ export function resolveLaneConcurrencyPlan(input: {
     }),
     reviewerFanout: resolveReviewerFanoutPolicy({
       provider: input.provider,
-      requestedConcurrency: projectCfg.reviewerFanoutConcurrency,
+      requestedConcurrency: pickAdvancedConcurrencyOverride(
+        projectCfg.reviewerFanoutConcurrency,
+        globalCfg.reviewerFanoutConcurrency,
+      ),
     }),
   }
 }

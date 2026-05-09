@@ -164,6 +164,51 @@ function findUniqueRelativeFile(rootDir: string, needle: string): string | null 
   return matches.length === 1 ? normalizeCommand(matches[0]!) : null
 }
 
+function globPatternToRegExp(pattern: string): RegExp {
+  const escaped = pattern
+    .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*')
+  return new RegExp(`^${escaped}$`)
+}
+
+function findRelativeFiles(rootDir: string, needle: string): string[] {
+  const normalizedNeedle = needle.trim()
+  if (!normalizedNeedle) return []
+  if (!normalizedNeedle.includes('*')) {
+    const unique = findUniqueRelativeFile(rootDir, normalizedNeedle)
+    return unique ? [unique] : []
+  }
+
+  const matcher = globPatternToRegExp(normalizedNeedle.replace(/\\/g, '/'))
+  const matches: string[] = []
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: rootDir, depth: 0 }]
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    if (current.depth > 6) continue
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(current.dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.name === 'node_modules' || entry.name === '.git') continue
+      const fullPath = path.join(current.dir, entry.name)
+      if (entry.isDirectory()) {
+        queue.push({ dir: fullPath, depth: current.depth + 1 })
+        continue
+      }
+      if (!entry.isFile()) continue
+      const relativePath = normalizeCommand(path.relative(rootDir, fullPath)).replace(/\\/g, '/')
+      if (matcher.test(relativePath) || matcher.test(path.basename(relativePath))) {
+        matches.push(relativePath)
+      }
+    }
+  }
+
+  return matches.sort()
+}
+
 function candidateNeedles(raw: string): string[] {
   const trimmed = raw.trim().replace(/^`|`$/g, '')
   if (!trimmed) return []
@@ -194,16 +239,16 @@ function maybeRewritePnpmVitestCommand(
 
   const normalizedRest = normalizeCommand(rest)
   const runWithTarget = /(?:^| )--run\s+([^\s][^]*)$/.exec(normalizedRest)
-  if (!runWithTarget) return null
-
-  const target = runWithTarget[1]!.trim()
+  const passthroughTarget = /^(?:--\s+)?([^\s][^]*)$/.exec(normalizedRest)
+  const target = (runWithTarget?.[1] ?? passthroughTarget?.[1] ?? '').trim()
   if (!target || target.startsWith('-')) return null
-  const resolvedTarget = findUniqueRelativeFile(pkg.dir, target)
-  if (!resolvedTarget) return null
+  const resolvedTargets = findRelativeFiles(pkg.dir, target)
+  if (resolvedTargets.length === 0) return null
+  const targetArgs = resolvedTargets.join(' ')
 
   return pkg.relativeDir === '.'
-    ? normalizeCommand(`pnpm vitest --run ${resolvedTarget}`)
-    : normalizeCommand(`cd ${pkg.relativeDir} && pnpm vitest --run ${resolvedTarget}`)
+    ? normalizeCommand(`pnpm vitest --run ${targetArgs}`)
+    : normalizeCommand(`cd ${pkg.relativeDir} && pnpm vitest --run ${targetArgs}`)
 }
 
 function owningPackageForRelativeFile(
@@ -273,15 +318,15 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
   const dirCommand = /^pnpm\s+--dir\s+(\S+)\s+([a-z0-9:_-]+)(.*)$/i.exec(normalized)
   if (dirCommand) {
     const [, relDir, script, rest = ''] = dirCommand
-    const targetDir = path.resolve(projectPath, relDir)
+    const targetDir = path.resolve(projectPath, relDir!)
     const parsed = readPackageScripts(targetDir)
-    if (parsed?.scripts.has(script)) {
+    if (script && parsed?.scripts.has(script)) {
       const pkg: WorkspacePackage | null =
         typeof parsed.name === 'string'
           ? {
               name: parsed.name,
               dir: targetDir,
-              relativeDir: relDir,
+              relativeDir: relDir!,
               scripts: parsed.scripts,
               scriptBodies: parsed.scriptBodies,
             }
@@ -309,13 +354,13 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
       return reordered
     }
 
-    const scriptOwners = packages.filter((pkg) => pkg.scripts.has(script))
+    const scriptOwners = script ? packages.filter((pkg) => pkg.scripts.has(script)) : []
     if (scriptOwners.length === 1) {
       const owner = scriptOwners[0]!
-      const rewritten = maybeRewritePnpmVitestCommand(owner, script, rest)
+      const rewritten = maybeRewritePnpmVitestCommand(owner, script!, rest)
       if (rewritten) return rewritten
       const relDir = owner.relativeDir
-      return normalizeCommand(`pnpm --dir ${relDir} ${script}${rest}`)
+      return normalizeCommand(`pnpm --dir ${relDir} ${script!}${rest}`)
     }
     return null
   }
@@ -323,7 +368,7 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
   const rootScriptCommand = /^pnpm\s+([a-z0-9:_-]+)(.*)$/i.exec(normalized)
   if (rootScriptCommand) {
     const [, script, rest = ''] = rootScriptCommand
-    if (rootScripts.has(script)) {
+    if (script && rootScripts.has(script)) {
       const pkg: WorkspacePackage | null =
         typeof rootPackage?.name === 'string'
           ? {
@@ -338,13 +383,13 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
       if (rewritten) return rewritten
       return normalizeCommand(`pnpm ${script}${rest}`)
     }
-    const scriptOwners = packages.filter((pkg) => pkg.scripts.has(script))
+    const scriptOwners = script ? packages.filter((pkg) => pkg.scripts.has(script)) : []
     if (scriptOwners.length === 1) {
       const owner = scriptOwners[0]!
-      const rewritten = maybeRewritePnpmVitestCommand(owner, script, rest)
+      const rewritten = maybeRewritePnpmVitestCommand(owner, script!, rest)
       if (rewritten) return rewritten
       const relDir = owner.relativeDir
-      return normalizeCommand(`pnpm --dir ${relDir} ${script}${rest}`)
+      return normalizeCommand(`pnpm --dir ${relDir} ${script!}${rest}`)
     }
     return null
   }
@@ -437,6 +482,97 @@ function mergeAcceptanceAndProjectGates(
   return merged
 }
 
+function deriveFocusedVerificationBuckets(
+  projectPath: string,
+  likelyTargetFiles: readonly string[],
+): Map<GateCommandKind, string[]> {
+  const buckets = new Map<GateCommandKind, string[]>()
+  const workspacePackages = readWorkspacePackages(projectPath)
+  const push = (kind: GateCommandKind, command: string) => {
+    const normalized = normalizeCommand(command)
+    if (!normalized) return
+    const existing = buckets.get(kind) ?? []
+    if (!existing.includes(normalized)) existing.push(normalized)
+    buckets.set(kind, existing)
+  }
+
+  for (const rawFile of likelyTargetFiles) {
+    const relativeFile = resolveRelativeFileFromDescription(projectPath, rawFile)
+    if (!relativeFile) continue
+    const owner = owningPackageForRelativeFile(workspacePackages, relativeFile)
+    if (!owner) continue
+    if (/\.(?:spec|test)\.[a-z0-9]+$/i.test(relativeFile) && owner.scripts.has('test')) {
+      const packageRelativeFile =
+        owner.relativeDir === '.'
+          ? relativeFile
+          : normalizeCommand(path.relative(owner.dir, path.join(projectPath, relativeFile)))
+      push(
+        'test',
+        owner.relativeDir === '.'
+          ? `pnpm vitest --run ${packageRelativeFile}`
+          : `cd ${owner.relativeDir} && pnpm vitest --run ${packageRelativeFile}`,
+      )
+    }
+  }
+
+  return buckets
+}
+
+function mergeVerificationCommands(
+  acceptanceBuckets: Map<GateCommandKind, string[]>,
+  focusedBuckets: Map<GateCommandKind, string[]>,
+  projectCommands: readonly string[] | undefined,
+  narrowTaskHint: boolean,
+): readonly string[] | undefined {
+  if (
+    acceptanceBuckets.size === 0 &&
+    focusedBuckets.size === 0 &&
+    !narrowTaskHint
+  ) {
+    return projectCommands
+  }
+
+  const merged: string[] = []
+  const seen = new Set<string>()
+  const pushAll = (commands: readonly string[]) => {
+    for (const command of commands) {
+      const normalized = normalizeCommand(command)
+      if (normalized.length === 0 || seen.has(normalized)) continue
+      seen.add(normalized)
+      merged.push(command.trim())
+    }
+  }
+
+  for (const kind of ['typecheck', 'build', 'test', 'lint'] as const) {
+    const acceptance = acceptanceBuckets.get(kind)
+    if (acceptance && acceptance.length > 0) {
+      pushAll(acceptance)
+      continue
+    }
+
+    const focused = focusedBuckets.get(kind)
+    if (focused && focused.length > 0) {
+      pushAll(focused)
+      continue
+    }
+
+    // Keep worker verification conservative for narrow tasks: only inherit the
+    // broad repo-wide test command when the task itself asked for tests or we
+    // derived a focused test target from likely files.
+    if (kind === 'test' && narrowTaskHint) continue
+
+    const fallback = (projectCommands ?? []).filter((command) => classifyGateCommand(command) === kind)
+    pushAll(fallback)
+  }
+
+  if (projectCommands) {
+    const remaining = projectCommands.filter((command) => classifyGateCommand(command) === 'other')
+    pushAll(remaining)
+  }
+
+  return merged
+}
+
 export function resolveEffectiveTaskProjectPath(
   task: Pick<Task, 'projectPath'>,
   workspaceProjectPath: string,
@@ -475,6 +611,47 @@ export function resolveEffectiveTaskSuccessGates(input: {
   return mergeAcceptanceAndProjectGates(acceptanceBuckets, undefined)
 }
 
+export function resolveEffectiveTaskVerificationCommands(input: {
+  task: Pick<Task, 'projectPath' | 'acceptanceCriteria'>
+  workspaceProjectPath: string
+  workspaceBootstrap?: BootstrapBlock
+  likelyTargetFiles?: readonly string[]
+}): readonly string[] | undefined {
+  const taskProjectPath = resolveEffectiveTaskProjectPath(
+    input.task,
+    input.workspaceProjectPath,
+  )
+  const workspaceProjectPath = path.resolve(input.workspaceProjectPath)
+  const acceptanceBuckets = deriveAutomatedAcceptanceCommands(input.task, taskProjectPath)
+  const focusedBuckets = deriveFocusedVerificationBuckets(
+    taskProjectPath,
+    input.likelyTargetFiles ?? [],
+  )
+  const narrowTaskHint = (input.likelyTargetFiles ?? []).length > 0
+
+  if (taskProjectPath !== workspaceProjectPath) {
+    const taskScoped = detectProjectGateCommands(taskProjectPath)
+    const merged = mergeVerificationCommands(
+      acceptanceBuckets,
+      focusedBuckets,
+      taskScoped,
+      narrowTaskHint,
+    )
+    if (merged && merged.length > 0) return merged
+  }
+
+  if (hasBootstrapSignal(input.workspaceBootstrap)) {
+    return mergeVerificationCommands(
+      acceptanceBuckets,
+      focusedBuckets,
+      effectiveBootstrapGateCommands(input.workspaceBootstrap!),
+      narrowTaskHint,
+    )
+  }
+
+  return mergeVerificationCommands(acceptanceBuckets, focusedBuckets, undefined, narrowTaskHint)
+}
+
 export function renderTaskScopedGateInstructions(input: {
   projectPath: string
   successGates: readonly string[] | undefined
@@ -507,6 +684,42 @@ export function renderTaskScopedGateInstructions(input: {
     ...input.successGates.map((gate) => `- \`${gate}\``),
     '',
     'When you call `run-gates`, set `cwd` to the task project path above and use these commands exactly.',
+  )
+  return lines.join('\n')
+}
+
+export function renderTaskScopedVerificationInstructions(input: {
+  projectPath: string
+  successGates: readonly string[] | undefined
+}): string {
+  const lines = [
+    '## Authoritative verification commands',
+    '',
+    `When you verify work for this task, run commands against \`${input.projectPath}\`. This task path is authoritative even when the outer workspace root differs.`,
+  ]
+
+  if (input.successGates === undefined) {
+    lines.push(
+      '',
+      'No task-scoped verification commands were derived for this task path. Verify conservatively against the task project path above and avoid inventing extra repo-wide gates.',
+    )
+    return lines.join('\n')
+  }
+
+  if (input.successGates.length === 0) {
+    lines.push(
+      '',
+      'No verified shell commands are currently configured for this task path. Only run verification that the task itself names explicitly.',
+    )
+    return lines.join('\n')
+  }
+
+  lines.push(
+    '',
+    'Use these commands as the authoritative verification commands for this task:',
+    ...input.successGates.map((gate) => `- \`${gate}\``),
+    '',
+    'If you call `shell` for verification and your drafted command differs, Guildhall will reconcile it back to this authoritative list.',
   )
   return lines.join('\n')
 }

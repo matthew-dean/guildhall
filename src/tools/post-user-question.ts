@@ -87,6 +87,23 @@ function parseStructuredOptionLine(line: string): string | null {
   return null
 }
 
+function isPlanningPrompt(promptBody: string): boolean {
+  const normalized = promptBody
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+  return (
+    /^(?:and\s+)?then i['’]ll\b/.test(normalized) ||
+    /^i['’]m going to\b/.test(normalized) ||
+    /^i am going to\b/.test(normalized) ||
+    /^next i['’]ll\b/.test(normalized) ||
+    /^next up\b/.test(normalized) ||
+    /^here['’]s what i['’]ll\b/.test(normalized) ||
+    /once you (?:pick|answer).+i['’]ll draft\b/.test(normalized)
+  )
+}
+
 function resolveQuestionDefaults(
   input: Pick<PostUserQuestionInput, 'tasksPath' | 'taskId' | 'askedBy'>,
   metadata: Record<string, unknown>,
@@ -128,6 +145,7 @@ function inferQuestionsFromAssistantText(text: string): InferredQuestion[] {
     const promptBody = (headingPrompt?.[1] ?? headingPrompt?.[2] ?? normalizedPromptLine).trim()
     const promptLike = /pick one\b|choose one\b|select one\b|\?$|:\s*$|success look like/i.test(promptBody)
     if (!promptLike) continue
+    if (isPlanningPrompt(promptBody)) continue
     const summaryLike =
       /i['’]ll draft the full spec with\b|i will draft the full spec with\b|once you (?:pick|answer).+i['’]ll draft\b/i
         .test(promptBody)
@@ -191,6 +209,7 @@ function inferQuestionsFromAssistantText(text: string): InferredQuestion[] {
 
   const sectionQuestions = sections
     .map<InferredQuestion | null>((section) => {
+      if (isPlanningPrompt(section.heading)) return null
       const choices = section.lines
         .map((line) => parseStructuredOptionLine(line))
         .filter(Boolean)
@@ -330,7 +349,7 @@ export const postUserQuestionTool = defineTool({
     const resolved = resolveQuestionDefaults(input, ctx.metadata)
     const payload = resolveQuestionPayload(input, ctx.metadata)
     if ('error' in resolved || 'error' in payload) {
-      const error = 'error' in resolved ? resolved.error : payload.error
+      const error = 'error' in resolved ? resolved.error : ('error' in payload ? payload.error : 'Unknown question error')
       return {
         output: `Error posting question: ${error}`,
         is_error: true,

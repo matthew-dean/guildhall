@@ -32,6 +32,7 @@ async function git(
     cwd: repoRoot,
     env: {
       ...process.env,
+      GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_AUTHOR_NAME: 'Test',
       GIT_AUTHOR_EMAIL: 'test@example.invalid',
       GIT_COMMITTER_NAME: 'Test',

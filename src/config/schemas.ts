@@ -224,6 +224,12 @@ export const GlobalConfig = z.object({
   // to another paid/cloud provider. Default is deliberately false; projects
   // can opt in through their local .guildhall/config.yaml.
   allowPaidProviderFallback: z.boolean().default(false),
+
+  /**
+   * Advanced override for reviewer persona fan-out. Omit to let Guildhall pick
+   * a sane default from the active provider's advertised capacity.
+   */
+  reviewerFanoutConcurrency: z.number().int().positive().max(16).optional(),
 })
 export type GlobalConfig = z.infer<typeof GlobalConfig>
 

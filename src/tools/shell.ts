@@ -17,6 +17,12 @@
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import { execSync, spawn } from 'node:child_process'
+import path from 'node:path'
+import {
+  classifyGateCommand,
+  parseAuthoritativeCommands,
+  reconcileShellCommandWithAuthority,
+} from './gate-command-authority.js'
 
 const OUTPUT_TRUNCATE_LIMIT = 12_000
 
@@ -43,6 +49,42 @@ function resolveShellCwd(inputCwd: string | undefined, fallbackCwd: string | und
     throw new Error('Shell tool requires a working directory, but none was provided or available from runtime context.')
   }
   return cwd
+}
+
+function reconcileShellCwdWithTaskScope(
+  requestedCwd: string,
+  metadata: Record<string, unknown> | undefined,
+): string {
+  const worktreePath = String(metadata?.['current_task_worktree_path'] ?? '').trim()
+  if (!worktreePath) return requestedCwd
+
+  const normalizedWorktree = path.resolve(worktreePath)
+  const normalizedRequested = path.resolve(requestedCwd)
+  const relativeToWorktree = path.relative(normalizedWorktree, normalizedRequested)
+  if (
+    relativeToWorktree === '' ||
+    (!relativeToWorktree.startsWith(`..${path.sep}`) &&
+      relativeToWorktree !== '..' &&
+      !path.isAbsolute(relativeToWorktree))
+  ) {
+    return normalizedRequested
+  }
+
+  const projectPath = String(metadata?.['current_task_project_path'] ?? '').trim()
+  if (!projectPath) return normalizedWorktree
+
+  const normalizedProject = path.resolve(projectPath)
+  const relativeToProject = path.relative(normalizedProject, normalizedRequested)
+  if (
+    relativeToProject === '' ||
+    (!relativeToProject.startsWith(`..${path.sep}`) &&
+      relativeToProject !== '..' &&
+      !path.isAbsolute(relativeToProject))
+  ) {
+    return path.resolve(normalizedWorktree, relativeToProject)
+  }
+
+  return normalizedRequested
 }
 
 const SCAFFOLD_MARKERS = [
@@ -129,6 +171,41 @@ function formatTimeoutOutput(raw: string, command: string, timeoutMs: number): s
   const hint = interactiveHint(command, text)
   if (hint) parts.push('', hint)
   return parts.join('\n')
+}
+
+function hasTaskScopedFileMutationGuard(metadata: Record<string, unknown> | undefined): boolean {
+  if (!metadata) return false
+  const worktreePath = String(metadata['current_task_worktree_path'] ?? '').trim()
+  if (worktreePath) return true
+  const missingTarget = String(metadata['current_missing_likely_target_file'] ?? '').trim()
+  if (missingTarget) return true
+  const likelyTargets = metadata['current_task_likely_target_files']
+  return Array.isArray(likelyTargets)
+    && likelyTargets.some((value) => typeof value === 'string' && value.trim().length > 0)
+}
+
+function looksLikeDirectFileWrite(command: string): boolean {
+  const hasStdoutRedirect = /(^|[^0-9])>>?/.test(command)
+  const hasHereDoc = /<<[-~]?['"]?[A-Za-z0-9_]+['"]?/.test(command)
+  const hasTee = /\btee\b/.test(command)
+  return hasStdoutRedirect || hasHereDoc || hasTee
+}
+
+function directFileWriteGuardMessage(metadata: Record<string, unknown> | undefined): string {
+  const missingTarget = String(metadata?.['current_missing_likely_target_file'] ?? '').trim()
+  const likelyTargets = Array.isArray(metadata?.['current_task_likely_target_files'])
+    ? (metadata?.['current_task_likely_target_files'] as unknown[])
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : []
+  const preferredTarget = missingTarget || likelyTargets[0] || ''
+  const targetHint = preferredTarget
+    ? ` Use write-file or edit-file for ${preferredTarget} instead.`
+    : ' Use write-file or edit-file instead.'
+  return (
+    'Shell-based file writes are blocked for active coding tasks. '
+    + 'Use shell for builds, tests, lint, and focused verification only.'
+    + targetHint
+  )
 }
 
 function normalizeExecErrorOutput(err: {
@@ -290,15 +367,65 @@ export const shellTool = defineTool({
   },
   isReadOnly: () => false,
   execute: async (input, ctx) => {
+    const authoritativeCommands = parseAuthoritativeCommands(ctx.metadata)
+    const reconciled = reconcileShellCommandWithAuthority(input.command, authoritativeCommands)
+    const requestedKind = classifyGateCommand(input.command)
+    if (
+      authoritativeCommands &&
+      authoritativeCommands.length > 0 &&
+      requestedKind !== 'other' &&
+      !reconciled.usedAuthority
+    ) {
+      return {
+        output:
+          `This task already has authoritative verification commands. ` +
+          `Do not invent a different ${requestedKind} command here.\n\n` +
+          `Use one of:\n${authoritativeCommands.map((command) => `- ${command}`).join('\n')}`,
+        is_error: true,
+        metadata: {
+          success: false,
+          exitCode: 2,
+          requestedCommand: input.command,
+          executedCommand: reconciled.command,
+          usedAuthoritativeCommand: false,
+          blockedUnauthorizedVerificationCommand: true,
+          authoritativeCommands,
+        } as unknown as Record<string, unknown>,
+      }
+    }
+    if (hasTaskScopedFileMutationGuard(ctx.metadata) && looksLikeDirectFileWrite(reconciled.command)) {
+      return {
+        output: directFileWriteGuardMessage(ctx.metadata),
+        is_error: true,
+        metadata: {
+          success: false,
+          exitCode: 2,
+          requestedCommand: input.command,
+          executedCommand: reconciled.command,
+          usedAuthoritativeCommand: reconciled.usedAuthority,
+          blockedDirectFileWrite: true,
+        } as unknown as Record<string, unknown>,
+      }
+    }
+    const requestedCwd = resolveShellCwd(input.cwd, ctx.cwd)
+    const effectiveCwd = reconcileShellCwdWithTaskScope(requestedCwd, ctx.metadata)
     const normalizedInput: ShellInput = {
       ...input,
-      cwd: input.cwd ?? ctx.cwd,
+      command: reconciled.command,
+      cwd: effectiveCwd,
     }
     const result = await runShell(normalizedInput)
     return {
       output: result.output,
       is_error: !result.success,
-      metadata: result as unknown as Record<string, unknown>,
+      metadata: {
+        ...result,
+        requestedCommand: input.command,
+        executedCommand: reconciled.command,
+        usedAuthoritativeCommand: reconciled.usedAuthority,
+        requestedCwd,
+        executedCwd: effectiveCwd,
+      } as unknown as Record<string, unknown>,
     }
   },
 })

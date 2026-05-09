@@ -193,6 +193,36 @@ describe('updateProductBrief', () => {
     })
   })
 
+  it('tool execute recovers string antiPatterns into a normalized array', async () => {
+    const result = await updateProductBriefTool.execute(
+      {
+        userJob: 'You want generated database types wired into the smallest useful Knit surfaces.',
+        successMetric: 'The generated Database types are used in the intended Knit consumer without widening the migration.',
+        antiPatterns: [
+          '- Do not widen this into a full-schema migration.',
+          '- Do not change the generation command or output path.',
+        ].join('\n'),
+      },
+      {
+        cwd: '/tmp',
+        metadata: {
+          tasks_path: tasksPath,
+          current_task_id: 'task-1',
+          current_agent_id: 'spec-agent',
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+
+    const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    expect(q.tasks[0]?.productBrief).toMatchObject({
+      antiPatterns: [
+        'Do not widen this into a full-schema migration.',
+        'Do not change the generation command or output path.',
+      ],
+    })
+  })
+
   it('skips evidence-preamble prose when inferring a fallback brief from assistant text', async () => {
     const result = await updateProductBriefTool.execute(
       {},

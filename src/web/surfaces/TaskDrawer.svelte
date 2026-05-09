@@ -394,7 +394,7 @@
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.5);
-    z-index: 150;
+    z-index: var(--z-drawer-backdrop);
   }
   .gh-drawer {
     position: fixed;
@@ -404,7 +404,7 @@
     height: 100vh;
     background: var(--bg-raised);
     border-left: 1px solid var(--border);
-    z-index: 151;
+    z-index: var(--z-drawer);
     display: flex;
     flex-direction: column;
   }

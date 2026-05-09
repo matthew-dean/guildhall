@@ -26,6 +26,7 @@ export interface ContextDebugRecord {
   agentName: string
   agentRole: string
   modelId: string
+  temperature?: number
   workspacePath: string
   taskProjectPath: string
   activeWorktreePath?: string
@@ -227,6 +228,7 @@ export async function writeContextDebugRecord(input: {
   ctx: BuiltContext
   agentName: string
   modelId: string
+  temperature?: number
   prompt: string
 }): Promise<ContextDebugRecord> {
   const at = new Date().toISOString()
@@ -242,14 +244,14 @@ export async function writeContextDebugRecord(input: {
     sections,
     contextChars,
     workspacePath: input.workspacePath,
-    activeWorktreePath: input.activeWorktreePath,
+    ...(input.activeWorktreePath ? { activeWorktreePath: input.activeWorktreePath } : {}),
     agentRole,
   })
   const reasons = explainContext({
     task: input.task,
     ctx: input.ctx,
     taskProjectPath,
-    activeWorktreePath: input.activeWorktreePath,
+    ...(input.activeWorktreePath ? { activeWorktreePath: input.activeWorktreePath } : {}),
     agentRole,
   })
 
@@ -269,6 +271,7 @@ export async function writeContextDebugRecord(input: {
     `- Status: ${input.task.status}`,
     `- Agent: ${input.agentName} (${agentRole})`,
     `- Model: ${input.modelId}`,
+    input.temperature !== undefined ? `- Temperature: ${input.temperature}` : '',
     `- Workspace: ${input.workspacePath}`,
     `- Task project path: ${taskProjectPath}`,
     input.activeWorktreePath ? `- Active worktree: ${input.activeWorktreePath}` : '',
@@ -299,6 +302,7 @@ export async function writeContextDebugRecord(input: {
     agentName: input.agentName,
     agentRole,
     modelId: input.modelId,
+    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
     workspacePath: input.workspacePath,
     taskProjectPath,
     ...(input.activeWorktreePath ? { activeWorktreePath: input.activeWorktreePath } : {}),

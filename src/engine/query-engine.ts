@@ -45,6 +45,7 @@ export interface QueryEngineOptions {
   model: string
   systemPrompt: string
   maxTokens?: number
+  temperature?: number
   contextWindowTokens?: number | null
   autoCompactThresholdTokens?: number | null
   maxTurns?: number | null
@@ -74,6 +75,7 @@ export class QueryEngine {
   private model: string
   private systemPrompt: string
   private readonly maxTokens: number
+  private readonly temperature: number | undefined
   private readonly contextWindowTokens: number | null | undefined
   private readonly autoCompactThresholdTokens: number | null | undefined
   private maxTurns: number | null
@@ -99,6 +101,7 @@ export class QueryEngine {
     this.model = options.model
     this.systemPrompt = options.systemPrompt
     this.maxTokens = options.maxTokens ?? 4096
+    this.temperature = options.temperature
     this.contextWindowTokens = options.contextWindowTokens
     this.autoCompactThresholdTokens = options.autoCompactThresholdTokens
     this.maxTurns = options.maxTurns ?? 8
@@ -272,6 +275,7 @@ export class QueryEngine {
       model: this.model,
       systemPrompt: this.systemPrompt,
       maxTokens: this.maxTokens,
+      ...(this.temperature !== undefined ? { temperature: this.temperature } : {}),
       ...(this.contextWindowTokens !== undefined
         ? { contextWindowTokens: this.contextWindowTokens }
         : {}),

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
+import { writeCheckpoint } from '@guildhall/tools'
 import { buildServeApp, filterEventsForTask } from '../serve.js'
 
 // Integration tests for the v0.2 UI endpoints:
@@ -61,6 +62,18 @@ describe('GET /api/project/task/:id', () => {
     expect(body.task?.status).toBe('in_progress')
     expect(Array.isArray(body.recentEvents)).toBe(true)
     expect(Array.isArray(body.contextDebug)).toBe(true)
+  })
+
+  it('heals stale worker ownership for in_progress tasks when reading task detail', async () => {
+    await seedTask('task-1', { assignedTo: null })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.task?.assignedTo).toBe('worker-agent')
+
+    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    expect(raw.tasks[0]?.assignedTo).toBe('worker-agent')
   })
 
   it('returns recent context debug records for the task', async () => {
@@ -144,6 +157,264 @@ describe('GET /api/project/task/:id', () => {
       'Added acceptance criterion: Redirects to /<slug> when membership resolves.',
       'Keep the /signup fallback explicit.',
     ])
+  })
+
+  it('surfaces derived reviewer, self-critique, and checkpoint summaries', async () => {
+    await seedTask('task-1', {
+      status: 'review',
+      notes: [
+        {
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          timestamp: new Date(Date.now() - 60_000).toISOString(),
+          content: 'Self-critique: focused use-collections tests are green.',
+        },
+        {
+          agentId: 'reviewer-fanout',
+          role: 'reviewer',
+          timestamp: new Date().toISOString(),
+          content: '**Aggregated revisions from 2 personas:**\n\nNeed direct file excerpts in the packet.',
+        },
+      ],
+    })
+    await writeCheckpoint({
+      tasksPath: path.join(memoryDir, 'TASKS.json'),
+      memoryDir,
+      taskId: 'task-1',
+      agentId: 'worker-agent',
+      intent: 'Verify focused unit tests',
+      nextPlannedAction: 'Hand off to review',
+      filesTouched: ['web/tests/unit/composables/use-collections.test.ts'],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.task?.latestReviewerSummary).toContain('Aggregated revisions')
+    expect(body.task?.latestSelfCritique).toContain('focused use-collections tests are green')
+    expect(body.task?.latestCheckpoint?.intent).toBe('Verify focused unit tests')
+    expect(body.task?.latestCheckpoint?.nextPlannedAction).toBe('Hand off to review')
+  })
+
+  it('hides stale reviewer summaries after a max-revisions retry was resolved', async () => {
+    await seedTask('task-1', {
+      status: 'in_progress',
+      notes: [
+        {
+          agentId: 'reviewer-fanout',
+          role: 'reviewer',
+          timestamp: '2026-05-09T01:00:00.000Z',
+          content: 'Recommended task-local revisions:\n- Add broad platform ceremony.',
+        },
+      ],
+      escalations: [
+        {
+          id: 'esc-task-1-3',
+          taskId: 'task-1',
+          agentId: 'reviewer-fanout',
+          reason: 'max_revisions_exceeded',
+          summary: 'Exceeded maxRevisions (3). Reviewer fan-out keeps rejecting.',
+          raisedAt: '2026-05-09T01:02:00.000Z',
+          resolvedAt: '2026-05-09T01:05:00.000Z',
+          resolvedBy: 'human',
+          resolution: 'Retry with narrower reviewer scope.',
+        },
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const detailRes = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    expect(detailRes.status).toBe(200)
+    const detailBody = (await detailRes.json()) as Record<string, any>
+    expect(detailBody.task?.latestReviewerSummary).toBeUndefined()
+
+    const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+    expect(projectRes.status).toBe(200)
+    const projectBody = (await projectRes.json()) as Record<string, any>
+    const task = projectBody.tasks?.find((entry: Record<string, any>) => entry.id === 'task-1')
+    expect(task?.latestReviewerSummary).toBeUndefined()
+  })
+
+  it('includes derived reviewer/self-critique/checkpoint summaries on /api/project task rows too', async () => {
+    await seedTask('task-1', {
+      status: 'review',
+      notes: [
+        {
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          timestamp: new Date(Date.now() - 60_000).toISOString(),
+          content: 'Self-critique: focused use-collections tests are green.',
+        },
+        {
+          agentId: 'reviewer-fanout',
+          role: 'reviewer',
+          timestamp: new Date().toISOString(),
+          content: '**Aggregated revisions from 2 personas:**\n\nNeed direct file excerpts in the packet.',
+        },
+      ],
+    })
+    await writeCheckpoint({
+      tasksPath: path.join(memoryDir, 'TASKS.json'),
+      memoryDir,
+      taskId: 'task-1',
+      agentId: 'worker-agent',
+      intent: 'Verify focused unit tests',
+      nextPlannedAction: 'Hand off to review',
+      filesTouched: ['web/tests/unit/composables/use-collections.test.ts'],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request('http://localhost/api/project'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    const task = body.tasks?.find((entry: Record<string, any>) => entry.id === 'task-1')
+    expect(task?.latestReviewerSummary).toContain('Aggregated revisions')
+    expect(task?.latestSelfCritique).toContain('focused use-collections tests are green')
+    expect(task?.latestCheckpoint?.intent).toBe('Verify focused unit tests')
+  })
+
+  it('derives terminal summaries from merge records on task detail and project rows', async () => {
+    await seedTask('task-1', {
+      status: 'done',
+      completedAt: '2026-05-08T18:48:00.000Z',
+      mergeRecord: {
+        fromBranch: 'guildhall/task-1',
+        toBranch: 'main',
+        strategy: 'ff_only_local',
+        result: 'merged',
+        commitSha: 'abc123',
+        mergedAt: '2026-05-08T18:47:00.000Z',
+      },
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const detailRes = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    expect(detailRes.status).toBe(200)
+    const detailBody = (await detailRes.json()) as Record<string, any>
+    expect(detailBody.task?.terminalSummary?.headline).toBe('Merged locally into main.')
+
+    const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+    expect(projectRes.status).toBe(200)
+    const projectBody = (await projectRes.json()) as Record<string, any>
+    const task = projectBody.tasks?.find((entry: Record<string, any>) => entry.id === 'task-1')
+    expect(task?.terminalSummary?.headline).toBe('Merged locally into main.')
+  })
+
+  it('explains skipped automatic merges truthfully for done tasks', async () => {
+    await seedTask('task-1', {
+      status: 'done',
+      mergeRecord: {
+        fromBranch: '<unknown>',
+        toBranch: '<unknown>',
+        strategy: 'ff_only_local',
+        result: 'skipped',
+        mergedAt: '2026-05-08T18:47:00.000Z',
+        detail: 'worktree isolation disabled — merge skipped',
+      },
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.task?.terminalSummary?.headline).toBe(
+      'Task completed without an automatic merge.',
+    )
+    expect(body.task?.terminalSummary?.detail).toBe(
+      'worktree isolation disabled — merge skipped',
+    )
+  })
+
+  it('derives self-critique summaries from worker-role notes when the content is explicitly labeled', async () => {
+    await seedTask('task-1', {
+      status: 'review',
+      notes: [
+        {
+          agentId: 'worker-agent',
+          role: 'Worker',
+          timestamp: new Date(Date.now() - 60_000).toISOString(),
+          content: '**Self-critique:** focused use-workspace verification passed.',
+        },
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.task?.latestSelfCritique).toContain('focused use-workspace verification passed')
+  })
+
+  it('derives self-critique summaries from implementer-role notes when the content is explicitly labeled', async () => {
+    await seedTask('task-1', {
+      status: 'review',
+      notes: [
+        {
+          agentId: 'worker-agent',
+          role: 'implementer',
+          timestamp: new Date(Date.now() - 60_000).toISOString(),
+          content: '**Self-critique:** focused use-presence verification passed.',
+        },
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.task?.latestSelfCritique).toContain('focused use-presence verification passed')
+  })
+
+  it('derives self-critique summaries from worker persona-role notes when the content is explicitly labeled', async () => {
+    await seedTask('task-1', {
+      status: 'review',
+      notes: [
+        {
+          agentId: 'worker-agent',
+          role: 'Backend Engineer',
+          timestamp: new Date(Date.now() - 60_000).toISOString(),
+          content: '**Self-critique:** focused restore handler verification passed.',
+        },
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.task?.latestSelfCritique).toContain('focused restore handler verification passed')
+  })
+
+  it('normalizes stale checkpoint self-critique instructions when a worker persona-role note already exists', async () => {
+    await seedTask('task-1', {
+      status: 'in_progress',
+      notes: [
+        {
+          agentId: 'worker-agent',
+          role: 'Backend Engineer',
+          timestamp: new Date(Date.now() - 60_000).toISOString(),
+          content: '**Self-critique:** focused restore handler verification passed.',
+        },
+      ],
+    })
+    await writeCheckpoint({
+      tasksPath: path.join(memoryDir, 'TASKS.json'),
+      memoryDir,
+      taskId: 'task-1',
+      agentId: 'worker-agent',
+      intent: 'Worker recovery checkpoint after verified progress.',
+      nextPlannedAction: "Write or refresh self-critique note, then transition task to 'review'",
+      filesTouched: ['web/server/api/pages/[id]/restore.post.ts'],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.task?.latestCheckpoint?.nextPlannedAction).toBe(
+      'Resume from the latest self-critique and recorded verification evidence, then hand off to review.',
+    )
   })
 
   it('returns 404 when task id is unknown', async () => {
@@ -547,6 +818,7 @@ describe('POST /api/project/task/:id/resolve-escalation', () => {
     const q = JSON.parse(raw)
     const task = q.tasks[0]
     expect(task.status).toBe('in_progress')
+    expect(task.assignedTo).toBe('worker-agent')
     expect(task.escalations[0].resolvedAt).toBeTruthy()
     expect(task.escalations[0].resolution).toMatch(/Proceed/)
     expect(task.blockReason).toBeUndefined()

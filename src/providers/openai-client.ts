@@ -104,6 +104,7 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
       messages: openaiMessages,
       stream: true,
       ...tokenLimitFieldFor(request.model, request.max_tokens),
+      ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     }
     if (tools) {
       body.tools = tools

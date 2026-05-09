@@ -1,4 +1,8 @@
 import { parseAcceptanceCriteriaFromSpec, type Task, type TaskQueue, type TaskStatus, type ReviewVerdict } from '@guildhall/core'
+import {
+  summarizeScopedHardGateDisposition,
+  type ScopedGateContext,
+} from '@guildhall/tools'
 
 // ---------------------------------------------------------------------------
 // FR-27 / AC-18: reviewer dispatch with deterministic fallback.
@@ -49,6 +53,12 @@ export interface DeterministicVerdict {
   reasoning: string
   score: number
   failingSignals: string[]
+}
+
+export interface DeterministicReviewContext {
+  projectPath: string
+  likelyTargetFiles: readonly string[]
+  resolvedDecisionTexts: readonly string[]
 }
 
 const GATE_LIKE_AUTOMATED_ACCEPTANCE = /\b(?:pnpm|npm|yarn|playwright|vitest|jest|pytest|typecheck|build|lint|test(?:\s+file|\s+runner)?|runner runs|passes with zero errors|zero console violations)\b/i
@@ -110,7 +120,10 @@ export function shouldAdvanceToGateCheckPendingAutomatedVerification(
  *     alone; the LLM reviewer picks this up semantically).
  *   • `documented`              — full credit; ditto.
  */
-export function deterministicReview(task: Task): DeterministicVerdict {
+export function deterministicReview(
+  task: Task,
+  context?: DeterministicReviewContext,
+): DeterministicVerdict {
   const rubric = SOFT_GATE_RUBRIC
   const totalWeight = Object.values(rubric).reduce((a, b) => a + b, 0)
   let weighted = 0
@@ -139,10 +152,29 @@ export function deterministicReview(task: Task): DeterministicVerdict {
   }
 
   const hardGates = task.gateResults.filter((g) => g.type === 'hard')
-  const hardAllPass = hardGates.length > 0 && hardGates.every((g) => g.passed)
+  const scopedHardGateDisposition = context
+    ? summarizeScopedHardGateDisposition(
+        {
+          projectPath: context.projectPath,
+          likelyTargetFiles: context.likelyTargetFiles,
+          resolvedDecisionTexts: context.resolvedDecisionTexts,
+        } satisfies ScopedGateContext,
+        hardGates,
+      )
+    : null
+  const hardAllPass =
+    hardGates.length > 0 &&
+    (hardGates.every((g) => g.passed) || scopedHardGateDisposition?.shouldPass === true)
   if (hardAllPass) {
     weighted += rubric['no-regressions']
-    trace.push(`no-regressions: +${rubric['no-regressions'].toFixed(1)} (${hardGates.length} hard gate(s), all passed)`)
+    if (hardGates.every((g) => g.passed)) {
+      trace.push(`no-regressions: +${rubric['no-regressions'].toFixed(1)} (${hardGates.length} hard gate(s), all passed)`)
+    } else {
+      const exempted = scopedHardGateDisposition?.exemptedFailures.map((gate) => gate.gateId) ?? []
+      trace.push(
+        `no-regressions: +${rubric['no-regressions'].toFixed(1)} (${hardGates.length} hard gate(s), remaining failures are scoped unrelated repo-red: ${exempted.join(', ') || 'none'})`,
+      )
+    }
   } else {
     failing.push('no-regressions')
     const failed = hardGates.filter((g) => !g.passed).map((g) => g.gateId)
@@ -290,6 +322,14 @@ export function extractLlmReviewerReasoning(task: Task): string | undefined {
   return undefined
 }
 
+function extractStructuredLlmVerdict(reasoning: string | undefined): ReviewVerdict['verdict'] | undefined {
+  const text = reasoning?.trim()
+  if (!text) return undefined
+  const match = /\*\*Verdict:\*\*\s*(Approved|Approve|Revised?|Revision requested)\b/i.exec(text)
+  if (!match?.[1]) return undefined
+  return /^approve?d?$/i.test(match[1]) ? 'approve' : 'revise'
+}
+
 /**
  * Record that the LLM reviewer path produced the verdict. Inferred from the
  * before/after status: a transition to `gate_check` means the LLM approved;
@@ -312,20 +352,21 @@ export function recordLlmVerdict(input: {
   now: string
   policyVersion?: string
   reasoning?: string
-}): ReviewVerdict | undefined {
+}): { record: ReviewVerdict; normalizedStatus: TaskStatus } | undefined {
   if (input.beforeStatus !== 'review') return undefined
   const idx = input.queue.tasks.findIndex((t) => t.id === input.taskId)
   if (idx < 0) return undefined
   const task = input.queue.tasks[idx]!
 
+  const reasoning = input.reasoning ?? extractLlmReviewerReasoning(task)
+  const structuredVerdict = extractStructuredLlmVerdict(reasoning)
   const verdict: ReviewVerdict['verdict'] =
-    input.afterStatus === 'gate_check' ? 'approve' : 'revise'
+    structuredVerdict ?? (input.afterStatus === 'gate_check' ? 'approve' : 'revise')
+  const normalizedStatus: TaskStatus = verdict === 'approve' ? 'gate_check' : 'in_progress'
   const reason =
     verdict === 'approve'
       ? 'LLM reviewer approved (transitioned to gate_check)'
       : `LLM reviewer requested revision (transitioned to ${input.afterStatus})`
-
-  const reasoning = input.reasoning ?? extractLlmReviewerReasoning(task)
 
   const record: ReviewVerdict = {
     verdict,
@@ -337,5 +378,5 @@ export function recordLlmVerdict(input: {
     ...(input.policyVersion !== undefined ? { policyVersion: input.policyVersion } : {}),
   }
   task.reviewVerdicts.push(record)
-  return record
+  return { record, normalizedStatus }
 }

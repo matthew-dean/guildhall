@@ -4,6 +4,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   resolveEffectiveTaskSuccessGates,
+  resolveEffectiveTaskVerificationCommands,
   resolveEffectiveTaskProjectPath,
 } from '../task-gates.js'
 
@@ -96,6 +97,127 @@ describe('resolveEffectiveTaskSuccessGates', () => {
       'pnpm --dir web typecheck',
       'pnpm build',
       'cd web && pnpm vitest --run tests/unit/pages/login-callback-index.flow.test.ts',
+      'pnpm lint',
+    ])
+  })
+
+  it('rewrites pnpm test -- <file> vitest commands into direct single-file runs', async () => {
+    const webDir = path.join(tmpDir, 'web')
+    await fs.mkdir(path.join(webDir, 'tests/unit/shared'), { recursive: true })
+    await fs.writeFile(
+      path.join(webDir, 'package.json'),
+      JSON.stringify({
+        name: '@knit-app',
+        scripts: {
+          test: 'vitest',
+          typecheck: 'nuxt typecheck',
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(webDir, 'tests/unit/shared/subdomain.test.ts'),
+      '// test placeholder\n',
+      'utf8',
+    )
+
+    const result = resolveEffectiveTaskSuccessGates({
+      task: {
+        projectPath: tmpDir,
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'subdomain file passes',
+            verifiedBy: 'automated',
+            command: 'pnpm --filter @knit-app test -- tests/unit/shared/subdomain.test.ts',
+            met: true,
+          },
+        ],
+      } as any,
+      workspaceProjectPath: tmpDir,
+      workspaceBootstrap: {
+        commands: [],
+        successGates: ['pnpm typecheck', 'pnpm build', 'pnpm test', 'pnpm lint'],
+        timeoutMs: 300_000,
+        verifiedAt: '2026-05-03T00:00:00Z',
+        packageManager: 'pnpm',
+        install: { command: 'pnpm install', status: 'ok' },
+        gates: {
+          typecheck: { command: 'pnpm typecheck', available: true },
+          build: { command: 'pnpm build', available: true },
+          test: { command: 'pnpm test', available: true },
+          lint: { command: 'pnpm lint', available: true },
+        },
+      } as any,
+    })
+
+    expect(result).toEqual([
+      'pnpm typecheck',
+      'pnpm build',
+      'cd web && pnpm vitest --run tests/unit/shared/subdomain.test.ts',
+      'pnpm lint',
+    ])
+  })
+
+  it('rewrites wildcard vitest targets into concrete file arguments', async () => {
+    const webDir = path.join(tmpDir, 'web')
+    await fs.mkdir(path.join(webDir, 'tests/unit/composables'), { recursive: true })
+    await fs.writeFile(
+      path.join(webDir, 'package.json'),
+      JSON.stringify({
+        name: '@knit-app',
+        scripts: {
+          test: 'vitest',
+          typecheck: 'nuxt typecheck',
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(webDir, 'tests/unit/composables/use-collections.test.ts'),
+      '// primary test placeholder\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(webDir, 'tests/unit/composables/use-collections-auth.test.ts'),
+      '// auth test placeholder\n',
+      'utf8',
+    )
+
+    const result = resolveEffectiveTaskSuccessGates({
+      task: {
+        projectPath: tmpDir,
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'use-collections tests pass',
+            verifiedBy: 'automated',
+            command: 'pnpm --filter @knit-app test -- tests/unit/composables/use-collections*.test.ts',
+            met: true,
+          },
+        ],
+      } as any,
+      workspaceProjectPath: tmpDir,
+      workspaceBootstrap: {
+        commands: [],
+        successGates: ['pnpm typecheck', 'pnpm build', 'pnpm test', 'pnpm lint'],
+        timeoutMs: 300_000,
+        verifiedAt: '2026-05-03T00:00:00Z',
+        packageManager: 'pnpm',
+        install: { command: 'pnpm install', status: 'ok' },
+        gates: {
+          typecheck: { command: 'pnpm typecheck', available: true },
+          build: { command: 'pnpm build', available: true },
+          test: { command: 'pnpm test', available: true },
+          lint: { command: 'pnpm lint', available: true },
+        },
+      } as any,
+    })
+
+    expect(result).toEqual([
+      'pnpm typecheck',
+      'pnpm build',
+      'cd web && pnpm vitest --run tests/unit/composables/use-collections-auth.test.ts tests/unit/composables/use-collections.test.ts',
       'pnpm lint',
     ])
   })
@@ -232,6 +354,113 @@ describe('resolveEffectiveTaskSuccessGates', () => {
       'pnpm --dir web typecheck',
       'pnpm build',
       'pnpm --dir web exec playwright test tests/e2e/authoring-flow.spec.ts',
+      'pnpm lint',
+    ])
+  })
+})
+
+describe('resolveEffectiveTaskVerificationCommands', () => {
+  it('prefers a focused vitest target for single-file test work instead of the broad test gate', async () => {
+    const webDir = path.join(tmpDir, 'web')
+    await fs.mkdir(path.join(webDir, 'tests/unit/composables'), { recursive: true })
+    await fs.writeFile(
+      path.join(webDir, 'package.json'),
+      JSON.stringify({
+        name: '@knit-app',
+        scripts: {
+          test: 'vitest',
+          typecheck: 'nuxt typecheck',
+          build: 'nuxt build',
+          lint: 'oxlint -c .oxlintrc.json --ignore-path .gitignore',
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(webDir, 'tests/unit/composables/use-presence.test.ts'),
+      '// test placeholder\n',
+      'utf8',
+    )
+
+    const result = resolveEffectiveTaskVerificationCommands({
+      task: {
+        projectPath: tmpDir,
+        acceptanceCriteria: [],
+      } as any,
+      workspaceProjectPath: tmpDir,
+      workspaceBootstrap: {
+        commands: [],
+        successGates: ['pnpm typecheck', 'pnpm build', 'pnpm test', 'pnpm lint'],
+        timeoutMs: 300_000,
+        verifiedAt: '2026-05-03T00:00:00Z',
+        packageManager: 'pnpm',
+        install: { command: 'pnpm install', status: 'ok' },
+        gates: {
+          typecheck: { command: 'pnpm typecheck', available: true },
+          build: { command: 'pnpm build', available: true },
+          test: { command: 'pnpm test', available: true },
+          lint: { command: 'pnpm lint', available: true },
+        },
+      } as any,
+      likelyTargetFiles: ['web/tests/unit/composables/use-presence.test.ts'],
+    })
+
+    expect(result).toEqual([
+      'pnpm typecheck',
+      'pnpm build',
+      'cd web && pnpm vitest --run tests/unit/composables/use-presence.test.ts',
+      'pnpm lint',
+    ])
+  })
+
+  it('drops the broad test fallback for narrow non-test file work', async () => {
+    const webDir = path.join(tmpDir, 'web')
+    await fs.mkdir(path.join(webDir, 'app/composables'), { recursive: true })
+    await fs.writeFile(
+      path.join(webDir, 'package.json'),
+      JSON.stringify({
+        name: '@knit-app',
+        scripts: {
+          test: 'vitest',
+          typecheck: 'nuxt typecheck',
+          build: 'nuxt build',
+          lint: 'oxlint -c .oxlintrc.json --ignore-path .gitignore',
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(webDir, 'app/composables/use-pages.ts'),
+      '// source placeholder\n',
+      'utf8',
+    )
+
+    const result = resolveEffectiveTaskVerificationCommands({
+      task: {
+        projectPath: tmpDir,
+        acceptanceCriteria: [],
+      } as any,
+      workspaceProjectPath: tmpDir,
+      workspaceBootstrap: {
+        commands: [],
+        successGates: ['pnpm typecheck', 'pnpm build', 'pnpm test', 'pnpm lint'],
+        timeoutMs: 300_000,
+        verifiedAt: '2026-05-03T00:00:00Z',
+        packageManager: 'pnpm',
+        install: { command: 'pnpm install', status: 'ok' },
+        gates: {
+          typecheck: { command: 'pnpm typecheck', available: true },
+          build: { command: 'pnpm build', available: true },
+          test: { command: 'pnpm test', available: true },
+          lint: { command: 'pnpm lint', available: true },
+        },
+      } as any,
+      likelyTargetFiles: ['web/app/composables/use-pages.ts'],
+    })
+
+    expect(result).toEqual([
+      'pnpm typecheck',
+      'pnpm build',
       'pnpm lint',
     ])
   })

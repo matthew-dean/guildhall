@@ -8,6 +8,8 @@ import {
   raiseEscalationTool,
   resolveEscalationTool,
   hasOpenEscalation,
+  activeEscalations,
+  currentRevisionCycleCount,
   resolveSupersededEscalations,
 } from '../escalation.js'
 import { readTasks } from '../task-queue.js'
@@ -200,10 +202,59 @@ describe('resolveEscalation', () => {
     const { queue } = await readTasks({ tasksPath })
     const task = queue?.tasks[0]
     expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
     expect(task?.blockReason).toBeUndefined()
     expect(task?.escalations[0]?.resolvedAt).toBeDefined()
     expect(task?.escalations[0]?.resolution).toBe('Use library A')
     expect(task?.escalations[0]?.resolvedBy).toBe('human')
+  })
+
+  it('restores reviewer ownership when an escalation resolves back to review', async () => {
+    const result = await resolveEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      escalationId: 'esc-task-001-1',
+      resolution: 'Return this to review',
+      nextStatus: 'review',
+    })
+    expect(result.success).toBe(true)
+
+    const { queue } = await readTasks({ tasksPath })
+    expect(queue?.tasks[0]?.status).toBe('review')
+    expect(queue?.tasks[0]?.assignedTo).toBe('reviewer-agent')
+  })
+
+  it('starts a fresh retry window when resolving max-revisions back to active work', async () => {
+    await writeSeed([
+      seedTask({
+        revisionCount: 4,
+        escalations: [],
+      }),
+    ])
+    await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'reviewer-fanout',
+      reason: 'max_revisions_exceeded',
+      summary: 'Exceeded maxRevisions (3). Reviewer fan-out keeps rejecting.',
+    })
+
+    const result = await resolveEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      escalationId: 'esc-task-001-1',
+      resolution: 'Retry after guardrail fix.',
+      nextStatus: 'in_progress',
+    })
+    expect(result.success).toBe(true)
+
+    const { queue } = await readTasks({ tasksPath })
+    const task = queue?.tasks[0]
+    expect(task?.retryWindow).toEqual({
+      startedAt: task?.escalations[0]?.resolvedAt,
+      baseRevisionCount: 4,
+    })
+    expect(currentRevisionCycleCount(task!)).toBe(0)
   })
 
   it('defaults resolvedBy to "human"', async () => {
@@ -301,6 +352,13 @@ describe('resolveEscalation', () => {
 })
 
 describe('hasOpenEscalation', () => {
+  it('treats missing escalation arrays as empty', () => {
+    const task = seedTask()
+    ;(task as Partial<Task>).escalations = undefined
+    expect(activeEscalations(task)).toEqual([])
+    expect(hasOpenEscalation(task)).toBe(false)
+  })
+
   it('returns false for a task with no escalations', () => {
     expect(hasOpenEscalation(seedTask())).toBe(false)
   })

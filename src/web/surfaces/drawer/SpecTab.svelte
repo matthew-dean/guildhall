@@ -16,6 +16,7 @@
   import Markdown from '../../lib/Markdown.svelte'
   import Textarea from '../../lib/Textarea.svelte'
   import Byline from '../../lib/Byline.svelte'
+  import { parseReviewerSummarySections, type ReviewerAdvisoryScores } from '../../lib/reviewer-summary.js'
   import WhyStuck from './WhyStuck.svelte'
   import SpecFillChecklist from './SpecFillChecklist.svelte'
   import SuggestionCard from './SuggestionCard.svelte'
@@ -74,6 +75,15 @@
       ? stripAcceptanceCriteriaSection(rawSpecText)
       : rawSpecText,
   )
+  const latestReviewerSummary = $derived((task.latestReviewerSummary ?? '').trim())
+  const reviewerSections = $derived(parseReviewerSummarySections(latestReviewerSummary))
+  const latestSelfCritique = $derived((task.latestSelfCritique ?? '').trim())
+  const latestCheckpoint = $derived(task.latestCheckpoint ?? null)
+  const hasReviewPacket = $derived(
+    latestReviewerSummary.length > 0 ||
+      latestSelfCritique.length > 0 ||
+      Boolean(latestCheckpoint),
+  )
   const exploring = $derived(task.status === 'exploring')
   const specApprovalPending = $derived(task.status === 'spec_review' && specText.length > 0)
   const needsAcceptance = $derived(exploring && briefApproved && acceptance.length === 0)
@@ -97,6 +107,36 @@
     if (!description) return
     await onAddAcceptance(description)
     acceptanceDraft = ''
+  }
+
+  type ChipTone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running'
+
+  function scoreTone(
+    kind: 'recommendationPriority' | 'expectedValue' | 'deferredRisk',
+    level: ReviewerAdvisoryScores[keyof ReviewerAdvisoryScores],
+  ): ChipTone {
+    if (!level) return 'neutral'
+    if (kind === 'expectedValue') {
+      if (level === 'high') return 'ok'
+      if (level === 'medium') return 'accent'
+      return 'neutral'
+    }
+    if (level === 'high') return 'danger'
+    if (level === 'medium') return 'warn'
+    return 'neutral'
+  }
+
+  function scoreLabel(
+    kind: 'recommendationPriority' | 'expectedValue' | 'deferredRisk',
+    level: ReviewerAdvisoryScores[keyof ReviewerAdvisoryScores],
+  ): string {
+    const prefix =
+      kind === 'recommendationPriority'
+        ? 'Priority'
+        : kind === 'expectedValue'
+          ? 'Value'
+          : 'Deferred risk'
+    return `${prefix}: ${level}`
   }
 </script>
 
@@ -137,6 +177,75 @@
     </Stack>
   </Card>
   </div>
+
+  {#if hasReviewPacket}
+    <Card title="Latest handoff packet">
+      <Stack gap="3">
+        {#if latestReviewerSummary}
+          <Field label="Latest reviewer feedback">
+            <Stack gap="2">
+              {#if reviewerSections.length > 0}
+                <div class="review-score-list">
+                  {#each reviewerSections as section}
+                    <div class="review-score-row">
+                      <strong class="review-score-name">{section.guildName}</strong>
+                      <div class="review-score-chips">
+                        {#if section.scores.recommendationPriority}
+                          <Chip
+                            label={scoreLabel('recommendationPriority', section.scores.recommendationPriority)}
+                            tone={scoreTone('recommendationPriority', section.scores.recommendationPriority)}
+                          />
+                        {/if}
+                        {#if section.scores.expectedValue}
+                          <Chip
+                            label={scoreLabel('expectedValue', section.scores.expectedValue)}
+                            tone={scoreTone('expectedValue', section.scores.expectedValue)}
+                          />
+                        {/if}
+                        {#if section.scores.deferredRisk}
+                          <Chip
+                            label={scoreLabel('deferredRisk', section.scores.deferredRisk)}
+                            tone={scoreTone('deferredRisk', section.scores.deferredRisk)}
+                          />
+                        {/if}
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+              <Markdown source={latestReviewerSummary} />
+            </Stack>
+          </Field>
+        {/if}
+        {#if latestSelfCritique}
+          <Field label="Latest self-critique">
+            <Markdown source={latestSelfCritique} />
+          </Field>
+        {/if}
+        {#if latestCheckpoint}
+          <Field label="Latest checkpoint">
+            <Stack gap="1">
+              <p class="checkpoint-line">
+                Step {latestCheckpoint.step ?? '?'} by {latestCheckpoint.agentId ?? 'unknown'}
+                {#if latestCheckpoint.writtenAt}
+                  · {latestCheckpoint.writtenAt}
+                {/if}
+              </p>
+              {#if latestCheckpoint.intent}
+                <p class="checkpoint-line"><strong>Intent:</strong> {latestCheckpoint.intent}</p>
+              {/if}
+              {#if latestCheckpoint.nextPlannedAction}
+                <p class="checkpoint-line"><strong>Next:</strong> {latestCheckpoint.nextPlannedAction}</p>
+              {/if}
+              {#if latestCheckpoint.filesTouched?.length}
+                <p class="checkpoint-line"><strong>Files:</strong> {latestCheckpoint.filesTouched.join(', ')}</p>
+              {/if}
+            </Stack>
+          </Field>
+        {/if}
+      </Stack>
+    </Card>
+  {/if}
 
   <div data-spec-section="section-brief">
   {#if brief}
@@ -286,6 +395,33 @@
     font-size: var(--fs-1);
     line-height: var(--lh-body);
     margin: 0;
+  }
+  .checkpoint-line {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+    margin: 0;
+  }
+  .review-score-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .review-score-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s-2);
+  }
+  .review-score-name {
+    color: var(--text);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+  .review-score-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-1);
   }
   .explainer {
     color: var(--text);

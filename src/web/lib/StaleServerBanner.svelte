@@ -67,7 +67,7 @@
   .stale {
     position: sticky;
     top: 0;
-    z-index: 9999;
+    z-index: var(--z-banner);
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: start;

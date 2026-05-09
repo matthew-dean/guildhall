@@ -655,7 +655,7 @@ describe('POST /api/project/start preflight', () => {
     })
   })
 
-  it('warns when reviewer fanout concurrency exceeds the provider recommendation', async () => {
+  it('reports effective reviewer fanout without surfacing config-clamp chatter in the UI payload', async () => {
     updateProjectConfig(tmpProject, {
       preferredProvider: 'llama-cpp',
       workerLaneConcurrency: 5,
@@ -731,12 +731,7 @@ describe('POST /api/project/start preflight', () => {
       recommended: 1,
       clamped: false,
     })
-    expect(body.providerStatus?.warnings?.[0]).toMatchObject({
-      code: 'reviewer_concurrency_clamped_to_provider_recommendation',
-      severity: 'info',
-    })
-    expect(body.providerStatus?.warnings?.[0]?.message).toMatch(/configured as 3/i)
-    expect(body.providerStatus?.warnings?.[0]?.message).toMatch(/capped at 1/i)
+    expect(body.providerStatus?.warnings).toBeUndefined()
   })
 
   it('rejects start when the local server does not have the configured project model loaded', async () => {

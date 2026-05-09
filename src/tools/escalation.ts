@@ -164,6 +164,57 @@ export interface ResolveEscalationResult {
   error?: string
 }
 
+function normalizeAssignmentForResolvedStatus(task: Task, nextStatus: z.infer<typeof resolveEscalationInputSchema>['nextStatus']): void {
+  task.status = nextStatus
+  switch (nextStatus) {
+    case 'in_progress':
+      task.assignedTo = 'worker-agent'
+      return
+    case 'review':
+      task.assignedTo = 'reviewer-agent'
+      return
+    case 'gate_check':
+      task.assignedTo = 'gate-checker-agent'
+      return
+    case 'exploring':
+    case 'spec_review':
+    case 'ready':
+      delete task.assignedTo
+      return
+  }
+}
+
+function supportsRetryWindow(status: Task['status']): boolean {
+  return status === 'in_progress' || status === 'review' || status === 'gate_check'
+}
+
+export function ensureRetryWindow(task: Task): boolean {
+  const latestResolvedRetry = latestResolvedRetryEscalationAt(task)
+  if (!latestResolvedRetry) return false
+  if (!supportsRetryWindow(task.status)) return false
+
+  if (task.retryWindow?.startedAt === latestResolvedRetry) return false
+  task.retryWindow = {
+    startedAt: latestResolvedRetry,
+    baseRevisionCount: task.revisionCount,
+  }
+  return true
+}
+
+export function currentRevisionCycleCount(task: Pick<Task, 'status' | 'revisionCount' | 'retryWindow' | 'escalations'>): number {
+  const latestResolvedRetry = latestResolvedRetryEscalationAt(task as Task)
+  if (!latestResolvedRetry || !supportsRetryWindow(task.status as Task['status'])) {
+    return task.revisionCount
+  }
+  if (task.retryWindow?.startedAt === latestResolvedRetry) {
+    return Math.max(0, task.revisionCount - task.retryWindow.baseRevisionCount)
+  }
+  // Legacy self-heal: once a retry was explicitly approved by a human, do not
+  // let historical revision debt immediately re-block the task before we have
+  // established a fresh retry window in persisted task state.
+  return 0
+}
+
 export async function resolveEscalation(
   input: ResolveEscalationInput,
 ): Promise<ResolveEscalationResult> {
@@ -194,7 +245,8 @@ export async function resolveEscalation(
 
     const stillOpen = task.escalations.some((e) => !e.resolvedAt)
     if (!stillOpen) {
-      task.status = input.nextStatus
+      normalizeAssignmentForResolvedStatus(task, input.nextStatus)
+      if (esc.reason === 'max_revisions_exceeded') ensureRetryWindow(task)
       delete task.blockReason
     }
     task.updatedAt = now
@@ -257,7 +309,8 @@ export function isEscalationActive(task: Task, escalation: TaskEscalation): bool
 }
 
 export function activeEscalations(task: Task): TaskEscalation[] {
-  return task.escalations.filter((escalation) => isEscalationActive(task, escalation))
+  const escalations = Array.isArray(task.escalations) ? task.escalations : []
+  return escalations.filter((escalation) => isEscalationActive(task, escalation))
 }
 
 export function resolveSupersededEscalations(
@@ -275,7 +328,7 @@ export function resolveSupersededEscalations(
     `Superseded after task continued in ${task.status}.`
 
   const resolvedIds: string[] = []
-  for (const escalation of task.escalations) {
+  for (const escalation of Array.isArray(task.escalations) ? task.escalations : []) {
     if (escalation.resolvedAt) continue
     if (isEscalationActive(task, escalation)) continue
     escalation.resolvedAt = now
@@ -289,6 +342,18 @@ export function resolveSupersededEscalations(
   }
 
   return resolvedIds
+}
+
+export function latestResolvedRetryEscalationAt(task: Task): string | null {
+  const resolved = (Array.isArray(task.escalations) ? task.escalations : [])
+    .filter(
+      (escalation) =>
+        escalation.reason === 'max_revisions_exceeded' &&
+        typeof escalation.resolvedAt === 'string' &&
+        escalation.resolvedAt.trim().length > 0,
+    )
+    .sort((a, b) => Date.parse(b.resolvedAt ?? '') - Date.parse(a.resolvedAt ?? ''))
+  return resolved[0]?.resolvedAt ?? null
 }
 
 /**

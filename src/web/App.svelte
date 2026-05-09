@@ -17,12 +17,18 @@
   })
 </script>
 
-<Header />
-<main class="app-main">
-  <Router />
-</main>
+<div class="app-shell">
+  <Header />
+  <main class="app-main">
+    <Router />
+  </main>
+</div>
 
 <style>
+  .app-shell {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
   .app-main {
     display: block;
   }

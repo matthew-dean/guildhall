@@ -30,6 +30,11 @@ For each provider connection, the page shows:
 - Global defaults and model settings: `~/.guildhall/config.yaml`.
 - Project-level provider preference: `<project>/.guildhall/config.yaml`.
 
+Execution concurrency is auto-derived from the active provider and runtime
+capacity. Advanced overrides, if you need them, belong in
+`~/.guildhall/config.yaml`; they are not part of the normal project-level
+provider workflow.
+
 The page only reveals credentials that are explicitly in config — it will never log or display a hidden system credential.
 
 ## Related

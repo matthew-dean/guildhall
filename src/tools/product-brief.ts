@@ -19,8 +19,8 @@ const updateProductBriefInputSchema = z.object({
   userJob: z.string().optional().describe('Who the task serves and what job it does for them'),
   successMetric: z.string().optional().describe('How we\'ll know this worked — observable outcome'),
   antiPatterns: z
-    .array(z.string())
-    .default([])
+    .union([z.array(z.string()), z.string()])
+    .optional()
     .describe('Things this task must NOT do — product / brand / ux-level prohibitions'),
   rolloutPlan: z
     .string()
@@ -36,7 +36,7 @@ const updateProductBriefInputSchema = z.object({
       z.object({
         userJob: z.string().optional(),
         successMetric: z.string().optional(),
-        antiPatterns: z.array(z.string()).optional(),
+        antiPatterns: z.union([z.array(z.string()), z.string()]).optional(),
         rolloutPlan: z.string().optional(),
       }).passthrough(),
     ])
@@ -68,6 +68,25 @@ interface BriefLikePayload {
   successMetric?: string
   antiPatterns?: string[]
   rolloutPlan?: string
+}
+
+function normalizeAntiPatternsValue(raw: unknown): string[] | undefined {
+  if (Array.isArray(raw)) {
+    const values = raw
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter(Boolean)
+    return values.length > 0 ? values : undefined
+  }
+  if (typeof raw === 'string') {
+    const values = raw
+      .split('\n')
+      .map((line) => line.trim())
+      .map((line) => line.replace(/^[*-]\s*/, '').trim())
+      .filter(Boolean)
+    return values.length > 0 ? values : undefined
+  }
+  return undefined
 }
 
 function resolveBriefTarget(
@@ -149,9 +168,7 @@ function parseBriefLikePayload(raw: unknown): BriefLikePayload | null {
   }
   if (typeof raw !== 'object') return null
   const obj = raw as Record<string, unknown>
-  const antiPatterns = Array.isArray(obj.antiPatterns)
-    ? obj.antiPatterns.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean)
-    : undefined
+  const antiPatterns = normalizeAntiPatternsValue(obj.antiPatterns)
   const userJob = typeof obj.userJob === 'string' ? obj.userJob.trim() : undefined
   const successMetric = typeof obj.successMetric === 'string' ? obj.successMetric.trim() : undefined
   const rolloutPlan = typeof obj.rolloutPlan === 'string' ? obj.rolloutPlan.trim() : undefined
@@ -172,8 +189,9 @@ function resolveBriefContent(
   const nested = parseBriefLikePayload(input.productBrief)
   const userJob = input.userJob?.trim() || nested?.userJob?.trim()
   const successMetric = input.successMetric?.trim() || nested?.successMetric?.trim()
-  const antiPatterns = input.antiPatterns?.length
-    ? input.antiPatterns
+  const inputAntiPatterns = normalizeAntiPatternsValue(input.antiPatterns)
+  const antiPatterns = inputAntiPatterns?.length
+    ? inputAntiPatterns
     : nested?.antiPatterns ?? []
   const rolloutPlan = input.rolloutPlan?.trim() || nested?.rolloutPlan?.trim()
 
@@ -219,7 +237,12 @@ export async function updateProductBrief(
     const brief: ProductBrief = {
       userJob: input.userJob,
       successMetric: input.successMetric,
-      antiPatterns: input.antiPatterns ?? [],
+      antiPatterns:
+        input.antiPatterns == null
+          ? []
+          : Array.isArray(input.antiPatterns)
+            ? input.antiPatterns
+            : [input.antiPatterns],
       ...(input.rolloutPlan !== undefined ? { rolloutPlan: input.rolloutPlan } : {}),
       authoredBy: input.authoredBy,
       authoredAt: now,

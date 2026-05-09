@@ -83,7 +83,7 @@ export interface Task {
   status?: string
   domain?: string
   priority?: string
-  assignedTo?: string
+  assignedTo?: string | null
   revisionCount?: number
   remediationAttempts?: number
   blockReason?: string
@@ -96,6 +96,37 @@ export interface Task {
   reviewVerdicts?: ReviewVerdict[]
   escalations?: Escalation[]
   notes?: TaskNote[]
+  latestReviewerSummary?: string
+  latestSelfCritique?: string
+  latestCheckpoint?: {
+    step?: number
+    agentId?: string
+    intent?: string
+    nextPlannedAction?: string
+    filesTouched?: string[]
+    writtenAt?: string
+  }
+  mergeRecord?: {
+    fromBranch?: string
+    toBranch?: string
+    strategy?: 'ff_only_local' | 'ff_only_with_push' | 'manual_pr' | string
+    result?:
+      | 'merged'
+      | 'pushed'
+      | 'push_failed_degraded'
+      | 'pending_pr'
+      | 'conflict'
+      | 'skipped'
+      | string
+    commitSha?: string
+    prUrl?: string
+    mergedAt?: string
+    detail?: string
+  }
+  terminalSummary?: {
+    headline?: string
+    detail?: string
+  }
   origination?: string
   proposedBy?: string
   proposalRationale?: string
@@ -168,13 +199,25 @@ export interface TaskLite {
   priority?: string
   revisionCount?: number
   escalations?: Escalation[]
+  latestReviewerSummary?: string
+  latestSelfCritique?: string
+  latestCheckpoint?: Task['latestCheckpoint']
+  terminalSummary?: Task['terminalSummary']
 }
 
 export interface CoordinatorConfig {
   id?: string
   name?: string
   domain?: string
+  path?: string
   mandate?: string
+  concerns?: Array<{
+    id?: string
+    description?: string
+    reviewQuestions?: string[]
+  }>
+  autonomousDecisions?: string[]
+  escalationTriggers?: string[]
 }
 
 export interface ProjectRun {
@@ -307,6 +350,25 @@ export interface BootstrapStatus {
   steps?: BootstrapStep[]
 }
 
+export interface ProjectInbox {
+  items?: Array<{
+    kind?: string
+    severity?: 'high' | 'medium' | 'low' | string
+    taskId?: string
+    title?: string
+    detail?: string
+    actionHref?: string
+    defaultCount?: number
+    dismissEndpoint?: string
+    signals?: string[]
+    missingSteps?: string[]
+  }>
+  blockers?: {
+    bootstrap?: boolean
+    workspaceImport?: boolean
+  }
+}
+
 export interface ProjectDetail {
   initializationNeeded?: boolean
   id?: string
@@ -318,6 +380,7 @@ export interface ProjectDetail {
     [k: string]: unknown
   }
   tasks?: Task[]
+  inbox?: ProjectInbox
   run?: ProjectRun | null
   providerStatus?: ProviderStatus | null
   bootstrapStatus?: BootstrapStatus

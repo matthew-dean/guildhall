@@ -126,8 +126,9 @@ export const readFileTool = defineTool({
   },
   isReadOnly: () => true,
   execute: async (input, ctx) => {
-    const resolvedPath = resolveFilePath(ctx.cwd, input.filePath)
-    const result = await readFile(input, { cwd: ctx.cwd })
+    const reconciledPath = reconcileLikelyTargetFilePath(input.filePath, ctx.metadata, ctx.cwd)
+    const resolvedPath = resolveFilePath(ctx.cwd, reconciledPath)
+    const result = await readFile({ ...input, filePath: reconciledPath }, { cwd: ctx.cwd })
     if (!result.exists) {
       return {
         output: `(file not found: ${resolvedPath})`,
@@ -156,7 +157,7 @@ export const readFileTool = defineTool({
       output:
         body.length > 0
           ? body
-          : `(no content in selected range for ${resolveFilePath(ctx.cwd, input.filePath)})`,
+          : `(no content in selected range for ${resolveFilePath(ctx.cwd, reconciledPath)})`,
       is_error: false,
       metadata: result as unknown as Record<string, unknown>,
     }
@@ -164,12 +165,30 @@ export const readFileTool = defineTool({
 })
 
 const writeFileInputSchema = z.object({
-  filePath: z.string().describe('Path to the file (absolute, ~-prefixed, or cwd-relative)'),
-  content: z.string().describe('Full content to write'),
+  filePath: z.string().optional().describe('Path to the file (absolute, ~-prefixed, or cwd-relative)'),
+  content: z.string().optional().describe('Full content to write'),
   createDirectories: z
     .boolean()
     .optional()
     .describe('Create missing parent directories (default true).'),
+  path: z.string().optional().describe('Alias for filePath used by near-miss model calls.'),
+  text: z.string().optional().describe('Alias for content used by near-miss model calls.'),
+  body: z.string().optional().describe('Alias for content used by near-miss model calls.'),
+  message: z.string().optional().describe('Alias for content used by near-miss model calls.'),
+  item: z
+    .union([
+      z.string(),
+      z.object({
+        filePath: z.string().optional(),
+        path: z.string().optional(),
+        content: z.string().optional(),
+        text: z.string().optional(),
+        body: z.string().optional(),
+        message: z.string().optional(),
+      }).passthrough(),
+    ])
+    .optional()
+    .describe('Optional nested or stringified payload recovered from near-miss model calls.'),
 })
 
 export type WriteFileInput = z.input<typeof writeFileInputSchema>
@@ -177,6 +196,21 @@ export interface WriteFileResult {
   success: boolean
   path: string
   error?: string
+}
+
+interface ReadFileStateEntry {
+  path?: unknown
+}
+
+function metadataStringArray(
+  metadata: Record<string, unknown>,
+  key: string,
+): string[] {
+  const raw = metadata[key]
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter(Boolean)
 }
 
 function resolveFilePath(cwd: string | undefined, candidate: string): string {
@@ -187,10 +221,23 @@ function resolveFilePath(cwd: string | undefined, candidate: string): string {
   return path.resolve(cwd ?? process.cwd(), expanded)
 }
 
+function taskPathBase(
+  metadata: Record<string, unknown>,
+  cwd?: string,
+): string {
+  const worktree = String(metadata['current_task_worktree_path'] ?? '').trim()
+  if (worktree) return worktree
+  const projectPath = String(metadata['current_task_project_path'] ?? '').trim()
+  if (projectPath) return projectPath
+  return cwd ?? process.cwd()
+}
+
 export async function writeFile(
   input: WriteFileInput,
   opts: { cwd?: string } = {},
 ): Promise<WriteFileResult> {
+  if (!input.filePath?.trim()) return { success: false, path: '', error: 'Missing filePath' }
+  if (typeof input.content !== 'string') return { success: false, path: '', error: 'Missing content' }
   const absPath = resolveFilePath(opts.cwd, input.filePath)
   const shouldMkdir = input.createDirectories !== false
   try {
@@ -199,6 +246,196 @@ export async function writeFile(
     return { success: true, path: absPath }
   } catch (err) {
     return { success: false, path: absPath, error: String(err) }
+  }
+}
+
+function recoverWriteFileAliases(
+  raw: WriteFileInput['item'],
+): { filePath?: string; content?: string } | null {
+  if (!raw) return null
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!trimmed) return null
+    try {
+      return recoverWriteFileAliases(JSON.parse(trimmed) as WriteFileInput['item'])
+    } catch {
+      return { content: trimmed }
+    }
+  }
+  if (typeof raw !== 'object') return null
+  const filePath = typeof raw.filePath === 'string'
+    ? raw.filePath.trim()
+    : (typeof raw.path === 'string' ? raw.path.trim() : '')
+  const content = typeof raw.content === 'string'
+    ? raw.content
+    : typeof raw.text === 'string'
+      ? raw.text
+      : typeof raw.body === 'string'
+        ? raw.body
+        : typeof raw.message === 'string'
+          ? raw.message
+          : ''
+  if (!filePath && !content) return null
+  return {
+    ...(filePath ? { filePath } : {}),
+    ...(content ? { content } : {}),
+  }
+}
+
+function inferLikelyWriteFilePath(
+  metadata: Record<string, unknown>,
+): string | null {
+  const explicitMissingTarget = String(metadata['current_missing_likely_target_file'] ?? '').trim()
+  if (explicitMissingTarget) return explicitMissingTarget
+
+  const likelyTargets = metadataStringArray(metadata, 'current_task_likely_target_files')
+  const testLikeTarget = likelyTargets.find((candidate) => /\.test\.[jt]sx?$/.test(candidate))
+  if (testLikeTarget) return testLikeTarget
+  if (likelyTargets.length > 0) return likelyTargets[0] ?? null
+
+  const readState = Array.isArray(metadata['read_file_state'])
+    ? metadata['read_file_state'] as ReadFileStateEntry[]
+    : []
+  for (let i = readState.length - 1; i >= 0; i -= 1) {
+    const rawPath = typeof readState[i]?.path === 'string' ? String(readState[i]!.path) : ''
+    if (!rawPath) continue
+    const normalized = rawPath.replace(/\\/g, '/')
+    const directTestPath = normalized.match(/^(.*\/tests\/unit\/(?:composables|shared)\/[^/]+\.test\.ts)$/)
+    if (directTestPath) return directTestPath[1] ?? null
+    const composableMatch = normalized.match(/^(.*\/)app\/composables\/([^/]+)\.ts$/)
+    if (composableMatch) {
+      return `${composableMatch[1]}tests/unit/composables/${composableMatch[2]}.test.ts`
+    }
+    const sharedMatch = normalized.match(/^(.*\/)shared\/utils\/([^/]+)\.ts$/)
+    if (sharedMatch) {
+      return `${sharedMatch[1]}tests/unit/shared/${sharedMatch[2]}.test.ts`
+    }
+  }
+
+  const taskTitle = String(metadata['current_task_title'] ?? '').trim()
+  const taskSpec = String(metadata['current_task_spec_excerpt'] ?? '').trim()
+  const taskHint = `${taskTitle}\n${taskSpec}`
+  const composableNameMatch = taskHint.match(/\buse-([a-z0-9-]+)\b/i)
+  if (composableNameMatch) {
+    const stem = `use-${composableNameMatch[1]!.toLowerCase()}`
+    const taskProjectPath = String(metadata['current_task_project_path'] ?? '').trim()
+    if (taskProjectPath) {
+      return path.join(taskProjectPath, 'web', 'tests', 'unit', 'composables', `${stem}.test.ts`)
+    }
+  }
+  return null
+}
+
+function likelyTargetCandidates(metadata: Record<string, unknown>): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  const base = taskPathBase(metadata)
+  const push = (candidate: string) => {
+    const trimmed = candidate.trim()
+    if (!trimmed) return
+    const normalized = resolveFilePath(base, trimmed)
+    if (seen.has(normalized)) return
+    seen.add(normalized)
+    out.push(normalized)
+  }
+  const explicitMissingTarget = String(metadata['current_missing_likely_target_file'] ?? '').trim()
+  if (explicitMissingTarget) push(explicitMissingTarget)
+  for (const target of metadataStringArray(metadata, 'current_task_likely_target_files')) push(target)
+  return out
+}
+
+function anchoredSuffix(candidate: string): string {
+  const normalized = candidate.replace(/\\/g, '/')
+  const parts = normalized.split('/').filter(Boolean)
+  const anchorIndex = parts.findIndex((part) => ['web', 'app', 'src', 'tests', 'server'].includes(part))
+  return anchorIndex >= 0 ? parts.slice(anchorIndex).join('/') : parts.join('/')
+}
+
+function reconcileLikelyTargetFilePath(
+  filePath: string,
+  metadata: Record<string, unknown>,
+  cwd?: string,
+): string {
+  const normalizedInput = resolveFilePath(taskPathBase(metadata, cwd), filePath)
+  const taskWorktreePath = String(metadata['current_task_worktree_path'] ?? '').trim()
+  if (taskWorktreePath) {
+    const normalizedWorktreePath = path.resolve(taskWorktreePath)
+    const relativeToWorktree = path.relative(normalizedWorktreePath, normalizedInput)
+    if (
+      relativeToWorktree === '' ||
+      (!relativeToWorktree.startsWith(`..${path.sep}`) &&
+        relativeToWorktree !== '..' &&
+        !path.isAbsolute(relativeToWorktree))
+    ) {
+      return normalizedInput
+    }
+  }
+
+  const targets = likelyTargetCandidates(metadata)
+  if (targets.length > 0) {
+    if (targets.includes(normalizedInput)) return normalizedInput
+
+    const preferredTarget = targets[0]!
+    if (path.basename(preferredTarget) === path.basename(normalizedInput)) {
+      return preferredTarget
+    }
+
+    const inputSuffix = anchoredSuffix(normalizedInput)
+    const suffixMatch = targets.find((target) => anchoredSuffix(target) === inputSuffix)
+    if (suffixMatch) return suffixMatch
+  }
+
+  const taskProjectPath = String(metadata['current_task_project_path'] ?? '').trim()
+  if (taskProjectPath && taskWorktreePath) {
+    const normalizedProjectPath = path.resolve(taskProjectPath)
+    const normalizedWorktreePath = path.resolve(taskWorktreePath)
+    const relativeToProject = path.relative(normalizedProjectPath, normalizedInput)
+    if (
+      relativeToProject &&
+      relativeToProject !== '..' &&
+      !relativeToProject.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relativeToProject)
+    ) {
+      return path.resolve(normalizedWorktreePath, relativeToProject)
+    }
+  }
+
+  return normalizedInput
+}
+
+function resolveWriteFileInput(
+  input: WriteFileInput,
+  metadata: Record<string, unknown>,
+  cwd?: string,
+): { filePath: string; content: string; createDirectories?: boolean } | { error: string } {
+  const recovered = recoverWriteFileAliases(input.item)
+  const filePath = String(input.filePath ?? input.path ?? recovered?.filePath ?? '').trim()
+  const content = String(
+    input.content ??
+    input.text ??
+    input.body ??
+    input.message ??
+    recovered?.content ??
+    '',
+  )
+  if (!filePath) {
+    const suggestion = inferLikelyWriteFilePath(metadata)
+    return {
+      error: suggestion
+        ? `Missing filePath. If you are creating the new test file, call write-file with { filePath: "${suggestion}", content: "..." }.`
+        : 'Missing filePath. Call write-file with { filePath: "/absolute/or/cwd-relative/path", content: "full file contents" }.',
+    }
+  }
+  if (!content.trim()) {
+    return {
+      error: `Missing content for ${filePath}. Call write-file with the full file text as { filePath: "${filePath}", content: "..." }.`,
+    }
+  }
+  const reconciledPath = reconcileLikelyTargetFilePath(filePath, metadata, cwd)
+  return {
+    filePath: reconciledPath,
+    content,
+    ...(input.createDirectories !== undefined ? { createDirectories: input.createDirectories } : {}),
   }
 }
 
@@ -219,12 +456,25 @@ export const writeFileTool = defineTool({
         type: 'boolean',
         description: 'Create missing parent directories (default true).',
       },
+      path: { type: 'string', description: 'Alias for filePath used by near-miss model calls.' },
+      text: { type: 'string', description: 'Alias for content used by near-miss model calls.' },
+      body: { type: 'string', description: 'Alias for content used by near-miss model calls.' },
+      message: { type: 'string', description: 'Alias for content used by near-miss model calls.' },
+      item: { type: ['object', 'string'], description: 'Optional nested or stringified payload.' },
     },
     required: ['filePath', 'content'],
   },
   isReadOnly: () => false,
   execute: async (input, ctx) => {
-    const result = await writeFile(input, { cwd: ctx.cwd })
+    const resolved = resolveWriteFileInput(input, ctx.metadata, ctx.cwd)
+    if ('error' in resolved) {
+      return {
+        output: `Error writing file: ${resolved.error}`,
+        is_error: true,
+        metadata: { success: false, path: '', error: resolved.error },
+      }
+    }
+    const result = await writeFile(resolved, { cwd: ctx.cwd })
     return {
       output: result.success
         ? `Wrote ${result.path}`
@@ -350,11 +600,15 @@ export const editFileTool = defineTool({
     required: ['filePath', 'oldString', 'newString'],
   },
   isReadOnly: () => false,
-  execute: async (input) => {
-    const result = await editFile(input)
+  execute: async (input, ctx) => {
+    const reconciledInput: EditFileInput = {
+      ...input,
+      filePath: reconcileLikelyTargetFilePath(input.filePath, ctx.metadata, ctx.cwd),
+    }
+    const result = await editFile(reconciledInput)
     const output = result.success
-      ? `Edited ${input.filePath} (${result.replacements} replacement${result.replacements === 1 ? '' : 's'})`
-      : `Error editing ${input.filePath}: ${result.error ?? 'unknown'}`
+      ? `Edited ${reconciledInput.filePath} (${result.replacements} replacement${result.replacements === 1 ? '' : 's'})`
+      : `Error editing ${reconciledInput.filePath}: ${result.error ?? 'unknown'}`
     return {
       output,
       is_error: !result.success,

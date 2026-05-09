@@ -8,7 +8,7 @@ A workspace is a directory containing:
 
 - a `guildhall.yaml` (committed) — coordinators, models, domains, ignore patterns
 - a `memory/` folder (committed) — the work queue, lever settings, transcripts
-- a `.guildhall/config.yaml` (gitignored) — local provider credentials
+- a `.guildhall/config.yaml` (gitignored) — local preferred-provider state and any other repo-local Guildhall state
 
 ## Registering workspaces
 

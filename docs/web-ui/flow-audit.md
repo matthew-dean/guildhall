@@ -118,6 +118,154 @@ correct the agent, and ask for direct action from Thread.
 
 ## Latest Progress
 
+- Closed the retry-window failure family with live proof on `task-016`.
+  Resolved `max_revisions_exceeded` retries now start a persisted fresh
+  revision window (`retryWindow.startedAt` + `baseRevisionCount`) instead of
+  inheriting historical debt forever. Live proof on Looma/Knit:
+  `task-016` resumed from `revisionCount: 8`, self-healed
+  `retryWindow.baseRevisionCount: 8`, handed off `in_progress -> review ->
+  gate_check`, then bounced `gate_check -> in_progress` with
+  `revisionCount: 9`, `currentCycleRevisionCount: 1`, and no new open
+  escalation. That proves the first post-retry bounce now counts against the
+  fresh window instead of immediately re-triggering historical
+  `maxRevisions`.
+- Defined the next failure family explicitly: stale reviewer baggage surviving a
+  human retry. After a `max_revisions_exceeded` escalation is resolved,
+  Guildhall now suppresses older reviewer notes in both worker context and
+  serve-layer `latestReviewerSummary` until a new review pass actually happens.
+  Live proof target: resolving and retrying `task-016` should stop surfacing
+  the old reviewer blob before the next reviewer run.
+- Defined the next failure family explicitly: worker self-critique exists but
+  Guildhall misses it when the note uses the worker's persona role label (for
+  example `Backend Engineer`) instead of `worker` / `implementer`. Live proof
+  target: `task-016` should surface `latestSelfCritique` from the existing
+  worker note, and recovery should stop asking to rewrite that note when it is
+  already present.
+- Release focus is now explicitly narrowed to start-to-finish automation.
+  Product/UI follow-ups are tabled unless they directly block unattended task
+  completion:
+  - coordinator detail polish
+  - layering / overlay sanity sweep
+  - task drawer information hierarchy
+- Found and fixed a real automation-lane ownership bug: resolving a blocked
+  escalation back to `in_progress` could leave the task with
+  `assignedTo: null`, which made reopened work look active without actually
+  restoring the worker lane. Escalation resolution now restores the correct
+  lane owner (`worker-agent`, `reviewer-agent`, or `gate-checker-agent`), and
+  both the serve layer and orchestrator now self-heal stale active ownership
+  when older task records still carry the broken shape.
+- Batch-proof prep exposed a more serious truth bug: task-scoped shell commands
+  could still execute in the base repo even after worktree isolation was set
+  up, which let generated artifacts like `web/app/types/supabase.ts` leak out
+  of `task-012` and leave the main Looma/Knit checkout dirty after a task was
+  marked done. The shell tool now remaps project-root cwd requests into the
+  current task worktree before execution, and we added focused shell tests for
+  omitted cwd and nested project-root cwd cases. Batch proof stays paused until
+  a fresh replay confirms the base repo stays clean.
+- Batch proof then exposed the last real autonomy policy gap: freshly drafted
+  `spec_review` tasks were intentionally excluded from the picker, so a
+  continuous unattended run could intake multiple tasks but would park every
+  one of them at “awaiting approval” forever. Normal drafted specs now route to
+  the owning coordinator for approval/trim, while the reserved bootstrap tasks
+  (`task-meta-intake` and `task-workspace-import`) still stay manual.
+- Batch proof then exposed a review-packet truth bug on the second queued
+  task: worker notes written with the live `implementer` role were being
+  ignored by self-critique readers that only recognized `worker` /
+  `implementation`. The review packet, acceptance-criteria reconciliation, and
+  task API summaries now all treat `implementer` notes with explicit
+  `Self-critique` content as valid worker self-critiques, so reviewer fan-out
+  stops bouncing clean worker handoffs for a critique that already exists.
+- Batch proof is now narrowed to one last throughput policy problem: for tiny
+  single-file cleanups, the worker still defaults to broad repo-level
+  verification (`pnpm -F web test`, full lint/typecheck/build) instead of a
+  file-scoped proof. In Looma/Knit that means unrelated standing failures keep
+  bouncing narrow tasks (`task-015`, and previously `task-014`) even after the
+  target file is fixed, because the unattended lane still treats whole-app test
+  health as authoritative for a one-line local cleanup.
+- The next runtime pass now splits worker verification from hard gates. Narrow
+  tasks with likely target files no longer inherit the broad repo-wide `test`
+  fallback by default, and single-file test work now derives a focused
+  `pnpm vitest --run <file>` command instead of `pnpm -F web test`. Hard gates
+  at `gate_check` still keep the broader authoritative gate list.
+
+- Reframed the coordinators UI around the actual product story. Settings →
+  Coordinators now explains that coordinators are review lanes, not folders;
+  spells out creation paths, current edit truth (`guildhall.yaml`), and the
+  required `domain` vs optional `path` split. The Coordinators board now reads
+  as live ownership: each lane shows domain, optional scoped path, a clearer
+  “protects” summary, calmer task counts, and only a prioritized slice of
+  domain tasks instead of dumping the whole history into each column.
+- Tightened the spec-approval card button language. Those cards now use
+  `Open task` and `Revise spec` instead of the mushier `Open` / `Change`
+  pair, so their actions match the workflow vocabulary used elsewhere in
+  Thread.
+- Fixed the Thread phase-count chip tone so it matches the section state.
+  Paused in-flight buckets no longer get a warn-colored count just because the
+  underlying turns are still marked active in the data model; truly live work
+  remains warn, while approval-paused sections can read as accent instead.
+- Made the Thread card status chip less naive. Paused task cards no longer
+  inherit a generic `now` badge just because the turn is still marked active;
+  they now show `paused`, while active spec-review cards show `awaiting
+  approval`.
+- Cooled down paused checklist rows inside Thread task cards. Active checklist
+  steps now read `Paused` instead of `Now` when the parent task has no live
+  agent, and their status lights stop pulsing in that state.
+- Made the Thread phase header tell the truth for paused work. When the whole
+  `inflight` section only contains paused task cards with no live agent, the
+  section label now reads `Paused` instead of the misleading `In flight`.
+- Made the top-bar task-count chip stateful so it stops contradicting paused
+  task cards. The count still tracks non-terminal work, but the label now
+  reads `active` only while Guildhall is actually running; otherwise it reads
+  `paused`.
+- Tightened paused-task copy in Thread so the body text matches the action
+  hierarchy. Cards now say things like `Work is paused. Resume work...` or
+  `Gate checks are paused...` instead of the generic `Waiting for worker
+  activity`, and task cards now consistently use `Open task` instead of the
+  vague `Open`.
+- Tightened the active-task CTA model in Thread. Paused task cards no longer
+  default to the vague `Tell agent` path; they now use stateful resume actions
+  like `Start work`, `Resume work`, `Resume review`, or `Resume gates`, with
+  freeform guidance demoted to `Add note`.
+- Restored the left rail's full-height behavior after simplifying the shell
+  scroll model. The page still owns scrolling, but the rail now pins to the
+  viewport below the global header with a full-height minimum again instead of
+  collapsing to content height.
+- Switched the Guildhall shell back to the simpler scroll model the user
+  actually wants: the page scrolls, while the global header, left rail, and
+  project topbar use sticky positioning. This removes the internal
+  full-viewport shell assumptions that had been fighting the browser and makes
+  the chrome behavior match a more normal document flow.
+- Fixed the top-level app shell sizing that was still making the page a little
+  too tall. The real overflow source was `Header + full-height ProjectView`
+  stacked together, not missing `box-sizing`. `App.svelte` now owns the
+  viewport height with a two-row shell, and `ProjectView` fills the remaining
+  row instead of claiming another full viewport for itself.
+- Simplified the topbar run controls again. `Start` and `Stop` now share the
+  same primary button slot, and the overflow menu no longer duplicates visible
+  actions like `New task` or `Stop`.
+- Normalized the web shell height contract again after the toolbar refactor.
+  The app already had global `box-sizing: border-box`, but `ProjectView`
+  was still mixing `calc(100vh - 44px)` on the shell with `height: 100vh` on
+  the sticky rail. The shell now uses a single `100dvh` viewport baseline,
+  and the root app nodes are explicitly normalized to full height so we stop
+  getting the annoying one-screen-plus-a-few-pixels overflow that lets the
+  toolbar drift off-screen.
+- Shrunk reclaimed worker prompts again by replacing the full markdown spec
+  body with a clipped `Spec Overview` summary section while keeping the
+  structured acceptance-criteria list separate below. This removes duplicated
+  spec AC/out-of-scope prose from long task contexts.
+- Tightened reclaimed worker context for noisy review loops. Context building no
+  longer treats command-shaped backticks or wildcard test globs as exact likely
+  target files, and worker task summaries now trim generic agent notes plus
+  avoid duplicating giant reviewer prose in both `Latest Required Revisions`
+  and `Agent Notes`.
+- Blocked tasks no longer surface `spec_fill_pending` inbox nags. The spec-fill
+  wizard now treats `blocked` / `shelved` as terminal for intake-completeness
+  nudges, which removes stale "Missing product brief" noise from tasks that are
+  already truthfully blocked for another reason.
+- Pointed the live Looma/Knit project back at `openai-api` after DeepInfra
+  billing was restored, replacing the stale project-local `llama-cpp`
+  preference/model override that had been forcing Codex CLI fallback.
 - `guildhall-automation-001` is complete.
 - Added a design note for protocol-first provider abstraction and bounded queue
   throughput in `docs/design/provider-abstraction-and-throughput.md`.
@@ -180,6 +328,28 @@ correct the agent, and ask for direct action from Thread.
   copied bootstrap/spec text. This closes the live bug where `task-006`
   reached `done` with `No projects matched the filters...` stored for
   typecheck/build even though the real `knit/web` commands passed.
+- Worker recovery on Looma/Knit `task-011` is now stricter after malformed
+  `write-file` calls: the query loop injects an immediate path-specific retry
+  instruction after the first empty `write-file` payload instead of waiting
+  for a second failure and only giving a generic "do not repeat that" nudge.
+- Focused malformed `write-file` repair is now less brittle: the repair path
+  feeds the prior tool error back into the retry prompt and lets the actual
+  `write-file` tool recover alias-shaped inputs like `path` / `text` instead
+  of rejecting them early in the query loop.
+- Reclaimed worker turns now carry an explicit `Resume From Current Worktree`
+  block listing the active task worktree and its changed files, and the worker
+  prompt now tells resumed tasks to start from those changed files or the exact
+  failing verification target before broad repo research. Live Looma/Knit
+  replay confirmed one concrete improvement: `task-011` no longer reopens raw
+  `MEMORY.md` on reclaim. The remaining blocker is narrower: the worker still
+  spends too much early budget on test-layout discovery instead of immediately
+  opening the changed worktree test file it already owns.
+- Reclaimed worker context now also derives `Likely Target Files` from the
+  task spec and automated verification commands, resolved against the active
+  worktree when present. This gives tasks like Looma/Knit `task-011` a concrete
+  source-file and test-file pair even when the worktree is clean, so the next
+  live question is whether the worker starts from those exact files instead of
+  root-level directory browsing.
 - Repaired `task-006`'s stored Looma/Knit gate record so its persisted
   typecheck/build outputs now reflect the real `pnpm --dir web ...` commands
   that pass on `knit/main`, rather than the earlier stale filter-based output.
@@ -361,6 +531,72 @@ correct the agent, and ask for direct action from Thread.
   `task-006` ran in a dedicated task worktree on `knit/`, replayed through
   narrowed task-scoped gates, and recorded a successful local ff-only merge
   back to `main` without manual PR bookkeeping.
+- The next staged-throughput pass exposed two honest blockers on fresh
+  Looma/Knit tasks: worktree setup treated untracked `.guildhall/` repo-local
+  state as a dirty subrepo, and spec-agent max-turn recovery still escalated
+  even when the assistant had already written enough plain-text brief/question
+  content to preserve.
+- Both are now hardened. `NodeGitDriver.isClean()` ignores untracked
+  `.guildhall/` bookkeeping while still treating real source changes as dirty,
+  and spec max-turn recovery now salvages the latest assistant prose more
+  defensively, persists fallback brief/question state before escalation, and
+  recognizes "my read ..." preambles where the actual user job lives on the
+  following bullet.
+- Live replay immediately found the next qualitative gap: the fallback brief
+  path could still fossilize agent research narration like "let me check the
+  worktree" as the task's `userJob`. Tightened inference so research/audit
+  chatter is ignored for brief authorship while preserving any structured
+  question cards from the same turn.
+- Fresh staged-throughput replay now gets meaningfully farther live: `task-010`
+  and `task-011` both reached `spec_review`, both were approved into `ready`,
+  and `task-010` was claimed into a real worker worktree with concrete edits to
+  `web/tests/unit/shared/subdomain.test.ts`.
+- The new blocker is the worker-side analogue of the old spec-turn problem:
+  `task-010` hit the worker turn limit after making real file edits, but
+  Guildhall still escalated it straight to `blocked` instead of preserving that
+  durable code progress for review or resumable revision. `task-011` was
+  claimed next, so the queue itself is moving; the durability gap has simply
+  shifted from spec-intake to worker completion.
+- Worker-side turn-limit preservation is now implemented and test-covered. If
+  an `in_progress` task hits the worker turn limit but its task worktree is
+  already dirty with real code edits, Guildhall preserves the task in
+  `in_progress` instead of escalating immediately to `blocked`.
+- Live Looma/Knit replay now shows that worker preservation fix paying off:
+  `task-010` resumed from its old blocked state, finished the subdomain test
+  expansion, passed its scoped Vitest run and typecheck, and handed off into
+  `review` instead of getting trapped by the old turn-limit path.
+- The next honest gap is reviewer durability. A reviewer can emit a real
+  plain-text verdict without successfully calling `update-task`, which used to
+  leave the task stuck in `review`. Guildhall now preserves that reviewer note
+  and applies the deterministic review decision so the queue keeps moving.
+- The next staged-throughput blocker is inside reviewer fanout itself. A
+  persona reviewer was able to hang inside a bare `agent.generate()` call with
+  almost no operator visibility, which left the whole one-task run parked in
+  `review` despite the worker having already completed real work. Persona
+  fanout calls are now bounded by a per-persona timeout and convert timeout
+  hangs into infrastructure-only revise verdicts, so fanout can fall through to
+  the single-reviewer path instead of freezing the review lane forever.
+- Live replay then exposed the same class of hang one step later: once fanout
+  fell through, the single reviewer path still had no wall-clock timeout around
+  the main `generateWithEvents()` turn. The core dispatch path now applies a
+  per-agent turn timeout, treats `timed out after ...ms` as infrastructure-like
+  reviewer failure, and lets deterministic fallback absorb a hung reviewer turn
+  instead of leaving `task-010` silently parked in `review`.
+- The next gate-truth issue turned out to be command-shape drift, not product
+  code failure. `task-010` still carried the common `pnpm --filter @knit-app
+  test -- <file>` shape, which expanded back out to unrelated suite failures.
+  Task-scoped gate normalization now rewrites that form into direct single-file
+  Vitest runs, and `run-gates` persists its hard-gate results back onto the
+  task immediately.
+- Live Looma/Knit proof: `task-010` now completes cleanly end to end. Review
+  reaches `gate_check`, the authoritative gates run as `pnpm --dir web
+  typecheck`, `pnpm build`, `cd web && pnpm vitest --run
+  tests/unit/shared/subdomain.test.ts`, and `pnpm lint`, all four pass, and
+  the task transitions `gate_check -> done` with recorded gate results.
+- The next live task (`task-011`, use-presence lifecycle tests) is now the
+  active throughput proof. It is no longer stuck in setup or intake; the worker
+  is actively reading the composable, existing test patterns, and Nuxt/Vitest
+  environment before writing the new unit test file.
 - Thread column width now uses a real target width again. The column had been
   using `max-width: 680px`, which let it shrink unexpectedly; it now uses
   `width: 680px; max-width: 100%` so desktop stays stable while smaller
@@ -764,3 +1000,619 @@ correct the agent, and ask for direct action from Thread.
   the target repo already has uncommitted changes, Guildhall now stops before
   minting a task worktree and surfaces a clear repo-dirty error instead of
   silently blending prior local edits into a supposedly autonomous task run.
+- The current unattended-throughput slice is now targeting worker file authoring
+  resilience. `write-file` no longer hard-fails immediately on common
+  near-miss payloads like nested `{ item: { path, text } }` calls, and when a
+  worker still emits `write-file {}` after inspecting a source file, the tool
+  now returns a concrete likely target path plus the exact `{ filePath,
+  content }` call shape required. This is meant to unstick Looma/Knit
+  `task-011`, where the worker had enough repo context to write
+  `use-presence.test.ts` but fell off the tool contract instead.
+- That file-authoring resilience now covers malformed `edit-file` turns too.
+  Guildhall will do one focused file-mutation repair after `edit-file {}` and
+  can recover either into a valid `edit-file` call or a whole-file
+  `write-file` call when that is the safer move. Live Looma/Knit replay also
+  proved that likely-target normalization is better now: a `web/app/...`
+  source hint plus a bare `tests/...` command now resolves to `web/tests/...`
+  instead of the repo root. The remaining blocker is more behavioral than
+  pathing: once the worker opens the right `web/` source and test surfaces, it
+  still burns extra discovery/listing turns before mutating the file.
+- Resume dispatch is sharper now too. For `in_progress` worker turns with
+  likely target files, the orchestrator injects an explicit `Immediate Resume
+  Instructions` block into the actual dispatch prompt: open or edit those
+  exact files first, and if a likely target file does not exist yet, create it
+  at that exact path instead of searching for alternate directories. Live
+  Looma/Knit replay confirmed the worker now reads the exact missing
+  `web/tests/unit/composables/use-presence.test.ts` path before any broader
+  listing. The next blocker is narrower again: after confirming the target
+  file is missing, the worker still falls back to `list-files`/`glob` instead
+  of creating it immediately.
+- The next repair slice hardened that authoring boundary further. Focused
+  `write-file` repair now carries the prior tool error, the exact likely
+  target path, and recent read-file hints, and it runs under a short dedicated
+  timeout instead of quietly consuming the whole worker turn budget. The
+  LLM-facing `write-file` schema now also advertises `filePath` and `content`
+  as required, while the backend still accepts alias-shaped recovery payloads
+  when a model gets close but not quite right.
+- Live Looma/Knit replay on `task-011` crossed a real threshold after that
+  change: the worker no longer only dies in the `write-file {}` trap. Once it
+  had re-read the exact source and test target, it eventually emitted a real
+  `write-file` call with concrete `filePath` + `content`, and the query loop
+  stayed alive instead of timing out immediately. The remaining blocker is now
+  a later-step worker loop: once the test file exists and has been inspected,
+  Guildhall still needs a cleaner handoff from “I know what is wrong” to
+  “finish the rewrite and hand off for review,” instead of cycling
+  `in_progress` turns around the same file.
+- The next replay removed another source of drift: `write-file` target
+  inference now prefers `current_missing_likely_target_file` and
+  `current_task_likely_target_files` before any project-root heuristics, so
+  repair prompts no longer fall back to `/knit/web/...` when the task is
+  actually working inside `/knit/.guildhall/worktrees/task-011/...`. Focused
+  tests now lock that behavior in. Live Looma/Knit replay on `task-011`
+  matched the healthier shape: the worker reopened the exact worktree source
+  and exact worktree test target, and it did not regress to the old repo-root
+  write suggestion. The remaining blocker is now cleaner still: worker
+  continuation can end a step after rereading the right files without yet
+  taking the concrete mutation step.
+- The next repair slice hardened the no-tool path after those exact-file
+  rereads. When a reclaimed worker has already inspected the exact likely
+  target file and still replies without a tool call, Guildhall now replaces
+  the generic nudge with a stricter mutation-or-escalation demand: the next
+  response must be exactly one tool call and no prose, either a concrete
+  `edit-file` / `write-file` mutation or an explicit `raise-escalation`.
+- The worker loop now also refuses to silently absorb repeated no-op reclaimed
+  turns. For in-progress worker tasks with likely target files, two
+  consecutive passes with no transition, no note, and no worktree edits now
+  produce a structured escalation instead of another invisible in-progress
+  loop. Focused `run-query` and `orchestrator` coverage are green, so the
+  next live Looma/Knit replay for `task-011` should either mutate the test
+  file or surface a truthful stuck reason instead of quietly spinning.
+- Live replay answered the next question: `task-011` now reaches a concrete
+  failing test diagnosis instead of wandering, but DeepInfra Qwen can still
+  burn the whole worker turn after that diagnosis and die as a timeout.
+  Guildhall now converts that specific resumed-worker timeout shape into a
+  structured escalation when the task still has likely target files and no
+  visible worktree edits, so the next run should stop as “worker is stuck”
+  rather than a vague `agent-error`.
+- The next repair closed the worktree-isolation leak that showed up once
+  `task-011` finally emitted a real `write-file`. `write-file` and
+  `edit-file` now reconcile near-miss absolute paths back onto the
+  authoritative likely target file from task metadata, so a model that tries
+  to write `/knit/web/tests/...` after working inside
+  `/knit/.guildhall/worktrees/task-011/...` is snapped back into the task
+  worktree instead of mutating the main repo. Focused file-tool tests now
+  lock that behavior in, and a fresh Looma/Knit replay on the rebuilt server
+  proved the execution-time behavior: the worker still requested the main-repo
+  `.../knit/web/tests/unit/composables/use-presence.test.ts` path, but
+  Guildhall completed the `write-file` against
+  `/knit/.guildhall/worktrees/task-011/web/tests/unit/composables/use-presence.test.ts`.
+- The next worker-tempo slice now stops intra-turn read-only churn earlier.
+  After Guildhall has already refused exact-target read-only exploration twice
+  in the same worker pass, `runQuery` now ends that turn immediately instead
+  of continuing to donate model budget until a timeout. Focused `run-query`
+  and orchestrator coverage are green. A fresh live replay attempt on
+  2026-05-05 was blocked before it could exercise the new loop because the
+  DeepInfra-backed provider returned HTTP 402 (`positive balance` required),
+  so the next live proof needs provider credit or a different provider.
+- The next live proof switched Looma/Knit to prefer `llama-cpp`, but the
+  local server did not have the assigned model loaded, so Guildhall
+  truthfully fell back to `codex-oauth`. That replay proved two useful things:
+  `task-011` still mutated the real worktree test file, and the next blocker
+  is no longer path drift or provider balance. It is worker-side verification
+  command truth: after the edit, the worker still asked `shell` to run stale
+  `pnpm --filter @knit-app test` commands that do not match the task worktree
+  package layout.
+- Closed that verification-command truth gap under one shared abstraction.
+  Authoritative task-scoped success gates now live in a reusable helper used by
+  both `run-gates` and `shell`, and `in_progress` worker prompts now surface
+  those same normalized commands explicitly. That means one stale worker shell
+  turn can no longer slip back to `@knit-app` filter commands after gate-check
+  has already learned the correct `web`-scoped shape. Focused shell,
+  run-gates, and orchestrator regressions are green; the next live Looma/Knit
+  replay should answer whether `task-011` now clears verification instead of
+  ending on empty-assistant/provider weirdness.
+- Live Looma/Knit replay answered that question well. On `task-011`, the worker
+  no longer ran `pnpm --filter @knit-app test`; it executed the normalized
+  `cd web && pnpm vitest --run tests/unit/composables/use-presence.test.ts`
+  command and surfaced a real failure in the task worktree test file:
+  `~/app/composables/use-presence` did not resolve under Vitest. The worker
+  then fixed that import path inside the worktree test file and continued.
+- The next blocker is now a policy/instruction bug, not command truth. After
+  making the valid test-only fix, the worker later escalated because Guildhall's
+  stricter resumed-worker lane demanded mutation of the exact likely target
+  source file (`web/app/composables/use-presence.ts`) or escalation, even
+  though the real progress path was still test-only. The next repair slice is
+  to distinguish “must mutate one of the likely target files” from “must mutate
+  that exact source file,” so valid test-only progress is not turned into a
+  false decision_required escalation.
+- That policy repair is now live-verified. After resolving the old false
+  escalation and replaying `task-011`, the worker no longer escalated about
+  needing to edit `use-presence.ts`. It stayed on the valid test-only path,
+  reran the normalized focused Vitest command, and exposed the next honest
+  blocker: the worktree test still bootstraps enough Nuxt/Vite app context to
+  fail on a missing `@looma/vue` import from `SidebarContent.vue` before test
+  collection. So the next repair slice is no longer worker orchestration. It
+  is deciding whether Guildhall should install/provide that dependency in the
+  task worktree or let the worker isolate the unit test runner/setup so the
+  file can execute without full app bootstrap.
+- That supposed `@looma/vue` bootstrap blocker turned out to be a bad Knit
+  unit-test harness, not another Guildhall runtime gap. The worktree test was
+  importing `~/app/composables/use-presence` (a path Vitest/Nuxt does not
+  expose), and its mock/setup path never mounted the composable inside a real
+  Vue setup context. Reworking the test onto the repo's `mockNuxtImport(...)`
+  pattern and a mounted harness made the focused command pass cleanly:
+  `cd web && pnpm vitest --run tests/unit/composables/use-presence.test.ts`.
+  The next live replay for `task-011` should now tell us whether the worker can
+  continue through review/gates instead of stalling on a phantom environment
+  problem.
+- The next replay exposed a second, more systemic multi-repo worktree bug.
+  `task-011` still blocked inside its task worktree because Knit's
+  `link:../../looma/packages/vue` dependency no longer resolves once `knit/`
+  is nested under `.guildhall/worktrees/task-011/`. Manually adding the sibling
+  anchor `knit/.guildhall/worktrees/looma -> ../../../looma` made the exact
+  worktree command pass, proving the root cause. Guildhall now creates these
+  sibling repo anchors automatically for nested multi-repo worktrees, so
+  cross-repo `link:` dependencies keep the same shape they had in the original
+  workspace. Focused `worktree-manager` coverage and a fresh Guildhall build are
+  green. The next live replay should show `task-011` getting past worker
+  verification instead of re-raising the same stale harness/environment block.
+- The next replay got past that nested worktree dependency failure and exposed
+  a smaller, meaner runtime gap: after real worker edits and successful focused
+  verification, some providers can start returning empty assistant replies
+  during checkpoint/review handoff. Guildhall now lets the orchestrator inspect
+  worker carryover metadata and preserve that state as resumable in-progress
+  work when the task already has dirty worktree edits plus handoff evidence,
+  instead of collapsing into a fake hard failure just because the provider
+  ghosted during the last mile.
+- The next real review blocker is evidence shape, not worker execution. Reviewer
+  fanout was bouncing `task-011` because it could only see narrated self-report,
+  not a real packet with changed file content. Guildhall now writes live review
+  packets at `review`/`gate_check`, including changed-file summaries, numbered
+  file excerpts, the latest self-critique, and the latest checkpoint, and it
+  injects that packet into reviewer context so reviewers can inspect the actual
+  task artifact instead of asking the worker to re-describe its own diff.
+- Empty-provider last-mile flakiness now leaves a durable worker checkpoint
+  behind instead of only a vague resumable state. When a worker has already
+  produced dirty-worktree edits plus verified-work handoff evidence and then
+  starts returning empty assistant replies, Guildhall writes a recovery
+  checkpoint with the changed files and next planned action before preserving
+  the task in `in_progress`. If the worker already raised a real blocker and
+  the provider ghosts immediately afterward, Guildhall now still writes that
+  checkpoint before leaving the task's `blocked` state intact. Focused
+  `orchestrator` regressions and a fresh build are green. The next live
+  Looma/Knit replay should tell us whether that checkpoint discipline is enough
+  to get `task-011` cleanly back into review, or whether the next real blocker
+  remains broader verification truth around unrelated repo-red files.
+- The next replay clarified that blocker: `task-011` is repeatedly surfacing a
+  broader `pnpm --dir web typecheck` failure in unrelated file
+  `web/app/composables/use-presence.test.ts`, then rediscovering that as a
+  fresh human decision on the next worker turn. Guildhall now injects the most
+  recent resolved escalations directly into task context as
+  `Resolved Human Decisions To Honor`, with explicit guidance not to reopen
+  those questions unless new evidence appears in the same touched files or
+  verification scope. Focused `context-builder` coverage and a fresh build are
+  green. The next live replay should tell us whether that scoped decision now
+  actually sticks inside resumed worker turns instead of reappearing as false
+  `Needs you` work.
+- That scoped decision is now sticking better, and the next blocker moved
+  again. On the fresh Looma/Knit replay, `task-011` no longer bounced straight
+  back into the same unrelated typecheck escalation; it stayed in `review`.
+  Guildhall also now recognizes review-ready worker prose with verified
+  evidence as a handoff problem instead of a “you must mutate again” problem,
+  and the worker followed that nudge by issuing a real `update-task` call on
+  the live run. The remaining flake is later: the provider can still ghost
+  immediately after that handoff tool call, so the next repair slice is making
+  post-handoff empty replies stop reading like active run churn when the task
+  is already durably in `review`.
+- That post-handoff slice is now in too. Empty assistant replies are no longer
+  allowed to trigger deterministic reviewer fallback first when the task is
+  already durably in `review`; Guildhall now preserves the review state before
+  that fallback can bounce the task back into a bogus revise loop. It also
+  normalizes ownership to `reviewer-agent` when review was still carrying a
+  stale worker assignee. Focused `orchestrator` coverage and a fresh build are
+  green. The next live replay should tell us whether the stop summary now reads
+  as a calm preserved review state instead of an `agent-error`.
+- Fresh Looma/Knit replay moved the live blocker again. The old
+  post-handoff-review ghost path no longer dominates: `task-011` now lands on a
+  real reviewer revision about `any` usage in the new test file and returns to
+  `in_progress` with concrete feedback. The remaining runtime noise is lower in
+  the stack now: after that legitimate bounce, the worker can still drift into
+  read-only retry churn while addressing the revision. So the next repair slice
+  is resumed-worker revision discipline, not review-handoff truth.
+- Review ownership truth now holds even while Guildhall is paused. The
+  orchestrator normalizes stale `review` ownership before picking lanes, and
+  the serve layer also repairs persisted `review + worker-agent` rows when
+  `/api/project` or `/api/project/task/:id` reads `TASKS.json`. Live
+  Looma/Knit verification on `task-011` now shows `status: review` together
+  with `assignedTo: reviewer-agent` in both endpoints without needing another
+  tick to clean it up. That clears one more misleading UI/runtime state leak;
+  the next honest blocker is still resumed-worker revision discipline after a
+  legitimate reviewer bounce.
+- The next live replay pushed `task-011` one stage farther: it finally cleared
+  review and reached `gate_check` on Codex fallback. That exposed the next
+  missing handoff rule. Guildhall had already persisted the hard gate results,
+  but a gate-checker prose verdict could still leave the task churning in
+  `gate_check` instead of converting those saved results into a durable status
+  transition. Guildhall now treats fresh hard gate results as authoritative in
+  that lane too: all-pass auto-completes to `done`, any hard-gate failure
+  bounces back to `in_progress`, and stale `gate_check` ownership is
+  normalized onto `gate-checker-agent` in both orchestrator and serve reads.
+- The next blocker after that was finally the real scoped-decision leak:
+  `task-011` kept failing `pnpm --dir web typecheck` on unrelated stale file
+  `web/app/composables/use-presence.test.ts` even after the human had already
+  resolved that broader repo-red was out of scope for this task's changed
+  target. Guildhall now classifies that exact gate shape as a scoped exception
+  when three conditions all hold: the failure paths do not touch the task's
+  likely target files, the failing hard gate is the authoritative typecheck
+  lane, and the task already has a resolved human decision explicitly keeping
+  unrelated repo-red out of scope. Focused orchestrator coverage now locks
+  that behavior in before the next live Looma/Knit replay.
+- Live Looma/Knit replay on the fresh build confirmed the new rule: after
+  resolving the stale `max_revisions_exceeded` escalation back to `gate_check`,
+  `task-011` replayed once and went `gate_check -> done` in a single tick.
+  The gate-checker still narrated the broad typecheck failure in its prose, but
+  the orchestrator now correctly treats that failure as a scoped exception
+  because it only touched unrelated file
+  `web/app/composables/use-presence.test.ts` while the task target remained
+  `web/tests/unit/composables/use-presence.test.ts`.
+- The next cleanup slice pushed that scoped-exception rule down into the
+  tool/runtime boundary itself. `run-gates` now receives the same resolved
+  scope-decision context as the orchestrator and reports a scoped unrelated
+  typecheck failure as an effective pass instead of a generic hard failure.
+  That keeps the gate-checker model from being handed contradictory evidence in
+  the first place and aligns tool narration with the orchestrator's final lane
+  decision.
+- The next spec-intake slice closed a quieter but real leak: once a spec-agent
+  had already used transcript/file tools, a later no-tool reply that only said
+  "I'll draft the spec now" could still end the turn because the generic
+  no-tool nudge only applied before the first tool call. The query loop now
+  detects future-step planning prose and reissues the same durable-step demand
+  even after earlier tools ran, so planning narration has to turn into
+  `update-task`, `update-product-brief`, `post-user-question`, or
+  `raise-escalation` instead of silently ending intake. Focused `run-query`
+  coverage is green, and the live Looma/Knit server is restarted on the fresh
+  build while `task-007` now sits in truthful `spec_review`.
+- Spec-review ownership now tells the truth while paused. A task waiting for
+  human spec approval should not still claim `worker-agent`, so both the
+  orchestrator normalization pass and the serve-layer task reader now clear
+  stale `assignedTo` values on `spec_review`. Focused orchestrator coverage is
+  green, and live Looma/Knit verification shows `task-007` at
+  `status: spec_review` with `assignedTo: null` on the fresh build.
+- Terminal task ownership now tells the truth too. Older Looma/Knit rows were
+  still surfacing `worker-agent` or `gate-checker-agent` on `done` tasks even
+  though no active lane owned them anymore. Guildhall now normalizes
+  `done`/`blocked`/`shelved` tasks to `assignedTo: null` in both the
+  orchestrator queue-normalization pass and the serve-layer task reader, and
+  the task schema now accepts that paused/terminal truth instead of insisting
+  on a string owner. Focused orchestrator coverage is green, and live
+  Looma/Knit readback now shows every `done` task with `assignedTo: null`.
+- Spec approval now reads as a paused approval state in the UI, not fake live
+  activity. Task cards no longer treat `spec_review` as an active lane just
+  because the orchestrator is running, and the Coordinators view now counts
+  those tasks separately as `awaiting approval` instead of rolling them into
+  the active total. The fresh Looma/Knit browser build is up on port 7844.
+- The top-bar task indicator now matches that same truth. `spec_review` no
+  longer inflates the `N active` chip in ProjectView; approval-paused work is
+  counted separately as `awaiting approval`, alongside any real `active` and
+  `stuck` counts.
+- The top-bar inbox badge now counts actionable notifications, not only
+  high-severity alarms. Medium-severity items like spec approval remain visible
+  in the header even when nothing is on fire; the badge stays danger-colored
+  for high severity and drops to warn-only when the outstanding action is
+  medium.
+- Approval-paused wording is now aligned across the remaining browser surfaces.
+  `spec_review` now renders as `Awaiting approval` in the shared status label,
+  the Thread card headline, the escalation resume picker, and the Release tab
+  empty state, so the paused lane no longer flips between `review` and
+  `approval` language depending on which surface the operator is looking at.
+- `/api/project` and `/api/project/inbox` now read from the same inbox snapshot
+  builder, including the same workspace-import self-healing path and blocker
+  flags, so the main project payload no longer drops inbox state while the
+  dedicated inbox endpoint still shows it. Hardening this also surfaced a raw
+  task-read edge: `activeEscalations()` now treats missing `escalations` arrays
+  as empty instead of throwing, which keeps lighter or older TASKS rows from
+  crashing the project shell.
+- Ready-state Thread cards now behave like queue cards instead of pseudo-chat.
+  When a task has been approved into `ready` with no live agent yet, Thread now
+  says it is approved and queued, offers `Start work` as the primary action,
+  demotes freeform follow-up to `Add note`, and labels the secondary nav button
+  `Open task`. This directly fixes the post-approval confusion where the card
+  still looked open but made `Tell agent` the default next action.
+- The project header now uses a clearer action hierarchy instead of just
+  wrapping everything. Status and provider chips stay visible, `New Task` is a
+  compact `+` affordance, `Start` / `Stop` remain the obvious main run control,
+  and lower-frequency actions like `Finish one` move into an overflow actions
+  menu so the header reads more like a product and less like a crowded control
+  panel.
+- Worker file-mutation discipline is tighter now. When a live coding task
+  already has authoritative file-tool context (active worktree and likely
+  target files), shell commands that try to write file contents directly via
+  redirection / heredocs / tee are blocked and redirected back toward
+  `write-file` / `edit-file`. Shell stays available for builds, tests, lint,
+  and other focused verification, but the worker can no longer slide from a
+  correct worktree file write into “let me rewrite that file through shell
+  instead.”
+- Agent-turn timeouts are now inactivity-based for streaming turns instead of
+  hard wall-clock kills. If DeepInfra (or another provider) is still emitting
+  assistant deltas or tool activity, Guildhall resets the turn timer and lets
+  the agent keep working. A timeout now means “no streamed activity arrived
+  for the configured interval,” which is a much truer signal than “the whole
+  turn lasted longer than N ms.”
+- Worker turns with real dirty-worktree progress no longer disappear as
+  “no change” just because the model failed to move status on the same pass.
+  When a worker finishes a turn, leaves verified work metadata behind, and the
+  task worktree is dirty, Guildhall now writes a recovery checkpoint and bumps
+  the task timestamp even if the task remains `in_progress`. That gives the
+  queue a durable trace of progress instead of pretending the turn was empty.
+- Agent request sampling is now role-aware instead of silently inheriting
+  provider defaults. Guildhall threads an explicit optional temperature through
+  the engine/provider contract, uses conservative defaults by role
+  (`spec/coordinator=0.2`, `worker=0.1`, `reviewer/gate=0.0`), and only emits
+  it on provider paths that actually support it today (OpenAI-compatible and
+  Claude). Codex keeps its existing tuned default behavior for now.
+- Context debug snapshots now record the effective temperature alongside the
+  model id, so when a lane gets weird later we can distinguish “provider/model
+  issue” from “sampling issue” without reconstructing runtime defaults from
+  source.
+- The first live DeepInfra split-model replay exposed a file-tool truth bug,
+  not a model-availability one. `task-007` really did reclaim under
+  `worker=Qwen/Qwen3-235B-A22B-Instruct-2507`, reached shell verification, and
+  wrote progress far enough to attempt a review handoff. The real failure was
+  that write/edit path reconciliation treated a file path already inside the
+  task worktree as if it still needed project-root remapping, which created a
+  bogus nested `.guildhall/worktrees/task-007/...` target and confused the
+  review guard about whether the worker had touched the real file.
+- The same live replay also showed the task-scoped verification command needed
+  one more normalization pass. `pnpm --filter @knit-app test --
+  tests/unit/composables/use-collections*.test.ts` was being rewritten into a
+  shell command that still left Vitest with a fuzzy glob, which in practice
+  ran far more of Knit's suite than intended. Task-gate normalization now
+  expands wildcard test targets into explicit file arguments, so the worker and
+  gate lanes can run the concrete `use-collections` unit files instead of
+  widening into unrelated component/server failures.
+- Inbox truth is tighter again for live tasks. The low-severity `spec_fill`
+  wizard no longer applies once a task has moved into `in_progress`, `review`,
+  or `gate_check`, so Looma/Knit tasks like `task-007` stop showing bogus
+  `Missing product brief` nags while real worker/reviewer work is already in
+  flight. Intake/approval stages still keep the spec-fill nudges.
+- Reviewer-lane evidence is now visible from the same live API payload the UI
+  already reads. `/api/project` task rows and `/api/project/task/:id` now
+  derive `latestReviewerSummary`, `latestSelfCritique`, and
+  `latestCheckpoint` from the newest reviewer/self-critique notes plus the
+  per-task checkpoint file, so a Looma/Knit replay that bounces `task-007`
+  back out of review can be diagnosed from the served task payload instead of
+  digging through raw `memory/TASKS.json` and `checkpoint.json` by hand.
+- That same review packet is now visible in the browser instead of living only
+  in the API. Task cards can show the latest reviewer bounce or next
+  checkpoint action inline, and the drawer Spec tab now renders a `Latest
+  handoff packet` card with the newest reviewer summary, self-critique, and
+  checkpoint details. When `task-007` churns again, the operator can inspect
+  the current handoff packet from the queue and drawer without leaving the app.
+- Reviewer-fanout summaries now separate actual requested changes from reviewer
+  availability failures. Persona timeouts / 429-style infra misses are still
+  preserved for audit, but they land in a `Reviewer availability notes`
+  section instead of inflating the `Aggregated revisions from N personas`
+  headline. That keeps the next `task-007` review bounce from reading like
+  five distinct code-change asks when some of the noise is really provider
+  flakiness.
+- Review-packet generation itself is less likely to undersell valid worker
+  evidence now. The packet treats `implementation` notes that contain a real
+  self-critique as review evidence, and changed-file rendering filters out
+  obvious command-shaped junk paths left over from earlier resume/write bugs.
+  That should stop `task-007`-style replays from getting bounced for “no
+  self-critique” or bogus command-path diff entries when the worker actually
+  did the right thing.
+- Fresh-task proof is finally cleaner now. `task-007` has been shelved as a
+  contaminated regression fixture, a new `task-012` Supabase type-generation
+  task can start from a fresh worktree again after cleaning the dirty `knit`
+  base repo, and the next honest blocker is narrower: the spec-agent was still
+  able to churn on repeated read-only tool calls after the intake research
+  budget was exhausted. `runQuery` now ends the turn after repeated
+  intake-budget refusals instead of looping forever on the same refusal.
+- The same fresh-task replay exposed one more intake escape hatch and we
+  tightened that too. After Guildhall has already demanded durable intake
+  progress, `append-exploring-transcript` alone no longer counts as a viable
+  next step; `runQuery` now ends the turn if the agent tries to use a
+  transcript-only carryover after a durable-progress nudge. In parallel,
+  `update-product-brief` now accepts the common near-miss shape where
+  `antiPatterns` arrives as one multiline string, normalizing it into the
+  expected array instead of bouncing the brief update.
+- Reclaimed worker context is now sharper for fresh-task replays. `task-012`
+  already had a real checkpoint on disk after successfully falling back from
+  local `pnpm db:types` to `pnpm db:types:remote`, but the injected resume
+  packet was still abstract enough that the worker's first move on reclaim was
+  `read-tasks`. Context assembly now surfaces the latest checkpoint as its own
+  block, folds checkpoint `filesTouched` into Likely Target Files, and the
+  worker prompt explicitly says not to reread `TASKS.json` on the first resume
+  turn when the checkpoint already names the next step. The next live replay
+  should tell us whether that turns the first reclaimed step into focused
+  verification/mutation instead of queue rehydration.
+- The next live `task-012` replay proved that checkpoint-first reclaim is
+  working. The worker now resumes straight into `pnpm db:types`, sees the
+  expected local Docker failure, and falls back to `pnpm db:types:remote`
+  without rereading queue state. After that, Guildhall now refuses pure
+  read-only follow-up turns using the checkpoint's own next action as the
+  reason, which is better than letting the worker silently spiral. The next
+  blocker is one layer later: the worker is still choosing the wrong post-
+  generation move and burning against the checkpoint guard instead of turning
+  that checkpoint into a concrete verification or code change.
+- Provider header copy is a bit more honest now for split-model experiments.
+  When the live run has different models assigned by role, the top bar no
+  longer shows the worker model as if it were the whole runtime; it now says
+  `Mixed models`, with the per-role breakdown still available in the provider
+  tooltip/details text. That keeps the DeepInfra A/B setup from looking like a
+  single-model run when spec/worker/reviewer lanes are intentionally split.
+- Checkpoint-directed worker reclaim is less blunt now. If a checkpoint's next
+  action is exploratory, Guildhall still refuses broad read-only drift, but it
+  now permits `read-file` on the checkpoint-touched files themselves before
+  demanding the next focused verification or mutation step. That gives task-012
+  just enough room to inspect the exact generated-types surfaces without
+  reopening repo-wide search.
+- Relative checkpoint file paths now reconcile against the task's real repo
+  root/worktree instead of the Guildhall process cwd. That closes the Looma/
+  Knit mismatch where `task-012` could ask for `web/app/types/supabase.ts`
+  after `db:types:remote`, but `read-file` would resolve it against the parent
+  workspace and fail before the worker ever reached the actual generated file.
+- Fresh bounded `task-012` replay shows the center of gravity has moved again.
+  The path/root mismatch is no longer the loudest failure. The worker is still
+  choosing broad `grep` probes after `db:types:remote` instead of taking the
+  now-permitted exact-file `read-file` step, so the remaining blocker is
+  checkpoint-follow-through behavior, not file-tool rooting.
+- Tightened checkpoint-follow-through on reclaimed worker turns. When a worker
+  drifts into broad read-only search after an exploratory checkpoint, the first
+  refusal now appends a strict one-tool follow-up demand that names an exact
+  checkpoint file to read next. Fresh bounded `task-012` replay proved the
+  change is doing useful work: after `db:types:remote`, the worker finally
+  opened the exact generated `web/app/types/supabase.ts` file instead of
+  grepping the repo again.
+- Chunk 2 has started in the worker-handoff lane. Recovery checkpoints are no
+  longer limited to dirty worktrees; if a worker has real verified progress but
+  no dirty diff (for example, successful generation/verification plus an exact
+  inspected file) Guildhall now preserves that progress with a recovery
+  checkpoint instead of acting like the turn had no durable value.
+- Fresh bounded `task-012` replay on the latest build completed the chunk-2
+  proof. After the tightened checkpoint-follow-through, the worker advanced
+  from generated Supabase types to the exact `use-workspace.ts` surface, then
+  wrote a new recovery checkpoint and bumped the task timestamp even though the
+  task remained `in_progress`. The live blocker has moved again: worker
+  follow-through is now specific to when read-only checkpoint steps trip the
+  generic research-budget refusal logic, not to whether progress gets preserved
+  at all.
+- Fresh `task-012` replay after the reclaim fixes exposed the next precise
+  worker-handoff leak. When a non-exploratory checkpoint already says "write
+  the self-critique and hand off to review", the worker still tends to start
+  with a reflexive `read-file`. Guildhall now distinguishes that handoff-shaped
+  checkpoint from exploratory ones and appends a stricter one-tool nudge that
+  demands an `update-task` self-critique note (or escalation) instead of
+  letting the turn stall on a generic "don't read more" refusal.
+- Fresh `task-012` replay then proved the worker was really writing the
+  self-critique, but the live API/review packet still failed to surface it
+  because those derivations only accepted `role: self-critique` or
+  `implementation`. Guildhall now recognizes worker-authored notes whose
+  content is explicitly labeled `Self-critique`, which made the live
+  `/api/project` and `/api/project/task/:id` payloads line up with the actual
+  task state again.
+- The next live blocker moved one step later: after persisting self-critique
+  and a review-handoff checkpoint, the worker could still satisfy the handoff
+  loop by writing another checkpoint instead of flipping the task to `review`.
+  Tightening that loop let the latest bounded replay move `task-012` back into
+  real `review` on the fresh build. The remaining throughput gap is now in the
+  reviewer reclaim lane: the task is visible as a reclaim candidate, but the
+  reviewer turn is not yet being resumed cleanly from that paused `review`
+  state.
+- The top toolbar action cluster has been re-normalized around one button
+  system. On wide screens `New task` is a labeled secondary action again,
+  `Start` / `Stop` stays the primary control, and the overflow trigger is now
+  a proper ellipsis icon button with a circular active state instead of the
+  mismatched sliders/chevron hybrid. The left/right header content is also
+  vertically centered again.
+- Reviewer fanout is now explicitly task-bounded. Persona reviewers are told
+  to anchor blocking findings to unmet ACs, changed files, or scope violations
+  only; broader architecture/perf/API ideas must be emitted as non-blocking
+  follow-ups instead of forcing a revise. The aggregate revision packet now
+  preserves those follow-up ideas in a separate section so the worker can see
+  them without treating them as required for task acceptance.
+- Worker handoff now asks for an explicit minimum-scope self-review before
+  `review`: list files changed, answer whether the diff is the smallest useful
+  change, and name anything that should be reverted before review. That pushes
+  scope-trimming back onto the worker instead of leaving reviewers to police
+  avoidable extras after the fact.
+- Thread review-feedback cards no longer inline the full reviewer packet as a
+  giant wall of Markdown. The card now stays compact: short revision summary,
+  pass count, and an `Open task` affordance that sends the user to the drawer
+  where the full handoff packet already lives.
+- Task worktrees now inherit runtime dependency directories when Guildhall
+  creates them and when it reuses an older worktree. The worktree manager
+  mirrors root `node_modules` plus nested package-level `node_modules` (like
+  `knit/web/node_modules`) into the task worktree so bounded worker runs can
+  execute `typecheck` / `vitest` without failing on missing local runtime
+  dependencies.
+- Fresh task-012 proof is healthier now. After the worktree runtime-link fix
+  and a task-local `use-workspace.ts` typing cleanup, the live Looma/Knit
+  replay ran `db:types:remote`, passed focused `typecheck`, persisted a new
+  self-critique, and moved task-012 back to real `review` on the fresh build.
+  The worker-side blocker is no longer dependency setup or handoff amnesia; the
+  next throughput gap is reviewer-lane reclaim / verdict quality on that fresh
+  task.
+- Worker no-progress nudges are now a little smarter around review handoff
+  checkpoints. When the latest checkpoint already says "set status to review",
+  Guildhall no longer falls back only to the generic "make durable progress"
+  message after extra non-progress turns; it can now nudge the worker toward
+  the exact `update-task { status: "review" }` handoff step instead.
+- Concurrency is now less knob-happy in the live product path. Reviewer fanout
+  auto-derives from the active provider's recommended capacity by default,
+  instead of requiring a project-local `reviewerFanoutConcurrency` tweak. The
+  Looma/Knit override was removed, the live `/api/project` payload still
+  reports reviewer fanout `4/4` on DeepInfra, and the top-bar/provider payload
+  no longer emits config-clamp chatter for concurrency tuning.
+- Blocked Thread cards no longer dump raw reviewer novels. Escalation details
+  are now compacted in the thread projection into one short blocker sentence
+  plus reviewer-timeout count, and the card copy explicitly points the user to
+  `Open task` for the full packet. Live Looma/Knit thread payload for
+  `task-012` now reads as a compact blocker summary instead of the full
+  aggregated markdown blob.
+- Coordinators now have a cleaner drill-in path. `Settings -> Coordinators`
+  explains the model and source of truth, `/coordinators` shows live lane
+  ownership, and `/coordinators/:id` no longer needs to repeat the selected
+  lane as both a policy panel and a second board column. The detail route now
+  focuses on lane policy plus a scoped `Tasks in this lane` stack so the flow
+  reads like a real detail view instead of a duplicated board.
+- `ProjectView` now tracks route props reactively instead of holding onto
+  stale "initial" sub-route values. That closes a real live-shell bug where a
+  coordinator detail route could render the policy drill-in at the top while
+  still leaking the old all-lanes board branch lower on the page.
+- Layering now follows shared z-index tokens instead of component-local magic
+  numbers. Shell chrome, banners, popovers, drawer overlays, and modals all
+  now map onto one explicit order in `src/web/tokens.css`, which fixes cases
+  like the stale-server alert bleeding through an open task drawer.
+- Release focus is now explicitly narrowed to start-to-finish automation.
+  Product/UI follow-ups like coordinator-detail polish, broader overlay sanity
+  sweep, and task-drawer information hierarchy are intentionally tabled in
+  favor of proving fresh-task throughput end to end.
+- Reviewer-lane ownership truth is now healthier on fresh tasks. Resolving an
+  escalation back to active work no longer leaves `in_progress` tasks orphaned
+  at `assignedTo: null`; escalation resolution plus serve/orchestrator
+  normalization restore the correct active assignee before the next dispatch.
+  Live Looma/Knit replay pushed `task-012` through review and into
+  `gate_check`, which moved the next honest blocker downstream into hard-gate
+  truth instead of reviewer reclaim mush.
+- Hard-gate scope exceptions now generalize beyond `typecheck` to broader
+  task-scoped repo red. Guildhall now classifies gate kind from the real gate
+  payload instead of trusting friendly ids like `test`, so authoritative
+  gate-check runs with generic ids like `gate-3` can still exempt unrelated
+  repo-red `test`/`lint` failures when they are outside the task's likely
+  target files. This closes the live Looma/Knit failure where `task-012`
+  reached `gate_check` but broad unrelated `pnpm -F web test` failures still
+  blocked the task despite being outside the actual Supabase-types change set.
+- Live proof: after replaying `task-012` on the fresh build and resolving the
+  final escalation back to `gate_check`, Looma/Knit now completes the task in
+  one bounded tick: `gate_check -> done via gate-checker-agent`. The task ends
+  terminal with `assignedTo: null`, no open escalation in inbox, and the broad
+  unrelated `pnpm -F web test` failure preserved only as raw gate evidence
+  instead of blocking the bounded Supabase-types task.
+- Terminal/publish truth is now explicit in the served task contract. The
+  API derives a concise terminal summary from each task's `mergeRecord`, so
+  done/pending-PR cards can say whether the task merged locally, pushed,
+  opened a PR, or skipped merge, and the drawer Provenance tab now exposes
+  the full terminal outcome record for audit.
+
+- Worker review handoff now ends the turn cleanly after a durable lane-exit status update instead of reapplying mutation nudges to the old lane. Added run-query metadata for lane handoff completion and a regression that covers `task-015` style worker -> review transitions with likely-target context.
+- Live fresh-build proof: with the lane-exit handoff fix in place, a bounded Looma/Knit replay took `task-015` from `review` to `gate_check` to `done` in one run. The worker no longer kept orbiting after a durable `update-task { status: "review" }` handoff, reviewer fanout reclaimed the task, and gate-check completed under task-scoped rules.
+- Batch-proof follow-through exposed one last worker-verification authority leak on fresh `task-016`: the worker prompt already had narrower task-scoped verification commands, but shell reconciliation was still deriving authority from broad hard gates. Guildhall now loads `current_task_verification_commands` into tool metadata and shell authority prefers that list over `current_task_success_gates`, so narrow cleanups stop drifting into whole-app verification during `in_progress` while hard gates remain authoritative later in `gate_check`.
+- Fresh `task-016` replay proved the worker-side verification clamp: the worker stayed on task-scoped `lint`/`typecheck`/`build` verification instead of falling into broad `pnpm -F web test`. The next truthful blocker was reviewer spillover on a one-line cleanup, so reviewer fanout now demotes broad standards-only asks (versioning, idempotency, observability, boundary validation) into non-blocking follow-up ideas when the reviewer itself says the task already meets the functional acceptance criteria and the remaining feedback is rubric spillover rather than a task-local regression.
+- Persona reviewer instructions now carry a much stronger pragmatism contract. Reviewers are explicitly told to ask whether the diff actually made the code worse, left the stated job undone, or introduced a new meaningful risk before blocking; to treat pre-existing imperfections in touched files as follow-up ideas unless the task explicitly asked to fix them; and to distinguish internal first-party routes from true public API contracts so small local changes do not trigger doctrinal versioning/idempotency/platform-ceremony demands.
+- Persona reviewer language is now less absolutist: reviewers are told they are not the final project owner, to avoid decree phrasing like "what must change", and to frame revise feedback as recommended task-local revisions for coordinator/project-owner judgment rather than persona-level commandments.
+- Persona reviewer ownership boundaries are now explicit in the prompt: each expert is a contributor to the decision, not the sole decision maker, so acceptance judgment belongs to the coordinator/project-owner layer even when a persona sees a legitimate concern in its lane.
+- Reviewer output is now shifting toward a lighter ADR-style frame: recommended task-local revisions, concrete risk if accepted as-is, and non-blocking follow-up ideas. The goal is to preserve expert trade-off thinking without turning every persona comment into a pseudo-order or a full architecture record.
+- Persona review output now also supports a small advisory scoring block: recommendation priority, expected value if taken, and risk if deferred. These scores are explicitly from the persona's perspective and are meant to help the coordinator weigh trade-offs, not to let any one expert dictate the final call.
+- The drawer review packet now surfaces persona advisory scoring as colored pills instead of leaving those rankings buried in markdown prose. Each reviewer section can show priority, expected value, and deferred risk at a glance while preserving the full underlying narrative below.
+- [x] Runtime: demote broad reviewer doctrine on narrow cleanup tasks when it does not overlap the task itself.
+  - Added task-aware reviewer demotion hints so one-file cleanup tasks no longer let versioning/idempotency/observability/boundary-validation sermons block unless they actually overlap the requested change.
+  - Kept direct task-overlap findings blocking, so a reviewer can still stop the task when the actual cleanup was not applied.
+- Reviewer/gate adjudication now share the same scoped hard-gate worldview. Deterministic review accepts a task-scoped context (`projectPath`, likely target files, resolved scope decisions) and credits `no-regressions` when the only hard-gate failures are unrelated repo-red already exemptable by gate-check policy. This closes the logic gap where review could bounce a tiny cleanup for `gate-3` before the gate adjudicator ever got a chance to apply the scoped exception.
+- Live Looma/Knit replay after that change showed the old deterministic blocker disappearing: `task-016` no longer re-escalated on `Deterministic review: ... failing signals: no-regressions`. The next failure family is sharper now: the latest LLM reviewer note explicitly approved the task and called the unrelated test failures non-blocking, but the persisted review transition still landed as `review -> in_progress`.
+- Added a guard for that new contradiction: when an LLM reviewer note contains an explicit structured verdict (`**Verdict:** Approved` / `Revise`), Guildhall now trusts that verdict over an ambiguous status transition when recording the review result and normalizes the post-review state accordingly. Focused tests pass, but the live `task-016` specimen still needs a clean fresh replay on the new build to fully prove this family end to end because the current task state was already carrying the pre-fix contradictory review record.
+- Live proof: on the fresh Looma/Knit build, `task-016` now replays cleanly from `in_progress -> review -> gate_check`, and the persisted reviewer records are truthful: the latest fan-out pass lands as `approve`, the task status stays `gate_check`, and `assignedTo` becomes `gate-checker-agent` instead of bouncing back to `worker-agent`. This completes the reviewer-approval normalization family.
+- Live proof: the follow-on gate-check family is also now complete on the same fresh replay. `task-016` proceeded from `gate_check -> done`, preserved the unrelated broad `gate-3` web-test failure as raw gate evidence, applied the scoped gate-check exception instead of bouncing the task, and merged locally into `main` with terminal outcome `Merged locally into main.` This confirms that the whole narrow-cleanup path now survives review, gates, and terminal merge truth end to end.
+- Release pivot: bumped Guildhall to `0.4.0`, added a repo-local `docs/releases/0.4.0.md` note, updated README publish commands/examples, and added a concise Release-tab shipping-claim card so the product now states the honest release story directly: proven end-to-end automation for the narrow cleanup lane, not all task shapes yet.
+- Release hardening for `0.4.0` is now in progress at the repo/runtime layer, not just docs. The dry release surfaced real blockers, and this pass cleared them by (1) restoring sane "few knobs, smart defaults" lane concurrency behavior so worker fanout is not silently forced back to serial by project-config defaults, (2) preserving serial picker priority semantics under lane-capacity fanout so coordinator pre-rejection policy work is not starved behind ordinary worker tasks, (3) updating reviewer-dispatch reasoning tests to the current structured return contract, and (4) making git-driver integration tests hermetic against this machine's global git hook path by neutralizing global git config during throwaway repo commits.

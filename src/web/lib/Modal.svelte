@@ -57,7 +57,7 @@
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.55);
-    z-index: 200;
+    z-index: var(--z-modal-backdrop);
   }
   .gh-modal {
     position: fixed;
@@ -67,7 +67,7 @@
     background: var(--bg-raised);
     border: 1px solid var(--border);
     border-radius: 12px;
-    z-index: 201;
+    z-index: var(--z-modal);
     display: flex;
     flex-direction: column;
     max-height: min(80vh, 720px);

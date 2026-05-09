@@ -15,6 +15,8 @@
 
 import { type Task, type TaskQueue, type TaskStatus } from '@guildhall/core'
 import { hasOpenEscalation } from '@guildhall/tools'
+import { META_INTAKE_TASK_ID } from './meta-intake.js'
+import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
 
 export type TaskLane = 'spec' | 'worker' | 'review' | 'coordinator'
 
@@ -24,6 +26,10 @@ function hasUnansweredOpenQuestion(task: Task): boolean {
 
 export function taskHasUnansweredOpenQuestion(task: Task): boolean {
   return hasUnansweredOpenQuestion(task)
+}
+
+function holdsDraftedSpecReviewForManualApproval(task: Task): boolean {
+  return task.id === META_INTAKE_TASK_ID || task.id === WORKSPACE_IMPORT_TASK_ID
 }
 
 /**
@@ -133,7 +139,7 @@ export function pickNextTask(
       const task = queue.tasks.find(
         (t) =>
           t.status === status &&
-          !(t.status === 'spec_review' && Boolean(t.spec?.trim())) &&
+          !(t.status === 'spec_review' && Boolean(t.spec?.trim()) && holdsDraftedSpecReviewForManualApproval(t)) &&
           !(t.status === 'exploring' && hasUnansweredOpenQuestion(t)) &&
           matchesLane(t) &&
           t.priority === p &&

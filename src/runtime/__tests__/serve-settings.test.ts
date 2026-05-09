@@ -150,7 +150,7 @@ describe('GET /api/project/facts', () => {
     expect(typeof body.identity.editHref).toBe('string')
     expect(body.environment.editHref).toBe('/settings')
     expect(body.workspace.reviewHref).toBe('/workspace-import')
-    expect(body.coordinators.editHref).toBe('/coordinators')
+    expect(body.coordinators.editHref).toBe('/settings/coordinators')
     expect(body.designSystem.editHref).toBe('/settings')
     // Environment defaults to unknown when bootstrap hasn't run yet.
     expect(body.environment.packageManager).toBe('unknown')
@@ -373,6 +373,46 @@ describe('GET /api/project — bootstrap status', () => {
     expect(body.bootstrapStatus?.success).toBe(false)
     expect(body.bootstrapStatus?.steps?.[0]?.command).toBe('pnpm run build')
     expect(body.bootstrapStatus?.steps?.[0]?.result).toBe('fail')
+  })
+
+  it('includes the same inbox snapshot as /api/project/inbox', async () => {
+    const tasksPath = path.join(tmpDir, 'memory', 'TASKS.json')
+    await fs.writeFile(
+      tasksPath,
+      JSON.stringify({
+        tasks: [
+          {
+            id: 'task-1',
+            title: 'Add unit coverage for use-collections behavior',
+            status: 'spec_review',
+            spec: 'Draft spec',
+            createdAt: '2026-05-05T00:00:00Z',
+            updatedAt: '2026-05-05T00:05:00Z',
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+    expect(projectRes.status).toBe(200)
+    const projectBody = (await projectRes.json()) as {
+      inbox?: {
+        items?: Array<{ kind?: string; taskId?: string }>
+        blockers?: { bootstrap?: boolean; workspaceImport?: boolean }
+      }
+    }
+
+    const inboxRes = await app.fetch(new Request('http://localhost/api/project/inbox'))
+    expect(inboxRes.status).toBe(200)
+    const inboxBody = (await inboxRes.json()) as {
+      items?: Array<{ kind?: string; taskId?: string }>
+      blockers?: { bootstrap?: boolean; workspaceImport?: boolean }
+    }
+
+    expect(projectBody.inbox).toEqual(inboxBody)
+    expect(projectBody.inbox?.items?.some(item => item.kind === 'spec_approval' && item.taskId === 'task-1')).toBe(true)
   })
 
   it('marks dynamic project payloads as non-cacheable', async () => {

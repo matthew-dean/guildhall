@@ -204,7 +204,7 @@
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.55);
-    z-index: 200;
+    z-index: var(--z-modal-backdrop);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -222,6 +222,8 @@
     display: flex;
     flex-direction: column;
     gap: var(--s-3);
+    position: relative;
+    z-index: var(--z-modal);
   }
   h2 {
     font-size: var(--fs-4);

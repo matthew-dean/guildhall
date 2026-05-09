@@ -14,6 +14,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
+import type { Task } from '@guildhall/core'
 import { activeEscalations } from '@guildhall/tools'
 import type { BootstrapStatus } from './bootstrap-runner.js'
 import {
@@ -149,10 +150,10 @@ export function detectRepoAnchors(projectPath: string): string[] {
   return candidates.filter(name => existsSync(join(projectPath, name)))
 }
 
-function tasksArray(raw: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(raw)) return raw as Array<Record<string, unknown>>
+function tasksArray(raw: unknown): Task[] {
+  if (Array.isArray(raw)) return raw as Task[]
   if (raw && typeof raw === 'object' && Array.isArray((raw as { tasks?: unknown }).tasks)) {
-    return (raw as { tasks: Array<Record<string, unknown>> }).tasks
+    return (raw as { tasks: Task[] }).tasks
   }
   return []
 }
@@ -257,7 +258,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
       brief &&
       typeof brief === 'object' &&
       !brief.approvedAt &&
-      (status === 'exploring' || status === 'awaiting_human')
+      status === 'exploring'
     if (briefNeedsHuman) {
       items.push({
         kind: 'brief_approval',

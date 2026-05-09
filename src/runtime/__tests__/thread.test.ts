@@ -323,6 +323,73 @@ describe('buildThread', () => {
     }
   })
 
+  it('compresses oversized reviewer escalation details into a short task-card digest', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Generate TypeScript types from Supabase schema',
+              status: 'blocked',
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+              escalations: [
+                {
+                  id: 'esc-task-1-1',
+                  reason: 'max_revisions_exceeded',
+                  summary: 'Exceeded maxRevisions (3). Reviewer fan-out keeps rejecting.',
+                  details: [
+                    '**Aggregated revisions from 1 persona:**',
+                    '',
+                    '### From The Security Engineer',
+                    '',
+                    'The composable accepts a `slug` from the subdomain and uses it directly in a Supabase query without any boundary validation.',
+                    '',
+                    'What must change:',
+                    '- Add schema validation for the `slug` value before it is used in the Supabase query.',
+                    '',
+                    '### Reviewer availability notes',
+                    '- The Project Manager failed to produce a verdict (persona review timed out after 60000ms). Treating as revise per strict-all policy.',
+                    '- The API Designer failed to produce a verdict (persona review timed out after 60000ms). Treating as revise per strict-all policy.',
+                  ].join('\n'),
+                  raisedAt: new Date().toISOString(),
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'core', name: 'Core' }],
+        },
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+
+      const turn = thread.turns.find(t => t.kind === 'escalation')
+      if (!turn || turn.kind !== 'escalation') throw new Error('expected escalation turn')
+      expect(turn.details).toBe(
+        'Add schema validation for the slug value before it is used in the Supabase query. 2 reviewers timed out.',
+      )
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('shows a rolling excerpt while an agent is writing', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

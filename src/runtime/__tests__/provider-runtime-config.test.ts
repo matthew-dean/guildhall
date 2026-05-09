@@ -140,6 +140,47 @@ describe('getRuntimeProviderConfig', () => {
     })
   })
 
+  it('auto-derives reviewer fanout concurrency from the provider when no override is set', () => {
+    expect(
+      resolveReviewerFanoutPolicy({
+        provider: 'llama-cpp',
+      }),
+    ).toEqual({
+      requestedConcurrency: 1,
+      effectiveConcurrency: 1,
+      recommendedConcurrency: 1,
+      clamped: false,
+    })
+
+    expect(
+      resolveReviewerFanoutPolicy({
+        provider: 'openai-api',
+      }),
+    ).toEqual({
+      requestedConcurrency: 4,
+      effectiveConcurrency: 4,
+      recommendedConcurrency: 4,
+      clamped: false,
+    })
+  })
+
+  it('lets a global reviewer fanout override apply when the project leaves it unset', () => {
+    updateGlobalConfig({ reviewerFanoutConcurrency: 2 })
+
+    expect(
+      resolveLaneConcurrencyPlan({
+        projectPath: tmpProject,
+        provider: 'openai-api',
+        dispatchCapacity: 4,
+      }).reviewerFanout,
+    ).toEqual({
+      requestedConcurrency: 2,
+      effectiveConcurrency: 2,
+      recommendedConcurrency: 4,
+      clamped: false,
+    })
+  })
+
   it('builds a bounded lane concurrency plan from project config plus dispatch capacity', () => {
     updateProjectConfig(tmpProject, {
       specLaneConcurrency: 2,

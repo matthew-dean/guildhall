@@ -45,11 +45,13 @@ describe('OpenAICompatibleClient', () => {
         model: 'llama-3',
         messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
         max_tokens: 64,
+        temperature: 0.1,
         tools: [],
       }),
     )
     expect(captured?.model).toBe('llama-3')
     expect(captured?.max_tokens).toBe(64)
+    expect(captured?.temperature).toBe(0.1)
     const deltas = events.filter((e) => e.type === 'text_delta')
     expect(deltas.map((e) => (e as { text: string }).text).join('')).toBe('Hello')
     const terminal = events.at(-1)
@@ -92,6 +94,27 @@ describe('OpenAICompatibleClient', () => {
       expect(caught.message).toContain('timed out after 12s')
       expect(caught.retryable).toBe(false)
     }
+  })
+
+  it('omits temperature when the request does not set one', async () => {
+    let captured: Record<string, unknown> | undefined
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      captured = JSON.parse((init?.body as string) ?? '{}') as Record<string, unknown>
+      return sseResponse([
+        dataFrame({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }),
+        'data: [DONE]\n\n',
+      ])
+    }) as unknown as typeof fetch
+    const client = new OpenAICompatibleClient({ fetch: fakeFetch })
+    await collect(
+      client.streamMessage({
+        model: 'llama-3',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+        max_tokens: 64,
+        tools: [],
+      }),
+    )
+    expect(captured).not.toHaveProperty('temperature')
   })
 
   it('honors an external abort signal without reporting it as a timeout', async () => {
