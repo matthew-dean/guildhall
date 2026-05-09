@@ -225,6 +225,57 @@ That means:
 
 The current UI should be preserved where it still works, but nested appropriately.
 
+## UI Architecture Requirements
+
+`0.5.0` should also use this pivot as an opportunity to revisit the UI
+component structure itself, not only the route structure.
+
+The goal is to avoid a Projects shell that is built from one-off bespoke
+project-specific UI/data components with muddy responsibilities.
+
+### Required qualities
+
+The UI should move toward components that are:
+
+- **sensible** — clear responsibilities and naming
+- **responsive** — layouts work cleanly across supported viewport sizes
+- **consistent** — repeated patterns behave and look the same
+- **atomic/composable** — reusable building blocks instead of one-off blobs
+- **separated by concern** — presentation, view composition, and data shaping
+  should not be unnecessarily fused together
+
+### Practical implications
+
+This means `0.5.0` should include a deliberate pass over the current project UI
+surface to identify:
+
+- components that should become reusable shell/layout primitives
+- components that should become reusable project-summary/task-summary cards
+- places where project-specific fetching/transformation logic is too tightly
+  coupled to rendering
+- places where top-level navigation concerns and project-detail concerns are
+  currently mixed together
+
+### Non-goal
+
+This is **not** a mandate for a vanity rewrite or a giant design-system detour.
+
+The intent is:
+
+- improve structure where the new Projects-first architecture touches the UI
+- create cleaner boundaries and reusable pieces while doing that work
+- avoid carrying forward bespoke project-view code that will make the new
+  top-level product harder to evolve
+
+### Proof requirement
+
+The `0.5.0` implementation should leave the UI in a state where:
+
+- the Projects screen is assembled from intentional reusable pieces
+- the project shell uses clearer shared layout/navigation primitives
+- project-specific data handling is more clearly separated from presentational
+  components than it is today
+
 ## Init / Setup Requirements
 
 Initialization should move inside the project shell for uninitialized projects.
