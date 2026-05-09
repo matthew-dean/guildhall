@@ -34,7 +34,7 @@
  *   node scripts/publish.mjs 0.4.0-rc.1 --tag next
  */
 
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -91,10 +91,14 @@ preflightGit()
 // ---------------------------------------------------------------------------
 
 const manifest = readJson(MANIFEST)
-manifest.version = nextVersion
-writeJson(MANIFEST, manifest)
-restoreManifestOnExit = flags.dryRun
-log(`Bumped package.json to ${nextVersion}.`)
+if (manifest.version !== nextVersion) {
+  manifest.version = nextVersion
+  writeJson(MANIFEST, manifest)
+  restoreManifestOnExit = flags.dryRun
+  log(`Bumped package.json to ${nextVersion}.`)
+} else {
+  log(`package.json already at ${nextVersion}; continuing without a manifest bump.`)
+}
 
 // ---------------------------------------------------------------------------
 // 4. Pre-publish gate
@@ -145,8 +149,16 @@ if (flags.dryRun) {
 
 log('Committing version bump + tagging…')
 run('git', ['add', 'package.json'])
-run('git', ['commit', '-m', `chore(release): guildhall@${nextVersion}`])
-run('git', ['tag', `v${nextVersion}`])
+if (hasStagedDiff(['package.json'])) {
+  run('git', ['commit', '-m', `chore(release): guildhall@${nextVersion}`])
+} else {
+  warn('No package.json version diff to commit; skipping release commit.')
+}
+if (gitRefExists(`refs/tags/v${nextVersion}`)) {
+  warn(`Tag v${nextVersion} already exists; skipping tag creation.`)
+} else {
+  run('git', ['tag', `v${nextVersion}`])
+}
 
 log(`\n✓ Published guildhall@${nextVersion}`)
 log(`  Push when ready:  git push origin main --follow-tags`)
@@ -216,6 +228,26 @@ function runCapture(cmd, argv) {
   } catch {
     die(`Command failed: ${cmd} ${argv.join(' ')}`)
   }
+}
+
+function hasStagedDiff(paths) {
+  const result = spawnSync('git', ['diff', '--cached', '--quiet', '--', ...paths], {
+    cwd: ROOT,
+    stdio: 'ignore',
+  })
+  if (result.status === 0) return false
+  if (result.status === 1) return true
+  die(`Command failed: git diff --cached --quiet -- ${paths.join(' ')}`)
+}
+
+function gitRefExists(ref) {
+  const result = spawnSync('git', ['show-ref', '--verify', '--quiet', ref], {
+    cwd: ROOT,
+    stdio: 'ignore',
+  })
+  if (result.status === 0) return true
+  if (result.status === 1) return false
+  die(`Command failed: git show-ref --verify --quiet ${ref}`)
 }
 
 function assertNoDocsInPackage() {
