@@ -557,6 +557,94 @@ describe('POST /api/project/task/:id/approve-spec', () => {
   })
 })
 
+describe('POST /api/project/task/:id/rerun-stage', () => {
+  it('reopens a task for a fresh spec pass', async () => {
+    await seedTask('task-1', {
+      status: 'ready',
+      spec: 'Old spec',
+      notes: [],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/rerun-stage', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ stage: 'spec' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.ok).toBe(true)
+    expect(body.status).toBe('exploring')
+
+    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    expect(raw.tasks[0]?.status).toBe('exploring')
+    expect(raw.tasks[0]?.notes?.at(-1)?.content).toMatch(/fresh spec pass/i)
+    const transcript = await fs.readFile(path.join(memoryDir, 'exploring', 'task-1.md'), 'utf8')
+    expect(transcript).toMatch(/fresh spec pass/i)
+  })
+
+  it('re-runs review from gate_check without dropping the task out of active work', async () => {
+    await seedTask('task-1', {
+      status: 'gate_check',
+      assignedTo: 'gate-checker-agent',
+      notes: [],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/rerun-stage', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ stage: 'review' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    expect(raw.tasks[0]?.status).toBe('review')
+    expect(raw.tasks[0]?.assignedTo).toBe('reviewer-agent')
+    expect(raw.tasks[0]?.notes?.at(-1)?.content).toMatch(/fresh review pass/i)
+  })
+
+  it('re-runs gate_check in place', async () => {
+    await seedTask('task-1', {
+      status: 'gate_check',
+      assignedTo: 'gate-checker-agent',
+      notes: [],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/rerun-stage', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ stage: 'gate' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    expect(raw.tasks[0]?.status).toBe('gate_check')
+    expect(raw.tasks[0]?.assignedTo).toBe('gate-checker-agent')
+    expect(raw.tasks[0]?.notes?.at(-1)?.content).toMatch(/fresh gate-check pass/i)
+  })
+
+  it('rejects rerun-stage for invalid stage/status combinations', async () => {
+    await seedTask('task-1', {
+      status: 'in_progress',
+      notes: [],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/rerun-stage', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ stage: 'gate' }),
+      }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.error).toMatch(/gate_check/i)
+  })
+})
+
 describe('POST /api/project/task/:id/resume', () => {
   it('appends a human follow-up message to the exploring transcript', async () => {
     await seedTask('task-1', { status: 'exploring' })

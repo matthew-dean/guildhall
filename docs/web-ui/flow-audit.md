@@ -78,10 +78,10 @@ correct the agent, and ask for direct action from Thread.
   mismatches.
 - [x] Make retryable gate-provider throttles clear stale escalation residue, so
   resumed `gate_check` tasks do not still halt later runs as falsely escalated.
-- [ ] Make stage-based automation re-triggerable from the UI instead of
-  forcing users to simulate retries by creating new tasks. Workspace import
-  and meta-intake now have explicit rerun actions; spec drafting, review, and
-  gate reruns still need the same treatment.
+- [x] Make stage-based automation re-triggerable from the UI instead of
+  forcing users to simulate retries by creating new tasks. Workspace import,
+  meta-intake, spec drafting, review, and gate reruns now all have explicit
+  rerun actions.
 - [ ] Prove re-intake against the real Looma + Knit planning corpus. The bar
   is not "an importer task existed once"; it must actually reread the
   substantial documented backlog and surface sensible candidate tasks.
@@ -190,6 +190,12 @@ correct the agent, and ask for direct action from Thread.
   views. `Work` stays the primary nav entry, defaults to the easier-to-read
   list view, and exposes a `Board` toggle for the old kanban-style planner
   grouping instead of making both pages compete as separate primary tabs.
+- Added task-level rerun controls to the drawer so normal work stages are no
+  longer one-shot flows. Non-reserved tasks can now explicitly re-draft spec,
+  re-run review, or re-run gates from the task details pane, and the backend
+  exposes the same behavior through `POST /api/project/task/:id/rerun-stage`.
+  Verified with focused endpoint coverage plus `pnpm typecheck`, `pnpm build`,
+  and `git diff --check`.
 
 - Closed the retry-window failure family with live proof on `task-016`.
   Resolved `max_revisions_exceeded` retries now start a persisted fresh

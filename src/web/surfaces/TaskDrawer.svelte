@@ -43,6 +43,7 @@
   let resolveModal = $state<{ escalation: Escalation; mode: 'retry' | 'resolve' } | null>(null)
   let approveSpecOpen = $state(false)
   let approveSpecNote = $state('')
+  let rerunStageBusy = $state<null | 'spec' | 'review' | 'gate'>(null)
 
   function friendlyFetchError(err: unknown): string {
     const message = err instanceof Error ? err.message : String(err)
@@ -161,6 +162,16 @@
     await post('add-acceptance', { description })
   }
 
+  async function rerunStage(stage: 'spec' | 'review' | 'gate') {
+    rerunStageBusy = stage
+    try {
+      await post('rerun-stage', { stage })
+      await project.refresh()
+    } finally {
+      rerunStageBusy = null
+    }
+  }
+
   function confirmed(action: string): boolean {
     return window.confirm(`${action} task ${taskId}?`)
   }
@@ -170,6 +181,20 @@
   const canPause = $derived(task && task.status !== 'done' && task.status !== 'shelved')
   const canShelve = $derived(task && task.status !== 'done')
   const isShelved = $derived(task?.status === 'shelved')
+  const stageRerun = $derived.by(() => {
+    if (!task) return null
+    if (task.id === 'task-meta-intake' || task.id === 'task-workspace-import') return null
+    if (['exploring', 'spec_review', 'ready', 'proposed'].includes(task.status ?? '')) {
+      return { stage: 'spec' as const, label: 'Re-draft spec' }
+    }
+    if (task.status === 'review') {
+      return { stage: 'review' as const, label: 'Re-run review' }
+    }
+    if (task.status === 'gate_check') {
+      return { stage: 'gate' as const, label: 'Re-run gates' }
+    }
+    return null
+  })
 
   $effect(() => {
     void load()
@@ -322,6 +347,16 @@
         {/if}
       </div>
       {#if canPause}
+        {#if stageRerun}
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={busy || rerunStageBusy !== null}
+            onclick={() => rerunStage(stageRerun.stage)}
+          >
+            {rerunStageBusy === stageRerun.stage ? 'Re-running…' : stageRerun.label}
+          </Button>
+        {/if}
         <Button
           variant="secondary"
           size="sm"

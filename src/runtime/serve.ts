@@ -91,6 +91,7 @@ import {
   createExploringTask,
   approveSpec,
   resumeExploring,
+  rerunTaskStage,
   createBugReportTask,
   parseStackTraceTopFile,
 } from './intake.js'
@@ -2899,6 +2900,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         'resolve-escalation',
         'answer-question',
         'answer-questions',
+        'rerun-stage',
       ] as const
       if (!(KNOWN_ACTIONS as readonly string[]).includes(action)) {
         return c.json({ error: 'unknown action' }, 400)
@@ -2948,6 +2950,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
         if (!result.success) return c.json({ error: result.error ?? 'resume failed' }, 400)
         return c.json({ ok: true })
+      }
+
+      if (action === 'rerun-stage') {
+        const body = await c.req.json().catch(() => ({})) as {
+          stage?: 'spec' | 'review' | 'gate'
+        }
+        if (body.stage !== 'spec' && body.stage !== 'review' && body.stage !== 'gate') {
+          return c.json({ error: 'Missing or invalid stage' }, 400)
+        }
+        const result = await rerunTaskStage({
+          memoryDir,
+          taskId: id,
+          stage: body.stage,
+        })
+        if (!result.success) return c.json({ error: result.error ?? 'rerun failed' }, 400)
+        return c.json({ ok: true, status: result.newStatus })
       }
 
       if (action === 'approve-brief') {
