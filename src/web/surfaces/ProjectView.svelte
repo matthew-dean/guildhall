@@ -18,6 +18,7 @@
   import WorkTab from './project/WorkTab.svelte'
   import WorkspaceImportTab from './project/WorkspaceImportTab.svelte'
   import PlannerTab from './project/PlannerTab.svelte'
+  import ProjectAttachFlow from './project/ProjectAttachFlow.svelte'
   import FactsTab from './project/FactsTab.svelte'
   import CoordinatorsTab from './project/CoordinatorsTab.svelte'
   import TimelineTab from './project/TimelineTab.svelte'
@@ -112,13 +113,6 @@
         clearInterval(refreshHandle)
         refreshHandle = null
       }
-    }
-  })
-
-  // Auto-forward to /setup if the project isn't initialized yet.
-  $effect(() => {
-    if (project.detail?.initializationNeeded && path.value !== '/setup') {
-      nav('/setup')
     }
   })
 
@@ -524,8 +518,50 @@
 <svelte:document onclick={handleDocumentClick} />
 
 {#if detail?.initializationNeeded}
-  <div class="page-centered">
-    <p class="muted">Redirecting to setup…</p>
+  <div class="shell shell--uninitialized">
+    <aside class="rail" aria-label="Project navigation">
+      <div class="rail-head" title={detail.path}>
+        <div class="rail-project">{detail.path?.split('/').pop() ?? 'Project'}</div>
+        <div class="rail-status">
+          <Chip label="Needs setup" tone="warn" />
+        </div>
+      </div>
+      <div class="rail-bottom">
+        <Tooltip text="Back to Projects" placement="right" className="rail-tooltip">
+          <button
+            type="button"
+            class="rail-item active"
+            onclick={() => go('/')}
+          >
+            <span class="rail-stripe"></span>
+            <Icon name="folder" size={18} />
+            <span class="rail-label">Projects</span>
+          </button>
+        </Tooltip>
+      </div>
+    </aside>
+    <div class="main">
+      <header class="topbar topbar--uninitialized">
+        <div class="topbar-leading">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="toolbar-btn toolbar-btn--back"
+            onclick={() => go('/')}
+            ariaLabel="Back to Projects"
+            title="Back to Projects"
+          >
+            <span class="toolbar-btn-label">Projects</span>
+          </Button>
+        </div>
+      </header>
+      <div class="page">
+        <ProjectAttachFlow
+          projectName={detail.path?.split('/').pop() ?? 'This project'}
+          projectPath={detail.path}
+        />
+      </div>
+    </div>
   </div>
 {:else if project.error}
   <div class="page-centered">

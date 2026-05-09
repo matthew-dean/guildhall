@@ -46,17 +46,20 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
   }
   const selected = Boolean(project.selected)
   const running = project.run?.status === 'running'
+  const initializationNeeded = Boolean(project.initializationNeeded)
   return {
     id: project.id,
     name: project.name,
     path: project.path,
     selected,
-    statusLabel: statusLabel(project.run, selected),
-    tone: statusFromRun(project.run),
+    statusLabel: initializationNeeded ? 'Needs setup' : statusLabel(project.run, selected),
+    tone: initializationNeeded ? 'warn' : statusFromRun(project.run),
     counts,
-    actionLabel: selected ? 'Open project' : 'Switch and open',
+    actionLabel: initializationNeeded
+      ? (selected ? 'Open setup' : 'Switch and set up')
+      : selected ? 'Open project' : 'Switch and open',
     canOpen: true,
-    canStart: !running,
+    canStart: !running && !initializationNeeded,
     canStop: running,
   }
 }

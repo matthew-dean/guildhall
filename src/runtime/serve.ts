@@ -1,7 +1,9 @@
 import { readFileSync, existsSync, mkdirSync, statSync, writeFileSync, promises as fsp } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
@@ -11,6 +13,10 @@ import {
   readWorkspaceConfig,
   writeWorkspaceConfig,
   listWorkspaces,
+  findWorkspace,
+  registerWorkspace,
+  updateWorkspace,
+  unregisterWorkspace,
   bootstrapWorkspace,
   readProjectConfig,
   updateProjectConfig,
@@ -190,6 +196,8 @@ export interface ServeOptions {
   preferredProjectPath?: string
   /** Optional path to the service-state file written by background runs. */
   serviceStatePath?: string
+  /** Optional folder picker override for tests or alternate shells. */
+  pickProjectFolder?: () => Promise<string | null>
 }
 
 interface ResolvedProject {
@@ -222,6 +230,8 @@ interface ServiceProjectSummary {
     providerStatus?: unknown
   }
 }
+
+const execFileP = promisify(execFile)
 
 function isReviewOwnershipMismatch(task: Record<string, unknown>): boolean {
   const handoffSequence = Array.isArray(task.handoffSequence) ? task.handoffSequence : []
@@ -463,6 +473,64 @@ function summarizeProject(project: ResolvedProject): ServiceProjectSummary {
     name: project.config?.name ?? project.id,
     initializationNeeded: project.initializationNeeded,
   }
+}
+
+async function chooseProjectFolderMacOS(): Promise<string | null> {
+  try {
+    const { stdout } = await execFileP('osascript', [
+      '-e',
+      'POSIX path of (choose folder with prompt "Choose a project folder to attach to Guildhall")',
+    ])
+    const picked = stdout.trim()
+    return picked.length > 0 ? picked : null
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (/User canceled|cancelled|canceled/i.test(message)) return null
+    throw err
+  }
+}
+
+function registrySummaryForProject(project: ResolvedProject): {
+  id: string
+  path: string
+  name: string
+  tags: string[]
+} {
+  if (project.initializationNeeded) {
+    const folderName = basename(project.path) || project.id || 'Project'
+    return {
+      id: project.id,
+      path: project.path,
+      name: folderName,
+      tags: ['uninitialized'],
+    }
+  }
+  return {
+    id: project.id,
+    path: project.path,
+    name: project.config?.name ?? project.id,
+    tags: project.config?.tags ?? [],
+  }
+}
+
+function syncRegistryEntryForProject(project: ResolvedProject) {
+  const summary = registrySummaryForProject(project)
+  const existing = findWorkspace(project.path)
+  if (!existing) {
+    registerWorkspace(summary)
+    return { attached: true, entryId: summary.id }
+  }
+  if (existing.id !== summary.id) {
+    unregisterWorkspace(existing.id)
+    registerWorkspace(summary)
+    return { attached: false, entryId: summary.id }
+  }
+  updateWorkspace(existing.id, {
+    path: summary.path,
+    name: summary.name,
+    tags: summary.tags,
+  })
+  return { attached: false, entryId: existing.id }
 }
 
 function summarizeTaskCounts(tasks: Array<Record<string, unknown>>): ServiceProjectSummary['taskCounts'] {
@@ -718,10 +786,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
   projectPath: string
 } {
   const preferredProjectPath = opts.preferredProjectPath ?? opts.projectPath ?? null
-  const registeredProjects = listWorkspaces()
+  const getRegisteredProjects = () => listWorkspaces()
+  const pickProjectFolder = opts.pickProjectFolder ?? chooseProjectFolderMacOS
   const explicitProjectPath = preferredProjectPath ? resolve(preferredProjectPath) : null
   const fallbackProjectPath = explicitProjectPath
-    ?? registeredProjects[0]?.path
+    ?? getRegisteredProjects()[0]?.path
     ?? process.cwd()
   const projectPath = resolve(fallbackProjectPath)
   let selectedProjectPath = explicitProjectPath
@@ -791,6 +860,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/service', async c => {
     const runsById = new Map(supervisor.list().map(run => [run.workspaceId, run]))
+    const registeredProjects = getRegisteredProjects()
     const projects = await Promise.all(
       registeredProjects.map(async (entry) => {
         const resolved = resolveProject(entry.path)
@@ -838,6 +908,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.post('/api/service/select-project', async c => {
     const body = await c.req.json().catch(() => ({})) as { projectId?: string; path?: string }
+    const registeredProjects = getRegisteredProjects()
     const selectedPath =
       (body.projectId ? registeredProjects.find((entry) => entry.id === body.projectId)?.path : undefined)
       ?? body.path
@@ -850,6 +921,29 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
     const next = selectForegroundProject(entry.path)
     return c.json({ ok: true, selectedProject: summarizeProject(next) })
+  })
+
+  app.post('/api/service/attach-project', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as { path?: string }
+      const providedPath = body.path?.trim()
+      const pickedPath = providedPath && providedPath.length > 0 ? providedPath : await pickProjectFolder()
+      if (!pickedPath) return c.json({ ok: false, cancelled: true })
+      const resolvedPath = resolve(pickedPath)
+      if (!existsSync(resolvedPath) || !statSync(resolvedPath).isDirectory()) {
+        return c.json({ error: 'Choose an existing project folder.' }, 400)
+      }
+      const next = resolveProject(resolvedPath)
+      const sync = syncRegistryEntryForProject(next)
+      selectForegroundProject(next.path)
+      return c.json({
+        ok: true,
+        attached: sync.attached,
+        selectedProject: summarizeProject(next),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
   })
 
   // -------------------------------------------------------------------------
@@ -3361,6 +3455,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       writeWorkspaceConfig(project.path, nextConfig as Parameters<typeof writeWorkspaceConfig>[1])
 
       refreshProject(project.path)
+      syncRegistryEntryForProject(project)
       return c.json({ ok: true, id: project.id, name, path: project.path })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)

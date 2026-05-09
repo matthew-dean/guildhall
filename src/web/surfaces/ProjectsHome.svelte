@@ -82,6 +82,28 @@
     }
   }
 
+  async function attachProject(): Promise<void> {
+    busyId = '__attach__'
+    try {
+      const response = await fetch('/api/service/attach-project', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(payload?.error ?? `Unable to attach project (${response.status})`)
+      }
+      if (payload?.cancelled) return
+      await refresh()
+      nav('/project')
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err)
+    } finally {
+      busyId = null
+    }
+  }
+
   $effect(() => {
     void refresh()
   })
@@ -110,6 +132,16 @@
       <p class="eyebrow">Projects</p>
       <h1>Your local Guildhall service</h1>
       <p class="lede">Open a project, keep a few running, and see which ones need you without dropping into each shell first.</p>
+    </div>
+    <div class="hero-actions">
+      <button
+        type="button"
+        class="attach-btn"
+        disabled={busyId === '__attach__'}
+        onclick={attachProject}
+      >
+        {busyId === '__attach__' ? 'Attaching…' : 'Attach project'}
+      </button>
     </div>
   </header>
 
@@ -151,6 +183,24 @@
     justify-content: space-between;
     gap: var(--s-4);
     align-items: end;
+  }
+  .hero-actions {
+    flex: 0 0 auto;
+  }
+  .attach-btn {
+    border: 1px solid var(--border);
+    background: var(--accent-9);
+    color: white;
+    border-radius: var(--r-2);
+    padding: 0.75rem 1rem;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    min-width: 10rem;
+  }
+  .attach-btn:disabled {
+    cursor: wait;
+    opacity: 0.8;
   }
   .eyebrow {
     margin: 0 0 var(--s-2);
@@ -195,5 +245,15 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
     gap: var(--s-4);
+  }
+  @media (max-width: 720px) {
+    .hero {
+      align-items: start;
+      flex-direction: column;
+    }
+    .hero-actions,
+    .attach-btn {
+      width: 100%;
+    }
   }
 </style>

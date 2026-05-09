@@ -57,4 +57,26 @@ describe('summarizeProjects', () => {
       canStop: false,
     })
   })
+
+  it('treats uninitialized projects as setup-only entries', () => {
+    const service: ServiceDetail = {
+      projects: [
+        {
+          id: 'scratch-pad',
+          name: 'scratch-pad',
+          path: '/work/scratch-pad',
+          initializationNeeded: true,
+          selected: false,
+        },
+      ],
+    }
+
+    expect(summarizeProjects(service)[0]).toMatchObject({
+      statusLabel: 'Needs setup',
+      tone: 'warn',
+      actionLabel: 'Switch and set up',
+      canStart: false,
+      canStop: false,
+    })
+  })
 })
