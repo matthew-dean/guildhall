@@ -18,7 +18,6 @@
   import InboxTab from './project/InboxTab.svelte'
   import WorkTab from './project/WorkTab.svelte'
   import WorkspaceImportTab from './project/WorkspaceImportTab.svelte'
-  import PlannerTab from './project/PlannerTab.svelte'
   import ProjectAttachFlow from './project/ProjectAttachFlow.svelte'
   import FactsTab from './project/FactsTab.svelte'
   import CoordinatorsTab from './project/CoordinatorsTab.svelte'
@@ -31,6 +30,7 @@
   import { onEvent } from '../lib/events.js'
   import { path, nav } from '../lib/nav.svelte.js'
   import { activeEscalations } from '../lib/escalation.js'
+  import { buildProviderIndicator } from '../lib/provider-indicator.js'
   import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { ProjectView, ProviderStatus } from '../lib/types.js'
 
@@ -140,7 +140,6 @@
     { id: 'thread', label: 'Thread', icon: 'sparkles', path: '/project/thread' },
     { id: 'inbox', label: 'Notifications', icon: 'inbox', path: '/project/notifications' },
     { id: 'work', label: 'Work', icon: 'activity', path: '/project/work' },
-    { id: 'planner', label: 'Planner', icon: 'list-checks', path: '/project/planner' },
     {
       id: 'coordinators',
       label: 'Coordinators',
@@ -275,74 +274,9 @@
   const detail = $derived(project.detail)
   const runStatus = $derived(detail?.run?.status ?? 'stopped')
   const providerStatus = $derived(detail?.providerStatus ?? detail?.run?.providerStatus ?? null)
-  function providerLabel(provider: string | null | undefined): string {
-    if (!provider) return 'Not selected'
-    const labels: Record<string, string> = {
-      'claude-oauth': 'Claude',
-      'codex-oauth': 'Codex',
-      codex: 'Codex',
-      'llama-cpp': 'Local server',
-      'anthropic-api': 'Anthropic',
-      'openai-api': 'OpenAI-compatible',
-      none: 'None',
-    }
-    return labels[provider] ?? provider
-  }
-  const activeProviderLabel = $derived(
-    providerStatus?.activeProviderLabel ??
-      providerLabel(providerStatus?.activeProvider ?? providerStatus?.preferredProvider),
-  )
-  function compactModelLabel(model: string | null | undefined): string {
-    if (!model) return 'default'
-    const trimmed = model.trim()
-    if (!trimmed) return 'default'
-    const slash = trimmed.lastIndexOf('/')
-    return slash >= 0 ? trimmed.slice(slash + 1) : trimmed
-  }
-  function modelMixSummary(models: ProviderStatus['models']): string | null {
-    if (!models) return null
-    const roles: Array<[string, string | undefined]> = [
-      ['Spec', models.spec],
-      ['Coordinator', models.coordinator],
-      ['Worker', models.worker],
-      ['Reviewer', models.reviewer],
-      ['Gate', models.gateChecker],
-    ]
-    const values = roles.map(([, model]) => model).filter((model): model is string => Boolean(model))
-    if (values.length === 0) return null
-    if (new Set(values).size === 1) return null
-    return roles
-      .filter(([, model]) => Boolean(model))
-      .map(([label, model]) => `${label}: ${model}`)
-      .join('\n')
-  }
-  const mixedModelSummary = $derived(modelMixSummary(providerStatus?.models))
-  const hasMixedModels = $derived(Boolean(mixedModelSummary))
-  const activeModelLabel = $derived(
-    hasMixedModels
-      ? 'Mixed models'
-      : compactModelLabel(providerStatus?.activeModel ?? providerStatus?.models?.worker),
-  )
-  const providerHeaderLabel = $derived(`${activeProviderLabel} | ${activeModelLabel}`)
-  const preferredProviderLabel = $derived(
-    providerStatus?.preferredProviderLabel ?? providerLabel(providerStatus?.preferredProvider),
-  )
-  const providerDetailsText = $derived(
-    `${providerStatus?.activeModel ? ` | ${providerStatus.activeModel}` : ''}${mixedModelSummary ? `\n${mixedModelSummary}` : ''}${providerStatus?.decisions?.length ? `\n${providerStatus.decisions.map((entry) => entry.message).join('\n')}` : ''}`,
-  )
-  const providerTitle = $derived(
-    providerStatus?.fallback
-      ? runStatus === 'running' || runStatus === 'stopping'
-        ? `Preferred ${preferredProviderLabel}; running ${activeProviderLabel}${providerDetailsText}`
-        : `Preferred ${preferredProviderLabel}; last run used ${activeProviderLabel}${providerDetailsText}`
-      : providerStatus?.activeProvider
-        ? runStatus === 'running' || runStatus === 'stopping'
-          ? `Running ${activeProviderLabel}${providerDetailsText}`
-          : `Preferred ${preferredProviderLabel}${providerDetailsText}`
-        : providerStatus?.preferredProvider
-          ? `Preferred ${preferredProviderLabel}${providerDetailsText}`
-          : 'Provider not selected',
-  )
+  const providerIndicator = $derived(buildProviderIndicator(providerStatus, runStatus))
+  const providerHeaderLabel = $derived(providerIndicator?.summaryLabel ?? null)
+  const providerTitle = $derived(providerIndicator?.title ?? 'Provider not selected')
   const providerDecisionText = $derived(
     providerStatus?.decisions?.[0]?.message ?? providerStatus?.reason ?? null,
   )
@@ -352,9 +286,7 @@
   const providerNoticeText = $derived(
     providerStatus?.fallback
       ? providerDecisionText ??
-        (runStatus === 'running'
-          ? `Preferred ${preferredProviderLabel} is unavailable; this run is using ${activeProviderLabel}.`
-          : `Preferred ${preferredProviderLabel} is unavailable; the current fallback engine is ${activeProviderLabel}.`)
+        'Preferred provider is unavailable; Guildhall is using a fallback for this run.'
       : null,
   )
   const providerWarningText = $derived(
@@ -365,7 +297,7 @@
   )
   const providerHealthText = $derived(
     providerStatus?.health?.state === 'degraded'
-      ? `${activeProviderLabel} has seen ${providerStatus.health.consecutiveFailures} consecutive pooled failures${providerStatus.health.lastError ? ` (${providerStatus.health.lastError})` : ''}.`
+      ? `${providerHeaderLabel ?? 'Current provider'} has seen ${providerStatus.health.consecutiveFailures} consecutive pooled failures${providerStatus.health.lastError ? ` (${providerStatus.health.lastError})` : ''}.`
       : null,
   )
   const runStopSummary = $derived.by(() => {
@@ -547,13 +479,14 @@
       <header class="topbar topbar--uninitialized">
         <div class="topbar-leading">
           <Button
-            variant="ghost"
+            variant="secondary"
             size="sm"
             className="toolbar-btn toolbar-btn--back"
             onclick={() => go('/')}
             ariaLabel="Back to Projects"
             title="Back to Projects"
           >
+            <Icon name="chevron-left" size={16} />
             <span class="toolbar-btn-label">Projects</span>
           </Button>
         </div>
@@ -643,13 +576,14 @@
       <header class="topbar">
         <div class="topbar-leading">
           <Button
-            variant="ghost"
+            variant="secondary"
             size="sm"
             className="toolbar-btn toolbar-btn--back"
             onclick={() => go('/')}
             ariaLabel="Back to Projects"
             title="Back to Projects"
           >
+            <Icon name="chevron-left" size={16} />
             <span class="toolbar-btn-label">Projects</span>
           </Button>
           {#if activeCount > 0 || awaitingApprovalCount > 0 || stuckCount > 0}
@@ -683,7 +617,7 @@
               <span>{inboxActionableCount}</span>
             </button>
           {/if}
-          {#if providerStatus?.activeProvider || providerStatus?.preferredProvider}
+          {#if providerHeaderLabel}
             <button
               type="button"
               class="provider-indicator"
@@ -719,12 +653,12 @@
             className="toolbar-btn toolbar-btn--primary"
             disabled={busy || (runStatus !== 'running' && (runStatus === 'stopping' || startDisabledReason !== null))}
             onclick={runStatus === 'running' ? stop : () => start('continuous')}
-            ariaLabel={runStatus === 'running' ? 'Stop orchestrator' : (startDisabledReason ?? 'Start orchestrator')}
-            title={runStatus === 'running' ? 'Stop orchestrator' : (startDisabledReason ?? 'Start orchestrator')}
+            ariaLabel={runStatus === 'running' ? 'Stop agents' : (startDisabledReason ?? 'Start agents')}
+            title={runStatus === 'running' ? 'Stop agents' : (startDisabledReason ?? 'Start agents')}
           >
             <span class="btn-inner">
               <Icon name={runStatus === 'running' ? 'square' : 'play'} size={16} />
-              {runStatus === 'running' ? 'Stop' : 'Start'}
+              {runStatus === 'running' ? 'Stop agents' : 'Start agents'}
             </span>
           </Button>
           <div class="actions-menu" bind:this={actionsMenuEl}>
@@ -817,9 +751,9 @@
           {:else if currentView === 'workspace-import'}
             <WorkspaceImportTab />
           {:else if currentView === 'work'}
-            <WorkTab {detail} />
+            <WorkTab {detail} mode="list" />
           {:else if currentView === 'planner'}
-            <PlannerTab {detail} />
+            <WorkTab {detail} mode="board" />
           {:else if currentView === 'facts'}
             <FactsTab />
           {:else if currentView === 'coordinators'}

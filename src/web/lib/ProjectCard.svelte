@@ -1,4 +1,13 @@
 <script lang="ts">
+  import {
+    Activity,
+    AlertTriangle,
+    CheckCircle2,
+    FolderOpen,
+    PauseCircle,
+    Play,
+    Square,
+  } from 'lucide-svelte'
   import Button from './Button.svelte'
   import Card from './Card.svelte'
   import Chip from './Chip.svelte'
@@ -19,63 +28,94 @@
     onStart,
     onStop,
   }: Props = $props()
+
+  const statusTone = $derived(
+    summary.tone === 'active'
+      ? 'running'
+      : summary.tone === 'warn'
+        ? 'warn'
+        : summary.tone === 'success'
+          ? 'ok'
+          : 'neutral',
+  )
 </script>
 
-<Card tone={summary.selected ? 'accent' : summary.tone === 'warn' ? 'warn' : summary.tone === 'active' ? 'ok' : 'default'}>
+<Card tone={summary.tone === 'warn' ? 'warn' : summary.tone === 'active' ? 'ok' : summary.tone === 'success' ? 'accent' : 'default'}>
   {#snippet actions()}
-    <Chip label={summary.statusLabel} tone={summary.tone === 'active' ? 'running' : summary.tone === 'warn' ? 'warn' : summary.tone === 'success' ? 'ok' : summary.selected ? 'accent' : 'neutral'} />
+    <div class="top-chips">
+      {#if summary.selected}
+        <Chip label="Current" tone="accent" />
+      {/if}
+      <Chip label={summary.statusLabel} tone={statusTone} />
+    </div>
   {/snippet}
 
   <div class="stack">
-    <div>
+    <div class="title-block">
       <h3>{summary.name}</h3>
-      <p class="path">{summary.path}</p>
+      <p class="path" title={summary.path}>{summary.path}</p>
       {#if summary.blurb}
         <p class="blurb">{summary.blurb}</p>
       {/if}
-      {#if summary.tags.length > 0}
-        <div class="tags">
-          {#each summary.tags.slice(0, 3) as tag (tag)}
-            <span class="tag">{tag}</span>
-          {/each}
-        </div>
+    </div>
+
+    <div class="story">
+      <p class="activity">
+        <Activity size={14} />
+        <span>{summary.activityLabel}</span>
+      </p>
+      {#if summary.recentLabel}
+        <p class="recent">{summary.recentLabel}</p>
       {/if}
     </div>
 
-    <dl class="story">
-      <div>
-        <dt>Stage</dt>
-        <dd>{summary.stageLabel}</dd>
-      </div>
-      <div>
-        <dt>Activity</dt>
-        <dd>{summary.activityLabel}</dd>
-      </div>
-      {#if summary.recentLabel}
-        <div>
-          <dt>Recent</dt>
-          <dd>{summary.recentLabel}</dd>
-        </div>
+    <div class="metrics" aria-label="Project task summary">
+      {#if summary.counts.active > 0}
+        <span class="metric tone-running">
+          <Activity size={13} />
+          <strong>{summary.counts.active}</strong>
+          <span>active</span>
+        </span>
       {/if}
-    </dl>
-
-    <dl class="stats">
-      <div><dt>Active</dt><dd>{summary.counts.active}</dd></div>
-      <div><dt>Blocked</dt><dd>{summary.counts.blocked}</dd></div>
-      <div><dt>Done</dt><dd>{summary.counts.done}</dd></div>
-      <div><dt>Total</dt><dd>{summary.counts.total}</dd></div>
-    </dl>
+      {#if summary.counts.blocked > 0}
+        <span class="metric tone-warn">
+          <AlertTriangle size={13} />
+          <strong>{summary.counts.blocked}</strong>
+          <span>blocked</span>
+        </span>
+      {/if}
+      {#if summary.counts.done > 0}
+        <span class="metric tone-ok">
+          <CheckCircle2 size={13} />
+          <strong>{summary.counts.done}</strong>
+          <span>done</span>
+        </span>
+      {/if}
+      {#if summary.counts.total > 0}
+        <span class="metric tone-neutral">
+          <PauseCircle size={13} />
+          <strong>{summary.counts.total}</strong>
+          <span>total</span>
+        </span>
+      {/if}
+    </div>
 
     <div class="actions">
       <Button variant="secondary" size="sm" disabled={busy || !summary.canOpen} onclick={() => onOpen?.(summary.id)}>
+        <FolderOpen size={14} />
         {summary.actionLabel}
       </Button>
-      <Button variant="primary" size="sm" disabled={busy || !summary.canStart} onclick={() => onStart?.(summary.id)}>
-        Start
-      </Button>
-      <Button variant="danger" size="sm" disabled={busy || !summary.canStop} onclick={() => onStop?.(summary.id)}>
-        Stop
-      </Button>
+      {#if summary.canStart}
+        <Button variant="primary" size="sm" disabled={busy} onclick={() => onStart?.(summary.id)}>
+          <Play size={14} />
+          {summary.runActionLabel}
+        </Button>
+      {:else if summary.canStop}
+        <Button variant="danger" size="sm" disabled={busy} onclick={() => onStop?.(summary.id)}>
+          <Square size={13} />
+          {summary.runActionLabel}
+        </Button>
+      {/if}
     </div>
   </div>
 </Card>
@@ -83,95 +123,105 @@
 <style>
   h3 {
     margin: 0;
-    font-size: var(--fs-5);
+    font-size: var(--fs-4);
     line-height: var(--lh-tight);
+  }
+  .top-chips {
+    display: flex;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
   .stack {
     display: flex;
     flex-direction: column;
-    gap: var(--s-4);
+    gap: var(--s-3);
+  }
+  .title-block {
+    min-width: 0;
   }
   .path {
     margin: var(--s-1) 0 0;
     color: var(--text-muted);
-    font-size: var(--fs-1);
-    overflow-wrap: anywhere;
+    font-size: var(--fs-0);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .blurb {
     margin: var(--s-2) 0 0;
     color: var(--text-muted);
-    font-size: var(--fs-2);
+    font-size: var(--fs-1);
     line-height: var(--lh-body);
-  }
-  .tags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-1);
-    margin-top: var(--s-2);
-  }
-  .tag {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.15rem 0.5rem;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--accent) 10%, var(--bg-elevated));
-    color: var(--text-muted);
-    font-size: var(--fs-0);
-    font-weight: 700;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
   .story {
     display: grid;
     gap: var(--s-2);
+  }
+  .activity,
+  .recent {
     margin: 0;
-  }
-  .story div {
-    display: grid;
-    gap: 0.15rem;
-  }
-  .story dt {
-    color: var(--text-muted);
-    font-size: var(--fs-0);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-weight: 700;
-  }
-  .story dd {
-    margin: 0;
-    color: var(--text);
-    font-size: var(--fs-2);
+    font-size: var(--fs-1);
     line-height: var(--lh-body);
   }
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: var(--s-3);
-    margin: 0;
-  }
-  .stats div {
+  .activity {
     display: flex;
-    flex-direction: column;
-    gap: var(--s-1);
+    align-items: center;
+    gap: var(--s-2);
+    color: var(--text);
   }
-  .stats dt {
+  .activity :global(svg) {
+    color: var(--accent-2);
+    flex: none;
+  }
+  .recent {
     color: var(--text-muted);
-    font-size: var(--fs-0);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-weight: 700;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
-  .stats dd {
-    margin: 0;
-    font-size: var(--fs-5);
+  .metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+  }
+  .metric {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.45rem;
+    border-radius: 999px;
+    font-size: var(--fs-0);
     font-weight: 700;
+    line-height: 1;
+  }
+  .metric strong {
+    font-size: var(--fs-1);
+  }
+  .tone-running {
+    background: rgba(78, 204, 163, 0.15);
+    color: var(--accent-2);
+  }
+  .tone-warn {
+    background: rgba(212, 162, 60, 0.15);
+    color: var(--warn);
+  }
+  .tone-ok {
+    background: rgba(93, 114, 255, 0.12);
+    color: var(--accent);
+  }
+  .tone-neutral {
+    background: rgba(136, 136, 153, 0.12);
+    color: var(--text-muted);
   }
   .actions {
     display: flex;
     gap: var(--s-2);
     flex-wrap: wrap;
-  }
-  @media (max-width: 720px) {
-    .stats {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
   }
 </style>

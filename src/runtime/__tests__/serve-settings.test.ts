@@ -12,6 +12,14 @@ import { buildServeApp } from '../serve.js'
 
 let tmpDir: string
 
+async function readTasks(tmpPath: string): Promise<Array<Record<string, any>>> {
+  const tasksPath = path.join(tmpPath, 'memory', 'TASKS.json')
+  const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as
+    | Array<Record<string, any>>
+    | { tasks?: Array<Record<string, any>> }
+  return Array.isArray(raw) ? raw : raw.tasks ?? []
+}
+
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-'))
   bootstrapWorkspace(tmpDir, { name: 'Settings Test' })
@@ -303,6 +311,162 @@ describe('Workspace Import review endpoints', () => {
     expect(body.ok).toBe(true)
     // Detector should have produced at least one goal from the README.
     expect((body.goalsRecorded ?? 0) + (body.tasksAdded ?? 0)).toBeGreaterThan(0)
+  })
+
+  it('rerun reseeds the reserved import task even when the project already has tasks', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'README.md'),
+      '# Knit\n\n## Goals\n\n- Ship Looma primitives cleanly\n',
+      'utf8',
+    )
+    await fs.mkdir(path.join(tmpDir, 'docs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'feature-roadmap.md'),
+      '## Next up\n\n- [ ] Turn planning docs into real intake tasks\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'workspace-goals.json'),
+      JSON.stringify({ dismissed: true, dismissedAt: '2026-01-01T00:00:00Z' }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'TASKS.json'),
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00Z',
+          tasks: [
+            {
+              id: 'task-001',
+              title: 'Existing user task',
+              description: 'Existing imported work.',
+              status: 'done',
+              domain: 'core',
+              priority: 'normal',
+              projectPath: tmpDir,
+              acceptanceCriteria: [],
+              outOfScope: [],
+              dependsOn: [],
+              notes: [],
+              gateResults: [],
+              reviewVerdicts: [],
+              adjudications: [],
+              escalations: [],
+              agentIssues: [],
+              revisionCount: 0,
+              remediationAttempts: 0,
+              origination: 'human',
+              createdAt: '2026-01-01T00:00:00Z',
+              updatedAt: '2026-01-01T00:00:00Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/workspace-import/rerun', { method: 'POST' }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      ok?: boolean
+      draft?: { tasks?: number; goals?: number }
+    }
+    expect(body.ok).toBe(true)
+    expect((body.draft?.tasks ?? 0) + (body.draft?.goals ?? 0)).toBeGreaterThan(0)
+
+    const tasks = await readTasks(tmpDir)
+    const importTask = tasks.find((task) => task.id === 'task-workspace-import')
+    expect(importTask?.status).toBe('exploring')
+
+    const goalsState = JSON.parse(
+      await fs.readFile(path.join(tmpDir, 'memory', 'workspace-goals.json'), 'utf8'),
+    ) as { dismissed?: boolean }
+    expect(goalsState.dismissed).toBeUndefined()
+  })
+})
+
+describe('POST /api/project/meta-intake/rerun', () => {
+  it('resets the reserved task back to exploring and reseeds the transcript', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'TASKS.json'),
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00Z',
+          tasks: [
+            {
+              id: 'task-meta-intake',
+              title: 'Map project areas and starter tasks',
+              description: 'Scan the codebase, ask for missing context, then propose review lanes and starter tasks.',
+              status: 'done',
+              domain: '_meta',
+              priority: 'critical',
+              projectPath: tmpDir,
+              spec: 'old draft',
+              notes: [
+                {
+                  agentId: 'worker-agent',
+                  role: 'worker-agent',
+                  content: 'stale',
+                  timestamp: '2026-01-01T00:30:00Z',
+                },
+              ],
+              acceptanceCriteria: [],
+              outOfScope: [],
+              dependsOn: [],
+              gateResults: [],
+              reviewVerdicts: [],
+              adjudications: [],
+              escalations: [],
+              agentIssues: [],
+              revisionCount: 0,
+              remediationAttempts: 0,
+              origination: 'system',
+              createdAt: '2026-01-01T00:00:00Z',
+              updatedAt: '2026-01-01T00:00:00Z',
+              completedAt: '2026-01-01T01:00:00Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+    await fs.mkdir(path.join(tmpDir, 'memory', 'exploring'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'exploring', 'task-meta-intake.md'),
+      'stale transcript\n',
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/meta-intake/rerun', { method: 'POST' }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok?: boolean; taskId?: string }
+    expect(body.ok).toBe(true)
+    expect(body.taskId).toBe('task-meta-intake')
+
+    const tasks = await readTasks(tmpDir)
+    const metaTask = tasks.find((task) => task.id === 'task-meta-intake')
+    expect(metaTask?.status).toBe('exploring')
+    expect(metaTask?.spec).toBeUndefined()
+    expect(metaTask?.completedAt).toBeUndefined()
+
+    const transcript = await fs.readFile(
+      path.join(tmpDir, 'memory', 'exploring', 'task-meta-intake.md'),
+      'utf8',
+    )
+    expect(transcript).toMatch(/You are bootstrapping a new Guildhall workspace/i)
+    expect(transcript).not.toMatch(/stale transcript/)
   })
 })
 

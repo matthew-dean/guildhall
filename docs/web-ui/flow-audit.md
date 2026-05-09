@@ -78,6 +78,16 @@ correct the agent, and ask for direct action from Thread.
   mismatches.
 - [x] Make retryable gate-provider throttles clear stale escalation residue, so
   resumed `gate_check` tasks do not still halt later runs as falsely escalated.
+- [ ] Make stage-based automation re-triggerable from the UI instead of
+  forcing users to simulate retries by creating new tasks. Workspace import
+  and meta-intake now have explicit rerun actions; spec drafting, review, and
+  gate reruns still need the same treatment.
+- [ ] Prove re-intake against the real Looma + Knit planning corpus. The bar
+  is not "an importer task existed once"; it must actually reread the
+  substantial documented backlog and surface sensible candidate tasks.
+- [ ] Untangle `Work` vs `Planner`. Right now they are too close: Work is
+  easier to read, Planner is mostly a lifecycle regrouping of the same tasks,
+  and the distinction is not earning two separate primary nav entries.
 
 ## Automation Backlog
 
@@ -145,6 +155,41 @@ correct the agent, and ask for direct action from Thread.
   installer against it, verifies the installed CLI, and surfaces the resolved
   `guildhall` path. `pnpm dev:uninstall` stops the service, removes the
   LaunchAgent and packaged runtime, and preserves user project registry/state.
+- Tightened the Projects board for scanability. Project cards now use compact
+  icon-led status chips and metric pills, a clearer navigation button, and a
+  single agent action instead of separate Start/Stop buttons. Status language
+  now reflects human-meaningful project state (`Current`, `Stable`, `Paused`,
+  `Needs attention`) instead of mixed internal selection/run-state labels like
+  `Ready here` and `Idle`. Live browser check on `http://127.0.0.1:7894`
+  confirmed the smaller card layout against the active Looma/Knit + t-minus-t
+  project set.
+- Fixed the project-shell top-bar affordances that were still reading like
+  internal chrome instead of user navigation. `Projects` is now a visible
+  secondary button with a left chevron instead of an invisible ghost control,
+  and the run button now says `Start agents` / `Stop agents` instead of the
+  more internal `Start` / `Stop`.
+- Fixed the provider badge so it no longer concatenates runtime absence with
+  config shape into nonsense like `None | Mixed models`. The shell now shows
+  the configured or active provider as the badge label, with role-model
+  details only in the tooltip/title.
+- Intake failure is now called what it is: for Looma + Knit, importing the
+  real documented backlog did not work in the way the user expected. The
+  existing workspace-import lane proved one tiny artifact flow, but not the
+  actual project planning corpus.
+- Added explicit re-run actions for the two reserved intake stages that were
+  previously stuck in a one-shot shape. `/api/project/meta-intake/rerun` now
+  resets the reserved meta-intake task/transcript back to `exploring`, and
+  `/api/project/workspace-import/rerun` now reseeds the reserved import task
+  from the current repo artifacts even when the project already has tasks.
+- Proved the new workspace-import rerun against the real Looma + Knit corpus
+  on a fresh `serve-internal` build at `http://localhost:7896`. The rerun path
+  surfaced `314` raw signals, folded into `80` task candidates, `132`
+  milestones, and `8` context notes from the actual planning docs and specs,
+  instead of the earlier one-task import artifact.
+- Collapsed the `Work` / `Planner` split into a single Work surface with two
+  views. `Work` stays the primary nav entry, defaults to the easier-to-read
+  list view, and exposes a `Board` toggle for the old kanban-style planner
+  grouping instead of making both pages compete as separate primary tabs.
 
 - Closed the retry-window failure family with live proof on `task-016`.
   Resolved `max_revisions_exceeded` retries now start a persisted fresh

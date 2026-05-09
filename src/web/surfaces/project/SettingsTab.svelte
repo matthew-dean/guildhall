@@ -296,6 +296,26 @@
     }
   }
 
+  async function rerunMetaIntake() {
+    if (metaIntakeBusy) return
+    metaIntakeBusy = true
+    metaIntakeError = null
+    try {
+      const r = await fetch('/api/project/meta-intake/rerun', { method: 'POST' })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j?.error) {
+        metaIntakeError = j?.error ?? `HTTP ${r.status}`
+        return
+      }
+      await ensureOrchestratorRunning()
+      nav('/thread')
+    } catch (err) {
+      metaIntakeError = err instanceof Error ? err.message : String(err)
+    } finally {
+      metaIntakeBusy = false
+    }
+  }
+
   const bootstrapReady = $derived(
     Boolean(bootstrapInfo?.configured && bootstrapInfo?.status?.success),
   )
@@ -465,12 +485,19 @@
           <code class="coord-source-path">{workspaceConfigPath}</code>
         </div>
 
-        <div class="coord-nav-row">
-          <span class="muted">Use the live board to inspect domain ownership and recent task flow.</span>
-          <button type="button" class="linkbtn" onclick={() => nav('/coordinators')}>
-            Open live board →
-          </button>
-        </div>
+          <div class="coord-nav-row">
+            <span class="muted">Use the live board to inspect domain ownership and recent task flow.</span>
+            <button type="button" class="linkbtn" onclick={() => nav('/coordinators')}>
+              Open live board →
+            </button>
+          </div>
+
+          <div class="coord-nav-row">
+            <span class="muted">If the coordinator split or starter tasks are stale, run the intake stage again.</span>
+            <button type="button" class="linkbtn" onclick={rerunMetaIntake}>
+              {metaIntakeBusy ? 'Re-running…' : 'Re-run meta-intake →'}
+            </button>
+          </div>
 
       {#if coordinators.length === 0}
           <div class="coord-empty">

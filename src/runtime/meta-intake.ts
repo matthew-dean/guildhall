@@ -183,6 +183,20 @@ export interface CreateMetaIntakeResult {
   alreadyExists: boolean
 }
 
+async function writeMetaIntakeTranscript(
+  memoryDir: string,
+  seedMessage?: string,
+): Promise<string> {
+  const transcriptPath = path.join(
+    memoryDir,
+    'exploring',
+    `${META_INTAKE_TASK_ID}.md`,
+  )
+  await fs.mkdir(path.dirname(transcriptPath), { recursive: true })
+  await fs.writeFile(transcriptPath, `${seedMessage ?? META_INTAKE_SEED}\n`, 'utf-8')
+  return transcriptPath
+}
+
 /**
  * Seed a workspace with the reserved meta-intake task. If one already exists,
  * this is a no-op (returning `alreadyExists: true`) so repeated invocations
@@ -246,6 +260,61 @@ export async function createMetaIntakeTask(
   }
 
   return { taskId: META_INTAKE_TASK_ID, transcriptPath: appendResult.path, alreadyExists: false }
+}
+
+export async function rerunMetaIntakeTask(
+  input: CreateMetaIntakeInput,
+): Promise<CreateMetaIntakeResult> {
+  const queue = await readQueue(input.memoryDir)
+  const now = new Date().toISOString()
+  const existingIndex = queue.tasks.findIndex((t) => t.id === META_INTAKE_TASK_ID)
+  const transcriptPath = await writeMetaIntakeTranscript(input.memoryDir, input.seedMessage)
+
+  const resetTask: Task = {
+    id: META_INTAKE_TASK_ID,
+    title: 'Map project areas and starter tasks',
+    description:
+      'Scan the codebase, ask for missing context, then propose review lanes and starter tasks.',
+    domain: META_INTAKE_DOMAIN,
+    projectPath: input.projectPath,
+    status: 'exploring',
+    priority: 'critical',
+    dependsOn: [],
+    outOfScope: [],
+    acceptanceCriteria: [],
+    notes: [
+      {
+        agentId: 'spec-agent',
+        role: 'system',
+        timestamp: now,
+        content: 'Meta-intake was explicitly re-run from the UI.',
+      },
+    ],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    escalations: [],
+    agentIssues: [],
+    revisionCount: 0,
+    remediationAttempts: 0,
+    origination: 'system',
+    createdAt: existingIndex >= 0 ? (queue.tasks[existingIndex]?.createdAt ?? now) : now,
+    updatedAt: now,
+  }
+
+  if (existingIndex >= 0) {
+    queue.tasks[existingIndex] = resetTask
+  } else {
+    queue.tasks.unshift(resetTask)
+  }
+  queue.lastUpdated = now
+  await writeQueue(input.memoryDir, queue)
+
+  return {
+    taskId: META_INTAKE_TASK_ID,
+    transcriptPath,
+    alreadyExists: existingIndex >= 0,
+  }
 }
 
 /**

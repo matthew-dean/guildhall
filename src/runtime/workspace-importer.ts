@@ -196,6 +196,29 @@ export interface CreateWorkspaceImportResult {
   draft: WorkspaceImportDraft
 }
 
+async function writeWorkspaceImportTranscript(
+  memoryDir: string,
+  inventory: WorkspaceInventory,
+  draft: WorkspaceImportDraft,
+  seedMessage?: string,
+): Promise<string> {
+  const transcriptPath = path.join(
+    memoryDir,
+    'exploring',
+    `${WORKSPACE_IMPORT_TASK_ID}.md`,
+  )
+  await fs.mkdir(path.dirname(transcriptPath), { recursive: true })
+  const seed =
+    seedMessage ??
+    [
+      WORKSPACE_IMPORT_SEED_PREAMBLE,
+      formatDraftForTranscript(inventory, draft),
+      WORKSPACE_IMPORT_SEED_FORMAT,
+    ].join('\n')
+  await fs.writeFile(transcriptPath, `${seed}\n`, 'utf-8')
+  return transcriptPath
+}
+
 /**
  * Seed the workspace with the reserved importer task. Idempotent — if the
  * task already exists, returns `alreadyExists: true` without re-running
@@ -284,6 +307,87 @@ export async function createWorkspaceImportTask(
     taskId: WORKSPACE_IMPORT_TASK_ID,
     transcriptPath: appendResult.path,
     alreadyExists: false,
+    inventory,
+    draft,
+  }
+}
+
+export async function rerunWorkspaceImportTask(
+  input: CreateWorkspaceImportInput,
+): Promise<CreateWorkspaceImportResult> {
+  const queue = await readQueue(input.memoryDir)
+  const inventory =
+    input.inventory ??
+    (await detectWorkspaceSignals({ projectPath: input.projectPath }))
+  const draft = input.draft ?? formWorkspaceHypothesis(inventory)
+  const now = new Date().toISOString()
+  const existingIndex = queue.tasks.findIndex((t) => t.id === WORKSPACE_IMPORT_TASK_ID)
+  const transcriptPath = await writeWorkspaceImportTranscript(
+    input.memoryDir,
+    inventory,
+    draft,
+    input.seedMessage,
+  )
+
+  const task: Task = {
+    id: WORKSPACE_IMPORT_TASK_ID,
+    title: 'Import existing workspace artifacts into TASKS.json',
+    description:
+      'Refine the detector-produced draft of goals, tasks, and milestones with the user, then emit YAML fences for the merge step.',
+    domain: WORKSPACE_IMPORT_DOMAIN,
+    projectPath: input.projectPath,
+    status: 'exploring',
+    priority: 'high',
+    dependsOn: [],
+    outOfScope: [],
+    acceptanceCriteria: [],
+    notes: [
+      {
+        role: 'system',
+        agentId: 'workspace-importer-agent',
+        timestamp: now,
+        content: 'Workspace import was explicitly re-run from the UI.',
+      },
+    ],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    escalations: [],
+    agentIssues: [],
+    revisionCount: 0,
+    remediationAttempts: 0,
+    origination: 'system',
+    createdAt: existingIndex >= 0 ? (queue.tasks[existingIndex]?.createdAt ?? now) : now,
+    updatedAt: now,
+  }
+
+  if (existingIndex >= 0) {
+    queue.tasks[existingIndex] = task
+  } else {
+    queue.tasks.unshift(task)
+  }
+  queue.lastUpdated = now
+  await writeQueue(input.memoryDir, queue)
+
+  const goalsPath = path.join(input.memoryDir, WORKSPACE_GOALS_FILE)
+  if (await fs.stat(goalsPath).then(() => true).catch(() => false)) {
+    try {
+      const raw = JSON.parse(await fs.readFile(goalsPath, 'utf-8')) as Record<string, unknown>
+      if (raw.dismissed) {
+        delete raw.dismissed
+        delete raw.dismissedAt
+        raw.recordedAt = now
+        await fs.writeFile(goalsPath, JSON.stringify(raw, null, 2), 'utf-8')
+      }
+    } catch {
+      // Ignore malformed dismissed-state files; the rerun task/transcript are the source of truth.
+    }
+  }
+
+  return {
+    taskId: WORKSPACE_IMPORT_TASK_ID,
+    transcriptPath,
+    alreadyExists: existingIndex >= 0,
     inventory,
     draft,
   }

@@ -211,14 +211,14 @@
   }
   h1 {
     margin: 0;
-    font-size: clamp(1.8rem, 4vw, 2.6rem);
+    font-size: clamp(1.65rem, 3vw, 2.2rem);
     line-height: 1.05;
   }
   .lede {
-    margin: var(--s-3) 0 0;
-    max-width: 56rem;
+    margin: var(--s-2) 0 0;
+    max-width: 44rem;
     color: var(--text-muted);
-    font-size: var(--fs-3);
+    font-size: var(--fs-2);
   }
   .notice {
     border: 1px solid var(--border);
@@ -242,7 +242,7 @@
   }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: var(--s-4);
   }
   @media (max-width: 720px) {

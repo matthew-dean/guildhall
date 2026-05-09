@@ -30,15 +30,16 @@ describe('summarizeProjects', () => {
         name: 'Guildhall',
         path: '/work/guildhall',
         selected: true,
-        statusLabel: 'Running here',
+        statusLabel: 'Running',
         tone: 'active',
-        stageLabel: 'In progress',
-        activityLabel: 'Agents are working on 2 active tasks.',
+        stageLabel: 'Running',
+        activityLabel: 'Agents are working on 2 tasks.',
         recentLabel: 'Working on: Restructure project service shell',
         blurb: 'Guildhall runs autonomous engineering workflows over local projects.',
         tags: ['cli', 'orchestrator'],
         counts: { total: 10, active: 2, blocked: 1, done: 6, shelved: 1 },
         actionLabel: 'Open project',
+        runActionLabel: 'Stop agents',
         canOpen: true,
         canStart: false,
         canStop: true,
@@ -61,11 +62,12 @@ describe('summarizeProjects', () => {
     }
 
     expect(summarizeProjects(service)[0]).toMatchObject({
-      statusLabel: 'Idle',
+      statusLabel: 'Ready',
       tone: 'idle',
-      stageLabel: 'Ready to start',
+      stageLabel: 'Ready',
       activityLabel: 'No task activity yet.',
-      actionLabel: 'Switch and open',
+      actionLabel: 'Open project',
+      runActionLabel: 'Start agents',
       canStart: true,
       canStop: false,
     })
@@ -88,8 +90,9 @@ describe('summarizeProjects', () => {
       statusLabel: 'Needs setup',
       tone: 'warn',
       stageLabel: 'Needs setup',
-      activityLabel: 'Attached folder waiting for first-time Guildhall setup.',
-      actionLabel: 'Switch and set up',
+      activityLabel: 'Needs first-time Guildhall setup.',
+      actionLabel: 'Open setup',
+      runActionLabel: null,
       canStart: false,
       canStop: false,
     })
@@ -118,14 +121,41 @@ describe('summarizeProjects', () => {
     }
 
     expect(summarizeProjects(service)[0]).toMatchObject({
-      stageLabel: 'Blocked',
+      statusLabel: 'Needs attention',
+      stageLabel: 'Needs attention',
       activityLabel: '1 blocked task needs attention.',
       recentLabel: 'Blocked on: Repair staging auth flow',
+      runActionLabel: 'Start agents',
     })
     expect(summarizeProjects(service)[1]).toMatchObject({
+      statusLabel: 'Stable',
       stageLabel: 'Stable',
       activityLabel: '4 of 4 tasks are done.',
       recentLabel: 'Recently completed: Audit primitive integration',
+      runActionLabel: 'Start agents',
+    })
+  })
+
+  it('treats stopped projects with unfinished active work as paused', () => {
+    const service: ServiceDetail = {
+      projects: [
+        {
+          id: 't-minus-t',
+          name: 't-minus-t',
+          path: '/work/t-minus-t',
+          taskCounts: { total: 3, active: 1, blocked: 0, done: 2, shelved: 0 },
+          highlights: { activeTaskTitle: 'Build TypeScript-JSDoc round-trip conversion' },
+          run: { status: 'stopped' },
+        },
+      ],
+    }
+
+    expect(summarizeProjects(service)[0]).toMatchObject({
+      statusLabel: 'Paused',
+      stageLabel: 'Paused',
+      activityLabel: '1 task is paused.',
+      recentLabel: 'Working on: Build TypeScript-JSDoc round-trip conversion',
+      runActionLabel: 'Start agents',
     })
   })
 })

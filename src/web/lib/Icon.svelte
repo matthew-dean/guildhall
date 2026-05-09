@@ -21,6 +21,7 @@
     | 'square'
     | 'plus'
     | 'rotate-ccw'
+    | 'chevron-left'
     | 'check'
     | 'x'
     | 'chevron-down'
@@ -51,6 +52,7 @@
   import Square from 'lucide-svelte/icons/square'
   import Plus from 'lucide-svelte/icons/plus'
   import RotateCcw from 'lucide-svelte/icons/rotate-ccw'
+  import ChevronLeft from 'lucide-svelte/icons/chevron-left'
   import Check from 'lucide-svelte/icons/check'
   import X from 'lucide-svelte/icons/x'
   import ChevronDown from 'lucide-svelte/icons/chevron-down'
@@ -90,6 +92,7 @@
   {:else if name === 'square'}<Square {size} {strokeWidth} />
   {:else if name === 'plus'}<Plus {size} {strokeWidth} />
   {:else if name === 'rotate-ccw'}<RotateCcw {size} {strokeWidth} />
+  {:else if name === 'chevron-left'}<ChevronLeft {size} {strokeWidth} />
   {:else if name === 'check'}<Check {size} {strokeWidth} />
   {:else if name === 'x'}<X {size} {strokeWidth} />
   {:else if name === 'chevron-down'}<ChevronDown {size} {strokeWidth} />

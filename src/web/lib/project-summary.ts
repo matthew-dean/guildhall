@@ -20,6 +20,7 @@ export interface ProjectCardSummary {
     shelved: number
   }
   actionLabel: string
+  runActionLabel: string | null
   canOpen: boolean
   canStart: boolean
   canStop: boolean
@@ -33,40 +34,40 @@ function statusFromRun(run: ProjectRun | null | undefined): ProjectCardSummary['
   return 'success'
 }
 
-function statusLabel(run: ProjectRun | null | undefined, selected: boolean): string {
-  const status = run?.status ?? 'stopped'
-  if (status === 'running') return selected ? 'Running here' : 'Running'
-  if (status === 'stopping') return 'Stopping'
-  if (status === 'error') return 'Needs attention'
-  return selected ? 'Ready here' : 'Idle'
+function stageLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
+  const runStatus = project.run?.status ?? 'stopped'
+  if (project.initializationNeeded) return 'Needs setup'
+  if (runStatus === 'error') return 'Needs attention'
+  if (runStatus === 'stopping') return 'Stopping'
+  if (runStatus === 'running') return 'Running'
+  if (counts.blocked > 0) return 'Needs attention'
+  if (counts.active > 0) return 'Paused'
+  if (counts.total === 0) return 'Ready'
+  if (counts.done > 0 && counts.active === 0 && counts.blocked === 0) return 'Stable'
+  return 'Ready'
 }
 
-function stageLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
-  if (project.initializationNeeded) return 'Needs setup'
-  if ((project.run?.status ?? 'stopped') === 'running') return 'In progress'
-  if (counts.blocked > 0 && counts.active === 0) return 'Blocked'
-  if (counts.total === 0) return 'Ready to start'
-  if (counts.done > 0 && counts.active === 0 && counts.blocked === 0) return 'Stable'
-  return 'Paused'
+function statusLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
+  return stageLabel(project, counts)
 }
 
 function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
-  if (project.initializationNeeded) return 'Attached folder waiting for first-time Guildhall setup.'
+  if (project.initializationNeeded) return 'Needs first-time Guildhall setup.'
   const running = (project.run?.status ?? 'stopped') === 'running'
   if (running && counts.active > 0) {
     return counts.active === 1
-      ? `Agents are working on 1 active task.`
-      : `Agents are working on ${counts.active} active tasks.`
+      ? 'Agents are working on 1 task.'
+      : `Agents are working on ${counts.active} tasks.`
   }
-  if (counts.blocked > 0 && counts.active === 0) {
+  if (counts.blocked > 0) {
     return counts.blocked === 1
       ? '1 blocked task needs attention.'
       : `${counts.blocked} blocked tasks need attention.`
   }
   if (counts.active > 0) {
     return counts.active === 1
-      ? '1 task is queued or paused.'
-      : `${counts.active} tasks are queued or paused.`
+      ? '1 task is paused.'
+      : `${counts.active} tasks are paused.`
   }
   if (counts.done > 0) {
     return counts.total > 0
@@ -100,17 +101,25 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
     name: project.name,
     path: project.path,
     selected,
-    statusLabel: initializationNeeded ? 'Needs setup' : statusLabel(project.run, selected),
-    tone: initializationNeeded ? 'warn' : statusFromRun(project.run),
+    statusLabel: statusLabel(project, counts),
+    tone:
+      initializationNeeded || project.run?.status === 'error'
+        ? 'warn'
+        : (project.run?.status ?? 'stopped') === 'running'
+          ? 'active'
+          : counts.blocked > 0
+            ? 'warn'
+            : counts.done > 0 && counts.active === 0 && counts.blocked === 0
+              ? 'success'
+              : statusFromRun(project.run),
     stageLabel: stageLabel(project, counts),
     activityLabel: activityLabel(project, counts),
     recentLabel: recentLabel(project, counts),
     blurb: project.summary ?? null,
     tags: project.tags ?? [],
     counts,
-    actionLabel: initializationNeeded
-      ? (selected ? 'Open setup' : 'Switch and set up')
-      : selected ? 'Open project' : 'Switch and open',
+    actionLabel: initializationNeeded ? 'Open setup' : 'Open project',
+    runActionLabel: initializationNeeded ? null : running ? 'Stop agents' : 'Start agents',
     canOpen: true,
     canStart: !running && !initializationNeeded,
     canStop: running,

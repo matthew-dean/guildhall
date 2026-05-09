@@ -100,6 +100,7 @@ import {
   createMetaIntakeTask,
   META_INTAKE_TASK_ID,
   parseCoordinatorDraft,
+  rerunMetaIntakeTask,
   synthesizeMetaIntakeDraft,
   workspaceNeedsMetaIntake,
 } from './meta-intake.js'
@@ -117,6 +118,7 @@ import {
   approveWorkspaceImport,
   createWorkspaceImportTask,
   parseWorkspaceImport,
+  rerunWorkspaceImportTask,
   workspaceNeedsImport,
   WORKSPACE_IMPORT_TASK_ID,
   formatDetectedDraftAsSpec,
@@ -1809,6 +1811,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  app.post('/api/project/meta-intake/rerun', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const result = await rerunMetaIntakeTask({
+        memoryDir: join(project.path, 'memory'),
+        projectPath: project.path,
+      })
+      return c.json({ ok: true, ...result })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
   app.get('/api/project/needs-meta-intake', c => {
     try {
       if (project.initializationNeeded) return c.json({ needsMetaIntake: true })
@@ -2101,6 +2118,33 @@ export function buildServeApp(opts: ServeOptions = {}): {
           goals: res.draft.goals.length,
           tasks: res.draft.tasks.length,
           milestones: res.draft.milestones.length,
+        },
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/workspace-import/rerun', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const memoryDir = join(project.path, 'memory')
+      const result = await rerunWorkspaceImportTask({
+        memoryDir,
+        projectPath: project.path,
+      })
+      return c.json({
+        ok: true,
+        seeded: true,
+        outcome: result.alreadyExists ? 'reseeded' : 'seeded',
+        draft: {
+          goals: result.draft.goals.length,
+          tasks: result.draft.tasks.length,
+          milestones: result.draft.milestones.length,
+          context: result.draft.context.length,
+          stats: result.draft.stats,
         },
       })
     } catch (err) {

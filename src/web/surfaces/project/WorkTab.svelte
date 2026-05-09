@@ -7,6 +7,7 @@
     · Overflow: "Recent progress" (PROGRESS.md) collapsed behind <details>.
 -->
 <script lang="ts">
+  import Button from '../../lib/Button.svelte'
   import Card from '../../lib/Card.svelte'
   import TaskCard from '../../lib/TaskCard.svelte'
   import Markdown from '../../lib/Markdown.svelte'
@@ -14,12 +15,14 @@
   import { nav } from '../../lib/nav.svelte.js'
   import { buildWorkSurface, sortEventsChronologically } from '../../lib/project-data.js'
   import type { ProjectDetail, EventEnvelope, Task } from '../../lib/types.js'
+  import PlannerTab from './PlannerTab.svelte'
 
   interface Props {
     detail: ProjectDetail
+    mode?: 'list' | 'board'
   }
 
-  let { detail }: Props = $props()
+  let { detail, mode = 'list' }: Props = $props()
 
   const viewModel = $derived(buildWorkSurface(detail))
   const tasks = $derived<Task[]>(viewModel.tasks)
@@ -66,12 +69,38 @@
     const id = eventTaskId(ev)
     if (id) nav('/task/' + encodeURIComponent(id))
   }
+
+  function setMode(next: 'list' | 'board') {
+    if (next === mode) return
+    nav(next === 'board' ? '/project/planner' : '/project/work')
+  }
 </script>
 
 <div class="two-col">
   <div class="col col-primary">
-    <Card title="Tasks ({tasks.length})">
-      {#if tasks.length === 0}
+    <Card title={mode === 'board' ? 'Task board' : `Tasks (${tasks.length})`}>
+      <div class="view-switch" role="tablist" aria-label="Work view mode">
+        <Button
+          variant={mode === 'list' ? 'primary' : 'secondary'}
+          size="sm"
+          onclick={() => setMode('list')}
+          ariaLabel="List view"
+        >
+          List
+        </Button>
+        <Button
+          variant={mode === 'board' ? 'primary' : 'secondary'}
+          size="sm"
+          onclick={() => setMode('board')}
+          ariaLabel="Board view"
+        >
+          Board
+        </Button>
+      </div>
+
+      {#if mode === 'board'}
+        <PlannerTab {detail} />
+      {:else if tasks.length === 0}
         {#if needsMeta}
           <p class="muted">No tasks yet — <strong>Bootstrap project</strong> first.</p>
         {:else}
@@ -91,7 +120,7 @@
     <Card title="Live activity">
       <div class="feed" id="work-feed">
         {#if events.length === 0 && !running}
-          <p class="muted">Idle — press Start to begin.</p>
+          <p class="muted">Idle — press Start agents to begin.</p>
         {:else if events.length === 0}
           <p class="muted">Connecting…</p>
         {:else}
@@ -136,6 +165,11 @@
     flex-direction: column;
     gap: var(--s-4);
     min-width: 0;
+  }
+  .view-switch {
+    display: flex;
+    gap: var(--s-2);
+    margin-bottom: var(--s-3);
   }
   .feed {
     max-height: 40vh;

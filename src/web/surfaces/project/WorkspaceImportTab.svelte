@@ -88,7 +88,7 @@
 
   let data = $state<DraftResponse | null>(null)
   let error = $state<string | null>(null)
-  let busy = $state<null | 'approve' | 'dismiss'>(null)
+  let busy = $state<null | 'approve' | 'dismiss' | 'rerun'>(null)
 
   async function load() {
     error = null
@@ -132,8 +132,8 @@
       )
       await load()
       await project.refresh()
-      // Bounce to planner so user sees the new tasks.
-      setTimeout(() => nav('/planner'), 900)
+      // Land in Work so the user sees the imported tasks in the default view.
+      setTimeout(() => nav('/work'), 900)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e))
     } finally {
@@ -153,6 +153,34 @@
       }
       toast.success('Dismissed. Findings remain visible here if you change your mind.')
       await load()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e))
+    } finally {
+      busy = null
+    }
+  }
+
+  async function rerun() {
+    busy = 'rerun'
+    try {
+      const r = await fetch('/api/project/workspace-import/rerun', {
+        method: 'POST',
+      })
+      const j = (await r.json()) as {
+        ok?: boolean
+        draft?: { goals?: number; tasks?: number; milestones?: number; context?: number }
+        error?: string
+      }
+      if (!r.ok || j.error) {
+        toast.error(j.error ?? `Re-run failed (${r.status})`)
+        return
+      }
+      toast.success(
+        `Re-ran workspace import: ${j.draft?.tasks ?? 0} task candidates, ${j.draft?.goals ?? 0} goals.`,
+      )
+      await load()
+      await project.refresh()
+      nav('/thread')
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e))
     } finally {
@@ -293,6 +321,13 @@
             {/if}
           </div>
           <div class="summary-actions">
+            <Button
+              variant="secondary"
+              onclick={rerun}
+              disabled={busy !== null}
+            >
+              {busy === 'rerun' ? 'Re-running…' : 'Re-run import'}
+            </Button>
             {#if hasAnything && !imported}
               <Button
                 variant="primary"
