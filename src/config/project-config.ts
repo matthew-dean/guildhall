@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
 import { z } from 'zod'
-import { ModelAssignmentConfig } from '@guildhall/core'
+import { ModelConfigInputSchema } from './schemas.js'
 
 // ---------------------------------------------------------------------------
 // Project-local Guildhall config — <project>/.guildhall/config.yaml
@@ -22,7 +22,7 @@ export const PROJECT_CONFIG_FILENAME = 'config.yaml'
 
 export const ProjectGuildhallConfig = z.object({
   /** Default model assignments (merged with per-workspace models) */
-  models: ModelAssignmentConfig.partial().optional(),
+  models: ModelConfigInputSchema.optional(),
 
   /** Default max revisions before a task is escalated */
   maxRevisions: z.number().int().positive().default(3),
@@ -30,7 +30,7 @@ export const ProjectGuildhallConfig = z.object({
   /** Default heartbeat interval (seconds) */
   heartbeatInterval: z.number().int().positive().default(5),
 
-  /** llama.cpp / LM Studio base URL */
+  /** OpenAI-compatible local server URL */
   lmStudioUrl: z.string().url().default('http://localhost:1234/v1'),
 
   /** Anthropic API key (can also be set via ANTHROPIC_API_KEY env var) */
@@ -55,14 +55,40 @@ export const ProjectGuildhallConfig = z.object({
   preferredProvider: z.enum(['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api']).optional(),
 
   /**
-   * How many persona reviewer agents to run concurrently during
-   * `review` fan-out. Default `1` (sequential) is safe for any provider
-   * — LM Studio / llama.cpp can't service concurrent requests on a
-   * single session. Raise to 2–4 when the reviewer is a cloud provider
-   * (Anthropic, OpenAI, Codex) whose rate limits comfortably exceed the
-   * roster size — wall-clock review latency drops roughly linearly.
+   * How many spec/intake tasks may run at once. Default `1` keeps the
+   * conversational intake surface focused; raise it only when you want Guildhall
+   * shaping multiple unrelated asks in parallel.
    */
-  reviewerFanoutConcurrency: z.number().int().positive().max(16).default(1),
+  specLaneConcurrency: z.number().int().positive().max(16).optional(),
+
+  /**
+   * How many worker tasks may run at once. The effective value is also capped
+   * by the `concurrent_task_dispatch` lever and any runtime slot limits.
+   */
+  workerLaneConcurrency: z.number().int().positive().max(16).optional(),
+
+  /**
+   * Advanced override for persona reviewer fan-out within one `review` pass.
+   *
+   * Omit this in normal use. Guildhall auto-derives reviewer concurrency from
+   * the active provider's capacity (`1` for local servers, higher for hosted
+   * providers). This knob remains as an escape hatch for unusual repos.
+   */
+  reviewerFanoutConcurrency: z.number().int().positive().max(16).optional(),
+
+  /**
+   * How many distinct review/gate tasks may run at once. This is separate from
+   * `reviewerFanoutConcurrency`, which controls persona fan-out *within* one
+   * review task.
+   */
+  reviewLaneConcurrency: z.number().int().positive().max(16).optional(),
+
+  /**
+   * How many coordinator/policy tasks may run at once. Default `1` keeps
+   * adjudication and proposal/policy handling serialized unless a workspace
+   * explicitly opts into more parallel judgment.
+   */
+  coordinatorLaneConcurrency: z.number().int().positive().max(16).optional(),
 })
 export type ProjectGuildhallConfig = z.infer<typeof ProjectGuildhallConfig>
 

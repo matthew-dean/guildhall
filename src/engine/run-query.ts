@@ -22,12 +22,13 @@
  */
 
 import type {
+  ContentBlock,
   ConversationMessage,
   ToolResultBlock,
   ToolUseBlock,
   UsageSnapshot,
 } from '@guildhall/protocol'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   emptyUsage,
   isEffectivelyEmpty,
@@ -132,6 +133,7 @@ export interface QueryContext {
   model: string
   systemPrompt: string
   maxTokens: number
+  temperature?: number
   contextWindowTokens?: number | null
   autoCompactThresholdTokens?: number | null
   permissionPrompt?: (toolName: string, reason: string) => Promise<boolean>
@@ -154,6 +156,10 @@ export interface QueryContext {
    */
   noToolTurnNudge?: string | undefined
   noToolTurnNudgeLimit?: number | undefined
+  noProgressToolNames?: readonly string[] | undefined
+  noProgressTurnNudge?: string | undefined
+  noProgressTurnNudgeLimit?: number | undefined
+  noProgressTurnThreshold?: number | undefined
   abortSignal?: AbortSignal | undefined
 }
 
@@ -183,6 +189,424 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === 'AbortError'
 }
 
+function isReadOnlyToolCall(context: QueryContext, toolName: string, input: Record<string, unknown>): boolean {
+  const tool = context.toolRegistry.get(toolName)
+  if (!tool) return false
+  try {
+    return tool.isReadOnly(input)
+  } catch {
+    return false
+  }
+}
+
+function likelyTargetFilesFromMetadata(
+  toolMetadata: Record<string, unknown> | undefined,
+): string[] {
+  const raw = toolMetadata?.['current_task_likely_target_files']
+  if (!Array.isArray(raw)) return []
+  return raw.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+}
+
+function readFileNotFoundPath(resultContent: string): string | null {
+  const match = resultContent.match(/^\(file not found: (.+)\)$/)
+  return match?.[1]?.trim() ?? null
+}
+
+function missingLikelyTargetFile(
+  toolMetadata: Record<string, unknown> | undefined,
+): string {
+  return String(toolMetadata?.['current_missing_likely_target_file'] ?? '').trim()
+}
+
+function currentAgentId(
+  toolMetadata: Record<string, unknown> | undefined,
+): string {
+  return String(toolMetadata?.['current_agent_id'] ?? '').trim()
+}
+
+function latestCheckpointNextAction(
+  toolMetadata: Record<string, unknown> | undefined,
+): string {
+  return String(toolMetadata?.['current_task_checkpoint_next_action'] ?? '').trim()
+}
+
+function currentTaskId(
+  toolMetadata: Record<string, unknown> | undefined,
+): string {
+  return String(toolMetadata?.['current_task_id'] ?? '').trim()
+}
+
+function currentTaskLaneHandoffCompleted(
+  toolMetadata: Record<string, unknown> | undefined,
+): boolean {
+  return toolMetadata?.['current_task_lane_handoff_completed'] === true
+}
+
+function hasStructuredSelfCritiqueInMetadata(
+  toolMetadata: Record<string, unknown> | undefined,
+): boolean {
+  return toolMetadata?.['current_task_has_structured_self_critique'] === true
+}
+
+function looksLikeStructuredSelfCritiqueContent(content: string): boolean {
+  const normalized = content.trim()
+  if (!/\*\*self-critique:\*\*/i.test(normalized) && !/^self-critique:/im.test(normalized)) {
+    return false
+  }
+  const hasAcceptanceCoverage =
+    /for each acceptance criterion:/i.test(normalized) ||
+    /-\s*(?:\[[^\]]+\]|ac-\d+):\s*(met|not met)\b/i.test(normalized)
+  const hasMinimumScope = /(?:^|\n)\s*-?\s*minimum-scope check:/i.test(normalized)
+  return hasAcceptanceCoverage && hasMinimumScope
+}
+
+function structuredSelfCritiqueFromUpdateTaskInput(
+  input: Record<string, unknown>,
+): string {
+  const note = input['note']
+  if (!note || typeof note !== 'object' || Array.isArray(note)) return ''
+  const rec = note as Record<string, unknown>
+  const content = typeof rec['content'] === 'string' ? rec['content'].trim() : ''
+  return looksLikeStructuredSelfCritiqueContent(content) ? content : ''
+}
+
+function checkpointFilesTouched(
+  toolMetadata: Record<string, unknown> | undefined,
+): string[] {
+  const raw = toolMetadata?.['current_task_checkpoint_files_touched']
+  if (!Array.isArray(raw)) return []
+  return raw.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+}
+
+function ownedTaskStatusForAgent(agentId: string): string | null {
+  switch (agentId) {
+    case 'worker-agent':
+      return 'in_progress'
+    case 'reviewer-agent':
+      return 'review'
+    case 'gate-checker-agent':
+      return 'gate_check'
+    default:
+      return null
+  }
+}
+
+function isLaneExitStatus(agentId: string, status: string): boolean {
+  const ownedStatus = ownedTaskStatusForAgent(agentId)
+  return ownedStatus !== null && status.trim() !== '' && status !== ownedStatus
+}
+
+function looksExploratoryCheckpointAction(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim()
+  if (!normalized) return false
+  return [
+    /\bsearch\b/,
+    /\binspect\b/,
+    /\breview\b/,
+    /\blook for\b/,
+    /\bscan\b/,
+    /\btrace\b/,
+    /\baudit\b/,
+    /\bidentify\b/,
+    /\bcheck for\b/,
+    /\bconfirm\b/,
+    /\bverify\b.*\bwhere\b/,
+  ].some((pattern) => pattern.test(normalized))
+}
+
+function looksLikeHandoffCheckpointAction(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim()
+  if (!normalized) return false
+  return [
+    /\bself-critique\b/,
+    /\bhandoff\b/,
+    /\bset\b.*\bstatus\b.*\breview\b/,
+    /\bmove .* to review\b/,
+    /\btransition .* to review\b/,
+    /\bstatus .* review\b/,
+    /\bpersist\b.*\bnote\b/,
+  ].some((pattern) => pattern.test(normalized))
+}
+
+function isCheckpointScopedReadOnlyToolCall(
+  cwd: string,
+  toolMetadata: Record<string, unknown> | undefined,
+  toolCall: ToolUseBlock,
+  checkpointTouched: readonly string[],
+): boolean {
+  if (toolCall.name !== 'read-file') return false
+  const filePath = String((toolCall.input as Record<string, unknown>)?.filePath ?? '').trim()
+  if (filePath.length === 0) return false
+  const normalizedInputPath = resolve(cwd, filePath)
+  const candidateBases = [
+    String(toolMetadata?.['current_task_worktree_path'] ?? '').trim(),
+    String(toolMetadata?.['current_task_project_path'] ?? '').trim(),
+    cwd,
+  ].filter((value): value is string => value.length > 0)
+  const normalizedTouched = checkpointTouched.flatMap((candidate) =>
+    candidateBases.map((base) => resolve(base, candidate)),
+  )
+  return normalizedTouched.includes(normalizedInputPath)
+}
+
+function noProgressStatusMessage(
+  toolMetadata: Record<string, unknown> | undefined,
+): string {
+  switch (currentAgentId(toolMetadata)) {
+    case 'worker-agent':
+      return 'Assistant kept using non-durable steps without moving the implementation forward; asking it to mutate, verify, checkpoint, or escalate now.'
+    case 'reviewer-agent':
+      return 'Assistant kept exploring without recording a durable review outcome; asking it to record a verdict, checkpoint, or escalation now.'
+    case 'gate-checker-agent':
+      return 'Assistant kept exploring without recording a durable gate outcome; asking it to run gates, record the result, or escalate now.'
+    default:
+      return 'Assistant kept researching without recording durable progress; asking it to write the brief, question, spec, or escalation now.'
+  }
+}
+
+interface ReadFileStateEntry {
+  path?: unknown
+  preview?: unknown
+}
+
+function recentReadFileHints(
+  toolMetadata: Record<string, unknown> | undefined,
+): Array<{ path: string; preview: string }> {
+  const raw = toolMetadata?.['read_file_state']
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null
+      const record = entry as ReadFileStateEntry
+      const path = String(record.path ?? '').trim()
+      const preview = String(record.preview ?? '').trim()
+      if (!path) return null
+      return { path, preview }
+    })
+    .filter((entry): entry is { path: string; preview: string } => entry !== null)
+    .slice(-3)
+}
+
+function inspectedLikelyTargetFile(
+  toolMetadata: Record<string, unknown> | undefined,
+): string {
+  const likelyTargets = new Set(likelyTargetFilesFromMetadata(toolMetadata))
+  if (likelyTargets.size === 0) return ''
+  const hints = recentReadFileHints(toolMetadata)
+  for (let i = hints.length - 1; i >= 0; i -= 1) {
+    const candidate = hints[i]?.path ?? ''
+    if (candidate && likelyTargets.has(candidate)) return candidate
+  }
+  return ''
+}
+
+function likelyTargetMutationDirective(input: {
+  likelyTargetFiles: readonly string[]
+  inspectedLikelyTarget: string
+}): string {
+  const distinct = Array.from(
+    new Set(input.likelyTargetFiles.map((file) => file.trim()).filter(Boolean)),
+  )
+  const preferred = input.inspectedLikelyTarget.trim()
+  if (preferred && distinct.includes(preferred)) {
+    const others = distinct.filter((file) => file !== preferred)
+    if (others.length > 0) {
+      return `Either mutate ${preferred}, mutate another authoritative likely target file (${others.join(', ')}), or run a focused verification command tied to the file you just changed.`
+    }
+    return `Either mutate ${preferred} or run a focused verification command tied to the file you just changed.`
+  }
+  if (distinct.length > 1) {
+    return `Mutate one of the authoritative likely target files (${distinct.join(', ')}), or run a focused verification command tied to the file you just changed.`
+  }
+  if (distinct.length === 1) {
+    return `Either mutate ${distinct[0]} or run a focused verification command tied to the file you just changed.`
+  }
+  return 'Mutate an authoritative likely target file or run a focused verification command tied to the file you just changed.'
+}
+
+function strictMutationOrEscalationNudge(input: {
+  missingLikelyTarget: string
+  inspectedLikelyTarget: string
+  likelyTargetFiles: readonly string[]
+}): string | null {
+  if (input.missingLikelyTarget.length > 0) {
+    return [
+      `You already know the exact target file is missing at ${input.missingLikelyTarget}.`,
+      'Your very next response must be exactly one tool call and no prose.',
+      `Either call write-file with { filePath: "${input.missingLikelyTarget}", content: "..." } to create it,`,
+      'or call raise-escalation if you still cannot safely author the file contents.',
+    ].join(' ')
+  }
+  if (input.inspectedLikelyTarget.length > 0) {
+    return [
+      `You already inspected an authoritative likely target file at ${input.inspectedLikelyTarget}.`,
+      'Your very next response must be exactly one tool call and no prose.',
+      likelyTargetMutationDirective(input),
+      'or call raise-escalation if you still cannot proceed safely.',
+    ].join(' ')
+  }
+  return null
+}
+
+function strictCheckpointFollowThroughNudge(input: {
+  checkpointNextAction: string
+  checkpointTouched: readonly string[]
+}): string | null {
+  const targets = input.checkpointTouched.map((file) => file.trim()).filter(Boolean)
+  if (targets.length === 0) return null
+  const exactTarget = targets[0]!
+  const alternateTargets = targets.slice(1)
+  return [
+    `The latest checkpoint already told you what to do next: ${input.checkpointNextAction}.`,
+    'Your very next response must be exactly one tool call and no prose.',
+    `Call read-file with { filePath: "${exactTarget}" } first.`,
+    alternateTargets.length > 0
+      ? `If that file is no longer the right surface, use read-file on one of these checkpoint-touched files instead: ${alternateTargets.join(', ')}.`
+      : '',
+    'If none of those files are the right next step anymore, call raise-escalation and explain why the checkpoint is no longer valid.',
+  ].filter(Boolean).join(' ')
+}
+
+function strictCheckpointHandoffNudge(input: {
+  checkpointNextAction: string
+  taskId: string
+  hasStructuredSelfCritique: boolean
+}): string | null {
+  if (!input.taskId.trim()) return null
+  const normalized = input.checkpointNextAction.toLowerCase().replace(/\s+/g, ' ').trim()
+  if (
+    /\bset\b.*\bstatus\b.*\breview\b/.test(normalized) ||
+    /\btransition\b.*\breview\b/.test(normalized) ||
+    /\bmove\b.*\breview\b/.test(normalized)
+  ) {
+    if (!input.hasStructuredSelfCritique) {
+      return [
+        `The latest checkpoint already told you what to do next: ${input.checkpointNextAction}.`,
+        'Your very next response must be exactly one tool call and no prose.',
+        `Call update-task with { taskId: "${input.taskId}", status: "review", note: { agentId: "worker-agent", role: "self-critique", content: "**Self-critique:** ..." } } now.`,
+        'The note must cover each acceptance criterion and include the minimum-scope check before the review handoff.',
+        'If the checkpoint is no longer valid, call raise-escalation instead.',
+      ].join(' ')
+    }
+    return [
+      `The latest checkpoint already told you what to do next: ${input.checkpointNextAction}.`,
+      'Your very next response must be exactly one tool call and no prose.',
+      `Call update-task with { taskId: "${input.taskId}", status: "review" } now.`,
+      'Do not write another checkpoint first unless the handoff is no longer valid.',
+      'If the checkpoint is no longer valid, call raise-escalation instead.',
+    ].join(' ')
+  }
+  return [
+    `The latest checkpoint already told you what to do next: ${input.checkpointNextAction}.`,
+    'Your very next response must be exactly one tool call and no prose.',
+    `Call update-task with { taskId: "${input.taskId}", status: "in_progress", note: { agentId: "worker-agent", role: "self-critique", content: "**Self-critique:** ..." } } to persist the self-critique note first.`,
+    `After that note exists, you can transition task ${input.taskId} to review.`,
+    'If the checkpoint is no longer valid, call raise-escalation instead.',
+  ].join(' ')
+}
+
+function strictCheckpointMutationNudge(input: {
+  checkpointNextAction: string
+  checkpointTouched: readonly string[]
+}): string | null {
+  const targets = input.checkpointTouched.map((file) => file.trim()).filter(Boolean)
+  if (targets.length === 0) return null
+  const exactTarget = targets[0]!
+  const alternateTargets = targets.slice(1)
+  return [
+    `The latest checkpoint already told you what to do next: ${input.checkpointNextAction}.`,
+    'Your very next response must be exactly one tool call and no prose.',
+    `Call edit-file on ${exactTarget} now, or call write-file if rewriting the full file is simpler.`,
+    alternateTargets.length > 0
+      ? `If ${exactTarget} is no longer the right surface, mutate one of these checkpoint-touched files instead: ${alternateTargets.join(', ')}.`
+      : '',
+    'If none of those files are the right next step anymore, call raise-escalation and explain why the checkpoint is no longer valid.',
+  ].filter(Boolean).join(' ')
+}
+
+function looksLikeReviewReadyHandoff(text: string): boolean {
+  const lower = text.toLowerCase()
+  const hasReviewLanguage =
+    lower.includes('review') ||
+    lower.includes('handoff') ||
+    lower.includes('verified') ||
+    lower.includes('what’s done') ||
+    lower.includes("what's done")
+  const hasCompletionShape =
+    lower.includes('implemented') ||
+    lower.includes('done') ||
+    lower.includes('evidence') ||
+    lower.includes('checkpoint') ||
+    lower.includes('next turn')
+  return hasReviewLanguage && hasCompletionShape
+}
+
+function looksLikeFutureStepNarration(text: string): boolean {
+  const normalized = text
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized) return false
+  const futureStepSignals = [
+    /\bi['’]ll\b/,
+    /\bi will\b/,
+    /\bi'm going to\b/,
+    /\bi am going to\b/,
+    /\bnext i['’]ll\b/,
+    /\bnext i will\b/,
+    /\bthen i['’]ll\b/,
+    /\bthen i will\b/,
+    /\bonce you (?:pick|answer|confirm)\b/,
+  ]
+  const planningActionSignals = [
+    /\bdraft\b/,
+    /\bwrite\b/,
+    /\bmove\b/,
+    /\blog\b/,
+    /\bfinish intake\b/,
+    /\bturn this into\b/,
+    /\bask\b/,
+    /\bupdate\b/,
+  ]
+  return (
+    futureStepSignals.some((pattern) => pattern.test(normalized)) &&
+    planningActionSignals.some((pattern) => pattern.test(normalized))
+  )
+}
+
+function reviewHandoffToolNudge(
+  assistantText: string,
+  toolMetadata: Record<string, unknown> | undefined,
+): string | null {
+  const evidence = reviewHandoffEvidence(toolMetadata)
+  if (!evidence?.changedOrVerified) return null
+  const taskId = evidence.taskId
+  if (taskId && looksLikeStructuredSelfCritiqueContent(assistantText)) {
+    return [
+      'You already wrote the structured self-critique in your last response.',
+      'Your very next response must be exactly one tool call and no prose.',
+      `Call update-task with { taskId: "${taskId}", status: "in_progress", note: { agentId: "worker-agent", role: "self-critique", content: "..." } } and persist that exact self-critique now.`,
+      'Do not write a checkpoint or transition to review until the note is durable in task state.',
+    ].join(' ')
+  }
+  if (!looksLikeReviewReadyHandoff(assistantText)) return null
+  return [
+    'You already have verified implementation evidence and are describing a review handoff.',
+    'Your very next response must be exactly one tool call and no prose.',
+    'Use update-task to append the note and move to review if the task is ready,',
+    'or use write-checkpoint / log-progress if you still need to formalize the handoff before review,',
+    'or raise-escalation if a real blocker still prevents honest handoff.',
+  ].join(' ')
+}
+
+function composeRepairAbortSignal(
+  external: AbortSignal | undefined,
+  timeoutMs: number,
+): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs)
+  return external ? AbortSignal.any([external, timeout]) : timeout
+}
+
 /**
  * Run the conversation loop until the model stops requesting tools.
  *
@@ -199,8 +623,12 @@ export async function* runQuery(
   // do the real work; for now, the branch yields an error and bails.
   let reactiveCompactAttempted = false
   let noToolTurnNudges = 0
+  let noProgressTurnNudges = 0
+  let noProgressToolTurns = 0
+  let repeatedReadOnlyRefusals = 0
   let sawToolCall = false
   const repeatedToolCallCounts = new Map<string, number>()
+  const progressToolNames = new Set(context.noProgressToolNames ?? [])
 
   while (context.maxTurns == null || turnCount < context.maxTurns) {
     turnCount += 1
@@ -229,6 +657,7 @@ export async function* runQuery(
         messages,
         system_prompt: context.systemPrompt,
         max_tokens: context.maxTokens,
+        ...(context.temperature !== undefined ? { temperature: context.temperature } : {}),
         tools: context.toolRegistry.toApiSchema(),
         ...(context.abortSignal ? { signal: context.abortSignal } : {}),
       })) {
@@ -319,21 +748,66 @@ export async function* runQuery(
     }
 
     messages.push(finalMessage)
+    const assistantText = messageText(finalMessage).trim()
+    if (context.toolMetadata && assistantText.length > 0) {
+      context.toolMetadata['last_assistant_text'] = assistantText
+    }
+    const assistantReasoning = finalMessage.role === 'assistant'
+      ? finalMessage.content
+        .filter((b): b is Extract<ContentBlock, { type: 'reasoning' }> => b.type === 'reasoning')
+        .map((b) => b.text)
+        .join('')
+        .trim()
+      : ''
+    if (context.toolMetadata && assistantReasoning.length > 0) {
+      context.toolMetadata['last_assistant_reasoning'] = assistantReasoning
+    }
     yield { event: { type: 'assistant_turn_complete', message: finalMessage, usage }, usage }
 
     const toolCalls = messageToolUses(finalMessage)
     if (toolCalls.length === 0) {
-      if (
-        !sawToolCall &&
-        context.noToolTurnNudge &&
-        noToolTurnNudges < (context.noToolTurnNudgeLimit ?? 2)
-      ) {
+      if (currentTaskLaneHandoffCompleted(context.toolMetadata)) {
+        if (context.hookExecutor != null) {
+          await context.hookExecutor.execute(HookEvent.STOP, {
+            event: HookEvent.STOP,
+            stop_reason: 'lane_handoff_complete',
+          })
+        }
+        return
+      }
+      noProgressToolTurns = 0
+      const reviewReadyHandoffNudge = reviewHandoffToolNudge(assistantText, context.toolMetadata)
+      const planningOnlyNudge =
+        context.noToolTurnNudge && looksLikeFutureStepNarration(assistantText)
+          ? context.noToolTurnNudge
+          : null
+      const missingLikelyTarget = missingLikelyTargetFile(context.toolMetadata)
+      const inspectedLikelyTarget = inspectedLikelyTargetFile(context.toolMetadata)
+      const likelyTargetFiles = likelyTargetFilesFromMetadata(context.toolMetadata)
+      const mutationOrEscalationNudge = strictMutationOrEscalationNudge({
+        missingLikelyTarget,
+        inspectedLikelyTarget,
+        likelyTargetFiles,
+      })
+      const nudge =
+        reviewReadyHandoffNudge ??
+        planningOnlyNudge ??
+        ((mutationOrEscalationNudge && noToolTurnNudges > 0)
+          ? mutationOrEscalationNudge
+          : (mutationOrEscalationNudge ?? (!sawToolCall ? context.noToolTurnNudge : undefined)))
+      if (nudge && noToolTurnNudges < (context.noToolTurnNudgeLimit ?? 2)) {
         noToolTurnNudges += 1
-        messages.push(userMessageFromText(context.noToolTurnNudge))
+        messages.push(userMessageFromText(nudge))
         yield {
           event: {
             type: 'status',
-            message: 'Assistant response had no tool call; asking it to take the next concrete step.',
+            message: reviewReadyHandoffNudge
+              ? 'Assistant produced review-ready handoff prose without a task-state tool call; demanding one handoff tool call next.'
+              : planningOnlyNudge
+              ? 'Assistant only narrated future steps without a tool call; demanding a durable tool step next.'
+              : mutationOrEscalationNudge
+              ? 'Assistant finished without a concrete mutation; demanding one mutation-or-escalation tool call next.'
+              : 'Assistant response had no tool call; asking it to take the next concrete step.',
           },
           usage: null,
         }
@@ -348,6 +822,160 @@ export async function* runQuery(
       return
     }
     sawToolCall = true
+    const hadProgressToolCall =
+      progressToolNames.size > 0 && toolCalls.some((tc) => progressToolNames.has(tc.name))
+    if (hadProgressToolCall) {
+      noProgressToolTurns = 0
+    } else if (progressToolNames.size > 0) {
+      noProgressToolTurns += 1
+    }
+    const missingLikelyTarget = missingLikelyTargetFile(context.toolMetadata)
+    const likelyTargetFiles = likelyTargetFilesFromMetadata(context.toolMetadata)
+    const checkpointNextAction = latestCheckpointNextAction(context.toolMetadata)
+    const checkpointTouched = checkpointFilesTouched(context.toolMetadata)
+    const checkpointActionIsExploratory = looksExploratoryCheckpointAction(checkpointNextAction)
+    const checkpointActionIsHandoff = looksLikeHandoffCheckpointAction(checkpointNextAction)
+    const checkpointTaskId = currentTaskId(context.toolMetadata)
+    const isWorkerCheckpointLane =
+      currentAgentId(context.toolMetadata) === 'worker-agent' && checkpointNextAction.length > 0
+    const shouldRefuseFurtherReadOnlyResearch =
+      progressToolNames.size > 0 &&
+      !hadProgressToolCall &&
+      noProgressTurnNudges > 0 &&
+      !isWorkerCheckpointLane &&
+      toolCalls.length > 0 &&
+      toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input))
+    const checkpointScopedReadOnlyFollowThroughAllowed =
+      checkpointActionIsExploratory &&
+      checkpointTouched.length > 0 &&
+      toolCalls.length > 0 &&
+      toolCalls.every((tc) =>
+        isCheckpointScopedReadOnlyToolCall(
+          context.cwd,
+          context.toolMetadata,
+          tc,
+          checkpointTouched,
+        ),
+      )
+    const shouldRefuseAfterMissingLikelyTarget =
+      missingLikelyTarget.length > 0 &&
+      toolCalls.length > 0 &&
+      toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input))
+    const inspectedLikelyTarget = inspectedLikelyTargetFile(context.toolMetadata)
+    const shouldRefuseAfterInspectingLikelyTarget =
+      inspectedLikelyTarget.length > 0 &&
+      noProgressTurnNudges > 0 &&
+      toolCalls.length > 0 &&
+      toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input))
+    const shouldRefuseAfterCheckpointNextAction =
+      isWorkerCheckpointLane &&
+      checkpointNextAction.length > 0 &&
+      noProgressToolTurns >= 1 &&
+      toolCalls.length > 0 &&
+      toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input)) &&
+      !checkpointScopedReadOnlyFollowThroughAllowed
+
+    if (
+      shouldRefuseFurtherReadOnlyResearch ||
+      shouldRefuseAfterMissingLikelyTarget ||
+      shouldRefuseAfterInspectingLikelyTarget ||
+      shouldRefuseAfterCheckpointNextAction
+    ) {
+      repeatedReadOnlyRefusals += 1
+      const refusalMessage = shouldRefuseAfterMissingLikelyTarget
+        ? `The likely target file does not exist yet at ${missingLikelyTarget}. Do not do more read-only exploration now. Create that file at exactly this path with write-file, or use edit-file only if the file now exists.`
+        : shouldRefuseAfterCheckpointNextAction
+          ? `The latest checkpoint already names your next step: ${checkpointNextAction}. Do not do more read-only exploration now. ${checkpointActionIsExploratory && checkpointTouched.length > 0 ? `If you must read first, only use read-file on the checkpoint-touched files (${checkpointTouched.join(', ')}) before taking the next focused verification or mutation step.` : `Run that focused verification or mutation step next${checkpointTouched.length > 0 ? ` using the checkpoint-touched files (${checkpointTouched.join(', ')}) as your authoritative scope` : ''}`}, or raise-escalation if the checkpoint is no longer valid.`
+        : shouldRefuseAfterInspectingLikelyTarget
+          ? `You have already inspected an authoritative likely target file at ${inspectedLikelyTarget}. Do not do more read-only exploration now. ${likelyTargetMutationDirective({ likelyTargetFiles, inspectedLikelyTarget })} Or raise-escalation if you still cannot proceed.`
+          : 'Research budget exhausted for this intake turn. Do not call more read-only tools now. Use update-product-brief, post-user-question, update-task, or raise-escalation instead.'
+      const toolResults: ToolResultBlock[] = toolCalls.map((tc) => ({
+        type: 'tool_result',
+        tool_use_id: tc.id,
+        content: refusalMessage,
+        is_error: true,
+      }))
+      for (let i = 0; i < toolCalls.length; i++) {
+        const tc = toolCalls[i]!
+        const result = toolResults[i]!
+        yield {
+          event: {
+            type: 'tool_execution_started',
+            tool_name: tc.name,
+            tool_input: tc.input,
+          },
+          usage: null,
+        }
+        yield {
+          event: {
+            type: 'tool_execution_completed',
+            tool_name: tc.name,
+            output: result.content,
+            is_error: true,
+          },
+          usage: null,
+        }
+      }
+      messages.push({ role: 'user', content: toolResults })
+      const strictCheckpointNudge =
+        shouldRefuseAfterCheckpointNextAction && checkpointActionIsExploratory
+          ? strictCheckpointFollowThroughNudge({
+              checkpointNextAction,
+              checkpointTouched,
+            })
+          : shouldRefuseAfterCheckpointNextAction && checkpointActionIsHandoff
+            ? strictCheckpointHandoffNudge({
+                checkpointNextAction,
+                taskId: checkpointTaskId,
+                hasStructuredSelfCritique: hasStructuredSelfCritiqueInMetadata(context.toolMetadata),
+              })
+            : shouldRefuseAfterCheckpointNextAction
+              ? strictCheckpointMutationNudge({
+                  checkpointNextAction,
+                  checkpointTouched,
+                })
+            : null
+      if (strictCheckpointNudge && repeatedReadOnlyRefusals < 2) {
+        messages.push(userMessageFromText(strictCheckpointNudge))
+      }
+      yield {
+          event: {
+            type: 'status',
+            message: shouldRefuseAfterMissingLikelyTarget
+              ? 'Assistant confirmed the exact likely target file is missing; refusing further read-only exploration for this turn.'
+              : shouldRefuseAfterCheckpointNextAction
+                ? checkpointActionIsExploratory
+                  ? 'Assistant drifted away from an exploratory checkpoint; demanding one exact checkpoint-file read or escalation next.'
+                  : checkpointActionIsHandoff
+                    ? 'Assistant drifted away from a handoff checkpoint; demanding one self-critique persistence tool call or escalation next.'
+                    : 'Assistant drifted away from a mutation checkpoint; demanding one exact file mutation or escalation next.'
+              : shouldRefuseAfterInspectingLikelyTarget
+                ? 'Assistant already inspected an authoritative likely target file; refusing further read-only exploration until it makes concrete progress or escalates.'
+              : 'Assistant kept researching after an explicit durable-progress nudge; refusing more read-only tool calls for this turn.',
+          },
+          usage: null,
+      }
+      if (repeatedReadOnlyRefusals >= 2) {
+        const endingMessage = shouldRefuseAfterMissingLikelyTarget
+          ? 'Assistant kept retrying read-only exploration after repeated exact-target refusals; ending the turn so the orchestrator can treat this as no progress.'
+          : shouldRefuseAfterCheckpointNextAction
+            ? 'Assistant kept retrying read-only exploration after repeated checkpoint-directed refusals; ending the turn so the orchestrator can treat this as no progress.'
+          : shouldRefuseAfterInspectingLikelyTarget
+            ? 'Assistant kept retrying read-only exploration after repeated inspected-target refusals; ending the turn so the orchestrator can treat this as no progress.'
+            : 'Assistant kept retrying read-only exploration after repeated intake-budget refusals; ending the turn so the orchestrator can treat this as no progress.'
+        yield {
+          event: {
+            type: 'status',
+            message: endingMessage,
+          },
+          usage: null,
+        }
+        return
+      }
+      continue
+    }
+
+    repeatedReadOnlyRefusals = 0
 
     if (toolCalls.length === 1) {
       const tc = toolCalls[0]!
@@ -355,7 +983,33 @@ export async function* runQuery(
         event: { type: 'tool_execution_started', tool_name: tc.name, tool_input: tc.input },
         usage: null,
       }
-      const result = await executeToolCall(context, tc)
+      let result = await executeToolCall(context, tc)
+      if (isMalformedWriteFileToolResult(tc.name, result)) {
+        yield {
+          event: {
+            type: 'status',
+            message: 'Malformed write-file call detected; attempting one focused write-file repair.',
+          },
+          usage: null,
+        }
+        const repaired = await attemptFocusedWriteFileRepair(context, tc, result)
+        if (repaired) {
+          result = repaired
+        }
+      }
+      if (isMalformedEditFileToolResult(tc.name, result)) {
+        yield {
+          event: {
+            type: 'status',
+            message: 'Malformed edit-file call detected; attempting one focused file-edit repair.',
+          },
+          usage: null,
+        }
+        const repaired = await attemptFocusedEditFileRepair(context, tc, result)
+        if (repaired) {
+          result = repaired
+        }
+      }
       yield {
         event: {
           type: 'tool_execution_completed',
@@ -439,6 +1093,76 @@ export async function* runQuery(
         }
       }
     }
+
+    if (
+      progressToolNames.size > 0 &&
+      !hadProgressToolCall &&
+      context.noProgressTurnNudge &&
+      noProgressToolTurns >= (context.noProgressTurnThreshold ?? 2)
+    ) {
+      const noProgressNudgeLimit = context.noProgressTurnNudgeLimit ?? 1
+      const transcriptOnlyCarryover =
+        toolCalls.length === 1 && toolCalls[0]?.name === 'append-exploring-transcript'
+      if (transcriptOnlyCarryover && noProgressTurnNudges > 0) {
+        yield {
+          event: {
+            type: 'status',
+            message:
+              'Assistant only appended the exploring transcript after a durable-progress nudge; ending the turn so the orchestrator can treat intake as stalled.',
+          },
+          usage: null,
+        }
+        return
+      }
+      const checkpointNextAction = latestCheckpointNextAction(context.toolMetadata)
+      const checkpointTouched = checkpointFilesTouched(context.toolMetadata)
+      const checkpointTaskId = currentTaskId(context.toolMetadata)
+      const handoffCheckpointNudge =
+        currentAgentId(context.toolMetadata) === 'worker-agent' &&
+        looksLikeHandoffCheckpointAction(checkpointNextAction)
+          ? strictCheckpointHandoffNudge({
+              checkpointNextAction,
+              taskId: checkpointTaskId,
+              hasStructuredSelfCritique: hasStructuredSelfCritiqueInMetadata(context.toolMetadata),
+            })
+          : null
+      const mutationCheckpointNudge =
+        currentAgentId(context.toolMetadata) === 'worker-agent' &&
+        checkpointNextAction.length > 0 &&
+        !looksExploratoryCheckpointAction(checkpointNextAction) &&
+        !looksLikeHandoffCheckpointAction(checkpointNextAction)
+          ? strictCheckpointMutationNudge({
+              checkpointNextAction,
+              checkpointTouched,
+            })
+          : null
+      const checkpointSpecificNudge = handoffCheckpointNudge ?? mutationCheckpointNudge
+      if (noProgressTurnNudges < noProgressNudgeLimit) {
+        noProgressTurnNudges += 1
+        messages.push(userMessageFromText(checkpointSpecificNudge ?? context.noProgressTurnNudge))
+        yield {
+          event: {
+            type: 'status',
+            message: handoffCheckpointNudge
+              ? 'Assistant kept using non-durable steps after a handoff checkpoint; demanding the exact review-transition tool call next.'
+              : mutationCheckpointNudge
+                ? 'Assistant kept using non-durable steps after a mutation checkpoint; demanding the exact file mutation or escalation next.'
+                : noProgressStatusMessage(context.toolMetadata),
+          },
+          usage: null,
+        }
+        continue
+      }
+      yield {
+        event: {
+          type: 'status',
+          message:
+            'Assistant kept using non-durable tool steps after repeated durable-progress nudges; ending the turn so the orchestrator can treat intake as stalled.',
+        },
+        usage: null,
+      }
+      return
+    }
   }
 
   if (context.maxTurns != null) throw new MaxTurnsExceededError(context.maxTurns)
@@ -471,6 +1195,10 @@ function repeatedToolResultNudge(
   }
   const count = (repeatedToolCallCounts.get(signature) ?? 0) + 1
   repeatedToolCallCounts.set(signature, count)
+  const writeFileRecovery = malformedWriteFileRecoveryNudge(toolCall, result, count)
+  if (writeFileRecovery) return writeFileRecovery
+  const editFileRecovery = malformedEditFileRecoveryNudge(toolCall, result, count)
+  if (editFileRecovery) return editFileRecovery
   if (count < 2) return null
   const outcome = result.is_error ? 'failed' : 'returned no useful result'
   return [
@@ -478,6 +1206,232 @@ function repeatedToolResultNudge(
     'Do not repeat that exact tool call again.',
     'Use a different diagnostic, read/list/search the relevant files first, or raise an escalation if you are blocked.',
   ].join(' ')
+}
+
+function malformedWriteFileRecoveryNudge(
+  toolCall: ToolUseBlock,
+  result: ToolResultBlock,
+  count: number,
+): string | null {
+  if (!isMalformedWriteFileToolResult(toolCall.name, result)) return null
+  const message = result.content
+
+  const inferredPathMatch = message.match(/filePath:\s*"([^"]+)"/)
+  const inferredPath = inferredPathMatch?.[1]?.trim()
+  const exactPathInstruction = inferredPath
+    ? `Use filePath exactly "${inferredPath}".`
+    : 'Use the real target filePath for the file you are creating or replacing.'
+
+  if (count === 1) {
+    return [
+      'Your previous write-file call was missing required arguments.',
+      'Your very next response must be exactly one write-file tool call and no explanatory prose.',
+      exactPathInstruction,
+      'Include BOTH JSON keys: filePath and content.',
+      'The content value must contain the complete file contents, not a summary or placeholder.',
+    ].join(' ')
+  }
+
+  return [
+    `The write-file tool has failed ${count} times because its arguments are incomplete.`,
+    'Do not call write-file again until you can provide both filePath and the complete content payload in the same tool call.',
+    exactPathInstruction,
+    'If you still cannot produce the file contents, use write-checkpoint, log-progress, or raise-escalation instead of repeating write-file {}.',
+  ].join(' ')
+}
+
+function isMalformedWriteFileToolResult(toolName: string, result: ToolResultBlock): boolean {
+  if (toolName !== 'write-file' || !result.is_error) return false
+  const message = result.content
+  return (
+    message.includes('Error writing file: Missing filePath') ||
+    message.includes('Error writing file: Missing content')
+  )
+}
+
+function malformedEditFileRecoveryNudge(
+  toolCall: ToolUseBlock,
+  result: ToolResultBlock,
+  count: number,
+): string | null {
+  if (!isMalformedEditFileToolResult(toolCall.name, result)) return null
+
+  if (count === 1) {
+    return [
+      'Your previous edit-file call was missing required arguments.',
+      'Your very next response must be exactly one file mutation tool call and no explanatory prose.',
+      'If you are making a targeted edit, use edit-file with filePath, oldString, and newString.',
+      'If you are replacing the whole file, use write-file with filePath and content instead.',
+      'Do not repeat edit-file {}.',
+    ].join(' ')
+  }
+
+  return [
+    `The edit-file tool has failed ${count} times because its arguments are incomplete.`,
+    'Do not call edit-file again until you can provide filePath, oldString, and newString in the same tool call.',
+    'If you cannot provide an exact oldString, switch to write-file with the complete file contents.',
+    'If you still cannot safely mutate the file, use write-checkpoint, log-progress, or raise-escalation instead of repeating edit-file {}.',
+  ].join(' ')
+}
+
+function isMalformedEditFileToolResult(toolName: string, result: ToolResultBlock): boolean {
+  if (toolName !== 'edit-file' || !result.is_error) return false
+  const message = result.content
+  return message.includes('Invalid input for edit-file')
+}
+
+async function attemptFocusedWriteFileRepair(
+  context: QueryContext,
+  originalToolCall: ToolUseBlock,
+  originalResult: ToolResultBlock,
+): Promise<ToolResultBlock | null> {
+  const writeFileToolSchema = context.toolRegistry
+    .toApiSchema()
+    .filter((tool) => tool.name === 'write-file')
+  if (writeFileToolSchema.length === 0) return null
+
+  const taskTitle = String(context.toolMetadata?.['current_task_title'] ?? '').trim()
+  const taskSpec = String(context.toolMetadata?.['current_task_spec_excerpt'] ?? '').trim()
+  const taskProjectPath = String(context.toolMetadata?.['current_task_project_path'] ?? context.cwd).trim()
+  const lastAssistantText = String(context.toolMetadata?.['last_assistant_text'] ?? '').trim()
+  const lastAssistantReasoning = String(context.toolMetadata?.['last_assistant_reasoning'] ?? '').trim()
+  const priorToolError = String(originalResult.content ?? '').trim()
+  const missingTargetPath = missingLikelyTargetFile(context.toolMetadata)
+  const likelyTargetFiles = likelyTargetFilesFromMetadata(context.toolMetadata)
+  const readHints = recentReadFileHints(context.toolMetadata)
+
+  const repairPrompt = [
+    'Repair the malformed write-file call from the coding task.',
+    taskTitle ? `Task title: ${taskTitle}` : '',
+    taskProjectPath ? `Task project path: ${taskProjectPath}` : '',
+    taskSpec ? `Task spec excerpt:\n${taskSpec}` : '',
+    lastAssistantReasoning ? `Previous assistant reasoning:\n${lastAssistantReasoning}` : '',
+    lastAssistantText ? `Previous assistant text:\n${lastAssistantText}` : '',
+    priorToolError ? `Previous tool error:\n${priorToolError}` : '',
+    missingTargetPath
+      ? `Write the file at exactly this path:\n${missingTargetPath}`
+      : '',
+    !missingTargetPath && likelyTargetFiles.length > 0
+      ? `Likely target file path(s):\n${likelyTargetFiles.join('\n')}`
+      : '',
+    readHints.length > 0
+      ? `Recent file context:\n${readHints
+          .map((entry) =>
+            entry.preview
+              ? `- ${entry.path}: ${entry.preview}`
+              : `- ${entry.path}`,
+          )
+          .join('\n')}`
+      : '',
+    'Return exactly one write-file tool call.',
+    'The tool call must include BOTH filePath and content.',
+    'content must be the full file contents, not a summary.',
+    missingTargetPath ? 'filePath must exactly match the path above.' : '',
+    'Do not return explanatory prose.',
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+
+  let repairedMessage: ConversationMessage | null = null
+  try {
+    for await (const ev of context.apiClient.streamMessage({
+      model: context.model,
+      messages: [userMessageFromText(repairPrompt)],
+      system_prompt:
+        'You are repairing a malformed write-file call. Return exactly one write-file tool call with complete JSON arguments.',
+      max_tokens: Math.min(context.maxTokens, 1_024),
+      ...(context.temperature !== undefined ? { temperature: context.temperature } : {}),
+      tools: writeFileToolSchema,
+      signal: composeRepairAbortSignal(context.abortSignal, 20_000),
+    })) {
+      if (ev.type === 'message_complete') repairedMessage = ev.message
+    }
+  } catch {
+    return null
+  }
+
+  if (!repairedMessage || repairedMessage.role !== 'assistant') return null
+  const repairedCalls = messageToolUses(repairedMessage)
+  if (repairedCalls.length !== 1) return null
+  const repairedCall = repairedCalls[0]
+  if (!repairedCall || repairedCall.name !== 'write-file') return null
+
+  const repairedResult = await executeToolCall(context, {
+    ...repairedCall,
+    id: originalToolCall.id,
+  })
+  if (isMalformedWriteFileToolResult('write-file', repairedResult)) return null
+  return repairedResult
+}
+
+async function attemptFocusedEditFileRepair(
+  context: QueryContext,
+  originalToolCall: ToolUseBlock,
+  originalResult: ToolResultBlock,
+): Promise<ToolResultBlock | null> {
+  const fileMutationToolSchemas = context.toolRegistry
+    .toApiSchema()
+    .filter((tool) => tool.name === 'edit-file' || tool.name === 'write-file')
+  if (fileMutationToolSchemas.length === 0) return null
+
+  const taskTitle = String(context.toolMetadata?.['current_task_title'] ?? '').trim()
+  const taskSpec = String(context.toolMetadata?.['current_task_spec_excerpt'] ?? '').trim()
+  const taskProjectPath = String(context.toolMetadata?.['current_task_project_path'] ?? context.cwd).trim()
+  const lastAssistantText = String(context.toolMetadata?.['last_assistant_text'] ?? '').trim()
+  const lastAssistantReasoning = String(context.toolMetadata?.['last_assistant_reasoning'] ?? '').trim()
+  const priorToolError = String(originalResult.content ?? '').trim()
+
+  const repairPrompt = [
+    'Repair the malformed file-edit call from the coding task.',
+    taskTitle ? `Task title: ${taskTitle}` : '',
+    taskProjectPath ? `Task project path: ${taskProjectPath}` : '',
+    taskSpec ? `Task spec excerpt:\n${taskSpec}` : '',
+    lastAssistantReasoning ? `Previous assistant reasoning:\n${lastAssistantReasoning}` : '',
+    lastAssistantText ? `Previous assistant text:\n${lastAssistantText}` : '',
+    priorToolError ? `Previous tool error:\n${priorToolError}` : '',
+    'Return exactly one tool call and no explanatory prose.',
+    'If you are making a targeted edit, return edit-file with filePath, oldString, and newString.',
+    'If you are replacing the whole file, return write-file with filePath and content.',
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+
+  let repairedMessage: ConversationMessage | null = null
+  try {
+    for await (const ev of context.apiClient.streamMessage({
+      model: context.model,
+      messages: [userMessageFromText(repairPrompt)],
+      system_prompt:
+        'You are repairing a malformed file mutation call. Return exactly one tool call: either edit-file with complete arguments or write-file with complete arguments.',
+      max_tokens: Math.min(context.maxTokens, 8_192),
+      ...(context.temperature !== undefined ? { temperature: context.temperature } : {}),
+      tools: fileMutationToolSchemas,
+      ...(context.abortSignal ? { signal: context.abortSignal } : {}),
+    })) {
+      if (ev.type === 'message_complete') repairedMessage = ev.message
+    }
+  } catch {
+    return null
+  }
+
+  if (!repairedMessage || repairedMessage.role !== 'assistant') return null
+  const repairedCalls = messageToolUses(repairedMessage)
+  if (repairedCalls.length !== 1) return null
+  const repairedCall = repairedCalls[0]
+  if (!repairedCall) return null
+  if (repairedCall.name !== 'edit-file' && repairedCall.name !== 'write-file') return null
+
+  const repairedResult = await executeToolCall(context, {
+    ...repairedCall,
+    id: originalToolCall.id,
+  })
+  if (
+    isMalformedEditFileToolResult(repairedCall.name, repairedResult) ||
+    isMalformedWriteFileToolResult(repairedCall.name, repairedResult)
+  ) {
+    return null
+  }
+  return repairedResult
 }
 
 function isMemoryTaskPath(path: string): boolean {
@@ -530,7 +1484,11 @@ function setReviewHandoffEvidence(
 }
 
 function activeReviewTaskId(toolMetadata: Record<string, unknown> | undefined): string {
-  return String(toolMetadata?.['active_review_handoff_task_id'] ?? '').trim()
+  return String(
+    toolMetadata?.['active_review_handoff_task_id'] ??
+    toolMetadata?.['current_task_id'] ??
+    '',
+  ).trim()
 }
 
 function resetReviewHandoffEvidence(
@@ -539,6 +1497,7 @@ function resetReviewHandoffEvidence(
 ): void {
   if (!toolMetadata || !taskId) return
   toolMetadata['active_review_handoff_task_id'] = taskId
+  toolMetadata['current_task_id'] = taskId
   setReviewHandoffEvidence(toolMetadata, {
     taskId,
     inspectedImplementationFile: false,
@@ -585,6 +1544,13 @@ function hasReviewHandoffEvidence(
     evidence.changedOrVerified
 }
 
+function hasStructuredSelfCritiqueForReviewHandoff(
+  input: Record<string, unknown>,
+  toolMetadata: Record<string, unknown> | undefined,
+): boolean {
+  return structuredSelfCritiqueFromUpdateTaskInput(input).length > 0 || hasStructuredSelfCritiqueInMetadata(toolMetadata)
+}
+
 function reviewHandoffGuardResult(
   toolUseId: string,
   toolName: string,
@@ -593,7 +1559,23 @@ function reviewHandoffGuardResult(
 ): ToolResultBlock | null {
   if (toolName !== 'update-task' || input['status'] !== 'review') return null
   const taskId = taskIdForReviewHandoff(input, toolMetadata)
-  if (taskId && hasReviewHandoffEvidence(toolMetadata, taskId)) return null
+  const hasImplementationEvidence = taskId && hasReviewHandoffEvidence(toolMetadata, taskId)
+  const hasStructuredSelfCritique = hasStructuredSelfCritiqueForReviewHandoff(input, toolMetadata)
+  if (hasImplementationEvidence && hasStructuredSelfCritique) return null
+  if (hasImplementationEvidence && !hasStructuredSelfCritique) {
+    const taskLabel = taskId || 'the active task'
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUseId,
+      content: [
+        'Blocked transition to review: persist a structured self-critique note via update-task first.',
+        'It must cover each acceptance criterion and include the minimum-scope check before handoff.',
+        `Call update-task again for ${taskLabel} with status "in_progress" and note: { agentId: "worker-agent", role: "self-critique", content: "**Self-critique:** ..." }.`,
+        'After that note is durable in task state, transition to review in a separate update-task call.',
+      ].join(' '),
+      is_error: true,
+    }
+  }
   return {
     type: 'tool_result',
     tool_use_id: toolUseId,
@@ -751,10 +1733,55 @@ async function executeToolCall(
     resolvedFilePath: filePath,
   })
 
+  if (context.toolMetadata) {
+    const likelyTargetFiles = new Set(likelyTargetFilesFromMetadata(context.toolMetadata))
+    if (toolName === 'read-file') {
+      const missingPath = readFileNotFoundPath(toolResult.content)
+      if (missingPath && likelyTargetFiles.has(missingPath)) {
+        context.toolMetadata['current_missing_likely_target_file'] = missingPath
+      } else if (!toolResult.is_error && filePath && likelyTargetFiles.has(filePath)) {
+        delete context.toolMetadata['current_missing_likely_target_file']
+      }
+    } else if ((toolName === 'write-file' || toolName === 'edit-file') && filePath && likelyTargetFiles.has(filePath) && !toolResult.is_error) {
+      delete context.toolMetadata['current_missing_likely_target_file']
+    }
+  }
+
+  if (
+    context.toolMetadata &&
+    !toolResult.is_error &&
+    toolName === 'update-task' &&
+    structuredSelfCritiqueFromUpdateTaskInput(toolInput).length > 0
+  ) {
+    context.toolMetadata['current_task_has_structured_self_critique'] = true
+  }
+
   const resultMetadata = (result as { metadata?: Record<string, unknown> }).metadata ?? null
+  if (context.toolMetadata && !toolResult.is_error && toolName === 'update-task') {
+    const nextStatus = typeof toolInput['status'] === 'string' ? toolInput['status'].trim() : ''
+    const taskId = String(resultMetadata?.['taskId'] ?? toolInput['taskId'] ?? '').trim()
+    const activeTaskId = currentTaskId(context.toolMetadata)
+    if (taskId.length > 0 && nextStatus.length > 0 && (activeTaskId.length === 0 || activeTaskId === taskId)) {
+      if (isLaneExitStatus(currentAgentId(context.toolMetadata), nextStatus)) {
+        context.toolMetadata['current_task_lane_handoff_completed'] = true
+      } else {
+        delete context.toolMetadata['current_task_lane_handoff_completed']
+      }
+    }
+  }
   if (!toolResult.is_error && toolName === 'update-task' && toolInput['status'] === 'in_progress') {
     const taskId = String(resultMetadata?.['taskId'] ?? toolInput['taskId'] ?? '').trim()
-    resetReviewHandoffEvidence(context.toolMetadata, taskId)
+    const currentTaskId = activeReviewTaskId(context.toolMetadata)
+    const currentEvidence = reviewHandoffEvidence(context.toolMetadata)
+    const shouldReset =
+      taskId.length > 0 &&
+      (
+        currentTaskId !== taskId ||
+        currentEvidence?.taskId !== taskId ||
+        (currentEvidence.inspectedImplementationFile !== true &&
+          currentEvidence.changedOrVerified !== true)
+      )
+    if (shouldReset) resetReviewHandoffEvidence(context.toolMetadata, taskId)
   } else if (!toolResult.is_error) {
     recordReviewHandoffEvidence(context.toolMetadata, toolName, filePath)
   }

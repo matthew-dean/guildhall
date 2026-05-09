@@ -649,6 +649,30 @@ tasks:
     expect(q.tasks.find((t) => t.id === 't-wire-dashboard')?.title).toBe('v1')
     expect(q.tasks.find((t) => t.id === 't-wire-dashboard-2')?.title).toBe('v2')
   })
+
+  it('assigns imported tasks to the matching coordinator project path when provided', async () => {
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-knit-auth
+    title: Redirect auth callback
+    description: Route signed-in users to the right Knit workspace.
+    domain: knit
+\`\`\`
+`)
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      coordinatorProjectPaths: {
+        knit: path.join(tmpDir, 'knit'),
+      },
+    })
+    expect(res.success).toBe(true)
+    const q = await readQueue()
+    expect(q.tasks.find((t) => t.id === 'task-knit-auth')?.projectPath).toBe(
+      path.join(tmpDir, 'knit'),
+    )
+  })
 })
 
 // The Workspace Import tab needs to let users approve the detector's

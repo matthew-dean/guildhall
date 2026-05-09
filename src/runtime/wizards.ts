@@ -216,7 +216,7 @@ const onboardSteps: readonly WizardStep[] = [
     id: 'direction',
     title: 'Give the project direction',
     why:
-      'Guildhall can draft a starting guess from the repo. Review it here so future tasks inherit the right product intent.',
+      'Start with a brief. Guildhall will use it when it drafts future tasks and specs.',
     skippable: true,
     status: snap => (snap.hasDirection ? 'done' : 'pending'),
   },
@@ -382,12 +382,10 @@ export const specFillWizard: TaskWizard = {
   lede:
     'Shape this task so the agent has enough context to work — and the reviewer has enough to verify.',
   steps: specFillSteps,
-  // Applies to every task that isn't already done/cancelled. Exploring and
-  // in-progress tasks both benefit from spec completeness.
-  applicable: snap => {
-    const terminal = new Set(['done', 'cancelled', 'archived'])
-    return !terminal.has(snap.status)
-  },
+  // Applies only while the task is still in intake / approval shaping.
+  // Once work or review has started, missing-brief nags are usually stale
+  // noise rather than the most helpful operator signal.
+  applicable: snap => new Set(['proposed', 'exploring', 'spec_review', 'ready']).has(snap.status),
 }
 
 const taskRegistry: TaskWizard[] = [specFillWizard]

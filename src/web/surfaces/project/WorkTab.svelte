@@ -29,8 +29,24 @@
   let progress = $state('Loading…')
   let events = $state<EventEnvelope[]>([])
 
+  function sortEventsChronologically(items: EventEnvelope[]): EventEnvelope[] {
+    return [...items].sort((a, b) => {
+      const left = a.at ? Date.parse(a.at) : 0
+      const right = b.at ? Date.parse(b.at) : 0
+      return left - right
+    })
+  }
+
+  function scrollFeedToBottom(): void {
+    queueMicrotask(() => {
+      const feed = document.getElementById('work-feed')
+      if (feed) feed.scrollTop = feed.scrollHeight
+    })
+  }
+
   $effect(() => {
-    events = detail.recentEvents ?? []
+    events = sortEventsChronologically(detail.recentEvents ?? [])
+    scrollFeedToBottom()
   })
 
   $effect(() => {
@@ -48,11 +64,8 @@
     const off = onEvent(ev => {
       const text = summarizeEvent(ev)
       if (!text) return
-      events = [...events, ev]
-      queueMicrotask(() => {
-        const feed = document.getElementById('work-feed')
-        if (feed) feed.scrollTop = feed.scrollHeight
-      })
+      events = sortEventsChronologically([...events, ev])
+      scrollFeedToBottom()
     })
     return off
   })

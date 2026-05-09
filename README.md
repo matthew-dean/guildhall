@@ -145,13 +145,23 @@ Current gate: **1679 tests, 115 test files, all passing** (plus 2 skipped integr
 
 ## Publishing
 
+### 0.4.0 release focus
+
+`0.4.0` is the first release where Guildhall has a live end-to-end proof for a
+bounded but real task lane: narrow, low-blast-radius cleanup work can now move
+through worker implementation, review, gate check, and terminal merge truth
+without manual babysitting.
+
+That is the release claim to make. It is strong enough to ship, and narrow
+enough to be honest.
+
 ```bash
 # Dry-run the whole pipeline (bumps the manifest, runs gates, packs the tarball, reverts):
-pnpm release:dry 0.3.0
+pnpm release:dry 0.4.0
 
 # Actual release: bumps package.json, runs typecheck + docs + lint:deps + tests,
-# builds, publishes guildhall to npm, commits, tags v0.3.0.
-pnpm release 0.3.0
+# builds, publishes guildhall to npm, commits, tags v0.4.0.
+pnpm release 0.4.0
 ```
 
 See [scripts/publish.mjs](./scripts/publish.mjs) for what it actually does.

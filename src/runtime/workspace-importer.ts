@@ -10,6 +10,7 @@ import {
   type WorkspaceImportDraft,
   type WorkspaceInventory,
 } from './workspace-import/index.js'
+import { resolveTaskProjectPath } from './task-project-path.js'
 
 // ---------------------------------------------------------------------------
 // FR-34: reserved workspace-importer task.
@@ -509,6 +510,7 @@ export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
 export interface ApproveWorkspaceImportInput {
   memoryDir: string
   projectPath: string
+  coordinatorProjectPaths?: Record<string, string>
 }
 
 export interface ApproveWorkspaceImportResult {
@@ -584,7 +586,12 @@ export async function approveWorkspaceImport(
       title: t.title,
       description: t.description,
       domain: t.domain,
-      projectPath: input.projectPath,
+      projectPath:
+        input.coordinatorProjectPaths?.[t.domain] ??
+        resolveTaskProjectPath({
+          workspaceProjectPath: input.projectPath,
+          domain: t.domain,
+        }),
       // Import approval means "yes, bring this into Guildhall", not "a worker
       // has a real spec." Imported TODOs and docs need normal spec-agent
       // intake before workers touch them.

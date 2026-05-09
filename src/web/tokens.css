@@ -60,6 +60,37 @@
   --control-h: 26px;
   --control-pad-y: 4px;
   --control-pad-x: 10px;
+
+  /* app chrome */
+  --app-header-h: 34px;
+
+  /* layering contract
+     1. in-flow sticky UI (section heads, page headers)
+     2. shell chrome (topbar, app header)
+     3. global banners/alerts
+     4. drawer overlays
+     5. modals
+     6. ephemeral overlays (tooltips) */
+  --z-sticky-local: 5;
+  --z-topbar: 20;
+  --z-app-header: 30;
+  --z-banner: 40;
+  --z-popover: 50;
+  --z-drawer-backdrop: 120;
+  --z-drawer: 130;
+  --z-modal-backdrop: 140;
+  --z-modal: 150;
+  --z-tooltip: 160;
+}
+
+html,
+body,
+#svelte-root {
+  min-height: 100%;
+}
+
+html {
+  height: 100%;
 }
 
 *, *::before, *::after {
@@ -76,6 +107,7 @@ body {
   font-size: var(--fs-2);
   line-height: var(--lh-body);
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 h1, h2, h3, h4 { line-height: var(--lh-tight); font-weight: 600; }

@@ -245,6 +245,66 @@ describe('buildInbox', () => {
     expect(hit.actionHref).toBe('/task/task-a')
   })
 
+  it('brief_approval: not emitted once the task has moved beyond intake', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-review',
+          title: 'Already underway',
+          status: 'review',
+          productBrief: {
+            userJob: 'fix the handoff',
+            successMetric: 'tests pass again',
+          },
+        },
+        {
+          id: 'task-done',
+          title: 'Already shipped',
+          status: 'done',
+          productBrief: {
+            userJob: 'audit the integration',
+            successMetric: 'no local fork remains',
+          },
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.find(i => i.kind === 'brief_approval')).toBeUndefined()
+  })
+
+  it('spec_fill_pending: not emitted once work has started even if the brief is still sparse', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-live',
+          title: 'Already being worked',
+          status: 'ready',
+          description: 'Narrow unit-test follow-up in progress.',
+          productBrief: {},
+          acceptanceCriteria: [
+            {
+              id: 'ac-1',
+              description: 'A real acceptance criterion exists',
+              verifiedBy: 'review',
+            },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.find(i => i.kind === 'spec_fill_pending')).toBeUndefined()
+  })
+
   it('spec_approval: emitted for tasks in status=spec_review', async () => {
     await writeCompleteBootstrap()
     await writeJson('memory/workspace-goals.json', { goals: [] })
@@ -323,7 +383,7 @@ describe('buildInbox', () => {
             successCriteria: 'passes audit',
             approvedAt: '2026-01-01T00:00:00Z',
           },
-          status: 'in_progress',
+          status: 'ready',
           acceptanceCriteria: [],
         },
       ],
@@ -380,6 +440,27 @@ describe('buildInbox', () => {
     expect(items.find(i => i.kind === 'spec_fill_pending')).toBeUndefined()
   })
 
+  it('spec_fill_pending: NOT emitted for blocked tasks', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-b',
+          title: 'Blocked task',
+          status: 'blocked',
+          description: 'Long enough to dodge the description gap.',
+          acceptanceCriteria: [{ id: 'ac-1', description: 'x' }],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.find(i => i.kind === 'spec_fill_pending')).toBeUndefined()
+  })
+
   it('spec_fill_pending: capped at 3 per pass to avoid flooding the inbox', async () => {
     await writeCompleteBootstrap()
     await writeJson('memory/workspace-goals.json', { goals: [] })
@@ -392,7 +473,7 @@ describe('buildInbox', () => {
         successCriteria: 'd',
         approvedAt: '2026-01-01T00:00:00Z',
       },
-      status: 'in_progress',
+      status: 'ready',
       acceptanceCriteria: [],
     }))
     await writeJson('memory/TASKS.json', { version: 1, lastUpdated: '', tasks })

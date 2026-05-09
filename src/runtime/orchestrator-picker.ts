@@ -15,6 +15,22 @@
 
 import { type Task, type TaskQueue, type TaskStatus } from '@guildhall/core'
 import { hasOpenEscalation } from '@guildhall/tools'
+import { META_INTAKE_TASK_ID } from './meta-intake.js'
+import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
+
+export type TaskLane = 'spec' | 'worker' | 'review' | 'coordinator'
+
+function hasUnansweredOpenQuestion(task: Task): boolean {
+  return (task.openQuestions ?? []).some((question) => !question.answeredAt)
+}
+
+export function taskHasUnansweredOpenQuestion(task: Task): boolean {
+  return hasUnansweredOpenQuestion(task)
+}
+
+function holdsDraftedSpecReviewForManualApproval(task: Task): boolean {
+  return task.id === META_INTAKE_TASK_ID || task.id === WORKSPACE_IMPORT_TASK_ID
+}
 
 /**
  * A worker-shelved task is "fresh" (needs `pre_rejection_policy` applied)
@@ -29,6 +45,25 @@ export function needsPreRejectionPolicy(task: Task): boolean {
     r.source === 'worker_pre_rejection' &&
     !r.policyApplied
   )
+}
+
+export function laneForTask(task: Task): TaskLane | null {
+  if (needsPreRejectionPolicy(task)) return 'coordinator'
+  switch (task.status) {
+    case 'proposed':
+      return 'coordinator'
+    case 'exploring':
+    case 'spec_review':
+      return 'spec'
+    case 'ready':
+    case 'in_progress':
+      return 'worker'
+    case 'review':
+    case 'gate_check':
+      return 'review'
+    default:
+      return null
+  }
 }
 
 /**
@@ -57,11 +92,15 @@ export function pickNextTask(
   queue: TaskQueue,
   domain?: string,
   exclude?: ReadonlySet<string>,
+  lane?: TaskLane,
 ): Task | undefined {
   const priority = ['critical', 'high', 'normal', 'low'] as const
   const isExcluded = exclude
     ? (t: Task) => exclude.has(t.id)
     : (_t: Task) => false
+  const matchesLane = lane
+    ? (t: Task) => laneForTask(t) === lane
+    : (_t: Task) => true
 
   // FR-22: worker-shelved tasks pending `pre_rejection_policy` are serviced
   // first — they're cheap (no LLM) and keeping the board clear of unresolved
@@ -71,6 +110,7 @@ export function pickNextTask(
     const task = queue.tasks.find(
       (t) =>
         needsPreRejectionPolicy(t) &&
+        matchesLane(t) &&
         t.priority === p &&
         (!domain || t.domain === domain) &&
         !hasOpenEscalation(t) &&
@@ -99,7 +139,9 @@ export function pickNextTask(
       const task = queue.tasks.find(
         (t) =>
           t.status === status &&
-          !(t.status === 'spec_review' && Boolean(t.spec?.trim())) &&
+          !(t.status === 'spec_review' && Boolean(t.spec?.trim()) && holdsDraftedSpecReviewForManualApproval(t)) &&
+          !(t.status === 'exploring' && hasUnansweredOpenQuestion(t)) &&
+          matchesLane(t) &&
           t.priority === p &&
           (!domain || t.domain === domain) &&
           dependenciesSatisfied(queue, t) &&

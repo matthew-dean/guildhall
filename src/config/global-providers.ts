@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
-import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
+import { load as yamlLoad } from 'js-yaml'
 import { z } from 'zod'
 import { guildhallHomeDir, ensureGuildhallHome } from './global-config.js'
 
@@ -42,6 +42,7 @@ const anthropicApiSchema = z.object({
 })
 const openaiApiSchema = z.object({
   apiKey: z.string().min(1),
+  baseUrl: z.string().url().optional(),
   verifiedAt: z.string().optional(),
 })
 const llamaCppSchema = z.object({
@@ -56,15 +57,17 @@ const oauthSchema = z.object({
 
 export const GlobalProvidersSchema = z.object({
   version: z.literal(1).default(1),
-  providers: z
-    .object({
+  providers: z.preprocess(
+    (value) => (value == null ? {} : value),
+    z.object({
       'anthropic-api': anthropicApiSchema.optional(),
       'openai-api': openaiApiSchema.optional(),
       'llama-cpp': llamaCppSchema.optional(),
       'claude-oauth': oauthSchema.optional(),
       'codex-oauth': oauthSchema.optional(),
     })
-    .default({}),
+      .default({}),
+  ),
 })
 
 export type GlobalProviders = z.infer<typeof GlobalProvidersSchema>
@@ -99,7 +102,7 @@ export function writeGlobalProviders(next: GlobalProviders): void {
   const path = globalProvidersPath()
   const homeDir = guildhallHomeDir()
   if (!existsSync(homeDir)) mkdirSync(homeDir, { recursive: true })
-  writeFileSync(path, yamlDump(validated, { lineWidth: 120, noRefs: true }), 'utf8')
+  writeFileSync(path, renderGlobalProvidersYaml(validated), 'utf8')
   // Credentials live here — tighten perms so ps auditors and nosy
   // process-listing tools can't read it. Best-effort: some filesystems
   // (FAT, certain CI containers) don't honor chmod; we ignore failures.
@@ -108,6 +111,82 @@ export function writeGlobalProviders(next: GlobalProviders): void {
   } catch {
     /* best-effort */
   }
+}
+
+function quote(value: string): string {
+  return JSON.stringify(value)
+}
+
+function renderGlobalProvidersYaml(next: GlobalProviders): string {
+  const p = next.providers
+  const lines: string[] = [
+    '# Global LLM provider credentials for Guildhall.',
+    '# Leave OpenAI-compatible baseUrl blank in the UI to use real OpenAI.',
+    'version: 1',
+    'providers:',
+  ]
+
+  if (p['claude-oauth']) {
+    lines.push('  claude-oauth:')
+    if (p['claude-oauth'].verifiedAt) {
+      lines.push(`    verifiedAt: ${quote(p['claude-oauth'].verifiedAt)}`)
+    }
+  } else {
+    lines.push('  # claude-oauth:')
+    lines.push('  #   verifiedAt: "2026-05-02T00:00:00.000Z"')
+  }
+
+  if (p['codex-oauth']) {
+    lines.push('  codex-oauth:')
+    if (p['codex-oauth'].verifiedAt) {
+      lines.push(`    verifiedAt: ${quote(p['codex-oauth'].verifiedAt)}`)
+    }
+  } else {
+    lines.push('  # codex-oauth:')
+    lines.push('  #   verifiedAt: "2026-05-02T00:00:00.000Z"')
+  }
+
+  if (p['anthropic-api']) {
+    lines.push('  anthropic-api:')
+    lines.push(`    apiKey: ${quote(p['anthropic-api'].apiKey)}`)
+    if (p['anthropic-api'].verifiedAt) {
+      lines.push(`    verifiedAt: ${quote(p['anthropic-api'].verifiedAt)}`)
+    }
+  } else {
+    lines.push('  # anthropic-api:')
+    lines.push('  #   apiKey: "sk-ant-..."')
+  }
+
+  if (p['openai-api']) {
+    lines.push('  openai-api:')
+    lines.push(`    apiKey: ${quote(p['openai-api'].apiKey)}`)
+    if (p['openai-api'].baseUrl) {
+      lines.push(`    baseUrl: ${quote(p['openai-api'].baseUrl)}`)
+    } else {
+      lines.push('    # baseUrl: "https://api.openai.com/v1"')
+    }
+    if (p['openai-api'].verifiedAt) {
+      lines.push(`    verifiedAt: ${quote(p['openai-api'].verifiedAt)}`)
+    }
+  } else {
+    lines.push('  # openai-api:')
+    lines.push('  #   apiKey: "sk-..."')
+    lines.push('  #   baseUrl: "https://api.openai.com/v1"')
+  }
+
+  if (p['llama-cpp']) {
+    lines.push('  llama-cpp:')
+    lines.push(`    url: ${quote(p['llama-cpp'].url)}`)
+    if (p['llama-cpp'].verifiedAt) {
+      lines.push(`    verifiedAt: ${quote(p['llama-cpp'].verifiedAt)}`)
+    }
+  } else {
+    lines.push('  # llama-cpp:')
+    lines.push('  #   url: "http://localhost:1234/v1"')
+  }
+
+  lines.push('')
+  return lines.join('\n')
 }
 
 /**
@@ -176,6 +255,7 @@ export function markProviderVerified(
 export interface ResolvedProviderCredentials {
   anthropicApiKey?: string
   openaiApiKey?: string
+  openaiBaseUrl?: string
   llamaCppUrl?: string
 }
 
@@ -269,6 +349,10 @@ export function resolveGlobalCredentials(
     (env.OPENAI_API_KEY ?? '').trim() ||
     (providers.providers['openai-api']?.apiKey ?? '').trim()
   if (o) out.openaiApiKey = o
+  const ob =
+    (env.OPENAI_BASE_URL ?? '').trim() ||
+    (providers.providers['openai-api']?.baseUrl ?? '').trim()
+  if (ob) out.openaiBaseUrl = ob
   const l =
     (env.LLAMA_CPP_URL ?? env.LM_STUDIO_BASE_URL ?? '').trim() ||
     (providers.providers['llama-cpp']?.url ?? '').trim()

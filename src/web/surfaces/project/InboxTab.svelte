@@ -6,49 +6,50 @@
 <script lang="ts">
   import Card from '../../lib/Card.svelte'
   import Icon, { type IconName } from '../../lib/Icon.svelte'
+  import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
   import { nav } from '../../lib/nav.svelte.js'
 
-  type Severity = 'high' | 'medium' | 'low'
-
-  interface InboxItem {
-    kind:
-      | 'bootstrap_missing'
-      | 'workspace_import_pending'
-      | 'brief_approval'
-      | 'spec_approval'
-      | 'open_escalation'
-      | 'lever_questions'
-    severity: Severity
-    title: string
-    detail: string
-    actionHref?: string
-    taskId?: string
-    escalationId?: string
-    signals?: string[]
-    defaultCount?: number
-    /** If present, POST to this path to dismiss the item (stays reachable elsewhere). */
-    dismissEndpoint?: string
+  interface Props {
+    items?: InboxItem[]
+    loaded?: boolean
+    error?: string | null
+    refresh?: (() => Promise<void>) | null
   }
 
-  let items = $state<InboxItem[]>([])
-  let loaded = $state(false)
-  let error = $state<string | null>(null)
+  let {
+    items: suppliedItems = undefined,
+    loaded: suppliedLoaded = false,
+    error: suppliedError = null,
+    refresh = null,
+  }: Props = $props()
+
+  let localItems = $state<InboxItem[]>([])
+  let localLoaded = $state(false)
+  let localError = $state<string | null>(null)
   // Which item (by list index) is currently being handled by an agent action.
   // We key by index so optimistic state doesn't collide across kinds.
   let handlingIndex = $state<number | null>(null)
   let handlingMessage = $state<string | null>(null)
 
+  const items = $derived(suppliedItems ?? localItems)
+  const loaded = $derived(suppliedItems ? suppliedLoaded : localLoaded)
+  const error = $derived(suppliedItems ? suppliedError : localError)
+
   async function load(): Promise<void> {
+    if (refresh) {
+      await refresh()
+      return
+    }
     try {
       const r = await fetch('/api/project/inbox')
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const j = (await r.json()) as { items?: InboxItem[] }
-      items = j.items ?? []
-      error = null
+      localItems = j.items ?? []
+      localError = null
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e)
+      localError = e instanceof Error ? e.message : String(e)
     } finally {
-      loaded = true
+      localLoaded = true
     }
   }
 
@@ -116,6 +117,7 @@
     spec_approval: 'file-check',
     open_escalation: 'alert-triangle',
     lever_questions: 'sliders',
+    spec_fill_pending: 'help-circle',
   }
 
   const VERBS: Record<InboxItem['kind'], string> = {
@@ -124,19 +126,23 @@
     brief_approval: 'Review',
     spec_approval: 'Review',
     open_escalation: 'Resolve',
-    lever_questions: 'Answer',
+    lever_questions: 'Review',
+    spec_fill_pending: 'Review',
   }
 
   function goTo(item: InboxItem): void {
     if (item.actionHref) nav(item.actionHref)
   }
+
+  const priorityItems = $derived(items.filter(item => item.severity !== 'low'))
+  const housekeepingItems = $derived(items.filter(item => item.severity === 'low'))
 </script>
 
 <div class="wrap">
   <header class="head">
     <h2>Needs you</h2>
     {#if loaded}
-      <span class="count">({items.length} item{items.length === 1 ? '' : 's'})</span>
+      <span class="count">({priorityItems.length} item{priorityItems.length === 1 ? '' : 's'})</span>
     {/if}
   </header>
 
@@ -152,56 +158,98 @@
       <p>All caught up — coordinator has no open questions.</p>
     </div>
   {:else}
-    <ul class="list">
-      {#each items as item, i (i)}
-        {@const handler = AGENT_HANDLERS[item.kind]}
-        {@const handling = handlingIndex === i}
-        <li>
-          <div class="row row-{item.severity}" class:handling>
-            <button
-              type="button"
-              class="row-main"
-              onclick={() => goTo(item)}
-              aria-label={item.title}
-            >
-              <span class="dot dot-{item.severity}" aria-hidden="true"></span>
-              <span class="kind-ic" aria-hidden="true">
-                <Icon name={ICONS[item.kind]} size={16} />
-              </span>
-              <div class="body">
-                <div class="title" title={item.title}>{item.title}</div>
-                <div class="detail" title={item.detail}>{item.detail}</div>
+    {#if priorityItems.length === 0}
+      <Card tone="neutral">
+        <p class="muted">Nothing is blocked right now. The remaining items are optional housekeeping.</p>
+      </Card>
+    {/if}
+
+    {#if priorityItems.length > 0}
+      <ul class="list">
+        {#each priorityItems as item, i (inboxItemKey(item))}
+          {@const handling = handlingIndex === items.indexOf(item)}
+          {@const handler = AGENT_HANDLERS[item.kind]}
+          <li>
+            <div class="row row-{item.severity}" class:handling>
+              <button
+                type="button"
+                class="row-main"
+                onclick={() => goTo(item)}
+                aria-label={item.title}
+              >
+                <span class="dot dot-{item.severity}" aria-hidden="true"></span>
+                <span class="kind-ic" aria-hidden="true">
+                  <Icon name={ICONS[item.kind]} size={16} />
+                </span>
+                <div class="body">
+                  <div class="title" title={item.title}>{item.title}</div>
+                  <div class="detail" title={item.detail}>{item.detail}</div>
+                </div>
+                <span class="verb">{VERBS[item.kind]} →</span>
+              </button>
+              {#if handler}
+                <button
+                  type="button"
+                  class="agent-verb"
+                  onclick={e => runAgentHandler(item, items.indexOf(item), e)}
+                  disabled={handlingIndex !== null}
+                  title="Agent runs this automatically"
+                >
+                  {handling ? handler.pending : handler.verb}
+                </button>
+              {/if}
+              {#if item.dismissEndpoint}
+                <button
+                  type="button"
+                  class="dismiss-verb"
+                  onclick={e => dismissItem(item, e)}
+                  title="Hide from Inbox (stays reachable elsewhere)"
+                >
+                  Dismiss
+                </button>
+              {/if}
+            </div>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+
+    {#if housekeepingItems.length > 0}
+      <section class="housekeeping">
+        <header class="subhead">
+          <h3>Housekeeping</h3>
+          <span class="count">({housekeepingItems.length})</span>
+        </header>
+        <ul class="list list-housekeeping">
+          {#each housekeepingItems as item (inboxItemKey(item))}
+            <li>
+              <div class="row row-{item.severity}">
+                <button
+                  type="button"
+                  class="row-main"
+                  onclick={() => goTo(item)}
+                  aria-label={item.title}
+                >
+                  <span class="dot dot-{item.severity}" aria-hidden="true"></span>
+                  <span class="kind-ic" aria-hidden="true">
+                    <Icon name={ICONS[item.kind]} size={16} />
+                  </span>
+                  <div class="body">
+                    <div class="title" title={item.title}>{item.title}</div>
+                    <div class="detail" title={item.detail}>{item.detail}</div>
+                  </div>
+                  <span class="verb">{VERBS[item.kind]} →</span>
+                </button>
               </div>
-              <span class="verb">{VERBS[item.kind]} →</span>
-            </button>
-            {#if handler}
-              <button
-                type="button"
-                class="agent-verb"
-                onclick={e => runAgentHandler(item, i, e)}
-                disabled={handlingIndex !== null}
-                title="Agent runs this automatically"
-              >
-                {handling ? handler.pending : handler.verb}
-              </button>
-            {/if}
-            {#if item.dismissEndpoint}
-              <button
-                type="button"
-                class="dismiss-verb"
-                onclick={e => dismissItem(item, e)}
-                title="Hide from Inbox (stays reachable elsewhere)"
-              >
-                Dismiss
-              </button>
-            {/if}
-          </div>
-        </li>
-      {/each}
-      {#if handlingMessage}
-        <li><div class="handling-msg">{handlingMessage}</div></li>
-      {/if}
-    </ul>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
+
+    {#if handlingMessage}
+      <div class="handling-msg">{handlingMessage}</div>
+    {/if}
   {/if}
 </div>
 
@@ -220,6 +268,17 @@
     margin: 0;
     font-size: var(--fs-4);
     font-weight: 700;
+  }
+  .subhead {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s-2);
+  }
+  .subhead h3 {
+    margin: 0;
+    font-size: var(--fs-2);
+    font-weight: 650;
+    color: var(--text-muted);
   }
   .count {
     color: var(--text-muted);
@@ -248,7 +307,16 @@
     flex-direction: column;
     gap: var(--s-1);
   }
+  .list-housekeeping {
+    gap: var(--s-2);
+  }
   .list li { margin: 0; padding: 0; }
+  .housekeeping {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    padding-top: var(--s-2);
+  }
   .row {
     display: flex;
     align-items: stretch;

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import { mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { Buffer } from 'node:buffer'
 
 // Redirect homedir so the global provider store lives under a per-test temp
 // directory — we must not read or write the user's real ~/.guildhall.
@@ -12,9 +13,10 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => TMP_HOME }
 })
 
-const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig, updateProjectConfig } =
+const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig, resolveModelsForProvider, updateProjectConfig } =
   await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
+const { clearProviderClientPool } = await import('../provider-client-pool.js')
 
 let tmpProject: string
 
@@ -37,9 +39,11 @@ function dataFrame(payload: unknown): string {
 }
 
 beforeEach(async () => {
+  clearProviderClientPool()
   // Clean env vars so env-precedence doesn't mask the global store.
   delete process.env.ANTHROPIC_API_KEY
   delete process.env.OPENAI_API_KEY
+  delete process.env.OPENAI_BASE_URL
   delete process.env.LLAMA_CPP_URL
   delete process.env.LM_STUDIO_BASE_URL
   mkdirSync(path.join(TMP_HOME, '.guildhall'), { recursive: true })
@@ -48,10 +52,35 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  clearProviderClientPool()
   vi.unstubAllGlobals()
   if (existsSync(TMP_HOME)) rmSync(TMP_HOME, { recursive: true, force: true })
   await fs.rm(tmpProject, { recursive: true, force: true })
 })
+
+async function writeCodexCred(): Promise<void> {
+  const payload = {
+    'https://api.openai.com/auth': { chatgpt_account_id: 'acct-test-1234' },
+  }
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8')
+    .toString('base64')
+    .replace(/=+$/, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+  const fakeJwt = `header.${encoded}.sig`
+  await fs.mkdir(path.join(TMP_HOME, '.codex'), { recursive: true })
+  await fs.writeFile(
+    path.join(TMP_HOME, '.codex', 'auth.json'),
+    JSON.stringify({
+      tokens: {
+        access_token: fakeJwt,
+        refresh_token: 'rt-test',
+        account_id: 'acct-test-1234',
+      },
+    }),
+    'utf8',
+  )
+}
 
 describe('GET /api/setup/providers', () => {
   it('reports no credentials when the global store is empty', async () => {
@@ -66,6 +95,17 @@ describe('GET /api/setup/providers', () => {
     expect(body.providers['anthropic-api']!.verifiedAt).toBeNull()
   })
 
+  it('uses protocol-first labels for compatible APIs and local servers', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(new Request('http://localhost/api/setup/providers'))
+    const body = (await res.json()) as {
+      providers: Record<string, { label: string }>
+    }
+    expect(body.providers['anthropic-api']!.label).toBe('Anthropic-compatible API key')
+    expect(body.providers['openai-api']!.label).toBe('OpenAI-compatible API key')
+    expect(body.providers['llama-cpp']!.label).toBe('OpenAI-compatible local server')
+  })
+
   it('reflects a stored Anthropic key from the global store (no project-level secret)', async () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-global' })
     const { app } = buildServeApp({ projectPath: tmpProject })
@@ -75,6 +115,21 @@ describe('GET /api/setup/providers', () => {
     }
     expect(body.providers['anthropic-api']!.detected).toBe(true)
     expect(body.providers['anthropic-api']!.detail).toMatch(/providers\.yaml/)
+  })
+
+  it('reports a stored OpenAI-compatible base URL and keeps blank meaning real OpenAI', async () => {
+    setProvider('openai-api', {
+      apiKey: 'sk-openai-global',
+      baseUrl: 'https://integrate.api.nvidia.com/v1',
+    })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(new Request('http://localhost/api/setup/providers'))
+    const body = (await res.json()) as {
+      providers: Record<string, { detected: boolean; detail: string; baseUrl?: string | null }>
+    }
+    expect(body.providers['openai-api']!.detected).toBe(true)
+    expect(body.providers['openai-api']!.baseUrl).toBe('https://integrate.api.nvidia.com/v1')
+    expect(body.providers['openai-api']!.detail).toMatch(/integrate\.api\.nvidia\.com/)
   })
 })
 
@@ -137,6 +192,46 @@ describe('POST /api/setup/providers/config', () => {
     expect(raw).toMatch(/preferredProvider:\s*anthropic-api/)
   })
 
+  it('writes an OpenAI-compatible base URL to the global store and preserves the key', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request('http://localhost/api/setup/providers/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          openaiApiKey: 'sk-openai-pasted',
+          openaiBaseUrl: 'https://integrate.api.nvidia.com/v1',
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const g = readGlobalProviders()
+    expect(g.providers['openai-api']?.apiKey).toBe('sk-openai-pasted')
+    expect(g.providers['openai-api']?.baseUrl).toBe('https://integrate.api.nvidia.com/v1')
+  })
+
+  it('clears the stored OpenAI-compatible base URL when blank is saved', async () => {
+    setProvider('openai-api', {
+      apiKey: 'sk-openai-pasted',
+      baseUrl: 'https://integrate.api.nvidia.com/v1',
+    })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request('http://localhost/api/setup/providers/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          openaiApiKey: 'sk-openai-pasted',
+          openaiBaseUrl: '',
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const g = readGlobalProviders()
+    expect(g.providers['openai-api']?.apiKey).toBe('sk-openai-pasted')
+    expect(g.providers['openai-api']?.baseUrl).toBeUndefined()
+  })
+
   it('does not update model assignments when saving llama-cpp provider settings', async () => {
     vi.stubGlobal(
       'fetch',
@@ -178,8 +273,39 @@ describe('POST /api/setup/providers/config', () => {
       }),
     )
     expect(res.status).toBe(200)
-    expect(readGlobalConfig().models?.worker).toBe('qwen/qwen3.6-35b-a3b')
+    expect(resolveModelsForProvider(readGlobalConfig().models).worker).toBe('qwen/qwen3.6-35b-a3b')
     expect(readWorkspaceConfig(tmpProject).models).toBeUndefined()
+  })
+
+  it('writes provider-scoped global models when the project prefers openai-api', async () => {
+    updateProjectConfig(tmpProject, { preferredProvider: 'openai-api' })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request('http://localhost/api/config/models', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'global',
+          models: {
+            spec: 'qwen/qwen3.5-122b-a10b',
+            coordinator: 'qwen/qwen3.5-122b-a10b',
+            worker: 'qwen/qwen3.5-122b-a10b',
+            reviewer: 'qwen/qwen3.5-122b-a10b',
+            gateChecker: 'qwen/qwen3.5-122b-a10b',
+          },
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(readGlobalConfig().models).toMatchObject({
+      'openai-api': {
+        spec: 'qwen/qwen3.5-122b-a10b',
+        coordinator: 'qwen/qwen3.5-122b-a10b',
+        worker: 'qwen/qwen3.5-122b-a10b',
+        reviewer: 'qwen/qwen3.5-122b-a10b',
+        gateChecker: 'qwen/qwen3.5-122b-a10b',
+      },
+    })
   })
 
   it('can set a global split-model preset in one request', async () => {
@@ -247,7 +373,7 @@ describe('POST /api/setup/providers/config', () => {
       }),
     )
     expect(setRes.status).toBe(200)
-    expect(readWorkspaceConfig(tmpProject).models?.reviewer).toBe('qwen/qwen2.5-coder-7b-instruct')
+    expect(resolveModelsForProvider(readWorkspaceConfig(tmpProject).models).reviewer).toBe('qwen/qwen2.5-coder-7b-instruct')
 
     const unsetRes = await app.fetch(
       new Request('http://localhost/api/config/models', {
@@ -392,21 +518,40 @@ describe('POST /api/project/start preflight', () => {
       const body = (await res.json()) as {
         providerStatus?: {
           preferredProvider?: string
+          preferredProviderFamily?: string
+          preferredProviderLabel?: string
           activeProvider?: string
+          activeProviderFamily?: string
+          activeProviderLabel?: string
           fallback?: boolean
         }
       }
       expect(body.providerStatus).toMatchObject({
         preferredProvider: 'llama-cpp',
+        preferredProviderFamily: 'openai-compatible',
+        preferredProviderLabel: 'OpenAI-compatible local server',
+        preferredCapabilities: {
+          recommendedConcurrency: 1,
+          localServer: true,
+        },
         activeProvider: 'anthropic-api',
+        activeProviderFamily: 'anthropic-compatible',
+        activeProviderLabel: 'Anthropic-compatible API',
+        activeCapabilities: {
+          recommendedConcurrency: 4,
+          localServer: false,
+        },
         fallback: true,
+        activeModel: 'claude-sonnet-4-6',
       })
 
       const projectRes = await app.fetch(new Request('http://localhost/api/project'))
       const projectBody = (await projectRes.json()) as {
         providerStatus?: {
           preferredProvider?: string
+          preferredProviderFamily?: string
           activeProvider?: string
+          activeProviderFamily?: string
           fallback?: boolean
         }
         run?: {
@@ -417,8 +562,11 @@ describe('POST /api/project/start preflight', () => {
       }
       expect(projectBody.providerStatus).toMatchObject({
         preferredProvider: 'llama-cpp',
+        preferredProviderFamily: 'openai-compatible',
         activeProvider: 'anthropic-api',
+        activeProviderFamily: 'anthropic-compatible',
         fallback: true,
+        activeModel: 'claude-sonnet-4-6',
       })
       expect(projectBody.run?.providerStatus?.activeProvider).toBe('anthropic-api')
     } finally {
@@ -426,7 +574,167 @@ describe('POST /api/project/start preflight', () => {
     }
   })
 
-  it('rejects start when LM Studio does not have the configured project model loaded', async () => {
+  it('falls back to Codex when LM Studio is reachable but the configured models are unavailable', async () => {
+    await writeCodexCred()
+    setProvider('llama-cpp', { url: 'http://localhost:1234/v1' })
+    updateProjectConfig(tmpProject, {
+      preferredProvider: 'llama-cpp',
+      allowPaidProviderFallback: true,
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ data: [{ id: 'qwen/qwen3.6-35b-a3b' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
+    try {
+      const res = await app.fetch(
+        new Request('http://localhost/api/project/start', { method: 'POST' }),
+      )
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as {
+        providerStatus?: {
+          preferredProvider?: string
+          activeProvider?: string
+          fallback?: boolean
+          activeModel?: string
+          decisions?: Array<{ code?: string; basis?: string; message?: string }>
+          models?: { spec?: string; worker?: string }
+          reason?: string
+        }
+      }
+      expect(body.providerStatus).toMatchObject({
+        preferredProvider: 'llama-cpp',
+        activeProvider: 'codex-oauth',
+        fallback: true,
+        activeModel: 'gpt-5.3-codex',
+      })
+      expect(body.providerStatus?.models?.spec).toBe('gpt-5.3-codex')
+      expect(body.providerStatus?.models?.worker).toBe('gpt-5.3-codex')
+      expect(body.providerStatus?.reason).toMatch(/configured models loaded|switched to a paid fallback provider/i)
+      expect(body.providerStatus?.decisions?.[0]).toMatchObject({
+        code: 'preferred_provider_missing_assigned_models',
+        basis: 'compatibility',
+      })
+      expect(body.providerStatus?.decisions?.[0]?.message).toMatch(/assigned models loaded/i)
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
+  })
+
+  it('surfaces normalized preferred-provider family and label even before a run starts', async () => {
+    updateProjectConfig(tmpProject, {
+      preferredProvider: 'openai-api',
+      allowPaidProviderFallback: true,
+    })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(new Request('http://localhost/api/project'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      providerStatus?: {
+        preferredProvider?: string
+        preferredProviderFamily?: string
+        preferredProviderLabel?: string
+        allowPaidProviderFallback?: boolean
+      } | null
+    }
+    expect(body.providerStatus).toMatchObject({
+      preferredProvider: 'openai-api',
+      preferredProviderFamily: 'openai-compatible',
+      preferredProviderLabel: 'OpenAI-compatible API',
+      preferredCapabilities: {
+        streaming: true,
+        toolCalls: true,
+        reasoningSideChannel: 'compatible',
+      },
+      allowPaidProviderFallback: true,
+    })
+  })
+
+  it('reports effective reviewer fanout without surfacing config-clamp chatter in the UI payload', async () => {
+    updateProjectConfig(tmpProject, {
+      preferredProvider: 'llama-cpp',
+      workerLaneConcurrency: 5,
+      reviewerFanoutConcurrency: 3,
+    })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(new Request('http://localhost/api/project'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      providerStatus?: {
+        laneConcurrency?: {
+          spec?: {
+            requested?: number
+            effective?: number
+            recommended?: number | null
+            clamped?: boolean
+          }
+          worker?: {
+            requested?: number
+            effective?: number
+            recommended?: number | null
+            clamped?: boolean
+          }
+          review?: {
+            requested?: number
+            effective?: number
+            recommended?: number | null
+            clamped?: boolean
+          }
+          coordinator?: {
+            requested?: number
+            effective?: number
+            recommended?: number | null
+            clamped?: boolean
+          }
+          reviewerFanout?: {
+            requested?: number
+            effective?: number
+            recommended?: number | null
+            clamped?: boolean
+          }
+        }
+        warnings?: Array<{ code?: string; severity?: string; message?: string }>
+      } | null
+    }
+    expect(body.providerStatus?.laneConcurrency?.reviewerFanout).toMatchObject({
+      requested: 3,
+      effective: 1,
+      recommended: 1,
+      clamped: true,
+    })
+    expect(body.providerStatus?.laneConcurrency?.spec).toMatchObject({
+      requested: 1,
+      effective: 1,
+      recommended: 1,
+      clamped: false,
+    })
+    expect(body.providerStatus?.laneConcurrency?.worker).toMatchObject({
+      requested: 5,
+      effective: 1,
+      recommended: 1,
+      clamped: true,
+    })
+    expect(body.providerStatus?.laneConcurrency?.review).toMatchObject({
+      requested: 1,
+      effective: 1,
+      recommended: 1,
+      clamped: false,
+    })
+    expect(body.providerStatus?.laneConcurrency?.coordinator).toMatchObject({
+      requested: 1,
+      effective: 1,
+      recommended: 1,
+      clamped: false,
+    })
+    expect(body.providerStatus?.warnings).toBeUndefined()
+  })
+
+  it('rejects start when the local server does not have the configured project model loaded', async () => {
     setProvider('llama-cpp', { url: 'http://localhost:1234/v1' })
     vi.stubGlobal(
       'fetch',
@@ -444,7 +752,7 @@ describe('POST /api/project/start preflight', () => {
     expect(res.status).toBe(400)
     const body = (await res.json()) as { code?: string; error?: string; loadedModels?: string[]; missingModels?: string[] }
     expect(body.code).toBe('model_unavailable')
-    expect(body.error).toMatch(/LM Studio/)
+    expect(body.error).toMatch(/configured local server/i)
     expect(body.error).toMatch(/will not JIT-load missing models/)
     expect(body.loadedModels).toContain('qwen/qwen3.6-35b-a3b')
     expect(body.missingModels).toContain('qwen2.5-coder-7b-instruct')

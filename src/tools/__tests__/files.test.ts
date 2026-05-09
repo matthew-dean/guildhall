@@ -153,6 +153,129 @@ describe('editFileTool.execute', () => {
     expect(await fs.readFile(file, 'utf-8')).toBe('the slow brown fox')
   })
 
+  it('reconciles a near-miss main-repo path back onto the authoritative worktree target', async () => {
+    const worktreeTarget = path.join(
+      dir,
+      '.guildhall',
+      'worktrees',
+      'task-011',
+      'web',
+      'tests',
+      'unit',
+      'composables',
+      'use-presence.test.ts',
+    )
+    await fs.mkdir(path.dirname(worktreeTarget), { recursive: true })
+    await fs.writeFile(worktreeTarget, 'the quick brown fox', 'utf-8')
+
+    const nearMissMainRepoPath = path.join(
+      dir,
+      'web',
+      'tests',
+      'unit',
+      'composables',
+      'use-presence.test.ts',
+    )
+
+    const result = await editFileTool.execute(
+      { filePath: nearMissMainRepoPath, oldString: 'quick', newString: 'slow' },
+      {
+        cwd: dir,
+        metadata: {
+          current_task_likely_target_files: [worktreeTarget],
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain(worktreeTarget)
+    expect(await fs.readFile(worktreeTarget, 'utf-8')).toBe('the slow brown fox')
+  })
+
+  it('falls back to remapping project-root writes into the active task worktree', async () => {
+    const projectRoot = path.join(dir, 'knit')
+    const worktreeRoot = path.join(projectRoot, '.guildhall', 'worktrees', 'task-011')
+    const worktreeTarget = path.join(
+      worktreeRoot,
+      'web',
+      'tests',
+      'unit',
+      'composables',
+      'use-presence.test.ts',
+    )
+    await fs.mkdir(path.dirname(worktreeTarget), { recursive: true })
+    await fs.writeFile(worktreeTarget, 'the quick brown fox', 'utf-8')
+
+    const nearMissMainRepoPath = path.join(
+      projectRoot,
+      'web',
+      'tests',
+      'unit',
+      'composables',
+      'use-presence.test.ts',
+    )
+
+    const result = await editFileTool.execute(
+      { filePath: nearMissMainRepoPath, oldString: 'quick', newString: 'slow' },
+      {
+        cwd: dir,
+        metadata: {
+          current_task_project_path: projectRoot,
+          current_task_worktree_path: worktreeRoot,
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain(worktreeTarget)
+    expect(await fs.readFile(worktreeTarget, 'utf-8')).toBe('the slow brown fox')
+  })
+
+  it('does not nest a path that is already inside the active task worktree', async () => {
+    const projectRoot = path.join(dir, 'knit')
+    const worktreeRoot = path.join(projectRoot, '.guildhall', 'worktrees', 'task-007')
+    const worktreeTarget = path.join(
+      worktreeRoot,
+      'web',
+      'tests',
+      'unit',
+      'composables',
+      'use-collections.test.ts',
+    )
+    await fs.mkdir(path.dirname(worktreeTarget), { recursive: true })
+    await fs.writeFile(worktreeTarget, 'the quick brown fox', 'utf-8')
+
+    const result = await editFileTool.execute(
+      { filePath: worktreeTarget, oldString: 'quick', newString: 'slow' },
+      {
+        cwd: worktreeRoot,
+        metadata: {
+          current_task_project_path: projectRoot,
+          current_task_worktree_path: worktreeRoot,
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain(worktreeTarget)
+    expect(await fs.readFile(worktreeTarget, 'utf-8')).toBe('the slow brown fox')
+    await expect(
+      fs.stat(
+        path.join(
+          worktreeRoot,
+          '.guildhall',
+          'worktrees',
+          'task-007',
+          'web',
+          'tests',
+          'unit',
+          'composables',
+          'use-collections.test.ts',
+        ),
+      ),
+    ).rejects.toThrow()
+  })
+
   it('returns is_error=true when the match is ambiguous', async () => {
     await fs.writeFile(file, 'x x x', 'utf-8')
     const result = await editFileTool.execute(
@@ -197,6 +320,17 @@ describe('readFile', () => {
     const binResult = await readFile({ filePath: bin })
     expect(binResult.exists).toBe(true)
     expect(binResult.isBinary).toBe(true)
+  })
+
+  it('resolves cwd-relative paths when cwd option is provided', async () => {
+    const file = path.join(dir, 'nested', 'hello.txt')
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, 'alpha\nbeta\n', 'utf-8')
+
+    const result = await readFile({ filePath: 'nested/hello.txt' }, { cwd: dir })
+
+    expect(result.exists).toBe(true)
+    expect(result.content).toBe('alpha\nbeta\n')
   })
 })
 
@@ -261,6 +395,172 @@ describe('writeFileTool.execute', () => {
     const abs = path.join(dir, 'rel.txt')
     expect(result.output).toContain(abs)
     expect(await fs.readFile(abs, 'utf-8')).toBe('ok')
+  })
+
+  it('recovers nested near-miss payloads instead of failing schema validation', async () => {
+    const result = await writeFileTool.execute(
+      { item: { path: 'nested/out.txt', text: 'hello' } },
+      { cwd: dir, metadata: {} },
+    )
+    expect(result.is_error).toBe(false)
+    expect(await fs.readFile(path.join(dir, 'nested', 'out.txt'), 'utf-8')).toBe('hello')
+  })
+
+  it('returns a concrete suggested test path when called with {} after reading a composable', async () => {
+    const result = await writeFileTool.execute(
+      {},
+      {
+        cwd: dir,
+        metadata: {
+          read_file_state: [
+            {
+              path: '/repo/web/app/composables/use-presence.ts',
+              span: 'lines 1-40',
+              preview: '',
+              timestamp: Date.now() / 1000,
+            },
+          ],
+        },
+      },
+    )
+    expect(result.is_error).toBe(true)
+    expect(result.output).toContain('/repo/web/tests/unit/composables/use-presence.test.ts')
+    expect(result.output).toContain('filePath')
+    expect(result.output).toContain('content')
+  })
+
+  it('can infer a likely composable test path from task metadata when read history is generic', async () => {
+    const result = await writeFileTool.execute(
+      {},
+      {
+        cwd: dir,
+        metadata: {
+          current_task_title: 'Add unit coverage for use-presence lifecycle',
+          current_task_project_path: '/repo/knit',
+        },
+      },
+    )
+    expect(result.is_error).toBe(true)
+    expect(result.output).toContain('/repo/knit/web/tests/unit/composables/use-presence.test.ts')
+  })
+
+  it('prefers the exact missing likely target file over project-root inference', async () => {
+    const result = await writeFileTool.execute(
+      {},
+      {
+        cwd: dir,
+        metadata: {
+          current_missing_likely_target_file:
+            '/repo/knit/.guildhall/worktrees/task-011/web/tests/unit/composables/use-presence.test.ts',
+          current_task_title: 'Add unit coverage for use-presence lifecycle',
+          current_task_project_path: '/repo/knit',
+        },
+      },
+    )
+    expect(result.is_error).toBe(true)
+    expect(result.output).toContain(
+      '/repo/knit/.guildhall/worktrees/task-011/web/tests/unit/composables/use-presence.test.ts',
+    )
+    expect(result.output).not.toContain('/repo/knit/web/tests/unit/composables/use-presence.test.ts')
+  })
+
+  it('prefers likely target files from metadata before project-root inference', async () => {
+    const result = await writeFileTool.execute(
+      {},
+      {
+        cwd: dir,
+        metadata: {
+          current_task_likely_target_files: [
+            '/repo/knit/.guildhall/worktrees/task-011/web/tests/unit/composables/use-presence.test.ts',
+          ],
+          current_task_title: 'Add unit coverage for use-presence lifecycle',
+          current_task_project_path: '/repo/knit',
+        },
+      },
+    )
+    expect(result.is_error).toBe(true)
+    expect(result.output).toContain(
+      '/repo/knit/.guildhall/worktrees/task-011/web/tests/unit/composables/use-presence.test.ts',
+    )
+    expect(result.output).not.toContain('/repo/knit/web/tests/unit/composables/use-presence.test.ts')
+  })
+
+  it('reconciles a near-miss main-repo path onto the authoritative worktree target before writing', async () => {
+    const worktreeTarget = path.join(
+      dir,
+      '.guildhall',
+      'worktrees',
+      'task-011',
+      'web',
+      'tests',
+      'unit',
+      'composables',
+      'use-presence.test.ts',
+    )
+    const nearMissMainRepoPath = path.join(
+      dir,
+      'web',
+      'tests',
+      'unit',
+      'composables',
+      'use-presence.test.ts',
+    )
+
+    const result = await writeFileTool.execute(
+      { filePath: nearMissMainRepoPath, content: 'fixed test contents' },
+      {
+        cwd: dir,
+        metadata: {
+          current_task_likely_target_files: [worktreeTarget],
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain(worktreeTarget)
+    expect(await fs.readFile(worktreeTarget, 'utf-8')).toBe('fixed test contents')
+  })
+
+  it('falls back to remapping project-root writes into the active task worktree', async () => {
+    const projectRoot = path.join(dir, 'knit')
+    const worktreeRoot = path.join(projectRoot, '.guildhall', 'worktrees', 'task-011')
+    const nearMissMainRepoPath = path.join(
+      projectRoot,
+      'web',
+      'tests',
+      'unit',
+      'composables',
+      'use-presence.test.ts',
+    )
+    const worktreeTarget = path.join(
+      worktreeRoot,
+      'web',
+      'tests',
+      'unit',
+      'composables',
+      'use-presence.test.ts',
+    )
+
+    const result = await writeFileTool.execute(
+      { filePath: nearMissMainRepoPath, content: 'fixed test contents' },
+      {
+        cwd: dir,
+        metadata: {
+          current_task_project_path: projectRoot,
+          current_task_worktree_path: worktreeRoot,
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain(worktreeTarget)
+    expect(await fs.readFile(worktreeTarget, 'utf-8')).toBe('fixed test contents')
+  })
+
+  it('advertises filePath and content as required in the LLM-facing schema', () => {
+    expect(writeFileTool.jsonSchema).toMatchObject({
+      required: ['filePath', 'content'],
+    })
   })
 })
 
@@ -335,5 +635,41 @@ describe('readFileTool.execute', () => {
     )
     expect(result.is_error).toBe(true)
     expect(result.output).toContain('file not found')
+  })
+
+  it('resolves cwd-relative file paths from the tool context', async () => {
+    const file = path.join(dir, 'nested', 'hello.txt')
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, 'alpha\nbeta\n', 'utf-8')
+
+    const result = await readFileTool.execute(
+      { filePath: 'nested/hello.txt' },
+      { cwd: dir, metadata: {} },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('alpha')
+    expect(result.output).toContain('beta')
+  })
+
+  it('resolves checkpoint-relative read-file paths against the task project path', async () => {
+    const projectRoot = path.join(dir, 'looma-knit', 'knit')
+    const file = path.join(projectRoot, 'web', 'app', 'types', 'supabase.ts')
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, 'export type Database = {\n  public: {}\n}\n', 'utf-8')
+
+    const result = await readFileTool.execute(
+      { filePath: 'web/app/types/supabase.ts' },
+      {
+        cwd: path.join(dir, 'looma-knit'),
+        metadata: {
+          current_task_project_path: projectRoot,
+          current_task_checkpoint_files_touched: ['web/app/types/supabase.ts'],
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('export type Database')
   })
 })

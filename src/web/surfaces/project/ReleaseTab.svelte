@@ -113,7 +113,7 @@
             key: 'specs',
             label: 'Specs awaiting approval',
             items: data.unapprovedSpecs,
-            clearLabel: 'Nothing in spec_review.',
+            clearLabel: 'No specs awaiting approval.',
           },
           {
             key: 'shelved',
@@ -182,6 +182,20 @@
 {:else}
   <Stack gap="4">
   {#if section === 'verdict'}
+    <Card title="0.4.0 shipping claim">
+      <div class="claim-copy">
+        <p>
+          Guildhall now has live proof for a bounded but real automation lane:
+          narrow, low-blast-radius cleanup tasks can complete end to end through
+          worker, review, gate check, and terminal merge truth.
+        </p>
+        <p class="muted">
+          Ship this as a proven narrow-task lane, not as a claim that every task
+          shape is autonomous yet.
+        </p>
+      </div>
+    </Card>
+
     <!-- PRIMARY: verdict -->
     <Card tone={verdict.tone === 'ok' ? 'ok' : verdict.tone === 'warn' ? 'warn' : 'default'}>
       <div class="verdict">
@@ -278,6 +292,17 @@
     align-items: center;
     gap: var(--s-3);
     flex-wrap: wrap;
+  }
+  .claim-copy {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .claim-copy p {
+    margin: 0;
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+    color: var(--text);
   }
   .verdict-reason {
     font-size: var(--fs-3);

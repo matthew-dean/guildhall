@@ -76,6 +76,7 @@ describe('POST /api/project/bug-report', () => {
     expect(task.priority).toBe('high')
     expect(task.title.startsWith('Bug: ')).toBe(true)
     expect(task.domain).toBe('looma') // first coordinator
+    expect(task.projectPath).toBe(path.join(tmpDir, 'packages/ui'))
   })
 
   it('routes by stack-trace top frame when no domain is given', async () => {
@@ -92,6 +93,7 @@ describe('POST /api/project/bug-report', () => {
     expect(res.status).toBe(200)
     const queue = await readQueue()
     expect(queue.tasks[0]!.domain).toBe('api')
+    expect(queue.tasks[0]!.projectPath).toBe(path.join(tmpDir, 'packages/server'))
   })
 
   it('respects an explicit domain override', async () => {
@@ -108,6 +110,7 @@ describe('POST /api/project/bug-report', () => {
     }))
     const queue = await readQueue()
     expect(queue.tasks[0]!.domain).toBe('api')
+    expect(queue.tasks[0]!.projectPath).toBe(path.join(tmpDir, 'packages/server'))
   })
 
   it('rejects a report with no title', async () => {

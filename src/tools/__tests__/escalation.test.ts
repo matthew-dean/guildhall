@@ -8,6 +8,9 @@ import {
   raiseEscalationTool,
   resolveEscalationTool,
   hasOpenEscalation,
+  activeEscalations,
+  currentRevisionCycleCount,
+  resolveSupersededEscalations,
 } from '../escalation.js'
 import { readTasks } from '../task-queue.js'
 import type { Task } from '@guildhall/core'
@@ -199,10 +202,59 @@ describe('resolveEscalation', () => {
     const { queue } = await readTasks({ tasksPath })
     const task = queue?.tasks[0]
     expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
     expect(task?.blockReason).toBeUndefined()
     expect(task?.escalations[0]?.resolvedAt).toBeDefined()
     expect(task?.escalations[0]?.resolution).toBe('Use library A')
     expect(task?.escalations[0]?.resolvedBy).toBe('human')
+  })
+
+  it('restores reviewer ownership when an escalation resolves back to review', async () => {
+    const result = await resolveEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      escalationId: 'esc-task-001-1',
+      resolution: 'Return this to review',
+      nextStatus: 'review',
+    })
+    expect(result.success).toBe(true)
+
+    const { queue } = await readTasks({ tasksPath })
+    expect(queue?.tasks[0]?.status).toBe('review')
+    expect(queue?.tasks[0]?.assignedTo).toBe('reviewer-agent')
+  })
+
+  it('starts a fresh retry window when resolving max-revisions back to active work', async () => {
+    await writeSeed([
+      seedTask({
+        revisionCount: 4,
+        escalations: [],
+      }),
+    ])
+    await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'reviewer-fanout',
+      reason: 'max_revisions_exceeded',
+      summary: 'Exceeded maxRevisions (3). Reviewer fan-out keeps rejecting.',
+    })
+
+    const result = await resolveEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      escalationId: 'esc-task-001-1',
+      resolution: 'Retry after guardrail fix.',
+      nextStatus: 'in_progress',
+    })
+    expect(result.success).toBe(true)
+
+    const { queue } = await readTasks({ tasksPath })
+    const task = queue?.tasks[0]
+    expect(task?.retryWindow).toEqual({
+      startedAt: task?.escalations[0]?.resolvedAt,
+      baseRevisionCount: 4,
+    })
+    expect(currentRevisionCycleCount(task!)).toBe(0)
   })
 
   it('defaults resolvedBy to "human"', async () => {
@@ -300,6 +352,13 @@ describe('resolveEscalation', () => {
 })
 
 describe('hasOpenEscalation', () => {
+  it('treats missing escalation arrays as empty', () => {
+    const task = seedTask()
+    ;(task as Partial<Task>).escalations = undefined
+    expect(activeEscalations(task)).toEqual([])
+    expect(hasOpenEscalation(task)).toBe(false)
+  })
+
   it('returns false for a task with no escalations', () => {
     expect(hasOpenEscalation(seedTask())).toBe(false)
   })
@@ -336,6 +395,56 @@ describe('hasOpenEscalation', () => {
       ],
     })
     expect(hasOpenEscalation(task)).toBe(false)
+  })
+
+  it('returns false when an unresolved escalation was superseded by later task progress', () => {
+    const task = seedTask({
+      status: 'gate_check',
+      updatedAt: '2026-05-03T19:10:00.000Z',
+      escalations: [
+        {
+          id: 'esc-1',
+          taskId: 'task-001',
+          agentId: 'a',
+          reason: 'gate_hard_failure',
+          summary: 'old blocker',
+          raisedAt: '2026-05-03T19:00:00.000Z',
+        },
+      ],
+    })
+    expect(hasOpenEscalation(task)).toBe(false)
+  })
+})
+
+describe('resolveSupersededEscalations', () => {
+  it('materializes superseded escalations as resolved and clears stale block reason', () => {
+    const task = seedTask({
+      status: 'gate_check',
+      blockReason: 'gate_hard_failure: stale blocker',
+      updatedAt: '2026-05-03T19:10:00.000Z',
+      escalations: [
+        {
+          id: 'esc-1',
+          taskId: 'task-001',
+          agentId: 'a',
+          reason: 'gate_hard_failure',
+          summary: 'old blocker',
+          raisedAt: '2026-05-03T19:00:00.000Z',
+        },
+      ],
+    })
+
+    expect(
+      resolveSupersededEscalations(task, {
+        now: '2026-05-03T19:10:00.000Z',
+        resolvedBy: 'system',
+        resolution: 'Superseded by resumed gate_check.',
+      }),
+    ).toEqual(['esc-1'])
+    expect(task.escalations[0]?.resolvedAt).toBe('2026-05-03T19:10:00.000Z')
+    expect(task.escalations[0]?.resolvedBy).toBe('system')
+    expect(task.escalations[0]?.resolution).toBe('Superseded by resumed gate_check.')
+    expect(task.blockReason).toBeUndefined()
   })
 })
 

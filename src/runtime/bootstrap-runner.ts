@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { runShell } from '@guildhall/tools'
+import { runShellSync } from '@guildhall/tools'
 
 /**
  * Bootstrap phase: runs `commands` (install, migrations, etc.) then
@@ -107,7 +107,7 @@ function runStep(
   opts: { projectPath: string; timeoutMs: number },
 ): BootstrapStep {
   const start = Date.now()
-  const res = runShell({ command, cwd: opts.projectPath, timeoutMs: opts.timeoutMs })
+  const res = runShellSync({ command, cwd: opts.projectPath, timeoutMs: opts.timeoutMs })
   return {
     kind,
     command,

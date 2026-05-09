@@ -6,13 +6,7 @@
  * Upstream SHA at port time: 559ba76f237db957a1a21453170df8500479dc7d
  *
  * Changes from upstream:
- *   - Stays synchronous via `execSync` rather than spawning an async
- *     subprocess. Upstream runs in a long-lived Python agent loop where
- *     blocking would starve other coroutines; Guildhall runs shell tools
- *     inside already-async agent executors where blocking a single worker
- *     fiber is fine, and converting `runShell` → async would cascade
- *     through `runBootstrap` and every orchestrator call site.
- *   - PTY branch is dropped — `execSync` has no PTY mode, and Guildhall
+ *   - PTY branch is dropped — our async spawn path has no PTY mode, and Guildhall
  *     has not added a PTY dependency. This is only a loss for tools that
  *     auto-detect a TTY; the non-interactive preflight below catches the
  *     most common case (scaffolding CLIs).
@@ -22,13 +16,19 @@
 
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
-import { execSync } from 'node:child_process'
+import { execSync, spawn } from 'node:child_process'
+import path from 'node:path'
+import {
+  classifyGateCommand,
+  parseAuthoritativeCommands,
+  reconcileShellCommandWithAuthority,
+} from './gate-command-authority.js'
 
 const OUTPUT_TRUNCATE_LIMIT = 12_000
 
 const shellInputSchema = z.object({
   command: z.string().describe('The shell command to run'),
-  cwd: z.string().describe('Absolute path to the working directory'),
+  cwd: z.string().optional().describe('Absolute path to the working directory. Defaults to the active project directory when omitted.'),
   timeoutMs: z.number().default(120_000).describe('Timeout in milliseconds'),
 })
 
@@ -41,6 +41,50 @@ export interface ShellResult {
   interactiveRequired?: boolean
   /** True when the child was killed by the timeout watchdog. */
   timedOut?: boolean
+}
+
+function resolveShellCwd(inputCwd: string | undefined, fallbackCwd: string | undefined): string {
+  const cwd = inputCwd?.trim() || fallbackCwd?.trim()
+  if (!cwd) {
+    throw new Error('Shell tool requires a working directory, but none was provided or available from runtime context.')
+  }
+  return cwd
+}
+
+function reconcileShellCwdWithTaskScope(
+  requestedCwd: string,
+  metadata: Record<string, unknown> | undefined,
+): string {
+  const worktreePath = String(metadata?.['current_task_worktree_path'] ?? '').trim()
+  if (!worktreePath) return requestedCwd
+
+  const normalizedWorktree = path.resolve(worktreePath)
+  const normalizedRequested = path.resolve(requestedCwd)
+  const relativeToWorktree = path.relative(normalizedWorktree, normalizedRequested)
+  if (
+    relativeToWorktree === '' ||
+    (!relativeToWorktree.startsWith(`..${path.sep}`) &&
+      relativeToWorktree !== '..' &&
+      !path.isAbsolute(relativeToWorktree))
+  ) {
+    return normalizedRequested
+  }
+
+  const projectPath = String(metadata?.['current_task_project_path'] ?? '').trim()
+  if (!projectPath) return normalizedWorktree
+
+  const normalizedProject = path.resolve(projectPath)
+  const relativeToProject = path.relative(normalizedProject, normalizedRequested)
+  if (
+    relativeToProject === '' ||
+    (!relativeToProject.startsWith(`..${path.sep}`) &&
+      relativeToProject !== '..' &&
+      !path.isAbsolute(relativeToProject))
+  ) {
+    return path.resolve(normalizedWorktree, relativeToProject)
+  }
+
+  return normalizedRequested
 }
 
 const SCAFFOLD_MARKERS = [
@@ -129,8 +173,54 @@ function formatTimeoutOutput(raw: string, command: string, timeoutMs: number): s
   return parts.join('\n')
 }
 
-export function runShell(input: ShellInput): ShellResult {
-  const { command, cwd, timeoutMs = 120_000 } = input
+function hasTaskScopedFileMutationGuard(metadata: Record<string, unknown> | undefined): boolean {
+  if (!metadata) return false
+  const worktreePath = String(metadata['current_task_worktree_path'] ?? '').trim()
+  if (worktreePath) return true
+  const missingTarget = String(metadata['current_missing_likely_target_file'] ?? '').trim()
+  if (missingTarget) return true
+  const likelyTargets = metadata['current_task_likely_target_files']
+  return Array.isArray(likelyTargets)
+    && likelyTargets.some((value) => typeof value === 'string' && value.trim().length > 0)
+}
+
+function looksLikeDirectFileWrite(command: string): boolean {
+  const hasStdoutRedirect = /(^|[^0-9])>>?/.test(command)
+  const hasHereDoc = /<<[-~]?['"]?[A-Za-z0-9_]+['"]?/.test(command)
+  const hasTee = /\btee\b/.test(command)
+  return hasStdoutRedirect || hasHereDoc || hasTee
+}
+
+function directFileWriteGuardMessage(metadata: Record<string, unknown> | undefined): string {
+  const missingTarget = String(metadata?.['current_missing_likely_target_file'] ?? '').trim()
+  const likelyTargets = Array.isArray(metadata?.['current_task_likely_target_files'])
+    ? (metadata?.['current_task_likely_target_files'] as unknown[])
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : []
+  const preferredTarget = missingTarget || likelyTargets[0] || ''
+  const targetHint = preferredTarget
+    ? ` Use write-file or edit-file for ${preferredTarget} instead.`
+    : ' Use write-file or edit-file instead.'
+  return (
+    'Shell-based file writes are blocked for active coding tasks. '
+    + 'Use shell for builds, tests, lint, and focused verification only.'
+    + targetHint
+  )
+}
+
+function normalizeExecErrorOutput(err: {
+  stdout?: string | Buffer
+  stderr?: string | Buffer
+}): string {
+  return [err.stdout, err.stderr]
+    .map((b) => (typeof b === 'string' ? b : b?.toString('utf-8') ?? ''))
+    .filter((s) => s.length > 0)
+    .join('\n')
+}
+
+export function runShellSync(input: ShellInput): ShellResult {
+  const { command, timeoutMs = 120_000 } = input
+  const cwd = resolveShellCwd(input.cwd, undefined)
 
   const blocked = preflightInteractive(command)
   if (blocked) {
@@ -157,11 +247,7 @@ export function runShell(input: ShellInput): ShellResult {
       status?: number | null
       signal?: NodeJS.Signals | null
     }
-    const rawOut =
-      [execErr.stdout, execErr.stderr]
-        .map((b) => (typeof b === 'string' ? b : b?.toString('utf-8') ?? ''))
-        .filter((s) => s.length > 0)
-        .join('\n')
+    const rawOut = normalizeExecErrorOutput(execErr)
 
     // Node's execSync signals timeout via signal=SIGTERM + status=null.
     const timedOut = execErr.signal === 'SIGTERM' && execErr.status == null
@@ -180,6 +266,79 @@ export function runShell(input: ShellInput): ShellResult {
       exitCode: execErr.status ?? 1,
     }
   }
+}
+
+export async function runShell(input: ShellInput): Promise<ShellResult> {
+  const { command, timeoutMs = 120_000 } = input
+  const cwd = resolveShellCwd(input.cwd, undefined)
+
+  const blocked = preflightInteractive(command)
+  if (blocked) {
+    return {
+      success: false,
+      output: blocked,
+      exitCode: -1,
+      interactiveRequired: true,
+    }
+  }
+
+  return await new Promise<ShellResult>((resolve) => {
+    const child = spawn('sh', ['-c', command], {
+      cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: process.env,
+    })
+
+    let stdout = ''
+    let stderr = ''
+    let timedOut = false
+    let settled = false
+
+    const settle = (result: ShellResult) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(result)
+    }
+
+    child.stdout?.setEncoding('utf8')
+    child.stderr?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk: string) => { stdout += chunk })
+    child.stderr?.on('data', (chunk: string) => { stderr += chunk })
+
+    child.on('error', (err) => {
+      settle({
+        success: false,
+        output: formatOutput(String(err)),
+        exitCode: 1,
+      })
+    })
+
+    child.on('close', (code, signal) => {
+      const rawOut = [stdout, stderr].filter(Boolean).join('\n')
+      if (timedOut || (signal === 'SIGTERM' && timedOut)) {
+        settle({
+          success: false,
+          output: formatTimeoutOutput(rawOut, command, timeoutMs),
+          exitCode: -1,
+          timedOut: true,
+        })
+        return
+      }
+      settle({
+        success: code === 0,
+        output: formatOutput(rawOut),
+        exitCode: code ?? 1,
+      })
+    })
+
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGTERM')
+      setTimeout(() => child.kill('SIGKILL'), 1000).unref()
+    }, timeoutMs)
+    timer.unref()
+  })
 }
 
 /**
@@ -201,18 +360,72 @@ export const shellTool = defineTool({
     type: 'object',
     properties: {
       command: { type: 'string', description: 'The shell command to run' },
-      cwd: { type: 'string', description: 'Absolute path to the working directory' },
+      cwd: { type: 'string', description: 'Absolute path to the working directory. Defaults to the active project directory when omitted.' },
       timeoutMs: { type: 'number', description: 'Timeout in milliseconds', default: 120_000 },
     },
-    required: ['command', 'cwd'],
+    required: ['command'],
   },
   isReadOnly: () => false,
-  execute: async (input) => {
-    const result = runShell(input)
+  execute: async (input, ctx) => {
+    const authoritativeCommands = parseAuthoritativeCommands(ctx.metadata)
+    const reconciled = reconcileShellCommandWithAuthority(input.command, authoritativeCommands)
+    const requestedKind = classifyGateCommand(input.command)
+    if (
+      authoritativeCommands &&
+      authoritativeCommands.length > 0 &&
+      requestedKind !== 'other' &&
+      !reconciled.usedAuthority
+    ) {
+      return {
+        output:
+          `This task already has authoritative verification commands. ` +
+          `Do not invent a different ${requestedKind} command here.\n\n` +
+          `Use one of:\n${authoritativeCommands.map((command) => `- ${command}`).join('\n')}`,
+        is_error: true,
+        metadata: {
+          success: false,
+          exitCode: 2,
+          requestedCommand: input.command,
+          executedCommand: reconciled.command,
+          usedAuthoritativeCommand: false,
+          blockedUnauthorizedVerificationCommand: true,
+          authoritativeCommands,
+        } as unknown as Record<string, unknown>,
+      }
+    }
+    if (hasTaskScopedFileMutationGuard(ctx.metadata) && looksLikeDirectFileWrite(reconciled.command)) {
+      return {
+        output: directFileWriteGuardMessage(ctx.metadata),
+        is_error: true,
+        metadata: {
+          success: false,
+          exitCode: 2,
+          requestedCommand: input.command,
+          executedCommand: reconciled.command,
+          usedAuthoritativeCommand: reconciled.usedAuthority,
+          blockedDirectFileWrite: true,
+        } as unknown as Record<string, unknown>,
+      }
+    }
+    const requestedCwd = resolveShellCwd(input.cwd, ctx.cwd)
+    const effectiveCwd = reconcileShellCwdWithTaskScope(requestedCwd, ctx.metadata)
+    const normalizedInput: ShellInput = {
+      ...input,
+      command: reconciled.command,
+      cwd: effectiveCwd,
+    }
+    const result = await runShell(normalizedInput)
     return {
       output: result.output,
       is_error: !result.success,
-      metadata: result as unknown as Record<string, unknown>,
+      metadata: {
+        ...result,
+        requestedCommand: input.command,
+        executedCommand: reconciled.command,
+        usedAuthoritativeCommand: reconciled.usedAuthority,
+        requestedCwd,
+        executedCwd: effectiveCwd,
+      } as unknown as Record<string, unknown>,
     }
   },
 })

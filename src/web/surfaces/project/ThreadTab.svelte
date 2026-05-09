@@ -36,6 +36,7 @@
   import InteractionCardLayout from '../../lib/InteractionCardLayout.svelte'
   import { onEvent } from '../../lib/events.js'
   import { nav } from '../../lib/nav.svelte.js'
+  import { project } from '../../lib/project.svelte.js'
 
   // ---- Turn shape (mirrors src/runtime/thread.ts) ------------------------
   type TurnPersona = 'intake' | 'spec' | 'worker' | 'reviewer' | 'coord' | 'system'
@@ -148,6 +149,7 @@
   let activeTurnId = $state<string | null>(null)
   let caughtUp = $state(false)
   let loaded = $state(false)
+  let loadError = $state<string | null>(null)
   let busyTurnId = $state<string | null>(null)
   let busyTaskId = $state<string | null>(null)
   let setupValues = $state<Record<string, string>>({})
@@ -170,6 +172,8 @@
   let pollHandle: ReturnType<typeof setInterval> | null = null
   let clockHandle: ReturnType<typeof setInterval> | null = null
   let nowMs = $state(Date.now())
+  let runBusy = $state(false)
+  let runError = $state<string | null>(null)
   const turnElements = new Map<string, HTMLDivElement>()
   const phaseOrder: TurnPhase[] = ['setup', 'intake', 'spec', 'ready', 'inflight', 'blocked', 'done']
   const phaseLabels: Record<TurnPhase, string> = {
@@ -181,6 +185,10 @@
     blocked: 'Blocked',
     done: 'Done',
   }
+  const optionalSetupOnly = $derived.by(() => {
+    const setupTurns = turns.filter(t => t.phase === 'setup')
+    return setupTurns.length > 0 && setupTurns.every(t => t.kind === 'setup_step' && t.skippable)
+  })
 
   // Staged answers for co-active agent_question turns. Keyed by question id.
   // Submitted as a batch (per-task) via POST /answer-questions so the agent
@@ -224,8 +232,12 @@
         }
       }
       setupValues = nextValues
-    } catch {
-      /* surface as empty thread; Notifications handles the "broken" case */
+      loadError = null
+    } catch (err) {
+      loadError = err instanceof Error ? err.message : String(err)
+      turns = []
+      activeTurnId = null
+      caughtUp = false
     } finally {
       loaded = true
     }
@@ -246,7 +258,11 @@
         type === 'agent_finished' ||
         type === 'task_transition' ||
         type === 'agent_issue' ||
-        type === 'escalation_raised'
+        type === 'escalation_raised' ||
+        type === 'tool_started' ||
+        type === 'tool_completed' ||
+        type === 'line_complete' ||
+        type === 'error'
       ) {
         void load()
       }
@@ -280,8 +296,35 @@
     return 'neutral'
   }
 
+  function turnStatusChipLabel(t: Turn): string {
+    if (t.status === 'done') return 'done'
+    if (t.kind === 'inflight' && t.status === 'active' && !t.liveAgent) return 'paused'
+    if (t.kind === 'spec_review' && t.status === 'active') return 'awaiting approval'
+    return t.status === 'active' ? 'now' : 'next'
+  }
+
+  function turnStatusChipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' {
+    if (t.status === 'done') return 'ok'
+    if (t.kind === 'inflight' && t.status === 'active' && !t.liveAgent) return 'neutral'
+    if (t.kind === 'spec_review' && t.status === 'active') return 'accent'
+    return t.status === 'active' ? 'warn' : 'neutral'
+  }
+
   function isWorkingTurn(t: Turn): boolean {
     return t.status === 'active' && (t.kind === 'inflight' || Boolean(turnLiveAgent(t)))
+  }
+
+  function phaseCountTone(group: { phase: TurnPhase; turns: Turn[] }): 'neutral' | 'warn' | 'accent' {
+    if (
+      group.phase === 'inflight' &&
+      group.turns.length > 0 &&
+      group.turns.every(t => t.kind === 'inflight' && !t.liveAgent)
+    ) {
+      return 'neutral'
+    }
+    if (group.turns.some(t => isWorkingTurn(t))) return 'warn'
+    if (group.turns.some(t => t.status === 'active')) return 'accent'
+    return 'neutral'
   }
 
   function turnLiveAgent(t: Turn): LiveAgent | undefined {
@@ -344,8 +387,19 @@
   const phaseGroups = $derived.by(() => phaseOrder
     .map(phase => ({
       phase,
-      label: phaseLabels[phase],
       turns: turns.filter(t => t.phase === phase),
+    }))
+    .map(group => ({
+      ...group,
+      label:
+        group.phase === 'setup' &&
+        group.turns.every(t => t.kind === 'setup_step' && t.skippable)
+          ? 'Optional'
+          : group.phase === 'inflight' &&
+              group.turns.length > 0 &&
+              group.turns.every(t => t.kind === 'inflight' && !t.liveAgent)
+            ? 'Paused'
+            : phaseLabels[group.phase],
     }))
     .filter(group => group.turns.length > 0))
 
@@ -383,6 +437,11 @@
   })
 
   $effect(() => {
+    if (!loaded || activeTurnId || caughtUp || !optionalSetupOnly || !expandedPhases.setup) return
+    expandedPhases = { ...expandedPhases, setup: false }
+  })
+
+  $effect(() => {
     if (!activeTurnId || caughtUp || activeTurnId === lastScrolledId) return
     const targetId = activeTurnId
     void tick().then(() => {
@@ -407,6 +466,8 @@
     try {
       const endpoint = turn.taskId === 'task-meta-intake'
         ? '/api/project/meta-intake/approve'
+        : turn.taskId === 'task-workspace-import'
+          ? '/api/project/workspace-import/approve'
         : `/api/project/task/${encodeURIComponent(turn.taskId)}/approve-spec`
       await fetch(endpoint, { method: 'POST' })
       await load()
@@ -596,7 +657,43 @@
     ) {
       return 'Local model is still loading or generating.'
     }
+    if (turn.taskStatus === 'ready' && !turn.liveAgent) {
+      return 'Approved and queued. Start work when you want Guildhall to pick this up.'
+    }
+    if (turn.taskStatus === 'exploring' && !turn.liveAgent) {
+      return 'Intake is paused. Continue intake when you want Guildhall to keep shaping this task.'
+    }
+    if (turn.taskStatus === 'in_progress' && !turn.liveAgent) {
+      return 'Work is paused. Resume work when you want Guildhall to continue.'
+    }
+    if (turn.taskStatus === 'review' && !turn.liveAgent) {
+      return 'Review is paused. Resume review when you want Guildhall to continue.'
+    }
+    if (turn.taskStatus === 'gate_check' && !turn.liveAgent) {
+      return 'Gate checks are paused. Resume gates when you want Guildhall to continue.'
+    }
     return turn.summary
+  }
+
+  function canStartTaskTurn(turn: InFlightTurn): boolean {
+    return !turn.liveAgent && (
+      turn.taskStatus === 'ready' ||
+      turn.taskStatus === 'exploring' ||
+      turn.taskStatus === 'in_progress' ||
+      turn.taskStatus === 'review' ||
+      turn.taskStatus === 'gate_check'
+    )
+  }
+
+  function startTaskLabel(turn: InFlightTurn): string {
+    switch (turn.taskStatus) {
+      case 'ready': return 'Start work'
+      case 'exploring': return 'Continue intake'
+      case 'review': return 'Resume review'
+      case 'gate_check': return 'Resume gates'
+      case 'in_progress': return 'Resume work'
+      default: return 'Continue'
+    }
   }
 
   function taskStateTone(turn: InFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
@@ -608,6 +705,48 @@
       case 'exploring': return 'accent'
       case 'in_progress': return 'neutral'
       default: return 'neutral'
+    }
+  }
+
+  function checklistStepTone(
+    turn: InFlightTurn,
+    step: { status: 'done' | 'active' | 'pending' | 'skipped' },
+  ): 'ok' | 'running' | 'idle' {
+    if (step.status === 'done') return 'ok'
+    if (step.status === 'active') return turn.liveAgent ? 'running' : 'idle'
+    return 'idle'
+  }
+
+  function checklistStepLabel(
+    turn: InFlightTurn,
+    step: { status: 'done' | 'active' | 'pending' | 'skipped' },
+  ): string {
+    if (step.status === 'done') return 'Done'
+    if (step.status === 'active') return turn.liveAgent ? 'Now' : 'Paused'
+    if (step.status === 'skipped') return 'Skipped'
+    return 'Pending'
+  }
+
+  async function startOneTaskRun(): Promise<void> {
+    runBusy = true
+    runError = null
+    try {
+      const res = await fetch('/api/project/start', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'one_task' }),
+      })
+      const body = await res.json().catch(() => ({})) as { error?: string }
+      if (!res.ok || body.error) {
+        runError = body.error ?? `Start failed (HTTP ${res.status})`
+        return
+      }
+      await load()
+      await project.refresh()
+    } catch (err) {
+      runError = err instanceof Error ? err.message : String(err)
+    } finally {
+      runBusy = false
     }
   }
 
@@ -666,11 +805,18 @@
 <div class="thread">
   <header class="thread-head">
     <h1>Thread</h1>
-    <p class="lede">Structured project interactions: decisions, questions, and live agent updates. Active work stays near the bottom.</p>
+    <p class="lede">Decisions, questions, and live task updates.</p>
   </header>
 
   {#if !loaded}
     <p class="muted">Loading…</p>
+  {:else if loadError}
+    <Card title="Thread unavailable">
+      <p class="muted">Could not load the current thread: {loadError}</p>
+      <Row justify="end">
+        <Button variant="primary" onclick={() => void load()}>Retry</Button>
+      </Row>
+    </Card>
   {:else if turns.length === 0}
     <Card title="Nothing here yet">
       <p class="muted">Add a task to start the thread.</p>
@@ -686,7 +832,7 @@
             onclick={() => togglePhase(group.phase)}
           >
             <span>{group.label}</span>
-            <Chip label={String(group.turns.length)} tone={group.turns.some(t => t.status === 'active') ? 'warn' : 'neutral'} />
+            <Chip label={String(group.turns.length)} tone={phaseCountTone(group)} />
           </button>
           {#if expandedPhases[group.phase]}
             <Stack gap="3">
@@ -696,8 +842,8 @@
             <InteractionCardLayout>
               {#snippet status()}
                 <Chip
-                  label={t.status === 'done' ? 'done' : t.status === 'active' ? 'now' : 'next'}
-                  tone={t.status === 'done' ? 'ok' : t.status === 'active' ? 'warn' : 'neutral'}
+                  label={turnStatusChipLabel(t)}
+                  tone={turnStatusChipTone(t)}
                 />
               {/snippet}
               {#snippet meta()}
@@ -728,7 +874,12 @@
                 {/if}
               {/snippet}
                 {#if t.kind === 'setup_step'}
-                  <h3 class="prompt"><Markdown source={t.title} inline /></h3>
+                  <div class="setup-title">
+                    <h3 class="prompt"><Markdown source={t.title} inline /></h3>
+                    {#if t.skippable}
+                      <Chip label="optional" tone="neutral" />
+                    {/if}
+                  </div>
                   <p class="why">{t.why}</p>
                   {#if t.status === 'active'}
                     {#if t.affordance === 'link' && t.actionHref}
@@ -897,7 +1048,7 @@
                 {@const missingSpec = t.taskId !== 'task-meta-intake' && t.spec.trim().length === 0}
                 <div class="prompt-row">
                   <h3 class="prompt">
-                    {t.taskId === 'task-meta-intake' ? 'Coordinator roles are ready for review' : 'Spec ready for review'}
+                    {t.taskId === 'task-meta-intake' ? 'Coordinator roles are awaiting approval' : 'Spec awaiting approval'}
                   </h3>
                   {#if t.taskId === 'task-meta-intake'}
                     <Help topic="guide.coordinators" />
@@ -968,10 +1119,10 @@
                   {:else}
                   <Row justify="end" gap="2">
                     <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => nav(`/task/${encodeURIComponent(t.taskId)}`)}>
-                      Open
+                      Open task
                     </Button>
                     <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
-                      Change
+                      Revise spec
                     </Button>
                     <Button
                       variant="primary"
@@ -987,7 +1138,10 @@
               {:else if t.kind === 'escalation'}
                 <h3 class="prompt">Worker is stuck</h3>
                 <p class="why">{t.summary}</p>
-                {#if t.details}<p class="detail">{t.details}</p>{/if}
+                {#if t.details}
+                  <p class="detail"><strong>Latest blocker:</strong> {t.details}</p>
+                  <p class="review-feedback-note">Full blocker details live in the task.</p>
+                {/if}
                 {#if t.activity?.length}
                   <div class="live-activity" aria-label="Recent agent activity">
                     {#each t.activity as item, index (`${item.at ?? 'event'}:${item.label}:${index}`)}
@@ -1012,14 +1166,23 @@
                   description={t.summary}
                   tone="warn"
                 />
-                <details class="review-feedback">
-                  <summary>
+                <div class="review-feedback">
+                  <p class="review-feedback-meta">
                     Review feedback{t.revisionCount ? ` · pass ${t.revisionCount}` : ''}
-                  </summary>
-                  <div class="review-feedback-body">
-                    <Markdown source={t.feedback} />
-                  </div>
-                </details>
+                  </p>
+                  <p class="review-feedback-note">
+                    Full reviewer notes live in the task details.
+                  </p>
+                  <Row justify="end">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onclick={() => nav(`/task/${encodeURIComponent(t.taskId)}`)}
+                    >
+                      Open task
+                    </Button>
+                  </Row>
+                </div>
               {:else if t.kind === 'inflight'}
                 <StateSummary
                   label={taskStateLabel(t)}
@@ -1049,15 +1212,15 @@
                       {#each t.checklist.steps as step (step.id)}
                         <div class="live-step" class:done={step.status === 'done'} class:active={step.status === 'active'}>
                           <StatusLight
-                            tone={step.status === 'done' ? 'ok' : step.status === 'active' ? 'running' : 'idle'}
-                            pulse={step.status === 'active'}
+                            tone={checklistStepTone(t, step)}
+                            pulse={step.status === 'active' && Boolean(t.liveAgent)}
                           />
                           <div class="live-step-copy">
                             <strong>{step.title}</strong>
                             <span>{step.why}</span>
                           </div>
                           <span class="live-step-state">
-                            {step.status === 'done' ? 'Done' : step.status === 'active' ? 'Now' : step.status === 'skipped' ? 'Skipped' : 'Pending'}
+                            {checklistStepLabel(t, step)}
                           </span>
                         </div>
                       {/each}
@@ -1091,18 +1254,36 @@
                   </Stack>
                 {:else}
                   <Row justify="end" gap="2">
-                    <Button variant="secondary" onclick={() => nav(`/task/${encodeURIComponent(t.taskId)}`)}>Open</Button>
+                    <Button variant="secondary" onclick={() => nav(`/task/${encodeURIComponent(t.taskId)}`)}>
+                      Open task
+                    </Button>
                     {#if t.taskId === 'task-meta-intake' && t.taskStatus === 'exploring'}
                       <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => synthesizeMetaIntake(t)}>
                         Use saved answers
                       </Button>
                     {/if}
-                    <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
-                      Tell agent
-                    </Button>
+                    {#if canStartTaskTurn(t)}
+                      <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
+                        Add note
+                      </Button>
+                      <Button variant="primary" disabled={runBusy || busyTurnId === t.id} onclick={startOneTaskRun}>
+                        {startTaskLabel(t)}
+                      </Button>
+                    {:else}
+                      <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
+                        Add note
+                      </Button>
+                    {/if}
                   </Row>
+                  {#if runError && canStartTaskTurn(t)}
+                    <p class="error">{runError}</p>
+                  {/if}
                   {#if sentReplies[t.id]}
-                    <p class="answer">Saved. The agent will read it on the next run.</p>
+                    <p class="answer">
+                      Saved. {canStartTaskTurn(t)
+                        ? 'Guildhall will read it when work starts.'
+                        : 'The agent will read it on the next run.'}
+                    </p>
                   {/if}
                   {#if replyErrors[t.id]}
                     <p class="error">{replyErrors[t.id]}</p>
@@ -1144,7 +1325,8 @@
 
 <style>
   .thread {
-    max-width: 680px;
+    width: 680px;
+    max-width: 100%;
     margin: 0 auto;
     padding: var(--s-3) var(--s-4) var(--s-6);
   }
@@ -1174,7 +1356,7 @@
     cursor: pointer;
     position: sticky;
     top: var(--s-2);
-    z-index: 3;
+    z-index: var(--z-sticky-local);
     box-shadow: 0 4px 12px color-mix(in srgb, var(--bg-base) 80%, transparent);
   }
   .phase-head:hover {
@@ -1225,6 +1407,12 @@
     white-space: nowrap;
   }
   .prompt { margin: 0; font-size: var(--fs-3); font-weight: 550; line-height: var(--lh-tight); }
+  .setup-title {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+  }
   .prompt-row {
     display: flex;
     align-items: center;
@@ -1334,21 +1522,18 @@
     border: 1px solid var(--border);
     border-radius: var(--r-2);
     background: var(--bg);
-    color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    display: grid;
+    gap: var(--s-2);
   }
-  .review-feedback summary {
-    cursor: pointer;
+  .review-feedback-meta {
+    margin: 0;
     color: var(--text);
-    font-weight: 550;
+    font-size: var(--fs-1);
+    font-weight: 600;
   }
-  .review-feedback-body {
-    margin-top: var(--s-2);
-    max-height: 320px;
-    overflow: auto;
-  }
-  .review-feedback-body :global(.md) {
+  .review-feedback-note {
+    margin: 0;
+    color: var(--text-muted);
     font-size: var(--fs-2);
     line-height: var(--lh-body);
   }

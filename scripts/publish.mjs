@@ -29,9 +29,9 @@
  *                         prereleases).
  *
  * Usage:
- *   node scripts/publish.mjs 0.3.0
+ *   node scripts/publish.mjs 0.4.0
  *   node scripts/publish.mjs patch --dry-run
- *   node scripts/publish.mjs 0.3.0-rc.1 --tag next
+ *   node scripts/publish.mjs 0.4.0-rc.1 --tag next
  */
 
 import { execFileSync } from 'node:child_process'
@@ -159,7 +159,7 @@ function printHelp() {
   console.log(`Usage: node scripts/publish.mjs <version> [flags]
 
 Arguments:
-  version            Explicit semver (e.g. 0.3.0) or keyword: patch | minor | major
+  version            Explicit semver (e.g. 0.4.0) or keyword: patch | minor | major
 
 Flags:
   --dry-run          Do everything except the real publish and the git commit/tag;

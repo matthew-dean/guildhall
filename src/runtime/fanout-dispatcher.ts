@@ -18,7 +18,7 @@
 
 import type { Task, TaskQueue } from '@guildhall/core'
 import type { ProjectLevers } from '@guildhall/levers'
-import { pickNextTask } from './orchestrator-picker.js'
+import { laneForTask, pickNextTask, type TaskLane } from './orchestrator-picker.js'
 
 export type FanoutCapacity = number
 
@@ -35,6 +35,7 @@ export function resolveFanoutCapacity(project: ProjectLevers): FanoutCapacity {
 export interface PickNextTasksInput {
   queue: TaskQueue
   capacity: FanoutCapacity
+  laneCapacities?: Partial<Record<TaskLane, number>>
   domainFilter?: string
   /**
    * Ids already in flight (or claimed by an earlier pass in the same tick).
@@ -55,7 +56,37 @@ export interface PickNextTasksInput {
  */
 export function pickNextTasks(input: PickNextTasksInput): Task[] {
   const excluded = new Set(input.excludeIds ?? [])
+  const laneCaps = input.laneCapacities
   const picks: Task[] = []
+  if (laneCaps) {
+    const remainingByLane: Record<TaskLane, number> = {
+      review: Math.max(0, Math.floor(laneCaps.review ?? 0)),
+      worker: Math.max(0, Math.floor(laneCaps.worker ?? 0)),
+      coordinator: Math.max(0, Math.floor(laneCaps.coordinator ?? 0)),
+      spec: Math.max(0, Math.floor(laneCaps.spec ?? 0)),
+    }
+    while (picks.length < input.capacity) {
+      const attemptExcluded = new Set(excluded)
+      let next: Task | undefined
+      while (true) {
+        const candidate = pickNextTask(input.queue, input.domainFilter, attemptExcluded)
+        if (!candidate) break
+        const lane = laneForTask(candidate)
+        if (lane && remainingByLane[lane] > 0) {
+          next = candidate
+          break
+        }
+        attemptExcluded.add(candidate.id)
+      }
+      if (!next) break
+      const lane = laneForTask(next)
+      if (!lane) break
+      picks.push(next)
+      excluded.add(next.id)
+      remainingByLane[lane] -= 1
+    }
+    return picks
+  }
   for (let i = 0; i < input.capacity; i++) {
     const next = pickNextTask(input.queue, input.domainFilter, excluded)
     if (!next) break

@@ -1,4 +1,8 @@
-import type { Task, TaskQueue, TaskStatus, ReviewVerdict } from '@guildhall/core'
+import { parseAcceptanceCriteriaFromSpec, type Task, type TaskQueue, type TaskStatus, type ReviewVerdict } from '@guildhall/core'
+import {
+  summarizeScopedHardGateDisposition,
+  type ScopedGateContext,
+} from '@guildhall/tools'
 
 // ---------------------------------------------------------------------------
 // FR-27 / AC-18: reviewer dispatch with deterministic fallback.
@@ -51,6 +55,54 @@ export interface DeterministicVerdict {
   failingSignals: string[]
 }
 
+export interface DeterministicReviewContext {
+  projectPath: string
+  likelyTargetFiles: readonly string[]
+  resolvedDecisionTexts: readonly string[]
+}
+
+const GATE_LIKE_AUTOMATED_ACCEPTANCE = /\b(?:pnpm|npm|yarn|playwright|vitest|jest|pytest|typecheck|build|lint|test(?:\s+file|\s+runner)?|runner runs|passes with zero errors|zero console violations)\b/i
+
+function effectiveAcceptanceCriteria(task: Task) {
+  return task.acceptanceCriteria.length > 0
+    ? task.acceptanceCriteria
+    : parseAcceptanceCriteriaFromSpec(task.spec)
+}
+
+export function shouldAdvanceToGateCheckPendingHardGates(
+  task: Task,
+  failingSignals: string[],
+): boolean {
+  if (failingSignals.some((signal) => signal !== 'no-regressions')) return false
+  const acs = effectiveAcceptanceCriteria(task)
+  if (acs.length === 0 || !acs.every((criterion) => criterion.met)) return false
+  return !task.gateResults.some((gate) => gate.type === 'hard')
+}
+
+export function shouldAdvanceToGateCheckPendingAutomatedVerification(
+  task: Task,
+): boolean {
+  if (task.gateResults.some((gate) => gate.type === 'hard')) return false
+  const acs = effectiveAcceptanceCriteria(task)
+  if (acs.length === 0) return false
+
+  let pendingAutomatedCount = 0
+  let metCount = 0
+  for (const criterion of acs) {
+    if (criterion.met) {
+      metCount += 1
+      continue
+    }
+    if (criterion.verifiedBy !== 'automated') return false
+    const command = typeof criterion.command === 'string' ? criterion.command.trim() : ''
+    const description = criterion.description?.trim() ?? ''
+    if (!command && !GATE_LIKE_AUTOMATED_ACCEPTANCE.test(description)) return false
+    pendingAutomatedCount += 1
+  }
+
+  return pendingAutomatedCount > 0 && metCount > 0
+}
+
 /**
  * Rubric-driven verdict from observable task state alone. No LLM call, no
  * side effects. Mapping from rubric questions to integer signals keyed off
@@ -68,18 +120,27 @@ export interface DeterministicVerdict {
  *     alone; the LLM reviewer picks this up semantically).
  *   • `documented`              — full credit; ditto.
  */
-export function deterministicReview(task: Task): DeterministicVerdict {
+export function deterministicReview(
+  task: Task,
+  context?: DeterministicReviewContext,
+): DeterministicVerdict {
   const rubric = SOFT_GATE_RUBRIC
   const totalWeight = Object.values(rubric).reduce((a, b) => a + b, 0)
   let weighted = 0
   const failing: string[] = []
   const trace: string[] = []
 
-  const acs = task.acceptanceCriteria
+  const acs = effectiveAcceptanceCriteria(task)
   const acsAllMet = acs.length > 0 && acs.every((a) => a.met)
-  if (acsAllMet) {
+  const pendingAutomatedVerification =
+    !acsAllMet && shouldAdvanceToGateCheckPendingAutomatedVerification(task)
+  if (acsAllMet || pendingAutomatedVerification) {
     weighted += rubric['acceptance-criteria-met']
-    trace.push(`acceptance-criteria-met: +${rubric['acceptance-criteria-met'].toFixed(1)} (${acs.length} AC(s), all met)`)
+    trace.push(
+      acsAllMet
+        ? `acceptance-criteria-met: +${rubric['acceptance-criteria-met'].toFixed(1)} (${acs.length} AC(s), all met)`
+        : `acceptance-criteria-met: +${rubric['acceptance-criteria-met'].toFixed(1)} (${acs.length} AC(s), only automated hard-verification checks remain unmet)`,
+    )
   } else {
     failing.push('acceptance-criteria-met')
     const unmet = acs.filter((a) => !a.met).map((a) => a.id)
@@ -91,10 +152,29 @@ export function deterministicReview(task: Task): DeterministicVerdict {
   }
 
   const hardGates = task.gateResults.filter((g) => g.type === 'hard')
-  const hardAllPass = hardGates.length > 0 && hardGates.every((g) => g.passed)
+  const scopedHardGateDisposition = context
+    ? summarizeScopedHardGateDisposition(
+        {
+          projectPath: context.projectPath,
+          likelyTargetFiles: context.likelyTargetFiles,
+          resolvedDecisionTexts: context.resolvedDecisionTexts,
+        } satisfies ScopedGateContext,
+        hardGates,
+      )
+    : null
+  const hardAllPass =
+    hardGates.length > 0 &&
+    (hardGates.every((g) => g.passed) || scopedHardGateDisposition?.shouldPass === true)
   if (hardAllPass) {
     weighted += rubric['no-regressions']
-    trace.push(`no-regressions: +${rubric['no-regressions'].toFixed(1)} (${hardGates.length} hard gate(s), all passed)`)
+    if (hardGates.every((g) => g.passed)) {
+      trace.push(`no-regressions: +${rubric['no-regressions'].toFixed(1)} (${hardGates.length} hard gate(s), all passed)`)
+    } else {
+      const exempted = scopedHardGateDisposition?.exemptedFailures.map((gate) => gate.gateId) ?? []
+      trace.push(
+        `no-regressions: +${rubric['no-regressions'].toFixed(1)} (${hardGates.length} hard gate(s), remaining failures are scoped unrelated repo-red: ${exempted.join(', ') || 'none'})`,
+      )
+    }
   } else {
     failing.push('no-regressions')
     const failed = hardGates.filter((g) => !g.passed).map((g) => g.gateId)
@@ -125,11 +205,16 @@ export function deterministicReview(task: Task): DeterministicVerdict {
   trace.push(`documented: +${rubric.documented.toFixed(1)} (no deterministic signal — credited)`)
 
   const score = weighted / totalWeight
+  const advanceToGateCheck =
+    pendingAutomatedVerification || shouldAdvanceToGateCheckPendingHardGates(task, failing)
   const verdict: DeterministicVerdict['verdict'] =
-    score >= DETERMINISTIC_PASS_THRESHOLD ? 'approve' : 'revise'
+    advanceToGateCheck || score >= DETERMINISTIC_PASS_THRESHOLD ? 'approve' : 'revise'
 
-  const reason =
-    verdict === 'approve'
+  const reason = pendingAutomatedVerification
+    ? 'Deterministic review: remaining unmet acceptance criteria are automated hard-verification steps; advance to gate_check.'
+    : advanceToGateCheck
+      ? 'Deterministic review: acceptance criteria are met and hard gates have not run yet; advance to gate_check.'
+    : verdict === 'approve'
       ? `Deterministic review: score ${score.toFixed(2)} \u2265 ${DETERMINISTIC_PASS_THRESHOLD}`
       : `Deterministic review: score ${score.toFixed(2)} < ${DETERMINISTIC_PASS_THRESHOLD}; failing signals: ${failing.join(', ') || '(none recorded)'}`
 
@@ -137,10 +222,20 @@ export function deterministicReview(task: Task): DeterministicVerdict {
     `Rubric walkthrough (weighted /${totalWeight.toFixed(1)}):`,
     ...trace.map((t) => `  - ${t}`),
     `Total: ${weighted.toFixed(2)} / ${totalWeight.toFixed(1)} = ${score.toFixed(3)}`,
-    `Threshold: ${DETERMINISTIC_PASS_THRESHOLD} → ${verdict === 'approve' ? 'APPROVE' : 'REVISE'}`,
+    pendingAutomatedVerification
+      ? 'Special-case handoff: the only unmet acceptance criteria are automated hard-verification checks, and no hard gates have run yet. Advance to gate_check so the runner decides those remaining criteria.'
+      : advanceToGateCheck
+        ? 'Special-case handoff: all acceptance criteria are met, and no hard gates have run yet. Advance to gate_check so hard verification decides no-regressions.'
+      : `Threshold: ${DETERMINISTIC_PASS_THRESHOLD} → ${verdict === 'approve' ? 'APPROVE' : 'REVISE'}`,
   ].join('\n')
 
-  return { verdict, reason, reasoning, score, failingSignals: failing }
+  return {
+    verdict,
+    reason,
+    reasoning,
+    score,
+    failingSignals: advanceToGateCheck ? [] : failing,
+  }
 }
 
 export interface ApplyDeterministicVerdictInput {
@@ -155,6 +250,17 @@ export interface ApplyDeterministicVerdictInput {
 export interface ApplyDeterministicVerdictResult {
   record: ReviewVerdict
   newStatus: TaskStatus
+}
+
+function assigneeForReviewOutcome(status: TaskStatus): string | undefined {
+  switch (status) {
+    case 'gate_check':
+      return 'gate-checker-agent'
+    case 'in_progress':
+      return 'worker-agent'
+    default:
+      return undefined
+  }
 }
 
 /**
@@ -185,6 +291,8 @@ export function applyDeterministicVerdict(
 
   const newStatus: TaskStatus = input.verdict.verdict === 'approve' ? 'gate_check' : 'in_progress'
   task.status = newStatus
+  const assignee = assigneeForReviewOutcome(newStatus)
+  if (assignee) task.assignedTo = assignee
   task.updatedAt = input.now
   input.queue.lastUpdated = input.now
 
@@ -214,6 +322,14 @@ export function extractLlmReviewerReasoning(task: Task): string | undefined {
   return undefined
 }
 
+function extractStructuredLlmVerdict(reasoning: string | undefined): ReviewVerdict['verdict'] | undefined {
+  const text = reasoning?.trim()
+  if (!text) return undefined
+  const match = /\*\*Verdict:\*\*\s*(Approved|Approve|Revised?|Revision requested)\b/i.exec(text)
+  if (!match?.[1]) return undefined
+  return /^approve?d?$/i.test(match[1]) ? 'approve' : 'revise'
+}
+
 /**
  * Record that the LLM reviewer path produced the verdict. Inferred from the
  * before/after status: a transition to `gate_check` means the LLM approved;
@@ -236,20 +352,21 @@ export function recordLlmVerdict(input: {
   now: string
   policyVersion?: string
   reasoning?: string
-}): ReviewVerdict | undefined {
+}): { record: ReviewVerdict; normalizedStatus: TaskStatus } | undefined {
   if (input.beforeStatus !== 'review') return undefined
   const idx = input.queue.tasks.findIndex((t) => t.id === input.taskId)
   if (idx < 0) return undefined
   const task = input.queue.tasks[idx]!
 
+  const reasoning = input.reasoning ?? extractLlmReviewerReasoning(task)
+  const structuredVerdict = extractStructuredLlmVerdict(reasoning)
   const verdict: ReviewVerdict['verdict'] =
-    input.afterStatus === 'gate_check' ? 'approve' : 'revise'
+    structuredVerdict ?? (input.afterStatus === 'gate_check' ? 'approve' : 'revise')
+  const normalizedStatus: TaskStatus = verdict === 'approve' ? 'gate_check' : 'in_progress'
   const reason =
     verdict === 'approve'
       ? 'LLM reviewer approved (transitioned to gate_check)'
       : `LLM reviewer requested revision (transitioned to ${input.afterStatus})`
-
-  const reasoning = input.reasoning ?? extractLlmReviewerReasoning(task)
 
   const record: ReviewVerdict = {
     verdict,
@@ -261,5 +378,5 @@ export function recordLlmVerdict(input: {
     ...(input.policyVersion !== undefined ? { policyVersion: input.policyVersion } : {}),
   }
   task.reviewVerdicts.push(record)
-  return record
+  return { record, normalizedStatus }
 }

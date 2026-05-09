@@ -61,7 +61,7 @@
   }
   .gh-tooltip-bubble {
     position: fixed;
-    z-index: 40;
+    z-index: var(--z-tooltip);
     max-width: min(260px, 80vw);
     width: max-content;
     padding: 6px 8px;

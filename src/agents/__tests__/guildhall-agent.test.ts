@@ -295,7 +295,11 @@ describe('FR-17 skill composition', () => {
     const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
     const llm = { apiClient: client, modelId: 'm' }
     const agent = createSpecAgent(llm, { skills: [skillA] })
-    await agent.generate('go')
+    try {
+      await agent.generate('go')
+    } catch (err) {
+      if (!(err instanceof Error) || !/ScriptedApiClient exhausted/.test(err.message)) throw err
+    }
     const sys = client.requests[0]?.system_prompt ?? ''
     expect(sys).toContain('## Skills')
     expect(sys).toContain('### coding-conventions')
@@ -351,7 +355,11 @@ describe('FR-18 hookExecutor forwarding', () => {
       { apiClient: client, modelId: 'm' },
       { hookExecutor },
     )
-    await agent.generate('go')
+    try {
+      await agent.generate('go')
+    } catch (err) {
+      if (!(err instanceof Error) || !/ScriptedApiClient exhausted/.test(err.message)) throw err
+    }
     expect(events).toContain('user_prompt_submit')
   })
 })
@@ -383,6 +391,20 @@ describe('agent factories', () => {
     expect(prompt).toContain('## No plan-only turns')
     expect(prompt).toContain('Every assistant turn must make observable progress')
     expect(prompt).toContain('If you know the next step, take it with a tool call')
+  })
+
+  it('createWorkerAgent requires a minimum-scope self-review before handoff', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('Minimum-scope check:')
+    expect(prompt).toContain('Smallest useful change?')
+    expect(prompt).toContain('Anything to revert before review?')
+  })
+
+  it('createWorkerAgent treats shell verification as durable progress', async () => {
+    const a = createWorkerAgent(llm)
+    const engine = (a as unknown as { engine: { noProgressToolNames?: readonly string[] } }).engine
+    expect(engine.noProgressToolNames).toContain('shell')
   })
 
   it('createReviewerAgent', () => {
@@ -514,7 +536,22 @@ describe('agent factories', () => {
       expect(sys).toContain('`pnpm typecheck`')
       expect(sys).toContain('`pnpm test`')
       expect(sys).toContain('`cargo clippy -- -D warnings`')
-      expect(sys).toContain('verified `bootstrap.successGates`')
+      expect(sys).toContain("project's currently known hard gates")
+      expect(sys).toContain('task-scoped project detection for a nested subproject')
+      expect(sys).not.toContain('falling back to the TypeScript defaults')
+    })
+
+    it('createGateCheckerAgent treats an explicit empty bootstrap gate list as authoritative', async () => {
+      const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
+      const agent = createGateCheckerAgent(
+        { apiClient: client, modelId: 'm' },
+        { successGates: [] },
+      )
+      await agent.generate('go')
+      const sys = client.requests[0]?.system_prompt ?? ''
+      expect(sys).toContain("project's currently known hard gates")
+      expect(sys).toContain('Do not invent extra gates beyond the authoritative list')
+      expect(sys).toContain('No verified shell gates are currently configured')
       expect(sys).not.toContain('falling back to the TypeScript defaults')
     })
 
@@ -539,7 +576,10 @@ describe('agent factories', () => {
     })
 
     it('createCoordinatorAgent does not instruct coordinators to claim ready work', async () => {
-      const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
+      const client = new ScriptedApiClient([
+        { message: assistantToolUse('read-file', { filePath: '/tmp/coord-prompt-check.txt' }) },
+        { message: assistantMsg('ok') },
+      ])
       const domain: CoordinatorDomain = {
         id: 'looma',
         name: 'Looma',
@@ -557,6 +597,33 @@ describe('agent factories', () => {
       const sys = client.requests[0]?.system_prompt ?? ''
       expect(sys).not.toContain("Assign 'ready' tasks to worker agents")
       expect(sys).toContain("Review specs (tasks in 'spec_review')")
+    })
+
+    it('createCoordinatorAgent enables durable-decision nudges', () => {
+      const domain: CoordinatorDomain = {
+        id: 'looma',
+        name: 'Looma',
+        mandate: 'UI quality.',
+        projectPaths: [],
+        concerns: [],
+        autonomousDecisions: [],
+        escalationTriggers: [],
+      }
+      const agent = createCoordinatorAgent(
+        domain,
+        { apiClient: new ScriptedApiClient([]), modelId: 'm' },
+      )
+      const engine = (agent as unknown as {
+        engine: {
+          noToolTurnNudge?: string
+          noProgressToolNames?: readonly string[]
+          noProgressTurnNudge?: string
+        }
+      }).engine
+      expect(engine.noToolTurnNudge).toContain('coordinator decision')
+      expect(engine.noProgressToolNames).toContain('update-task')
+      expect(engine.noProgressToolNames).toContain('log-decision')
+      expect(engine.noProgressTurnNudge).toContain('record the decision durably')
     })
   })
 
@@ -717,6 +784,38 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
     expect(agent.saveSession()).toBeNull()
   })
 
+  it('resetConversation clears in-memory and persisted session state', async () => {
+    const client = new ScriptedApiClient([
+      { message: assistantMsg('first reply'), usage: { input_tokens: 5, output_tokens: 3 } },
+    ])
+    const agent = new GuildhallAgent({
+      name: 'resettable',
+      llm: { apiClient: client, modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [],
+      sessionPersistence: { cwd: projectCwd, sessionId: 'reset-session' },
+    })
+
+    await agent.generate('first user prompt')
+    expect(agent.messages).toHaveLength(2)
+    expect(agent.totalUsage).toEqual({ input_tokens: 5, output_tokens: 3 })
+
+    agent.resetConversation()
+
+    expect(agent.messages).toHaveLength(0)
+    expect(agent.totalUsage).toEqual({ input_tokens: 0, output_tokens: 0 })
+
+    const reloader = new GuildhallAgent({
+      name: 'reload',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [],
+    })
+    expect(reloader.loadSession({ cwd: projectCwd, sessionId: 'reset-session' })).toBe(true)
+    expect(reloader.messages).toHaveLength(0)
+    expect(reloader.totalUsage).toEqual({ input_tokens: 0, output_tokens: 0 })
+  })
+
   it('mid-turn resume: tool-result tail triggers continue() instead of a fresh prompt', async () => {
     // The engine considers a conversation "pending continuation" when the
     // tail is a user tool_result following an assistant tool_use. We simulate
@@ -771,6 +870,43 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
     // Final history: user prompt, assistant tool_use, user tool_result, assistant final
     expect(resumer.messages).toHaveLength(4)
     expect(resumer.messages[3]?.role).toBe('assistant')
+  })
+
+  it('returns the latest non-empty assistant prose when a later assistant message is tool-only', async () => {
+    const prose: ConversationMessage = {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Pick one target and I can draft the spec.' }],
+    }
+    const toolOnly: ConversationMessage = {
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: 'toolu_post-user-question', name: 'post-user-question', input: {} }],
+    }
+
+    const saver = new GuildhallAgent({
+      name: 'saver',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'm' },
+      systemPrompt: 'sys',
+      tools: [],
+      sessionPersistence: { cwd: projectCwd, sessionId: 'latest-prose' },
+    })
+    ;(saver as unknown as { engine: { loadMessages: (m: ConversationMessage[]) => void } }).engine.loadMessages([
+      { role: 'user', content: [{ type: 'text', text: 'help me spec this' }] },
+      prose,
+      { role: 'user', content: [{ type: 'text', text: 'nudge: use a tool now' }] },
+      toolOnly,
+    ])
+    saver.saveSession()
+
+    const resumer = new GuildhallAgent({
+      name: 'resumer',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'm' },
+      systemPrompt: 'sys',
+      tools: [],
+    })
+    expect(resumer.loadSession({ cwd: projectCwd, sessionId: 'latest-prose' })).toBe(true)
+    await expect(resumer.continue()).resolves.toMatchObject({
+      text: 'Pick one target and I can draft the spec.',
+    })
   })
 
   it('saveSession with overrides writes a snapshot even without ctor config', async () => {

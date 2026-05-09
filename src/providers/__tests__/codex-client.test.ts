@@ -61,6 +61,7 @@ describe('CodexClient', () => {
         model: 'gpt-5-codex',
         messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
         max_tokens: 256,
+        temperature: 0.1,
         tools: [],
       }),
     )
@@ -69,6 +70,9 @@ describe('CodexClient', () => {
     expect(headers.authorization).toBe('Bearer codex-at')
     expect(headers['chatgpt-account-id']).toBe('acct_123')
     expect(headers['OpenAI-Beta']).toBe('responses=experimental')
+    if (!capturedInit) throw new Error('expected request init to be captured')
+    const requestBody = (capturedInit as { body?: unknown }).body
+    expect(JSON.parse(String(requestBody))?.temperature).toBeUndefined()
 
     const textDeltas = events.filter((e) => e.type === 'text_delta')
     expect(textDeltas.map((e) => (e as { text: string }).text).join('')).toBe('Hello')

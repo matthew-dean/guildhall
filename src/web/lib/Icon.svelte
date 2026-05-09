@@ -30,6 +30,7 @@
     | 'file-text'
     | 'file-check'
     | 'sliders'
+    | 'ellipsis'
     | 'help-circle'
     | 'sparkles'
 </script>
@@ -59,6 +60,7 @@
   import FileText from 'lucide-svelte/icons/file-text'
   import FileCheck from 'lucide-svelte/icons/file-check'
   import Sliders from 'lucide-svelte/icons/sliders'
+  import Ellipsis from 'lucide-svelte/icons/ellipsis'
   import HelpCircle from 'lucide-svelte/icons/circle-help'
   import Sparkles from 'lucide-svelte/icons/sparkles'
 
@@ -97,6 +99,7 @@
   {:else if name === 'file-text'}<FileText {size} {strokeWidth} />
   {:else if name === 'file-check'}<FileCheck {size} {strokeWidth} />
   {:else if name === 'sliders'}<Sliders {size} {strokeWidth} />
+  {:else if name === 'ellipsis'}<Ellipsis {size} {strokeWidth} />
   {:else if name === 'help-circle'}<HelpCircle {size} {strokeWidth} />
   {:else if name === 'sparkles'}<Sparkles {size} {strokeWidth} />
   {/if}

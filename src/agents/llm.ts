@@ -16,6 +16,7 @@ import type { ModelAssignmentConfig, AgentRole } from '@guildhall/core'
 export interface AgentLLM {
   apiClient: SupportsStreamingMessages
   modelId: string
+  temperature?: number
 }
 
 export interface ModelSet {
@@ -24,6 +25,19 @@ export interface ModelSet {
   worker: AgentLLM
   reviewer: AgentLLM
   gateChecker: AgentLLM
+}
+
+export function temperatureForRole(role: AgentRole): number {
+  switch (role) {
+    case 'worker':
+      return 0.1
+    case 'reviewer':
+    case 'gateChecker':
+      return 0
+    case 'spec':
+    case 'coordinator':
+      return 0.2
+  }
 }
 
 /**
@@ -35,11 +49,11 @@ export function buildModelSet(
   apiClient: SupportsStreamingMessages,
 ): ModelSet {
   return {
-    spec: { apiClient, modelId: assignment.spec },
-    coordinator: { apiClient, modelId: assignment.coordinator },
-    worker: { apiClient, modelId: assignment.worker },
-    reviewer: { apiClient, modelId: assignment.reviewer },
-    gateChecker: { apiClient, modelId: assignment.gateChecker },
+    spec: { apiClient, modelId: assignment.spec, temperature: temperatureForRole('spec') },
+    coordinator: { apiClient, modelId: assignment.coordinator, temperature: temperatureForRole('coordinator') },
+    worker: { apiClient, modelId: assignment.worker, temperature: temperatureForRole('worker') },
+    reviewer: { apiClient, modelId: assignment.reviewer, temperature: temperatureForRole('reviewer') },
+    gateChecker: { apiClient, modelId: assignment.gateChecker, temperature: temperatureForRole('gateChecker') },
   }
 }
 

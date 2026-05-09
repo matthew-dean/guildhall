@@ -32,6 +32,12 @@ import {
 } from '@guildhall/providers'
 import { notImplementedApiClient } from '@guildhall/agents'
 import { findModel, type ModelAssignmentConfig } from '@guildhall/core'
+import {
+  anthropicCompatiblePoolKey,
+  getOrCreateProviderClient,
+  openAiCompatiblePoolKey,
+} from './provider-client-pool.js'
+import { providerCapabilitiesForAnyKey } from './provider-metadata.js'
 
 export type ProviderName =
   | 'claude-oauth'
@@ -56,6 +62,15 @@ export type PreferredProviderKey =
 
 export function normalizePreferredProvider(key: PreferredProviderKey): ProviderName {
   if (key === 'codex') return 'codex-oauth'
+  return key
+}
+
+export function normalizeProviderName(
+  key: ProviderName | PreferredProviderKey | 'lm-studio' | undefined,
+): ProviderName | undefined {
+  if (!key) return undefined
+  if (key === 'codex') return 'codex-oauth'
+  if (key === 'lm-studio') return 'llama-cpp'
   return key
 }
 
@@ -114,12 +129,19 @@ export interface SelectApiClientOptions {
    * OpenAI API key. Falls back to `OPENAI_API_KEY`. Empty → skip.
    */
   openaiApiKey?: string
+  /**
+   * OpenAI-compatible base URL. Falls back to `OPENAI_BASE_URL`. When omitted,
+   * real OpenAI remains the default.
+   */
+  openaiBaseUrl?: string
 }
 
 export async function selectApiClient(
   opts: SelectApiClientOptions = {},
 ): Promise<SelectApiClientResult> {
-  const forced = opts.provider ?? (process.env.GUILDHALL_PROVIDER as ProviderName | undefined)
+  const forced = normalizeProviderName(
+    opts.provider ?? (process.env.GUILDHALL_PROVIDER as ProviderName | 'lm-studio' | undefined),
+  )
   if (forced && forced !== 'none') {
     return selectForced(forced, opts)
   }
@@ -162,8 +184,8 @@ export async function selectApiClient(
 
   const reason =
     'No provider configured. Run `claude login` for Claude OAuth, `codex auth login` ' +
-    'for Codex OAuth, paste an Anthropic or OpenAI API key in the dashboard, or set ' +
-    'LLAMA_CPP_URL to point at a running llama.cpp / LM Studio server.'
+    'for Codex OAuth, paste an Anthropic-compatible or OpenAI-compatible API key in the dashboard, or set ' +
+    'LLAMA_CPP_URL to point at a running OpenAI-compatible local server such as LM Studio or llama.cpp.'
   return {
     apiClient: notImplementedApiClient(reason),
     providerName: 'none',
@@ -198,11 +220,12 @@ type Probe =
 
 async function tryClaude(opts: SelectApiClientOptions): Promise<Probe> {
   try {
-    const credential = await readClaudeCredentials(
+    await readClaudeCredentials(
       opts.claudeCredentialPath ? { path: opts.claudeCredentialPath } : {},
     )
     const apiClient = new ClaudeOauthClient({
-      credential,
+      loadCredential: () =>
+        readClaudeCredentials(opts.claudeCredentialPath ? { path: opts.claudeCredentialPath } : {}),
       persistOnRefresh: true,
     })
     return { ok: true, result: { apiClient, providerName: 'claude-oauth' } }
@@ -214,10 +237,13 @@ async function tryClaude(opts: SelectApiClientOptions): Promise<Probe> {
 
 async function tryCodex(opts: SelectApiClientOptions): Promise<Probe> {
   try {
-    const credential = await readCodexCredentials(
+    await readCodexCredentials(
       opts.codexCredentialPath ? { path: opts.codexCredentialPath } : {},
     )
-    const apiClient = new CodexClient({ credential })
+    const apiClient = new CodexClient({
+      loadCredential: () =>
+        readCodexCredentials(opts.codexCredentialPath ? { path: opts.codexCredentialPath } : {}),
+    })
     return { ok: true, result: { apiClient, providerName: 'codex-oauth' } }
   } catch (err) {
     if (err instanceof CodexCredentialMissingError) return { ok: false }
@@ -233,13 +259,22 @@ function tryLlama(opts: SelectApiClientOptions): Probe {
     ''
   ).trim()
   if (url.length === 0) return { ok: false }
-  const apiClient = new OpenAICompatibleClient({ baseUrl: url })
+  const apiClient = getOrCreateProviderClient(
+    openAiCompatiblePoolKey({
+      provider: 'llama-cpp',
+      baseUrl: url,
+    }),
+    {
+      maxConcurrency: providerCapabilitiesForAnyKey('llama-cpp')?.recommendedConcurrency,
+    },
+    () => new OpenAICompatibleClient({ baseUrl: url }),
+  )
   return {
     ok: true,
     result: {
       apiClient,
       providerName: 'llama-cpp',
-      reason: `llama.cpp/LM Studio at ${url}`,
+      reason: `OpenAI-compatible local server at ${url}`,
     },
   }
 }
@@ -247,7 +282,13 @@ function tryLlama(opts: SelectApiClientOptions): Probe {
 function tryAnthropicApi(opts: SelectApiClientOptions): Probe {
   const key = (opts.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY ?? '').trim()
   if (key.length === 0) return { ok: false }
-  const apiClient = new AnthropicApiClient({ apiKey: key })
+  const apiClient = getOrCreateProviderClient(
+    anthropicCompatiblePoolKey(key),
+    {
+      maxConcurrency: providerCapabilitiesForAnyKey('anthropic-api')?.recommendedConcurrency,
+    },
+    () => new AnthropicApiClient({ apiKey: key }),
+  )
   return {
     ok: true,
     result: {
@@ -261,16 +302,29 @@ function tryAnthropicApi(opts: SelectApiClientOptions): Probe {
 function tryOpenAiApi(opts: SelectApiClientOptions): Probe {
   const key = (opts.openaiApiKey ?? process.env.OPENAI_API_KEY ?? '').trim()
   if (key.length === 0) return { ok: false }
-  const apiClient = new OpenAICompatibleClient({
-    baseUrl: 'https://api.openai.com/v1',
-    apiKey: key,
-  })
+  const baseUrl = (opts.openaiBaseUrl ?? process.env.OPENAI_BASE_URL ?? '').trim()
+  const resolvedBaseUrl = baseUrl || 'https://api.openai.com/v1'
+  const apiClient = getOrCreateProviderClient(
+    openAiCompatiblePoolKey({
+      provider: 'openai-api',
+      baseUrl: resolvedBaseUrl,
+      apiKey: key,
+    }),
+    {
+      maxConcurrency: providerCapabilitiesForAnyKey('openai-api')?.recommendedConcurrency,
+    },
+    () =>
+      new OpenAICompatibleClient({
+        baseUrl: resolvedBaseUrl,
+        apiKey: key,
+      }),
+  )
   return {
     ok: true,
     result: {
       apiClient,
       providerName: 'openai-api',
-      reason: 'OpenAI API key',
+      reason: baseUrl ? `OpenAI-compatible API at ${baseUrl}` : 'OpenAI API key',
     },
   }
 }
@@ -302,7 +356,7 @@ async function selectForced(
     if (probe.ok) return probe.result
     return failForced(
       'openai-api',
-      'OpenAI API key missing. Paste one in the dashboard or set OPENAI_API_KEY.',
+      'OpenAI-compatible API key missing. Paste one in the dashboard or set OPENAI_API_KEY.',
     )
   }
   if (forced === 'llama-cpp') {
@@ -310,7 +364,7 @@ async function selectForced(
     if (probe.ok) return probe.result
     return failForced(
       'llama-cpp',
-      'llama.cpp selected but no URL provided. Set LLAMA_CPP_URL or pass llamaCppUrl.',
+      'OpenAI-compatible local server selected but no URL provided. Set LLAMA_CPP_URL or pass llamaCppUrl.',
     )
   }
   return failForced('none', `Unknown provider "${String(forced)}".`)

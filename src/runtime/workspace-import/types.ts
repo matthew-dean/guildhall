@@ -30,6 +30,12 @@ export interface WorkspaceSignal {
   evidence: string
   /** File paths / commit shas / URLs backing this signal. */
   references?: string[]
+  /**
+   * Optional project-area hint inferred from the evidence path, such as
+   * `knit` or `looma`. This lets the hypothesis former keep nested repo
+   * structure instead of flattening everything into a generic core bucket.
+   */
+  domainHint?: string
   /** How confident the source is that this signal means what it claims. */
   confidence: 'high' | 'medium' | 'low'
 }

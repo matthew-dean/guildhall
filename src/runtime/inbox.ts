@@ -14,6 +14,8 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
+import type { Task } from '@guildhall/core'
+import { activeEscalations } from '@guildhall/tools'
 import type { BootstrapStatus } from './bootstrap-runner.js'
 import {
   buildTaskSnapshot,
@@ -148,10 +150,10 @@ export function detectRepoAnchors(projectPath: string): string[] {
   return candidates.filter(name => existsSync(join(projectPath, name)))
 }
 
-function tasksArray(raw: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(raw)) return raw as Array<Record<string, unknown>>
+function tasksArray(raw: unknown): Task[] {
+  if (Array.isArray(raw)) return raw as Task[]
   if (raw && typeof raw === 'object' && Array.isArray((raw as { tasks?: unknown }).tasks)) {
-    return (raw as { tasks: Array<Record<string, unknown>> }).tasks
+    return (raw as { tasks: Task[] }).tasks
   }
   return []
 }
@@ -251,7 +253,13 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     if (!id) continue
 
     const brief = t.productBrief as { approvedAt?: unknown } | undefined
-    if (brief && typeof brief === 'object' && !brief.approvedAt) {
+    const status = typeof t.status === 'string' ? t.status : ''
+    const briefNeedsHuman =
+      brief &&
+      typeof brief === 'object' &&
+      !brief.approvedAt &&
+      status === 'exploring'
+    if (briefNeedsHuman) {
       items.push({
         kind: 'brief_approval',
         severity: 'medium',
@@ -322,11 +330,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
       }
     }
 
-    const escalations = Array.isArray(t.escalations)
-      ? (t.escalations as Array<Record<string, unknown>>)
-      : []
-    for (const esc of escalations) {
-      if (esc.resolvedAt) continue
+    for (const esc of activeEscalations(t)) {
       const escId = typeof esc.id === 'string' ? esc.id : ''
       const summary =
         typeof esc.summary === 'string' && esc.summary.trim()
@@ -371,7 +375,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
         kind: 'lever_questions',
         severity: 'low',
         title: `${defaultCount} levers at system defaults`,
-        detail: 'Policy positions not yet confirmed for this project.',
+        detail: 'Defaults are still in effect for some project policies.',
         defaultCount,
         actionHref: '/settings/advanced',
       })

@@ -10,6 +10,7 @@
  */
 
 import path from 'node:path'
+import fs from 'node:fs/promises'
 import type { Task } from '@guildhall/core'
 import type { ProjectLevers } from '@guildhall/levers'
 import type { GitDriver } from './git-driver.js'
@@ -59,6 +60,7 @@ export interface EnsureWorktreeInput {
   task: Task
   mode: WorktreeMode
   projectPath: string
+  workspacePath?: string
   baseBranch: string
   gitDriver: GitDriver
 }
@@ -89,7 +91,7 @@ export interface EnsureWorktreeResult {
 export async function ensureWorktreeForDispatch(
   input: EnsureWorktreeInput,
 ): Promise<EnsureWorktreeResult> {
-  const { task, mode, projectPath, baseBranch, gitDriver } = input
+  const { task, mode, projectPath, workspacePath, baseBranch, gitDriver } = input
 
   if (mode === 'none') {
     return {
@@ -110,6 +112,15 @@ export async function ensureWorktreeForDispatch(
     task.worktreePath === expectedPath &&
     task.branchName === expectedBranch
   ) {
+    await ensureProjectRuntimeLinks({
+      projectPath,
+      worktreePath: expectedPath,
+    })
+    await ensureWorkspaceSiblingLinks({
+      workspacePath,
+      projectPath,
+      worktreePath: expectedPath,
+    })
     return {
       worktreePath: expectedPath,
       branchName: expectedBranch,
@@ -122,6 +133,15 @@ export async function ensureWorktreeForDispatch(
     worktreePath: expectedPath,
     branch: expectedBranch,
     baseBranch,
+  })
+  await ensureProjectRuntimeLinks({
+    projectPath,
+    worktreePath: expectedPath,
+  })
+  await ensureWorkspaceSiblingLinks({
+    workspacePath,
+    projectPath,
+    worktreePath: expectedPath,
   })
   return {
     worktreePath: expectedPath,
@@ -155,4 +175,111 @@ export async function cleanupWorktreeForTerminal(
   if (input.preserveForPendingPr) return
   if (!input.task.worktreePath) return
   await input.gitDriver.removeWorktree(input.projectPath, input.task.worktreePath)
+}
+
+interface EnsureWorkspaceSiblingLinksInput {
+  workspacePath?: string
+  projectPath: string
+  worktreePath: string
+}
+
+interface EnsureProjectRuntimeLinksInput {
+  projectPath: string
+  worktreePath: string
+}
+
+async function ensureProjectRuntimeLinks(
+  input: EnsureProjectRuntimeLinksInput,
+): Promise<void> {
+  const normalizedProject = path.resolve(input.projectPath)
+  const normalizedWorktree = path.resolve(input.worktreePath)
+  if (!(await exists(normalizedProject))) return
+  await ensureDirSymlink({
+    sourcePath: path.join(normalizedProject, 'node_modules'),
+    linkPath: path.join(normalizedWorktree, 'node_modules'),
+  })
+
+  const entries = await fs.readdir(normalizedProject, { withFileTypes: true })
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    if (entry.name.startsWith('.')) continue
+    const packageRoot = path.join(normalizedProject, entry.name)
+    const hasPackageJson = await exists(path.join(packageRoot, 'package.json'))
+    if (!hasPackageJson) continue
+    await ensureDirSymlink({
+      sourcePath: path.join(packageRoot, 'node_modules'),
+      linkPath: path.join(normalizedWorktree, entry.name, 'node_modules'),
+    })
+  }
+}
+
+async function ensureWorkspaceSiblingLinks(
+  input: EnsureWorkspaceSiblingLinksInput,
+): Promise<void> {
+  const workspacePath = input.workspacePath?.trim()
+  if (!workspacePath) return
+  const normalizedWorkspace = path.resolve(workspacePath)
+  const normalizedProject = path.resolve(input.projectPath)
+  if (path.dirname(normalizedProject) !== normalizedWorkspace) return
+
+  const projectName = path.basename(normalizedProject)
+  const worktreeRoot = path.dirname(input.worktreePath)
+  await fs.mkdir(worktreeRoot, { recursive: true })
+  const entries = await fs.readdir(normalizedWorkspace, { withFileTypes: true })
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    if (entry.name.startsWith('.')) continue
+    if (entry.name === projectName) continue
+    const candidatePath = path.join(normalizedWorkspace, entry.name)
+    const looksRelevant =
+      (await exists(path.join(candidatePath, '.git'))) ||
+      (await exists(path.join(candidatePath, 'package.json')))
+    if (!looksRelevant) continue
+    const linkPath = path.join(worktreeRoot, entry.name)
+    const target = path.relative(worktreeRoot, candidatePath)
+    const existing = await readSymlinkTarget(linkPath)
+    if (existing === target) continue
+    if (existing !== null) {
+      await fs.unlink(linkPath)
+    } else if (await exists(linkPath)) {
+      continue
+    }
+    await fs.symlink(target, linkPath, 'dir')
+  }
+}
+
+async function ensureDirSymlink(input: {
+  sourcePath: string
+  linkPath: string
+}): Promise<void> {
+  if (!(await exists(input.sourcePath))) return
+  await fs.mkdir(path.dirname(input.linkPath), { recursive: true })
+  const target = path.relative(path.dirname(input.linkPath), input.sourcePath)
+  const existing = await readSymlinkTarget(input.linkPath)
+  if (existing === target) return
+  if (existing !== null) {
+    await fs.unlink(input.linkPath)
+  } else if (await exists(input.linkPath)) {
+    return
+  }
+  await fs.symlink(target, input.linkPath, 'dir')
+}
+
+async function exists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function readSymlinkTarget(linkPath: string): Promise<string | null> {
+  try {
+    const stat = await fs.lstat(linkPath)
+    if (!stat.isSymbolicLink()) return null
+    return await fs.readlink(linkPath)
+  } catch {
+    return null
+  }
 }

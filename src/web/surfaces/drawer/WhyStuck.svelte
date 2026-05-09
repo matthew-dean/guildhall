@@ -12,6 +12,7 @@
   import Button from '../../lib/Button.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Markdown from '../../lib/Markdown.svelte'
+  import { activeEscalations } from '../../lib/escalation.js'
   import {
     escalationReasonLabel,
     escalationPrimaryAction,
@@ -30,7 +31,7 @@
   let { task, busy = false, onUnshelve, onResolve }: Props = $props()
 
   const openEscalations = $derived(
-    (task.escalations ?? []).filter((e) => !e.resolvedAt),
+    activeEscalations(task),
   )
   const firstOpen = $derived<Escalation | undefined>(openEscalations[0])
 

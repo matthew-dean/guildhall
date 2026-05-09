@@ -67,6 +67,10 @@ export interface GuildhallAgentOptions {
   compactor?: Compactor
   noToolTurnNudge?: string | undefined
   noToolTurnNudgeLimit?: number | undefined
+  noProgressToolNames?: readonly string[] | undefined
+  noProgressTurnNudge?: string | undefined
+  noProgressTurnNudgeLimit?: number | undefined
+  noProgressTurnThreshold?: number | undefined
   /**
    * FR-20: automatic session persistence. When set, a snapshot is written
    * after every successful `generate()` turn so the agent can resume from
@@ -128,6 +132,9 @@ export class GuildhallAgent {
       cwd: options.cwd ?? process.cwd(),
       maxTurns: options.maxTurns ?? 8,
       maxTokens: options.maxTokens ?? 4096,
+      ...(options.llm.temperature !== undefined
+        ? { temperature: options.llm.temperature }
+        : {}),
       ...(options.hookExecutor ? { hookExecutor: options.hookExecutor } : {}),
       ...(options.compactor ? { compactor: options.compactor } : {}),
       ...(options.noToolTurnNudge !== undefined
@@ -136,11 +143,27 @@ export class GuildhallAgent {
       ...(options.noToolTurnNudgeLimit !== undefined
         ? { noToolTurnNudgeLimit: options.noToolTurnNudgeLimit }
         : {}),
+      ...(options.noProgressToolNames !== undefined
+        ? { noProgressToolNames: options.noProgressToolNames }
+        : {}),
+      ...(options.noProgressTurnNudge !== undefined
+        ? { noProgressTurnNudge: options.noProgressTurnNudge }
+        : {}),
+      ...(options.noProgressTurnNudgeLimit !== undefined
+        ? { noProgressTurnNudgeLimit: options.noProgressTurnNudgeLimit }
+        : {}),
+      ...(options.noProgressTurnThreshold !== undefined
+        ? { noProgressTurnThreshold: options.noProgressTurnThreshold }
+        : {}),
     })
   }
 
   get permissionMode(): PermissionMode {
     return this.currentMode
+  }
+
+  loadToolMetadata(metadata: Record<string, unknown>): void {
+    this.engine.loadToolMetadata(metadata)
   }
 
   /**
@@ -185,8 +208,7 @@ export class GuildhallAgent {
     }
     if (streamError) throw new Error(streamError)
     const messages = this.engine.messages
-    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
-    const text = lastAssistant ? extractText(lastAssistant) : ''
+    const text = extractLatestAssistantText(messages)
     return {
       text,
       messages,
@@ -263,9 +285,17 @@ export class GuildhallAgent {
     for await (const _event of this.engine.continuePending()) void _event
     this.persistSession()
     const messages = this.engine.messages
-    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
-    const text = lastAssistant ? extractText(lastAssistant) : ''
+    const text = extractLatestAssistantText(messages)
     return { text, messages, usage: this.engine.totalUsage }
+  }
+
+  /**
+   * Clear the in-memory conversation and persist the empty snapshot so later
+   * resumes do not reload a poisoned session.
+   */
+  resetConversation(): void {
+    this.engine.clear()
+    this.persistSession()
   }
 
   private persistSession(): void {
@@ -301,6 +331,10 @@ export class GuildhallAgent {
 
   get totalUsage(): UsageSnapshot {
     return this.engine.totalUsage
+  }
+
+  getToolMetadata(): Record<string, unknown> {
+    return this.engine.getToolMetadata()
   }
 }
 
@@ -360,4 +394,13 @@ function extractText(message: ConversationMessage): string {
     }
   }
   return parts.join('')
+}
+
+function extractLatestAssistantText(messages: readonly ConversationMessage[]): string {
+  for (const message of [...messages].reverse()) {
+    if (message.role !== 'assistant') continue
+    const text = extractText(message)
+    if (text.trim().length > 0) return text
+  }
+  return ''
 }

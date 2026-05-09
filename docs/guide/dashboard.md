@@ -10,7 +10,7 @@ The dashboard is a Svelte SPA served by `guildhall serve` at `http://localhost:7
 
 - **Project view** — the main surface. Tabs for Work (inbox + active tasks), Planner, Timeline, Coordinators, Settings, Release, and Workspace Import. See [Project view](../web-ui/project-view).
 - **Task drawer** — slides open when you click a task card. Tabs for Transcript, History, Spec, Experts, and Provenance. See [Task drawer](../web-ui/task-drawer).
-- **Providers** — credential management for Claude, OpenAI, Codex, llama.cpp, LM Studio. See [Providers page](../web-ui/providers).
+- **Providers** — credential management for authenticated CLIs plus OpenAI-compatible and Anthropic-compatible providers. See [Providers page](../web-ui/providers).
 - **Setup wizard** — runs from `/setup` on first boot and after `guildhall config`. See [Setup wizard](../web-ui/setup).
 
 ## In-UI help

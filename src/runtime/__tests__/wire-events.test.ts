@@ -106,6 +106,24 @@ describe('tickOutcomeToBackendEvent — FR-16 wire mapping', () => {
     expect(parsed.message).toContain('boom')
   })
 
+  it('maps provider-backoff to a resumable wire error instead of a hard task failure', () => {
+    const outcome: TickOutcome = {
+      kind: 'provider-backoff',
+      taskId: 't1',
+      agent: 'gate-checker-agent',
+      status: 'gate_check',
+      error: 'OpenAI-compatible API HTTP 429: {"status":429,"title":"Too Many Requests"}',
+    }
+    const evt = tickOutcomeToBackendEvent(outcome)
+    const parsed = backendEventSchema.parse(evt)
+    expect(parsed.type).toBe('error')
+    expect(parsed.reason).toBe('provider_backoff')
+    expect(parsed.task_id).toBe('t1')
+    expect(parsed.agent_name).toBe('gate-checker-agent')
+    expect(parsed.message).toMatch(/retryable provider throttle/i)
+    expect(parsed.message).toMatch(/kept the task in gate_check/i)
+  })
+
   it('humanizes the "Exceeded maximum turn limit" error for non-technical readers', () => {
     // The activity feed used to show "Agent worker-agent failed on task-001:
     // Exceeded maximum turn limit (8)" which reads as a scary ERROR to a
@@ -127,6 +145,22 @@ describe('tickOutcomeToBackendEvent — FR-16 wire mapping', () => {
     expect(parsed.message).toMatch(/task-001/)
     expect(parsed.message).toMatch(/8 steps/)
     expect(parsed.message).toMatch(/no action needed/i)
+  })
+
+  it('humanizes empty model replies as provider hiccups instead of task failure', () => {
+    const outcome: TickOutcome = {
+      kind: 'agent-error',
+      taskId: 'task-001',
+      agent: 'worker-agent',
+      error: 'Model returned an empty assistant message. The turn was ignored to keep the session healthy.',
+    }
+    const evt = tickOutcomeToBackendEvent(outcome)
+    const parsed = backendEventSchema.parse(evt)
+    expect(parsed.type).toBe('error')
+    expect(parsed.message).not.toMatch(/failed/i)
+    expect(parsed.message).toMatch(/empty model reply/i)
+    expect(parsed.message).toMatch(/task state intact/i)
+    expect(parsed.message).toMatch(/retry the run or switch providers/i)
   })
 
   it('maps no-coordinator to a wire error event', () => {

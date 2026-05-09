@@ -45,6 +45,7 @@ export interface QueryEngineOptions {
   model: string
   systemPrompt: string
   maxTokens?: number
+  temperature?: number
   contextWindowTokens?: number | null
   autoCompactThresholdTokens?: number | null
   maxTurns?: number | null
@@ -60,6 +61,10 @@ export interface QueryEngineOptions {
   compactor?: Compactor
   noToolTurnNudge?: string | undefined
   noToolTurnNudgeLimit?: number | undefined
+  noProgressToolNames?: readonly string[] | undefined
+  noProgressTurnNudge?: string | undefined
+  noProgressTurnNudgeLimit?: number | undefined
+  noProgressTurnThreshold?: number | undefined
 }
 
 export class QueryEngine {
@@ -70,6 +75,7 @@ export class QueryEngine {
   private model: string
   private systemPrompt: string
   private readonly maxTokens: number
+  private readonly temperature: number | undefined
   private readonly contextWindowTokens: number | null | undefined
   private readonly autoCompactThresholdTokens: number | null | undefined
   private maxTurns: number | null
@@ -79,6 +85,10 @@ export class QueryEngine {
   private readonly compactor: Compactor | undefined
   private readonly noToolTurnNudge: string | undefined
   private readonly noToolTurnNudgeLimit: number | undefined
+  private readonly noProgressToolNames: readonly string[] | undefined
+  private readonly noProgressTurnNudge: string | undefined
+  private readonly noProgressTurnNudgeLimit: number | undefined
+  private readonly noProgressTurnThreshold: number | undefined
   private readonly toolMetadata: Record<string, unknown>
   private messagesInternal: ConversationMessage[] = []
   private totalUsageInternal: UsageSnapshot = { ...emptyUsage }
@@ -91,6 +101,7 @@ export class QueryEngine {
     this.model = options.model
     this.systemPrompt = options.systemPrompt
     this.maxTokens = options.maxTokens ?? 4096
+    this.temperature = options.temperature
     this.contextWindowTokens = options.contextWindowTokens
     this.autoCompactThresholdTokens = options.autoCompactThresholdTokens
     this.maxTurns = options.maxTurns ?? 8
@@ -100,6 +111,10 @@ export class QueryEngine {
     this.compactor = options.compactor
     this.noToolTurnNudge = options.noToolTurnNudge
     this.noToolTurnNudgeLimit = options.noToolTurnNudgeLimit
+    this.noProgressToolNames = options.noProgressToolNames
+    this.noProgressTurnNudge = options.noProgressTurnNudge
+    this.noProgressTurnNudgeLimit = options.noProgressTurnNudgeLimit
+    this.noProgressTurnThreshold = options.noProgressTurnThreshold
     this.toolMetadata = options.toolMetadata ?? {}
     // Plan-mode tools call this callback to swap the engine's permission
     // checker. Effect is "next turn onward" — mid-turn evaluations continue
@@ -260,6 +275,7 @@ export class QueryEngine {
       model: this.model,
       systemPrompt: this.systemPrompt,
       maxTokens: this.maxTokens,
+      ...(this.temperature !== undefined ? { temperature: this.temperature } : {}),
       ...(this.contextWindowTokens !== undefined
         ? { contextWindowTokens: this.contextWindowTokens }
         : {}),
@@ -274,6 +290,18 @@ export class QueryEngine {
       ...(this.noToolTurnNudge !== undefined ? { noToolTurnNudge: this.noToolTurnNudge } : {}),
       ...(this.noToolTurnNudgeLimit !== undefined
         ? { noToolTurnNudgeLimit: this.noToolTurnNudgeLimit }
+        : {}),
+      ...(this.noProgressToolNames !== undefined
+        ? { noProgressToolNames: this.noProgressToolNames }
+        : {}),
+      ...(this.noProgressTurnNudge !== undefined
+        ? { noProgressTurnNudge: this.noProgressTurnNudge }
+        : {}),
+      ...(this.noProgressTurnNudgeLimit !== undefined
+        ? { noProgressTurnNudgeLimit: this.noProgressTurnNudgeLimit }
+        : {}),
+      ...(this.noProgressTurnThreshold !== undefined
+        ? { noProgressTurnThreshold: this.noProgressTurnThreshold }
         : {}),
       ...(abortSignal ? { abortSignal } : {}),
       toolMetadata: this.toolMetadata,

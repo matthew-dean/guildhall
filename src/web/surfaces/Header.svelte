@@ -58,8 +58,12 @@
     align-items: center;
     gap: var(--s-3);
     padding: var(--s-2) var(--s-4);
+    min-height: var(--app-header-h);
     border-bottom: 1px solid var(--border);
     background: var(--bg-raised);
+    position: sticky;
+    top: 0;
+    z-index: var(--z-app-header);
   }
   .brand {
     font-size: var(--fs-3);

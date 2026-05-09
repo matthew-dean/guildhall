@@ -145,7 +145,7 @@
 
       <Card title="Coordinators ({facts.coordinators.count})">
         {#snippet actions()}
-          <a class="edit-link" href={facts.coordinators.editHref} onclick={editLink(facts.coordinators.editHref)}>Edit →</a>
+          <a class="edit-link" href={facts.coordinators.editHref} onclick={editLink(facts.coordinators.editHref)}>Open →</a>
         {/snippet}
         {#if facts.coordinators.count === 0}
           <p class="muted">None configured.</p>

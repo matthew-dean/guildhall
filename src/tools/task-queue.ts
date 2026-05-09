@@ -1,7 +1,7 @@
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
-import { AcceptanceCriteria, GateResult, Task, TaskQueue, TaskStatus } from '@guildhall/core'
+import { AcceptanceCriteria, GateResult, Task, TaskQueue, TaskStatus, parseAcceptanceCriteriaFromSpec } from '@guildhall/core'
 import { atomicWriteText } from '@guildhall/sessions'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
@@ -55,7 +55,7 @@ const updateTaskInputSchema = z.object({
   taskId: z.string().optional(),
   title: z.string().optional(),
   status: TaskStatus.optional(),
-  assignedTo: z.string().optional(),
+  assignedTo: z.string().nullable().optional(),
   note: z
     .object({
       agentId: z.string(),
@@ -78,15 +78,23 @@ export interface UpdateTaskResult {
   error?: string
 }
 
-export async function updateTask(input: UpdateTaskInput): Promise<UpdateTaskResult> {
+function inferMetadataTaskId(metadata: Record<string, unknown> = {}): string | null {
+  const taskId = metadata['current_task_id']
+  return typeof taskId === 'string' && taskId.trim().length > 0 ? taskId.trim() : null
+}
+
+export async function updateTask(
+  input: UpdateTaskInput,
+  metadata: Record<string, unknown> = {},
+): Promise<UpdateTaskResult> {
   try {
     const raw = await fs.readFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
-    const taskId = input.taskId ?? inferSingleActiveTaskId(queue)
+    const taskId = input.taskId ?? inferMetadataTaskId(metadata) ?? inferSingleActiveTaskId(queue)
     if (!taskId) {
       return {
         success: false,
-        error: 'Missing taskId and could not infer a single active task',
+        error: 'Missing taskId (or metadata.current_task_id) and could not infer a single active task',
       }
     }
     const task = queue.tasks.find((t) => t.id === taskId)
@@ -102,18 +110,37 @@ export async function updateTask(input: UpdateTaskInput): Promise<UpdateTaskResu
     }
 
     if (input.title !== undefined) task.title = input.title
-    if (input.status) task.status = TaskStatus.parse(input.status)
+    const explicitStatus = input.status ? TaskStatus.parse(input.status) : undefined
+    if (explicitStatus) task.status = explicitStatus
     if (input.assignedTo !== undefined) {
-      if (input.assignedTo.trim() === '') delete task.assignedTo
+      if ((input.assignedTo ?? '').trim() === '') delete task.assignedTo
       else task.assignedTo = input.assignedTo
     }
     if (input.blockReason !== undefined && input.blockReason.trim() !== '') task.blockReason = input.blockReason
     if (input.humanJudgment !== undefined && input.humanJudgment.trim() !== '') task.humanJudgment = input.humanJudgment
-    if (input.spec !== undefined && input.spec.trim() !== '') task.spec = input.spec
-    if (input.acceptanceCriteria !== undefined) {
+    if (input.spec !== undefined && input.spec.trim() !== '') {
+      task.spec = input.spec
+      if (task.acceptanceCriteria.length === 0) {
+        const derivedCriteria = parseAcceptanceCriteriaFromSpec(input.spec)
+        if (derivedCriteria.length > 0) task.acceptanceCriteria = derivedCriteria
+      }
+    }
+    if (
+      input.status === undefined &&
+      input.spec !== undefined &&
+      input.spec.trim() !== '' &&
+      task.status === 'exploring'
+    ) {
+      task.status = 'spec_review'
+    }
+    normalizeAssignmentForStatus(task, {
+      explicitAssignedTo: input.assignedTo !== undefined,
+      explicitStatus,
+    })
+    if (input.acceptanceCriteria !== undefined && input.acceptanceCriteria.length > 0) {
       task.acceptanceCriteria = z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
     }
-    if (input.gateResults !== undefined) {
+    if (input.gateResults !== undefined && input.gateResults.length > 0) {
       task.gateResults = z.array(GateResult).parse(input.gateResults)
     }
     if (input.completedAt !== undefined && input.completedAt.trim() !== '') task.completedAt = input.completedAt
@@ -127,6 +154,35 @@ export async function updateTask(input: UpdateTaskInput): Promise<UpdateTaskResu
     return { success: true, taskId }
   } catch (err) {
     return { success: false, error: String(err) }
+  }
+}
+
+function normalizeAssignmentForStatus(
+  task: z.infer<typeof Task>,
+  opts: { explicitAssignedTo: boolean; explicitStatus?: z.infer<typeof TaskStatus> },
+): void {
+  if (opts.explicitAssignedTo) return
+
+  switch (task.status) {
+    case 'in_progress':
+      task.assignedTo = 'worker-agent'
+      return
+    case 'review':
+      task.assignedTo = 'reviewer-agent'
+      return
+    case 'gate_check':
+      task.assignedTo = 'gate-checker-agent'
+      return
+    case 'ready':
+    case 'spec_review':
+    case 'exploring':
+    case 'proposed':
+    case 'pending_pr':
+    case 'done':
+    case 'shelved':
+    case 'blocked':
+      if (opts.explicitStatus) delete task.assignedTo
+      return
   }
 }
 
@@ -223,8 +279,8 @@ export const updateTaskTool = defineTool({
     required: ['tasksPath'],
   },
   isReadOnly: () => false,
-  execute: async (input) => {
-    const result = await updateTask(input)
+  execute: async (input, ctx) => {
+    const result = await updateTask(input, ctx.metadata ?? {})
     return {
       output: result.success
         ? `Updated task ${result.taskId ?? input.taskId ?? '(inferred task)'}`

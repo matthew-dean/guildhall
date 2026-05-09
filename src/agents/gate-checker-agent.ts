@@ -17,9 +17,12 @@ function renderGateDescriptions(gates: readonly string[] | undefined): {
   descriptions: string
   source: 'project-bootstrap' | 'standard-ts'
 } {
-  if (gates && gates.length > 0) {
+  if (gates !== undefined) {
     return {
-      descriptions: gates.map((g) => `- \`${g}\``).join('\n'),
+      descriptions:
+        gates.length > 0
+          ? gates.map((g) => `- \`${g}\``).join('\n')
+          : '- No verified shell gates are currently configured for this project bootstrap.',
       source: 'project-bootstrap',
     }
   }
@@ -35,8 +38,8 @@ function buildPrompt(gates: readonly string[] | undefined): string {
   const { descriptions, source } = renderGateDescriptions(gates)
   const sourceLine =
     source === 'project-bootstrap'
-      ? "These are the project's verified `bootstrap.successGates` from guildhall.yaml. They were empirically established during meta-intake and are the authoritative list for this project."
-      : 'No project-level gates configured — falling back to the TypeScript defaults. When in doubt, run typecheck and build at minimum.'
+      ? "These are the project's currently known hard gates. They may come from workspace bootstrap verification or from task-scoped project detection for a nested subproject. If the current task prompt supplies task-scoped hard gates, those override any generic defaults below. Do not invent extra gates beyond the authoritative list you were given for this task."
+      : 'No project-level gates configured — falling back to the TypeScript defaults unless the current task prompt supplies a more specific task-scoped gate list. When in doubt, run typecheck and build at minimum.'
   return `
 You are the Gate Checker Agent in the Guildhall multi-agent system.
 You run automated hard gates to verify that completed work actually passes.
@@ -64,7 +67,7 @@ All gates pass:
 Any gate fails:
 - Add a note with the exact gate output (truncated to 50 lines if very long)
 - Increment revisionCount
-- Set status back to 'in_progress', clear assignedTo
+- Set status back to 'in_progress'
 - Log a 'heartbeat' progress entry: "Gate [id] failed on task [id]. Returning to worker."
 
 ## Escalation (FR-10)

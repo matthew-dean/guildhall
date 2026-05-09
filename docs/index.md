@@ -41,7 +41,7 @@ features:
     linkText: Worktree isolation
   - icon: 🔌
     title: Provider-agnostic
-    details: Claude, OpenAI-compatible, Codex, local llama.cpp / LM Studio. Model assignment is per role.
+    details: Authenticated CLIs plus OpenAI-compatible and Anthropic-compatible providers. Model assignment is per role.
     link: /subsystems/providers
     linkText: Providers
   - icon: 🛠️
@@ -62,7 +62,7 @@ features:
    │                         ├── sessions/           ← resumable state   │
    │                         └── transcripts/        ← full audit trail  │
    │                                                                     │
-   │   .guildhall/config.yaml       (local provider creds; gitignored)   │
+   │   .guildhall/config.yaml       (project policy, preferred provider) │
    └─────────────────────────────────────────────────────────────────────┘
                                       │
               ┌───────────────────────┼────────────────────────┐

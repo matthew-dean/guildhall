@@ -13,11 +13,23 @@ help_summary: |
 
 Three config layers, merged in order:
 
-1. **Global** — `~/.guildhall/config.yaml`. Provider credentials, default models, provider fallback policy, UI preferences. Overridable with `GUILDHALL_CONFIG_DIR`.
+1. **Global** — `~/.guildhall/config.yaml`. Provider credentials, default models, provider fallback policy, UI preferences, and any rare machine-wide runtime overrides. Overridable with `GUILDHALL_CONFIG_DIR`.
 2. **Workspace** — `guildhall.yaml` at the workspace root. Coordinators, domains, MCP servers, hooks, models.
-3. **Project** — `.guildhall/config.yaml` inside a repo. Mostly used for per-repo secrets and provider policy that shouldn't be committed.
+3. **Project** — `.guildhall/config.yaml` inside a repo. Mostly used for local secrets and the selected preferred provider for that repo.
 
 Project overrides workspace overrides global.
+
+## Runtime tuning posture
+
+Guildhall tries to auto-tune execution concurrency from the active provider and
+runtime capacity. That is the default path and the only one we document for
+normal use.
+
+If you truly need to override reviewer fan-out or similar execution behavior,
+prefer a machine-wide override in `~/.guildhall/config.yaml` so every project on
+that machine follows the same rule. Project-local execution tuning remains
+supported as an escape hatch, but it is intentionally not part of the normal
+setup flow.
 
 ## Public API
 

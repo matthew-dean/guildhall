@@ -155,4 +155,48 @@ describe('pickNextTasks', () => {
     const picks = pickNextTasks({ queue: q, capacity: 5, domainFilter: 'core' })
     expect(picks.map((t) => t.id)).toEqual(['t2'])
   })
+
+  it('uses lane capacities to keep spec intake moving alongside worker progress', () => {
+    const q = queue([
+      task({ id: 't-progress', status: 'in_progress', priority: 'high' }),
+      task({ id: 't-ready', status: 'ready', priority: 'normal' }),
+      task({ id: 't-exploring', status: 'exploring', priority: 'critical' }),
+    ])
+    const picks = pickNextTasks({
+      queue: q,
+      capacity: 2,
+      laneCapacities: {
+        worker: 1,
+        spec: 1,
+      },
+    })
+    expect(picks.map((t) => t.id)).toEqual(['t-progress', 't-exploring'])
+  })
+
+  it('round-robins across bounded lanes in priority lane order', () => {
+    const q = queue([
+      task({ id: 't-gate', status: 'gate_check', priority: 'low' }),
+      task({ id: 't-review', status: 'review', priority: 'normal' }),
+      task({ id: 't-progress', status: 'in_progress', priority: 'normal' }),
+      task({ id: 't-ready', status: 'ready', priority: 'high' }),
+      task({ id: 't-proposed', status: 'proposed', priority: 'critical' }),
+      task({ id: 't-exploring', status: 'exploring', priority: 'critical' }),
+    ])
+    const picks = pickNextTasks({
+      queue: q,
+      capacity: 4,
+      laneCapacities: {
+        review: 1,
+        worker: 1,
+        coordinator: 1,
+        spec: 1,
+      },
+    })
+    expect(picks.map((t) => t.id)).toEqual([
+      't-gate',
+      't-progress',
+      't-proposed',
+      't-exploring',
+    ])
+  })
 })

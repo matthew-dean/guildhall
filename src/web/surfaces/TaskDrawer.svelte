@@ -22,7 +22,7 @@
   import type { DrawerPayload, DrawerTab, Escalation } from '../lib/types.js'
   import { onEvent, eventTaskId } from '../lib/events.js'
   import { project } from '../lib/project.svelte.js'
-  import { onDestroy } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
 
   interface Props {
     taskId: string
@@ -37,6 +37,7 @@
   let runBusy = $state(false)
   let runError = $state<string | null>(null)
   let activeTab = $state<DrawerTab>('spec')
+  let pollHandle: ReturnType<typeof setInterval> | null = null
 
   // Modal state
   let resolveModal = $state<{ escalation: Escalation; mode: 'retry' | 'resolve' } | null>(null)
@@ -112,6 +113,28 @@
     const note = approveSpecNote.trim()
     const body = note ? { approvalNote: note } : undefined
     approveSpecOpen = false
+    if (taskId === 'task-workspace-import') {
+      busy = true
+      try {
+        const res = await fetch('/api/project/workspace-import/approve', {
+          method: 'POST',
+          headers: body ? { 'content-type': 'application/json' } : undefined,
+          body: body ? JSON.stringify(body) : undefined,
+        })
+        if (!res.ok) {
+          const b = await res.json().catch(() => ({}))
+          error = b.error ?? `HTTP ${res.status}`
+          return
+        }
+        await load()
+        return
+      } catch (err) {
+        error = friendlyFetchError(err)
+        return
+      } finally {
+        busy = false
+      }
+    }
     await post('approve-spec', body)
   }
 
@@ -151,6 +174,12 @@
   $effect(() => {
     void load()
     void project.refresh()
+  })
+
+  onMount(() => {
+    pollHandle = setInterval(() => {
+      void load()
+    }, 4000)
   })
 
   async function runProject(action: 'start' | 'stop') {
@@ -196,6 +225,10 @@
   })
   onDestroy(() => {
     offEvent()
+    if (pollHandle) {
+      clearInterval(pollHandle)
+      pollHandle = null
+    }
     if (refreshTimer) {
       clearTimeout(refreshTimer)
       refreshTimer = null
@@ -232,7 +265,10 @@
 
   <div class="gh-drawer-body">
     {#if error}
-      <p class="error">Error: {error}</p>
+      <div class="error-stack">
+        <p class="error">Error: {error}</p>
+        <Button variant="ghost" size="sm" onclick={() => void load()}>Retry</Button>
+      </div>
     {:else if !payload}
       <p class="loading">Loading…</p>
     {:else if activeTab === 'spec'}
@@ -255,7 +291,7 @@
     {:else if activeTab === 'history'}
       <HistoryTab task={payload.task} />
     {:else if activeTab === 'provenance'}
-      <ProvenanceTab task={payload.task} />
+      <ProvenanceTab task={payload.task} contextDebug={payload.contextDebug ?? []} />
     {/if}
   </div>
 
@@ -358,7 +394,7 @@
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.5);
-    z-index: 150;
+    z-index: var(--z-drawer-backdrop);
   }
   .gh-drawer {
     position: fixed;
@@ -368,7 +404,7 @@
     height: 100vh;
     background: var(--bg-raised);
     border-left: 1px solid var(--border);
-    z-index: 151;
+    z-index: var(--z-drawer);
     display: flex;
     flex-direction: column;
   }
@@ -417,6 +453,12 @@
     font-size: var(--fs-1);
     text-decoration: underline dotted;
     margin-left: var(--s-2);
+  }
+  .error-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--s-2);
   }
   .loading,
   .error {

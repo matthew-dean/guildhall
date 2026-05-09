@@ -24,16 +24,30 @@ import {
   markProviderVerified,
   resolveGlobalCredentials,
   migrateProjectProvidersToGlobal,
+  resolveModelsForProvider,
   type ProviderKind,
+  writeModelsForProvider,
 } from '@guildhall/config'
-import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT, type ModelAssignmentConfig } from '@guildhall/core'
+import {
+  MODEL_CATALOG,
+  type Checkpoint,
+  DEFAULT_LOCAL_MODEL_ASSIGNMENT,
+  DEFAULT_CLOUD_MODEL_ASSIGNMENT,
+  type ModelAssignmentConfig,
+} from '@guildhall/core'
 import {
   loadLeverSettings,
   saveLeverSettings,
   defaultAgentSettingsPath,
   makeDefaultSettings,
 } from '@guildhall/levers'
-import { resolveEscalation, updateDesignSystem } from '@guildhall/tools'
+import {
+  activeEscalations,
+  latestResolvedRetryEscalationAt,
+  readCheckpoint,
+  resolveEscalation,
+  updateDesignSystem,
+} from '@guildhall/tools'
 import { DesignSystem, summarizeDesignSystem } from '@guildhall/core'
 import {
   loadProjectGuildRoster,
@@ -42,12 +56,30 @@ import {
   pickPrimaryEngineer,
 } from '@guildhall/guilds'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
+import { resolveFanoutCapacity } from './fanout-dispatcher.js'
 import {
   normalizePreferredProvider,
-  inferPreferredProvider,
   selectApiClient,
   type PreferredProviderKey,
+  type ProviderName,
 } from './provider-selection.js'
+import {
+  buildSelectApiClientOptions,
+  getRuntimeProviderConfig,
+  resolveLaneConcurrencyPlan,
+} from './provider-runtime-config.js'
+import {
+  anthropicCompatiblePoolKey,
+  openAiCompatiblePoolKey,
+  providerClientHealth,
+} from './provider-client-pool.js'
+import {
+  providerCapabilitiesForAnyKey,
+  providerFamilyForAnyKey,
+  providerLabelForAnyKey,
+  providerLabelForSetupKey,
+  SETUP_PROVIDER_ORDER,
+} from './provider-metadata.js'
 import {
   createExploringTask,
   approveSpec,
@@ -88,6 +120,11 @@ import {
 } from './workspace-import/index.js'
 import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
 import { buildThread } from './thread.js'
+import {
+  buildCoordinatorProjectPathMap,
+  resolveTaskProjectPath,
+} from './task-project-path.js'
+import { readContextDebugForTask } from './context-observability.js'
 import {
   buildSnapshot,
   listWizards,
@@ -155,6 +192,122 @@ interface ResolvedProject {
   /** Null if guildhall.yaml is missing — wizard handles this case. */
   config: ReturnType<typeof readWorkspaceConfig> | null
   initializationNeeded: boolean
+}
+
+function isReviewOwnershipMismatch(task: Record<string, unknown>): boolean {
+  const handoffSequence = Array.isArray(task.handoffSequence) ? task.handoffSequence : []
+  const handoffStep =
+    typeof task.handoffStep === 'number' && Number.isFinite(task.handoffStep)
+      ? task.handoffStep
+      : 0
+  const hasPendingHandoffStep = handoffSequence.length > 0 && handoffStep + 1 < handoffSequence.length
+  return (
+    task.status === 'review' &&
+    task.assignedTo !== 'reviewer-agent' &&
+    !hasPendingHandoffStep
+  )
+}
+
+function isWorkerOwnershipMismatch(task: Record<string, unknown>): boolean {
+  return task.status === 'in_progress' && task.assignedTo !== 'worker-agent'
+}
+
+function isGateCheckOwnershipMismatch(task: Record<string, unknown>): boolean {
+  return task.status === 'gate_check' && task.assignedTo !== 'gate-checker-agent'
+}
+
+function isSpecReviewOwnershipMismatch(task: Record<string, unknown>): boolean {
+  return task.status === 'spec_review' && task.assignedTo != null
+}
+
+function isTerminalOwnershipMismatch(task: Record<string, unknown>): boolean {
+  return (
+    (task.status === 'done' || task.status === 'blocked' || task.status === 'shelved') &&
+    task.assignedTo != null
+  )
+}
+
+  async function readTasksFileNormalized(
+  tasksPath: string,
+): Promise<Array<Record<string, unknown>>> {
+  if (!existsSync(tasksPath)) return []
+  const rawText = await fsp.readFile(tasksPath, 'utf8')
+  const parsed = JSON.parse(rawText) as
+    | { tasks?: Array<Record<string, unknown>>; version?: unknown; lastUpdated?: unknown }
+    | Array<Record<string, unknown>>
+  const tasks = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tasks) ? parsed.tasks : []
+  let changed = false
+  for (const task of tasks) {
+    if (isWorkerOwnershipMismatch(task)) {
+      task.assignedTo = 'worker-agent'
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    } else if (isReviewOwnershipMismatch(task)) {
+      task.assignedTo = 'reviewer-agent'
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    } else if (isGateCheckOwnershipMismatch(task)) {
+      task.assignedTo = 'gate-checker-agent'
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    } else if (isSpecReviewOwnershipMismatch(task)) {
+      task.assignedTo = null
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    } else if (isTerminalOwnershipMismatch(task)) {
+      task.assignedTo = null
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    }
+  }
+  if (!changed) return tasks
+
+  const rewritten = Array.isArray(parsed)
+    ? tasks
+    : {
+        ...parsed,
+        tasks,
+        lastUpdated: new Date().toISOString(),
+      }
+  await atomicWriteText(tasksPath, JSON.stringify(rewritten, null, 2))
+  return tasks
+}
+
+async function buildProjectInboxSnapshot(input: {
+  projectPath: string
+  initializationNeeded: boolean
+  coordinatorCount: number
+}) {
+  if (input.initializationNeeded) {
+    return { items: [], blockers: { bootstrap: false, workspaceImport: false } }
+  }
+  // Self-healing scan: if the workspace has signals but nobody has run
+  // the scanner yet, kick it off implicitly. The user shouldn't have to
+  // press "Scan" — once a coordinator exists, the agent discovers
+  // existing goals/tasks on its own and surfaces them for review.
+  // No-op if already seeded, off, or not needed.
+  try {
+    const memoryDir = join(input.projectPath, 'memory')
+    const goalsPath = join(memoryDir, 'workspace-goals.json')
+    if (!existsSync(goalsPath) && input.coordinatorCount > 0) {
+      await maybeSeedWorkspaceImport({ memoryDir, projectPath: input.projectPath })
+    }
+  } catch {
+    /* never let self-healing break an inbox read */
+  }
+  const items = buildInbox({ projectPath: input.projectPath })
+  const blockers = buildInboxBlockers(items)
+  return { items, blockers }
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +427,17 @@ function resolveProject(projectPath: string): ResolvedProject {
   return { path: projectPath, id, config, initializationNeeded: false }
 }
 
+function resolveTaskPathForDomain(
+  project: ResolvedProject,
+  domain: string,
+): string {
+  return resolveTaskProjectPath({
+    workspaceProjectPath: project.path,
+    domain,
+    coordinators: project.config?.coordinators ?? [],
+  })
+}
+
 /**
  * Filter a supervisor event buffer down to events for a specific task id.
  *
@@ -294,6 +458,196 @@ export function filterEventsForTask<T extends { event?: unknown }>(
   })
 }
 
+function noteMatchesCanonicalAcceptance(
+  note: Record<string, unknown>,
+  canonicalDescriptions: ReadonlySet<string>,
+): boolean {
+  const role = typeof note.role === 'string' ? note.role : ''
+  const content = typeof note.content === 'string' ? note.content.trim() : ''
+  if (role !== 'specifier') return true
+  const prefix = 'Added acceptance criterion: '
+  if (!content.startsWith(prefix)) return true
+  const description = content.slice(prefix.length).trim()
+  if (!description) return true
+  return canonicalDescriptions.has(description)
+}
+
+function normalizeTaskForDrawer(task: Record<string, unknown>): Record<string, unknown> {
+  const canonicalDescriptions = new Set(
+    Array.isArray(task.acceptanceCriteria)
+      ? task.acceptanceCriteria
+          .map((criterion) =>
+            typeof (criterion as { description?: unknown }).description === 'string'
+              ? (criterion as { description: string }).description.trim()
+              : '',
+          )
+          .filter(Boolean)
+      : [],
+  )
+  if (canonicalDescriptions.size === 0 || !Array.isArray(task.notes)) return task
+  const notes = (task.notes as Array<Record<string, unknown>>)
+    .filter((note) => noteMatchesCanonicalAcceptance(note, canonicalDescriptions))
+  return notes.length === task.notes.length ? task : { ...task, notes }
+}
+
+function latestTaskNoteContent(
+  task: Record<string, unknown>,
+  predicate: (note: Record<string, unknown>) => boolean,
+): string | null {
+  const notes = Array.isArray(task.notes) ? task.notes as Array<Record<string, unknown>> : []
+  const match = [...notes]
+    .reverse()
+    .find((note) => {
+      const content = typeof note.content === 'string' ? note.content.trim() : ''
+      return content.length > 0 && predicate(note)
+    })
+  const content = typeof match?.content === 'string' ? match.content.trim() : ''
+  return content || null
+}
+
+function isWorkerSelfCritiqueNote(note: Record<string, unknown>): boolean {
+  const role = typeof note.role === 'string' ? note.role.trim().toLowerCase() : ''
+  const agentId = typeof note.agentId === 'string' ? note.agentId.trim().toLowerCase() : ''
+  const content = typeof note.content === 'string' ? note.content : ''
+  if (content.trim().length === 0 || !/self-critique/i.test(content)) return false
+  if (role === 'self-critique') return true
+  if (agentId === 'worker-agent') return true
+  return role === 'implementation' || role === 'implementer' || role === 'worker'
+}
+
+function taskHasWorkerSelfCritique(task: Record<string, unknown>): boolean {
+  const notes = Array.isArray(task.notes) ? (task.notes as Array<Record<string, unknown>>) : []
+  return [...notes].reverse().some((note) => isWorkerSelfCritiqueNote(note))
+}
+
+function normalizedCheckpointNextPlannedAction(
+  task: Record<string, unknown>,
+  checkpoint: Checkpoint | null,
+): string | null {
+  const nextAction = checkpoint?.nextPlannedAction?.trim() ?? ''
+  if (!nextAction) return null
+  if (
+    taskHasWorkerSelfCritique(task) &&
+    /write or refresh self-critique note|write or refresh the self-critique note/i.test(nextAction)
+  ) {
+    return "Resume from the latest self-critique and recorded verification evidence, then hand off to review."
+  }
+  return nextAction
+}
+
+function buildTerminalSummary(
+  task: Record<string, unknown>,
+): { headline: string; detail?: string } | undefined {
+  const status = typeof task.status === 'string' ? task.status : ''
+  const mergeRecord =
+    task.mergeRecord && typeof task.mergeRecord === 'object'
+      ? (task.mergeRecord as Record<string, unknown>)
+      : null
+
+  if (mergeRecord) {
+    const result = typeof mergeRecord.result === 'string' ? mergeRecord.result : ''
+    const toBranch =
+      typeof mergeRecord.toBranch === 'string' && mergeRecord.toBranch.trim().length > 0
+        ? mergeRecord.toBranch.trim()
+        : 'the base branch'
+    const detail =
+      typeof mergeRecord.detail === 'string' && mergeRecord.detail.trim().length > 0
+        ? mergeRecord.detail.trim()
+        : undefined
+    const prUrl =
+      typeof mergeRecord.prUrl === 'string' && mergeRecord.prUrl.trim().length > 0
+        ? mergeRecord.prUrl.trim()
+        : ''
+
+    switch (result) {
+      case 'merged':
+        return { headline: `Merged locally into ${toBranch}.` }
+      case 'pushed':
+        return { headline: `Merged and pushed to ${toBranch}.` }
+      case 'push_failed_degraded':
+        return {
+          headline: `Merged locally into ${toBranch}; push did not complete.`,
+          ...(detail ? { detail } : {}),
+        }
+      case 'pending_pr':
+        return {
+          headline: prUrl ? 'PR opened and awaiting human merge.' : 'Awaiting human PR merge.',
+          ...(prUrl ? { detail: prUrl } : detail ? { detail } : {}),
+        }
+      case 'skipped':
+        return {
+          headline: 'Task completed without an automatic merge.',
+          ...(detail ? { detail } : {}),
+        }
+      case 'conflict':
+        return {
+          headline: `Merge into ${toBranch} hit a conflict.`,
+          ...(detail ? { detail } : {}),
+        }
+      default:
+        break
+    }
+  }
+
+  if (status === 'done') return { headline: 'Task completed.' }
+  if (status === 'pending_pr') return { headline: 'Awaiting human PR merge.' }
+  return undefined
+}
+
+async function enrichTaskForServe(
+  projectPath: string,
+  task: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const normalized = normalizeTaskForDrawer(task)
+  const taskId = typeof normalized.id === 'string' ? normalized.id : ''
+  const memoryDir = join(projectPath, 'memory')
+  const checkpoint = taskId ? await readCheckpoint(memoryDir, taskId) : null
+  const reviewerFeedbackCutoffMs = (() => {
+    const cutoff = latestResolvedRetryEscalationAt(normalized as import('@guildhall/core').Task)
+    const parsed = cutoff ? Date.parse(cutoff) : Number.NaN
+    return Number.isFinite(parsed) ? parsed : null
+  })()
+  const latestReviewerSummary = latestTaskNoteContent(
+    normalized,
+    (note) => {
+      const agentId = typeof note.agentId === 'string' ? note.agentId : ''
+      const role = typeof note.role === 'string' ? note.role : ''
+      if (!(agentId === 'reviewer-fanout' || agentId === 'reviewer-agent' || role === 'reviewer')) {
+        return false
+      }
+      if (reviewerFeedbackCutoffMs === null) return true
+      const timestamp = typeof note.timestamp === 'string' ? Date.parse(note.timestamp) : Number.NaN
+      return Number.isFinite(timestamp) && timestamp > reviewerFeedbackCutoffMs
+    },
+  )
+  const latestSelfCritique = latestTaskNoteContent(
+    normalized,
+    (note) => isWorkerSelfCritiqueNote(note),
+  )
+  const terminalSummary = buildTerminalSummary(normalized)
+
+  return {
+    ...normalized,
+    ...(latestReviewerSummary ? { latestReviewerSummary } : {}),
+    ...(latestSelfCritique ? { latestSelfCritique } : {}),
+    ...(terminalSummary ? { terminalSummary } : {}),
+    ...(checkpoint
+      ? {
+          latestCheckpoint: {
+            step: checkpoint.step,
+            agentId: checkpoint.agentId,
+            intent: checkpoint.intent,
+            nextPlannedAction:
+              normalizedCheckpointNextPlannedAction(normalized, checkpoint) ??
+              checkpoint.nextPlannedAction,
+            filesTouched: checkpoint.filesTouched,
+            writtenAt: checkpoint.writtenAt,
+          },
+        }
+      : {}),
+  }
+}
+
 /**
  * Build the Hono app for a project without binding to a port. Exposed for
  * integration tests that want to call `app.fetch(new Request(...))` directly;
@@ -309,6 +663,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   const supervisor = new OrchestratorSupervisor()
   const app = new Hono()
+
+  // Dynamic API surfaces should never be cached. The dashboard depends on
+  // `/api/project`, inbox state, and SSE-adjacent status reads reflecting the
+  // latest orchestrator tick immediately after a stop/start transition.
+  app.use('/api/*', async (c, next) => {
+    await next()
+    c.header('Cache-Control', 'no-store, no-cache, must-revalidate')
+    c.header('Pragma', 'no-cache')
+    c.header('Expires', '0')
+  })
 
   // -------------------------------------------------------------------------
   // API: runtime version (shown next to the "Guildhall" wordmark)
@@ -403,7 +767,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // -------------------------------------------------------------------------
   // API: project
   // -------------------------------------------------------------------------
-  app.get('/api/project', c => {
+  app.get('/api/project', async c => {
     try {
       if (project.initializationNeeded) {
         return c.json({
@@ -413,25 +777,49 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       }
       const tasksPath = join(project.path, 'memory', 'TASKS.json')
-      let tasks: unknown[] = []
-      if (existsSync(tasksPath)) {
-        const raw = JSON.parse(readFileSync(tasksPath, 'utf8'))
-        tasks = Array.isArray(raw) ? raw : Array.isArray(raw?.tasks) ? raw.tasks : []
-      }
+      const rawTasks = await readTasksFileNormalized(tasksPath)
+      const tasks = await Promise.all(rawTasks.map((task) => enrichTaskForServe(project.path, task)))
       const run = supervisor.get(project.id)
+      const resolvedConfig = resolveConfig({ workspacePath: project.path })
       const preferredProvider = readProjectConfig(project.path).preferredProvider
       const preferredActiveProvider = preferredProvider
         ? normalizePreferredProvider(preferredProvider)
         : undefined
       const recent = supervisor.recent(project.id, undefined, project.path)
       const bootstrapStatus = readBootstrapStatus(join(project.path, 'memory'))
+      const inbox = await buildProjectInboxSnapshot({
+        projectPath: project.path,
+        initializationNeeded: project.initializationNeeded,
+        coordinatorCount: project.config?.coordinators?.length ?? 0,
+      })
+      const runtimeProvider = getRuntimeProviderConfig({
+        projectPath: project.path,
+        models: resolvedConfig.models,
+      })
+      const preferredHealth = providerHealthForRun({
+        credentials: runtimeProvider.credentials,
+        activeProvider: preferredActiveProvider ?? null,
+      })
       const providerStatus = run?.providerStatus ?? (
         preferredActiveProvider
-          ? {
+          ? buildProviderStatusSnapshot({
               preferredProvider,
               activeProvider: null,
               fallback: false,
-            }
+              health: preferredHealth,
+              allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
+              activeModel: resolvedConfig.models.worker,
+              models: resolvedConfig.models,
+              laneConcurrency: await providerLaneConcurrencyForRun({
+                projectPath: project.path,
+                activeProvider: preferredActiveProvider ?? null,
+              }),
+              warnings: await providerWarningsForRun({
+                projectPath: project.path,
+                activeProvider: preferredActiveProvider ?? null,
+                health: preferredHealth,
+              }),
+            })
           : null
       )
       return c.json({
@@ -442,6 +830,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tags: project.config?.tags ?? [],
         config: project.config,
         tasks,
+        inbox,
         run: run
           ? {
               status: run.status,
@@ -449,6 +838,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               startedAt: run.startedAt,
               stoppedAt: run.stoppedAt,
               error: run.error,
+              ...(run.stopSummary ? { stopSummary: run.stopSummary } : {}),
               ...(run.providerStatus ? { providerStatus: run.providerStatus } : {}),
             }
           : null,
@@ -487,6 +877,321 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  const DEFAULT_OPENAI_MODEL_ASSIGNMENT: ModelAssignmentConfig = {
+    spec: 'gpt-4o',
+    coordinator: 'gpt-4o',
+    worker: 'gpt-4o',
+    reviewer: 'gpt-4o-mini',
+    gateChecker: 'gpt-4o-mini',
+  }
+
+  const DEFAULT_CODEX_MODEL_ASSIGNMENT: ModelAssignmentConfig = {
+    spec: 'gpt-5.3-codex',
+    coordinator: 'gpt-5.3-codex',
+    worker: 'gpt-5.3-codex',
+    reviewer: 'gpt-5.3-codex',
+    gateChecker: 'gpt-5.3-codex',
+  }
+
+  function modelLooksCompatibleWithProvider(provider: ProviderName, modelId: string): boolean {
+    const lower = modelId.trim().toLowerCase()
+    if (!lower) return false
+    switch (provider) {
+      case 'claude-oauth':
+      case 'anthropic-api':
+        return lower.startsWith('claude-')
+      case 'codex-oauth':
+        return lower === 'gpt-5-codex' || lower === 'gpt-5.3-codex'
+      case 'openai-api':
+        return lower.length > 0
+      case 'llama-cpp':
+        return true
+      default:
+        return false
+    }
+  }
+
+  function assignmentMatchesProvider(
+    provider: ProviderName,
+    assignment: ModelAssignmentConfig,
+  ): boolean {
+    return [
+      assignment.spec,
+      assignment.coordinator,
+      assignment.worker,
+      assignment.reviewer,
+      assignment.gateChecker,
+    ].every(modelId => modelLooksCompatibleWithProvider(provider, modelId))
+  }
+
+  function defaultAssignmentForProvider(provider: ProviderName): ModelAssignmentConfig | null {
+    switch (provider) {
+      case 'claude-oauth':
+      case 'anthropic-api':
+        return DEFAULT_CLOUD_MODEL_ASSIGNMENT
+      case 'codex-oauth':
+        return DEFAULT_CODEX_MODEL_ASSIGNMENT
+      case 'openai-api':
+        return DEFAULT_OPENAI_MODEL_ASSIGNMENT
+      case 'llama-cpp':
+        return DEFAULT_LOCAL_MODEL_ASSIGNMENT
+      default:
+        return null
+    }
+  }
+
+  function buildProviderStatusSnapshot(input: {
+    preferredProvider?: PreferredProviderKey | ProviderName | null
+    activeProvider?: ProviderName | null
+    health?: {
+      pooled: boolean
+      state: 'idle' | 'healthy' | 'degraded'
+      lastUsedAt?: string
+      lastSuccessAt?: string
+      lastFailureAt?: string
+      consecutiveFailures: number
+      retryableFailures: number
+      fatalFailures: number
+      lastError?: string
+    } | null
+    allowPaidProviderFallback?: boolean
+    selectedAt?: string
+    reason?: string
+    activeModel?: string | null
+    models?: ModelAssignmentConfig | null
+    fallback?: boolean
+    decisions?: Array<{
+      code: string
+      severity: 'info' | 'warn' | 'error'
+      basis: 'availability' | 'capability' | 'compatibility'
+      message: string
+    }>
+    laneConcurrency?: {
+      spec: {
+        requested: number
+        effective: number
+        recommended: number | null
+        clamped: boolean
+      }
+      worker: {
+        requested: number
+        effective: number
+        recommended: number | null
+        clamped: boolean
+      }
+      review: {
+        requested: number
+        effective: number
+        recommended: number | null
+        clamped: boolean
+      }
+      coordinator: {
+        requested: number
+        effective: number
+        recommended: number | null
+        clamped: boolean
+      }
+      reviewerFanout: {
+        requested: number
+        effective: number
+        recommended: number | null
+        clamped: boolean
+      }
+    }
+    warnings?: Array<{
+      code: string
+      severity: 'info' | 'warn' | 'error'
+      message: string
+    }>
+  }) {
+    const preferredProvider = input.preferredProvider ?? null
+    const activeProvider = input.activeProvider ?? 'none'
+    const selectedAt =
+      input.selectedAt ??
+      input.health?.lastUsedAt ??
+      input.health?.lastSuccessAt ??
+      input.health?.lastFailureAt ??
+      'unknown'
+    return {
+      activeProvider,
+      ...(preferredProvider ? {
+        preferredCapabilities: providerCapabilitiesForAnyKey(preferredProvider),
+        preferredProvider,
+        preferredProviderFamily: providerFamilyForAnyKey(preferredProvider),
+        preferredProviderLabel: providerLabelForAnyKey(preferredProvider),
+      } : {}),
+      ...(activeProvider !== 'none' ? {
+        activeCapabilities: providerCapabilitiesForAnyKey(activeProvider),
+        activeProviderFamily: providerFamilyForAnyKey(activeProvider),
+        activeProviderLabel: providerLabelForAnyKey(activeProvider),
+      } : {}),
+      ...(input.health !== undefined ? { health: input.health } : {}),
+      fallback: Boolean(input.fallback),
+      ...(input.allowPaidProviderFallback !== undefined
+        ? { allowPaidProviderFallback: input.allowPaidProviderFallback }
+        : {}),
+      selectedAt,
+      ...(input.reason ? { reason: input.reason } : {}),
+      ...(input.activeModel ? { activeModel: input.activeModel } : {}),
+      ...(input.models ? { models: input.models } : {}),
+      ...(input.decisions && input.decisions.length > 0 ? { decisions: input.decisions } : {}),
+      ...(input.laneConcurrency ? { laneConcurrency: input.laneConcurrency } : {}),
+      ...(input.warnings && input.warnings.length > 0 ? { warnings: input.warnings } : {}),
+    }
+  }
+
+  async function dispatchCapacityForProject(projectPath: string): Promise<number> {
+    try {
+      const settings = await loadLeverSettings({
+        path: defaultAgentSettingsPath(projectPath),
+      })
+      return resolveFanoutCapacity(settings.project)
+    } catch {
+      return readProjectConfig(projectPath).workerLaneConcurrency ?? 1
+    }
+  }
+
+  async function providerWarningsForRun(input: {
+    projectPath: string
+    activeProvider: ProviderName | null | undefined
+    health?: ReturnType<typeof providerHealthForRun>
+  }) {
+    const warnings: Array<{
+      code: string
+      severity: 'info' | 'warn' | 'error'
+      message: string
+    }> = []
+    if (input.health?.state === 'degraded') {
+      warnings.push({
+        code: 'provider_pool_health_degraded',
+        severity: 'warn',
+        message:
+          `${providerLabelForAnyKey(input.activeProvider)} has seen ${input.health.consecutiveFailures} consecutive pooled failures` +
+          `${input.health.lastError ? ` (${input.health.lastError})` : ''}.`,
+      })
+    }
+    return warnings
+  }
+
+  function providerHealthForRun(input: {
+    credentials: {
+      anthropicApiKey?: string
+      openaiApiKey?: string
+      openaiBaseUrl?: string
+      llamaCppUrl?: string
+    }
+    activeProvider: ProviderName | null | undefined
+  }) {
+    const key = providerHealthKeyForRun(input)
+    if (!key) return null
+    return providerClientHealth(key)
+  }
+
+  function providerHealthKeyForRun(input: {
+    credentials: {
+      anthropicApiKey?: string
+      openaiApiKey?: string
+      openaiBaseUrl?: string
+      llamaCppUrl?: string
+    }
+    activeProvider: ProviderName | null | undefined
+  }) {
+    switch (input.activeProvider) {
+      case 'llama-cpp': {
+        const url = input.credentials.llamaCppUrl?.trim()
+        if (!url) return null
+        return openAiCompatiblePoolKey({
+          provider: 'llama-cpp',
+          baseUrl: url,
+        })
+      }
+      case 'openai-api': {
+        const key = input.credentials.openaiApiKey?.trim()
+        if (!key) return null
+        return openAiCompatiblePoolKey({
+          provider: 'openai-api',
+          baseUrl: input.credentials.openaiBaseUrl?.trim() || 'https://api.openai.com/v1',
+          apiKey: key,
+        })
+      }
+      case 'anthropic-api': {
+        const key = input.credentials.anthropicApiKey?.trim()
+        if (!key) return null
+        return anthropicCompatiblePoolKey(key)
+      }
+      default:
+        return null
+    }
+  }
+
+  async function providerLaneConcurrencyForRun(input: {
+    projectPath: string
+    activeProvider: ProviderName | null | undefined
+    dispatchCapacity?: number
+  }) {
+    const dispatchCapacity =
+      input.dispatchCapacity ?? await dispatchCapacityForProject(input.projectPath)
+    const lanePlan = resolveLaneConcurrencyPlan({
+      projectPath: input.projectPath,
+      provider: input.activeProvider,
+      dispatchCapacity,
+    })
+    return {
+      spec: {
+        requested: lanePlan.spec.requestedConcurrency,
+        effective: lanePlan.spec.effectiveConcurrency,
+        recommended: lanePlan.spec.recommendedConcurrency,
+        clamped: lanePlan.spec.clamped,
+      },
+      worker: {
+        requested: lanePlan.worker.requestedConcurrency,
+        effective: lanePlan.worker.effectiveConcurrency,
+        recommended: lanePlan.worker.recommendedConcurrency,
+        clamped: lanePlan.worker.clamped,
+      },
+      review: {
+        requested: lanePlan.review.requestedConcurrency,
+        effective: lanePlan.review.effectiveConcurrency,
+        recommended: lanePlan.review.recommendedConcurrency,
+        clamped: lanePlan.review.clamped,
+      },
+      coordinator: {
+        requested: lanePlan.coordinator.requestedConcurrency,
+        effective: lanePlan.coordinator.effectiveConcurrency,
+        recommended: lanePlan.coordinator.recommendedConcurrency,
+        clamped: lanePlan.coordinator.clamped,
+      },
+      reviewerFanout: {
+        requested: lanePlan.reviewerFanout.requestedConcurrency,
+        effective: lanePlan.reviewerFanout.effectiveConcurrency,
+        recommended: lanePlan.reviewerFanout.recommendedConcurrency,
+        clamped: lanePlan.reviewerFanout.clamped,
+      },
+    }
+  }
+
+  async function selectPaidFallbackProvider(opts: {
+    anthropicApiKey?: string
+    openaiApiKey?: string
+    openaiBaseUrl?: string
+    llamaCppUrl?: string
+  }) {
+    const fallbackOrder: ProviderName[] = [
+      'codex-oauth',
+      'claude-oauth',
+      'anthropic-api',
+      'openai-api',
+    ]
+    for (const provider of fallbackOrder) {
+      const result = await selectApiClient(buildSelectApiClientOptions({
+        providerOverride: provider,
+        credentials: opts,
+      }))
+      if (result.providerName !== 'none') return result
+    }
+    return null
+  }
+
   function missingAssignedModels(
     assignment: ModelAssignmentConfig,
     loadedModels: string[],
@@ -522,19 +1227,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
       } catch {
         /* best-effort */
       }
-      const creds = resolveGlobalCredentials()
-      const globalCfg = readGlobalConfig()
       const resolvedConfig = resolveConfig({ workspacePath: project.path })
-      const preferred = projectCfg.preferredProvider ?? inferPreferredProvider(resolvedConfig.models)
-      const allowPaidProviderFallback =
-        projectCfg.allowPaidProviderFallback ?? globalCfg.allowPaidProviderFallback
-      const preflight = await selectApiClient({
-        ...(preferred ? { preferredProvider: preferred } : {}),
-        ...(allowPaidProviderFallback ? { allowPaidProviderFallback: true } : {}),
-        ...(creds.anthropicApiKey ? { anthropicApiKey: creds.anthropicApiKey } : {}),
-        ...(creds.openaiApiKey ? { openaiApiKey: creds.openaiApiKey } : {}),
-        ...(creds.llamaCppUrl ? { llamaCppUrl: creds.llamaCppUrl } : {}),
+      const runtimeProvider = getRuntimeProviderConfig({
+        projectPath: project.path,
+        models: resolvedConfig.models,
       })
+      const creds = runtimeProvider.credentials
+      const preferred = runtimeProvider.preferredProvider
+      const allowPaidProviderFallback = runtimeProvider.allowPaidProviderFallback
+      let preflight = await selectApiClient(runtimeProvider.selectOptions)
       if (preflight.providerName === 'none') {
         return c.json(
           {
@@ -546,34 +1247,105 @@ export function buildServeApp(opts: ServeOptions = {}): {
           400,
         )
       }
+      let effectiveProvider = preflight.providerName
+      let effectiveModels = resolvedConfig.models
+      let fallbackReason = preflight.reason
+      const routingDecisions: Array<{
+        code: string
+        severity: 'info' | 'warn' | 'error'
+        basis: 'availability' | 'capability' | 'compatibility'
+        message: string
+      }> = []
       if (preflight.providerName === 'llama-cpp' && creds.llamaCppUrl && project.config) {
         const assignedModels = resolvedConfig.models
         const loadedModels = await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
         if (loadedModels.length === 0) {
-          return c.json(
-            {
-              error:
-                'LM Studio is reachable, but Guildhall could not see a loaded model. To avoid surprise memory pressure from JIT loading, load the model you want in LM Studio, then start again.',
-              code: 'no_loaded_model',
-              provider: 'llama-cpp',
-            },
-            400,
-          )
+          const paidFallback = allowPaidProviderFallback
+            ? await selectPaidFallbackProvider(creds)
+            : null
+          if (!paidFallback) {
+            return c.json(
+              {
+                error:
+                  'The configured local server is reachable, but Guildhall could not see a loaded model. To avoid surprise memory pressure from JIT loading, load the model you want on that server, then start again.',
+                code: 'no_loaded_model',
+                provider: 'llama-cpp',
+              },
+              400,
+            )
+          }
+          preflight = paidFallback
+          if (paidFallback.providerName === 'none') {
+            return c.json(
+              { error: paidFallback.reason ?? 'No fallback provider available.', code: 'fallback_unavailable' },
+              400,
+            )
+          }
+          effectiveProvider = paidFallback.providerName
+          effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
+          fallbackReason =
+            'Preferred local server had no loaded model available, so Guildhall switched to a paid fallback provider.'
+          routingDecisions.push({
+            code: 'preferred_provider_missing_loaded_model',
+            severity: 'info',
+            basis: 'availability',
+            message:
+              'The preferred local server had no loaded model available, so Guildhall selected a fallback provider for this run.',
+          })
         }
-        const missingModels = missingAssignedModels(assignedModels, loadedModels)
-        if (missingModels.length > 0) {
-          return c.json(
-            {
-              error:
-                `LM Studio currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
-                'Guildhall will not JIT-load missing models automatically; load the configured model in LM Studio or choose a loaded model in Providers.',
-              code: 'model_unavailable',
-              provider: 'llama-cpp',
-              loadedModels,
-              missingModels,
-            },
-            400,
-          )
+        if (effectiveProvider === 'llama-cpp') {
+          const missingModels = missingAssignedModels(assignedModels, loadedModels)
+          if (missingModels.length > 0) {
+            const paidFallback = allowPaidProviderFallback
+              ? await selectPaidFallbackProvider(creds)
+              : null
+            if (!paidFallback) {
+              return c.json(
+                {
+                  error:
+                    `The configured local server currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
+                    'Guildhall will not JIT-load missing models automatically; load the configured model on that server or choose a loaded model in Providers.',
+                  code: 'model_unavailable',
+                  provider: 'llama-cpp',
+                  loadedModels,
+                  missingModels,
+                },
+                400,
+              )
+            }
+            preflight = paidFallback
+            if (paidFallback.providerName === 'none') {
+              return c.json(
+                { error: paidFallback.reason ?? 'No fallback provider available.', code: 'fallback_unavailable' },
+                400,
+              )
+            }
+            effectiveProvider = paidFallback.providerName
+            effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
+            fallbackReason =
+              'Preferred local server did not have the configured models loaded, so Guildhall switched to a paid fallback provider.'
+            routingDecisions.push({
+              code: 'preferred_provider_missing_assigned_models',
+              severity: 'info',
+              basis: 'compatibility',
+              message:
+                'The preferred local server did not have this project’s assigned models loaded, so Guildhall selected a fallback provider for this run.',
+            })
+          }
+        }
+      }
+      if (!assignmentMatchesProvider(effectiveProvider, effectiveModels)) {
+        effectiveModels = defaultAssignmentForProvider(effectiveProvider) ?? effectiveModels
+        if (effectiveProvider !== 'llama-cpp') {
+          fallbackReason ??=
+            `Guildhall swapped to models that ${effectiveProvider} can actually serve for this run.`
+          routingDecisions.push({
+            code: 'model_assignment_swapped_for_provider_compatibility',
+            severity: 'info',
+            basis: 'compatibility',
+            message:
+              `Guildhall swapped to models that ${providerLabelForAnyKey(effectiveProvider)} can actually serve for this run.`,
+          })
         }
       }
       const body = await c.req.json().catch(() => ({})) as {
@@ -585,25 +1357,50 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const normalizedPreferred = preferred
         ? normalizePreferredProvider(preferred)
         : undefined
-      const providerStatus = {
-        ...(preferred ? { preferredProvider: preferred } : {}),
-        activeProvider: preflight.providerName,
-        fallback: Boolean(normalizedPreferred && normalizedPreferred !== preflight.providerName),
+      const activeHealth = providerHealthForRun({
+        credentials: creds,
+        activeProvider: effectiveProvider,
+      })
+      const activeHealthKey = providerHealthKeyForRun({
+        credentials: creds,
+        activeProvider: effectiveProvider,
+      })
+      const providerStatus = buildProviderStatusSnapshot({
+        preferredProvider: preferred ?? null,
+        activeProvider: effectiveProvider,
+        health: activeHealth,
+        fallback: Boolean(normalizedPreferred && normalizedPreferred !== effectiveProvider),
         allowPaidProviderFallback,
         selectedAt: new Date().toISOString(),
-        ...(preflight.reason ? { reason: preflight.reason } : {}),
-      }
+        activeModel: effectiveModels.worker,
+        models: effectiveModels,
+        decisions: routingDecisions,
+        laneConcurrency: await providerLaneConcurrencyForRun({
+          projectPath: project.path,
+          activeProvider: effectiveProvider,
+        }),
+        warnings: await providerWarningsForRun({
+          projectPath: project.path,
+          activeProvider: effectiveProvider,
+          health: activeHealth,
+        }),
+        ...(fallbackReason ? { reason: fallbackReason } : {}),
+      })
       const run = supervisor.start({
         workspaceId: project.id,
         workspacePath: project.path,
         ...(stopAfterOneTask ? { stopAfterOneTask: true } : {}),
         providerStatus,
+        ...(activeHealthKey ? { providerHealthKey: activeHealthKey } : {}),
+        providerOverride: effectiveProvider,
+        modelAssignmentOverride: effectiveModels,
       })
       return c.json({
         status: run.status,
         mode: run.mode,
         startedAt: run.startedAt,
-        provider: preflight.providerName,
+        ...(run.stopSummary ? { stopSummary: run.stopSummary } : {}),
+        provider: effectiveProvider,
         providerStatus: run.providerStatus,
       })
     } catch (err) {
@@ -643,7 +1440,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         memoryDir: join(project.path, 'memory'),
         ask: body.ask,
         domain,
-        projectPath: project.path,
+        projectPath: resolveTaskPathForDomain(project, domain),
         ...(body.title ? { title: body.title } : {}),
       })
       return c.json(result)
@@ -689,7 +1486,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       domain = domain ?? coordinators[0]!.domain
       const result = await createBugReportTask({
         memoryDir: join(project.path, 'memory'),
-        projectPath: project.path,
+        projectPath: resolveTaskPathForDomain(project, domain),
         title: body.title,
         body: body.body,
         ...(body.stackTrace ? { stackTrace: body.stackTrace } : {}),
@@ -1209,6 +2006,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const result = await approveWorkspaceImport({
         memoryDir,
         projectPath: project.path,
+        coordinatorProjectPaths: buildCoordinatorProjectPathMap(
+          project.path,
+          project.config?.coordinators ?? [],
+        ),
       })
       if (!result.success) {
         return c.json({ error: result.error ?? 'Approval failed' }, 400)
@@ -1305,7 +2106,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         coordinators: {
           count: cfg?.coordinators?.length ?? 0,
           list: (cfg?.coordinators ?? []).map(c => ({ id: c.id, name: c.name })),
-          editHref: '/coordinators',
+          editHref: '/settings/coordinators',
         },
         designSystem: {
           summary: designSummary,
@@ -1339,29 +2140,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/project/inbox', async c => {
     try {
-      if (project.initializationNeeded) {
-        return c.json({ items: [], blockers: { bootstrap: false, workspaceImport: false } })
-      }
-      // Self-healing scan: if the workspace has signals but nobody has run
-      // the scanner yet, kick it off implicitly. The user shouldn't have to
-      // press "Scan" — once a coordinator exists, the agent discovers
-      // existing goals/tasks on its own and surfaces them for review.
-      // No-op if already seeded, off, or not needed.
-      try {
-        const memoryDir = join(project.path, 'memory')
-        const goalsPath = join(memoryDir, 'workspace-goals.json')
-        if (
-          !existsSync(goalsPath) &&
-          (project.config?.coordinators?.length ?? 0) > 0
-        ) {
-          await maybeSeedWorkspaceImport({ memoryDir, projectPath: project.path })
-        }
-      } catch {
-        /* never let self-healing break the inbox read */
-      }
-      const items = buildInbox({ projectPath: project.path })
-      const blockers = buildInboxBlockers(items)
-      return c.json({ items, blockers })
+      const inbox = await buildProjectInboxSnapshot({
+        projectPath: project.path,
+        initializationNeeded: project.initializationNeeded,
+        coordinatorCount: project.config?.coordinators?.length ?? 0,
+      })
+      return c.json(inbox)
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -1592,20 +2376,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // slice of related context (recent events touching this task) so the UI
   // can show "what's happening right now" without a second round-trip.
   // -------------------------------------------------------------------------
-  app.get('/api/project/task/:id', c => {
+  app.get('/api/project/task/:id', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const tasksPath = join(project.path, 'memory', 'TASKS.json')
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
-        | { tasks?: Array<Record<string, unknown>> }
-        | Array<Record<string, unknown>>
-      const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
+      const tasks = await readTasksFileNormalized(tasksPath)
       const id = c.req.param('id')
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
       const recent = filterEventsForTask(supervisor.recent(project.id, undefined, project.path), id)
-      return c.json({ task, recentEvents: recent })
+      const contextDebug = await readContextDebugForTask(join(project.path, 'memory'), id)
+      return c.json({
+        task: await enrichTaskForServe(project.path, task as Record<string, unknown>),
+        recentEvents: recent,
+        contextDebug,
+      })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -1785,6 +2571,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // approve-spec and resume have their own persistence (intake.ts owns the
       // write). Delegate to them so the exploring-transcript stays in sync.
       if (action === 'approve-spec') {
+        if (id === WORKSPACE_IMPORT_TASK_ID) {
+          return c.json(
+            {
+              error:
+                'Workspace import uses a dedicated approval flow. Use /api/project/workspace-import/approve instead.',
+            },
+            400,
+          )
+        }
         const body = await c.req.json().catch(() => ({})) as { approvalNote?: string }
         const result = await approveSpec({
           memoryDir,
@@ -2307,9 +3102,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           const br = (t as { blockReason?: string }).blockReason
           blockedByAgent.push({ id, title, ...(br ? { reason: br } : {}) })
         }
-        const escs = (t as { escalations?: Array<{ id: string; reason: string; summary: string; resolvedAt?: string }> }).escalations ?? []
-        for (const e of escs) {
-          if (!e.resolvedAt) openEscalations.push({
+        for (const e of activeEscalations(t as import('@guildhall/core').Task)) {
+          openEscalations.push({
             taskId: id,
             taskTitle: title,
             escalationId: e.id,
@@ -2495,6 +3289,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const configuredLlamaUrl = creds.llamaCppUrl ?? ''
       const llamaUrl = configuredLlamaUrl || defaultLlamaUrl
       const llamaReachable = llamaUrl.length > 0 ? await probeLlamaCpp(llamaUrl) : false
+      const configuredOpenAiBaseUrl = creds.openaiBaseUrl ?? ''
 
       const v = (kind: ProviderKind) => global.providers[kind]?.verifiedAt ?? null
 
@@ -2502,7 +3297,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         preferredProvider: stored.preferredProvider ?? null,
         providers: {
           'claude-oauth': {
-            label: 'Claude Pro/Max (via Claude Code CLI)',
+            label: providerLabelForSetupKey('claude-oauth'),
             detected: claudeInstalled,
             verifiedAt: v('claude-oauth'),
             detail: claudeInstalled
@@ -2510,7 +3305,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               : 'Install Claude Code and run `claude auth login`.',
           },
           'codex': {
-            label: 'Codex (via Codex CLI)',
+            label: providerLabelForSetupKey('codex'),
             detected: codexInstalled,
             verifiedAt: v('codex-oauth'),
             detail: codexInstalled
@@ -2518,19 +3313,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
               : 'Install the Codex CLI and run `codex auth login`.',
           },
           'llama-cpp': {
-            label: 'Local llama.cpp / LM Studio',
+            label: providerLabelForSetupKey('llama-cpp'),
             detected: llamaReachable,
             verifiedAt: v('llama-cpp'),
             url: llamaReachable ? llamaUrl : configuredLlamaUrl || null,
             detail:
               configuredLlamaUrl.length === 0 && !llamaReachable
-                ? `Not reachable at ${defaultLlamaUrl}. Start LM Studio / llama.cpp or paste a server URL.`
+                ? `Not reachable at ${defaultLlamaUrl}. Start an OpenAI-compatible local server such as LM Studio or llama.cpp, or paste a server URL.`
                 : llamaReachable
                   ? `Reachable at ${llamaUrl}`
-                  : `Not reachable at ${llamaUrl}. Start LM Studio / llama.cpp and click refresh.`,
+                  : `Not reachable at ${llamaUrl}. Start an OpenAI-compatible local server such as LM Studio or llama.cpp and click refresh.`,
           },
           'anthropic-api': {
-            label: 'Anthropic API key',
+            label: providerLabelForSetupKey('anthropic-api'),
             detected: Boolean(creds.anthropicApiKey),
             verifiedAt: v('anthropic-api'),
             detail: global.providers['anthropic-api']?.apiKey
@@ -2540,14 +3335,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
                 : 'Paste an API key to enable.',
           },
           'openai-api': {
-            label: 'OpenAI API key',
+            label: providerLabelForSetupKey('openai-api'),
             detected: Boolean(creds.openaiApiKey),
             verifiedAt: v('openai-api'),
+            baseUrl: configuredOpenAiBaseUrl || null,
             detail: global.providers['openai-api']?.apiKey
-              ? 'Stored in ~/.guildhall/providers.yaml'
+              ? configuredOpenAiBaseUrl
+                ? `Stored in ~/.guildhall/providers.yaml · ${configuredOpenAiBaseUrl}`
+                : 'Stored in ~/.guildhall/providers.yaml · defaults to https://api.openai.com/v1'
               : process.env.OPENAI_API_KEY
-                ? 'Picked up from $OPENAI_API_KEY'
-                : 'Paste an API key to enable.',
+                ? configuredOpenAiBaseUrl
+                  ? `Picked up from $OPENAI_API_KEY · ${configuredOpenAiBaseUrl}`
+                  : 'Picked up from $OPENAI_API_KEY · defaults to https://api.openai.com/v1'
+                : 'Paste an API key to enable. Leave base URL blank to use https://api.openai.com/v1.',
           },
         },
       })
@@ -2562,9 +3362,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         preferredProvider?: string
         anthropicApiKey?: string
         openaiApiKey?: string
+        openaiBaseUrl?: string
         lmStudioUrl?: string
       }
-      const allowed = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api'] as const
+      const allowed = SETUP_PROVIDER_ORDER
       // preferredProvider lives in the project file (selection, not a secret).
       if (body.preferredProvider) {
         if (!(allowed as readonly string[]).includes(body.preferredProvider)) {
@@ -2579,7 +3380,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
         setProvider('anthropic-api', { apiKey: body.anthropicApiKey.trim() })
       }
       if (typeof body.openaiApiKey === 'string' && body.openaiApiKey.trim().length > 0) {
-        setProvider('openai-api', { apiKey: body.openaiApiKey.trim() })
+        const existing = readGlobalProviders().providers['openai-api']
+        const baseUrl = (body.openaiBaseUrl ?? '').trim()
+        setProvider('openai-api', {
+          apiKey: body.openaiApiKey.trim(),
+          ...(baseUrl ? { baseUrl } : {}),
+          ...(existing?.verifiedAt ? { verifiedAt: existing.verifiedAt } : {}),
+        })
+      } else if (typeof body.openaiBaseUrl === 'string') {
+        const existing = readGlobalProviders().providers['openai-api']
+        if (existing?.apiKey) {
+          const baseUrl = body.openaiBaseUrl.trim()
+          setProvider('openai-api', {
+            apiKey: existing.apiKey,
+            ...(baseUrl ? { baseUrl } : {}),
+            ...(existing.verifiedAt ? { verifiedAt: existing.verifiedAt } : {}),
+          })
+        }
       }
       if (typeof body.lmStudioUrl === 'string' && body.lmStudioUrl.trim().length > 0) {
         const url = body.lmStudioUrl.trim()
@@ -2595,6 +3412,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       const global = readGlobalConfig()
       const workspace = readWorkspaceConfig(projectPath)
+      const projectCfg = readProjectConfig(projectPath)
+      const preferredProvider = projectCfg.preferredProvider
       const resolved = resolveConfig({ workspacePath: projectPath })
       const creds = resolveGlobalCredentials()
       const loadedModels = creds.llamaCppUrl
@@ -2604,8 +3423,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ? missingAssignedModels(resolved.models, loadedModels)
         : []
       return c.json({
-        globalModels: global.models ?? {},
-        projectModels: workspace.models ?? {},
+        globalModels: resolveModelsForProvider(global.models, preferredProvider),
+        projectModels: resolveModelsForProvider(workspace.models, preferredProvider),
         effectiveModels: resolved.models,
         loadedModels,
         missingModels,
@@ -2614,22 +3433,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
             [
               ...loadedModels.map(id => ({
                 id,
-                provider: 'lm-studio',
-                notes: 'Loaded in LM Studio',
+                provider: 'openai-compatible',
+                notes: 'Loaded on the configured local server',
               })),
               ...MODEL_CATALOG.map(m => ({
                 id: m.id,
                 provider: m.provider,
                 notes: m.notes ?? '',
               })),
-              ...Object.values(global.models ?? {}).map(id => ({
+              ...Object.values(resolveModelsForProvider(global.models, preferredProvider)).map(id => ({
                 id,
-                provider: 'lm-studio',
+                provider: 'openai-compatible',
                 notes: 'Global default',
               })),
-              ...Object.values(workspace.models ?? {}).map(id => ({
+              ...Object.values(resolveModelsForProvider(workspace.models, preferredProvider)).map(id => ({
                 id,
-                provider: 'lm-studio',
+                provider: 'openai-compatible',
                 notes: 'Project override',
               })),
             ].map(item => [item.id, item]),
@@ -2651,6 +3470,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker']
       if (!body.scope) return c.json({ error: 'Missing "scope"' }, 400)
+      const projectCfg = readProjectConfig(projectPath)
+      const preferredProvider = projectCfg.preferredProvider
 
       const requestedModels = body.models && typeof body.models === 'object'
         ? Object.entries(body.models).filter((entry): entry is [keyof ModelAssignmentConfig, string] => {
@@ -2667,7 +3488,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
       if (body.scope === 'global') {
         const global = readGlobalConfig()
-        const nextModels = { ...(global.models ?? {}) }
+        const nextModels = { ...resolveModelsForProvider(global.models, preferredProvider) }
         if (requestedModels) {
           for (const [role, model] of requestedModels) {
             const trimmed = model.trim()
@@ -2681,13 +3502,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
         updateGlobalConfig({
           ...global,
-          models: nextModels,
+          models: writeModelsForProvider(global.models, preferredProvider, nextModels),
         })
         return c.json({ ok: true })
       }
 
       const workspace = readWorkspaceConfig(projectPath)
-      const nextModels = { ...(workspace.models ?? {}) }
+      const nextModels = { ...resolveModelsForProvider(workspace.models, preferredProvider) }
       if (body.scope === 'global-default') {
         if (requestedModels) {
           for (const [role] of requestedModels) delete nextModels[role]
@@ -2712,7 +3533,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
       const nextConfig = { ...workspace }
       if (Object.keys(nextModels).length > 0) {
-        nextConfig.models = nextModels
+        nextConfig.models = writeModelsForProvider(workspace.models, preferredProvider, nextModels)
       } else {
         delete nextConfig.models
       }
@@ -2757,15 +3578,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
     name: PreferredProviderKey,
     llamaUrl: string,
   ): Promise<string | undefined> {
+    const configured = resolveModelsForProvider(readGlobalConfig().models, name)
     switch (name) {
       case 'claude-oauth':
       case 'anthropic-api':
-        return 'claude-haiku-4-5-20251001'
+        return configured.worker ?? configured.spec ?? 'claude-haiku-4-5-20251001'
       case 'openai-api':
-        return 'gpt-4o-mini'
+        return configured.worker ?? configured.spec ?? 'gpt-4o-mini'
       case 'codex':
       case 'codex-oauth':
-        return 'gpt-5.3-codex'
+        return configured.worker ?? configured.spec ?? 'gpt-5.3-codex'
       case 'llama-cpp': {
         if (!llamaUrl) return undefined
         try {
@@ -2803,19 +3625,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ok: false,
         error:
           forced === 'llama-cpp'
-            ? 'No model loaded on the llama.cpp/LM Studio server. Load a model and try again.'
+            ? 'No model loaded on the configured OpenAI-compatible local server. Load a model and try again.'
             : `No default model known for ${forced}.`,
       }
     }
     let selected
     try {
-      const selectOpts: Parameters<typeof selectApiClient>[0] = {
-        provider: forcedInternal,
-      }
-      if (creds.anthropicApiKey) selectOpts.anthropicApiKey = creds.anthropicApiKey
-      if (creds.openaiApiKey) selectOpts.openaiApiKey = creds.openaiApiKey
-      if (creds.llamaCppUrl) selectOpts.llamaCppUrl = creds.llamaCppUrl
-      selected = await selectApiClient(selectOpts)
+      selected = await selectApiClient(buildSelectApiClientOptions({
+        providerOverride: forcedInternal,
+        credentials: creds,
+      }))
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
@@ -2860,7 +3679,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.post('/api/providers/test', async c => {
     try {
       const body = (await c.req.json().catch(() => ({}))) as { provider?: string }
-      const allowed = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api'] as const
+      const allowed = SETUP_PROVIDER_ORDER
       const name = body.provider
       if (!name || !(allowed as readonly string[]).includes(name)) {
         return c.json({ ok: false, error: `Unknown provider "${name ?? ''}"` }, 400)
@@ -2887,7 +3706,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.post('/api/providers/disconnect', async c => {
     try {
       const body = (await c.req.json().catch(() => ({}))) as { provider?: string }
-      const allowed = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api'] as const
+      const allowed = SETUP_PROVIDER_ORDER
       const name = body.provider
       if (!name || !(allowed as readonly string[]).includes(name)) {
         return c.json({ ok: false, error: `Unknown provider "${name ?? ''}"` }, 400)
@@ -2946,7 +3765,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // -------------------------------------------------------------------------
   // SPA (catch-all)
   // -------------------------------------------------------------------------
-  app.get('*', c => c.html(dashboardHtml()))
+  app.get('*', c => {
+    c.header('Cache-Control', 'no-store, no-cache, must-revalidate')
+    c.header('Pragma', 'no-cache')
+    return c.html(dashboardHtml())
+  })
 
   return { app, supervisor, projectPath }
 }
@@ -3023,6 +3846,14 @@ const WEB_DIR = (() => {
   return resolve(here, '..', '..', 'dist', 'web')
 })()
 
+const WEB_ASSET_VERSION = (() => {
+  try {
+    return String(Math.floor(statSync(join(WEB_DIR, 'app.js')).mtimeMs))
+  } catch {
+    return 'dev'
+  }
+})()
+
 async function serveWebAsset(
   c: Context,
   filename: string,
@@ -3034,7 +3865,11 @@ async function serveWebAsset(
   }
   const body = await fsp.readFile(path)
   return new Response(body, {
-    headers: { 'content-type': contentType, 'cache-control': 'no-cache' },
+    headers: {
+      'content-type': contentType,
+      'cache-control': 'no-store, no-cache, must-revalidate',
+      pragma: 'no-cache',
+    },
   })
 }
 
@@ -3049,7 +3884,7 @@ function dashboardHtml(): string {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Guildhall</title>
-  <link rel="stylesheet" href="/web/app.css" />
+  <link rel="stylesheet" href="/web/app.css?v=${WEB_ASSET_VERSION}" />
 </head>
 <body>
   <div id="svelte-root"></div>
@@ -3058,7 +3893,7 @@ function dashboardHtml(): string {
       Guildhall requires JavaScript. Enable it and reload.
     </p>
   </noscript>
-  <script type="module" src="/web/app.js"></script>
+  <script type="module" src="/web/app.js?v=${WEB_ASSET_VERSION}"></script>
 </body>
 </html>`
 }

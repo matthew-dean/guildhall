@@ -83,7 +83,7 @@ export interface Task {
   status?: string
   domain?: string
   priority?: string
-  assignedTo?: string
+  assignedTo?: string | null
   revisionCount?: number
   remediationAttempts?: number
   blockReason?: string
@@ -96,6 +96,37 @@ export interface Task {
   reviewVerdicts?: ReviewVerdict[]
   escalations?: Escalation[]
   notes?: TaskNote[]
+  latestReviewerSummary?: string
+  latestSelfCritique?: string
+  latestCheckpoint?: {
+    step?: number
+    agentId?: string
+    intent?: string
+    nextPlannedAction?: string
+    filesTouched?: string[]
+    writtenAt?: string
+  }
+  mergeRecord?: {
+    fromBranch?: string
+    toBranch?: string
+    strategy?: 'ff_only_local' | 'ff_only_with_push' | 'manual_pr' | string
+    result?:
+      | 'merged'
+      | 'pushed'
+      | 'push_failed_degraded'
+      | 'pending_pr'
+      | 'conflict'
+      | 'skipped'
+      | string
+    commitSha?: string
+    prUrl?: string
+    mergedAt?: string
+    detail?: string
+  }
+  terminalSummary?: {
+    headline?: string
+    detail?: string
+  }
   origination?: string
   proposedBy?: string
   proposalRationale?: string
@@ -107,9 +138,50 @@ export interface Task {
   dependsOn?: string[]
 }
 
+export interface ContextSectionStat {
+  key?: string
+  label?: string
+  chars?: number
+  included?: boolean
+}
+
+export interface ContextHealthWarning {
+  code?: string
+  severity?: 'info' | 'warn' | 'error' | string
+  message?: string
+}
+
+export interface ContextDebugRecord {
+  id?: string
+  at?: string
+  taskId?: string
+  taskTitle?: string
+  taskStatus?: string
+  domain?: string
+  agentName?: string
+  agentRole?: string
+  modelId?: string
+  workspacePath?: string
+  taskProjectPath?: string
+  activeWorktreePath?: string
+  promptChars?: number
+  contextChars?: number
+  promptPreview?: string
+  snapshotPath?: string
+  sections?: ContextSectionStat[]
+  health?: ContextHealthWarning[]
+  reasons?: string[]
+  applicableGuildSlugs?: string[]
+  reviewerSlugs?: string[]
+  primaryEngineerSlug?: string | null
+  openQuestionCount?: number
+  acceptanceCriteriaCount?: number
+}
+
 export interface DrawerPayload {
   task: Task
   recentEvents?: unknown[]
+  contextDebug?: ContextDebugRecord[]
 }
 
 export type DrawerTab = 'spec' | 'transcript' | 'experts' | 'history' | 'provenance'
@@ -127,13 +199,25 @@ export interface TaskLite {
   priority?: string
   revisionCount?: number
   escalations?: Escalation[]
+  latestReviewerSummary?: string
+  latestSelfCritique?: string
+  latestCheckpoint?: Task['latestCheckpoint']
+  terminalSummary?: Task['terminalSummary']
 }
 
 export interface CoordinatorConfig {
   id?: string
   name?: string
   domain?: string
+  path?: string
   mandate?: string
+  concerns?: Array<{
+    id?: string
+    description?: string
+    reviewQuestions?: string[]
+  }>
+  autonomousDecisions?: string[]
+  escalationTriggers?: string[]
 }
 
 export interface ProjectRun {
@@ -142,16 +226,110 @@ export interface ProjectRun {
   startedAt?: string
   stoppedAt?: string
   error?: string
+  stopSummary?: {
+    ticks?: number
+    stopReason?: string
+    stopMessage?: string
+    idleSummary?: {
+      reason?: string
+      message?: string
+      counts?: Record<string, number>
+    }
+  }
   providerStatus?: ProviderStatus
 }
 
 export interface ProviderStatus {
+  health?: {
+    pooled: boolean
+    state: 'idle' | 'healthy' | 'degraded'
+    lastUsedAt?: string
+    lastSuccessAt?: string
+    lastFailureAt?: string
+    consecutiveFailures: number
+    retryableFailures: number
+    fatalFailures: number
+    lastError?: string
+  } | null
+  decisions?: Array<{
+    code: string
+    severity: 'info' | 'warn' | 'error'
+    basis: 'availability' | 'capability' | 'compatibility'
+    message: string
+  }>
+  laneConcurrency?: {
+    spec: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    worker: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    review: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    coordinator: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    reviewerFanout: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+  }
+  preferredCapabilities?: {
+    streaming: boolean
+    toolCalls: boolean
+    resumableSessions: boolean
+    reasoningSideChannel: 'none' | 'compatible'
+    browserAppControl: boolean
+    recommendedConcurrency: number
+    localServer: boolean
+  } | null
   preferredProvider?: string | null
+  preferredProviderFamily?: string | null
+  preferredProviderLabel?: string | null
   activeProvider?: string | null
+  activeCapabilities?: {
+    streaming: boolean
+    toolCalls: boolean
+    resumableSessions: boolean
+    reasoningSideChannel: 'none' | 'compatible'
+    browserAppControl: boolean
+    recommendedConcurrency: number
+    localServer: boolean
+  } | null
+  activeProviderFamily?: string | null
+  activeProviderLabel?: string | null
+  warnings?: Array<{
+    code: string
+    severity: 'info' | 'warn' | 'error'
+    message: string
+  }>
   fallback?: boolean
   allowPaidProviderFallback?: boolean
   selectedAt?: string
   reason?: string
+  activeModel?: string | null
+  models?: {
+    spec?: string
+    coordinator?: string
+    worker?: string
+    reviewer?: string
+    gateChecker?: string
+  } | null
 }
 
 export interface BootstrapStep {
@@ -172,6 +350,25 @@ export interface BootstrapStatus {
   steps?: BootstrapStep[]
 }
 
+export interface ProjectInbox {
+  items?: Array<{
+    kind?: string
+    severity?: 'high' | 'medium' | 'low' | string
+    taskId?: string
+    title?: string
+    detail?: string
+    actionHref?: string
+    defaultCount?: number
+    dismissEndpoint?: string
+    signals?: string[]
+    missingSteps?: string[]
+  }>
+  blockers?: {
+    bootstrap?: boolean
+    workspaceImport?: boolean
+  }
+}
+
 export interface ProjectDetail {
   initializationNeeded?: boolean
   id?: string
@@ -183,6 +380,7 @@ export interface ProjectDetail {
     [k: string]: unknown
   }
   tasks?: Task[]
+  inbox?: ProjectInbox
   run?: ProjectRun | null
   providerStatus?: ProviderStatus | null
   bootstrapStatus?: BootstrapStatus

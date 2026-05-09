@@ -33,6 +33,7 @@
     detail: string
     detected: boolean
     url?: string
+    baseUrl?: string | null
   }
   interface DraftCoordinator {
     name: string
@@ -70,6 +71,7 @@
   let providers = $state<Record<string, ProviderMeta> | null>(null)
   let selectedProvider = $state<string | null>(null)
   let apiKey = $state('')
+  let openaiBaseUrl = $state('')
   let llamaUrl = $state('')
 
   let bootstrapBusy = $state(false)
@@ -145,6 +147,7 @@
       .then(j => {
         if (j.error) return
         providers = j.providers
+        openaiBaseUrl = providers?.['openai-api']?.baseUrl ?? ''
         selectedProvider =
           j.preferredProvider ??
           ['claude-oauth', 'codex', 'anthropic-api', 'openai-api', 'llama-cpp'].find(
@@ -193,7 +196,10 @@
     try {
       const body: Record<string, unknown> = { preferredProvider: selectedProvider }
       if (selectedProvider === 'anthropic-api' && apiKey.trim()) body.anthropicApiKey = apiKey.trim()
-      if (selectedProvider === 'openai-api' && apiKey.trim()) body.openaiApiKey = apiKey.trim()
+      if (selectedProvider === 'openai-api' && apiKey.trim()) {
+        body.openaiApiKey = apiKey.trim()
+        body.openaiBaseUrl = openaiBaseUrl.trim()
+      }
       if (selectedProvider === 'llama-cpp') {
         body.lmStudioUrl = llamaUrl.trim() || providers?.['llama-cpp']?.url || 'http://localhost:1234/v1'
       }
@@ -428,7 +434,7 @@
         <Stack gap="3">
           <p class="muted">
             Guildhall reads credentials from Anthropic's / OpenAI's official CLIs, or falls back to
-            a paste-in API key stored in <code>.guildhall/config.yaml</code> (gitignored).
+            a pasted key stored globally in <code>~/.guildhall/providers.yaml</code>.
           </p>
           {#if !providers}
             <p class="muted">Detecting providers…</p>
@@ -438,8 +444,10 @@
               selected={selectedProvider}
               onselect={k => (selectedProvider = k)}
               {apiKey}
+              {openaiBaseUrl}
               {llamaUrl}
               onApiKeyChange={v => (apiKey = v)}
+              onOpenAiBaseUrlChange={v => (openaiBaseUrl = v)}
               onLlamaUrlChange={v => (llamaUrl = v)}
             />
           {/if}
