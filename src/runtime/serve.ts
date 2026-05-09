@@ -1006,6 +1006,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
   }) {
     const preferredProvider = input.preferredProvider ?? null
     const activeProvider = input.activeProvider ?? 'none'
+    const selectedAt =
+      input.selectedAt ??
+      input.health?.lastUsedAt ??
+      input.health?.lastSuccessAt ??
+      input.health?.lastFailureAt ??
+      'unknown'
     return {
       activeProvider,
       ...(preferredProvider ? {
@@ -1024,7 +1030,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ...(input.allowPaidProviderFallback !== undefined
         ? { allowPaidProviderFallback: input.allowPaidProviderFallback }
         : {}),
-      selectedAt: input.selectedAt ?? new Date().toISOString(),
+      selectedAt,
       ...(input.reason ? { reason: input.reason } : {}),
       ...(input.activeModel ? { activeModel: input.activeModel } : {}),
       ...(input.models ? { models: input.models } : {}),

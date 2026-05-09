@@ -38,5 +38,5 @@
     }
   },
   "include": ["src"],
-  "exclude": ["src/web", "src/**/__tests__/**"]
+  "exclude": ["src/web"]
 }

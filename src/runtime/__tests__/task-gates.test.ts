@@ -22,7 +22,7 @@ describe('resolveEffectiveTaskProjectPath', () => {
   it('prefers the task project path when provided', () => {
     expect(
       resolveEffectiveTaskProjectPath(
-        { projectPath: '/tmp/subproject', acceptanceCriteria: [] as any[] },
+        { projectPath: '/tmp/subproject' },
         '/tmp/workspace',
       ),
     ).toBe('/tmp/subproject')

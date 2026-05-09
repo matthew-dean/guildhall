@@ -4058,7 +4058,7 @@ export class Orchestrator {
       const settings = await this.readLeverSettings()
       return resolveFanoutCapacity(settings.project)
     } catch {
-      return 1
+      return readProjectConfig(this.opts.config.projectPath).workerLaneConcurrency ?? 1
     }
   }
 

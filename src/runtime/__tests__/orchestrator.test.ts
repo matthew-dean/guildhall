@@ -665,7 +665,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.status).toBe('exploring')
     expect(task.openQuestions).toHaveLength(1)
     expect(task.openQuestions?.[0]?.kind).toBe('choice')
-    expect(task.openQuestions?.[0]?.prompt).toContain('Pick one')
+    expect(task.openQuestions?.[0] && 'prompt' in task.openQuestions[0] ? task.openQuestions[0].prompt : '').toContain('Pick one')
 
     const transcript = await fs.readFile(
       path.join(memoryDir, 'exploring', 'a.md'),
@@ -752,7 +752,7 @@ describe('Orchestrator.tick — routing', () => {
     const task = queue.tasks[0]!
     expect(task.openQuestions).toHaveLength(1)
     expect(task.openQuestions?.[0]?.kind).toBe('choice')
-    expect(task.openQuestions?.[0]?.prompt).toBe('Pick one')
+    expect(task.openQuestions?.[0] && 'prompt' in task.openQuestions[0] ? task.openQuestions[0].prompt : '').toBe('Pick one')
     expect(task.openQuestions?.[0]).toMatchObject({
       choices: ['happy path only', 'error cases too'],
       selectionMode: 'single',
@@ -1250,7 +1250,7 @@ describe('Orchestrator.tick — routing', () => {
     await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
     const worker = stubAgent('worker-agent')
     const gitDriver = new InMemoryGitDriver()
-    gitDriver.setClean(path.join(tmpDir, '.guildhall', 'worktrees', 'task-resume'), true)
+    gitDriver.setClean(true)
     const orch = new Orchestrator({
       config: baseConfig(),
       agents: agentSet({ worker }),
@@ -2125,7 +2125,7 @@ describe('Orchestrator.tick — feedback loop', () => {
         ],
       }),
     ])
-    const reviewer = stubAgent('reviewer-agent', async () => ({ message: 'approve', toolCalls: [] }))
+    const reviewer = stubAgent('reviewer-agent')
 
     const orch = new Orchestrator({
       config: baseConfig(),
@@ -2161,7 +2161,7 @@ describe('Orchestrator.tick — feedback loop', () => {
         ],
       }),
     ])
-    const reviewer = stubAgent('reviewer-agent', async () => ({ message: 'approve', toolCalls: [] }))
+    const reviewer = stubAgent('reviewer-agent')
 
     const orch = new Orchestrator({
       config: baseConfig(),
@@ -2197,7 +2197,7 @@ describe('Orchestrator.tick — feedback loop', () => {
         ],
       }),
     ])
-    const reviewer = stubAgent('reviewer-agent', async () => ({ message: 'approve', toolCalls: [] }))
+    const reviewer = stubAgent('reviewer-agent')
 
     const orch = new Orchestrator({
       config: baseConfig(),
@@ -5267,7 +5267,7 @@ describe('Orchestrator worker no-progress escalation', () => {
 
     const worker = stubAgent('worker-agent', undefined, '')
     const gitDriver = new InMemoryGitDriver()
-    gitDriver.setClean(worktreePath, true)
+    gitDriver.setClean(true)
     const orch = new Orchestrator({
       config: baseConfig(),
       agents: agentSet({ worker }),
@@ -5276,11 +5276,11 @@ describe('Orchestrator worker no-progress escalation', () => {
 
     const first = await orch.tick({ dispatchLimit: 1 })
     expect(first.kind).toBe('processed')
-    expect(first.transitioned).toBe(false)
+    if (first.kind === 'processed') expect(first.transitioned).toBe(false)
 
     const second = await orch.tick({ dispatchLimit: 1 })
     expect(second.kind).toBe('escalated')
-    expect(second.reason).toContain('Worker made no visible progress')
+    if (second.kind === 'escalated') expect(second.reason).toContain('Worker made no visible progress')
 
     const queue = await readQueue()
     const task = queue.tasks.find((candidate) => candidate.id === 'task-011')

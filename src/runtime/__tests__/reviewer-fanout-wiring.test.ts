@@ -199,6 +199,24 @@ async function writeDesignSystem(ds: DesignSystem): Promise<void> {
   )
 }
 
+function builtContextStub() {
+  return {
+    taskSummary: '',
+    projectMemory: '',
+    recentProgress: '',
+    recentDecisions: '',
+    exploringTranscript: '',
+    personaPrompt: '',
+    applicableGuildSlugs: [],
+    primaryEngineerSlug: null,
+    reviewerSlugs: [],
+    envelope: '',
+    designSystem: '',
+    reviewRubrics: '',
+    formatted: '',
+  }
+}
+
 describe('Orchestrator — reviewer fan-out at review', () => {
   it('default fanout reviewers inspect files from the task projectPath', async () => {
     let observedCwd: string | null = null
@@ -238,10 +256,15 @@ describe('Orchestrator — reviewer fan-out at review', () => {
         {
           slug: 'project-manager',
           name: 'The Project Manager',
+          blurb: 'Checks handoff quality.',
+          role: 'overseer',
           principles: 'Check handoff quality.',
           rubric: [{ id: 'review', question: 'Is the review packet usable?', weight: 1 }],
+          deterministicChecks: [],
+          applicable: () => true,
         },
       ],
+      builtContext: builtContextStub(),
       context: 'Review the task.',
       memoryDir,
       projectPath: tmpDir,
@@ -264,10 +287,15 @@ describe('Orchestrator — reviewer fan-out at review', () => {
         {
           slug: 'project-manager',
           name: 'The Project Manager',
+          blurb: 'Checks handoff quality.',
+          role: 'overseer',
           principles: 'Check handoff quality.',
           rubric: [{ id: 'review', question: 'Is the review packet usable?', weight: 1 }],
+          deterministicChecks: [],
+          applicable: () => true,
         },
       ],
+      builtContext: builtContextStub(),
       context: 'Review the task.',
       memoryDir,
       projectPath: tmpDir,

@@ -24,8 +24,12 @@ beforeEach(() => {
 
 class SuccessfulClient implements SupportsStreamingMessages {
   async *streamMessage(_request: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
-    yield { type: 'message_start', message: { role: 'assistant', content: [] } }
-    yield { type: 'message_stop', stop_reason: 'end_turn' }
+    yield {
+      type: 'message_complete',
+      message: { role: 'assistant', content: [] },
+      usage: { input_tokens: 0, output_tokens: 0 },
+      stop_reason: 'end_turn',
+    }
   }
 }
 
@@ -44,9 +48,13 @@ class BlockingClient implements SupportsStreamingMessages {
     this.state.active += 1
     this.state.maxSeen = Math.max(this.state.maxSeen, this.state.active)
     try {
-      yield { type: 'message_start', message: { role: 'assistant', content: [] } }
       await this.state.release
-      yield { type: 'message_stop', stop_reason: 'end_turn' }
+      yield {
+        type: 'message_complete',
+        message: { role: 'assistant', content: [] },
+        usage: { input_tokens: 0, output_tokens: 0 },
+        stop_reason: 'end_turn',
+      }
     } finally {
       this.state.active -= 1
     }
