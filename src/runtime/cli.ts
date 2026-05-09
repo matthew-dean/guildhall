@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { resolve, join } from 'node:path'
 import { homedir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { runOrchestrator } from './orchestrator.js'
 import { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
 import { runInit } from './init.js'
@@ -23,7 +25,7 @@ import {
   readWorkspaceConfig,
   slugify,
 } from '@guildhall/config'
-import { exec } from 'node:child_process'
+import { exec, spawn } from 'node:child_process'
 import { platform } from 'node:os'
 
 function openBrowser(url: string): void {
@@ -38,6 +40,139 @@ function openBrowser(url: string): void {
 /** Expand leading ~ to home directory */
 function expandPath(p: string): string {
   return p.startsWith('~/') ? join(homedir(), p.slice(2)) : p
+}
+
+const DEFAULT_DASHBOARD_PORT = 7777
+const SERVICE_STATE_FILENAME = 'service.json'
+
+interface ServiceRuntimeState {
+  pid: number
+  port: number
+  url: string
+  startedAt: string
+  preferredProjectPath: string | null
+  foregroundProjectPath: string | null
+}
+
+export interface ServiceLifecycleIntent {
+  kind: 'serve' | 'start' | 'stop' | 'open'
+  port: number
+  preferredProjectPath: string | null
+  openBrowser: boolean
+}
+
+function serviceStatePath(home = homedir()): string {
+  return join(home, '.guildhall', SERVICE_STATE_FILENAME)
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function readServiceRuntimeState(home = homedir()): ServiceRuntimeState | null {
+  const path = serviceStatePath(home)
+  if (!existsSync(path)) return null
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<ServiceRuntimeState>
+    if (
+      typeof parsed.pid !== 'number' ||
+      typeof parsed.port !== 'number' ||
+      typeof parsed.url !== 'string' ||
+      typeof parsed.startedAt !== 'string'
+    ) {
+      return null
+    }
+    return {
+      pid: parsed.pid,
+      port: parsed.port,
+      url: parsed.url,
+      startedAt: parsed.startedAt,
+      preferredProjectPath:
+        typeof parsed.preferredProjectPath === 'string' ? parsed.preferredProjectPath : null,
+      foregroundProjectPath:
+        typeof parsed.foregroundProjectPath === 'string' ? parsed.foregroundProjectPath : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+function clearServiceRuntimeState(home = homedir()): void {
+  rmSync(serviceStatePath(home), { force: true })
+}
+
+function parseArgs(rawArgs: string[]): {
+  getFlag: (flag: string) => string | undefined
+  positionals: string[]
+} {
+  function getFlag(flag: string): string | undefined {
+    const idx = rawArgs.indexOf(flag)
+    return idx !== -1 ? rawArgs[idx + 1] : undefined
+  }
+
+  const positionals: string[] = []
+  for (let i = 0; i < rawArgs.length; i++) {
+    const a = rawArgs[i]
+    if (a === undefined) continue
+    if (a.startsWith('--')) {
+      const next = rawArgs[i + 1]
+      if (next !== undefined && !next.startsWith('--')) i++
+      continue
+    }
+    positionals.push(a)
+  }
+
+  return { getFlag, positionals }
+}
+
+export function resolveServiceLifecycleIntent(
+  commandName: string,
+  rawArgs: string[],
+  opts: { cwd?: string; homeDir?: string } = {},
+): ServiceLifecycleIntent | null {
+  const cwd = opts.cwd ?? process.cwd()
+  const home = opts.homeDir ?? homedir()
+  const { getFlag, positionals } = parseArgs(rawArgs)
+  const port = Number(getFlag('--port') ?? DEFAULT_DASHBOARD_PORT)
+  const explicitPath = positionals[0] ? resolve(expandPath(positionals[0].replace(/^~(?=\/)/, home))) : null
+
+  switch (commandName) {
+    case 'serve':
+      return {
+        kind: 'serve',
+        port,
+        preferredProjectPath: explicitPath ?? resolve(cwd),
+        openBrowser: !rawArgs.includes('--no-open'),
+      }
+    case 'start':
+      return {
+        kind: 'start',
+        port,
+        preferredProjectPath: explicitPath,
+        openBrowser: false,
+      }
+    case 'open':
+      return {
+        kind: 'open',
+        port,
+        preferredProjectPath: explicitPath,
+        openBrowser: true,
+      }
+    case 'stop':
+      return {
+        kind: 'stop',
+        port,
+        preferredProjectPath: null,
+        openBrowser: false,
+      }
+    default:
+      return null
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +239,13 @@ Usage:
     --max-ticks <n>              Stop after N ticks (testing)
     --one-task                   Stop after one task reaches terminal/PR/block
 
-  guildhall serve                    Start the web dashboard for all workspaces
+  guildhall serve [path]             Start the local service if needed, then open Guildhall
+    --port <n>                   Override dashboard port (default: 7777)
+    --no-open                    Start/bias the service without opening a browser
+  guildhall start [path]             Start the local service without opening a browser
+    --port <n>                   Override dashboard port (default: 7777)
+  guildhall stop                     Stop the local service
+  guildhall open [path]              Open the running service (starts it if needed)
     --port <n>                   Override dashboard port (default: 7777)
 
   guildhall config [id|path]         Re-run the init wizard on an existing workspace
@@ -274,16 +415,94 @@ async function cmdRun() {
 }
 
 async function cmdServe() {
-  const pos = positionals()
-  const pathArg = pos[0]
+  const intent = resolveServiceLifecycleIntent('serve', args)
+  if (!intent) return
+  const state = await ensureServiceRunning(intent)
+  if (intent.openBrowser) setTimeout(() => openBrowser(state.url), 200)
+}
+
+async function waitForServiceReady(home = homedir(), attempts = 40): Promise<ServiceRuntimeState> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const state = readServiceRuntimeState(home)
+    if (state && isPidAlive(state.pid)) return state
+    await new Promise(resolve => setTimeout(resolve, 150))
+  }
+  throw new Error('Guildhall service did not become ready in time.')
+}
+
+function cliEntryPath(): string {
+  return fileURLToPath(import.meta.url)
+}
+
+async function ensureServiceRunning(intent: ServiceLifecycleIntent): Promise<ServiceRuntimeState> {
+  const existing = readServiceRuntimeState()
+  if (existing && isPidAlive(existing.pid)) return existing
+  if (existing && !isPidAlive(existing.pid)) clearServiceRuntimeState()
+
+  mkdirSync(join(homedir(), '.guildhall'), { recursive: true })
+
+  const childArgs = [
+    cliEntryPath(),
+    'serve-internal',
+    '--port',
+    String(intent.port),
+    ...(intent.preferredProjectPath ? [intent.preferredProjectPath] : []),
+    '--service-state',
+    serviceStatePath(),
+  ]
+  const child = spawn(process.execPath, childArgs, {
+    detached: true,
+    stdio: 'ignore',
+  })
+  child.unref()
+
+  return waitForServiceReady()
+}
+
+async function cmdStart() {
+  const intent = resolveServiceLifecycleIntent('start', args)
+  if (!intent) return
+  await ensureServiceRunning(intent)
+}
+
+async function cmdOpen() {
+  const intent = resolveServiceLifecycleIntent('open', args)
+  if (!intent) return
+  const state = await ensureServiceRunning(intent)
+  if (intent.openBrowser) openBrowser(state.url)
+}
+
+async function cmdStop() {
+  const state = readServiceRuntimeState()
+  if (!state) {
+    console.log('[guildhall] No running service found.')
+    return
+  }
+  if (!isPidAlive(state.pid)) {
+    clearServiceRuntimeState()
+    console.log('[guildhall] Cleared a stale service record.')
+    return
+  }
+  process.kill(state.pid, 'SIGTERM')
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (!isPidAlive(state.pid)) break
+    await new Promise(resolve => setTimeout(resolve, 150))
+  }
+  clearServiceRuntimeState()
+  console.log('[guildhall] Service stopped.')
+}
+
+async function cmdServeInternal() {
+  const { getFlag, positionals } = parseArgs(args)
+  const preferredProjectPath = positionals[0] ? resolve(expandPath(positionals[0])) : undefined
   const portArg = getFlag('--port')
-  const noOpen = process.argv.includes('--no-open')
-  const projectPath = pathArg ? resolve(expandPath(pathArg)) : process.cwd()
-  const opts: Parameters<typeof runServe>[0] = { projectPath }
-  if (portArg) opts.port = Number(portArg)
-  const port = opts.port ?? 7777
-  await runServe(opts)
-  if (!noOpen) setTimeout(() => openBrowser(`http://localhost:${port}`), 400)
+  const serviceState = getFlag('--service-state')
+
+  await runServe({
+    ...(preferredProjectPath ? { preferredProjectPath } : {}),
+    ...(portArg ? { port: Number(portArg) } : {}),
+    ...(serviceState ? { serviceStatePath: serviceState } : {}),
+  })
 }
 
 function loadWorkspaceByFlagOrCwd(flag?: string) {
@@ -502,6 +721,10 @@ async function main() {
     case 'list':    return cmdList()
     case 'run':     return cmdRun()
     case 'serve':   return cmdServe()
+    case 'start':   return cmdStart()
+    case 'stop':    return cmdStop()
+    case 'open':    return cmdOpen()
+    case 'serve-internal': return cmdServeInternal()
     case 'config':  return cmdConfig()
     case 'intake':  return cmdIntake()
     case 'approve-spec': return cmdApproveSpec()
@@ -515,7 +738,12 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('[guildhall] Fatal error:', err)
-  process.exit(1)
-})
+const invokedPath = process.argv[1] ? resolve(process.argv[1]) : null
+const modulePath = fileURLToPath(import.meta.url)
+
+if (invokedPath === modulePath) {
+  main().catch(err => {
+    console.error('[guildhall] Fatal error:', err)
+    process.exit(1)
+  })
+}

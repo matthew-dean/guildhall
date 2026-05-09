@@ -10,6 +10,7 @@ import { atomicWriteText } from '@guildhall/sessions'
 import {
   readWorkspaceConfig,
   writeWorkspaceConfig,
+  listWorkspaces,
   bootstrapWorkspace,
   readProjectConfig,
   updateProjectConfig,
@@ -139,14 +140,15 @@ import {
 import { stringify as stringifyYaml } from 'yaml'
 
 // ---------------------------------------------------------------------------
-// guildhall serve — single-project dashboard
+// guildhall serve — local service over many projects
 //
-// One `guildhall serve` instance corresponds to one project directory. The
-// project path is resolved on boot (defaults to cwd) and drives every
-// endpoint; there is no cross-project registry here. Cross-project
-// aggregation is guild-pro's job.
+// `guildhall serve` now acts like the friendly entrypoint to a local
+// user-level service. During the 0.5.0 transition, the backend already knows
+// about many registered projects and can surface service-level metadata even
+// while the UI still leans on one foreground project API surface.
 //
 // Routes:
+//   GET    /api/service               → service metadata + preferred/foreground project
 //   GET    /                          → SPA (root = project detail or setup)
 //   GET    /setup                     → SPA setup wizard route
 //   GET    /api/project               → project detail (config + tasks + run state)
@@ -182,8 +184,12 @@ import { stringify as stringifyYaml } from 'yaml'
 
 export interface ServeOptions {
   port?: number
-  /** Absolute path to the project root. Defaults to process.cwd(). */
+  /** Legacy alias; prefer preferredProjectPath for new callers. */
   projectPath?: string
+  /** Optional project the operator launched Guildhall toward. */
+  preferredProjectPath?: string
+  /** Optional path to the service-state file written by background runs. */
+  serviceStatePath?: string
 }
 
 interface ResolvedProject {
@@ -191,6 +197,13 @@ interface ResolvedProject {
   id: string
   /** Null if guildhall.yaml is missing — wizard handles this case. */
   config: ReturnType<typeof readWorkspaceConfig> | null
+  initializationNeeded: boolean
+}
+
+interface ServiceProjectSummary {
+  id: string
+  path: string
+  name: string
   initializationNeeded: boolean
 }
 
@@ -427,6 +440,15 @@ function resolveProject(projectPath: string): ResolvedProject {
   return { path: projectPath, id, config, initializationNeeded: false }
 }
 
+function summarizeProject(project: ResolvedProject): ServiceProjectSummary {
+  return {
+    id: project.id,
+    path: project.path,
+    name: project.config?.name ?? project.id,
+    initializationNeeded: project.initializationNeeded,
+  }
+}
+
 function resolveTaskPathForDomain(
   project: ResolvedProject,
   domain: string,
@@ -658,8 +680,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
   supervisor: OrchestratorSupervisor
   projectPath: string
 } {
-  const projectPath = resolve(opts.projectPath ?? process.cwd())
+  const preferredProjectPath = opts.preferredProjectPath ?? opts.projectPath ?? null
+  const registeredProjects = listWorkspaces()
+  const explicitProjectPath = preferredProjectPath ? resolve(preferredProjectPath) : null
+  const fallbackProjectPath = explicitProjectPath
+    ?? registeredProjects[0]?.path
+    ?? process.cwd()
+  const projectPath = resolve(fallbackProjectPath)
+  let selectedProject = explicitProjectPath ? resolveProject(explicitProjectPath) : null
   let project = resolveProject(projectPath)
+  const refreshProject = (path = project.path): ResolvedProject => {
+    project = resolveProject(path)
+    if (selectedProject?.path === project.path) selectedProject = project
+    return project
+  }
 
   const supervisor = new OrchestratorSupervisor()
   const app = new Hono()
@@ -708,6 +742,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/version', c => {
     return c.json({ version: readRuntimeVersion() })
+  })
+
+  app.get('/api/service', c => {
+    return c.json({
+      pid: process.pid,
+      preferredProjectPath: explicitProjectPath,
+      selectedProject: selectedProject ? summarizeProject(selectedProject) : null,
+      foregroundProject: summarizeProject(project),
+      projects: registeredProjects.map((entry) => ({
+        id: entry.id,
+        path: entry.path,
+        name: entry.name,
+      })),
+    })
   })
 
   // -------------------------------------------------------------------------
@@ -1654,7 +1702,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: result.error ?? 'Approval failed' }, 400)
       }
       // Re-resolve so subsequent GETs reflect the newly-added coordinators.
-      project = resolveProject(project.path)
+      refreshProject(project.path)
 
       // Bootstrap the environment eagerly so the user doesn't have to hunt
       // for a separate "Configure" action. Skip install (slow, needs real
@@ -2326,7 +2374,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         coordinators: [...(existing.coordinators ?? []), ...seeds],
       }
       writeWorkspaceConfig(project.path, nextConfig as Parameters<typeof writeWorkspaceConfig>[1])
-      project = resolveProject(project.path)
+      refreshProject(project.path)
       return c.json({ ok: true, added: seeds.length, coordinators: nextConfig.coordinators })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -3185,7 +3233,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.post('/api/setup/identity', async c => {
     try {
-      project = resolveProject(project.path)
+      refreshProject(project.path)
       const body = await c.req.json().catch(() => ({})) as {
         name?: string
         id?: string
@@ -3218,7 +3266,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       writeWorkspaceConfig(project.path, nextConfig as Parameters<typeof writeWorkspaceConfig>[1])
 
-      project = resolveProject(project.path)
+      refreshProject(project.path)
       return c.json({ ok: true, id: project.id, name, path: project.path })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -3538,7 +3586,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         delete nextConfig.models
       }
       writeWorkspaceConfig(projectPath, nextConfig)
-      project = resolveProject(project.path)
+      refreshProject(project.path)
       return c.json({ ok: true })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -3780,8 +3828,14 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   const cfg = readProjectConfig(projectPath)
   const port = opts.port ?? cfg.servePort
 
-  console.log(`[guildhall serve] Project: ${project.path}`)
-  console.log(`[guildhall serve] ${project.initializationNeeded ? '⚠ Not initialized — wizard at /setup' : `✓ ${project.config?.name ?? project.id}`}`)
+  console.log('[guildhall serve] Service: Guildhall local service')
+  if (opts.preferredProjectPath ?? opts.projectPath) {
+    console.log(`[guildhall serve] Preferred project: ${resolve(opts.preferredProjectPath ?? opts.projectPath ?? project.path)}`)
+  } else {
+    console.log('[guildhall serve] Preferred project: none selected')
+  }
+  console.log(`[guildhall serve] Foreground project: ${project.path}`)
+  console.log(`[guildhall serve] ${project.initializationNeeded ? '⚠ Foreground project not initialized — wizard at /setup' : `✓ ${project.config?.name ?? project.id}`}`)
   console.log(`[guildhall serve] Dashboard: http://localhost:${port}`)
   console.log(`[guildhall serve] PID: ${process.pid}`)
   // Heads-up to any humans: Node loaded the dist into memory at startup.
@@ -3804,6 +3858,21 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
 
   const server = serve({ fetch: app.fetch, port }, info => {
     console.log(`[guildhall serve] ✓ Running at http://localhost:${info.port}`)
+    if (opts.serviceStatePath) {
+      try {
+        mkdirSync(dirname(opts.serviceStatePath), { recursive: true })
+        writeFileSync(opts.serviceStatePath, JSON.stringify({
+          pid: process.pid,
+          port: info.port,
+          url: `http://localhost:${info.port}`,
+          startedAt: new Date().toISOString(),
+          preferredProjectPath: opts.preferredProjectPath ?? opts.projectPath ?? null,
+          foregroundProjectPath: project.path,
+        }, null, 2))
+      } catch {
+        /* non-fatal */
+      }
+    }
   })
 
   // FR-28 / AC-19: cooperative shutdown. SIGINT (Ctrl+C) and SIGTERM both
@@ -3821,6 +3890,13 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
       await supervisor.stopAll({ reason: `signal:${signal}` })
     } catch (err) {
       console.warn(`[guildhall serve] stopAll error: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    if (opts.serviceStatePath) {
+      try {
+        await fsp.rm(opts.serviceStatePath, { force: true })
+      } catch {
+        /* non-fatal */
+      }
     }
     await new Promise<void>(resolve => server.close(() => resolve()))
     console.log('[guildhall serve] shutdown complete')

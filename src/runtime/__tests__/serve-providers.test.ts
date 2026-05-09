@@ -13,7 +13,7 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => TMP_HOME }
 })
 
-const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig, resolveModelsForProvider, updateProjectConfig } =
+const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig, resolveModelsForProvider, updateProjectConfig, registerWorkspace } =
   await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
 const { clearProviderClientPool } = await import('../provider-client-pool.js')
@@ -83,6 +83,37 @@ async function writeCodexCred(): Promise<void> {
 }
 
 describe('GET /api/setup/providers', () => {
+  it('reports service metadata with no selected project when the service starts at the fleet level', async () => {
+    registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
+    const { app } = buildServeApp({})
+    const res = await app.fetch(new Request('http://localhost/api/service'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      preferredProjectPath: string | null
+      selectedProject: { id: string } | null
+      foregroundProject: { id: string } | null
+      projects: Array<{ id: string }>
+    }
+    expect(body.preferredProjectPath).toBeNull()
+    expect(body.selectedProject).toBeNull()
+    expect(body.foregroundProject?.id).toBe('provider-test')
+    expect(body.projects.map(project => project.id)).toContain('provider-test')
+  })
+
+  it('reports a preferred project when the service is launched with project bias', async () => {
+    const { app } = buildServeApp({ preferredProjectPath: tmpProject })
+    const res = await app.fetch(new Request('http://localhost/api/service'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      preferredProjectPath: string | null
+      selectedProject: { id: string; path: string } | null
+      foregroundProject: { id: string } | null
+    }
+    expect(body.preferredProjectPath).toBe(tmpProject)
+    expect(body.selectedProject).toMatchObject({ id: 'provider-test', path: tmpProject })
+    expect(body.foregroundProject).toMatchObject({ id: 'provider-test' })
+  })
+
   it('reports no credentials when the global store is empty', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(new Request('http://localhost/api/setup/providers'))

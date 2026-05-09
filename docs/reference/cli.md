@@ -2,9 +2,9 @@
 title: CLI reference
 help_topic: reference.cli
 help_summary: |
-  Every `guildhall` subcommand — init, register, list, run, serve, config,
-  intake, approve-spec, resume, meta-intake, approve-meta-intake — with
-  flags and examples.
+  Every `guildhall` subcommand — init, register, list, run, serve, start,
+  stop, open, config, intake, approve-spec, resume, meta-intake,
+  approve-meta-intake — with flags and examples.
 ---
 
 # CLI reference
@@ -47,12 +47,39 @@ Flags:
 
 ## `guildhall serve [path]`
 
-Start the web dashboard.
+Friendly entrypoint for normal humans. Ensures the local Guildhall service is
+running, then opens the web UI. If you pass a path — or run it from inside a
+project — Guildhall remembers that as the preferred project bias for this run.
 
 Flags:
 
-- `--port <n>` (default `7842`).
+- `--port <n>` (default `7777`).
 - `--no-open` — don't open a browser.
+
+## `guildhall start [path]`
+
+Start the local Guildhall service without opening a browser.
+
+Use this when you want Guildhall running in the background and plan to open the
+UI later.
+
+Flags:
+
+- `--port <n>` (default `7777`).
+
+## `guildhall stop`
+
+Stop the local Guildhall service.
+
+## `guildhall open [path]`
+
+Open the running Guildhall service in a browser. If the service is not running
+yet, this starts it first. An optional path can be used as a preferred project
+bias when the service is first started.
+
+Flags:
+
+- `--port <n>` (default `7777`).
 
 ## `guildhall config [id|path]`
 
@@ -102,4 +129,7 @@ guildhall run my-app --domain ui
 guildhall intake "add a ghost button" --workspace my-app --domain ui
 guildhall approve-spec task-001 --workspace my-app
 guildhall serve
+guildhall start
+guildhall open
+guildhall stop
 ```

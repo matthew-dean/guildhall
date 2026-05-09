@@ -24,7 +24,20 @@ guildhall run --one-task         # finish one task, then stop
 guildhall serve
 ```
 
-Opens the dashboard at `http://localhost:7842`. The **Run** control on the project page starts and stops the orchestrator with the same semantics as the CLI.
+`guildhall serve` is the friendly path: it starts the local Guildhall service
+if needed, then opens the web UI at `http://localhost:7777`.
+
+If you want a little more control:
+
+```bash
+guildhall start           # start the local service only
+guildhall open            # open the UI (starts the service if needed)
+guildhall stop            # stop the local service
+guildhall serve ~/work/x  # open Guildhall with a preferred project bias
+```
+
+The **Run** control inside a project starts and stops that project's
+orchestrator lane with the same semantics as the CLI.
 
 ## Fanout
 
