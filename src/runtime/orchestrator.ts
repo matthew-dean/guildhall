@@ -290,6 +290,13 @@ function streamMessageText(message: { content?: unknown }): string {
   return parts.join('')
 }
 
+function shouldSkipGitIsolation(task: Pick<Task, 'id'>): boolean {
+  return (
+    task.id === META_INTAKE_TASK_ID ||
+    task.id === WORKSPACE_IMPORT_TASK_ID
+  )
+}
+
 function findMetaIntakeDraftText(result: AgentGenerateResult): string | null {
   const candidates = [
     result.text,
@@ -1383,7 +1390,7 @@ export class Orchestrator {
       this.opts.config.projectPath,
     )
     let activeWorktreePath = effectiveTaskProjectPath
-    if (worktreeMode !== 'none') {
+    if (worktreeMode !== 'none' && !shouldSkipGitIsolation(task)) {
       if (!task.worktreePath) {
         const repoClean = await this.gitDriver.isClean(effectiveTaskProjectPath)
         if (!repoClean) {

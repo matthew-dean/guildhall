@@ -196,6 +196,15 @@ correct the agent, and ask for direct action from Thread.
   exposes the same behavior through `POST /api/project/task/:id/rerun-stage`.
   Verified with focused endpoint coverage plus `pnpm typecheck`, `pnpm build`,
   and `git diff --check`.
+- Fixed the paused reserved-intake run path for Looma + Knit. `Continue
+  intake` was crashing immediately with `fatal: not a git repository` because
+  reserved meta/workspace-import tasks were still trying to enter the normal
+  git/worktree isolation lane against the non-git umbrella workspace root.
+  Reserved intake tasks now skip git isolation entirely, which matches their
+  job: shape the workspace, not mint a code worktree. Verified with a focused
+  orchestrator regression plus a real `serve-internal` proof on Looma + Knit
+  at `http://localhost:7897`, where `POST /api/project/start` now stays
+  running instead of immediately flipping the project into `run.status=error`.
 
 - Closed the retry-window failure family with live proof on `task-016`.
   Resolved `max_revisions_exceeded` retries now start a persisted fresh

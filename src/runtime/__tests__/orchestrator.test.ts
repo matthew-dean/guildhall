@@ -3467,6 +3467,55 @@ describe('Orchestrator.run — full loops', () => {
     }
   })
 
+  it('does not touch git isolation for reserved intake tasks in a non-git workspace root', async () => {
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    await writeQueue([
+      mkTask({
+        id: 'task-meta-intake',
+        domain: '_meta',
+        status: 'exploring',
+        projectPath: tmpDir,
+      }),
+    ])
+
+    class ExplodingGitDriver extends InMemoryGitDriver {
+      override async isClean(): Promise<boolean> {
+        throw new Error('reserved intake should not probe git cleanliness')
+      }
+
+      override async currentBranch(): Promise<string> {
+        throw new Error('reserved intake should not resolve git branch')
+      }
+
+      override async createWorktree(): Promise<void> {
+        throw new Error('reserved intake should not create worktrees')
+      }
+    }
+
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+      gitDriver: new ExplodingGitDriver(),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    expect(spec.calls).toHaveLength(1)
+  })
+
   it('stopAfterOneTask stops after one active task reaches terminal status', async () => {
     await writeQueue([
       mkTask({ id: 'a', status: 'in_progress', domain: 'looma' }),
