@@ -1409,6 +1409,7 @@ export class Orchestrator {
         const ensured = await ensureWorktreeForDispatch({
           task,
           mode: worktreeMode,
+          projectId: this.opts.config.workspaceId,
           projectPath: effectiveTaskProjectPath,
           workspacePath: this.opts.config.projectPath,
           baseBranch,
@@ -4119,8 +4120,7 @@ export class Orchestrator {
   ): Promise<void> {
     const isTerminal =
       task.status === 'done' ||
-      task.status === 'shelved' ||
-      task.status === 'blocked'
+      task.status === 'shelved'
     const preservingForPr = task.status === 'pending_pr'
     if (!isTerminal && !preservingForPr) return
     const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(

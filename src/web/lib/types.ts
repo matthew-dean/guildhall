@@ -106,6 +106,9 @@ export interface Task {
     filesTouched?: string[]
     writtenAt?: string
   }
+  worktreePath?: string
+  branchName?: string
+  baseBranch?: string
   mergeRecord?: {
     fromBranch?: string
     toBranch?: string

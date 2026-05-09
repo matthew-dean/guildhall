@@ -173,6 +173,116 @@ If invoked outside any project folder:
 
 The local service itself should not be thought of as "serving one project." It serves Guildhall as a whole.
 
+## Task Workspace Model
+
+### Summary
+
+Task workspaces should move out of the project repo and into Guildhall's
+user-local runtime area.
+
+For `0.5.0`, use:
+
+- `~/.guildhall/worktrees/<project-id>/<task-id>`
+
+This replaces the older repo-local shape under `.guildhall/worktrees/`.
+
+### Why
+
+Repo-local task workspaces create the wrong product impression:
+
+- they clutter normal `git status`
+- they show up as noisy folders in editors
+- they blur the line between durable project state and ephemeral runtime state
+- they make Guildhall feel like it is spilling implementation guts into the repo
+
+The `0.5.0` service pivot gives us a better model:
+
+- project-local config and durable memory stay with the project
+- ephemeral execution sandboxes live under Guildhall's user-local control
+
+That matches the new "local service over projects" product story much more
+cleanly.
+
+### One task, one workspace
+
+Guildhall should use a single isolated workspace per task.
+
+Do not expose or foreground a "fresh workspace per revision attempt" model in
+`0.5.0`.
+
+Review/revise cycles are normal task iteration, not a special failure mode, so
+the default mental model should stay simple:
+
+- one task
+- one isolated workspace
+
+If Guildhall cannot safely iterate within one task workspace, that is a runtime
+hygiene problem to fix rather than a user-facing concept to normalize.
+
+### Cleanup semantics
+
+Guildhall should not delete a task workspace merely because a task reached a
+locally successful state. Cleanup should be tied to whether the work has
+actually landed.
+
+Rules:
+
+- if Guildhall merged the task branch into the base branch locally, the task
+  workspace can be removed immediately after that merge succeeds
+- if the project uses PR-based merge flow, keep the task workspace while the PR
+  is still pending
+- once Guildhall can confirm the PR landed, remove the task workspace
+- do not delete task workspaces prematurely just because a task entered
+  `pending_pr`
+
+For PR-based flows, "landed" should be based on PR merge state, not only branch
+or commit ancestry heuristics. This matters because squash merges may not leave
+the original branch commit in mainline history.
+
+### Migration posture
+
+`0.5.0` should:
+
+- create new task workspaces only in the user-local root
+- tolerate older repo-local task workspace records if they already exist
+- clean up legacy workspaces when tasks naturally terminate or land
+- avoid a brittle one-shot migration step
+
+## Settings and UX Requirements For Task Workspaces
+
+Task workspace policy should be mostly invisible in normal use.
+
+### Main settings surface
+
+In project settings, expose only a calm, human-readable workspace mode choice:
+
+- `Shared project workspace`
+- `Isolated task workspaces` (recommended)
+
+Do not force users to reason about path templates, revision-sandbox models, or
+other orchestrator internals.
+
+### Advanced information
+
+The settings surface may show an informational note that isolated task
+workspaces are stored under:
+
+- `~/.guildhall/worktrees`
+
+But this should be explanatory, not the center of the UI.
+
+### Task detail visibility
+
+If a user wants the exact path, it should appear in the task details /
+provenance surface, for example:
+
+- workspace mode
+- sandbox path
+- branch name
+
+That keeps the product calm by default while still supporting power-user
+inspection.
+
 ## Chosen approach
 
 For `0.5.0`, use:

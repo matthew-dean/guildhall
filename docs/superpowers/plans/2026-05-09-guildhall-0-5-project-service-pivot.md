@@ -624,8 +624,74 @@ git add src/runtime/__tests__/e2e.test.ts src/runtime/__tests__/serve-release-re
 git commit -m "test: prove 0.5.0 project service flow"
 ```
 
+### Task 9: Move task workspaces to Guildhall's user-local runtime root
+
+**Files:**
+- Modify: `src/runtime/worktree-manager.ts`
+- Modify: `src/runtime/orchestrator.ts`
+- Modify: `src/runtime/serve.ts`
+- Modify: `src/runtime/git-driver.ts`
+- Modify: `src/runtime/__tests__/worktree-manager.test.ts`
+- Modify: `src/runtime/__tests__/orchestrator.test.ts`
+- Modify: `docs/reference/memory-layout.md`
+- Modify: `docs/levers/worktree-isolation.md`
+- Modify: `docs/web-ui/flow-audit.md`
+- Test: focused runtime + live project verification
+
+- [ ] **Step 1: Write or adjust failing tests for user-local worktree placement**
+
+Cover:
+
+- new task workspaces live under `~/.guildhall/worktrees/<project-id>/<task-id>`
+- one task reuses one isolated workspace through normal review/revision cycles
+- legacy repo-local task workspace records are still tolerated
+- cleanup removes landed workspaces but keeps pending-PR ones
+
+- [ ] **Step 2: Implement the user-local worktree root and deterministic naming**
+
+In `src/runtime/worktree-manager.ts`:
+
+- move new worktree allocation out of the repo-local `.guildhall/worktrees`
+- use a deterministic user-local root keyed by project id and task id
+- keep one task workspace per task
+
+- [ ] **Step 3: Update merge and cleanup behavior**
+
+In the merge/orchestrator path:
+
+- delete task workspaces when work has actually landed
+- keep PR-backed workspaces while the PR is still pending
+- preserve the exact sandbox path for task provenance surfaces
+
+- [ ] **Step 4: Update docs and user-facing framing**
+
+Reflect the new model in:
+
+- `docs/reference/memory-layout.md`
+- `docs/levers/worktree-isolation.md`
+- `docs/web-ui/flow-audit.md`
+
+Use the simpler product framing:
+
+- `Shared project workspace`
+- `Isolated task workspaces`
+
+- [ ] **Step 5: Run focused verification and a live project check**
+
+Run:
+
+```bash
+pnpm vitest run src/runtime/__tests__/worktree-manager.test.ts src/runtime/__tests__/orchestrator.test.ts
+pnpm typecheck
+pnpm build
+git diff --check
+```
+
+Then confirm on the active test project that new task workspaces no longer
+appear inside the repo tree.
+
 ## Self-Review
 
-- Spec coverage: this plan covers the Projects-first shell, service lifecycle, attach flow, UI architecture cleanup, installer/LaunchAgent work, packaging comparison, and end-to-end proof requirements from the approved `0.5.0` design.
+- Spec coverage: this plan covers the Projects-first shell, service lifecycle, attach flow, UI architecture cleanup, installer/LaunchAgent work, packaging comparison, end-to-end proof requirements, and the user-local task-workspace move from the approved `0.5.0` design.
 - Placeholder scan: no `TODO`/`TBD` placeholders remain; each task names exact files and verification commands.
 - Type consistency: the plan consistently uses `project` for the user-facing surface, keeps `workspace` only in existing file names/runtime references, and keeps the Node-packaged executable + LaunchAgent approach as the implementation default while treating Deno as a comparison spike only.

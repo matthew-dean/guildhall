@@ -46,6 +46,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_CONFIG_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -3267,6 +3268,8 @@ describe('Orchestrator.run — full loops', () => {
 
   it('uses the task project repo for worktree and merge operations in multi-repo workspaces', async () => {
     const subrepo = path.join(tmpDir, 'knit')
+    const guildhallHome = path.join(tmpDir, '.guildhall-home')
+    process.env.GUILDHALL_CONFIG_DIR = guildhallHome
     await fs.mkdir(subrepo, { recursive: true })
 
     const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
@@ -3352,9 +3355,67 @@ describe('Orchestrator.run — full loops', () => {
     expect(gitDriver.createRoots).toEqual([subrepo])
     expect(gitDriver.mergeRoots).toEqual([subrepo])
     expect(gitDriver.removeRoots).toEqual([subrepo])
+    expect(gitDriver.state.createdWorktrees[0]?.worktreePath).toBe(
+      path.join(guildhallHome, 'worktrees', 'test-ws', 'a'),
+    )
 
     const q = await readQueue()
     expect(q.tasks[0]!.mergeRecord?.result).toBe('merged')
+    delete process.env.GUILDHALL_CONFIG_DIR
+  })
+
+  it('keeps isolated task workspaces for blocked tasks that have not landed', async () => {
+    const guildhallHome = path.join(tmpDir, '.guildhall-home')
+    process.env.GUILDHALL_CONFIG_DIR = guildhallHome
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    await writeQueue([
+      mkTask({
+        id: 'blocked-task',
+        status: 'ready',
+        domain: 'looma',
+        spec: 'approved spec',
+      }),
+    ])
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', async () => {
+        await mutateTask('blocked-task', { status: 'blocked' })
+      }),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+
+    class RecordingGitDriver extends InMemoryGitDriver {
+      readonly removeRoots: string[] = []
+      override async removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {
+        this.removeRoots.push(worktreePath)
+        return super.removeWorktree(repoRoot, worktreePath)
+      }
+    }
+
+    const gitDriver = new RecordingGitDriver()
+    const orch = new Orchestrator({ config: baseConfig(), agents, gitDriver })
+    await orch.run({ maxTicks: 5, tickDelayMs: 0 })
+
+    expect(gitDriver.state.createdWorktrees[0]?.worktreePath).toBe(
+      path.join(guildhallHome, 'worktrees', 'test-ws', 'blocked-task'),
+    )
+    expect(gitDriver.removeRoots).toEqual([])
+    delete process.env.GUILDHALL_CONFIG_DIR
   })
 
   it('surfaces a clear agent-error when the target repo is dirty before worktree creation', async () => {

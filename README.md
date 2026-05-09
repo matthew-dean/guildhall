@@ -2,7 +2,7 @@
 
 # GuildHall
 
-**A local service that helps agent teams work your software projects.**
+**A local workspace for running software work with a guild of AI experts.**
 
 [![npm](https://img.shields.io/npm/v/guildhall.svg)](https://www.npmjs.com/package/guildhall)
 [![node](https://img.shields.io/node/v/guildhall.svg)](https://nodejs.org)
@@ -14,11 +14,22 @@
 
 ## What GuildHall is
 
-GuildHall is not a chat tab and it is not a repo-local toy dashboard.
+Most agent tools give you a chat box, a pile of tools, and the vague
+instruction to go be clever. GuildHall is for people who would rather **run the
+work** than babysit a prompt loop.
 
-It runs as a **local service over your projects**. You open GuildHall, attach a
-project folder, and let a team of agents work through tasks with explicit
-stages, review, and gates.
+GuildHall is a **local workspace for software projects**. It gives you a guided
+process for handing work to a guild of specialists: coordinators, workers,
+reviewers, and gate-checkers. They do not just freestyle forever. Work moves
+through explicit stages, review, and gates so you can see what is happening,
+where it is stuck, and when human judgment is actually needed.
+
+The UI is the point. You open GuildHall, attach a project folder, and work from
+a real product surface instead of memorizing 1,000 CLI spells. The CLI exists,
+but mostly for power users and automation. For everyone else, `guildhall serve`
+is the friendly front door.
+
+Under the hood, GuildHall runs as a **local service over your projects**.
 
 The top level is a **Projects** view. Inside each project, GuildHall keeps the
 queue, transcripts, settings, and live task state together.
@@ -39,6 +50,14 @@ The core idea is simple:
 - GuildHall routes it through the right agents
 - you step in when judgment, clarification, or approval is needed
 
+That structure is what makes it different from open-ended harnesses. GuildHall
+is designed to **guide agents toward good results**, not just let them wander
+around your repo in an infinite while loop and hope for character development.
+
+It is also designed for **longer-running software tasks**, where work may need
+to move through multiple agents, pauses, approvals, and retries without losing
+the thread.
+
 ## What it is good at right now
 
 Today, GuildHall has the strongest proof for **narrow, low-blast-radius
@@ -49,8 +68,16 @@ engineering tasks**:
 - low-scope test or type follow-ups
 - local repairs with clear acceptance criteria
 
-That is the lane we have proven end to end, and the product is honest about
+That is the lane currently proven end to end, and the product is honest about
 that.
+
+GuildHall is still in **early development**. Ideas, feedback, issue reports,
+and contributions are all very welcome.
+
+It is best suited to coding-oriented models and inference providers that are
+pretty good at **tool-calling** and **writing code**. It does **not** require
+best-in-class expensive inference to be useful. You do not need to burn Codex-
+or-Opus money just to get value out of it.
 
 ## Install
 
