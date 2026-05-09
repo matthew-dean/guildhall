@@ -129,6 +129,12 @@ correct the agent, and ask for direct action from Thread.
   the installer wrote the LaunchAgent under `~/Library/LaunchAgents`,
   started the service, answered `/api/version`, and `guildhall stop` shut it
   down cleanly.
+- Recorded the packaging-runtime decision for `0.5.0` in
+  `docs/design/deno-vs-node-packaging.md`. Measured result: keep the
+  Node-based packaged executable. The Deno experiment only compiled with
+  `--no-check`, produced a larger binary, started more slowly, and failed the
+  real `serve --no-open` startup path, so it is not the right packaging pivot
+  for this release.
 
 - Closed the retry-window failure family with live proof on `task-016`.
   Resolved `max_revisions_exceeded` retries now start a persisted fresh
