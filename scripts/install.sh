@@ -6,6 +6,7 @@ HOME_DIR="${HOME}"
 GUILDHALL_HOME="${HOME_DIR}/.guildhall"
 APP_DIR="${GUILDHALL_HOME}/app"
 BIN_DIR="${GUILDHALL_HOME}/bin"
+LOCAL_BIN_DIR="${HOME_DIR}/.local/bin"
 CURRENT_DIR="${APP_DIR}/current"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -20,7 +21,7 @@ artifact_url() {
   fi
 }
 
-mkdir -p "$APP_DIR" "$BIN_DIR" "$GUILDHALL_HOME/logs"
+mkdir -p "$APP_DIR" "$BIN_DIR" "$LOCAL_BIN_DIR" "$GUILDHALL_HOME/logs"
 
 if [ -n "${GUILDHALL_ARTIFACT_DIR:-}" ]; then
   cp -R "$GUILDHALL_ARTIFACT_DIR" "$TMP_DIR/guildhall-macos"
@@ -44,6 +45,7 @@ mv "$TMP_DIR/guildhall-macos" "$RELEASE_DIR"
 rm -rf "$CURRENT_DIR"
 ln -s "$RELEASE_DIR" "$CURRENT_DIR"
 ln -sf "$CURRENT_DIR/bin/guildhall" "$BIN_DIR/guildhall"
+ln -sf "$BIN_DIR/guildhall" "$LOCAL_BIN_DIR/guildhall"
 
 "$CURRENT_DIR/runtime/node" "$CURRENT_DIR/install/install-launch-agent.mjs" \
   --home "$HOME_DIR" \
@@ -53,6 +55,15 @@ ln -sf "$CURRENT_DIR/bin/guildhall" "$BIN_DIR/guildhall"
 
 printf '\nGuildhall is installed.\n\n'
 printf 'Next commands:\n'
-printf '  %s\n' "$BIN_DIR/guildhall serve"
-printf '  %s\n' "$BIN_DIR/guildhall open"
-printf '  %s\n' "$BIN_DIR/guildhall stop"
+printf '  %s\n' "guildhall serve"
+printf '  %s\n' "guildhall open"
+printf '  %s\n' "guildhall stop"
+
+case ":${PATH}:" in
+  *":${LOCAL_BIN_DIR}:"*) ;;
+  *)
+    printf '\nNote: %s is not on your PATH yet.\n' "$LOCAL_BIN_DIR"
+    printf 'Add this to your shell profile and restart your shell:\n'
+    printf '  export PATH="%s:$PATH"\n' "$LOCAL_BIN_DIR"
+    ;;
+esac
