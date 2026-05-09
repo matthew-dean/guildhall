@@ -36,6 +36,7 @@
   import InteractionCardLayout from '../../lib/InteractionCardLayout.svelte'
   import { onEvent } from '../../lib/events.js'
   import { nav } from '../../lib/nav.svelte.js'
+  import { buildThreadPhaseGroups } from '../../lib/project-data.js'
   import { project } from '../../lib/project.svelte.js'
 
   // ---- Turn shape (mirrors src/runtime/thread.ts) ------------------------
@@ -175,16 +176,6 @@
   let runBusy = $state(false)
   let runError = $state<string | null>(null)
   const turnElements = new Map<string, HTMLDivElement>()
-  const phaseOrder: TurnPhase[] = ['setup', 'intake', 'spec', 'ready', 'inflight', 'blocked', 'done']
-  const phaseLabels: Record<TurnPhase, string> = {
-    setup: 'Setup',
-    intake: 'Intake',
-    spec: 'Spec',
-    ready: 'Ready',
-    inflight: 'In flight',
-    blocked: 'Blocked',
-    done: 'Done',
-  }
   const optionalSetupOnly = $derived.by(() => {
     const setupTurns = turns.filter(t => t.phase === 'setup')
     return setupTurns.length > 0 && setupTurns.every(t => t.kind === 'setup_step' && t.skippable)
@@ -384,24 +375,7 @@
     return shortElapsed(nowMs - parsed)
   }
 
-  const phaseGroups = $derived.by(() => phaseOrder
-    .map(phase => ({
-      phase,
-      turns: turns.filter(t => t.phase === phase),
-    }))
-    .map(group => ({
-      ...group,
-      label:
-        group.phase === 'setup' &&
-        group.turns.every(t => t.kind === 'setup_step' && t.skippable)
-          ? 'Optional'
-          : group.phase === 'inflight' &&
-              group.turns.length > 0 &&
-              group.turns.every(t => t.kind === 'inflight' && !t.liveAgent)
-            ? 'Paused'
-            : phaseLabels[group.phase],
-    }))
-    .filter(group => group.turns.length > 0))
+  const phaseGroups = $derived(buildThreadPhaseGroups(turns))
 
   function captureTurn(node: HTMLDivElement, id: string) {
     turnElements.set(id, node)

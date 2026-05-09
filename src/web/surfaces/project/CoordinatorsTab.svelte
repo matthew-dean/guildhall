@@ -5,7 +5,8 @@
 <script lang="ts">
   import TaskCard from '../../lib/TaskCard.svelte'
   import { nav } from '../../lib/nav.svelte.js'
-  import type { ProjectDetail, Task } from '../../lib/types.js'
+  import { buildCoordinatorsSurface } from '../../lib/project-data.js'
+  import type { ProjectDetail } from '../../lib/types.js'
 
   interface Props {
     detail: ProjectDetail
@@ -14,40 +15,9 @@
 
   let { detail, subView = null }: Props = $props()
 
-  const allCoordinators = $derived(detail.config?.coordinators ?? [])
-  const selectedCoordinatorId = $derived(
-    subView && subView !== 'all' ? decodeURIComponent(subView) : null,
-  )
-  const coordinators = $derived(
-    subView && subView !== 'all'
-      ? allCoordinators.filter(
-          c => (c.id ?? c.name ?? '').toString() === decodeURIComponent(subView),
-        )
-      : allCoordinators,
-  )
-  const tasks = $derived<Task[]>(detail.tasks ?? [])
-  const running = $derived((detail.run?.status ?? 'stopped') === 'running')
-
-  const GLYPH: Record<string, string> = {
-    done: '■',
-    in_progress: '◉',
-    review: '◎',
-    gate_check: '◎',
-    spec_review: '◐',
-    exploring: '◐',
-    ready: '○',
-    proposed: '·',
-    blocked: '✕',
-    shelved: '–',
-  }
-
-  function sparkline(domainTasks: Task[]): string {
-    if (domainTasks.length === 0) return '(empty)'
-    return domainTasks
-      .slice(-24)
-      .map(t => GLYPH[t.status ?? ''] ?? '?')
-      .join('')
-  }
+  const viewModel = $derived(buildCoordinatorsSurface(detail, subView))
+  const coordinators = $derived(viewModel.coordinators)
+  const running = $derived(viewModel.running)
 
   function scopeLabel(path?: string): string {
     return path?.trim() ? path.trim() : 'workspace root'
@@ -69,54 +39,8 @@
     return text.length > 0 ? text : 'No mandate recorded yet.'
   }
 
-  function prioritizedTasks(domainTasks: Task[]): Task[] {
-    const order: Record<string, number> = {
-      blocked: 0,
-      in_progress: 1,
-      review: 2,
-      gate_check: 3,
-      spec_review: 4,
-      exploring: 5,
-      ready: 6,
-      proposed: 7,
-      shelved: 8,
-      done: 9,
-    }
-    return [...domainTasks]
-      .sort((a, b) => {
-        const ao = order[a.status ?? ''] ?? 99
-        const bo = order[b.status ?? ''] ?? 99
-        if (ao !== bo) return ao - bo
-        return (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '')
-      })
-      .slice(0, 4)
-  }
-
-  const columns = $derived(
-    coordinators.map(c => {
-      const domainTasks = tasks.filter(t => t.domain === c.domain)
-      const active = domainTasks.filter(t =>
-        ['in_progress', 'review', 'gate_check', 'exploring'].includes(t.status ?? ''),
-      ).length
-      const blocked = domainTasks.filter(t => t.status === 'blocked').length
-      const awaitingApproval = domainTasks.filter(t => t.status === 'spec_review').length
-      const done = domainTasks.filter(t => t.status === 'done').length
-      return {
-        c,
-        domainTasks,
-        active,
-        blocked,
-        awaitingApproval,
-        done,
-        spark: sparkline(domainTasks),
-        visibleTasks: prioritizedTasks(domainTasks),
-      }
-    }),
-  )
-
-  const selectedColumn = $derived(
-    selectedCoordinatorId ? columns.find(col => (col.c.id ?? col.c.name ?? '') === selectedCoordinatorId) ?? null : null,
-  )
+  const columns = $derived(viewModel.columns)
+  const selectedColumn = $derived(viewModel.selectedColumn)
 </script>
 
 {#if coordinators.length === 0}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onEvent } from '../lib/events.js'
   import { nav } from '../lib/nav.svelte.js'
+  import ProjectsShell from '../lib/layout/ProjectsShell.svelte'
   import ProjectCard from '../lib/ProjectCard.svelte'
   import { summarizeProjects } from '../lib/project-summary.js'
   import type { ServiceDetail } from '../lib/types.js'
@@ -126,7 +127,8 @@
   const cards = $derived(summarizeProjects(service))
 </script>
 
-<section class="projects-home">
+<ProjectsShell shellClass="projects-home">
+  {#snippet hero()}
   <header class="hero">
     <div>
       <p class="eyebrow">Projects</p>
@@ -144,10 +146,13 @@
       </button>
     </div>
   </header>
+  {/snippet}
 
+  {#snippet notices()}
   {#if error}
     <div class="notice warn">{error}</div>
   {/if}
+  {/snippet}
 
   {#if loading && cards.length === 0}
     <div class="empty">Loading projects…</div>
@@ -169,15 +174,9 @@
       {/each}
     </div>
   {/if}
-</section>
+</ProjectsShell>
 
 <style>
-  .projects-home {
-    padding: var(--s-5);
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-5);
-  }
   .hero {
     display: flex;
     justify-content: space-between;

@@ -12,6 +12,7 @@
   import Button from '../lib/Button.svelte'
   import Chip from '../lib/Chip.svelte'
   import Icon, { type IconName } from '../lib/Icon.svelte'
+  import ProjectShell from '../lib/layout/ProjectShell.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
   import ThreadTab from './project/ThreadTab.svelte'
   import InboxTab from './project/InboxTab.svelte'
@@ -518,7 +519,8 @@
 <svelte:document onclick={handleDocumentClick} />
 
 {#if detail?.initializationNeeded}
-  <div class="shell shell--uninitialized">
+  <ProjectShell uninitialized>
+    {#snippet rail()}
     <aside class="rail" aria-label="Project navigation">
       <div class="rail-head" title={detail.path}>
         <div class="rail-project">{detail.path?.split('/').pop() ?? 'Project'}</div>
@@ -540,7 +542,8 @@
         </Tooltip>
       </div>
     </aside>
-    <div class="main">
+    {/snippet}
+    {#snippet topbar()}
       <header class="topbar topbar--uninitialized">
         <div class="topbar-leading">
           <Button
@@ -555,14 +558,12 @@
           </Button>
         </div>
       </header>
-      <div class="page">
-        <ProjectAttachFlow
-          projectName={detail.path?.split('/').pop() ?? 'This project'}
-          projectPath={detail.path}
-        />
-      </div>
-    </div>
-  </div>
+    {/snippet}
+    <ProjectAttachFlow
+      projectName={detail.path?.split('/').pop() ?? 'This project'}
+      projectPath={detail.path}
+    />
+  </ProjectShell>
 {:else if project.error}
   <div class="page-centered">
     <p class="muted">Error: {project.error}</p>
@@ -572,7 +573,8 @@
     <p class="muted">Loading project…</p>
   </div>
 {:else}
-  <div class="shell">
+  <ProjectShell>
+    {#snippet rail()}
     <aside class="rail" aria-label="Project navigation">
       <div class="rail-head" title={detail.name}>
         <div class="rail-project">{detail.name}</div>
@@ -636,8 +638,8 @@
         </Tooltip>
       </div>
     </aside>
-
-    <div class="main">
+    {/snippet}
+    {#snippet topbar()}
       <header class="topbar">
         <div class="topbar-leading">
           <Button
@@ -753,8 +755,7 @@
           </div>
         </div>
       </header>
-
-      <div class="page">
+    {/snippet}
         {#if runError}
           <div class="start-error" role="alert">
             <Icon name="alert-triangle" size={14} />
@@ -827,17 +828,15 @@
             <TimelineTab {detail} />
           {:else if currentView === 'release'}
             <ReleaseTab subView={currentSub} />
-          {:else if currentView === 'settings'}
-            <SettingsTab subView={currentSub} />
-          {/if}
+        {:else if currentView === 'settings'}
+          <SettingsTab subView={currentSub} />
+        {/if}
         </div>
-      </div>
-    </div>
-  </div>
 
   {#if intakeOpen}
     <IntakeModal coordinators={coordinators} onClose={() => (intakeOpen = false)} />
   {/if}
+  </ProjectShell>
 {/if}
 
 <style>

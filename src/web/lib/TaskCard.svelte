@@ -19,6 +19,10 @@
   ])
 
   type StatusTone = 'danger' | 'warn' | 'ok' | 'accent' | 'neutral'
+  interface TaskCardSummary {
+    label: string
+    text: string
+  }
 
   interface Props {
     task: TaskLite
@@ -79,27 +83,20 @@
     if (!raw) return ''
     return raw.length > 140 ? `${raw.slice(0, 137).trimEnd()}…` : raw
   })
-  const summaryLabel = $derived.by(() => {
+  const summary = $derived.by<TaskCardSummary | null>(() => {
     if (
       reviewerBlurb &&
       (task.revisionCount ?? 0) > 0 &&
       ['review', 'gate_check', 'blocked'].includes(status)
-    ) return 'Latest review'
-    if (checkpointBlurb && status === 'in_progress') return 'Next'
-    if (terminalHeadline && ['done', 'pending_pr'].includes(status)) return 'Outcome'
-    return ''
-  })
-  const summaryText = $derived.by(() => {
-    if (
-      reviewerBlurb &&
-      (task.revisionCount ?? 0) > 0 &&
-      ['review', 'gate_check', 'blocked'].includes(status)
-    ) return reviewerBlurb
-    if (checkpointBlurb && status === 'in_progress') return checkpointBlurb
+    ) return { label: 'Latest review', text: reviewerBlurb }
+    if (checkpointBlurb && status === 'in_progress') return { label: 'Next', text: checkpointBlurb }
     if (terminalHeadline && ['done', 'pending_pr'].includes(status)) {
-      return terminalDetail ? `${terminalHeadline} ${terminalDetail}` : terminalHeadline
+      return {
+        label: 'Outcome',
+        text: terminalDetail ? `${terminalHeadline} ${terminalDetail}` : terminalHeadline,
+      }
     }
-    return ''
+    return null
   })
 
   const statusTone = $derived<StatusTone>(
@@ -175,10 +172,10 @@
       <span class="tc-rev">r{task.revisionCount}</span>
     {/if}
   </div>
-  {#if summaryText}
+  {#if summary}
     <div class="tc-summary">
-      <span class="tc-summary-label">{summaryLabel}:</span>
-      <span>{summaryText}</span>
+      <span class="tc-summary-label">{summary.label}:</span>
+      <span>{summary.text}</span>
     </div>
   {/if}
 </div>

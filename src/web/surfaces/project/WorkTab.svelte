@@ -12,6 +12,7 @@
   import Markdown from '../../lib/Markdown.svelte'
   import { onEvent, summarizeEvent, eventTaskId, eventCssClass } from '../../lib/events.js'
   import { nav } from '../../lib/nav.svelte.js'
+  import { buildWorkSurface, sortEventsChronologically } from '../../lib/project-data.js'
   import type { ProjectDetail, EventEnvelope, Task } from '../../lib/types.js'
 
   interface Props {
@@ -20,22 +21,13 @@
 
   let { detail }: Props = $props()
 
-  const tasks = $derived<Task[]>(detail.tasks ?? [])
-  const coordinators = $derived(detail.config?.coordinators ?? [])
-  const needsMeta = $derived(coordinators.length === 0)
-  const runStatus = $derived(detail.run?.status ?? 'stopped')
-  const running = $derived(runStatus === 'running')
+  const viewModel = $derived(buildWorkSurface(detail))
+  const tasks = $derived<Task[]>(viewModel.tasks)
+  const needsMeta = $derived(viewModel.needsMeta)
+  const running = $derived(viewModel.running)
 
   let progress = $state('Loading…')
   let events = $state<EventEnvelope[]>([])
-
-  function sortEventsChronologically(items: EventEnvelope[]): EventEnvelope[] {
-    return [...items].sort((a, b) => {
-      const left = a.at ? Date.parse(a.at) : 0
-      const right = b.at ? Date.parse(b.at) : 0
-      return left - right
-    })
-  }
 
   function scrollFeedToBottom(): void {
     queueMicrotask(() => {
@@ -45,7 +37,7 @@
   }
 
   $effect(() => {
-    events = sortEventsChronologically(detail.recentEvents ?? [])
+    events = viewModel.events
     scrollFeedToBottom()
   })
 
