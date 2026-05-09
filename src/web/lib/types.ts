@@ -394,12 +394,19 @@ export interface ServiceProjectSummary {
   name: string
   initializationNeeded?: boolean
   selected?: boolean
+  tags?: string[]
+  summary?: string | null
   taskCounts?: {
     total: number
     active: number
     blocked: number
     done: number
     shelved: number
+  }
+  highlights?: {
+    activeTaskTitle?: string | null
+    blockedTaskTitle?: string | null
+    recentCompletedTaskTitle?: string | null
   }
   run?: ProjectRun | null
 }

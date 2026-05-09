@@ -7,6 +7,11 @@ export interface ProjectCardSummary {
   selected: boolean
   statusLabel: string
   tone: 'active' | 'warn' | 'success' | 'idle'
+  stageLabel: string
+  activityLabel: string
+  recentLabel: string | null
+  blurb: string | null
+  tags: string[]
   counts: {
     total: number
     active: number
@@ -36,6 +41,49 @@ function statusLabel(run: ProjectRun | null | undefined, selected: boolean): str
   return selected ? 'Ready here' : 'Idle'
 }
 
+function stageLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
+  if (project.initializationNeeded) return 'Needs setup'
+  if ((project.run?.status ?? 'stopped') === 'running') return 'In progress'
+  if (counts.blocked > 0 && counts.active === 0) return 'Blocked'
+  if (counts.total === 0) return 'Ready to start'
+  if (counts.done > 0 && counts.active === 0 && counts.blocked === 0) return 'Stable'
+  return 'Paused'
+}
+
+function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
+  if (project.initializationNeeded) return 'Attached folder waiting for first-time Guildhall setup.'
+  const running = (project.run?.status ?? 'stopped') === 'running'
+  if (running && counts.active > 0) {
+    return counts.active === 1
+      ? `Agents are working on 1 active task.`
+      : `Agents are working on ${counts.active} active tasks.`
+  }
+  if (counts.blocked > 0 && counts.active === 0) {
+    return counts.blocked === 1
+      ? '1 blocked task needs attention.'
+      : `${counts.blocked} blocked tasks need attention.`
+  }
+  if (counts.active > 0) {
+    return counts.active === 1
+      ? '1 task is queued or paused.'
+      : `${counts.active} tasks are queued or paused.`
+  }
+  if (counts.done > 0) {
+    return counts.total > 0
+      ? `${counts.done} of ${counts.total} tasks are done.`
+      : `${counts.done} tasks are done.`
+  }
+  return 'No task activity yet.'
+}
+
+function recentLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string | null {
+  if (project.highlights?.activeTaskTitle) return `Working on: ${project.highlights.activeTaskTitle}`
+  if (project.highlights?.blockedTaskTitle) return `Blocked on: ${project.highlights.blockedTaskTitle}`
+  if (project.highlights?.recentCompletedTaskTitle) return `Recently completed: ${project.highlights.recentCompletedTaskTitle}`
+  if (counts.done > 0) return 'Completed work is recorded in this project.'
+  return null
+}
+
 export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCardSummary {
   const counts = {
     total: project.taskCounts?.total ?? 0,
@@ -54,6 +102,11 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
     selected,
     statusLabel: initializationNeeded ? 'Needs setup' : statusLabel(project.run, selected),
     tone: initializationNeeded ? 'warn' : statusFromRun(project.run),
+    stageLabel: stageLabel(project, counts),
+    activityLabel: activityLabel(project, counts),
+    recentLabel: recentLabel(project, counts),
+    blurb: project.summary ?? null,
+    tags: project.tags ?? [],
     counts,
     actionLabel: initializationNeeded
       ? (selected ? 'Open setup' : 'Switch and set up')

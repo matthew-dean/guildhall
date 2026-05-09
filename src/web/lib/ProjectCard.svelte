@@ -30,7 +30,34 @@
     <div>
       <h3>{summary.name}</h3>
       <p class="path">{summary.path}</p>
+      {#if summary.blurb}
+        <p class="blurb">{summary.blurb}</p>
+      {/if}
+      {#if summary.tags.length > 0}
+        <div class="tags">
+          {#each summary.tags.slice(0, 3) as tag (tag)}
+            <span class="tag">{tag}</span>
+          {/each}
+        </div>
+      {/if}
     </div>
+
+    <dl class="story">
+      <div>
+        <dt>Stage</dt>
+        <dd>{summary.stageLabel}</dd>
+      </div>
+      <div>
+        <dt>Activity</dt>
+        <dd>{summary.activityLabel}</dd>
+      </div>
+      {#if summary.recentLabel}
+        <div>
+          <dt>Recent</dt>
+          <dd>{summary.recentLabel}</dd>
+        </div>
+      {/if}
+    </dl>
 
     <dl class="stats">
       <div><dt>Active</dt><dd>{summary.counts.active}</dd></div>
@@ -69,6 +96,50 @@
     color: var(--text-muted);
     font-size: var(--fs-1);
     overflow-wrap: anywhere;
+  }
+  .blurb {
+    margin: var(--s-2) 0 0;
+    color: var(--text-muted);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+  }
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-1);
+    margin-top: var(--s-2);
+  }
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-elevated));
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    font-weight: 700;
+  }
+  .story {
+    display: grid;
+    gap: var(--s-2);
+    margin: 0;
+  }
+  .story div {
+    display: grid;
+    gap: 0.15rem;
+  }
+  .story dt {
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+  }
+  .story dd {
+    margin: 0;
+    color: var(--text);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
   }
   .stats {
     display: grid;

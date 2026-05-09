@@ -214,12 +214,19 @@ interface ServiceProjectSummary {
   name: string
   initializationNeeded: boolean
   selected?: boolean
+  tags?: string[]
+  summary?: string | null
   taskCounts?: {
     total: number
     active: number
     blocked: number
     done: number
     shelved: number
+  }
+  highlights?: {
+    activeTaskTitle?: string | null
+    blockedTaskTitle?: string | null
+    recentCompletedTaskTitle?: string | null
   }
   run?: {
     status?: string
@@ -472,6 +479,7 @@ function summarizeProject(project: ResolvedProject): ServiceProjectSummary {
     path: project.path,
     name: project.config?.name ?? project.id,
     initializationNeeded: project.initializationNeeded,
+    tags: project.config?.tags ?? [],
   }
 }
 
@@ -552,6 +560,48 @@ function summarizeTaskCounts(tasks: Array<Record<string, unknown>>): ServiceProj
     done,
     shelved,
   }
+}
+
+function summarizeProjectText(project: ResolvedProject): string | null {
+  if (project.initializationNeeded) {
+    return 'Attached to this folder. Initialize Guildhall here to set up coordinators, providers, and task flow.'
+  }
+  const briefPath = join(project.path, 'memory', 'project-brief.md')
+  if (existsSync(briefPath)) {
+    const brief = readFileSync(briefPath, 'utf8')
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^#+\s*/, '').trim())
+      .filter((line) => line.length > 0)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (brief.length > 0) {
+      return brief.length > 180 ? `${brief.slice(0, 177).trimEnd()}…` : brief
+    }
+  }
+  const mandates = (project.config?.coordinators ?? [])
+    .map((coordinator) => coordinator.mandate?.replace(/\s+/g, ' ').trim())
+    .filter((mandate): mandate is string => Boolean(mandate))
+  if (mandates.length > 0) {
+    const combined = mandates.join(' ')
+    return combined.length > 180 ? `${combined.slice(0, 177).trimEnd()}…` : combined
+  }
+  if ((project.config?.tags ?? []).length > 0) {
+    return `Tagged ${project.config?.tags?.join(', ')}.`
+  }
+  return null
+}
+
+function latestTaskTitleByStatus(
+  tasks: Array<Record<string, unknown>>,
+  statuses: string[],
+): string | null {
+  const allowed = new Set(statuses)
+  const picked = [...tasks]
+    .filter((task) => typeof task.status === 'string' && allowed.has(task.status))
+    .sort((left, right) => (String(right.updatedAt ?? '')).localeCompare(String(left.updatedAt ?? '')))[0]
+  const title = typeof picked?.title === 'string' ? picked.title.trim() : ''
+  return title || null
 }
 
 function resolveTaskPathForDomain(
@@ -871,17 +921,25 @@ export function buildServeApp(opts: ServeOptions = {}): {
           done: 0,
           shelved: 0,
         }
+        let highlights: ServiceProjectSummary['highlights'] = undefined
         try {
           const tasks = await readTasksFileNormalized(join(entry.path, 'memory', 'TASKS.json'))
           taskCounts = summarizeTaskCounts(tasks)
+          highlights = {
+            activeTaskTitle: latestTaskTitleByStatus(tasks, ['in_progress', 'review', 'gate_check', 'exploring']),
+            blockedTaskTitle: latestTaskTitleByStatus(tasks, ['blocked']),
+            recentCompletedTaskTitle: latestTaskTitleByStatus(tasks, ['done']),
+          }
         } catch {
           // leave zeroed summary for missing/unreadable task files
         }
         const run = runsById.get(resolved.id)
         return {
           ...summarizeProject(resolved),
+          summary: summarizeProjectText(resolved),
           selected: resolved.path === project.path,
           taskCounts,
+          ...(highlights ? { highlights } : {}),
           ...(run
             ? {
                 run: {
