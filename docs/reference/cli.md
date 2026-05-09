@@ -56,6 +56,8 @@ Flags:
 - `--port <n>` (default `7777`).
 - `--no-open` — don't open a browser.
 
+The default service state file lives at `~/.guildhall/service.json`.
+
 ## `guildhall start [path]`
 
 Start the local Guildhall service without opening a browser.
@@ -70,6 +72,10 @@ Flags:
 ## `guildhall stop`
 
 Stop the local Guildhall service.
+
+If you installed Guildhall through the macOS packaged installer, the background
+service is managed by a LaunchAgent at
+`~/Library/LaunchAgents/io.guildhall.agent.plist`.
 
 ## `guildhall open [path]`
 

@@ -49,14 +49,33 @@ The metaphor: a medieval guildhall, where masters, journeymen, and apprentices w
                              ╰────────────────╯        ╰───────────────╯
 ```
 
+## Install
+
+Recommended on macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | sh
+```
+
+Also supported:
+
+```bash
+npm install -g guildhall
+```
+
 ## Quick start
 
 ```bash
-# Inside the project you want the guild to work on:
-npx guildhall init
+# Start Guildhall and open the Projects view:
+guildhall serve
 ```
 
-That's it. `init` writes a `guildhall.yaml` and pops open a dashboard at <http://localhost:7777/setup> that walks through:
+From there, attach an existing project folder. If the folder already contains a
+`guildhall.yaml`, Guildhall registers it and opens it immediately. If not, it
+opens the project in an uninitialized state and walks you through setup inside
+the project shell.
+
+Setup still writes a `guildhall.yaml` and walks through:
 
 1. **Identity** — workspace name + slug
 2. **Provider** — Claude (via Claude Code CLI), Codex (via Codex CLI), local `llama.cpp` / LM Studio, or paste-in Anthropic / OpenAI API keys
@@ -99,8 +118,11 @@ Doesn't care whether you run frontier Claude, Codex via OAuth, or a llama.cpp se
 ## Commands
 
 ```
-guildhall init [path]              Launch dashboard + browser-based setup
-guildhall serve [path]             Start only the dashboard (project must already be initialized)
+guildhall init [path]              Launch project setup directly for one folder
+guildhall serve [path]             Start the local service if needed, then open Guildhall
+guildhall start [path]             Start the local service without opening a browser
+guildhall open [path]              Open the running service (starts it if needed)
+guildhall stop                     Stop the local service
 guildhall run [id|path]            Run the orchestrator headlessly
 guildhall intake "<ask>" --domain  Queue a new task from the CLI
 guildhall help                     Full command list
@@ -156,11 +178,13 @@ That is the release claim to make. It is strong enough to ship, and narrow
 enough to be honest.
 
 ```bash
-# Dry-run the whole pipeline (bumps the manifest, runs gates, packs the tarball, reverts):
+# Dry-run the whole pipeline (bumps the manifest, runs gates, builds the macOS package,
+# packs the npm tarball, reverts):
 pnpm release:dry 0.4.0
 
 # Actual release: bumps package.json, runs typecheck + docs + lint:deps + tests,
-# builds, publishes guildhall to npm, commits, tags v0.4.0.
+# builds dist/, builds the macOS packaged artifact, publishes guildhall to npm,
+# commits, tags v0.4.0.
 pnpm release 0.4.0
 ```
 

@@ -118,6 +118,18 @@ correct the agent, and ask for direct action from Thread.
 
 ## Latest Progress
 
+- Completed the `0.5.0` macOS packaging slice. Guildhall now has a
+  buildable packaged artifact at `artifacts/macos/guildhall-macos`,
+  a tarball at `artifacts/macos/guildhall-macos.tar.gz`, LaunchAgent install
+  and uninstall scripts, a plist template, and a curl-first installer script.
+  The packaged launcher now resolves correctly through the
+  `~/.guildhall/bin/guildhall` symlink, and the artifact includes a portable
+  production dependency tree instead of assuming the source repo's
+  `node_modules`. Verified with focused tests plus a temp-home installer smoke:
+  the installer wrote the LaunchAgent under `~/Library/LaunchAgents`,
+  started the service, answered `/api/version`, and `guildhall stop` shut it
+  down cleanly.
+
 - Closed the retry-window failure family with live proof on `task-016`.
   Resolved `max_revisions_exceeded` retries now start a persisted fresh
   revision window (`retryWindow.startedAt` + `baseRevisionCount`) instead of
