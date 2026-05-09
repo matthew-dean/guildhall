@@ -56,6 +56,19 @@ async function seed(tasks: Task[]): Promise<void> {
 }
 
 describe('GET /api/project/release-readiness', () => {
+  it('reports initializationNeeded for an attached-but-uninitialized project shell', async () => {
+    const emptyDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-uninitialized-'))
+    try {
+      const { app } = buildServeApp({ projectPath: emptyDir })
+      const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+      expect(res.status).toBe(200)
+      const body = await res.json() as { initializationNeeded?: boolean }
+      expect(body.initializationNeeded).toBe(true)
+    } finally {
+      await fs.rm(emptyDir, { recursive: true, force: true })
+    }
+  })
+
   it('reports all-clear on an empty workspace', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
@@ -90,6 +103,23 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.unapprovedBriefs.map((b: any) => b.id)).toEqual(['task-1'])
     expect(body.unapprovedSpecs.map((b: any) => b.id)).toEqual(['task-2'])
     expect(body.totals.blockingCount).toBe(2)
+  })
+
+  it('treats a done-only narrow-lane project as release-ready', async () => {
+    await seed([
+      makeTask({
+        id: 'task-1',
+        title: 'Completed cleanup',
+        status: 'done',
+        completedAt: '2026-05-09T00:00:00Z',
+      }),
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    const body = await res.json() as any
+    expect(body.ready).toBe(true)
+    expect(body.totals.done).toBe(1)
+    expect(body.totals.blockingCount).toBe(0)
   })
 
   it('surfaces open escalations, shelved tasks, and blocked tasks', async () => {

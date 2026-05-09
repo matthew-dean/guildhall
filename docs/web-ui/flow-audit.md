@@ -135,6 +135,11 @@ correct the agent, and ask for direct action from Thread.
   `--no-check`, produced a larger binary, started more slowly, and failed the
   real `serve --no-open` startup path, so it is not the right packaging pivot
   for this release.
+- Added the `0.5.0` proof tests and release note. Focused proof now covers:
+  fleet-level service start with no selected project, attach-existing-folder,
+  initialization inside the nested project shell, per-project start/stop, and
+  a selected project that still surfaces the proven narrow automation lane as
+  terminal success from inside the new service/project structure.
 
 - Closed the retry-window failure family with live proof on `task-016`.
   Resolved `max_revisions_exceeded` retries now start a persisted fresh
