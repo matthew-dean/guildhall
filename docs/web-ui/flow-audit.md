@@ -254,6 +254,13 @@ screen.
   found, source scope, per-source preview, candidate task review, and final
   confirmation — instead of asking the user to decode a mixed-abstraction
   transcript card.
+- Wrote a repo-local product philosophy doc in
+  `docs/superpowers/specs/2026-05-09-guildhall-product-philosophy.md`. This
+  now captures the cross-cutting rules for every Guildhall screen and card:
+  one decision at a time, one level of abstraction at a time, inspectable
+  detail instead of front-loaded dumps, and a concrete review rubric for
+  asking whether a surface tells the user what it is showing, what it wants,
+  and what the primary action will do.
 - Captured a future product direction for a model diagnostics lab: a user-local
   bakeoff surface that can run multiple models/providers through Guildhall
   tasks, store results over time, and help answer "which model is good for
