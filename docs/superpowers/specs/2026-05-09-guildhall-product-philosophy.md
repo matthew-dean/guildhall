@@ -89,6 +89,55 @@ The user should know what an action will do before clicking it.
 
 Primary actions should feel intentional, not magical or risky.
 
+### 7. Guide toward strong outcomes
+
+Guildhall should not stop at being merely understandable. It should help the
+user make good decisions.
+
+That means the product should be opinionated in a useful way:
+
+- leading with recommended paths
+- nudging toward higher-quality outcomes
+- helping the user avoid accidental low-quality or incomplete choices
+- shaping work toward a result that fits the user's goals, constraints, and
+  working style
+
+The product should feel like a capable guide, not a neutral form generator.
+
+When there is a clear best-practice path, Guildhall should surface it clearly.
+When there are meaningful tradeoffs, Guildhall should explain them briefly and
+help the user choose well.
+
+### 8. Do most of the work before asking the human
+
+When Guildhall asks the user for a decision, it should have already done most
+of the heavy lifting.
+
+Human checkpoints should feel like:
+
+- confirmation
+- correction
+- prioritization
+- a light final judgment
+
+They should not feel like:
+
+- deciphering a giant draft
+- reconstructing what Guildhall found
+- doing first-pass synthesis by hand
+- making twelve hidden decisions at once
+
+The ideal feeling is:
+
+- Guildhall has already prepared this well
+- the recommendation is sensible
+- I can inspect the evidence if I want
+- approving or correcting this is easy
+
+If a step feels tedious, mentally expensive, or like the user is doing the
+agent's unfinished homework, Guildhall has asked too early or prepared too
+poorly.
+
 ## The Journey Model
 
 Most guided Guildhall flows should move through some version of this sequence:
@@ -115,6 +164,15 @@ Not every flow needs all five stages, but the shape should remain legible.
 
 Guildhall should not skip from orientation to final approval if the user has
 not yet seen the candidate items they are being asked to approve.
+
+Within that journey, Guildhall should actively steer toward the best likely
+result. A guided flow is not just a sequence of steps; it is a sequence of
+well-designed recommendations that help the user reach a strong outcome with
+less guesswork.
+
+At each human checkpoint, the work should feel mostly done already. The user
+should be stepping in to confirm or refine a well-prepared proposal, not to
+create the proposal from scratch under a different name.
 
 ## The Card Rule
 
@@ -289,6 +347,10 @@ Avoid:
 
 unless the context already makes the outcome unmistakable.
 
+Primary actions should also reflect Guildhall's recommendation when there is a
+clear default path. The best next move should be obvious from both placement
+and wording.
+
 ### Secondary actions
 
 Secondary actions should support:
@@ -369,6 +431,10 @@ Trust comes from:
 Users should not feel like Guildhall is doing hidden reasoning they are only
 allowed to bless after the fact.
 
+Trust also comes from feeling guided competently. The user should sense that
+Guildhall is helping them arrive at the right result, not merely asking them
+to navigate a maze of choices alone.
+
 ## Review Questions For Any Screen Or Card
 
 Use this checklist during design or review.
@@ -393,6 +459,7 @@ Use this checklist during design or review.
 - Is there one obvious primary action?
 - Does the action label say what happens next?
 - Is the action safe-feeling and understandable?
+- Is Guildhall making its recommendation clear when there is a best next step?
 
 ### Sequence
 
@@ -415,6 +482,10 @@ Use this checklist during design or review.
 
 - Could the user tell what will be changed if they proceed?
 - Are existing state and proposed new state clearly separated?
+- Does the flow help the user make a strong decision, or does it merely expose
+  options without guidance?
+- Has Guildhall already done enough preparation that this checkpoint feels
+  easy rather than tedious?
 
 ## Failure Patterns To Watch For
 
