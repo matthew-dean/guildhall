@@ -256,7 +256,7 @@ export async function createWorkspaceImportTask(
   const now = new Date().toISOString()
   const task: Task = {
     id: WORKSPACE_IMPORT_TASK_ID,
-    title: 'Import existing workspace artifacts into TASKS.json',
+    title: 'Review existing project work',
     description:
       'Refine the detector-produced draft of goals, tasks, and milestones with the user, then emit YAML fences for the merge step.',
     domain: WORKSPACE_IMPORT_DOMAIN,
@@ -331,7 +331,7 @@ export async function rerunWorkspaceImportTask(
 
   const task: Task = {
     id: WORKSPACE_IMPORT_TASK_ID,
-    title: 'Import existing workspace artifacts into TASKS.json',
+    title: 'Import project notes and plans',
     description:
       'Refine the detector-produced draft of goals, tasks, and milestones with the user, then emit YAML fences for the merge step.',
     domain: WORKSPACE_IMPORT_DOMAIN,
@@ -615,6 +615,7 @@ export interface ApproveWorkspaceImportInput {
   memoryDir: string
   projectPath: string
   coordinatorProjectPaths?: Record<string, string>
+  draftOverride?: WorkspaceImportDraft
 }
 
 export interface ApproveWorkspaceImportResult {
@@ -656,15 +657,18 @@ export async function approveWorkspaceImport(
       error: `No workspace-import task found (id: ${WORKSPACE_IMPORT_TASK_ID})`,
     }
   }
-  if (!task.spec || task.spec.trim().length === 0) {
+  const parsed = input.draftOverride
+    ? parseWorkspaceImport(formatDetectedDraftAsSpec(input.draftOverride))
+    : (!task.spec || task.spec.trim().length === 0)
+        ? null
+        : parseWorkspaceImport(task.spec)
+  if (!parsed) {
     return {
       success: false,
       error:
         'Workspace-import task has no spec yet; ask the importer agent to emit the YAML fences first.',
     }
   }
-
-  const parsed = parseWorkspaceImport(task.spec)
   if (
     parsed.goals.length === 0 &&
     parsed.tasks.length === 0 &&

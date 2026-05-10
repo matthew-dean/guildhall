@@ -92,13 +92,13 @@ screen.
   forcing users to simulate retries by creating new tasks. Workspace import,
   meta-intake, spec drafting, review, and gate reruns now all have explicit
   rerun actions.
-- [ ] Prove re-intake against the real Looma + Knit planning corpus. The bar
+- [x] Prove re-intake against the real Looma + Knit planning corpus. The bar
   is not "an importer task existed once"; it must actually reread the
   substantial documented backlog and surface sensible candidate tasks.
-- [ ] Redesign workspace import as a real staged journey. The current flow
+- [x] Redesign workspace import as a real staged journey. The current flow
   still mixes source-level review, candidate-task review, existing-task state,
   and final confirmation into one muddy question lane.
-- [ ] Make import gating strict. Source-selection and candidate-review steps
+- [x] Make import gating strict. Source-selection and candidate-review steps
   should block later wizard steps instead of surfacing as co-active optional
   cards.
 - [ ] Untangle `Work` vs `Planner`. Right now they are too close: Work is
@@ -254,6 +254,21 @@ screen.
   found, source scope, per-source preview, candidate task review, and final
   confirmation — instead of asking the user to decode a mixed-abstraction
   transcript card.
+- Landed the first real implementation of that redesign and proved it live
+  against Looma + Knit on `http://localhost:7899/workspace-import`. The flow
+  now opens with project parts (`Looma`, `Knit`, plus reference-only parts)
+  instead of a raw file list, moves through explicit `Found → Parts → Sources
+  → Tasks → Confirm` steps, and keeps the user at one abstraction level at a
+  time. Source selection is now guided one project-part at a time, task review
+  is source-by-source and paged, and final confirmation speaks in plain
+  language (`Create 80 draft tasks?`) instead of runtime internals like
+  `TASKS.json` or `exploring` state.
+- Killed the most misleading import fallback shapes. Reserved workspace-import
+  questions no longer render as generic Thread question cards, the importer no
+  longer synthesizes the bogus existing-task `pick one` fallback, and the
+  dedicated review screen now uses consistent user-facing naming around
+  `Review existing project work` instead of bouncing between repo-scan/import
+  jargon.
 - Wrote a repo-local product philosophy doc in
   `docs/superpowers/specs/2026-05-09-guildhall-product-philosophy.md`. This
   now captures the cross-cutting rules for every Guildhall screen and card:

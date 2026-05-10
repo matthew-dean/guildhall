@@ -128,6 +128,7 @@ import {
   detectWorkspaceSignals,
   formWorkspaceHypothesis,
 } from './workspace-import/index.js'
+import { buildWorkspaceImportReview, filterWorkspaceImportDraft } from './workspace-import/review.js'
 import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
 import { buildThread } from './thread.js'
 import {
@@ -398,7 +399,6 @@ export { writeWizardsState as _writeWizardsState, mutateSkip as _mutateSkip }
  */
 function archetypesToCoordinators(archetypes: string[]): Array<{
   id: string
-  name: string
   domain: string
   mandate: string
   concerns: Array<{ id: string; description: string; reviewQuestions: string[] }>
@@ -406,7 +406,6 @@ function archetypesToCoordinators(archetypes: string[]): Array<{
   const seeds: Record<string, ReturnType<typeof archetypesToCoordinators>[number]> = {
     product: {
       id: 'product',
-      name: 'Product Coordinator',
       domain: 'product',
       mandate:
         'Owns user-facing behavior, product brief coherence, and whether a task is doing the right thing for users before we ask whether it is done correctly.',
@@ -423,7 +422,6 @@ function archetypesToCoordinators(archetypes: string[]): Array<{
     },
     tech: {
       id: 'tech',
-      name: 'Tech Coordinator',
       domain: 'tech',
       mandate:
         'Owns implementation quality, architectural coherence, and making sure the codebase stays maintainable as tasks land.',
@@ -440,7 +438,6 @@ function archetypesToCoordinators(archetypes: string[]): Array<{
     },
     qa: {
       id: 'qa',
-      name: 'QA Coordinator',
       domain: 'qa',
       mandate:
         'Owns verification: tests, gates, and making sure we know a change works before it merges.',
@@ -2187,6 +2184,26 @@ export function buildServeApp(opts: ServeOptions = {}): {
         /* treat as not-dismissed */
       }
 
+      let existingTasks: Array<{ title: string; status: string }> = []
+      const tasksPath = join(memoryDir, 'TASKS.json')
+      if (existsSync(tasksPath)) {
+        try {
+          const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+            | { tasks?: Array<Record<string, unknown>> }
+            | Array<Record<string, unknown>>
+          const list = Array.isArray(raw) ? raw : raw.tasks ?? []
+          existingTasks = list
+            .filter(t => (t as { id?: string }).id !== WORKSPACE_IMPORT_TASK_ID)
+            .map(t => ({
+              title: typeof (t as { title?: unknown }).title === 'string' ? (t as { title: string }).title : '',
+              status: typeof (t as { status?: unknown }).status === 'string' ? (t as { status: string }).status : 'unknown',
+            }))
+            .filter(t => t.title.trim().length > 0)
+        } catch {
+          existingTasks = []
+        }
+      }
+
       // Deterministic detector preview — runs regardless of whether the
       // agent has populated the task spec yet. This is what the UI shows
       // first: real findings the user can Approve or Dismiss *now*.
@@ -2196,6 +2213,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         milestones: unknown[]
         context: unknown[]
         stats: { inputSignals: number; drafted: number; deduped: number }
+        review?: unknown
       } | null = null
       try {
         const inventory = await detectWorkspaceSignals({ projectPath: project.path })
@@ -2206,12 +2224,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
           milestones: [...draft.milestones],
           context: [...draft.context],
           stats: draft.stats,
+          review: buildWorkspaceImportReview(draft, existingTasks, projectPath),
         }
       } catch {
         /* detector best-effort */
       }
-
-      const tasksPath = join(memoryDir, 'TASKS.json')
       if (!existsSync(tasksPath)) {
         return c.json({
           taskExists: false,
@@ -2274,6 +2291,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
       const memoryDir = join(project.path, 'memory')
+      const body = await c.req.json().catch(() => ({})) as {
+        sourceKeys?: string[]
+        taskIds?: string[]
+      }
 
       // Fallback: if the reserved task is missing or has no agent-authored
       // spec yet, create the task (idempotent) and seed the spec from the
@@ -2342,6 +2363,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
         )
       }
 
+      const inventory = await detectWorkspaceSignals({ projectPath: project.path })
+      const filteredDraft = filterWorkspaceImportDraft(formWorkspaceHypothesis(inventory), {
+        sourceKeys: Array.isArray(body.sourceKeys) ? body.sourceKeys : undefined,
+        taskIds: Array.isArray(body.taskIds) ? body.taskIds : undefined,
+      })
+
       const result = await approveWorkspaceImport({
         memoryDir,
         projectPath: project.path,
@@ -2349,6 +2376,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           project.path,
           project.config?.coordinators ?? [],
         ),
+        draftOverride: filteredDraft,
       })
       if (!result.success) {
         return c.json({ error: result.error ?? 'Approval failed' }, 400)
@@ -2444,7 +2472,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         },
         coordinators: {
           count: cfg?.coordinators?.length ?? 0,
-          list: (cfg?.coordinators ?? []).map(c => ({ id: c.id, name: c.name })),
+          list: (cfg?.coordinators ?? []).map(c => ({ id: c.id, ...(c.domain ? { domain: c.domain } : {}) })),
           editHref: '/settings/coordinators',
         },
         designSystem: {

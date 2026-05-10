@@ -33,6 +33,7 @@
   import StatusLine from '../../lib/StatusLine.svelte'
   import StateSummary from '../../lib/StateSummary.svelte'
   import Help from '../../lib/Help.svelte'
+  import { friendlyStewardName } from '../../lib/display.js'
   import InteractionCardLayout from '../../lib/InteractionCardLayout.svelte'
   import { onEvent } from '../../lib/events.js'
   import { nav } from '../../lib/nav.svelte.js'
@@ -98,7 +99,7 @@
     taskId: string; taskTitle: string; spec: string
     draftCoordinators?: Array<{
       id: string
-      name: string
+      name?: string
       domain: string
       path?: string
       mandate: string
@@ -268,7 +269,7 @@
   function personaLabel(p: TurnPersona): string {
     switch (p) {
       case 'intake': return 'Setup guide'
-      case 'spec':   return 'Spec author'
+      case 'spec':   return 'Guildhall'
       case 'worker': return 'Worker'
       case 'reviewer': return 'Reviewer'
       case 'coord':  return 'Coordinator'
@@ -278,6 +279,7 @@
 
   function displayTaskTitle(t: { taskId: string; taskTitle: string }): string {
     if (t.taskId === 'task-meta-intake') return 'Map project areas and starter tasks'
+    if (t.taskId === 'task-workspace-import') return 'Review existing project work'
     return t.taskTitle
   }
 
@@ -384,6 +386,24 @@
         if (turnElements.get(id) === node) turnElements.delete(id)
       },
     }
+  }
+
+  function openQuestionCountForTask(taskId: string): number {
+    return turns.filter(
+      t => t.kind === 'agent_question' && t.taskId === taskId && t.status === 'active',
+    ).length
+  }
+
+  function revealQuestionsForTask(taskId: string): void {
+    const first = turns.find(
+      t => t.kind === 'agent_question' && t.taskId === taskId && t.status === 'active',
+    )
+    if (!first) return
+    expandedPhases = { ...expandedPhases, [first.phase]: true }
+    queueMicrotask(() => {
+      const el = turnElements.get(first.id)
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
   }
 
   function togglePhase(phase: TurnPhase): void {
@@ -609,7 +629,7 @@
   }
 
   function taskStateLabel(turn: InFlightTurn): string {
-    if (turn.liveAgent?.name === 'spec-agent') return 'Spec'
+    if (turn.liveAgent?.name === 'spec-agent') return 'Drafting'
     if (turn.liveAgent?.name.startsWith('coordinator-')) return 'Ready'
     if (turn.liveAgent?.name === 'worker-agent') return 'In flight'
     if (turn.liveAgent?.name === 'reviewer-agent') return 'Review'
@@ -631,11 +651,18 @@
     ) {
       return 'Local model is still loading or generating.'
     }
+    if (turn.liveAgent?.name === 'spec-agent') {
+      return turn.taskId === 'task-workspace-import'
+        ? 'Guildhall is turning your existing project notes into candidate tasks now.'
+        : 'Guildhall is drafting this now.'
+    }
     if (turn.taskStatus === 'ready' && !turn.liveAgent) {
       return 'Approved and queued. Start work when you want Guildhall to pick this up.'
     }
     if (turn.taskStatus === 'exploring' && !turn.liveAgent) {
-      return 'Intake is paused. Continue intake when you want Guildhall to keep shaping this task.'
+      return turn.taskId === 'task-workspace-import'
+        ? 'This import draft is paused. Continue when you want Guildhall to turn your existing project notes into candidate tasks.'
+        : 'This draft is paused. Continue when you want Guildhall to keep shaping it.'
     }
     if (turn.taskStatus === 'in_progress' && !turn.liveAgent) {
       return 'Work is paused. Resume work when you want Guildhall to continue.'
@@ -649,6 +676,16 @@
     return turn.summary
   }
 
+  function metaIntakeChecklistComplete(turn: InFlightTurn): boolean {
+    return Boolean(
+      turn.taskId === 'task-meta-intake' &&
+      turn.taskStatus === 'exploring' &&
+      turn.checklist &&
+      turn.checklist.totalSteps > 0 &&
+      turn.checklist.doneCount >= turn.checklist.totalSteps,
+    )
+  }
+
   function canStartTaskTurn(turn: InFlightTurn): boolean {
     return !turn.liveAgent && (
       turn.taskStatus === 'ready' ||
@@ -660,6 +697,7 @@
   }
 
   function startTaskLabel(turn: InFlightTurn): string {
+    if (metaIntakeChecklistComplete(turn)) return 'Create split proposal'
     switch (turn.taskStatus) {
       case 'ready': return 'Start work'
       case 'exploring': return 'Continue intake'
@@ -762,6 +800,16 @@
   }
   function totalCountForTask(taskId: string): number {
     return sectionByTask[taskId]?.askedQuestionIds.length ?? 0
+  }
+  function hasStagedAnswersForTask(taskId: string): boolean {
+    return stagedCountForTask(taskId) > 0
+  }
+  function stagedSummaryForTask(taskId: string): string {
+    const ready = stagedCountForTask(taskId)
+    const total = totalCountForTask(taskId)
+    if (ready <= 0 || total <= 0) return ''
+    if (ready === total) return `${ready} of ${total} answers ready to submit`
+    return `${ready} of ${total} answers ready so far`
   }
 
   // True if the task has at least one un-answered agent_question turn.
@@ -933,11 +981,17 @@
                 {/if}
                 {#if t.status === 'active'}
                   {@const blockedByQuestions = hasOpenQuestionsForTask(t.taskId)}
+                  {@const openQuestionCount = openQuestionCountForTask(t.taskId)}
                   {#if blockedByQuestions}
-                    <p class="lede gating">
-                      Answer the open questions below before approving — the
-                      brief depends on what you say.
-                    </p>
+                    <div class="gating-row">
+                      <p class="lede gating">
+                        Answer {openQuestionCount} open question{openQuestionCount === 1 ? '' : 's'} in Thread before approving — the
+                        brief depends on what you say.
+                      </p>
+                      <Button variant="secondary" size="sm" onclick={() => revealQuestionsForTask(t.taskId)}>
+                        Go to questions
+                      </Button>
+                    </div>
                   {/if}
                   {#if sentReplies[t.id]}
                     <p class="answer">Sent. The spec author has the correction.</p>
@@ -990,6 +1044,25 @@
 
               {:else if t.kind === 'agent_question'}
                 {#if t.status === 'active'}
+                  {@const hasStaged = hasStagedAnswersForTask(t.taskId)}
+                  {@const stagedSummary = stagedSummaryForTask(t.taskId)}
+                  {@const totalQuestions = totalCountForTask(t.taskId)}
+                  {#if hasStaged && totalQuestions > 1}
+                    <div class="question-submit-banner">
+                      <div>
+                        <div class="question-submit-title">Answers are staged</div>
+                        <div class="question-submit-copy">{stagedSummary}</div>
+                      </div>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={busyTaskId === t.taskId}
+                        onclick={() => submitSection(t.taskId)}
+                      >
+                        Submit answers
+                      </Button>
+                    </div>
+                  {/if}
                   {#if staged[t.question.id]}
                     <div class="prompt"><Markdown source={t.question.restatement ?? t.question.prompt ?? ''} /></div>
                     <div class="field"><span class="field-label">Staged</span>
@@ -1020,39 +1093,53 @@
 
               {:else if t.kind === 'spec_review'}
                 {@const missingSpec = t.taskId !== 'task-meta-intake' && t.spec.trim().length === 0}
+                {@const isMetaIntakeDraft = t.taskId === 'task-meta-intake'}
+                {@const proposedCount = t.draftCoordinators?.length ?? 0}
                 <div class="prompt-row">
                   <h3 class="prompt">
-                    {t.taskId === 'task-meta-intake' ? 'Coordinator roles are awaiting approval' : 'Spec awaiting approval'}
+                    {isMetaIntakeDraft
+                      ? `Guildhall found ${proposedCount || 0} proposed ${proposedCount === 1 ? 'work area' : 'work areas'}`
+                      : 'Spec draft awaiting approval'}
                   </h3>
-                  {#if t.taskId === 'task-meta-intake'}
+                  {#if isMetaIntakeDraft}
                     <Help topic="guide.coordinators" />
                   {/if}
                 </div>
-                {#if t.taskId === 'task-meta-intake' && t.draftCoordinators?.length}
+                {#if isMetaIntakeDraft && t.draftCoordinators?.length}
+                  <p class="why decision-question">Is this the right split for this project?</p>
                   <p class="why">
-                    Coordinator roles are review lanes for future work. Guildhall uses them to route
-                    tasks, choose the right reviewer, and decide what an agent may handle without
-                    interrupting you. Approve these if the lanes match how this repo should be split.
+                    Guildhall will use this split later to route work and apply the right review checks.
                   </p>
-                  <div class="coord-list">
+                  <div class="draft-summary-list">
                     {#each t.draftCoordinators as d (d.id)}
-                      <div class="coord">
-                        <div class="coord-title">
-                          <strong><Markdown source={d.name} inline /></strong>
-                          {#if d.path}<span class="muted"> — {d.path}</span>{/if}
-                        </div>
-                        {#if d.mandate}
-                          <div class="coord-mandate"><strong>Will watch:</strong> <Markdown source={d.mandate} inline /></div>
-                        {/if}
-                        {#if d.concerns?.length}
-                          <div class="coord-concerns">
-                            <strong>Will check:</strong>
-                            {d.concerns.map(c => c.description ?? c.id).join(', ')}
-                          </div>
-                        {/if}
+                      <div class="draft-summary-item">
+                        <strong>{friendlyStewardName(undefined, d.domain, d.id)}</strong>
+                        {#if d.path}<span class="muted"> — {d.path}</span>{/if}
                       </div>
                     {/each}
                   </div>
+                  <details class="draft-details">
+                    <summary>See why Guildhall suggested this split</summary>
+                    <div class="coord-list">
+                      {#each t.draftCoordinators as d (d.id)}
+                        <div class="coord">
+                          <div class="coord-title">
+                            <strong>{friendlyStewardName(undefined, d.domain, d.id)}</strong>
+                            {#if d.path}<span class="muted"> — {d.path}</span>{/if}
+                          </div>
+                          {#if d.mandate}
+                            <div class="coord-mandate"><strong>Owns:</strong> <Markdown source={d.mandate} inline /></div>
+                          {/if}
+                          {#if d.concerns?.length}
+                            <div class="coord-concerns">
+                              <strong>Review checks:</strong>
+                              {d.concerns.map(c => c.description ?? c.id).join(', ')}
+                            </div>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                  </details>
                 {:else if t.spec}
                   <div class="spec-preview"><Markdown source={t.spec} /></div>
                 {:else if missingSpec}
@@ -1060,10 +1147,16 @@
                 {/if}
                 {#if t.status === 'active'}
                   {@const blockedByQuestions = hasOpenQuestionsForTask(t.taskId)}
+                  {@const openQuestionCount = openQuestionCountForTask(t.taskId)}
                   {#if blockedByQuestions}
-                    <p class="lede gating">
-                      Answer the open questions below before approving the spec.
-                    </p>
+                    <div class="gating-row">
+                      <p class="lede gating">
+                        {openQuestionCount} open question{openQuestionCount === 1 ? '' : 's'} still block{openQuestionCount === 1 ? 's' : ''} this decision.
+                      </p>
+                      <Button variant="secondary" size="sm" onclick={() => revealQuestionsForTask(t.taskId)}>
+                        Go to questions
+                      </Button>
+                    </div>
                   {/if}
                   {#if replyTurnId === t.id}
                     <Stack gap="2">
@@ -1096,14 +1189,14 @@
                       Open task
                     </Button>
                     <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
-                      Revise spec
+                      {isMetaIntakeDraft ? 'Change the split' : 'Request changes'}
                     </Button>
                     <Button
                       variant="primary"
                       disabled={busyTurnId === t.id || blockedByQuestions || missingSpec}
                       onclick={() => approveSpec(t)}
                     >
-                      {t.taskId === 'task-meta-intake' ? 'Approve and merge' : 'Approve spec'}
+                      {isMetaIntakeDraft ? 'Yes, use this split' : 'Approve spec'}
                     </Button>
                   </Row>
                   {/if}
@@ -1231,18 +1324,23 @@
                     <Button variant="secondary" onclick={() => nav(`/task/${encodeURIComponent(t.taskId)}`)}>
                       Open task
                     </Button>
-                    {#if t.taskId === 'task-meta-intake' && t.taskStatus === 'exploring'}
-                      <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => synthesizeMetaIntake(t)}>
-                        Use saved answers
-                      </Button>
-                    {/if}
                     {#if canStartTaskTurn(t)}
                       <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
                         Add note
                       </Button>
-                      <Button variant="primary" disabled={runBusy || busyTurnId === t.id} onclick={startOneTaskRun}>
-                        {startTaskLabel(t)}
-                      </Button>
+                      {#if metaIntakeChecklistComplete(t)}
+                        <Button
+                          variant="primary"
+                          disabled={busyTurnId === t.id}
+                          onclick={() => synthesizeMetaIntake(t)}
+                        >
+                          {startTaskLabel(t)}
+                        </Button>
+                      {:else}
+                        <Button variant="primary" disabled={runBusy || busyTurnId === t.id} onclick={startOneTaskRun}>
+                          {startTaskLabel(t)}
+                        </Button>
+                      {/if}
                     {:else}
                       <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
                         Add note
@@ -1401,7 +1499,36 @@
     line-height: inherit;
   }
   .why { margin: 0; color: var(--text-muted); font-size: var(--fs-2); line-height: var(--lh-body); }
+  .gating-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+  }
   .detail { margin: 0; color: var(--text-muted); font-size: var(--fs-1); }
+  .question-submit-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+    padding: var(--s-2) var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg-raised-2);
+    margin-bottom: var(--s-2);
+    flex-wrap: wrap;
+  }
+  .question-submit-title {
+    font-size: var(--fs-1);
+    font-weight: 700;
+    color: var(--text);
+  }
+  .question-submit-copy {
+    margin-top: 2px;
+    font-size: var(--fs-1);
+    color: var(--text-muted);
+  }
   .field { display: flex; flex-direction: column; gap: var(--s-1); }
   .field :global(.md) {
     font-size: var(--fs-2);
@@ -1454,6 +1581,40 @@
     flex-direction: column;
     gap: var(--s-2);
   }
+  .decision-question {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .draft-summary-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .draft-summary-item {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    padding: var(--s-2) var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+    font-size: var(--fs-2);
+  }
+  .draft-details {
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+    padding: var(--s-2) var(--s-3);
+  }
+  .draft-details summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    font-weight: 600;
+  }
+  .draft-details[open] summary {
+    margin-bottom: var(--s-2);
+  }
   .coord {
     background: var(--bg);
     border: 1px solid var(--border);
@@ -1472,6 +1633,7 @@
   .coord-concerns {
     font-size: var(--fs-1);
     color: var(--text-muted);
+    line-height: var(--lh-body);
   }
   .live-checklist {
     display: flex;

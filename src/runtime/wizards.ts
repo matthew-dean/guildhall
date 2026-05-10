@@ -194,7 +194,7 @@ const onboardSteps: readonly WizardStep[] = [
   },
   {
     id: 'bootstrap',
-    title: 'Verify install + gates',
+    title: 'Check that this project can run',
     why:
       'Agents must run against an environment where tests + build + typecheck are known to pass. Until this is green, agents produce unverifiable PRs.',
     skippable: false,
@@ -205,7 +205,7 @@ const onboardSteps: readonly WizardStep[] = [
   },
   {
     id: 'coordinator',
-    title: 'Pick at least one coordinator',
+    title: 'Choose work stewards',
     why:
       'Coordinators are the agents that drive intake → spec → dispatch. Without one, no task ever gets picked up.',
     skippable: false,
@@ -224,13 +224,13 @@ const onboardSteps: readonly WizardStep[] = [
     id: 'workspaceImport',
     title: 'Review existing work',
     why:
-      'If this is an existing repo, pull the goals, tasks, and milestones already in the README / roadmap / TODOs into the planner instead of starting at zero.',
+      'If this project already has notes, roadmaps, or TODOs, turn the real work hiding in them into backlog tasks instead of starting from zero.',
     skippable: true,
     status: snap => (snap.workspaceImportReviewed ? 'done' : 'pending'),
   },
   {
     id: 'firstTask',
-    title: 'Seed the first task',
+    title: 'Create the first task',
     why:
       'Until there is at least one task, the orchestrator has nothing to tick on.',
     skippable: false,
@@ -356,7 +356,7 @@ const specFillSteps: readonly TaskWizardStep[] = [
   },
   {
     id: 'brief',
-    title: 'Fill in the product brief',
+    title: 'Explain what success looks like',
     why:
       'User need + Done-when are what review gates check. Without them the reviewer has nothing to compare the work against.',
     skippable: true,
@@ -378,9 +378,9 @@ const specFillSteps: readonly TaskWizardStep[] = [
 
 export const specFillWizard: TaskWizard = {
   id: 'spec-fill',
-  title: 'Spec fill',
+  title: 'Task checklist',
   lede:
-    'Shape this task so the agent has enough context to work — and the reviewer has enough to verify.',
+    'Finish the missing pieces so Guildhall can work on this task clearly and review it cleanly.',
   steps: specFillSteps,
   // Applies only while the task is still in intake / approval shaping.
   // Once work or review has started, missing-brief nags are usually stale

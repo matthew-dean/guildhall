@@ -134,7 +134,7 @@ export interface SpecReviewTurn extends TurnBase {
   spec: string
   draftCoordinators?: Array<{
     id: string
-    name: string
+    name?: string
     domain: string
     path?: string | undefined
     mandate: string
@@ -381,12 +381,12 @@ const SETUP_STEP_ACTIONS: Record<string, SetupAction> = {
   },
   bootstrap: {
     affordance: 'inline-button',
-    actionLabel: 'Verify',
+    actionLabel: 'Run checks',
     submitEndpoint: '/api/project/bootstrap/run',
   },
   coordinator: {
     affordance: 'inline-choice',
-    actionLabel: 'Add',
+    actionLabel: 'Choose',
     submitEndpoint: '/api/project/coordinators/seed',
     choices: [
       { value: 'tech', label: 'Tech' },
@@ -402,12 +402,12 @@ const SETUP_STEP_ACTIONS: Record<string, SetupAction> = {
   },
   workspaceImport: {
     affordance: 'link',
-    actionLabel: 'Review',
+    actionLabel: 'Open review',
     actionHref: '/workspace-import',
   },
   firstTask: {
     affordance: 'inline-text',
-    actionLabel: 'Create',
+    actionLabel: 'Create task',
     submitEndpoint: '/api/project/intake',
     placeholder: 'First task',
   },
@@ -831,6 +831,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const openQs = Array.isArray(t.openQuestions)
       ? (t.openQuestions as Array<Record<string, unknown>>)
       : []
+    if (taskId === 'task-workspace-import') {
+      continue
+    }
     for (const q of openQs) {
       const qid = typeof q.id === 'string' ? q.id : ''
       const askedAt = typeof q.askedAt === 'string' ? q.askedAt : createdAt
@@ -881,7 +884,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       const draftCoordinators = taskId === 'task-meta-intake'
         ? parseCoordinatorDraft(spec)?.map((draft) => ({
             id: draft.id,
-            name: draft.name,
+            ...(draft.name ? { name: draft.name } : {}),
             domain: draft.domain,
             path: draft.path,
             mandate: draft.mandate,

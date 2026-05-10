@@ -85,21 +85,21 @@
         return {
           verb: `Review the product brief${id}`,
           why: 'The spec agent is waiting for you to confirm the brief (or correct it).',
-          button: 'Open brief',
-          href: item.actionHref ?? '/work',
+          button: 'Review in Thread',
+          href: '/thread',
         }
       case 'spec_approval':
         return {
           verb: `Approve the spec${id}`,
           why: 'The worker can’t start until the spec is approved.',
-          button: 'Open spec',
-          href: item.actionHref ?? '/work',
+          button: 'Review in Thread',
+          href: '/thread',
         }
       case 'workspace_import_pending':
         return {
-          verb: 'Review what the repo scan found',
-          why: item.detail ?? 'README + project files detected. Import or dismiss.',
-          button: 'Open import',
+          verb: 'Review existing project work',
+          why: item.detail ?? 'Guildhall found planning notes and possible tasks in this project.',
+          button: 'Open review',
           href: item.actionHref ?? '/workspace-import',
         }
       case 'lever_questions':
@@ -113,8 +113,8 @@
         return {
           verb: `Finish the spec${id}`,
           why: item.detail ?? 'Shape the task so the reviewer has something to verify.',
-          button: 'Open task',
-          href: item.actionHref ?? '/work',
+          button: 'Open in Thread',
+          href: '/thread',
         }
       default:
         return {
