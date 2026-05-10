@@ -14,12 +14,11 @@ updated while auditing `t-minus-t` so another agent can resume without guessing.
 ## Test workspace
 
 - Guildhall repo: `/Users/matthew/git/oss/guildhall`
-- Test project: `/Users/matthew/git/oss/t-minus-t`
-- Serve command: `cd /Users/matthew/git/oss/t-minus-t && pnpm exec guildhall serve --port 4177`
-- Browser target: `http://localhost:4177/`
-- Expected project shape: a VSCode extension that lets users write TypeScript
-  syntax in `.js` files and view/save it as JSDoc-backed JavaScript, with a
-  converter package plus an extension package.
+- Test project: `/Users/matthew/git/oss/looma-knit`
+- Browser target: `http://127.0.0.1:7777/project`
+- Expected project shape: a two-subproject workspace containing Looma and
+  Knit, with a large existing planning corpus that should import into a real
+  task backlog instead of a tiny or confusing placeholder set.
 
 ## Current Principle
 
@@ -27,6 +26,17 @@ Thread is the command surface. If the UI asks the user to understand hidden
 state, jump across pages for a simple answer, or wait on a vague "agent is
 working" card, fix the flow. The user should be able to answer questions,
 correct the agent, and ask for direct action from Thread.
+
+Wizard flows must stay narrow. One card should ask one clear question about
+one decision. Supporting detail can exist, but it should be collapsible and
+secondary. Guildhall should never ask the user to approve a bundled manifesto
+that hides a dozen implicit decisions.
+
+Journey design matters as much as copy. A good flow cannot just rename labels;
+it must guide the user through discrete steps with one level of abstraction at
+a time. Source discovery, source selection, candidate-task review, and final
+task creation are different user jobs and should not be collapsed into one
+screen.
 
 ## Current Follow-Ups
 
@@ -85,6 +95,12 @@ correct the agent, and ask for direct action from Thread.
 - [ ] Prove re-intake against the real Looma + Knit planning corpus. The bar
   is not "an importer task existed once"; it must actually reread the
   substantial documented backlog and surface sensible candidate tasks.
+- [ ] Redesign workspace import as a real staged journey. The current flow
+  still mixes source-level review, candidate-task review, existing-task state,
+  and final confirmation into one muddy question lane.
+- [ ] Make import gating strict. Source-selection and candidate-review steps
+  should block later wizard steps instead of surfacing as co-active optional
+  cards.
 - [ ] Untangle `Work` vs `Planner`. Right now they are too close: Work is
   easier to read, Planner is mostly a lifecycle regrouping of the same tasks,
   and the distinction is not earning two separate primary nav entries.
@@ -205,6 +221,43 @@ correct the agent, and ask for direct action from Thread.
   orchestrator regression plus a real `serve-internal` proof on Looma + Knit
   at `http://localhost:7897`, where `POST /api/project/start` now stays
   running instead of immediately flipping the project into `run.status=error`.
+- Tightened button affordances at the shared component level. The old dark
+  secondary buttons were blending into their surrounding card/footer surfaces
+  and reading like inert chrome instead of actions. `Button.svelte` now uses a
+  brighter secondary fill, stronger border, and clearer hover state; the
+  ambiguous Looma/Knit meta-intake action label is now `Draft from answers…`
+  instead of `Use saved answers`.
+- Clarified Thread approval cards so they stop implying hidden UI. The old
+  copy said `Answer the open questions below` even when the relevant questions
+  could live in another collapsed Thread phase. Approval gating now reports the
+  question count, says the questions are in Thread, and adds a `Go to
+  questions` action that expands the relevant phase and scrolls to the first
+  active question. Coordinator drafts also now say `Owns` and `Review checks`
+  instead of the murkier `Will watch` / `Will check`.
+- Promoted the wizard rule to a real product principle and started applying it
+  to the renderer. Meta-intake approval no longer leads with `Project areas
+  draft` plus a giant policy dump. Thread and SetupWizard now lead with one
+  decision — "Guildhall found N proposed work areas. Is this the right split
+  for this project?" — keep supporting detail collapsed by default, and stop
+  showing both `Draft from answers…` and `Continue intake` as competing next
+  actions once intake answers are complete.
+- Proved that the Looma + Knit import corpus is not small; the problem is the
+  journey shape, not thin source material. Reading the actual docs gives a
+  conservative floor of at least 43 concrete task-sized items before counting
+  split-up subtasks, while the importer transcript itself reports `signals:
+  314` and `deduped to: 220`. The misleading "six tasks" impression came from
+  a bogus fallback question over existing tasks in `TASKS.json`, not from the
+  imported planning corpus.
+- Wrote a dedicated workspace-import journey redesign spec in
+  `docs/superpowers/specs/2026-05-09-workspace-import-journey-redesign.md`.
+  The key rule is that import must move through explicit steps — sources
+  found, source scope, per-source preview, candidate task review, and final
+  confirmation — instead of asking the user to decode a mixed-abstraction
+  transcript card.
+- Captured a future product direction for a model diagnostics lab: a user-local
+  bakeoff surface that can run multiple models/providers through Guildhall
+  tasks, store results over time, and help answer "which model is good for
+  which lane?" without relying on one-off impressions.
 
 - Closed the retry-window failure family with live proof on `task-016`.
   Resolved `max_revisions_exceeded` retries now start a persisted fresh
@@ -1725,3 +1778,25 @@ correct the agent, and ask for direct action from Thread.
   - keep the main settings story calm: `Shared project workspace` vs `Isolated task workspaces`
   - show exact sandbox paths only in task details/provenance
   - keep workspaces until work has actually landed, especially for PR-backed flows
+- First-time-user live audit on `http://localhost:7895` exposed a still-open
+  language/safety problem across the active project shell. Biggest blockers:
+  the global stale-serve banner speaks in raw operator commands instead of
+  user-facing recovery language; project entry still mixes safe navigation with
+  ambiguous state-changing actions like `Start agents`; Notifications,
+  Thread, and the task drawer all re-describe the same approval state with
+  different verbs; and approval/question flows still leak Guildhall internals
+  (`Spec author`, `RESTATING`, `coordinator`, `lever positions`,
+  `stopAfterOneTask`) at the exact moment a new user most needs plain language
+  and confidence about what happens next.
+- Naive-user audit against the live `0.5.0` shell (`http://localhost:7895`) confirmed that the remaining friction is still mostly language + routing, not missing features. The sharpest blockers were: approval items landing in the wrong surface, multi-question answers feeling staged-but-not-submittable, and approval copy slipping back into Guildhall jargon (`Spec author`, `coordinator`, `Approve areas`, etc.) right when a first-time user needs plain-English reassurance.
+- Approval routing is now more direct. `Do this next` and `Inbox` approval items for brief/spec/spec-fill now send the user to `Thread` and label the action as `Review in Thread` / `Open in Thread` instead of dropping them into task/work views that do not actually contain the approve affordance.
+- Multi-question Thread answers now surface their own submit affordance inline on every active question card once any answer is staged. The user no longer has to intuit that the real submit button is hiding at the bottom of the section after the last question card.
+- New-task language is calmer for first-time users. The task prompt now says Guildhall will ask follow-up questions before work starts, the field is `Project area (optional)`, and the selector defaults to `Let Guildhall choose` instead of silently preselecting the first coordinator domain.
+- Approval copy is getting more consistent across Thread and the drawer: `Project areas draft`, `Use these areas`, and `Guildhall's draft of your task` now replace some of the older internal phrasing that made the same approval state sound different in each surface.
+- Project-level action language is a little clearer too: the overflow action now says `Run one task` instead of `Finish one`, and the empty inbox state now reads `nothing is waiting on you right now` rather than coordinator-internal wording.
+
+- SetupWizard still had older coordinator-approval copy hard-coded (`Will watch`, `Will check`, `Approve and merge`). That was not stale generated data; it was a stale renderer path. It now matches the newer Thread language: `Project areas draft`, `Purpose`, `Checks on work here`, and `Use these areas`.
+- The next naive-user pass exposed a second layer of "this still feels like an operator console" friction. The main fixes in this batch were: (1) the provider badge now explains configuration vs active runtime in human terms (`This project is set to use ... when you start a run`, `Current run is using ...`) instead of `Configured preferred provider`, (2) project-level run controls now say `Start run` / `Stop run` and task-drawer controls say `Run this task`, `Pause task`, and `Put aside`, and (3) the stale-build banner no longer opens with a panic-y kill command. It now says Guildhall needs a restart to show recent code changes and tucks the exact restart steps behind `Show restart steps`.
+- Live fresh-build proof on `http://127.0.0.1:7898`: the top-bar no longer showed raw `stopAfterOneTask reached task-meta-intake (processed).` text. The fallback stop-summary path now normalizes that case to the human-facing `One task finished.` when the richer idle counts payload is absent.
+- Added a short design sketch to the `0.5.0` spec for a future action layer plus companion chat/control surface. The important constraint is that navigation still has to make sense without chat: the app remains the primary product, while MCP-callable actions and a future chat pane should sit on top of the same canonical verbs rather than becoming a substitute for understandable product structure.
+- 2026-05-09 20:45 PDT: user called out a deeper labeling bug, not just stale copy on one screen. Coordinator/steward display labels had been written into config/drafts (`Looma Coordinator`, `Knit Coordinator`) and then re-rendered as if those strings were source-of-truth product state. Cleanup in progress now derives visible steward labels from `domain`/`id`, removes generated coordinator names from live Looma + Knit config plus repo seed configs, and relaxes the config/meta-intake schema so legacy `name` fields are tolerated but no longer required or written back for the normal product path.

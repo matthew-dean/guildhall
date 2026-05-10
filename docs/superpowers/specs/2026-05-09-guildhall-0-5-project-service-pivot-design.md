@@ -31,6 +31,77 @@ Guildhall becomes:
 - with a **Projects** home screen at the top level
 - and the current Guildhall UI living **inside a selected project**
 
+## Guided Wizard Philosophy
+
+Guildhall should treat guided setup and approval flows as a wizard, not a
+document review system.
+
+The product rule is simple:
+
+- one screen or card should ask for one decision
+- one decision should be phrased as one clear question
+- supporting detail should be optional, collapsible, and secondary
+- the user should never be asked to approve a bundled manifesto that hides
+  many implicit sub-decisions
+
+This applies everywhere, not only to first-run setup:
+
+- project intake
+- project split and stewardship drafts
+- task brief approval
+- spec approval
+- review and escalation follow-ups
+
+When Guildhall infers structure, proposes wording, or drafts policy, the UI
+should turn that into small explicit choices such as:
+
+- "Guildhall found 2 work areas. Is that split right?"
+- "Is this task summary what you want?"
+- "Should Guildhall keep this check strict?"
+
+The user should always know:
+
+- what Guildhall is asking
+- what specific thing they are agreeing to or correcting
+- what happens next if they click the primary action
+
+If a card needs a wall of prose to be understandable, the product should
+change the step rather than asking the user to read harder.
+
+## Guided Journey Principle
+
+Guildhall should design product journeys as a sequence of discrete user jobs,
+not as a series of generated artifacts to approve.
+
+That means each guided flow should move through clear stages such as:
+
+- orient
+- choose scope
+- inspect evidence
+- confirm candidates
+- commit
+
+The product should avoid collapsing these into one mixed screen. In practice:
+
+- source discovery should not be the same step as task confirmation
+- task summaries should not be the same step as final task creation
+- existing state should not be mixed into candidate-import decisions
+
+Users should always know:
+
+- where they are in the journey
+- what level of abstraction they are looking at
+- what exact outcome the primary action will cause
+
+If a flow forces the user to decode whether they are approving:
+
+- a source list
+- a draft summary
+- a task list
+- or a final write
+
+then the journey is not designed tightly enough.
+
 ### User-facing terminology
 
 Use **project** as the primary user-facing term.
@@ -402,6 +473,148 @@ This slower posture supports both:
 
 - brand-new projects
 - existing Guildhall projects coming from another machine
+
+## Action Layer and Companion Chat
+
+Guildhall should grow toward a three-layer product model:
+
+1. **Navigation layer**
+   - where the user is
+   - what surface they are in
+   - what kind of decision or work is happening there
+2. **Action layer**
+   - the canonical verbs Guildhall can perform
+   - these should be callable both from UI buttons and from an MCP server
+3. **Conversation layer**
+   - a future companion chat/control surface
+   - used for summaries, explanation, and natural-language invocation of the same actions
+
+### Important product rule
+
+The structured app must remain the primary product.
+
+Chat should **not** become the only way to understand or operate Guildhall.
+
+The app still needs to make sense to a cold user through visible navigation,
+clear state, and obvious next actions.
+
+### Action-layer direction
+
+Any important coordinator/user action should eventually exist as a canonical
+callable action, not only as a button with bespoke UI-only behavior.
+
+Examples:
+
+- project actions
+  - `attach_project`
+  - `open_project`
+  - `start_run`
+  - `stop_run`
+  - `run_one_task`
+- task actions
+  - `open_task`
+  - `pause_task`
+  - `shelve_task`
+  - `unshelve_task`
+  - `add_task_note`
+- approval actions
+  - `approve_brief`
+  - `request_brief_changes`
+  - `approve_spec`
+  - `request_spec_changes`
+  - `approve_project_areas`
+- rerun actions
+  - `rerun_meta_intake`
+  - `rerun_workspace_import`
+  - `rerun_spec_draft`
+  - `rerun_review`
+  - `rerun_gates`
+- question actions
+  - `answer_question`
+  - `submit_staged_answers`
+
+### Companion chat direction
+
+Later, Guildhall can add a lightweight chat/control pane that:
+
+- summarizes project or task state
+- explains blockers and approvals
+- suggests the next obvious action
+- invokes the same canonical actions as the UI
+
+This chat should be a **companion** surface, not the primary navigation model.
+
+### Near-term implication
+
+This is not a reason to pause `0.5.0` for a large architecture project.
+
+For now, it should serve as a design constraint:
+
+- avoid inventing important UI-only actions
+- keep labels aligned with user intent instead of runtime internals
+- make future MCP exposure straightforward by keeping actions explicit and bounded
+
+## Future Capability: Model Diagnostics Lab
+
+Guildhall should eventually grow a dedicated model-evaluation surface for
+comparing providers and models against real Guildhall-shaped work.
+
+This is not the main `0.5.0` focus, but it is worth preserving as a future
+direction because model selection should be based on observed fit, not
+marketing claims or one-off anecdotes.
+
+### Goal
+
+Let a user run a repeatable bakeoff across multiple models/providers and see
+which ones are best for different Guildhall jobs such as:
+
+- spec drafting
+- intake and project-shaping questions
+- review quality
+- gate-check quality
+- coding / worker execution
+
+### Product shape
+
+Guildhall should offer a diagnostics page or lab where the user can:
+
+- select one or more models/providers
+- select one or more benchmark tasks or task slices
+- run the same evaluation flow across each candidate
+- compare results over time
+
+### Storage and evidence
+
+Results should live in user-local Guildhall storage so the user can build up a
+history of what actually works well for their machine, projects, and provider
+mix.
+
+That storage should preserve:
+
+- the model/provider tested
+- the task or benchmark scenario
+- timestamps
+- success/failure outcome
+- cost and latency signals when available
+- qualitative notes or rubric scores
+- a user-facing conclusion, such as `good for review` or `too flaky for worker runs`
+
+### Product purpose
+
+The point is not just "benchmarking." It is decision support.
+
+Guildhall should help the user answer questions like:
+
+- which model is good enough for fast review?
+- which model is too unreliable for autonomous worker runs?
+- which cheap model is surprisingly strong for intake/spec work?
+- how has a provider changed over time?
+
+### Constraint
+
+This should remain a companion diagnostic surface, not a distraction from the
+main product. The primary bar is still that a user can understand the app and
+get real work done. The diagnostics lab helps choose better models for that work.
 
 ## Testing and Proof Requirements
 
