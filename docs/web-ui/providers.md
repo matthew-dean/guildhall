@@ -4,7 +4,7 @@ help_topic: web.providers
 help_summary: |
   Manage provider credentials — Claude OAuth or API key, OpenAI key, Codex
   tokens, llama.cpp / LM Studio URLs. Credentials are stored in
-  .guildhall/config.yaml (gitignored).
+  ~/.guildhall/providers.yaml or the provider CLI's own auth store.
 ---
 
 # Providers page
@@ -13,22 +13,28 @@ help_summary: |
 
 For each provider, the page shows:
 
-- **Status**: not configured / authenticated / expired / error.
-- **Credential action**: log in, paste API key, refresh token.
-- **Model picker** (`src/web/lib/ProviderPicker.svelte`): which role(s) this provider backs.
+- **Detection**: whether the service found a usable CLI auth file, API key, or
+  reachable local-model endpoint.
+- **Verification**: a `verifiedAt` marker after a successful test.
+- **Credential action**: connect, paste an API key, test, or disconnect.
+- **Provider choice**: which configured provider GuildHall prefers by default, with room for a project override when needed.
 
-## Providers supported
+## Provider slots the service exposes
 
-- **Claude** — OAuth (via Claude Code CLI) or API key. Auto-refreshes 60s before expiry.
+- **Claude** — OAuth (via Claude Code CLI) or API key.
 - **OpenAI** — API key.
 - **Codex (ChatGPT)** — Codex CLI tokens.
-- **llama.cpp** — local server URL.
-- **LM Studio** — local server URL.
+- **OpenAI-compatible local server** — one `llama-cpp` slot, usually pointed
+  at llama.cpp or LM Studio.
 
 ## Where credentials live
 
-- Per-workspace: `.guildhall/config.yaml` (gitignored).
-- Global defaults: `~/.guildhall/config.yaml`.
+- Machine-scoped provider credentials: `~/.guildhall/providers.yaml`.
+- OAuth-managed credentials:
+  - `~/.claude/.credentials.json`
+  - `~/.codex/auth.json`
+- Machine-wide default: `preferredProvider` in `~/.guildhall/config.yaml`.
+- Optional project override: `preferredProvider` in `.guildhall/config.yaml` only when one project truly needs different behavior.
 
 The page only reveals credentials that are explicitly in config — it will never log or display a hidden system credential.
 

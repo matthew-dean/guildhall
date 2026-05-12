@@ -1,28 +1,31 @@
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
-  title: 'GuildHall',
-  description: 'A multi-agent operating system for software projects.',
+  title: 'Guildhall',
+  description: 'Local service for unattended software work with visible state, reviewer guardrails, and inspectable transcripts.',
   cleanUrls: true,
   lastUpdated: true,
   base: '/guildhall/',
   head: [
     ['link', { rel: 'icon', href: '/guildhall/favicon.svg' }],
-    ['meta', { name: 'theme-color', content: '#7c6df0' }],
+    ['meta', { name: 'theme-color', content: '#141418' }],
   ],
   themeConfig: {
     nav: [
-      { text: 'Guide', link: '/guide/introduction' },
-      { text: 'Subsystems', link: '/subsystems/' },
-      { text: 'Levers', link: '/levers/' },
+      { text: 'Start', link: '/guide/quick-start' },
+      { text: 'Dashboard', link: '/guide/dashboard' },
       { text: 'Web UI', link: '/web-ui/' },
+      { text: 'CLI', link: '/cli/' },
+      { text: 'Reference', link: '/reference/' },
       {
-        text: 'Resources',
+        text: 'More',
         items: [
-          { text: 'CLI Reference', link: '/reference/cli' },
+          { text: 'Guide', link: '/guide/introduction' },
+          { text: 'Levers', link: '/levers/' },
+          { text: 'Subsystems', link: '/subsystems/' },
+          { text: 'Design notes', link: '/design/' },
+          { text: 'Releases', link: '/releases/' },
           { text: 'guildhall.yaml', link: '/reference/workspace-config' },
-          { text: 'Environment variables', link: '/reference/env' },
-          { text: 'Design notes', link: '/design/disagreement-and-handoff' },
         ],
       },
     ],
@@ -31,20 +34,24 @@ export default defineConfig({
         {
           text: 'Getting started',
           items: [
-            { text: 'Introduction', link: '/guide/introduction' },
             { text: 'Quick start', link: '/guide/quick-start' },
+            { text: 'Introduction', link: '/guide/introduction' },
+            { text: 'The dashboard', link: '/guide/dashboard' },
+            { text: 'Onboarding and levers', link: '/guide/onboarding-and-levers' },
+            { text: 'Setup wizard', link: '/web-ui/setup' },
+            { text: 'Project view', link: '/web-ui/project-view' },
+            { text: 'Task drawer', link: '/web-ui/task-drawer' },
             { text: 'Core concepts', link: '/guide/concepts' },
             { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
           ],
         },
         {
-          text: 'Working with GuildHall',
+          text: 'Working with Guildhall',
           items: [
-            { text: 'Workspaces', link: '/guide/workspaces' },
+            { text: 'Project files & workspace state', link: '/guide/workspaces' },
             { text: 'Coordinators & domains', link: '/guide/coordinators' },
             { text: 'Agents & models', link: '/guide/agents-and-models' },
             { text: 'Running the orchestrator', link: '/guide/running' },
-            { text: 'The dashboard', link: '/guide/dashboard' },
           ],
         },
       ],
@@ -129,9 +136,18 @@ export default defineConfig({
           ],
         },
       ],
+      '/cli/': [
+        {
+          text: 'CLI',
+          items: [
+            { text: 'Overview', link: '/cli/' },
+            { text: 'Command reference', link: '/cli/reference' },
+          ],
+        },
+      ],
       '/web-ui/': [
         {
-          text: 'Web UI',
+          text: 'Dashboard UI',
           items: [
             { text: 'Overview', link: '/web-ui/' },
             { text: 'Setup wizard', link: '/web-ui/setup' },
@@ -148,7 +164,7 @@ export default defineConfig({
         {
           text: 'Reference',
           items: [
-            { text: 'CLI', link: '/reference/cli' },
+            { text: 'CLI', link: '/cli/reference' },
             { text: 'guildhall.yaml', link: '/reference/workspace-config' },
             { text: 'agent-settings.yaml', link: '/reference/agent-settings' },
             { text: 'Environment variables', link: '/reference/env' },
@@ -157,23 +173,38 @@ export default defineConfig({
           ],
         },
       ],
+      '/releases/': [
+        {
+          text: 'Releases',
+          items: [
+            { text: 'Overview', link: '/releases/' },
+            { text: '0.5.0', link: '/releases/0.5.0' },
+            { text: '0.4.0', link: '/releases/0.4.0' },
+          ],
+        },
+      ],
       '/design/': [
         {
           text: 'Design notes',
           items: [
             { text: 'Disagreement & handoff', link: '/design/disagreement-and-handoff' },
+            { text: 'UI structural audit', link: '/design/ui-audit' },
+            { text: 'Symphony comparison', link: '/design/symphony-comparison' },
+            { text: 'Beads and one-task pivot', link: '/design/beads-and-one-task-pivot' },
+            { text: 'Provider abstraction and throughput', link: '/design/provider-abstraction-and-throughput' },
+            { text: 'Node vs Deno packaging for 0.5.0', link: '/design/deno-vs-node-packaging' },
           ],
         },
       ],
     },
-    socialLinks: [{ icon: 'github', link: 'https://github.com/anthropics/guildhall' }],
+    socialLinks: [{ icon: 'github', link: 'https://github.com/matthew-dean/guildhall' }],
     search: { provider: 'local' },
     footer: {
       message: 'Released under the FLL-1.2 License.',
-      copyright: 'Copyright © 2026 GuildHall contributors',
+      copyright: 'Copyright © 2026 Guildhall contributors',
     },
     editLink: {
-      pattern: 'https://github.com/anthropics/guildhall/edit/main/docs/:path',
+      pattern: 'https://github.com/matthew-dean/guildhall/edit/main/docs/:path',
       text: 'Edit this page on GitHub',
     },
   },

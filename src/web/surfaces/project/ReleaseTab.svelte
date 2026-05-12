@@ -1,14 +1,14 @@
 <!--
   Release readiness view. Primary/secondary/overflow IA:
-    · Primary: single VERDICT block — big status chip + one-line reason.
-    · Secondary: criteria list, one row per check (icon + label + chip).
-      Each row expandable via <details> to show the offending tasks.
-    · No card grid; single column.
+    · Primary: single verdict band — shared status treatment + one-line reason.
+    · Secondary: criteria list, one row per check, expandable into task links.
+    · Overflow: compact release counts and task-state tally.
 -->
 <script lang="ts">
-  import Card from '../../lib/Card.svelte'
-  import Chip from '../../lib/Chip.svelte'
-  import Stack from '../../lib/Stack.svelte'
+  import FrameCard from '../../../../packages/ui/src/components/FrameCard.svelte'
+  import NoticeBand from '../../../../packages/ui/src/components/NoticeBand.svelte'
+  import SectionHeader from '../../../../packages/ui/src/components/SectionHeader.svelte'
+  import StatusPill from '../../../../packages/ui/src/components/StatusPill.svelte'
   import { nav } from '../../lib/nav.svelte.js'
 
   interface ReleaseItem {
@@ -135,13 +135,14 @@
     const ds = data?.designSystem
     if (!ds) return { label: 'not drafted', tone: 'warn' as const, clear: false }
     if (!ds.drafted) return { label: 'not drafted', tone: 'warn' as const, clear: false }
-    if (ds.approved)
+    if (ds.approved) {
       return { label: `approved · rev ${ds.revision ?? 0}`, tone: 'ok' as const, clear: true }
+    }
     return { label: `draft · rev ${ds.revision ?? 0}`, tone: 'warn' as const, clear: false }
   })
 
   const verdict = $derived.by(() => {
-    if (!data) return { label: '…', tone: 'neutral' as const, reason: '' }
+    if (!data) return { label: 'Loading', tone: 'neutral' as const, reason: '' }
     if (data.totals.tasks === 0) {
       return {
         label: 'Not yet',
@@ -163,90 +164,172 @@
     }
   })
 
+  const sectionCopy = $derived(
+    section === 'criteria'
+      ? {
+          title: 'Release criteria',
+          description: 'Expand any row to inspect the tasks or approvals still holding this release.',
+        }
+      : {
+          title: 'Release readiness',
+          description: 'Operator summary of whether this project is ready to ship right now.',
+        },
+  )
+
   const statusRows = $derived(
     data ? Object.entries(data.statusCounts).sort((a, b) => b[1] - a[1]) : [],
   )
 </script>
 
 {#if initNeeded}
-  <Card title="Project not initialized yet">
-    <p class="muted">Complete the setup wizard before you can assess release readiness.</p>
-    <p><a href="/setup">Open setup wizard →</a></p>
-  </Card>
+  <NoticeBand tone="warn" role="note" label="Release" title="Project not initialized yet">
+    {#snippet actions()}
+      <a class="notice-link" href="/setup">Open setup wizard</a>
+    {/snippet}
+    <p>Complete the setup wizard before you can assess release readiness.</p>
+  </NoticeBand>
 {:else if error}
-  <Card title="Could not load" tone="danger">
-    <p class="muted">{error}</p>
-  </Card>
+  <NoticeBand tone="danger" role="alert" label="Release" title="Could not load release readiness">
+    <p>{error}</p>
+  </NoticeBand>
 {:else if !data}
-  <p class="muted">Loading release readiness…</p>
+  <NoticeBand tone="neutral" role="status" label="Release" title="Loading release readiness">
+    <p>Collecting release status, approvals, and task counts…</p>
+  </NoticeBand>
 {:else}
-  <Stack gap="4">
-  {#if section === 'verdict'}
-    <!-- PRIMARY: verdict -->
-    <Card tone={verdict.tone === 'ok' ? 'ok' : verdict.tone === 'warn' ? 'warn' : 'default'}>
-      <div class="verdict">
-        <Chip label={verdict.label} tone={verdict.tone} />
-        <span class="verdict-reason">{verdict.reason}</span>
-      </div>
-    </Card>
-  {/if}
+  <div class="release-shell">
+    <SectionHeader
+      eyebrow="Release"
+      title={sectionCopy.title}
+      description={sectionCopy.description}
+      headingTag="h2"
+      density="compact"
+    >
+      {#snippet meta()}
+        <StatusPill label={verdict.label} tone={verdict.tone} emphasis="default" />
+        <StatusPill label={`${data.totals.done}/${data.totals.tasks} done`} tone="neutral" />
+      {/snippet}
+    </SectionHeader>
 
-  {#if section === 'criteria'}
-    <!-- SECONDARY: criteria list -->
-    <Card title="Criteria">
-      <ul class="criteria">
-        {#each criteria as c (c.key)}
-          {@const clear = c.items.length === 0}
-          <li class="crit-row">
-            {#if clear}
-              <details class="crit-det" aria-disabled="true">
-                <summary class="crit-summary crit-clear">
-                  <span class="crit-icon">✓</span>
-                  <span class="crit-label">{c.label}</span>
-                  <Chip label="clear" tone="ok" />
-                </summary>
-              </details>
-            {:else}
-              <details class="crit-det">
-                <summary class="crit-summary">
-                  <span class="crit-icon">✗</span>
-                  <span class="crit-label">{c.label}</span>
-                  <Chip label={`${c.items.length} open`} tone="warn" />
-                </summary>
-                <ul class="crit-items">
-                  {#each c.items as it, i (i)}
-                    <li>
-                      <button type="button" class="link" onclick={() => openTask(idOf(it))}>
-                        {titleOf(it)}
-                      </button>
-                      {#if extraOf(it)}
-                        <span class="muted"> · {extraOf(it)}</span>
-                      {/if}
-                    </li>
-                  {/each}
-                </ul>
-              </details>
-            {/if}
-          </li>
-        {/each}
+    {#if section === 'verdict'}
+      <NoticeBand
+        tone={verdict.tone === 'ok' ? 'ok' : 'warn'}
+        role="status"
+        label="Verdict"
+        title={verdict.label}
+      >
+        <p>{verdict.reason}</p>
+      </NoticeBand>
 
-        {#if dsLabel()}
-          {@const ds = dsLabel()}
+      <FrameCard
+        tone={data.totals.blockingCount === 0 ? 'ok' : 'warn'}
+        padding="compact"
+        class="summary-card"
+      >
+        {#snippet header()}
+          <SectionHeader
+            title="Current counts"
+            description="A compact view of the signals feeding the release verdict."
+            headingTag="h3"
+            density="dense"
+          >
+            {#snippet meta()}
+              <StatusPill
+                label={`${data.totals.blockingCount} waiting`}
+                tone={data.totals.blockingCount === 0 ? 'ok' : 'warn'}
+              />
+            {/snippet}
+          </SectionHeader>
+        {/snippet}
+
+        <div class="summary-grid" aria-label="Release summary counts">
+          <div class="summary-stat">
+            <span class="summary-label">Tasks done</span>
+            <strong>{data.totals.done}/{data.totals.tasks}</strong>
+          </div>
+          <div class="summary-stat">
+            <span class="summary-label">Human blockers</span>
+            <strong>{data.totals.blockingCount}</strong>
+          </div>
+          <div class="summary-stat">
+            <span class="summary-label">Design system</span>
+            <StatusPill label={dsLabel().label} tone={dsLabel().tone} />
+          </div>
+        </div>
+      </FrameCard>
+    {/if}
+
+    {#if section === 'criteria'}
+      <FrameCard class="criteria-card">
+        {#snippet header()}
+          <SectionHeader
+            title="Criteria"
+            description="Each row stays compact until you need the task-level detail."
+            headingTag="h3"
+            density="dense"
+          />
+        {/snippet}
+
+        <ul class="criteria">
+          {#each criteria as c (c.key)}
+            {@const clear = c.items.length === 0}
+            <li class="crit-row">
+              <details class="crit-det" open={false}>
+                <summary class="crit-summary" aria-disabled={clear}>
+                  <span class="crit-copy">
+                    <span class="crit-label">{c.label}</span>
+                    <span class="crit-detail">{clear ? c.clearLabel : `${c.items.length} task${c.items.length === 1 ? '' : 's'} still open.`}</span>
+                  </span>
+                  <StatusPill
+                    label={clear ? 'clear' : `${c.items.length} open`}
+                    tone={clear ? 'ok' : 'warn'}
+                  />
+                </summary>
+
+                {#if !clear}
+                  <ul class="crit-items">
+                    {#each c.items as it, i (i)}
+                      <li>
+                        <button type="button" class="link" onclick={() => openTask(idOf(it))}>
+                          {titleOf(it)}
+                        </button>
+                        {#if extraOf(it)}
+                          <span class="muted">{extraOf(it)}</span>
+                        {/if}
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+              </details>
+            </li>
+          {/each}
+
           <li class="crit-row">
-            <div class="crit-summary" style="cursor: default">
-              <span class="crit-icon">{ds.clear ? '✓' : '✗'}</span>
-              <span class="crit-label">Design system</span>
-              <Chip label={ds.label} tone={ds.tone} />
+            <div class="crit-summary crit-static">
+              <span class="crit-copy">
+                <span class="crit-label">Design system</span>
+                <span class="crit-detail">Current approval state for the operator-facing design system draft.</span>
+              </span>
+              <StatusPill label={dsLabel().label} tone={dsLabel().tone} />
             </div>
           </li>
-        {/if}
-      </ul>
-    </Card>
+        </ul>
+      </FrameCard>
 
-    <!-- Overflow: status tally (kept within criteria sub-view) -->
-    <details class="tally-more">
-      <summary>Task-state tally ({data.totals.done}/{data.totals.tasks} done)</summary>
-      <div class="tally-body">
+      <FrameCard padding="compact" class="tally-card">
+        {#snippet header()}
+          <SectionHeader
+            title="Task-state tally"
+            description="Status distribution across the current project backlog."
+            headingTag="h3"
+            density="dense"
+          >
+            {#snippet meta()}
+              <StatusPill label={`${data.totals.done}/${data.totals.tasks} done`} tone="neutral" />
+            {/snippet}
+          </SectionHeader>
+        {/snippet}
+
         {#if statusRows.length === 0}
           <p class="muted">No tasks yet.</p>
         {:else}
@@ -261,125 +344,167 @@
             </tbody>
           </table>
         {/if}
-      </div>
-    </details>
-  {/if}
-  </Stack>
+      </FrameCard>
+    {/if}
+  </div>
 {/if}
 
 <style>
+  .release-shell {
+    display: grid;
+    gap: var(--gh-space-4);
+    container-type: inline-size;
+  }
+
+  :global(.summary-card),
+  :global(.criteria-card),
+  :global(.tally-card) {
+    min-inline-size: 0;
+  }
+
+  .summary-grid {
+    display: grid;
+    gap: var(--gh-space-3);
+  }
+
+  .summary-stat {
+    display: grid;
+    gap: var(--gh-space-1);
+  }
+
+  .summary-label,
   .muted {
     color: var(--text-muted);
     font-size: var(--fs-2);
     line-height: var(--lh-body);
   }
-  .verdict {
-    display: flex;
-    align-items: center;
-    gap: var(--s-3);
-    flex-wrap: wrap;
-  }
-  .verdict-reason {
-    font-size: var(--fs-3);
-    color: var(--text);
+
+  .summary-stat strong {
+    font-size: var(--fs-4);
     line-height: var(--lh-tight);
   }
+
   .criteria {
     list-style: none;
+    display: grid;
+    gap: 0;
     padding: 0;
-    display: flex;
-    flex-direction: column;
   }
+
   .crit-row {
     border-top: 1px solid var(--border);
   }
+
   .crit-row:first-child {
     border-top: none;
   }
+
   .crit-det {
     width: 100%;
   }
+
   .crit-summary {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--gh-space-3);
     align-items: center;
-    gap: var(--s-3);
-    padding: var(--s-2) 0;
-    cursor: pointer;
     list-style: none;
+    cursor: pointer;
+    padding: var(--gh-space-3) 0;
   }
+
   .crit-summary::-webkit-details-marker {
     display: none;
   }
-  .crit-icon {
-    width: 16px;
-    text-align: center;
-    color: var(--warn);
-    font-weight: 700;
+
+  .crit-static {
+    cursor: default;
   }
-  .crit-clear .crit-icon {
-    color: var(--accent-2);
+
+  .crit-copy {
+    display: grid;
+    gap: var(--gh-space-1);
+    min-inline-size: 0;
   }
+
   .crit-label {
-    flex: 1;
-    font-size: var(--fs-2);
+    color: var(--text);
+    font-size: var(--fs-3);
     font-weight: 600;
+    line-height: var(--lh-tight);
   }
-  .crit-items {
-    list-style: none;
-    padding: 0 0 var(--s-2) var(--s-5);
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-1);
+
+  .crit-detail {
+    color: var(--text-muted);
     font-size: var(--fs-2);
     line-height: var(--lh-body);
   }
-  .link {
-    background: transparent;
-    border: none;
-    padding: 0;
-    font: inherit;
-    color: var(--text);
-    cursor: pointer;
-    text-align: left;
+
+  .crit-items {
+    list-style: none;
+    display: grid;
+    gap: var(--gh-space-2);
+    padding: 0 0 var(--gh-space-3) 0;
   }
-  .link:hover {
+
+  .crit-items li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    align-items: baseline;
+  }
+
+  .link,
+  .notice-link {
+    color: var(--accent);
+    background: none;
+    border: none;
+    cursor: pointer;
+    font: inherit;
+    padding: 0;
+    text-align: left;
     text-decoration: underline;
   }
-  .tally-more > summary {
-    cursor: pointer;
-    color: var(--text-muted);
-    font-size: var(--fs-1);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-weight: 700;
-    list-style: none;
-    padding: var(--s-2) 0;
+
+  .notice-link {
+    min-height: var(--gh-control-height-default);
+    padding: var(--gh-control-padding-block) var(--gh-control-padding-inline);
+    border: 1px solid var(--gh-color-border-strong);
+    border-radius: var(--gh-radius-full);
+    color: var(--gh-color-text-primary);
+    text-decoration: none;
   }
-  .tally-more > summary::-webkit-details-marker {
-    display: none;
+
+  .notice-link:hover {
+    background: color-mix(in srgb, var(--gh-color-feedback-warn) 14%, transparent);
   }
-  .tally-more > summary::before {
-    content: '▸ ';
-  }
-  .tally-more[open] > summary::before {
-    content: '▾ ';
-  }
-  .tally-body {
-    margin-top: var(--s-2);
-  }
+
   .tally {
-    border-collapse: collapse;
     width: 100%;
+    border-collapse: collapse;
     font-size: var(--fs-2);
   }
+
   .tally td {
-    padding: var(--s-1) var(--s-2);
+    padding: var(--gh-space-2) 0;
     border-top: 1px solid var(--border);
   }
-  .tally code {
+
+  .tally tbody tr:first-child td {
+    border-top: none;
+  }
+
+  code {
     font-family: 'SF Mono', monospace;
     background: var(--bg-raised-2);
     padding: 0 4px;
     border-radius: var(--r-1);
+    font-size: var(--fs-1);
+  }
+
+  @container (min-width: 42rem) {
+    .summary-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
   }
 </style>

@@ -20,9 +20,11 @@
     "README.md"
   ],
   "scripts": {
-    "build": "node ./build.mjs",
+    "build": "pnpm build:ui && node ./build.mjs",
+    "build:ui": "pnpm --filter @guildhall/ui build",
     "dev": "node ./build.mjs --watch",
-    "typecheck": "tsgo -p tsconfig.json --noEmit",
+    "typecheck": "tsgo -p tsconfig.json --noEmit && pnpm typecheck:ui",
+    "typecheck:ui": "pnpm --filter @guildhall/ui typecheck",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "lint:deps": "depcruise src",

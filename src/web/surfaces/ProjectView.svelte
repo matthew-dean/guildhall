@@ -9,8 +9,10 @@
       surfaces that support it).
 -->
 <script lang="ts">
+  import '../../../packages/ui/src/styles.css'
+  import NoticeBand from '../../../packages/ui/src/components/NoticeBand.svelte'
+  import StatusPill from '../../../packages/ui/src/components/StatusPill.svelte'
   import Button from '../lib/Button.svelte'
-  import Chip from '../lib/Chip.svelte'
   import Icon, { type IconName } from '../lib/Icon.svelte'
   import InboxTab from './project/InboxTab.svelte'
   import WorkTab from './project/WorkTab.svelte'
@@ -248,6 +250,9 @@
           : 'neutral',
   )
   const providersActive = $derived(path.value === '/providers')
+  const runErrorTitle = $derived(
+    runError?.toLowerCase().startsWith('stop') ? 'Could not stop the run' : 'Could not start the run',
+  )
 
   // Task counts for the top-bar indicator. Stuck = has at least one open
   // escalation. Active = running/in-progress-like statuses.
@@ -279,15 +284,21 @@
 
 {#if detail?.initializationNeeded}
   <div class="page-centered">
-    <p class="muted">Redirecting to setup…</p>
+    <NoticeBand tone="info" role="status" label="Setup" title="Redirecting to setup">
+      <p>Guildhall still needs project setup before this surface can load.</p>
+    </NoticeBand>
   </div>
 {:else if project.error}
   <div class="page-centered">
-    <p class="muted">Error: {project.error}</p>
+    <NoticeBand tone="danger" role="alert" label="Project" title="Could not load project">
+      <p>{project.error}</p>
+    </NoticeBand>
   </div>
 {:else if !detail}
   <div class="page-centered">
-    <p class="muted">Loading project…</p>
+    <NoticeBand tone="neutral" role="status" label="Project" title="Loading project">
+      <p>Fetching the latest project state…</p>
+    </NoticeBand>
   </div>
 {:else}
   <div class="shell">
@@ -350,7 +361,7 @@
     <div class="main">
       <header class="topbar">
         <span class="ws-chip" title="Workspace">{detail.name}</span>
-        <Chip label={phaseLabel} tone={phaseTone} />
+        <StatusPill label={phaseLabel} tone={phaseTone} emphasis="default" />
         {#if activeCount > 0 || stuckCount > 0}
           <button
             type="button"
@@ -410,14 +421,26 @@
 
       <div class="page">
         {#if runError}
-          <div class="start-error" role="alert">
-            <Icon name="alert-triangle" size={14} />
-            <span>{runError}</span>
-            {#if /provider/i.test(runError)}
-              <a href="/providers" onclick={(e) => { e.preventDefault(); nav('/providers') }}>Open Providers</a>
-            {/if}
-            <button class="dismiss" onclick={() => (runError = null)} aria-label="Dismiss">×</button>
-          </div>
+          <NoticeBand tone="danger" role="alert" label="Run" title={runErrorTitle}>
+            {#snippet actions()}
+              {#if /provider/i.test(runError)}
+                <a
+                  class="notice-link"
+                  href="/providers"
+                  onclick={(e) => {
+                    e.preventDefault()
+                    nav('/providers')
+                  }}
+                >
+                  Open Providers
+                </a>
+              {/if}
+              <button class="notice-dismiss" onclick={() => (runError = null)} aria-label="Dismiss">
+                Dismiss
+              </button>
+            {/snippet}
+            <p>{runError}</p>
+          </NoticeBand>
         {/if}
         {#if needsMeta}
           <MetaIntakeBanner />
@@ -622,40 +645,30 @@
   }
   .page-centered {
     padding: var(--s-4);
+    max-width: 44rem;
   }
-  .start-error {
-    display: flex;
-    align-items: center;
-    gap: var(--s-2);
-    padding: var(--s-2) var(--s-3);
-    border: 1px solid var(--color-danger, #c0392b);
-    background: var(--color-danger-bg, #fdecea);
-    color: var(--color-danger-fg, #8a1f1a);
-    border-radius: var(--radius-md, 6px);
-    font-size: 13px;
-  }
-  .start-error a {
-    color: inherit;
-    text-decoration: underline;
-    margin-left: auto;
-  }
-  .start-error .dismiss {
-    background: none;
-    border: none;
-    color: inherit;
-    font-size: 16px;
+  .notice-link,
+  .notice-dismiss {
+    appearance: none;
+    border: 1px solid var(--gh-color-border-strong);
+    border-radius: var(--gh-radius-full);
+    background: transparent;
+    color: var(--gh-color-text-primary);
     cursor: pointer;
-    padding: 0 var(--s-1);
+    font: inherit;
+    line-height: 1;
+    min-height: var(--gh-control-height-default);
+    padding: var(--gh-control-padding-block) var(--gh-control-padding-inline);
+    text-decoration: none;
+  }
+  .notice-link:hover,
+  .notice-dismiss:hover {
+    background: color-mix(in srgb, var(--gh-color-feedback-danger) 12%, transparent);
   }
   .body {
     display: flex;
     flex-direction: column;
     gap: var(--s-4);
-  }
-  .muted {
-    color: var(--text-muted);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
   }
 
   @media (max-width: 1100px) {

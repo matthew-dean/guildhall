@@ -1839,7 +1839,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         lmStudioUrl?: string
       }
       const allowed = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api'] as const
-      // preferredProvider lives in the project file (selection, not a secret).
+      // preferredProvider is machine-level by default. Projects may still
+      // override it locally when needed, but the setup flow writes the shared
+      // default rather than stamping every project.
       if (body.preferredProvider) {
         if (!(allowed as readonly string[]).includes(body.preferredProvider)) {
           return c.json({ error: `Unknown provider "${body.preferredProvider}"` }, 400)
@@ -2159,4 +2161,3 @@ function dashboardHtml(): string {
 </body>
 </html>`
 }
-

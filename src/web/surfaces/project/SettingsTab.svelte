@@ -1,21 +1,17 @@
 <!--
   Settings tab. Primary/secondary/overflow IA:
-    · Primary: "Ready to start?" checklist — Bootstrap / Coordinators /
-      LLM provider — each a single-line row with status chip + action.
-    · Secondary: Coordinators summary card.
-    · Overflow (<details> "Advanced"): Workspace identity, rename, Levers
-      (read-only), Design system.
-  Left-rail sub-nav maps:
-    /settings            -> subView null | 'ready'       => ready block
-    /settings/coordinators -> 'coordinators'             => coordinators block
-    /settings/advanced   -> 'advanced'                    => advanced block
+    · Primary: readiness checklist for bootstrap, coordinators, and provider.
+    · Secondary: coordinator routing summary.
+    · Overflow: workspace identity, levers, and design system state.
 -->
 <script lang="ts">
-  import Card from '../../lib/Card.svelte'
+  import FrameCard from '../../../../packages/ui/src/components/FrameCard.svelte'
+  import NoticeBand from '../../../../packages/ui/src/components/NoticeBand.svelte'
+  import SectionHeader from '../../../../packages/ui/src/components/SectionHeader.svelte'
+  import StatusPill from '../../../../packages/ui/src/components/StatusPill.svelte'
   import Stack from '../../lib/Stack.svelte'
   import Row from '../../lib/Row.svelte'
   import Button from '../../lib/Button.svelte'
-  import Chip from '../../lib/Chip.svelte'
   import Input from '../../lib/Input.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import Byline from '../../lib/Byline.svelte'
@@ -143,9 +139,6 @@
   }
 
   let bootstrapError = $state<string | null>(null)
-  // Toast after a manual bootstrap run so the user sees what actually
-  // happened — pressing "Configure" and silently landing on "Running" was
-  // the documented UX bug.
   let bootstrapToast = $state<{ text: string; tone: 'ok' | 'danger' } | null>(null)
 
   function flashToast(text: string, tone: 'ok' | 'danger'): void {
@@ -156,10 +149,16 @@
   }
 
   function summarizeBootstrapResult(j: unknown): string {
-    const d = (j as { detected?: { packageManager?: string; gates?: Record<string, { available?: boolean }> } })?.detected
-    if (!d) return 'Bootstrap verified.'
-    const pm = d.packageManager ?? 'none'
-    const gates = d.gates ? Object.entries(d.gates).filter(([, v]) => v?.available).map(([k]) => k) : []
+    const detected = (j as {
+      detected?: { packageManager?: string; gates?: Record<string, { available?: boolean }> }
+    })?.detected
+    if (!detected) return 'Bootstrap verified.'
+    const pm = detected.packageManager ?? 'none'
+    const gates = detected.gates
+      ? Object.entries(detected.gates)
+          .filter(([, value]) => value?.available)
+          .map(([key]) => key)
+      : []
     const gateList = gates.length > 0 ? gates.join(', ') : 'no gates'
     return `Bootstrap verified (${pm}): ${gateList}`
   }
@@ -204,11 +203,12 @@
 
   const coordinators = $derived(project.detail?.config?.coordinators ?? [])
 
-  const bootstrapReady = $derived(
-    Boolean(bootstrapInfo?.configured && bootstrapInfo?.status?.success),
-  )
+  const bootstrapReady = $derived(Boolean(bootstrapInfo?.configured && bootstrapInfo?.status?.success))
   const providerReady = $derived(Boolean(providerStatus?.configured))
   const coordinatorsReady = $derived(coordinators.length > 0)
+  const readinessCount = $derived(
+    (bootstrapReady ? 1 : 0) + (coordinatorsReady ? 1 : 0) + (providerReady ? 1 : 0),
+  )
 
   function flashIdentity(text: string, error: boolean) {
     identityStatus = { text, error }
@@ -248,9 +248,9 @@
 
   const leversByScope = $derived.by(() => {
     const out = new Map<string, Lever[]>()
-    for (const l of levers ?? []) {
-      if (!out.has(l.scope)) out.set(l.scope, [])
-      out.get(l.scope)!.push(l)
+    for (const lever of levers ?? []) {
+      if (!out.has(lever.scope)) out.set(lever.scope, [])
+      out.get(lever.scope)!.push(lever)
     }
     return [...out.entries()]
   })
@@ -267,290 +267,399 @@
 </script>
 
 {#if initialized === null}
-  <p class="muted">Loading settings…</p>
+  <NoticeBand tone="neutral" role="status" label="Settings" title="Loading settings">
+    <p>Fetching project setup, provider, and design-system state…</p>
+  </NoticeBand>
 {:else if !initialized}
-  <Card title="Project not initialized yet">
-    <p class="muted">Complete the setup wizard first.</p>
-    <Row justify="end">
-      <Button variant="primary" onclick={() => nav('/setup')}>Open setup wizard →</Button>
-    </Row>
-  </Card>
+  <NoticeBand tone="warn" role="note" label="Settings" title="Project not initialized yet">
+    {#snippet actions()}
+      <Button variant="primary" onclick={() => nav('/setup')}>Open setup wizard</Button>
+    {/snippet}
+    <p>Complete the setup wizard first.</p>
+  </NoticeBand>
 {:else}
-  <Stack gap="4">
-  {#if bootstrapToast}
-    <div class="toast toast-{bootstrapToast.tone}" role="status">{bootstrapToast.text}</div>
-  {/if}
-  {#if section === 'facts'}
-    <FactsTab />
-  {:else if section === 'providers'}
-    <ProjectProvidersSection />
-  {:else if section === 'ready'}
-    <!-- PRIMARY: Ready-to-start checklist -->
-    <Card title="Ready to start?" titleTag="h2">
-      <ul class="checklist">
-        <li class="check-row">
-          <span class="check-label">Bootstrap</span>
-          <Chip
-            label={bootstrapReady ? 'passed' : bootstrapInfo?.configured ? 'failed' : 'not set'}
-            tone={bootstrapReady ? 'ok' : bootstrapInfo?.configured ? 'danger' : 'warn'}
-          />
-          {#if !bootstrapReady}
-            <button type="button" class="linkbtn" onclick={runBootstrap} disabled={bootstrapRunning}>
-              {bootstrapRunning ? 'Running…' : 'Configure →'}
-            </button>
-          {/if}
-          {#if bootstrapError}
-            <div class="row-error">{bootstrapError}</div>
-          {/if}
-        </li>
-        <li class="check-row">
-          <span class="check-label">Coordinators</span>
-          <Chip
-            label={coordinatorsReady ? `${coordinators.length} defined` : 'none'}
-            tone={coordinatorsReady ? 'ok' : 'warn'}
-          />
-          {#if !coordinatorsReady}
-            <button type="button" class="linkbtn" onclick={() => nav('/')}>Configure →</button>
-          {/if}
-        </li>
-        <li class="check-row">
-          <span class="check-label">LLM provider</span>
-          <Chip
-            label={providerReady ? (providerStatus?.active ?? 'configured') : 'not configured'}
-            tone={providerReady ? 'ok' : 'warn'}
-          />
-          {#if !providerReady}
-            <button type="button" class="linkbtn" onclick={() => nav('/providers')}>
-              Configure →
-            </button>
-          {/if}
-        </li>
-      </ul>
-    </Card>
-  {/if}
+  <div class="settings-shell">
+    {#if bootstrapToast}
+      <NoticeBand
+        tone={bootstrapToast.tone === 'ok' ? 'ok' : 'danger'}
+        role={bootstrapToast.tone === 'ok' ? 'status' : 'alert'}
+        label="Bootstrap"
+        title={bootstrapToast.tone === 'ok' ? 'Bootstrap verified' : 'Bootstrap failed'}
+        density="compact"
+      >
+        <p>{bootstrapToast.text}</p>
+      </NoticeBand>
+    {/if}
 
-  {#if section === 'coordinators'}
-    <!-- SECONDARY: Coordinators summary -->
-    <Card title="Coordinators">
-      {#if coordinators.length === 0}
-        <p class="muted">None yet — run meta-intake to bootstrap.</p>
-      {:else}
-        <div class="coord-list">
-          {#each coordinators as c, i (c.id ?? c.name ?? i)}
-            <div class="coord">
-              <div class="coord-title">
-                <strong>{c.name ?? c.id}</strong>
-                <span class="muted"> · {c.domain ?? ''}</span>
-              </div>
-              {#if c.mandate}<Markdown source={c.mandate} />{/if}
+    {#if section === 'facts'}
+      <FactsTab />
+    {:else if section === 'providers'}
+      <ProjectProvidersSection />
+    {:else if section === 'ready'}
+      <SectionHeader
+        eyebrow="Settings"
+        title="Ready to start?"
+        description="Check the prerequisites Guildhall needs before unattended project runs."
+        headingTag="h2"
+        density="compact"
+      >
+        {#snippet meta()}
+          <StatusPill
+            label={`${readinessCount}/3 ready`}
+            tone={readinessCount === 3 ? 'ok' : 'warn'}
+            emphasis="default"
+          />
+        {/snippet}
+      </SectionHeader>
+
+      <FrameCard class="readiness-card">
+        <ul class="checklist">
+          <li class="check-row">
+            <div class="check-copy">
+              <span class="check-label">Bootstrap</span>
+              <span class="check-detail">Project bootstrap commands and success gates.</span>
             </div>
-          {/each}
-        </div>
-      {/if}
-    </Card>
-  {/if}
-
-  {#if section === 'ready'}
-    <!-- Bootstrap detail (shown only when configured, collapsed-ish via its own card) -->
-    {#if bootstrapInfo?.configured}
-      <Card title="Bootstrap detail">
-        <Stack gap="3">
-          <Row gap="2">
-            <Chip
-              label={bootstrapInfo.status?.success
-                ? 'passed'
-                : bootstrapInfo.status
-                  ? 'failed'
-                  : 'never run'}
-              tone={bootstrapInfo.status?.success ? 'ok' : bootstrapInfo.status ? 'danger' : 'warn'}
+            <StatusPill
+              label={bootstrapReady ? 'passed' : bootstrapInfo?.configured ? 'failed' : 'not set'}
+              tone={bootstrapReady ? 'ok' : bootstrapInfo?.configured ? 'danger' : 'warn'}
             />
-            {#if bootstrapInfo.needed}
-              <Chip label="re-run needed" tone="warn" />
+            {#if !bootstrapReady}
+              <button type="button" class="linkbtn" onclick={runBootstrap} disabled={bootstrapRunning}>
+                {bootstrapRunning ? 'Running…' : 'Configure'}
+              </button>
             {/if}
+            {#if bootstrapError}
+              <div class="row-error">{bootstrapError}</div>
+            {/if}
+          </li>
+
+          <li class="check-row">
+            <div class="check-copy">
+              <span class="check-label">Coordinators</span>
+              <span class="check-detail">Routing roles that own planning and task execution.</span>
+            </div>
+            <StatusPill
+              label={coordinatorsReady ? `${coordinators.length} defined` : 'none'}
+              tone={coordinatorsReady ? 'ok' : 'warn'}
+            />
+            {#if !coordinatorsReady}
+              <button type="button" class="linkbtn" onclick={() => nav('/')}>Configure</button>
+            {/if}
+          </li>
+
+          <li class="check-row">
+            <div class="check-copy">
+              <span class="check-label">LLM provider</span>
+              <span class="check-detail">Active model host and runtime selection for this project.</span>
+            </div>
+            <StatusPill
+              label={providerReady ? (providerStatus?.active ?? 'configured') : 'not configured'}
+              tone={providerReady ? 'ok' : 'warn'}
+            />
+            {#if !providerReady}
+              <button type="button" class="linkbtn" onclick={() => nav('/providers')}>
+                Configure
+              </button>
+            {/if}
+          </li>
+        </ul>
+      </FrameCard>
+
+      {#if bootstrapInfo?.configured}
+        <FrameCard
+          tone={bootstrapInfo.status?.success ? 'info' : bootstrapInfo.status ? 'warn' : 'default'}
+          class="bootstrap-card"
+        >
+          {#snippet header()}
+            <SectionHeader
+              title="Bootstrap detail"
+              description="The last verification pass and the commands behind it."
+              headingTag="h3"
+              density="dense"
+            >
+              {#snippet meta()}
+                <StatusPill
+                  label={bootstrapInfo.status?.success ? 'passed' : bootstrapInfo.status ? 'failed' : 'never run'}
+                  tone={bootstrapInfo.status?.success ? 'ok' : bootstrapInfo.status ? 'danger' : 'warn'}
+                />
+                {#if bootstrapInfo.needed}
+                  <StatusPill label="re-run needed" tone="warn" />
+                {/if}
+              {/snippet}
+            </SectionHeader>
+          {/snippet}
+
+          <Stack gap="3">
             {#if bootstrapInfo.status}
               <Byline verb="Last run" at={bootstrapInfo.status.lastRunAt} />
             {/if}
-          </Row>
 
-          <DefinitionList
-            size="sm"
-            items={[
-              ['Commands', bootstrapInfo.bootstrap?.commands.join(' · ') ?? '—'],
-              ['Gates', bootstrapInfo.bootstrap?.successGates.join(' · ') ?? '—'],
-              [
-                'Established by',
-                bootstrapInfo.bootstrap?.provenance
-                  ? `${bootstrapInfo.bootstrap.provenance.establishedBy} (${bootstrapInfo.bootstrap.provenance.establishedAt})`
-                  : null,
-              ],
-            ]}
-          />
-
-          {#if bootstrapInfo.status && bootstrapInfo.status.steps.length > 0}
-            <LogViewer
-              lines={bootstrapInfo.status.steps.map(
-                s =>
-                  `[${s.result === 'pass' ? '✓' : '✗'}] ${s.kind}: ${s.command} (${s.durationMs}ms)`,
-              )}
-              maxHeight="200px"
+            <DefinitionList
+              size="sm"
+              items={[
+                ['Commands', bootstrapInfo.bootstrap?.commands.join(' · ') ?? '—'],
+                ['Gates', bootstrapInfo.bootstrap?.successGates.join(' · ') ?? '—'],
+                [
+                  'Established by',
+                  bootstrapInfo.bootstrap?.provenance
+                    ? `${bootstrapInfo.bootstrap.provenance.establishedBy} (${bootstrapInfo.bootstrap.provenance.establishedAt})`
+                    : null,
+                ],
+              ]}
             />
-          {/if}
 
-          <Row justify="end">
-            <Button onclick={runBootstrap} disabled={bootstrapRunning}>
-              {bootstrapRunning ? 'Running…' : 'Re-run bootstrap'}
-            </Button>
-          </Row>
-        </Stack>
-      </Card>
-    {/if}
-  {/if}
+            {#if bootstrapInfo.status && bootstrapInfo.status.steps.length > 0}
+              <LogViewer
+                lines={bootstrapInfo.status.steps.map(
+                  step =>
+                    `[${step.result === 'pass' ? '✓' : '✗'}] ${step.kind}: ${step.command} (${step.durationMs}ms)`,
+                )}
+                maxHeight="200px"
+              />
+            {/if}
 
-  {#if section === 'advanced'}
-    <!-- OVERFLOW: Advanced -->
-    <div class="advanced-body">
-        <Stack gap="4">
-          <Card title="Workspace identity">
-            <Stack gap="3">
-              <label class="field">
-                <span>Workspace name</span>
-                <Input bind:value={name} />
-              </label>
-              <label class="field">
-                <span>Workspace ID (slug)</span>
-                <Input bind:value={id} />
-              </label>
-              <Row justify="end" gap="2" align="center">
-                {#if identityStatus}
-                  <span class="status" class:error={identityStatus.error}>{identityStatus.text}</span>
+            <Row justify="end">
+              <Button onclick={runBootstrap} disabled={bootstrapRunning}>
+                {bootstrapRunning ? 'Running…' : 'Re-run bootstrap'}
+              </Button>
+            </Row>
+          </Stack>
+        </FrameCard>
+      {/if}
+    {:else if section === 'coordinators'}
+      <SectionHeader
+        eyebrow="Settings"
+        title="Coordinators"
+        description="The project’s routing layer for planning, review, and execution."
+        headingTag="h2"
+        density="compact"
+      >
+        {#snippet meta()}
+          <StatusPill
+            label={coordinatorsReady ? `${coordinators.length} defined` : 'none'}
+            tone={coordinatorsReady ? 'ok' : 'warn'}
+          />
+        {/snippet}
+      </SectionHeader>
+
+      {#if coordinators.length === 0}
+        <NoticeBand tone="warn" role="note" label="Coordinators" title="No coordinators yet">
+          <p>Run meta-intake to bootstrap routing for this project.</p>
+        </NoticeBand>
+      {:else}
+        <FrameCard class="coordinators-card">
+          <div class="coord-list">
+            {#each coordinators as coordinator, i (coordinator.id ?? coordinator.name ?? i)}
+              <section class="coord">
+                <header class="coord-title">
+                  <strong>{coordinator.name ?? coordinator.id}</strong>
+                  {#if coordinator.domain}
+                    <span class="muted">{coordinator.domain}</span>
+                  {/if}
+                </header>
+                {#if coordinator.mandate}
+                  <Markdown source={coordinator.mandate} />
                 {/if}
-                <Button variant="primary" disabled={savingIdentity} onclick={saveIdentity}>
-                  Save identity
-                </Button>
-              </Row>
-            </Stack>
-          </Card>
+              </section>
+            {/each}
+          </div>
+        </FrameCard>
+      {/if}
+    {:else if section === 'advanced'}
+      <SectionHeader
+        eyebrow="Settings"
+        title="Advanced settings"
+        description="Identity, levers, and design-system controls that shape how Guildhall operates."
+        headingTag="h2"
+        density="compact"
+      />
 
-          <Card title="Levers">
-            <Stack gap="2">
-              <Row align="center" gap="2">
-                <span class="muted">
-                  Every behavioral knob is a named lever with full provenance.
-                </span>
-                <Help topic="subsystem.levers" />
-              </Row>
-              {#if leversError}
-                <Row justify="between" align="center" gap="2">
-                  <span class="error">Could not load levers: {leversError}</span>
-                  <Button variant="secondary" size="sm" onclick={resetLevers}>
-                    Reset to defaults
-                  </Button>
-                </Row>
-              {:else if !levers}
-                <p class="muted">Loading…</p>
-              {:else if levers.length === 0}
-                <p class="muted">No levers configured.</p>
-              {:else}
-                {#each leversByScope as [scope, entries] (scope)}
-                  <div class="lever-scope">{scope}</div>
-                  <table class="lever-table">
-                    <tbody>
-                      {#each entries as l, i (l.name + i)}
-                        <tr>
-                          <td>
-                            <code>{l.name}</code>
-                            <Help topic={`lever.${l.name}`} size={12} />
-                          </td>
-                          <td><strong>{l.position}</strong></td>
-                          <td class="lever-by">{l.setBy}</td>
-                        </tr>
-                        <tr class="lever-rationale">
-                          <td colspan="3">{l.rationale}</td>
-                        </tr>
-                      {/each}
-                    </tbody>
-                  </table>
-                {/each}
+      <div class="advanced-grid">
+        <FrameCard class="advanced-card">
+          {#snippet header()}
+            <SectionHeader
+              title="Workspace identity"
+              description="Operator-facing name and slug for this project."
+              headingTag="h3"
+              density="dense"
+            />
+          {/snippet}
+
+          <Stack gap="3">
+            <label class="field">
+              <span>Workspace name</span>
+              <Input bind:value={name} />
+            </label>
+            <label class="field">
+              <span>Workspace ID (slug)</span>
+              <Input bind:value={id} />
+            </label>
+            <Row justify="end" gap="2" align="center">
+              {#if identityStatus}
+                <span class="status" class:error={identityStatus.error}>{identityStatus.text}</span>
               {/if}
-            </Stack>
-          </Card>
+              <Button variant="primary" disabled={savingIdentity} onclick={saveIdentity}>
+                Save identity
+              </Button>
+            </Row>
+          </Stack>
+        </FrameCard>
 
-          <Card title="Design system">
-            <Stack gap="3">
-              {#if designSystem === undefined}
-                <p class="muted">Loading…</p>
-              {:else if !designSystem}
-                <p class="muted">No draft yet.</p>
-              {:else}
-                <div class="ds-head">
-                  <strong>Revision {designSystem.revision ?? 0}</strong>
-                  <Chip
+        <FrameCard class="advanced-card">
+          {#snippet header()}
+            <SectionHeader
+              title="Levers"
+              description="Every behavioral knob should stay explicit, named, and explainable."
+              headingTag="h3"
+              density="dense"
+            >
+              {#snippet meta()}
+                <Help topic="subsystem.levers" />
+              {/snippet}
+            </SectionHeader>
+          {/snippet}
+
+          <Stack gap="3">
+            {#if leversError}
+              <NoticeBand tone="danger" role="alert" label="Levers" title="Could not load levers" density="compact">
+                {#snippet actions()}
+                  <Button variant="secondary" size="sm" onclick={resetLevers}>Reset to defaults</Button>
+                {/snippet}
+                <p>{leversError}</p>
+              </NoticeBand>
+            {:else if !levers}
+              <NoticeBand tone="neutral" role="status" label="Levers" title="Loading levers" density="compact">
+                <p>Reading lever provenance and current positions…</p>
+              </NoticeBand>
+            {:else if levers.length === 0}
+              <NoticeBand tone="neutral" role="note" label="Levers" title="No levers configured" density="compact">
+                <p>This project is currently using defaults only.</p>
+              </NoticeBand>
+            {:else}
+              {#each leversByScope as [scope, entries] (scope)}
+                <div class="lever-scope">{scope}</div>
+                <table class="lever-table">
+                  <tbody>
+                    {#each entries as lever, i (lever.name + i)}
+                      <tr>
+                        <td>
+                          <code>{lever.name}</code>
+                          <Help topic={`lever.${lever.name}`} size={12} />
+                        </td>
+                        <td><strong>{lever.position}</strong></td>
+                        <td class="lever-by">{lever.setBy}</td>
+                      </tr>
+                      <tr class="lever-rationale">
+                        <td colspan="3">{lever.rationale}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              {/each}
+            {/if}
+          </Stack>
+        </FrameCard>
+
+        <FrameCard class="advanced-card advanced-card-wide">
+          {#snippet header()}
+            <SectionHeader
+              title="Design system"
+              description="Current draft state for the operator-facing shared UI primitives."
+              headingTag="h3"
+              density="dense"
+            >
+              {#snippet meta()}
+                {#if designSystem && designSystem !== undefined}
+                  <StatusPill
                     label={designSystem.approvedAt ? 'approved' : 'draft'}
                     tone={designSystem.approvedAt ? 'ok' : 'warn'}
                   />
-                  <Byline by={designSystem.authoredBy ?? 'unknown'} at={designSystem.authoredAt} />
-                </div>
-                <div class="ds-facts">
-                  <div><span class="muted">Tokens:</span> {dsTokenCount}</div>
-                  <div><span class="muted">Primitives:</span> {designSystem.primitives?.length ?? 0}</div>
-                  <div><span class="muted">Tone:</span> {designSystem.copyVoice?.tone ?? 'plain'}</div>
-                  <div><span class="muted">Min contrast:</span> {designSystem.a11y?.minContrastRatio ?? '—'}</div>
-                </div>
-                {#if designSystem.primitives?.length}
-                  <ul class="ds-prims">
-                    {#each designSystem.primitives as p, i (p.name + i)}
-                      <li><strong>{p.name}</strong> <span class="muted">— {p.usage}</span></li>
-                    {/each}
-                  </ul>
                 {/if}
-                {#if designSystem.approvedAt}
-                  <p class="muted">
-                    <Byline
-                      verb="Approved by"
-                      by={designSystem.approvedBy ?? 'human'}
-                      at={designSystem.approvedAt}
-                    />
-                  </p>
-                {:else}
-                  <Row justify="end">
-                    <Button variant="primary" onclick={approveDesignSystem}>Approve current draft</Button>
-                  </Row>
-                {/if}
+              {/snippet}
+            </SectionHeader>
+          {/snippet}
+
+          <Stack gap="3">
+            {#if designSystem === undefined}
+              <NoticeBand tone="neutral" role="status" label="Design system" title="Loading draft" density="compact">
+                <p>Fetching the current design-system document…</p>
+              </NoticeBand>
+            {:else if !designSystem}
+              <NoticeBand tone="neutral" role="note" label="Design system" title="No draft yet" density="compact">
+                <p>Guildhall has not generated a design-system draft for this project yet.</p>
+              </NoticeBand>
+            {:else}
+              <div class="ds-head">
+                <strong>Revision {designSystem.revision ?? 0}</strong>
+                <Byline by={designSystem.authoredBy ?? 'unknown'} at={designSystem.authoredAt} />
+              </div>
+
+              <div class="ds-facts">
+                <div><span class="muted">Tokens</span><strong>{dsTokenCount}</strong></div>
+                <div><span class="muted">Primitives</span><strong>{designSystem.primitives?.length ?? 0}</strong></div>
+                <div><span class="muted">Tone</span><strong>{designSystem.copyVoice?.tone ?? 'plain'}</strong></div>
+                <div><span class="muted">Min contrast</span><strong>{designSystem.a11y?.minContrastRatio ?? '—'}</strong></div>
+              </div>
+
+              {#if designSystem.primitives?.length}
+                <ul class="ds-prims">
+                  {#each designSystem.primitives as primitive, i (primitive.name + i)}
+                    <li>
+                      <strong>{primitive.name}</strong>
+                      <span class="muted">{primitive.usage}</span>
+                    </li>
+                  {/each}
+                </ul>
               {/if}
-            </Stack>
-          </Card>
-        </Stack>
+
+              {#if designSystem.approvedAt}
+                <Byline
+                  verb="Approved by"
+                  by={designSystem.approvedBy ?? 'human'}
+                  at={designSystem.approvedAt}
+                />
+              {:else}
+                <Row justify="end">
+                  <Button variant="primary" onclick={approveDesignSystem}>Approve current draft</Button>
+                </Row>
+              {/if}
+            {/if}
+          </Stack>
+        </FrameCard>
       </div>
-  {/if}
-  </Stack>
+    {/if}
+  </div>
 {/if}
 
 <style>
+  .settings-shell {
+    display: grid;
+    gap: var(--gh-space-4);
+    container-type: inline-size;
+  }
+
+  .field {
+    display: grid;
+    gap: var(--gh-space-1);
+  }
+
+  .field > span:first-child,
   .muted {
     color: var(--text-muted);
     font-size: var(--fs-2);
     line-height: var(--lh-body);
   }
-  .error {
-    color: var(--danger);
-    font-size: var(--fs-1);
-  }
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-1);
-  }
-  .field > span:first-child {
-    color: var(--text-muted);
-    font-size: var(--fs-1);
-  }
+
   .status {
     font-size: var(--fs-1);
     color: var(--accent-2);
   }
-  .status.error {
+
+  .status.error,
+  .row-error {
     color: var(--danger);
   }
+
   code {
     font-family: 'SF Mono', monospace;
     background: var(--bg-raised-2);
@@ -558,138 +667,185 @@
     border-radius: var(--r-1);
     font-size: var(--fs-1);
   }
+
   .checklist {
     list-style: none;
+    display: grid;
+    gap: 0;
     padding: 0;
-    display: flex;
-    flex-direction: column;
   }
+
   .check-row {
-    display: flex;
-    align-items: center;
-    gap: var(--s-3);
-    padding: var(--s-2) 0;
+    display: grid;
+    gap: var(--gh-space-3);
+    align-items: start;
+    padding: var(--gh-space-3) 0;
     border-top: 1px solid var(--border);
   }
+
   .check-row:first-child {
     border-top: none;
   }
+
+  .check-copy {
+    display: grid;
+    gap: var(--gh-space-1);
+    min-inline-size: 0;
+  }
+
   .check-label {
-    min-width: 120px;
+    font-size: var(--fs-3);
     font-weight: 600;
+    line-height: var(--lh-tight);
+    color: var(--text);
+  }
+
+  .check-detail {
+    color: var(--text-muted);
     font-size: var(--fs-2);
+    line-height: var(--lh-body);
   }
+
   .linkbtn {
+    justify-self: start;
     background: transparent;
-    border: none;
-    padding: 0;
-    margin-left: auto;
-    font: inherit;
-    color: var(--accent);
+    border: 1px solid var(--gh-color-border-strong);
+    border-radius: var(--gh-radius-full);
+    color: var(--gh-color-text-primary);
     cursor: pointer;
+    font: inherit;
+    min-height: var(--gh-control-height-default);
+    padding: var(--gh-control-padding-block) var(--gh-control-padding-inline);
   }
+
   .linkbtn:hover {
-    text-decoration: underline;
+    background: color-mix(in srgb, var(--gh-color-feedback-accent) 12%, transparent);
   }
+
   .linkbtn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
   }
+
   .row-error {
-    flex-basis: 100%;
-    margin-top: var(--s-1);
     font-size: var(--fs-1);
-    color: var(--danger);
   }
-  .toast {
-    padding: var(--s-2) var(--s-3);
-    border-radius: var(--r-1);
-    border: 1px solid var(--border);
-    font-size: var(--fs-2);
-    font-weight: 600;
-  }
-  .toast-ok {
-    background: color-mix(in srgb, var(--accent-2) 15%, transparent);
-    border-color: var(--accent-2);
-    color: var(--accent-2);
-  }
-  .toast-danger {
-    background: color-mix(in srgb, var(--danger) 15%, transparent);
-    border-color: var(--danger);
-    color: var(--danger);
-  }
+
   .coord-list {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-2);
+    display: grid;
+    gap: var(--gh-space-3);
   }
+
   .coord {
-    background: var(--bg);
+    display: grid;
+    gap: var(--gh-space-1);
+    padding: var(--gh-space-3);
     border: 1px solid var(--border);
     border-radius: var(--r-2);
-    padding: var(--s-3);
+    background: var(--bg);
+  }
+
+  .coord-title {
     display: flex;
-    flex-direction: column;
-    gap: var(--s-1);
-    font-size: var(--fs-2);
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    align-items: baseline;
   }
-  .advanced-body {
-    margin-top: var(--s-3);
+
+  .advanced-grid {
+    display: grid;
+    gap: var(--gh-space-4);
   }
+
   .lever-scope {
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0;
     color: var(--text-muted);
     font-weight: 700;
     font-size: var(--fs-0);
-    margin-top: var(--s-2);
   }
+
   .lever-table {
     width: 100%;
     border-collapse: collapse;
     font-size: var(--fs-1);
   }
+
   .lever-table td {
-    padding: var(--s-1) var(--s-2);
+    padding: var(--gh-space-2) var(--gh-space-2);
     border-top: 1px solid var(--border);
+    vertical-align: top;
   }
-  .lever-table code {
-    font-size: var(--fs-1);
+
+  .lever-table tbody tr:first-child td {
+    border-top: none;
   }
+
   .lever-by {
     color: var(--text-muted);
     text-transform: uppercase;
-    letter-spacing: 0.05em;
     font-size: var(--fs-0);
     font-weight: 700;
   }
+
   .lever-rationale td {
     color: var(--text-muted);
     font-style: italic;
-    padding-bottom: var(--s-2);
     padding-top: 0;
     border-top: none;
-    line-height: var(--lh-body);
   }
+
   .ds-head {
     display: flex;
-    gap: var(--s-2);
-    align-items: center;
     flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    align-items: center;
   }
+
   .ds-facts {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: var(--s-2);
-    font-size: var(--fs-2);
+    gap: var(--gh-space-3);
   }
+
+  .ds-facts > div {
+    display: grid;
+    gap: var(--gh-space-1);
+  }
+
   .ds-prims {
     list-style: none;
-    padding-left: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-1);
-    font-size: var(--fs-2);
-    line-height: var(--lh-body);
+    display: grid;
+    gap: var(--gh-space-2);
+    padding: 0;
+  }
+
+  .ds-prims li {
+    display: grid;
+    gap: var(--gh-space-1);
+  }
+
+  @container (min-width: 42rem) {
+    .check-row {
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      align-items: center;
+    }
+
+    .row-error {
+      grid-column: 1 / -1;
+    }
+
+    .ds-facts {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+
+  @container (min-width: 60rem) {
+    .advanced-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    :global(.advanced-card-wide) {
+      grid-column: 1 / -1;
+    }
   }
 </style>

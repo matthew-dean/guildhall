@@ -6,34 +6,53 @@ title: Running the orchestrator
 
 The orchestrator is the process that advances tasks. It ticks through each domain, asks coordinators to evaluate their queues, dispatches workers, collects reviews, and runs gates.
 
-## From the CLI
-
-```bash
-guildhall run                    # run the default workspace
-guildhall run my-app             # run a specific workspace by id
-guildhall run --domain ui        # only the ui domain
-guildhall run --max-ticks 10     # stop after 10 ticks (for testing)
-```
-
-`guildhall run` blocks until Ctrl-C or until there are no ticks left. Progress is appended to `memory/PROGRESS.md`, events are streamed to `memory/events.ndjson`, and the full transcript per task lives under `memory/transcripts/`.
-
 ## From the dashboard
 
 ```bash
 guildhall serve
 ```
 
-Opens the dashboard at <http://localhost:7842>. The **Run** control on the project page starts and stops the orchestrator with the same semantics as the CLI.
+Open the dashboard at `http://localhost:7777`, choose a project, and use the
+**Start** / **Stop** controls from the project shell. This is the main path:
+you can inspect Thread, Work, Needs you, task drawers, and release state
+without leaving the UI.
+
+The dashboard uses the same runtime as the CLI. Progress is appended to `memory/PROGRESS.md`, events are streamed to `memory/events.ndjson`, and the full transcript per task lives under `memory/transcripts/`.
+
+## From the CLI
+
+Use the CLI when you want a blocking terminal process, scripting, CI smoke runs, or a domain-scoped debugging session.
+
+```bash
+guildhall run                    # run the default workspace
+guildhall run my-app             # run a specific workspace by id
+guildhall run --domain ui        # only the ui domain
+guildhall run --max-ticks 10     # stop after 10 ticks (for testing)
+guildhall run --one-task         # stop after one task reaches a handoff point
+```
+
+`guildhall run` blocks until Ctrl-C or until there are no ticks left.
+
+For service-style usage without a foreground terminal:
+
+```bash
+guildhall start
+guildhall open
+guildhall stop
+```
 
 ## Fanout
 
 By default the orchestrator runs one task at a time per domain. Set [`concurrent_task_dispatch`](../levers/concurrent-task-dispatch) to `fanout_N` to run up to N tasks in parallel. Combined with [`worktree_isolation: per_task`](../levers/worktree-isolation), each parallel task runs in its own git worktree.
 
-## Stop, pause, resume
+## Stop, pause, and stage transitions
 
-- **Stop**: Ctrl-C the `run` process (or Stop in the dashboard). The current agent turn finishes gracefully; state is snapshotted.
-- **Pause a task**: `guildhall pause <task-id>` moves it to `blocked` with a pause reason. Resume with `guildhall resume`.
-- **Shelve a task**: `guildhall shelve <task-id>` terminally parks it.
+- **Stop**: Ctrl-C the `run` process, use `guildhall stop`, or press **Stop**
+  in the project shell. The current agent turn finishes gracefully; state is
+  snapshotted.
+- **Pause or shelve a task**: use the task drawer or project actions in the UI.
+- **Resume spec shaping**: `guildhall resume <task-id>` appends a follow-up to
+  an `exploring` task.
 
 ## What a "tick" does
 

@@ -2,14 +2,14 @@
 title: guildhall.yaml
 help_topic: reference.workspace_config
 help_summary: |
-  The workspace config file. Defines name, id, projectPath, model assignments
+  The project workspace config file. Defines name, id, projectPath, model assignments
   per agent role, coordinator domains with mandates/concerns/autonomy, and
   orchestrator knobs like maxRevisions.
 ---
 
 # `guildhall.yaml` reference
 
-The workspace config file. Lives at the workspace root (or `.guildhall/config.yaml` inside a repo).
+The project workspace config file. It normally lives at the project root.
 
 ## Top-level shape
 
@@ -128,7 +128,7 @@ ignore:
 
 ## `tags`
 
-Free-form groups shown in the multi-workspace dashboard.
+Free-form groups shown on the Projects page.
 
 ```yaml
 tags:

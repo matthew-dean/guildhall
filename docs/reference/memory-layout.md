@@ -48,4 +48,11 @@ memory/sessions/
 
 ## Global data
 
-Session snapshots can alternately live in `~/.cache/guildhall/sessions/` keyed by `SHA1(projectPath)` — this is the default when `GUILDHALL_DATA_DIR` is unset.
+Session snapshots live under `~/.guildhall/data/sessions/` by default when
+`GUILDHALL_DATA_DIR` is unset.
+
+Machine-global Guildhall state sits outside the project:
+
+- `~/.guildhall/registry.yaml` — registered projects
+- `~/.guildhall/providers.yaml` — shared API keys and local-model URLs
+- `~/.guildhall/config.yaml` — machine-wide defaults
