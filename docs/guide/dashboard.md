@@ -1,24 +1,25 @@
 ---
 title: The dashboard
+pageClass: gh-first-visit-page
 ---
 
-# The dashboard
+# The dashboard is where the state becomes readable
 
-The dashboard is a Svelte SPA served by `guildhall serve` at `http://localhost:7842`. It's a window into `memory/` — it doesn't store anything itself. You can edit `memory/*.yaml` with your editor and the dashboard will reflect the change on next refresh.
+Guildhall is easiest to understand once you see the shell. The dashboard experience starts at the service home, then quickly narrows into the project shell where setup, task intake, live progress, reviewer calls, and release readiness actually play out. It tries very hard not to make you remember more than you should.
 
-## Pages
+![Guildhall work view with active tasks, live progress, and reviewer signals.](../assets/ui-audit/work.png)
 
-- **Project view** — the main surface. Tabs for Thread, Needs you, Work, Timeline, Settings, Release, and Workspace Import. Internal routing inspection lives under Settings. See [Project view](../web-ui/project-view).
-- **Task drawer** — slides open when you click a task card. Tabs for Transcript, History, Spec, Experts, and Provenance. See [Task drawer](../web-ui/task-drawer).
-- **Providers** — credential management for authenticated CLIs plus OpenAI-compatible and Anthropic-compatible providers. See [Providers page](../web-ui/providers).
-- **Setup wizard** — runs from `/setup` on first boot and after `guildhall config`. See [Setup wizard](../web-ui/setup).
+## What it does well
 
-## In-UI help
+- **Service over projects**: the dashboard is not married to one repo. It runs as a local service and keeps multiple projects available from one place.
+- **File-backed, not hidden**: project state still lives in `guildhall.yaml`, `.guildhall/config.yaml`, and `memory/*`, while machine-wide state such as the registry and provider credentials lives in `~/.guildhall/`. The UI is a clearer window into that state, not a secret second database.
+- **One operating surface**: the service home gets you into the right project, and the shell carries the detailed state without feeling like a separate product.
 
-Nearly every piece of the UI has a `?` icon that opens a modal with a short explanation and a "Open full docs ↗" link that lands on the matching page in *this* docs site. The help content comes from the YAML frontmatter of the docs pages themselves — there's no second source of truth. See [the help system](../web-ui/help-system) for how it works.
+## Most of the real loop lives in the browser
 
-## What the dashboard does NOT do
+- **Attach and configure**: bring a project into the service, choose a provider path, and get the shell into a state where the guild can work without tripping over setup debris.
+- **Shape and launch tasks**: create work, review the draft, answer the awkward questions, then hit **Start** when the task is ready to move.
+- **Inspect the run**: read the queue, open the drawer, follow the transcript, and decide whether the guild is cooking or merely making smoke.
+- **Judge release readiness**: keep reviewer verdicts and release checks visible so “probably fine” does not become your deployment methodology.
 
-- It does not replace `guildhall.yaml`. You can edit the YAML by hand; the dashboard picks up changes on refresh.
-- It does not hide state. Everything the dashboard shows is in `memory/*`, readable and greppable.
-- It does not require a network connection to Anthropic — the only outbound calls are to whichever provider you've configured.
+> Honest note: the shell shape is ahead of the final polish. Some denser views still want stronger grouping and better typography rhythm. The good news is that the important thing is already true: the structure of the work is visible.

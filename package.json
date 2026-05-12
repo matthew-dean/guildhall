@@ -20,12 +20,14 @@
     "README.md"
   ],
   "scripts": {
-    "build": "node ./build.mjs",
+    "build": "pnpm build:ui && node ./build.mjs",
+    "build:ui": "pnpm --filter @guildhall/ui build",
     "build:macos-package": "node ./scripts/build-macos-package.mjs",
     "dev": "node ./build.mjs --watch",
     "dev:install": "node ./scripts/dev-install.mjs",
     "dev:uninstall": "node ./scripts/dev-uninstall.mjs",
-    "typecheck": "tsgo -p tsconfig.json --noEmit",
+    "typecheck": "tsgo -p tsconfig.json --noEmit && pnpm typecheck:ui",
+    "typecheck:ui": "pnpm --filter @guildhall/ui typecheck",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "lint:deps": "depcruise src",

@@ -2,38 +2,39 @@
 title: Providers page
 help_topic: web.providers
 help_summary: |
-  Manage machine-scoped provider credentials — authenticated CLIs,
-  Anthropic-compatible API keys, OpenAI-compatible API keys, and local
-  OpenAI-compatible server URLs.
+  Manage provider credentials — Claude OAuth or API key, OpenAI key, Codex
+  tokens, llama.cpp / LM Studio URLs. Credentials are stored in
+  ~/.guildhall/providers.yaml or the provider CLI's own auth store.
 ---
 
 # Providers page
 
 `src/web/surfaces/ProvidersPage.svelte`. Credential and model management.
 
-For each provider connection, the page shows:
+For each provider, the page shows:
 
-- **Status**: not configured / authenticated / expired / error.
-- **Credential action**: log in, paste API key, or set a base URL.
-- **Model picker** (`src/web/lib/ProviderPicker.svelte`): which role(s) this provider backs.
+- **Detection**: whether the service found a usable CLI auth file, API key, or
+  reachable local-model endpoint.
+- **Verification**: a `verifiedAt` marker after a successful test.
+- **Credential action**: connect, paste an API key, test, or disconnect.
+- **Provider choice**: which configured provider GuildHall prefers by default, with room for a project override when needed.
 
-## Provider families
+## Provider slots the service exposes
 
-- **Authenticated CLIs** — Claude Code CLI and Codex CLI.
-- **Anthropic-compatible API** — API key-backed hosted provider.
-- **OpenAI-compatible API** — API key-backed hosted provider. Leave base URL blank to use real OpenAI.
-- **OpenAI-compatible local server** — local server URL for endpoints such as LM Studio or llama.cpp.
+- **Claude** — OAuth (via Claude Code CLI) or API key.
+- **OpenAI** — API key.
+- **Codex (ChatGPT)** — Codex CLI tokens.
+- **OpenAI-compatible local server** — one `llama-cpp` slot, usually pointed
+  at llama.cpp or LM Studio.
 
 ## Where credentials live
 
-- Machine-scoped credentials: `~/.guildhall/providers.yaml`.
-- Global defaults and model settings: `~/.guildhall/config.yaml`.
-- Project-level provider preference: `<project>/.guildhall/config.yaml`.
-
-Execution concurrency is auto-derived from the active provider and runtime
-capacity. Advanced overrides, if you need them, belong in
-`~/.guildhall/config.yaml`; they are not part of the normal project-level
-provider workflow.
+- Machine-scoped provider credentials: `~/.guildhall/providers.yaml`.
+- OAuth-managed credentials:
+  - `~/.claude/.credentials.json`
+  - `~/.codex/auth.json`
+- Machine-wide default: `preferredProvider` in `~/.guildhall/config.yaml`.
+- Optional project override: `preferredProvider` in `.guildhall/config.yaml` only when one project truly needs different behavior.
 
 The page only reveals credentials that are explicitly in config — it will never log or display a hidden system credential.
 

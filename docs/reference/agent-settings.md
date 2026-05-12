@@ -9,7 +9,9 @@ help_summary: |
 
 # `memory/agent-settings.yaml`
 
-The lever-storage file. Seeded by `makeDefaultSettings()` on workspace init and edited from then on by the Setup wizard, the Settings tab, the Spec Agent during `exploring`, or by hand.
+The lever-storage file. Seeded by `makeDefaultSettings()` on first read and edited from then on by the Settings tab, the Spec Agent during meta-intake/exploring, or by hand.
+
+During onboarding, meta-intake may infer initial positions from your project-guidance answers. Approved inferences are written here with `setBy: spec-agent-intake`; defaults that were not inferred remain `setBy: system-default`.
 
 ## Shape
 

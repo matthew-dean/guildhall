@@ -169,14 +169,14 @@ guildhall run [id|path]   Run the orchestrator headlessly
 guildhall help            Full command list
 ```
 
-For the full CLI reference, see [docs/reference/cli.md](./docs/reference/cli.md).
+For the full CLI reference, see [docs/cli/reference.md](./docs/cli/reference.md).
 
 ## Learn more
 
 - [Quick start](./docs/guide/quick-start.md)
 - [Introduction](./docs/guide/introduction.md)
 - [Core concepts](./docs/guide/concepts.md)
-- [CLI reference](./docs/reference/cli.md)
+- [CLI reference](./docs/cli/reference.md)
 - [Workspace config reference](./docs/reference/workspace-config.md)
 - [0.5.0 release note](./docs/releases/0.5.0.md)
 

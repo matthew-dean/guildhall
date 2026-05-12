@@ -1,25 +1,31 @@
 ---
 title: Dashboard
+pageClass: gh-first-visit-page
 help_topic: web.dashboard
 help_summary: |
-  Landing page at http://localhost:7842 when guildhall serve is run without
-  a path. Lists every registered workspace with tags, run state, and jump
-  links into the project view.
+  Service-level front door for Guildhall. Attach a project, scan what is
+  blocked or moving, and open the shell that needs attention.
 ---
 
-# Dashboard
+# Projects home keeps the local service organized
 
-The dashboard is the entry page when you run `guildhall serve` without a path argument. It lists every workspace registered in `~/.guildhall/registry.yaml`, grouped by `tags:` from `guildhall.yaml`.
+This page exists so Guildhall can behave like a local service over projects instead of a one-repo session. You attach a folder, scan what is moving, and open the shell that actually needs your eyes.
 
-Each card shows:
+## What the dashboard should answer quickly
 
-- Workspace name + id.
-- Current run state (idle, running, paused, errored).
-- Count of open escalations and blocked tasks.
-- Quick links to Work tab, Settings, and Providers.
+- **Can this project run at all?**
+- **What is blocked or on fire?**
+- **Which shell needs attention first?**
 
-Clicking a card opens the [project view](./project-view) for that workspace.
+If the page cannot answer those three questions fast, it is being decorative when it should be operational.
 
-## Global header
+## The actual job of each card
 
-The header (`src/web/surfaces/Header.svelte`) surfaces the current workspace name, a global status dot, and the primary nav to switch between project tabs or jump to providers.
+- Project identity and whether the service still recognizes it
+- Run status and whether the guild is active, idle, paused, or unhappy
+- Blocked work and unresolved escalations
+- Enough signal to tell whether opening the shell is likely to be a quick check or a proper firefight
+
+![Guildhall project shell showing thread, setup prompts, and current work items.](../assets/ui-audit/inbox.png)
+
+> Current shape: this service-level entry path matters, but the project shell still carries most of the product’s real power today. That is not a flaw in the docs. It is the product honestly telling you where the sharp tools are.

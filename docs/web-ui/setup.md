@@ -2,10 +2,9 @@
 title: Setup wizard
 help_topic: web.setup
 help_summary: |
-  First-run onboarding at http://localhost:7842/setup. Collects workspace
-  identity, detects installed providers, collects API keys or CLI auth,
-  and optionally kicks off the meta-intake agent to inspect the repo and
-  infer internal routing.
+  First-run onboarding at `/setup`. Collects project identity, detects
+  installed providers, collects API keys or CLI auth, and optionally kicks
+  off the meta-intake agent to draft coordinators.
 ---
 
 # Setup wizard
@@ -14,11 +13,13 @@ Lives at `/setup` and is rendered by `src/web/surfaces/SetupWizard.svelte`.
 
 ## Steps
 
-1. **Identity** — workspace name and slug. The slug becomes the workspace id used by `guildhall run <slug>`.
-2. **Provider detection** — `POST /api/setup/providers` scans for authenticated CLIs plus configured OpenAI-compatible and Anthropic-compatible providers. Detected providers light up; undetected ones show an inline configuration prompt.
-3. **Credentials** — for hosted providers, either paste an API key or log in via the provider's CLI. Machine-scoped credentials land in `~/.guildhall/providers.yaml`; the project only stores its preferred provider in `.guildhall/config.yaml`.
-4. **Launch** — choose between "bootstrap via meta-intake" (recommended) or "skip to dashboard."
+1. **Identity** — project name and slug. The slug becomes the project id used by the dashboard and CLI.
+2. **Provider detection** — `GET /api/setup/providers` checks five provider keys: Claude OAuth, Codex OAuth, Anthropic API, OpenAI API, and one OpenAI-compatible local-server slot. Detected providers light up; undetected ones show an inline configuration prompt.
+3. **Credentials** — for hosted providers, either paste an API key or log in via the provider's CLI. API keys land in `~/.guildhall/providers.yaml`, while Claude and Codex OAuth stay in their own CLI auth stores. The project's own provider selection is stored locally in `.guildhall/config.yaml`.
+4. **Launch** — choose between "bootstrap via meta-intake" (recommended) or "skip to dashboard." Meta-intake drafts coordinators, verified bootstrap commands, and inferred lever positions for approval.
 
 ## Re-running
 
-`guildhall config` re-opens the wizard on an existing workspace so you can reconfigure providers, change models, or rerun meta-intake without losing state.
+`guildhall config` re-opens the wizard on an existing project so you can
+reconfigure providers, change models, or rerun meta-intake without losing
+state.
