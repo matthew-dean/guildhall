@@ -396,7 +396,7 @@
         <Button variant="ghost" size="sm" onclick={() => void load()}>Retry</Button>
       </div>
     {:else if !payload}
-      <p class="loading">Loading…</p>
+      <p class="loading">Loading...</p>
     {:else if activeTab === 'current'}
       <CurrentTab
         task={payload.task}
@@ -471,7 +471,7 @@
             disabled={busy || rerunStageBusy !== null}
             onclick={() => rerunStage(stageRerun.stage)}
           >
-            {rerunStageBusy === stageRerun.stage ? 'Re-running…' : stageRerun.label}
+            {rerunStageBusy === stageRerun.stage ? 'Re-running...' : stageRerun.label}
           </Button>
         {/if}
         <Button

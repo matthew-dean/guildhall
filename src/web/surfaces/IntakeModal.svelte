@@ -162,7 +162,7 @@
       <Row justify="end" gap="2">
         <Button variant="secondary" disabled={busy} onclick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={busy} onclick={submit}>
-          {type === 'bug' ? (busy ? 'Filing…' : 'File bug') : busy ? 'Creating…' : 'Create task'}
+          {type === 'bug' ? (busy ? 'Filing...' : 'File bug') : busy ? 'Creating...' : 'Create task'}
         </Button>
       </Row>
     </Stack>

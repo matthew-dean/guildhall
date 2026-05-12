@@ -91,7 +91,7 @@ const SEVERITY_ORDER: Record<InboxSeverity, number> = {
 
 function truncateTitle(title: string, max = 80): string {
   if (title.length <= max) return title
-  return title.slice(0, max - 1).trimEnd() + '…'
+  return title.slice(0, max - 1).trimEnd() + '...'
 }
 
 function inboxTitle(taskId: string, title: string): string {
@@ -339,7 +339,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
       kind: 'workspace_import_pending',
       severity: 'medium',
       title: 'Existing repo detected',
-      detail: `Anchors found (${anchors.slice(0, 3).join(', ')}${anchors.length > 3 ? '…' : ''}). Open to see what the detector extracts — or dismiss.`,
+      detail: `Anchors found (${anchors.slice(0, 3).join(', ')}${anchors.length > 3 ? '...' : ''}). Open to see what the detector extracts — or dismiss.`,
       signals: anchors,
       actionHref: '/workspace-import',
       dismissEndpoint: '/api/project/workspace-import/dismiss',

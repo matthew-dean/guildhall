@@ -371,7 +371,7 @@
   function summarizeMandate(value?: string, limit = 220): string {
     const text = (value ?? '').replace(/\s+/g, ' ').trim()
     if (!text) return ''
-    return text.length > limit ? text.slice(0, limit - 1).trimEnd() + '…' : text
+    return text.length > limit ? text.slice(0, limit - 1).trimEnd() + '...' : text
   }
 
   async function ensureCoordinatorRunning(): Promise<boolean> {
@@ -540,7 +540,7 @@
 </script>
 
 {#if initialized === null}
-  <p class="muted">Loading settings…</p>
+  <p class="muted">Loading settings...</p>
 {:else if !initialized}
   <Card title="Project not initialized yet">
     <p class="muted">Complete the setup wizard first.</p>
@@ -569,7 +569,7 @@
           />
           {#if !bootstrapReady}
             <button type="button" class="linkbtn" onclick={runBootstrap} disabled={bootstrapRunning}>
-              {bootstrapRunning ? 'Running…' : 'Run again →'}
+              {bootstrapRunning ? 'Running...' : 'Run again →'}
             </button>
           {/if}
           {#if bootstrapError}
@@ -644,7 +644,7 @@
         <div class="coord-nav-row">
           <span class="muted">If Guildhall's inferred repo structure or starter tasks are stale, run the setup intake again.</span>
           <button type="button" class="linkbtn" onclick={rerunMetaIntake}>
-            {metaIntakeBusy ? 'Re-running…' : 'Re-run meta-intake →'}
+            {metaIntakeBusy ? 'Re-running...' : 'Re-run meta-intake →'}
           </button>
           </div>
 
@@ -656,7 +656,7 @@
           </p>
             <div class="coord-empty-actions">
               <Button variant="primary" onclick={startMetaIntake} disabled={metaIntakeBusy}>
-                {metaIntakeBusy ? 'Starting…' : 'Start meta-intake'}
+                {metaIntakeBusy ? 'Starting...' : 'Start meta-intake'}
               </Button>
               <Button variant="secondary" onclick={() => nav('/thread')}>Open Thread</Button>
             </div>
@@ -755,7 +755,7 @@
 
           <Row justify="end">
             <Button onclick={runBootstrap} disabled={bootstrapRunning}>
-              {bootstrapRunning ? 'Running…' : 'Re-run bootstrap'}
+              {bootstrapRunning ? 'Running...' : 'Re-run bootstrap'}
             </Button>
           </Row>
         </Stack>
@@ -820,7 +820,7 @@
                   <span class="status" class:error={landingStatus.error}>{landingStatus.text}</span>
                 {/if}
                 <Button variant="primary" disabled={landingBusy} onclick={saveLandingSettings}>
-                  {landingBusy ? 'Saving…' : 'Save landing settings'}
+                  {landingBusy ? 'Saving...' : 'Save landing settings'}
                 </Button>
               </Row>
             </Stack>
@@ -929,10 +929,10 @@
 
                 <Row justify="end" gap="2" align="center">
                   <Button variant="secondary" onclick={() => resetLearning('project')} disabled={learningBusy !== null}>
-                    {learningBusy === 'project' ? 'Resetting…' : 'Reset project learning'}
+                    {learningBusy === 'project' ? 'Resetting...' : 'Reset project learning'}
                   </Button>
                   <Button variant="secondary" onclick={() => resetLearning('all')} disabled={learningBusy !== null}>
-                    {learningBusy === 'all' ? 'Resetting…' : 'Reset all learning'}
+                    {learningBusy === 'all' ? 'Resetting...' : 'Reset all learning'}
                   </Button>
                 </Row>
               {/if}
@@ -961,7 +961,7 @@
                   </Button>
                 </Row>
               {:else if !levers}
-                <p class="muted">Loading…</p>
+                <p class="muted">Loading...</p>
               {:else if levers.length === 0}
                 <p class="muted">No levers configured.</p>
               {:else}
@@ -992,7 +992,7 @@
           <Card title="Design system">
             <Stack gap="3">
               {#if designSystem === undefined}
-                <p class="muted">Loading…</p>
+                <p class="muted">Loading...</p>
               {:else if !designSystem}
                 <p class="muted">No draft yet.</p>
               {:else}

@@ -209,7 +209,7 @@ screen.
   work do not force a separate jump back to Thread just to understand what
   needs doing.
 - [x] Separate human review actions from direct Guildhall-run actions on
-  imported draft cards. Thread cards now use a human-facing `Review draft…`
+  imported draft cards. Thread cards now use a human-facing `Review draft...`
   entry point, while the right-side details view carries the explicit
   Guildhall-run action with its own visual treatment. The copy now avoids
   calling these drafts "paused" when they are really waiting for review or
@@ -305,7 +305,7 @@ screen.
   submits now refresh both Thread data and project shell state before
   surfacing success.
 - [x] Give post-setup intake cards a real next action. Freshly created
-  `exploring` tasks now lead with `Review draft…` instead of burying the user
+  `exploring` tasks now lead with `Review draft...` instead of burying the user
   in a partial-draft card that only advertised `Add note`.
 - [x] Make fleet project switching drive the real `/api/project/*` surface.
   One live `7777` service can now switch between registered projects without
@@ -315,7 +315,7 @@ screen.
 - [x] Stop relying on the task title as the hidden way into first-task intake.
   Live fair-labor-license walkthrough showed the Thread card still looked
   effectively actionless unless the user guessed that the title opened the
-  drawer. Paused `exploring` cards now surface `Review draft…`, `Add note`,
+  drawer. Paused `exploring` cards now surface `Review draft...`, `Add note`,
   and the Guildhall-run action directly on the card, and the run-finished
   banner now explicitly says to review the updated draft in Thread.
 - [x] Make brief approval preserve or restore the truthful task phase. A task
@@ -496,7 +496,7 @@ screen.
   secondary buttons were blending into their surrounding card/footer surfaces
   and reading like inert chrome instead of actions. `Button.svelte` now uses a
   brighter secondary fill, stronger border, and clearer hover state; the
-  ambiguous Looma/Knit meta-intake action label is now `Draft from answers…`
+  ambiguous Looma/Knit meta-intake action label is now `Draft from answers...`
   instead of `Use saved answers`.
 - Clarified Thread approval cards so they stop implying hidden UI. The old
   copy said `Answer the open questions below` even when the relevant questions
@@ -510,7 +510,7 @@ screen.
   draft` plus a giant policy dump. Thread and SetupWizard now lead with one
   decision — "Guildhall found N proposed work areas. Is this the right split
   for this project?" — keep supporting detail collapsed by default, and stop
-  showing both `Draft from answers…` and `Continue intake` as competing next
+  showing both `Draft from answers...` and `Continue intake` as competing next
   actions once intake answers are complete.
 - Proved that the Looma + Knit import corpus is not small; the problem is the
   journey shape, not thin source material. Reading the actual docs gives a
@@ -923,7 +923,7 @@ screen.
   advertised an empty JSON schema, so the turn died and escalated. The tool
   now accepts `prompt` / `restatement` aliases and exposes the real argument
   shape to models.
-- Notifications `Loading…` on Looma/Knit turned out to be a client-side crash,
+- Notifications `Loading...` on Looma/Knit turned out to be a client-side crash,
   not a hung inbox endpoint. `/api/project/inbox` returned immediately, but
   InboxTab keyed rows by `kind + title`, and multiple escalations shared that
   tuple. Svelte threw `each_key_duplicate`, leaving Notifications stuck at
@@ -965,7 +965,7 @@ screen.
   gate-check → completion proof now exists for a real grounded task, even
   though the project still needs better explicit gate truth than the current
   empty-root bootstrap fallback.
-  immediately, with `Loading…` gone and the repeated escalation titles rendered
+  immediately, with `Loading...` gone and the repeated escalation titles rendered
   safely.
 - `guildhall-automation-003` is now complete in the live Looma/Knit flow. The
   spec lane preserves durable progress after turn-limit churn, answered intake
@@ -2171,7 +2171,7 @@ screen.
   instead of shifting when the rail preview opens.
 - Setup/meta-intake cards now obey `startReadiness` truth before rendering
   their primary action. If Guildhall already knows the next step is human setup
-  (`Connect provider…`, `Load model…`, or another setup fix), Thread suppresses
+  (`Connect provider...`, `Load model...`, or another setup fix), Thread suppresses
   the Guildhall-run button and shows the setup action instead of offering a
   dead "let Guildhall keep setting this up" path.
 - Coordinator/routing cleanup is now leaning harder on the agreed product
@@ -2282,7 +2282,7 @@ screen.
   as spec-phase `Guildhall next` work, hides the intake checklist, and derives
   a human-readable title from the draft summary instead of repeating the old
   placeholder `Draft a first starter task...` title.
-- Task-drawer follow-up on `2026-05-11`: `Review draft…` must open the draft,
+- Task-drawer follow-up on `2026-05-11`: `Review draft...` must open the draft,
   not the same `Now` card the user already sees in Thread. The drawer now
   defaults to the Spec tab for queued spec-revision states so opening details
   lands on the actual draft content.

@@ -695,7 +695,7 @@
   </div>
 {:else if !detail}
   <div class="page-centered">
-    <p class="muted">Loading project…</p>
+    <p class="muted">Loading project...</p>
   </div>
 {:else}
   <ProjectShell
@@ -910,7 +910,7 @@
               title="Open actions menu"
               onclick={toggleActionsMenu}
             >
-              …
+              ...
             </Button>
             {#if actionsMenuOpen}
               <div class="actions-menu-panel">

@@ -356,7 +356,7 @@
           bind:value={followup}
           rows={4}
           mono
-          placeholder="Answer a question, add a requirement, correct a misunderstanding…"
+          placeholder="Answer a question, add a requirement, correct a misunderstanding..."
         />
         <Row justify="end" gap="2" align="center">
           <span class="hint">Appends to memory/exploring/{task.id}.md</span>

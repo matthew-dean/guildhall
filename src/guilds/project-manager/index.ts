@@ -10,7 +10,7 @@ import { PROJECT_MANAGER_RUBRIC } from './rubric.js'
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url))
 // Match the layout used by @guildhall/engineering-defaults: in dev/test the
 // markdown sits alongside index.ts; in the esbuild bundle, build.mjs copies
-// it to `dist/guilds/<slug>/…`, and MODULE_DIR collapses to `dist/`, so we
+// it to `dist/guilds/<slug>/...`, and MODULE_DIR collapses to `dist/`, so we
 // try a nested path as well.
 const CONTENT_CANDIDATES = [
   MODULE_DIR,

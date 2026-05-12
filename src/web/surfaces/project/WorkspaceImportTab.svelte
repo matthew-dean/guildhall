@@ -599,14 +599,14 @@
       <Button variant="secondary" onclick={load}>Retry</Button>
     </Card>
   {:else if !data}
-    <p class="muted">Loading import findings…</p>
+    <p class="muted">Loading import findings...</p>
   {:else if !data.detected}
     <Card>
       <Stack gap="4">
         <p class="muted">Guildhall did not find any importable planning material yet.</p>
         <Row justify="end" gap="3" wrap>
           <Button variant="secondary" onclick={rerun} disabled={busy !== null}>
-            {busy === 'rerun' ? 'Re-reading…' : 'Re-read project notes'}
+            {busy === 'rerun' ? 'Re-reading...' : 'Re-read project notes'}
           </Button>
         </Row>
       </Stack>
@@ -735,7 +735,7 @@
           {/if}
           <Row justify="end" gap="3" wrap>
             <Button variant="secondary" onclick={dismiss} disabled={busy !== null}>
-              {busy === 'dismiss' ? 'Dismissing…' : 'Skip import for now'}
+              {busy === 'dismiss' ? 'Dismissing...' : 'Skip import for now'}
             </Button>
             <Button variant="primary" onclick={() => (step = 'parts')}>
               {hasTaskCandidates ? 'Choose parts to review' : 'Review found sources'}
@@ -1099,7 +1099,7 @@
             <Button variant="secondary" onclick={() => { step = selectedTasks.length > 0 ? 'tasks' : 'sources'; detailOpen = false }}>Back</Button>
             <Button variant="primary" onclick={approve} disabled={busy !== null || (selectedTaskIds.length === 0 && !canConfirmReferenceImport)}>
               {#if busy === 'approve'}
-                {selectedTasks.length > 0 ? 'Creating tasks…' : 'Saving import…'}
+                {selectedTasks.length > 0 ? 'Creating tasks...' : 'Saving import...'}
               {:else}
                 {selectedTasks.length > 0 ? 'Create tasks' : 'Save import'}
               {/if}

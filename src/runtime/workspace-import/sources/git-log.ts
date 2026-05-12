@@ -15,7 +15,7 @@ const FIX_KEYWORDS = /^(fix|bug|hotfix|patch)\b/i
  *
  * - subjects matching MILESTONE_KEYWORDS → high-confidence milestones
  * - `feat:` / `feature:` conventional-commit prefixes → medium milestones
- * - merge commits (`Merge pull request …`) → medium milestones
+ * - merge commits (`Merge pull request ...`) → medium milestones
  *
  * We deliberately ignore `fix:` and `chore:` — they are not milestones.
  * Caller can cap via `limit` (default 40).

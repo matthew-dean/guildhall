@@ -417,7 +417,7 @@ describe('inferPreferredProvider', () => {
     expect(result).toBe('llama-cpp')
   })
 
-  it('returns "llama-cpp" for unlisted ids that heuristically look local (qwen/, deepseek/, llama/…)', () => {
+  it('returns "llama-cpp" for unlisted ids that heuristically look local (qwen/, deepseek/, llama/...)', () => {
     const result = inferPreferredProvider({
       spec: 'qwen/qwen3.6-35b-a3b',
       coordinator: 'qwen/qwen3.6-35b-a3b',

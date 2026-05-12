@@ -369,7 +369,7 @@ async function cmdInit() {
 
   // Default path: open the browser and let the web wizard do the rest.
   console.log(`[guildhall] Project directory: ${absPath}`)
-  console.log(`[guildhall] Launching dashboard…`)
+  console.log(`[guildhall] Launching dashboard...`)
   console.log(`[guildhall] The setup wizard will open at http://localhost:${port}/setup`)
   console.log()
   const opts: Parameters<typeof runServe>[0] = { projectPath: absPath, port }

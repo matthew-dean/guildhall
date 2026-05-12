@@ -121,7 +121,7 @@ export const WorkspaceYamlConfig = z.object({
   }).optional(),
 
   // FR-18: lifecycle hook definitions keyed by HookEvent (session_start,
-  // session_end, pre_tool_use, post_tool_use, …). Each event maps to an array
+  // session_end, pre_tool_use, post_tool_use, ...). Each event maps to an array
   // of hook definitions (command/http/prompt/agent). The structure is left as
   // passthrough here; @guildhall/hooks' zod schema is applied by the runtime
   // when building the HookExecutor. Keeping validation at the edge avoids a
@@ -286,7 +286,7 @@ export type WorkspaceRegistry = z.infer<typeof WorkspaceRegistry>
 export const AgentSettingEntry = z.object({
   // ISO timestamp of when this setting was saved
   savedAt: z.string(),
-  // Which agent role saved this (coordinator, worker, reviewer, …)
+  // Which agent role saved this (coordinator, worker, reviewer, ...)
   agentRole: z.string(),
   // Free-text rationale (also written to DECISIONS.md)
   rationale: z.string(),

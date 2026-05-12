@@ -64,7 +64,7 @@
     bootstrap_missing: {
       endpoint: '/api/project/bootstrap/run',
       verb: 'Let agent verify',
-      pending: 'Verifying…',
+      pending: 'Verifying...',
     },
   }
 
@@ -167,7 +167,7 @@
       <p class="muted">Couldn't load inbox: {error}</p>
     </Card>
   {:else if !loaded}
-    <p class="muted">Loading…</p>
+    <p class="muted">Loading...</p>
   {:else if items.length === 0}
     <div class="empty">
       <Icon name="check-circle-2" size={24} />

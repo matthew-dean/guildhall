@@ -27,7 +27,7 @@
   function summarizeMandate(value?: string, limit = 180): string {
     const text = (value ?? '').replace(/\s+/g, ' ').trim()
     if (!text) return ''
-    return text.length > limit ? text.slice(0, limit - 1).trimEnd() + '…' : text
+    return text.length > limit ? text.slice(0, limit - 1).trimEnd() + '...' : text
   }
 
   function protectsLabel(value?: string): string {

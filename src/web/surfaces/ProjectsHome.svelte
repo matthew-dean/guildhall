@@ -125,7 +125,7 @@
     <div class="hero-actions">
       <Button variant="secondary" disabled={busyId === '__attach__'} onclick={attachProject}>
         <FolderPlus size={15} />
-        {busyId === '__attach__' ? 'Attaching…' : 'Attach project'}
+        {busyId === '__attach__' ? 'Attaching...' : 'Attach project'}
       </Button>
     </div>
   </header>
@@ -138,7 +138,7 @@
   {/snippet}
 
   {#if loading && cards.length === 0}
-    <div class="empty">Loading projects…</div>
+    <div class="empty">Loading projects...</div>
   {:else if cards.length === 0}
     <div class="empty">
       <h2>No projects yet</h2>

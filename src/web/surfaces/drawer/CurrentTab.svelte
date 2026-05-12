@@ -220,7 +220,7 @@
               tone="accent"
             />
             <Row justify="end" gap="2">
-              <Button variant="secondary" onclick={onOpenSpecTab}>Review draft…</Button>
+              <Button variant="secondary" onclick={onOpenSpecTab}>Review draft...</Button>
               <Button variant="primary" disabled={busy} onclick={onApproveBrief}>Approve brief</Button>
             </Row>
           </Stack>
@@ -239,7 +239,7 @@
               </div>
             {/if}
             <Row justify="end" gap="2">
-              <Button variant="secondary" onclick={onOpenSpecTab}>Review draft…</Button>
+              <Button variant="secondary" onclick={onOpenSpecTab}>Review draft...</Button>
               <Button variant="primary" disabled={busy} onclick={onApproveSpec}>Approve spec</Button>
             </Row>
           </Stack>
@@ -332,7 +332,7 @@
               <Row justify="end" gap="2">
                 {#if turn.importedDraft && !turn.liveAgent}
                   <Button variant="human" onclick={onOpenSpecTab}>
-                    Review draft…
+                    Review draft...
                   </Button>
                   <Button
                     variant="agent"

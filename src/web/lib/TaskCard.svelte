@@ -61,28 +61,28 @@
       .replace(/\s+/g, ' ')
       .trim()
     if (!cleaned) return ''
-    return cleaned.length > 180 ? `${cleaned.slice(0, 177).trimEnd()}…` : cleaned
+    return cleaned.length > 180 ? `${cleaned.slice(0, 177).trimEnd()}...` : cleaned
   })
   const checkpointBlurb = $derived.by(() => {
     const next = typeof task.latestCheckpoint?.nextPlannedAction === 'string'
       ? task.latestCheckpoint.nextPlannedAction.trim()
       : ''
     if (!next) return ''
-    return next.length > 140 ? `${next.slice(0, 137).trimEnd()}…` : next
+    return next.length > 140 ? `${next.slice(0, 137).trimEnd()}...` : next
   })
   const terminalHeadline = $derived.by(() => {
     const raw = typeof task.terminalSummary?.headline === 'string'
       ? task.terminalSummary.headline.trim()
       : ''
     if (!raw) return ''
-    return raw.length > 140 ? `${raw.slice(0, 137).trimEnd()}…` : raw
+    return raw.length > 140 ? `${raw.slice(0, 137).trimEnd()}...` : raw
   })
   const terminalDetail = $derived.by(() => {
     const raw = typeof task.terminalSummary?.detail === 'string'
       ? task.terminalSummary.detail.trim()
       : ''
     if (!raw) return ''
-    return raw.length > 140 ? `${raw.slice(0, 137).trimEnd()}…` : raw
+    return raw.length > 140 ? `${raw.slice(0, 137).trimEnd()}...` : raw
   })
   const summary = $derived.by<TaskCardSummary | null>(() => {
     if (

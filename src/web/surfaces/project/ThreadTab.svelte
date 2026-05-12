@@ -922,12 +922,12 @@
   function metaSetupActionLabel(): string {
     switch (startReadiness?.code) {
       case 'no_provider':
-        return 'Connect provider…'
+        return 'Connect provider...'
       case 'no_loaded_model':
       case 'model_unavailable':
-        return 'Load model…'
+        return 'Load model...'
       default:
-        return 'Fix setup…'
+        return 'Fix setup...'
     }
   }
 
@@ -1099,7 +1099,7 @@
   {/if}
 
   {#if !loaded}
-    <p class="muted">Loading…</p>
+    <p class="muted">Loading...</p>
   {:else if loadError}
     <Card title="Thread unavailable">
       <p class="muted">Could not load the current thread: {loadError}</p>
@@ -1196,7 +1196,7 @@
                           oninput={(v) => setSetupValue(t.id, v)}
                         />
                         <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
-                          {busyTurnId === t.id ? 'Saving…' : t.actionLabel}
+                          {busyTurnId === t.id ? 'Saving...' : t.actionLabel}
                         </Button>
                       </div>
                     {:else if t.affordance === 'inline-textarea'}
@@ -1210,14 +1210,14 @@
                         />
                         <Row justify="end">
                           <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
-                            {busyTurnId === t.id ? 'Saving…' : t.actionLabel}
+                            {busyTurnId === t.id ? 'Saving...' : t.actionLabel}
                           </Button>
                         </Row>
                       </Stack>
                     {:else if t.affordance === 'inline-button'}
                       <Row justify="end" gap="2">
                         <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
-                          {busyTurnId === t.id ? 'Verifying…' : t.actionLabel}
+                          {busyTurnId === t.id ? 'Verifying...' : t.actionLabel}
                         </Button>
                       </Row>
                     {:else if t.affordance === 'inline-choice'}
@@ -1229,7 +1229,7 @@
                           onchange={(v) => setSetupValue(t.id, v)}
                         />
                         <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
-                          {busyTurnId === t.id ? 'Adding…' : t.actionLabel}
+                          {busyTurnId === t.id ? 'Adding...' : t.actionLabel}
                         </Button>
                       </div>
                     {/if}
@@ -1534,7 +1534,7 @@
                 {#if t.taskStatus === 'exploring' && !t.liveAgent && !isQueuedSpecRevision(t)}
                   <Row justify="end" gap="2" wrap>
                     <Button variant="human" onclick={() => nav(currentTaskHref(t.taskId))}>
-                      Review draft…
+                      Review draft...
                     </Button>
                     <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
                       Add note
@@ -1612,7 +1612,7 @@
                   <Row justify="end" gap="2">
                     {#if t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !t.liveAgent}
                       <Button variant="human" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
-                        Review draft…
+                        Review draft...
                       </Button>
                     {:else if t.taskId === 'task-meta-intake' && !t.liveAgent}
                       <Button variant="secondary" onclick={focusSetupPhase}>
@@ -1656,7 +1656,7 @@
                       </Button>
                     {:else}
                       <Button variant={t.taskStatus === 'exploring' ? 'human' : 'secondary'} onclick={() => nav(currentTaskHref(t.taskId))}>
-                        {t.taskStatus === 'exploring' ? 'Review draft…' : 'Open task'}
+                        {t.taskStatus === 'exploring' ? 'Review draft...' : 'Open task'}
                       </Button>
                       {#if canStartTaskTurn(t)}
                         <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>

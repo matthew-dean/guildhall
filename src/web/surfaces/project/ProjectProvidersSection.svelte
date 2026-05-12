@@ -150,7 +150,7 @@
     {#if loadError}
       <p class="error">{loadError}</p>
     {:else if !providers}
-      <p class="muted">Loading…</p>
+      <p class="muted">Loading...</p>
     {:else}
       <div class="list">
         {#each ORDER.filter(k => providers?.[k]) as key (key)}
@@ -187,7 +187,7 @@
           <span class="status" class:error={status.error}>{status.text}</span>
         {/if}
         <Button variant="primary" disabled={saving || !dirty || !preferred} onclick={save}>
-          {saving ? 'Saving…' : 'Save selection'}
+          {saving ? 'Saving...' : 'Save selection'}
         </Button>
       </Row>
     {/if}
@@ -210,7 +210,7 @@
     {/if}
 
     {#if !models}
-      <p class="muted">Loading…</p>
+      <p class="muted">Loading...</p>
     {:else}
       <div class="model-list">
         {#each MODEL_ROLES as role (role.id)}

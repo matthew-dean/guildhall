@@ -13,7 +13,7 @@ const CANDIDATES = [
 
 /**
  * Walks ROADMAP/TODO files and emits an `open_work` signal per unchecked
- * checklist item (`- [ ] …`) and per top-level bullet.
+ * checklist item (`- [ ] ...`) and per top-level bullet.
  *
  * Checked items (`- [x]`) become `milestone` signals so progress backfill can
  * credit them as already-done work.

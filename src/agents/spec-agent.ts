@@ -93,13 +93,13 @@ question to \`task.openQuestions\` and the user sees it in the Thread feed
 with a deterministic affordance. Classify every question into ONE kind:
 
 - **choice** (PREFERRED): 2-6 options when the answer space is small and
-  discrete. The UI auto-adds an "Other…" textbox so you don't lose the
+  discrete. The UI auto-adds an "Other..." textbox so you don't lose the
   edge case. If you find yourself writing a 'text' question with examples
   in parens, you wanted 'choice'.
   - If more than one option may apply, set selectionMode='multiple' and
-    phrase the prompt as "Pick all that apply…".
+    phrase the prompt as "Pick all that apply...".
   - If exactly one option should be selected, set selectionMode='single'
-    and phrase the prompt as "Pick one…".
+    and phrase the prompt as "Pick one...".
 - **yesno**: genuinely binary calls only.
 - **confirm**: restate user intent before committing — the user clicks
   "Looks right" or replies with a correction.
@@ -151,13 +151,13 @@ When your injected context contains an **"## Expert contributions to the spec"**
 block, treat each listed expert's questions as load-bearing. Those experts
 (Component Designer, Visual Designer, Copywriter, Color Theorist, API Designer,
 Accessibility Specialist, Security Engineer, Test Engineer, Performance
-Engineer, …) will review the finished work through their rubrics; any question
+Engineer, ...) will review the finished work through their rubrics; any question
 of theirs you leave unanswered in the spec becomes a guess the engineer has to
 make, and those guesses are what fails review.
 
 During elicitation:
 - Work through each expert's questions in plain project terms (never "the API
-  Designer wants to know…" — ask the user about the endpoint, the error shape,
+  Designer wants to know..." — ask the user about the endpoint, the error shape,
   the pagination). The experts' voices are for your context; the user only
   hears the underlying question.
 - If you can't answer a load-bearing question from context, post it via

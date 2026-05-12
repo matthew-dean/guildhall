@@ -398,7 +398,7 @@
 </script>
 
 {#if !loaded}
-  <div class="page"><p class="muted">Loading setup…</p></div>
+  <div class="page"><p class="muted">Loading setup...</p></div>
 {:else}
   <div class="page">
     <div class="step-header">
@@ -445,7 +445,7 @@
             a pasted key stored globally in <code>~/.guildhall/providers.yaml</code>.
           </p>
           {#if !providers}
-            <p class="muted">Detecting providers…</p>
+            <p class="muted">Detecting providers...</p>
           {:else}
             <ProviderPicker
               {providers}
@@ -485,7 +485,7 @@
           </p>
           <Row gap="2">
             <Button variant="primary" disabled={bootstrapBusy || bootstrapLive} onclick={startBootstrap}>
-              {bootstrapBusy ? 'Seeding…' : bootstrapLive ? 'Running' : 'Start meta-intake'}
+              {bootstrapBusy ? 'Seeding...' : bootstrapLive ? 'Running' : 'Start meta-intake'}
             </Button>
             <Button variant="secondary" disabled={bootstrapLive} onclick={skipToDashboard}>
               Skip to dashboard
@@ -573,7 +573,7 @@
             {#if approvalError}<p class="error">Failed: {approvalError}</p>{/if}
             <Row justify="end">
               <Button variant="primary" disabled={approving} onclick={approveDrafts}>
-                {approving ? 'Saving…' : 'Looks right'}
+                {approving ? 'Saving...' : 'Looks right'}
               </Button>
             </Row>
           </Stack>

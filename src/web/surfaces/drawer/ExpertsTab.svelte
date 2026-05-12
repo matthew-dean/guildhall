@@ -83,7 +83,7 @@
   </Card>
 {:else if !payload}
   <Card title="Experts">
-    <p class="muted">Loading…</p>
+    <p class="muted">Loading...</p>
   </Card>
 {:else if payload.applicable.length === 0}
   <Card title="Experts">

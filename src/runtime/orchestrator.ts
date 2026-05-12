@@ -1340,7 +1340,7 @@ export class Orchestrator {
     }
 
     // Guild deterministic-check pre-pass at `gate_check`: each applicable
-    // guild's pure-function checks (WCAG contrast, OKLab near-duplicates, …)
+    // guild's pure-function checks (WCAG contrast, OKLab near-duplicates, ...)
     // run *before* the LLM gate-checker. Failures short-circuit straight to
     // `in_progress` — there's no point running build/test if a token pair
     // fails WCAG. All-pass (or no applicable checks) falls through to the
@@ -1388,7 +1388,7 @@ export class Orchestrator {
     }
 
     // Reviewer fan-out at `review`: each applicable persona (Component
-    // Designer, Accessibility Specialist, Color Theorist, …) reviews
+    // Designer, Accessibility Specialist, Color Theorist, ...) reviews
     // independently through its own lens. Aggregation is strict — any revise
     // bounces the task to `in_progress` with combined feedback. Falls
     // through to the legacy single-reviewer dispatch when no fan-out runner
@@ -1529,7 +1529,7 @@ export class Orchestrator {
         wtBootstrap.successGates,
       )
       if (needed) {
-        console.log(`[guildhall] bootstrapping worktree ${activeWorktreePath}…`)
+        console.log(`[guildhall] bootstrapping worktree ${activeWorktreePath}...`)
         const res = runBootstrap({
           projectPath: activeWorktreePath,
           memoryDir: wtMemoryDir,
@@ -2475,7 +2475,7 @@ export class Orchestrator {
         bootstrap.successGates,
       )
       if (needed) {
-        console.log('[guildhall] running bootstrap…')
+        console.log('[guildhall] running bootstrap...')
         const res = runBootstrap({
           projectPath: this.opts.config.projectPath,
           memoryDir: this.opts.config.memoryDir,
@@ -5802,7 +5802,7 @@ function taskModeToPermissionMode(mode: TaskPermissionMode): PermissionMode {
  * - `1` (default) — strictly sequential. Safe for LM Studio and any
  *   single-session local model; wall-clock cost is `N * per-persona`.
  * - `n > 1` — up to `n` personas in flight simultaneously. Appropriate
- *   for cloud providers (Anthropic, OpenAI, …) whose rate limits
+ *   for cloud providers (Anthropic, OpenAI, ...) whose rate limits
  *   comfortably exceed `n`. Wall-clock cost collapses to roughly
  *   `ceil(N / n) * per-persona`.
  *

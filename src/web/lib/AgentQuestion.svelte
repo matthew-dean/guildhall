@@ -1,12 +1,12 @@
 <!--
   Renders ONE agent → user question with a kind-specific deterministic
-  affordance. Every kind also exposes a free-text reply ("Reply differently…")
+  affordance. Every kind also exposes a free-text reply ("Reply differently...")
   so the user is never trapped by a misclassified question.
 
   Kinds:
     confirm — "Here's what I think you want." UI: Approve | Reply
     yesno   — Yes/No. UI: Yes | No | Reply
-    choice  — multiple choice (2..6). UI: chip per choice + Other… textbox
+    choice  — multiple choice (2..6). UI: chip per choice + Other... textbox
     text    — open-ended. UI: textarea + Send
 
   The component is presentational. Parents pass `onAnswer(answer: string)` —
@@ -208,7 +208,7 @@
         </div>
         <Row justify="end" gap="2">
           <Button variant="secondary" disabled={busy} onclick={() => (mode = 'other')}>
-            Correct it…
+            Correct it...
           </Button>
           <Button
             variant="primary"
@@ -247,7 +247,7 @@
           >
             <span class="choice-mark" aria-hidden="true"></span>
             <span class="choice-copy">
-              <span class="choice-title">Other…</span>
+              <span class="choice-title">Other...</span>
             </span>
           </button>
         </div>
@@ -265,7 +265,7 @@
   {:else if question.kind === 'text'}
     <div class="prompt"><Markdown source={displayPrompt(question.prompt)} /></div>
     {#if mode === 'idle'}
-      <Textarea bind:value={replyText} rows={3} placeholder="Type your answer…" />
+      <Textarea bind:value={replyText} rows={3} placeholder="Type your answer..." />
       <Row justify="end">
         <Button
           variant="primary"
@@ -277,7 +277,7 @@
   {/if}
 
   {#if mode === 'reply' || mode === 'other'}
-    <Textarea bind:value={replyText} rows={3} placeholder="Type your answer…" />
+    <Textarea bind:value={replyText} rows={3} placeholder="Type your answer..." />
     <Row justify="end" gap="2">
       <Button
         variant="ghost"

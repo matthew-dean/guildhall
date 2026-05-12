@@ -264,9 +264,9 @@ export interface BuiltContext {
    *                      `specContribution` prose, so the Spec Agent
    *                      elicits the answers each expert needs.
    *   - `in_progress`  — the single primary engineer's principles (Frontend
-   *                      Engineer, TypeScript Engineer, …) framed as the
+   *                      Engineer, TypeScript Engineer, ...) framed as the
    *                      worker's persona. Framework-specialized when
-   *                      detected (Vue / React / Svelte / …).
+   *                      detected (Vue / React / Svelte / ...).
    *   - `review`       — empty (the reviewer fan-out attaches personas at
    *                      dispatch time, one reviewer per applicable guild).
    *   - other statuses — empty; those stages don't need persona prompt.

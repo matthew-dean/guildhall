@@ -82,7 +82,7 @@
       <p class="muted">Couldn't load facts: {error}</p>
     </Card>
   {:else if !facts}
-    <p class="muted">Loading…</p>
+    <p class="muted">Loading...</p>
   {:else}
     <Card title="Identity">
       {#snippet actions()}

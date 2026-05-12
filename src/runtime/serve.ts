@@ -659,7 +659,7 @@ function summarizeProjectText(project: ResolvedProject): string | null {
       .replace(/\s+/g, ' ')
       .trim()
     if (brief.length > 0) {
-      return brief.length > 180 ? `${brief.slice(0, 177).trimEnd()}…` : brief
+      return brief.length > 180 ? `${brief.slice(0, 177).trimEnd()}...` : brief
     }
   }
   const mandates = (project.config?.coordinators ?? [])
@@ -667,7 +667,7 @@ function summarizeProjectText(project: ResolvedProject): string | null {
     .filter((mandate): mandate is string => Boolean(mandate))
   if (mandates.length > 0) {
     const combined = mandates.join(' ')
-    return combined.length > 180 ? `${combined.slice(0, 177).trimEnd()}…` : combined
+    return combined.length > 180 ? `${combined.slice(0, 177).trimEnd()}...` : combined
   }
   if ((project.config?.tags ?? []).length > 0) {
     return `Tagged ${project.config?.tags?.join(', ')}.`
@@ -2408,7 +2408,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // The same cheap anchor check the inbox chip uses, echoed back so the
       // Workspace Import tab can say "anchors present but nothing extracted"
       // when the semantic detector returns empty — which otherwise produces
-      // the contradictory "Found 5 signals … click Review … No signals
+      // the contradictory "Found 5 signals ... click Review ... No signals
       // detected" UX.
       const anchors = detectRepoAnchors(project.path)
       if (project.initializationNeeded) {
@@ -4723,7 +4723,7 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
     if (shuttingDown) return
     shuttingDown = true
-    console.log(`\n[guildhall serve] Guildhall is shutting down… (${signal})`)
+    console.log(`\n[guildhall serve] Guildhall is shutting down... (${signal})`)
     try {
       await supervisor.stopAll({ reason: `signal:${signal}` })
     } catch (err) {

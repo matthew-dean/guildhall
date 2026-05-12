@@ -12,7 +12,7 @@
  * Producers (spec agent, intake, coordinator) MUST classify each question
  * into ONE of the four kinds — no free prose. Multiple choice is the
  * preferred kind whenever there's a small finite answer set, because the
- * UI degrades gracefully (Other… textbox) and the answer is structured.
+ * UI degrades gracefully (Other... textbox) and the answer is structured.
  */
 
 import { defineTool } from '@guildhall/engine'
@@ -30,9 +30,9 @@ const postUserQuestionInputSchema = z.object({
   askedBy: z.string().optional().describe('Agent id posting the question (e.g. "spec-agent")'),
   /**
    * One of:
-   *   confirm — restate user intent ("Here's what I think you want…")
+   *   confirm — restate user intent ("Here's what I think you want...")
    *   yesno   — binary
-   *   choice  — 2..6 options; UI provides "Other…" textbox automatically
+   *   choice  — 2..6 options; UI provides "Other..." textbox automatically
    *   text    — open-ended (use sparingly; multiple choice is almost always better)
    */
   kind: z.enum(['confirm', 'yesno', 'choice', 'text']).optional(),
@@ -352,7 +352,7 @@ export async function postUserQuestion(
 export const postUserQuestionTool = defineTool({
   name: 'post-user-question',
   description:
-    "Post an asynchronous structured question to the user on this task. Use this whenever you need human judgment to proceed — the question lands in the user's Thread feed with a kind-specific affordance, and you should yield (end your turn) so the orchestrator can resume you when an answer arrives. PREFER `kind: 'choice'` whenever the answer space is small and discrete (it always degrades to Other… free-text). For choice questions, set `selectionMode: 'multiple'` when more than one answer may apply; otherwise set `selectionMode: 'single'` or omit it. Use `confirm` to restate intent before committing. Use `yesno` only for genuinely binary calls. Use `text` sparingly — usually a multiple choice with the question phrased as the prompt is better. NEVER bury questions in productBrief.userJob — that field is for what you think the user wants, not for asking them.",
+    "Post an asynchronous structured question to the user on this task. Use this whenever you need human judgment to proceed — the question lands in the user's Thread feed with a kind-specific affordance, and you should yield (end your turn) so the orchestrator can resume you when an answer arrives. PREFER `kind: 'choice'` whenever the answer space is small and discrete (it always degrades to Other... free-text). For choice questions, set `selectionMode: 'multiple'` when more than one answer may apply; otherwise set `selectionMode: 'single'` or omit it. Use `confirm` to restate intent before committing. Use `yesno` only for genuinely binary calls. Use `text` sparingly — usually a multiple choice with the question phrased as the prompt is better. NEVER bury questions in productBrief.userJob — that field is for what you think the user wants, not for asking them.",
   inputSchema: postUserQuestionInputSchema,
   jsonSchema: {
     type: 'object',

@@ -142,7 +142,7 @@
   })
 
   const verdict = $derived.by(() => {
-    if (!data) return { label: '…', tone: 'neutral' as const, reason: '' }
+    if (!data) return { label: '...', tone: 'neutral' as const, reason: '' }
     if (data.totals.tasks === 0) {
       return {
         label: 'Not yet',
@@ -179,7 +179,7 @@
     <p class="muted">{error}</p>
   </Card>
 {:else if !data}
-  <p class="muted">Loading release readiness…</p>
+  <p class="muted">Loading release readiness...</p>
 {:else}
   <Stack gap="4">
   {#if section === 'verdict'}

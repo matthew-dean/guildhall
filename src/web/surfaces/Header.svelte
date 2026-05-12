@@ -32,7 +32,7 @@
     sseStatus === 'live' ? 'active' : sseStatus === 'error' ? 'warn' : 'idle',
   )
   const sseLabel = $derived(
-    sseStatus === 'live' ? 'live' : sseStatus === 'error' ? 'reconnecting…' : 'connecting…',
+    sseStatus === 'live' ? 'live' : sseStatus === 'error' ? 'reconnecting...' : 'connecting...',
   )
   const showProjectMenu = $derived(path.value.startsWith('/project') || parseProjectRoute(path.value).projectScoped)
 

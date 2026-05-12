@@ -55,7 +55,7 @@
   const needsMeta = $derived(viewModel.needsMeta)
   const running = $derived(viewModel.running)
 
-  let progress = $state('Loading…')
+  let progress = $state('Loading...')
   let events = $state<EventEnvelope[]>([])
   let sortKey = $state<SortKey>('updated')
   let sortDir = $state<SortDir>('desc')
@@ -373,7 +373,7 @@
           {#if events.length === 0 && !running}
             <p class="muted">Idle — press Start to let Guildhall continue.</p>
           {:else if events.length === 0}
-            <p class="muted">Connecting…</p>
+            <p class="muted">Connecting...</p>
           {:else}
             {#each events as ev, i (i)}
               {@const text = summarizeEvent(ev)}

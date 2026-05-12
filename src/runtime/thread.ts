@@ -429,7 +429,7 @@ function compactEscalationDetails(value: string | undefined): string | undefined
   }
 
   const summary = parts.join(' ')
-  return summary.length > 220 ? `${summary.slice(0, 217).trimEnd()}…` : summary
+  return summary.length > 220 ? `${summary.slice(0, 217).trimEnd()}...` : summary
 }
 
 function guessedProjectDirection(projectPath: string): string {

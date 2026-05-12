@@ -107,7 +107,7 @@ if (manifest.version !== nextVersion) {
 // ---------------------------------------------------------------------------
 
 if (!flags.skipTests) {
-  log('Running typecheck, docs build, lint:deps, and tests…')
+  log('Running typecheck, docs build, lint:deps, and tests...')
   run('pnpm', ['typecheck'])
   run('pnpm', ['docs:build'])
   run('pnpm', ['lint:deps'])
@@ -120,21 +120,21 @@ if (!flags.skipTests) {
 // 5. Build the bundle
 // ---------------------------------------------------------------------------
 
-log('Building dist/…')
+log('Building dist/...')
 run('pnpm', ['build'])
 
 // ---------------------------------------------------------------------------
 // 6. Build the macOS packaged artifact
 // ---------------------------------------------------------------------------
 
-log('Building macOS packaged artifact…')
+log('Building macOS packaged artifact...')
 run('node', ['scripts/build-macos-package.mjs', '--skip-build'])
 
 // ---------------------------------------------------------------------------
 // 7. Package contents guard
 // ---------------------------------------------------------------------------
 
-log('Checking npm package contents…')
+log('Checking npm package contents...')
 assertNoDocsInPackage()
 
 // ---------------------------------------------------------------------------
@@ -144,7 +144,7 @@ assertNoDocsInPackage()
 const publishArgs = ['publish', '--access=public', '--tag', flags.tag]
 if (flags.dryRun) publishArgs.push('--dry-run')
 
-log(`Publishing guildhall@${nextVersion} (tag: ${flags.tag})${flags.dryRun ? ' [dry-run]' : ''}…`)
+log(`Publishing guildhall@${nextVersion} (tag: ${flags.tag})${flags.dryRun ? ' [dry-run]' : ''}...`)
 run('npm', publishArgs)
 
 // ---------------------------------------------------------------------------
@@ -156,7 +156,7 @@ if (flags.dryRun) {
   process.exit(0)
 }
 
-log('Committing version bump + tagging…')
+log('Committing version bump + tagging...')
 run('git', ['add', 'package.json'])
 if (hasStagedDiff(['package.json'])) {
   run('git', ['commit', '-m', `chore(release): guildhall@${nextVersion}`])
