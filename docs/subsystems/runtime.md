@@ -22,7 +22,7 @@ The runtime is the top-level orchestration layer. It owns the task state machine
 3. For each `ready` task: dispatch a worker (respecting [`concurrent_task_dispatch`](../levers/concurrent-task-dispatch)).
 4. For each `review` task: run reviewer fanout.
 5. For each `gate_check` task: run hard gates.
-6. Apply merges per [`merge_policy`](../levers/merge-policy).
+6. Land accepted work per [`landing_strategy`](../levers/merge-policy).
 7. Persist; emit events.
 
 Call `runOrchestrator({ cwd, maxTicks, domainFilter })` to drive one or more ticks.
@@ -54,7 +54,7 @@ This keeps prompts tight — agents get only what they need for the current deci
 ## Intake and meta-intake
 
 - `src/runtime/intake.ts` — the flow driven by `guildhall intake`.
-- `src/runtime/meta-intake.ts` — bootstrap flow (`guildhall meta-intake`) that drafts coordinators.
+- `src/runtime/meta-intake.ts` — bootstrap flow (`guildhall meta-intake`) that inspects the repo, infers internal routing, and drafts starter tasks.
 
 ## CLI and server entry points
 

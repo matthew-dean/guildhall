@@ -1,6 +1,6 @@
 # Stage: `pending_pr`
 
-Under `merge_policy: manual_pr`, gates have passed, the branch is pushed, and a PR is open. The task is holding for external merge. No agent should be editing code in the worktree for this task.
+Under `landing_strategy: manual_pr`, gates have passed, the branch is pushed, and a PR is open. The task is holding for external merge. No agent should be editing code in the worktree for this task.
 
 ## What "good" looks like
 

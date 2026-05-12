@@ -77,6 +77,7 @@ export function createReviewerAgent(
     skills?: readonly SkillDefinition[]
     hookExecutor?: HookExecutor
     compactor?: Compactor
+    cwd?: string
     sessionPersistence?: { cwd: string; sessionId?: string }
     /** Optional tools appended to the factory's built-in set (e.g. MCP adapters). */
     extraTools?: readonly AnyTool[]
@@ -86,6 +87,7 @@ export function createReviewerAgent(
     name: 'reviewer-agent',
     llm,
     systemPrompt: REVIEWER_AGENT_PROMPT,
+    ...(opts.cwd ? { cwd: opts.cwd } : {}),
     tools: [
       readFileTool,
       listFilesTool,

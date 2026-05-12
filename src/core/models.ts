@@ -253,12 +253,14 @@ export const ModelAssignmentConfig = z.object({
 })
 export type ModelAssignmentConfig = z.infer<typeof ModelAssignmentConfig>
 
-// Sensible defaults for a local-only setup with a single powerful model
+// Conservative defaults for a local-only setup. Larger local models can be
+// excellent, but they should be an explicit opt-in because LM Studio may
+// allocate enough memory to destabilize smaller machines.
 export const DEFAULT_LOCAL_MODEL_ASSIGNMENT: ModelAssignmentConfig = {
-  spec: 'qwen2.5-coder-32b-instruct',
-  coordinator: 'qwen2.5-coder-32b-instruct',
-  worker: 'qwen2.5-coder-32b-instruct',
-  reviewer: 'qwen2.5-coder-14b-instruct',
+  spec: 'qwen2.5-coder-7b-instruct',
+  coordinator: 'qwen2.5-coder-7b-instruct',
+  worker: 'qwen2.5-coder-7b-instruct',
+  reviewer: 'qwen2.5-coder-7b-instruct',
   gateChecker: 'qwen2.5-coder-7b-instruct',
 }
 
@@ -266,7 +268,7 @@ export const DEFAULT_LOCAL_MODEL_ASSIGNMENT: ModelAssignmentConfig = {
 export const DEFAULT_HYBRID_MODEL_ASSIGNMENT: ModelAssignmentConfig = {
   spec: 'claude-sonnet-4-6',
   coordinator: 'claude-sonnet-4-6',
-  worker: 'qwen2.5-coder-32b-instruct',
+  worker: 'qwen2.5-coder-7b-instruct',
   reviewer: 'claude-haiku-4-5-20251001',
   gateChecker: 'qwen2.5-coder-7b-instruct',
 }

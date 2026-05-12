@@ -15,6 +15,22 @@
 
 import { type Task, type TaskQueue, type TaskStatus } from '@guildhall/core'
 import { hasOpenEscalation } from '@guildhall/tools'
+import { META_INTAKE_TASK_ID } from './meta-intake.js'
+import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
+
+export type TaskLane = 'spec' | 'worker' | 'review' | 'coordinator'
+
+function hasUnansweredOpenQuestion(task: Task): boolean {
+  return (task.openQuestions ?? []).some((question) => !question.answeredAt)
+}
+
+export function taskHasUnansweredOpenQuestion(task: Task): boolean {
+  return hasUnansweredOpenQuestion(task)
+}
+
+function holdsDraftedSpecReviewForManualApproval(task: Task): boolean {
+  return task.id === META_INTAKE_TASK_ID || task.id === WORKSPACE_IMPORT_TASK_ID
+}
 
 /**
  * A worker-shelved task is "fresh" (needs `pre_rejection_policy` applied)
@@ -31,16 +47,75 @@ export function needsPreRejectionPolicy(task: Task): boolean {
   )
 }
 
-/** Highest-priority actionable task. Status order defines the routing priority. */
+export function laneForTask(task: Task): TaskLane | null {
+  if (needsPreRejectionPolicy(task)) return 'coordinator'
+  switch (task.status) {
+    case 'proposed':
+      return 'coordinator'
+    case 'exploring':
+    case 'spec_review':
+      return 'spec'
+    case 'ready':
+    case 'in_progress':
+      return 'worker'
+    case 'review':
+    case 'gate_check':
+      return 'review'
+    default:
+      return null
+  }
+}
+
+/**
+ * A dependency edge means "this task cannot start until that task is done."
+ * Missing dependencies are treated as unmet rather than silently ignored; the
+ * planner/UI can surface that as a queue hygiene problem, but the runtime
+ * should not dispatch blocked work.
+ */
+export function dependenciesSatisfied(queue: TaskQueue, task: Task): boolean {
+  if (task.dependsOn.length === 0) return true
+  return task.dependsOn.every((dependencyId) => {
+    const dependency = queue.tasks.find((candidate) => candidate.id === dependencyId)
+    return dependency?.status === 'done'
+  })
+}
+
+/**
+ * Highest-priority actionable task.
+ *
+ * The picker intentionally favors active work before fresh work: once a task
+ * has entered implementation/review/gates, the outer loop keeps driving that
+ * task toward a terminal state instead of claiming something new. This is the
+ * small "one-task finisher" rule borrowed from Ralph/Beads-style workflows.
+ */
 export function pickNextTask(
   queue: TaskQueue,
   domain?: string,
   exclude?: ReadonlySet<string>,
+  lane?: TaskLane,
+  preferredTaskId?: string,
 ): Task | undefined {
   const priority = ['critical', 'high', 'normal', 'low'] as const
   const isExcluded = exclude
     ? (t: Task) => exclude.has(t.id)
     : (_t: Task) => false
+  const matchesLane = lane
+    ? (t: Task) => laneForTask(t) === lane
+    : (_t: Task) => true
+  const matchesStatusSlot = (
+    task: Task,
+    status: TaskStatus,
+    priorityLevel: (typeof priority)[number],
+  ): boolean =>
+    task.status === status &&
+    !(task.status === 'spec_review' && Boolean(task.spec?.trim()) && holdsDraftedSpecReviewForManualApproval(task)) &&
+    !((task.status === 'exploring' || task.status === 'spec_review') && hasUnansweredOpenQuestion(task)) &&
+    matchesLane(task) &&
+    task.priority === priorityLevel &&
+    (!domain || task.domain === domain) &&
+    dependenciesSatisfied(queue, task) &&
+    !hasOpenEscalation(task) &&
+    !isExcluded(task)
 
   // FR-22: worker-shelved tasks pending `pre_rejection_policy` are serviced
   // first — they're cheap (no LLM) and keeping the board clear of unresolved
@@ -50,6 +125,7 @@ export function pickNextTask(
     const task = queue.tasks.find(
       (t) =>
         needsPreRejectionPolicy(t) &&
+        matchesLane(t) &&
         t.priority === p &&
         (!domain || t.domain === domain) &&
         !hasOpenEscalation(t) &&
@@ -58,29 +134,36 @@ export function pickNextTask(
     if (task) return task
   }
 
-  const statuses: TaskStatus[] = [
+  const activeStatuses: TaskStatus[] = [
+    'gate_check',
+    'review',
+    'in_progress',
+  ]
+
+  const freshStatuses: TaskStatus[] = [
     // FR-21: proposals are cheapest to service (pure lever decision, no LLM)
-    // so they run first — keeps the board clear of unresolved proposals
-    // before exploratory or in-flight work consumes a tick.
+    // so they lead fresh-work intake after already-active work is cleared.
     'proposed',
     'exploring',
     'spec_review',
     'ready',
-    'in_progress',
-    'review',
-    'gate_check',
   ]
 
-  for (const status of statuses) {
+  if (preferredTaskId) {
+    const preferred = queue.tasks.find((task) => task.id === preferredTaskId)
+    if (preferred) {
+      for (const status of [...activeStatuses, ...freshStatuses]) {
+        for (const p of priority) {
+          if (matchesStatusSlot(preferred, status, p)) return preferred
+        }
+      }
+    }
+  }
+
+  for (const status of [...activeStatuses, ...freshStatuses]) {
     for (const p of priority) {
       const task = queue.tasks.find(
-        (t) =>
-          t.status === status &&
-          t.priority === p &&
-          (!domain || t.domain === domain) &&
-          // FR-10: halt any task with an unresolved escalation regardless of status
-          !hasOpenEscalation(t) &&
-          !isExcluded(t),
+        (t) => matchesStatusSlot(t, status, p),
       )
       if (task) return task
     }

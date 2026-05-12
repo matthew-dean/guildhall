@@ -3,8 +3,8 @@ import { z } from 'zod'
 // ---------------------------------------------------------------------------
 // Task status lifecycle (FR-01)
 //    proposed ─┐
-//    exploring ┼→ spec_review → ready → in_progress → review → gate_check → done
-//              │                                                ↘ blocked
+// import_draft ┼→ exploring → spec_review → ready → in_progress → review → gate_check → done
+//              │                                                     ↘ blocked
 //              └─────────────────────────→ shelved (worker pre-rejection, FR-22)
 //
 // Origination:
@@ -15,8 +15,9 @@ import { z } from 'zod'
 // Terminal states: `done`, `shelved`, `blocked`.
 // ---------------------------------------------------------------------------
 
-export const TaskStatus = z.enum([
+const TaskStatusValue = z.enum([
   'proposed',      // FR-21: agent-originated; awaiting promotion per lever `task_origination`
+  'import_draft',  // Workspace-imported draft that still needs shaping before normal intake begins
   'exploring',     // Conversational intake — Spec Agent is building the spec with the user (FR-12)
   'spec_review',   // Spec drafted; awaiting human or coordinator approval
   'ready',         // Spec approved, ready for a worker to pick up
@@ -28,6 +29,11 @@ export const TaskStatus = z.enum([
   'shelved',       // FR-22: worker pre-rejected (no_op/not_viable/low_value/duplicate/spec_wrong) — terminal
   'blocked',       // Cannot proceed — escalation required — terminal
 ])
+
+export const TaskStatus: z.ZodType<z.infer<typeof TaskStatusValue>, z.ZodTypeDef, unknown> = z.preprocess(
+  (value) => value === 'pending' ? 'ready' : value,
+  TaskStatusValue,
+)
 export type TaskStatus = z.infer<typeof TaskStatus>
 
 export const TERMINAL_TASK_STATUSES = ['done', 'shelved', 'blocked'] as const
@@ -199,6 +205,71 @@ export type Escalation = z.infer<typeof Escalation>
 // worked, and what should we NOT do?" Brief approval is orthogonal to spec
 // approval — a task may have an approved brief before its spec is final, or
 // may skip the brief entirely for purely infrastructural work.
+// ---------------------------------------------------------------------------
+// Agent → user questions (FR-mini, ADHD-UX directive)
+//
+// Every prompt an agent puts to the user MUST classify into ONE of four
+// kinds. No free prose. The UI renders each kind with a single deterministic
+// affordance: tap-to-confirm, yes/no, multiple choice with "Other...", or a
+// long-text reply. This kills the "is the agent asking me or telling me?"
+// confusion that emerges when an agent writes a paragraph that contains a
+// question buried inside.
+//
+// Producers (spec agent, coordinator, importer, etc.) emit AgentQuestion
+// values into `task.openQuestions`. The drawer renders any open questions
+// ABOVE the brief / spec / acceptance cards, since they are blocking by
+// definition. Answers are appended via POST /api/project/task/:id/answer.
+// ---------------------------------------------------------------------------
+
+const AgentQuestionBase = {
+  /** Stable id within the task — survives re-renders / re-asks. */
+  id: z.string(),
+  /** Which agent asked (spec-agent, coordinator, etc.). */
+  askedBy: z.string(),
+  askedAt: z.string(),
+  /** Persisted-but-unsubmitted answer draft shown back to the user on reload. */
+  draftAnswer: z.string().optional(),
+  /** ISO timestamp when the user answered, or undefined if still open. */
+  answeredAt: z.string().optional(),
+  /** Free-text capture of the user's answer regardless of kind. */
+  answer: z.string().optional(),
+}
+
+export const AgentQuestion = z.discriminatedUnion('kind', [
+  // "Here's what I think you want — confirm or correct." Equivalent to the
+  // current brief-approval surface. UI: Approve / Reply.
+  z.object({
+    ...AgentQuestionBase,
+    kind: z.literal('confirm'),
+    /** What the agent thinks is true; one statement. */
+    restatement: z.string(),
+  }),
+  // Binary choice. UI: Yes / No / Reply.
+  z.object({
+    ...AgentQuestionBase,
+    kind: z.literal('yesno'),
+    prompt: z.string(),
+  }),
+  // Multiple choice with mandatory "Other..." escape hatch. UI: chip per choice
+  // + free-text fallback.
+  z.object({
+    ...AgentQuestionBase,
+    kind: z.literal('choice'),
+    prompt: z.string(),
+    /** Single-choice by default; multiple means checkbox-style selection. */
+    selectionMode: z.enum(['single', 'multiple']).optional(),
+    /** Must be 2..6 short labels. UI also surfaces an "Other..." textbox. */
+    choices: z.array(z.string()).min(2).max(6),
+  }),
+  // Open-ended. UI: textarea + Send.
+  z.object({
+    ...AgentQuestionBase,
+    kind: z.literal('text'),
+    prompt: z.string(),
+  }),
+])
+export type AgentQuestion = z.infer<typeof AgentQuestion>
+
 export const ProductBrief = z.object({
   userJob: z.string(),                            // The user's job-to-be-done this task serves
   successMetric: z.string(),                      // How we'll know it worked
@@ -296,14 +367,35 @@ export const Checkpoint = z.object({
 })
 export type Checkpoint = z.infer<typeof Checkpoint>
 
-export const AcceptanceCriteria = z.object({
+const ACCEPTANCE_VERIFIERS = ['automated', 'review', 'human'] as const
+
+function normalizeAcceptanceCriteria(input: unknown): unknown {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input
+  const criterion = input as Record<string, unknown>
+  const verifiedBy = criterion.verifiedBy
+  if (verifiedBy === undefined && typeof criterion.command === 'string' && criterion.command.trim()) {
+    return { ...criterion, verifiedBy: 'automated' }
+  }
+  if (typeof verifiedBy !== 'string') return input
+  if ((ACCEPTANCE_VERIFIERS as readonly string[]).includes(verifiedBy)) return input
+
+  const value = verifiedBy.trim()
+  const looksLikeCommand = /\s|\/|^(pnpm|npm|yarn|bun|vitest|tsx|node|tsgo|tsc|cargo|go|pytest|python|make)\b/.test(value)
+  return {
+    ...criterion,
+    verifiedBy: looksLikeCommand ? 'automated' : 'review',
+    ...(looksLikeCommand && typeof criterion.command !== 'string' ? { command: value } : {}),
+  }
+}
+
+export const AcceptanceCriteria = z.preprocess(normalizeAcceptanceCriteria, z.object({
   id: z.string(),
   description: z.string(),
   // How to verify: 'automated' = shell command, 'review' = reviewer agent judgment
-  verifiedBy: z.enum(['automated', 'review', 'human']),
+  verifiedBy: z.enum(ACCEPTANCE_VERIFIERS),
   command: z.string().optional(), // for automated criteria
   met: z.boolean().default(false),
-})
+}))
 export type AcceptanceCriteria = z.infer<typeof AcceptanceCriteria>
 
 export const Task = z.object({
@@ -329,6 +421,12 @@ export const Task = z.object({
   // technical spec; approved by the human independently of spec approval.
   productBrief: ProductBrief.optional(),
 
+  // Open agent → user questions. See AgentQuestion above. Any question with
+  // `answeredAt` undefined is "open" and renders at the top of the drawer
+  // until the user answers. Producers MUST classify into one of the four
+  // kinds — no free prose questions.
+  openQuestions: z.array(AgentQuestion).optional(),
+
   // Scope boundaries — what this task explicitly will NOT do
   outOfScope: z.array(z.string()).default([]),
 
@@ -336,7 +434,7 @@ export const Task = z.object({
   dependsOn: z.array(z.string()).default([]),
 
   // Which agent is currently working on this
-  assignedTo: z.string().optional(),
+  assignedTo: z.string().nullable().optional(),
 
   // Running notes from all agents involved
   notes: z.array(AgentNote).default([]),
@@ -367,14 +465,28 @@ export const Task = z.object({
   // How many times this task has been sent back for revision
   revisionCount: z.number().default(0),
 
+  // When a human resolves a max-revisions escalation and explicitly retries
+  // the task, we preserve the historical raw `revisionCount` for audit but
+  // start a fresh counting window for future auto-block decisions.
+  retryWindow: z
+    .object({
+      startedAt: z.string(),
+      baseRevisionCount: z.number().int().nonnegative(),
+    })
+    .optional(),
+
   // FR-32: count of coordinator remediation decisions recorded against this
   // task. Used as input to the *next* remediation context so the coordinator
   // can see the trend ("this is the 4th time we've been here"). Incremented
   // by the orchestrator on `recordRemediationDecision`.
   remediationAttempts: z.number().int().nonnegative().default(0),
 
-  // If blocked: why
-  blockReason: z.string().optional(),
+  // If blocked: why. Some older task snapshots persisted `null`; normalize
+  // that to missing so loading legacy queues does not crash a run.
+  blockReason: z.preprocess(
+    (value) => value == null ? undefined : value,
+    z.string().optional(),
+  ),
 
   // FR-15: per-task permission mode override. When set, the orchestrator
   // tells the dispatched agent to clamp its QueryEngine permission checker to
@@ -447,7 +559,14 @@ export const Task = z.object({
     .object({
       fromBranch: z.string(),
       toBranch: z.string(),
-      strategy: z.enum(['ff_only_local', 'ff_only_with_push', 'manual_pr']),
+      strategy: z.enum([
+        'cherry_pick_local',
+        'cherry_pick_with_push',
+        'manual_pr',
+        // Deprecated compatibility values.
+        'ff_only_local',
+        'ff_only_with_push',
+      ]),
       result: z.enum([
         'merged',
         'pushed',

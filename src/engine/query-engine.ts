@@ -45,6 +45,7 @@ export interface QueryEngineOptions {
   model: string
   systemPrompt: string
   maxTokens?: number
+  temperature?: number
   contextWindowTokens?: number | null
   autoCompactThresholdTokens?: number | null
   maxTurns?: number | null
@@ -58,6 +59,12 @@ export interface QueryEngineOptions {
    * loop retry the turn instead of bubbling the failure to the caller.
    */
   compactor?: Compactor
+  noToolTurnNudge?: string | undefined
+  noToolTurnNudgeLimit?: number | undefined
+  noProgressToolNames?: readonly string[] | undefined
+  noProgressTurnNudge?: string | undefined
+  noProgressTurnNudgeLimit?: number | undefined
+  noProgressTurnThreshold?: number | undefined
 }
 
 export class QueryEngine {
@@ -68,6 +75,7 @@ export class QueryEngine {
   private model: string
   private systemPrompt: string
   private readonly maxTokens: number
+  private readonly temperature: number | undefined
   private readonly contextWindowTokens: number | null | undefined
   private readonly autoCompactThresholdTokens: number | null | undefined
   private maxTurns: number | null
@@ -75,6 +83,12 @@ export class QueryEngine {
   private readonly askUserPrompt: QueryEngineOptions['askUserPrompt']
   private readonly hookExecutor: HookExecutor | undefined
   private readonly compactor: Compactor | undefined
+  private readonly noToolTurnNudge: string | undefined
+  private readonly noToolTurnNudgeLimit: number | undefined
+  private readonly noProgressToolNames: readonly string[] | undefined
+  private readonly noProgressTurnNudge: string | undefined
+  private readonly noProgressTurnNudgeLimit: number | undefined
+  private readonly noProgressTurnThreshold: number | undefined
   private readonly toolMetadata: Record<string, unknown>
   private messagesInternal: ConversationMessage[] = []
   private totalUsageInternal: UsageSnapshot = { ...emptyUsage }
@@ -87,6 +101,7 @@ export class QueryEngine {
     this.model = options.model
     this.systemPrompt = options.systemPrompt
     this.maxTokens = options.maxTokens ?? 4096
+    this.temperature = options.temperature
     this.contextWindowTokens = options.contextWindowTokens
     this.autoCompactThresholdTokens = options.autoCompactThresholdTokens
     this.maxTurns = options.maxTurns ?? 8
@@ -94,6 +109,12 @@ export class QueryEngine {
     this.askUserPrompt = options.askUserPrompt
     this.hookExecutor = options.hookExecutor
     this.compactor = options.compactor
+    this.noToolTurnNudge = options.noToolTurnNudge
+    this.noToolTurnNudgeLimit = options.noToolTurnNudgeLimit
+    this.noProgressToolNames = options.noProgressToolNames
+    this.noProgressTurnNudge = options.noProgressTurnNudge
+    this.noProgressTurnNudgeLimit = options.noProgressTurnNudgeLimit
+    this.noProgressTurnThreshold = options.noProgressTurnThreshold
     this.toolMetadata = options.toolMetadata ?? {}
     // Plan-mode tools call this callback to swap the engine's permission
     // checker. Effect is "next turn onward" — mid-turn evaluations continue
@@ -200,6 +221,7 @@ export class QueryEngine {
 
   async *submitMessage(
     prompt: string | ConversationMessage,
+    opts?: { signal?: AbortSignal | undefined },
   ): AsyncGenerator<StreamEvent> {
     const userMessage: ConversationMessage =
       typeof prompt === 'string' ? userMessageFromText(prompt) : prompt
@@ -215,7 +237,7 @@ export class QueryEngine {
       })
     }
 
-    const context = this.buildContext(this.maxTurns)
+    const context = this.buildContext(this.maxTurns, opts?.signal)
 
     // runQuery mutates the messages array in place — assistant turns and
     // tool_result follow-ups are appended directly to messagesInternal so
@@ -233,17 +255,18 @@ export class QueryEngine {
 
   async *continuePending(opts?: {
     maxTurns?: number | null
+    signal?: AbortSignal | undefined
   }): AsyncGenerator<StreamEvent> {
     const effectiveMaxTurns =
       opts?.maxTurns !== undefined ? opts.maxTurns : this.maxTurns
-    const context = this.buildContext(effectiveMaxTurns)
+    const context = this.buildContext(effectiveMaxTurns, opts?.signal)
     for await (const { event, usage } of runQuery(context, this.messagesInternal)) {
       if (usage !== null) this.addUsage(usage)
       yield event
     }
   }
 
-  private buildContext(maxTurns: number | null): QueryContext {
+  private buildContext(maxTurns: number | null, abortSignal?: AbortSignal): QueryContext {
     return {
       apiClient: this.apiClient,
       toolRegistry: this.toolRegistry,
@@ -252,6 +275,7 @@ export class QueryEngine {
       model: this.model,
       systemPrompt: this.systemPrompt,
       maxTokens: this.maxTokens,
+      ...(this.temperature !== undefined ? { temperature: this.temperature } : {}),
       ...(this.contextWindowTokens !== undefined
         ? { contextWindowTokens: this.contextWindowTokens }
         : {}),
@@ -263,6 +287,23 @@ export class QueryEngine {
       ...(this.askUserPrompt != null ? { askUserPrompt: this.askUserPrompt } : {}),
       ...(this.hookExecutor != null ? { hookExecutor: this.hookExecutor } : {}),
       ...(this.compactor != null ? { compactor: this.compactor } : {}),
+      ...(this.noToolTurnNudge !== undefined ? { noToolTurnNudge: this.noToolTurnNudge } : {}),
+      ...(this.noToolTurnNudgeLimit !== undefined
+        ? { noToolTurnNudgeLimit: this.noToolTurnNudgeLimit }
+        : {}),
+      ...(this.noProgressToolNames !== undefined
+        ? { noProgressToolNames: this.noProgressToolNames }
+        : {}),
+      ...(this.noProgressTurnNudge !== undefined
+        ? { noProgressTurnNudge: this.noProgressTurnNudge }
+        : {}),
+      ...(this.noProgressTurnNudgeLimit !== undefined
+        ? { noProgressTurnNudgeLimit: this.noProgressTurnNudgeLimit }
+        : {}),
+      ...(this.noProgressTurnThreshold !== undefined
+        ? { noProgressTurnThreshold: this.noProgressTurnThreshold }
+        : {}),
+      ...(abortSignal ? { abortSignal } : {}),
       toolMetadata: this.toolMetadata,
     }
   }

@@ -21,7 +21,7 @@ Each persona is an expert with a role in the lifecycle:
 | `test-engineer` | The Test Engineer | specialist | `test.no-focused-or-skipped` — pure detector `findTestSmells` | Project has a test framework or test keywords |
 | `performance-engineer` | The Performance Engineer | specialist | _(rubric-only; bundle / Core Web Vitals wiring later)_ | Product brief or perf keywords |
 | `frontend-engineer` | The Frontend Engineer | engineer | _(delegates to framework tooling)_ | Detected framework (Vue/React/Svelte/Solid/Angular) or UI keywords |
-| `backend-engineer` | The Backend Engineer | engineer | _(delegates to project gates)_ | Backend deps (Express/Fastify/Hono/…) + backend keywords |
+| `backend-engineer` | The Backend Engineer | engineer | _(delegates to project gates)_ | Backend deps (Express/Fastify/Hono/...) + backend keywords |
 | `typescript-engineer` | The TypeScript Engineer | engineer | _(delegates to `pnpm typecheck`)_ | Project has `tsconfig.json` |
 
 ## Lifecycle integration
@@ -44,4 +44,4 @@ src/guilds/<slug>/
   index.ts           — assembles the GuildDefinition
 ```
 
-Projects can shadow principles (and later, any piece) per-project via `<memoryDir>/guilds/<slug>/…` with the same layout; the shared loader at `src/guilds/load-asset.ts` honors overrides.
+Projects can shadow principles (and later, any piece) per-project via `<memoryDir>/guilds/<slug>/...` with the same layout; the shared loader at `src/guilds/load-asset.ts` honors overrides.

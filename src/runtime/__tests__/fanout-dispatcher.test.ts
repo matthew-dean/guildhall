@@ -21,7 +21,7 @@ function makeProject(
   return {
     concurrent_task_dispatch: entry(dispatch),
     worktree_isolation: entry('none' as const),
-    merge_policy: entry('ff_only_local' as const),
+    landing_strategy: entry('cherry_pick_local' as const),
     rejection_dampening: entry({ kind: 'off' as const }),
     business_envelope_strictness: entry('off' as const),
     agent_health_strictness: entry('standard' as const),
@@ -103,6 +103,31 @@ describe('pickNextTasks', () => {
     expect(picks.map((t) => t.id)).toEqual(['t1', 't2', 't3'])
   })
 
+  it('fills fanout capacity from active work before ready work', () => {
+    const q = queue([
+      task({ id: 't-ready-critical', status: 'ready', priority: 'critical' }),
+      task({ id: 't-review-low', status: 'review', priority: 'low' }),
+      task({ id: 't-progress-normal', status: 'in_progress', priority: 'normal' }),
+    ])
+    const picks = pickNextTasks({ queue: q, capacity: 2 })
+    expect(picks.map((t) => t.id)).toEqual(['t-review-low', 't-progress-normal'])
+  })
+
+  it('does not fill fanout capacity with dependency-blocked work', () => {
+    const q = queue([
+      task({ id: 'foundation', status: 'ready', priority: 'normal' }),
+      task({
+        id: 'dependent',
+        status: 'ready',
+        priority: 'critical',
+        dependsOn: ['foundation'],
+      }),
+      task({ id: 'independent', status: 'ready', priority: 'low' }),
+    ])
+    const picks = pickNextTasks({ queue: q, capacity: 3 })
+    expect(picks.map((t) => t.id)).toEqual(['foundation', 'independent'])
+  })
+
   it('honors excludeIds so a task already in flight is not re-picked', () => {
     const q = queue([
       task({ id: 't1', status: 'ready', priority: 'high' }),
@@ -129,5 +154,62 @@ describe('pickNextTasks', () => {
     ])
     const picks = pickNextTasks({ queue: q, capacity: 5, domainFilter: 'core' })
     expect(picks.map((t) => t.id)).toEqual(['t2'])
+  })
+
+  it('prefers an explicitly requested task when it is actionable', () => {
+    const q = queue([
+      task({ id: 't-active', status: 'review', priority: 'normal' }),
+      task({ id: 't-requested', status: 'ready', priority: 'low' }),
+    ])
+    const picks = pickNextTasks({
+      queue: q,
+      capacity: 1,
+      preferredTaskId: 't-requested',
+    })
+    expect(picks.map((t) => t.id)).toEqual(['t-requested'])
+  })
+
+  it('uses lane capacities to keep spec intake moving alongside worker progress', () => {
+    const q = queue([
+      task({ id: 't-progress', status: 'in_progress', priority: 'high' }),
+      task({ id: 't-ready', status: 'ready', priority: 'normal' }),
+      task({ id: 't-exploring', status: 'exploring', priority: 'critical' }),
+    ])
+    const picks = pickNextTasks({
+      queue: q,
+      capacity: 2,
+      laneCapacities: {
+        worker: 1,
+        spec: 1,
+      },
+    })
+    expect(picks.map((t) => t.id)).toEqual(['t-progress', 't-exploring'])
+  })
+
+  it('round-robins across bounded lanes in priority lane order', () => {
+    const q = queue([
+      task({ id: 't-gate', status: 'gate_check', priority: 'low' }),
+      task({ id: 't-review', status: 'review', priority: 'normal' }),
+      task({ id: 't-progress', status: 'in_progress', priority: 'normal' }),
+      task({ id: 't-ready', status: 'ready', priority: 'high' }),
+      task({ id: 't-proposed', status: 'proposed', priority: 'critical' }),
+      task({ id: 't-exploring', status: 'exploring', priority: 'critical' }),
+    ])
+    const picks = pickNextTasks({
+      queue: q,
+      capacity: 4,
+      laneCapacities: {
+        review: 1,
+        worker: 1,
+        coordinator: 1,
+        spec: 1,
+      },
+    })
+    expect(picks.map((t) => t.id)).toEqual([
+      't-gate',
+      't-progress',
+      't-proposed',
+      't-exploring',
+    ])
   })
 })

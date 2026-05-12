@@ -102,6 +102,8 @@ export const backendEventType = z.enum([
   // should see but the task can keep running. Carries `issue_id`, `code`,
   // `severity`, and the existing `reason`/`agent_name`/`task_id` fields.
   'agent_issue',
+  'agent_started',
+  'agent_finished',
   'error',
   'shutdown',
 ])

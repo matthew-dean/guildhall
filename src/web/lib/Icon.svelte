@@ -21,6 +21,11 @@
     | 'square'
     | 'plus'
     | 'rotate-ccw'
+    | 'chevron-left'
+    | 'chevron-right'
+    | 'panel-left-open'
+    | 'panel-left-close'
+    | 'menu'
     | 'check'
     | 'x'
     | 'chevron-down'
@@ -30,7 +35,9 @@
     | 'file-text'
     | 'file-check'
     | 'sliders'
+    | 'ellipsis'
     | 'help-circle'
+    | 'sparkles'
 </script>
 
 <script lang="ts">
@@ -49,6 +56,11 @@
   import Square from 'lucide-svelte/icons/square'
   import Plus from 'lucide-svelte/icons/plus'
   import RotateCcw from 'lucide-svelte/icons/rotate-ccw'
+  import ChevronLeft from 'lucide-svelte/icons/chevron-left'
+  import ChevronRight from 'lucide-svelte/icons/chevron-right'
+  import PanelLeftOpen from 'lucide-svelte/icons/panel-left-open'
+  import PanelLeftClose from 'lucide-svelte/icons/panel-left-close'
+  import Menu from 'lucide-svelte/icons/menu'
   import Check from 'lucide-svelte/icons/check'
   import X from 'lucide-svelte/icons/x'
   import ChevronDown from 'lucide-svelte/icons/chevron-down'
@@ -58,7 +70,9 @@
   import FileText from 'lucide-svelte/icons/file-text'
   import FileCheck from 'lucide-svelte/icons/file-check'
   import Sliders from 'lucide-svelte/icons/sliders'
+  import Ellipsis from 'lucide-svelte/icons/ellipsis'
   import HelpCircle from 'lucide-svelte/icons/circle-help'
+  import Sparkles from 'lucide-svelte/icons/sparkles'
 
   interface Props {
     name: IconName
@@ -86,6 +100,11 @@
   {:else if name === 'square'}<Square {size} {strokeWidth} />
   {:else if name === 'plus'}<Plus {size} {strokeWidth} />
   {:else if name === 'rotate-ccw'}<RotateCcw {size} {strokeWidth} />
+  {:else if name === 'chevron-left'}<ChevronLeft {size} {strokeWidth} />
+  {:else if name === 'chevron-right'}<ChevronRight {size} {strokeWidth} />
+  {:else if name === 'panel-left-open'}<PanelLeftOpen {size} {strokeWidth} />
+  {:else if name === 'panel-left-close'}<PanelLeftClose {size} {strokeWidth} />
+  {:else if name === 'menu'}<Menu {size} {strokeWidth} />
   {:else if name === 'check'}<Check {size} {strokeWidth} />
   {:else if name === 'x'}<X {size} {strokeWidth} />
   {:else if name === 'chevron-down'}<ChevronDown {size} {strokeWidth} />
@@ -95,7 +114,9 @@
   {:else if name === 'file-text'}<FileText {size} {strokeWidth} />
   {:else if name === 'file-check'}<FileCheck {size} {strokeWidth} />
   {:else if name === 'sliders'}<Sliders {size} {strokeWidth} />
+  {:else if name === 'ellipsis'}<Ellipsis {size} {strokeWidth} />
   {:else if name === 'help-circle'}<HelpCircle {size} {strokeWidth} />
+  {:else if name === 'sparkles'}<Sparkles {size} {strokeWidth} />
   {/if}
 </span>
 

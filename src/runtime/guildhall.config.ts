@@ -34,19 +34,21 @@ export const forgeConfig: ForgeConfig = {
   // To use cloud models for specific roles, change the ID to a cloud model ID
   // and set the corresponding API key env var (ANTHROPIC_API_KEY, OPENAI_API_KEY).
   //
-  // Recommended starting setup (single powerful model + fast reviewer):
-  //   spec/coordinator/worker → qwen2.5-coder-32b-instruct  (load in LM Studio)
-  //   reviewer/gateChecker   → qwen2.5-coder-7b-instruct   (load as second model)
+  // Recommended safe local setup:
+  //   all roles → qwen2.5-coder-7b-instruct
+  //
+  // Larger models can improve quality, but opt into them deliberately after
+  // confirming LM Studio can keep them resident without memory pressure.
   //
   // If you only want to load one model, set all roles to the same ID.
   // ---------------------------------------------------------------------------
   models: {
     ...DEFAULT_LOCAL_MODEL_ASSIGNMENT,
     // Uncomment to override individual roles:
-    // spec: 'deepseek-r1-distill-qwen-32b',        // better reasoning for specs
-    // coordinator: 'deepseek-r1-distill-qwen-32b', // better reasoning for planning
-    // worker: 'qwen2.5-coder-32b-instruct',        // best local coder
-    // reviewer: 'qwen2.5-coder-14b-instruct',      // faster reviewer
+    // spec: 'qwen2.5-coder-14b-instruct',          // stronger, if resident
+    // coordinator: 'qwen2.5-coder-14b-instruct',   // stronger, if resident
+    // worker: 'qwen2.5-coder-14b-instruct',        // stronger, if resident
+    // reviewer: 'qwen2.5-coder-7b-instruct',       // fast reviewer
     // gateChecker: 'qwen2.5-coder-7b-instruct',    // minimal, just runs commands
   },
 
@@ -56,7 +58,6 @@ export const forgeConfig: ForgeConfig = {
   coordinators: [
     {
       id: 'looma',
-      name: 'Looma Coordinator',
       mandate: `
         Looma is a stack-agnostic UI library built on web standards. It must stay general-purpose:
         no Knit-specific vocabulary in component APIs, no app business logic, no tight coupling
@@ -115,7 +116,6 @@ export const forgeConfig: ForgeConfig = {
     },
     {
       id: 'knit',
-      name: 'Knit Coordinator',
       mandate: `
         Knit is a wiki app for small teams. It uses Looma as its design system and must
         migrate progressively toward Looma primitives, but its primary obligation is

@@ -7,7 +7,7 @@
  *   - No OpenAI SDK dependency — POST /v1/chat/completions with native fetch
  *     and consume the SSE stream via the shared sse.ts parser
  *   - Model-specific `max_completion_tokens` swap for gpt-5/o1/o3/o4 stays
- *   - `<think>…</think>` stripping is preserved since llama.cpp can be
+ *   - `<think>...</think>` stripping is preserved since llama.cpp can be
  *     fronting any model including ones that emit inline reasoning
  *   - Reasoning-content carryover: upstream stashes raw reasoning on
  *     `msg._reasoning` and replays it as `reasoning_content` on the next
@@ -34,6 +34,7 @@ const DEFAULT_BASE_URL = 'http://127.0.0.1:8080/v1'
 const MAX_RETRIES = 3
 const BASE_RETRY_DELAY_MS = 1_000
 const MAX_RETRY_DELAY_MS = 30_000
+const DEFAULT_REQUEST_TIMEOUT_MS = 300_000
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503])
 const MAX_COMPLETION_TOKEN_PREFIXES = ['gpt-5', 'o1', 'o3', 'o4']
 
@@ -44,6 +45,7 @@ export interface OpenAICompatibleClientOptions {
   apiKey?: string
   fetch?: typeof fetch
   maxRetries?: number
+  requestTimeoutMs?: number
 }
 
 export class OpenAIApiError extends Error {
@@ -62,12 +64,14 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
   private readonly apiKey: string
   private readonly fetchImpl: typeof fetch
   private readonly maxRetries: number
+  private readonly requestTimeoutMs: number
 
   constructor(opts: OpenAICompatibleClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(opts.baseUrl) ?? DEFAULT_BASE_URL
     this.apiKey = opts.apiKey ?? 'local'
     this.fetchImpl = opts.fetch ?? fetch
     this.maxRetries = opts.maxRetries ?? MAX_RETRIES
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
   }
 
   async *streamMessage(request: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
@@ -100,6 +104,7 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
       messages: openaiMessages,
       stream: true,
       ...tokenLimitFieldFor(request.model, request.max_tokens),
+      ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     }
     if (tools) {
       body.tools = tools
@@ -107,15 +112,34 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
       body.stream_options = { include_usage: true }
     }
 
-    const res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${this.apiKey}`,
-        'content-type': 'application/json',
-        accept: 'text/event-stream',
-      },
-      body: JSON.stringify(body),
-    })
+    const abort = composeAbortSignal(this.requestTimeoutMs, request.signal)
+    let res: Response
+    try {
+      res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${this.apiKey}`,
+          'content-type': 'application/json',
+          accept: 'text/event-stream',
+        },
+        body: JSON.stringify(body),
+        signal: abort.signal,
+      })
+    } catch (err) {
+      if (request.signal?.aborted) {
+        throw new DOMException('Request aborted.', 'AbortError')
+      }
+      if (isAbortError(err)) {
+        throw new OpenAIApiError(
+          `OpenAI-compatible API timed out after ${Math.round(this.requestTimeoutMs / 1000)}s`,
+          null,
+          false,
+        )
+      }
+      throw err
+    } finally {
+      abort.dispose()
+    }
     if (!res.ok) {
       const text = await res.text().catch(() => '')
       throw new OpenAIApiError(
@@ -130,6 +154,37 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
 
     yield* consumeOpenAiSse(res.body)
   }
+}
+
+function composeAbortSignal(
+  timeoutMs: number,
+  external?: AbortSignal,
+): { signal: AbortSignal; dispose: () => void } {
+  const timeout = AbortSignal.timeout(timeoutMs)
+  if (!external) return { signal: timeout, dispose: () => {} }
+
+  const controller = new AbortController()
+  const abortFromTimeout = (): void => { controller.abort(timeout.reason) }
+  const abortFromExternal = (): void => { controller.abort(external.reason) }
+
+  if (external.aborted) controller.abort(external.reason)
+  else external.addEventListener('abort', abortFromExternal, { once: true })
+
+  if (timeout.aborted) controller.abort(timeout.reason)
+  else timeout.addEventListener('abort', abortFromTimeout, { once: true })
+
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      external.removeEventListener('abort', abortFromExternal)
+      timeout.removeEventListener('abort', abortFromTimeout)
+    },
+  }
+}
+
+function isAbortError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  return err.name === 'AbortError' || err.name === 'TimeoutError'
 }
 
 // -----------------------------------------------------------------------------

@@ -9,6 +9,7 @@ import {
   escalationReasonLabel,
   roleLabel,
   roleBlurb,
+  escalationPrimaryAction,
 } from '../escalation-labels.js'
 
 describe('escalationReasonLabel', () => {
@@ -31,6 +32,28 @@ describe('escalationReasonLabel', () => {
 
   it('passes through unknown codes unchanged (graceful degradation)', () => {
     expect(escalationReasonLabel('future_new_reason')).toBe('future_new_reason')
+  })
+})
+
+describe('escalationPrimaryAction', () => {
+  it('uses gate retry only for gate failures', () => {
+    expect(escalationPrimaryAction({ reason: 'gate_hard_failure' })).toMatchObject({
+      label: 'Retry gates',
+      nextStatus: 'gate_check',
+    })
+  })
+
+  it('resumes worker turn-limit failures instead of sending them to gates', () => {
+    expect(
+      escalationPrimaryAction({
+        reason: 'human_judgment_required',
+        agentId: 'worker-agent',
+        summary: 'Worker stopped after hitting its turn limit.',
+      }),
+    ).toMatchObject({
+      label: 'Resume worker',
+      nextStatus: 'in_progress',
+    })
   })
 })
 

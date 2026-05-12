@@ -104,7 +104,25 @@ export const logProgressTool = defineTool({
   description:
     "Append a progress update to PROGRESS.md. Call after completing significant work, hitting milestones, or when blocked. This is how the human tracks what's happening.",
   inputSchema: logProgressInputSchema,
-  jsonSchema: { type: 'object' },
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      progressPath: { type: 'string', description: 'Absolute path to PROGRESS.md' },
+      entry: {
+        type: 'object',
+        properties: {
+          timestamp: { type: 'string', description: 'ISO timestamp' },
+          agentId: { type: 'string' },
+          domain: { type: 'string' },
+          taskId: { type: 'string' },
+          summary: { type: 'string' },
+          type: { type: 'string', enum: ['heartbeat', 'milestone', 'blocked', 'escalation'] },
+        },
+        required: ['timestamp', 'agentId', 'domain', 'summary', 'type'],
+      },
+    },
+    required: ['entry'],
+  },
   isReadOnly: () => false,
   execute: async (input) => {
     const result = await logProgress(input)

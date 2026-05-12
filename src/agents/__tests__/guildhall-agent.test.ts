@@ -43,8 +43,21 @@ class ScriptedApiClient implements SupportsStreamingMessages {
   }
 }
 
+class ThrowingApiClient implements SupportsStreamingMessages {
+  async *streamMessage(_request: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
+    throw new Error('provider rejected model')
+  }
+}
+
 function assistantMsg(text: string): ConversationMessage {
   return { role: 'assistant', content: [{ type: 'text', text }] }
+}
+
+function assistantToolUse(name: string, input: Record<string, unknown> = {}): ConversationMessage {
+  return {
+    role: 'assistant',
+    content: [{ type: 'tool_use', id: `toolu_${name}`, name, input }],
+  }
 }
 
 describe('GuildhallAgent', () => {
@@ -111,6 +124,18 @@ describe('GuildhallAgent', () => {
     expect(r2.text).toBe('second')
     // 2 user + 2 assistant = 4 messages
     expect(r2.messages).toHaveLength(4)
+  })
+
+  it('throws when the provider stream reports an error instead of silently returning an empty turn', async () => {
+    const agent = new GuildhallAgent({
+      name: 't',
+      llm: { apiClient: new ThrowingApiClient(), modelId: 'bad-model' },
+      systemPrompt: 'p',
+      tools: [],
+    })
+
+    await expect(agent.generate('go')).rejects.toThrow(/provider rejected model/)
+    expect(agent.messages.map((m) => m.role)).toEqual(['user'])
   })
 })
 
@@ -270,7 +295,11 @@ describe('FR-17 skill composition', () => {
     const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
     const llm = { apiClient: client, modelId: 'm' }
     const agent = createSpecAgent(llm, { skills: [skillA] })
-    await agent.generate('go')
+    try {
+      await agent.generate('go')
+    } catch (err) {
+      if (!(err instanceof Error) || !/ScriptedApiClient exhausted/.test(err.message)) throw err
+    }
     const sys = client.requests[0]?.system_prompt ?? ''
     expect(sys).toContain('## Skills')
     expect(sys).toContain('### coding-conventions')
@@ -326,7 +355,11 @@ describe('FR-18 hookExecutor forwarding', () => {
       { apiClient: client, modelId: 'm' },
       { hookExecutor },
     )
-    await agent.generate('go')
+    try {
+      await agent.generate('go')
+    } catch (err) {
+      if (!(err instanceof Error) || !/ScriptedApiClient exhausted/.test(err.message)) throw err
+    }
     expect(events).toContain('user_prompt_submit')
   })
 })
@@ -344,6 +377,34 @@ describe('agent factories', () => {
   it('createWorkerAgent registers shell + file tools', async () => {
     const a = createWorkerAgent(llm)
     expect(a.name).toBe('worker-agent')
+  })
+
+  it('createWorkerAgent gives coding tasks a larger turn budget', async () => {
+    const a = createWorkerAgent(llm)
+    expect((a as unknown as { engine: { getMaxTurns(): number | null } }).engine.getMaxTurns())
+      .toBe(24)
+  })
+
+  it('createWorkerAgent tells workers not to spend turns on plans only', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('## No plan-only turns')
+    expect(prompt).toContain('Every assistant turn must make observable progress')
+    expect(prompt).toContain('If you know the next step, take it with a tool call')
+  })
+
+  it('createWorkerAgent requires a minimum-scope self-review before handoff', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('Minimum-scope check:')
+    expect(prompt).toContain('Smallest useful change?')
+    expect(prompt).toContain('Anything to revert before review?')
+  })
+
+  it('createWorkerAgent treats shell verification as durable progress', async () => {
+    const a = createWorkerAgent(llm)
+    const engine = (a as unknown as { engine: { noProgressToolNames?: readonly string[] } }).engine
+    expect(engine.noProgressToolNames).toContain('shell')
   })
 
   it('createReviewerAgent', () => {
@@ -373,7 +434,14 @@ describe('agent factories', () => {
     }
 
     async function toolNamesAfterGenerate(agent: GuildhallAgent, client: ScriptedApiClient) {
-      await agent.generate('go')
+      try {
+        await agent.generate('go')
+      } catch (err) {
+        // Some role prompts (notably worker) intentionally nudge plan-only
+        // responses into another turn. These tests only need the first API
+        // request to inspect the registered tool schemas.
+        if (!(err instanceof Error) || !/ScriptedApiClient exhausted/.test(err.message)) throw err
+      }
       return client.requests[0]?.tools.map((t) => t['name']) ?? []
     }
 
@@ -389,7 +457,10 @@ describe('agent factories', () => {
     })
 
     it('createWorkerAgent appends extraTools', async () => {
-      const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
+      const client = new ScriptedApiClient([
+        { message: assistantToolUse('mcp__x__tool') },
+        { message: assistantMsg('ok') },
+      ])
       const agent = createWorkerAgent(
         { apiClient: client, modelId: 'm' },
         { extraTools: [stubTool('mcp__x__tool')] },
@@ -397,6 +468,32 @@ describe('agent factories', () => {
       const names = await toolNamesAfterGenerate(agent, client)
       expect(names).toContain('mcp__x__tool')
       expect(names).toContain('shell')
+    })
+
+    it('createWorkerAgent forwards cwd to tool execution context', async () => {
+      let observedCwd: string | null = null
+      const cwdProbe = defineTool<Record<string, never>>({
+        name: 'cwd-probe',
+        description: 'records cwd',
+        inputSchema: z.object({}),
+        jsonSchema: { type: 'object', properties: {}, additionalProperties: false },
+        execute: async (_input, ctx) => {
+          observedCwd = ctx.cwd
+          return { output: 'ok', is_error: false }
+        },
+      })
+      const client = new ScriptedApiClient([
+        { message: assistantToolUse('cwd-probe') },
+        { message: assistantMsg('ok') },
+      ])
+      const agent = createWorkerAgent(
+        { apiClient: client, modelId: 'm' },
+        { cwd: '/tmp/guildhall-agent-cwd', extraTools: [cwdProbe] },
+      )
+
+      await toolNamesAfterGenerate(agent, client)
+
+      expect(observedCwd).toBe('/tmp/guildhall-agent-cwd')
     })
 
     it('createReviewerAgent appends extraTools', async () => {
@@ -439,7 +536,22 @@ describe('agent factories', () => {
       expect(sys).toContain('`pnpm typecheck`')
       expect(sys).toContain('`pnpm test`')
       expect(sys).toContain('`cargo clippy -- -D warnings`')
-      expect(sys).toContain('verified `bootstrap.successGates`')
+      expect(sys).toContain("project's currently known hard gates")
+      expect(sys).toContain('task-scoped project detection for a nested subproject')
+      expect(sys).not.toContain('falling back to the TypeScript defaults')
+    })
+
+    it('createGateCheckerAgent treats an explicit empty bootstrap gate list as authoritative', async () => {
+      const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
+      const agent = createGateCheckerAgent(
+        { apiClient: client, modelId: 'm' },
+        { successGates: [] },
+      )
+      await agent.generate('go')
+      const sys = client.requests[0]?.system_prompt ?? ''
+      expect(sys).toContain("project's currently known hard gates")
+      expect(sys).toContain('Do not invent extra gates beyond the authoritative list')
+      expect(sys).toContain('No verified shell gates are currently configured')
       expect(sys).not.toContain('falling back to the TypeScript defaults')
     })
 
@@ -461,6 +573,57 @@ describe('agent factories', () => {
       )
       const names = await toolNamesAfterGenerate(agent, client)
       expect(names).toContain('mcp__x__c')
+    })
+
+    it('createCoordinatorAgent does not instruct coordinators to claim ready work', async () => {
+      const client = new ScriptedApiClient([
+        { message: assistantToolUse('read-file', { filePath: '/tmp/coord-prompt-check.txt' }) },
+        { message: assistantMsg('ok') },
+      ])
+      const domain: CoordinatorDomain = {
+        id: 'looma',
+        name: 'Looma',
+        mandate: 'UI quality.',
+        projectPaths: [],
+        concerns: [],
+        autonomousDecisions: [],
+        escalationTriggers: [],
+      }
+      const agent = createCoordinatorAgent(
+        domain,
+        { apiClient: client, modelId: 'm' },
+      )
+      await agent.generate('go')
+      const sys = client.requests[0]?.system_prompt ?? ''
+      expect(sys).not.toContain("Assign 'ready' tasks to worker agents")
+      expect(sys).toContain("Review specs (tasks in 'spec_review')")
+    })
+
+    it('createCoordinatorAgent enables durable-decision nudges', () => {
+      const domain: CoordinatorDomain = {
+        id: 'looma',
+        name: 'Looma',
+        mandate: 'UI quality.',
+        projectPaths: [],
+        concerns: [],
+        autonomousDecisions: [],
+        escalationTriggers: [],
+      }
+      const agent = createCoordinatorAgent(
+        domain,
+        { apiClient: new ScriptedApiClient([]), modelId: 'm' },
+      )
+      const engine = (agent as unknown as {
+        engine: {
+          noToolTurnNudge?: string
+          noProgressToolNames?: readonly string[]
+          noProgressTurnNudge?: string
+        }
+      }).engine
+      expect(engine.noToolTurnNudge).toContain('coordinator decision')
+      expect(engine.noProgressToolNames).toContain('update-task')
+      expect(engine.noProgressToolNames).toContain('log-decision')
+      expect(engine.noProgressTurnNudge).toContain('record the decision durably')
     })
   })
 
@@ -537,6 +700,69 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
     expect(reloader.totalUsage).toEqual({ input_tokens: 5, output_tokens: 3 })
   })
 
+  it('can ignore completed snapshots when only pending continuation should resume', async () => {
+    const client = new ScriptedApiClient([
+      { message: assistantMsg('completed reply'), usage: { input_tokens: 5, output_tokens: 3 } },
+    ])
+    const saver = new GuildhallAgent({
+      name: 'persisting-complete',
+      llm: { apiClient: client, modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [],
+      sessionPersistence: { cwd: projectCwd, sessionId: 'complete-session' },
+    })
+    await saver.generate('first user prompt')
+
+    const reloader = new GuildhallAgent({
+      name: 'reload',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [],
+    })
+    const found = reloader.loadSession({
+      cwd: projectCwd,
+      sessionId: 'complete-session',
+      onlyPending: true,
+    })
+    expect(found).toBe(false)
+    expect(reloader.messages).toHaveLength(0)
+    expect(reloader.totalUsage).toEqual({ input_tokens: 0, output_tokens: 0 })
+  })
+
+  it('persists a recoverable snapshot when generate stops on max turns', async () => {
+    const client = new ScriptedApiClient([
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'tu-1', name: 'shell', input: { command: 'echo hi' } },
+          ],
+        },
+        usage: { input_tokens: 5, output_tokens: 3 },
+      },
+    ])
+    const agent = new GuildhallAgent({
+      name: 'persisting-error',
+      llm: { apiClient: client, modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [shellTool],
+      maxTurns: 1,
+      sessionPersistence: { cwd: projectCwd, sessionId: 'max-turn' },
+    })
+
+    await expect(agent.generate('run a command')).rejects.toThrow('Exceeded maximum turn limit (1)')
+
+    const reloader = new GuildhallAgent({
+      name: 'reload',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [shellTool],
+    })
+    expect(reloader.loadSession({ cwd: projectCwd, sessionId: 'max-turn' })).toBe(true)
+    expect(reloader.messages).toHaveLength(3)
+    expect(reloader.hasPendingContinuation()).toBe(true)
+  })
+
   it('loadSession returns false when no snapshot exists', () => {
     const agent = new GuildhallAgent({
       name: 'cold',
@@ -556,6 +782,38 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
       tools: [],
     })
     expect(agent.saveSession()).toBeNull()
+  })
+
+  it('resetConversation clears in-memory and persisted session state', async () => {
+    const client = new ScriptedApiClient([
+      { message: assistantMsg('first reply'), usage: { input_tokens: 5, output_tokens: 3 } },
+    ])
+    const agent = new GuildhallAgent({
+      name: 'resettable',
+      llm: { apiClient: client, modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [],
+      sessionPersistence: { cwd: projectCwd, sessionId: 'reset-session' },
+    })
+
+    await agent.generate('first user prompt')
+    expect(agent.messages).toHaveLength(2)
+    expect(agent.totalUsage).toEqual({ input_tokens: 5, output_tokens: 3 })
+
+    agent.resetConversation()
+
+    expect(agent.messages).toHaveLength(0)
+    expect(agent.totalUsage).toEqual({ input_tokens: 0, output_tokens: 0 })
+
+    const reloader = new GuildhallAgent({
+      name: 'reload',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'test-model' },
+      systemPrompt: 'sys',
+      tools: [],
+    })
+    expect(reloader.loadSession({ cwd: projectCwd, sessionId: 'reset-session' })).toBe(true)
+    expect(reloader.messages).toHaveLength(0)
+    expect(reloader.totalUsage).toEqual({ input_tokens: 0, output_tokens: 0 })
   })
 
   it('mid-turn resume: tool-result tail triggers continue() instead of a fresh prompt', async () => {
@@ -600,7 +858,7 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
     ])
     const resumer = new GuildhallAgent({
       name: 'resumer',
-      llm: { apiClient: client, modelId: 'test-model' },
+      llm: { apiClient: client, modelId: 'm' },
       systemPrompt: 'sys',
       tools: [shellTool],
     })
@@ -612,6 +870,43 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
     // Final history: user prompt, assistant tool_use, user tool_result, assistant final
     expect(resumer.messages).toHaveLength(4)
     expect(resumer.messages[3]?.role).toBe('assistant')
+  })
+
+  it('returns the latest non-empty assistant prose when a later assistant message is tool-only', async () => {
+    const prose: ConversationMessage = {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Pick one target and I can draft the spec.' }],
+    }
+    const toolOnly: ConversationMessage = {
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: 'toolu_post-user-question', name: 'post-user-question', input: {} }],
+    }
+
+    const saver = new GuildhallAgent({
+      name: 'saver',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'm' },
+      systemPrompt: 'sys',
+      tools: [],
+      sessionPersistence: { cwd: projectCwd, sessionId: 'latest-prose' },
+    })
+    ;(saver as unknown as { engine: { loadMessages: (m: ConversationMessage[]) => void } }).engine.loadMessages([
+      { role: 'user', content: [{ type: 'text', text: 'help me spec this' }] },
+      prose,
+      { role: 'user', content: [{ type: 'text', text: 'nudge: use a tool now' }] },
+      toolOnly,
+    ])
+    saver.saveSession()
+
+    const resumer = new GuildhallAgent({
+      name: 'resumer',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'm' },
+      systemPrompt: 'sys',
+      tools: [],
+    })
+    expect(resumer.loadSession({ cwd: projectCwd, sessionId: 'latest-prose' })).toBe(true)
+    await expect(resumer.continue()).resolves.toMatchObject({
+      text: 'Pick one target and I can draft the spec.',
+    })
   })
 
   it('saveSession with overrides writes a snapshot even without ctor config', async () => {
@@ -630,11 +925,34 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
 
     const reloader = new GuildhallAgent({
       name: 'reload',
-      llm: { apiClient: new ScriptedApiClient([]), modelId: 'm' },
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'test-model' },
       systemPrompt: '',
       tools: [],
     })
     expect(reloader.loadSession({ cwd: projectCwd, sessionId: 'manual-id' })).toBe(true)
     expect(reloader.messages).toHaveLength(2)
+  })
+
+  it('loadSession refuses snapshots saved for a different model', async () => {
+    const client = new ScriptedApiClient([
+      { message: assistantMsg('old-model reply'), usage: { input_tokens: 1, output_tokens: 1 } },
+    ])
+    const saver = new GuildhallAgent({
+      name: 'saver',
+      llm: { apiClient: client, modelId: 'old-model' },
+      systemPrompt: 'sys',
+      tools: [],
+      sessionPersistence: { cwd: projectCwd, sessionId: 'model-bound' },
+    })
+    await saver.generate('hello')
+
+    const reloader = new GuildhallAgent({
+      name: 'reload',
+      llm: { apiClient: new ScriptedApiClient([]), modelId: 'new-model' },
+      systemPrompt: 'sys',
+      tools: [],
+    })
+    expect(reloader.loadSession({ cwd: projectCwd, sessionId: 'model-bound' })).toBe(false)
+    expect(reloader.messages).toHaveLength(0)
   })
 })

@@ -5,21 +5,25 @@
  * The repo is flat — one package at the root. There is no monorepo and
  * nothing pretends to be a package that isn't. The `dist/` bundle
  * inlines every internal module (src/*) via esbuild, so `npm install
- * guildhall` is the complete install story.
+ * -g guildhall` stays a complete supported install story even though
+ * the recommended 0.5.x UX is the packaged macOS installer.
  *
  * What this script does, in order:
  *   1. Parse the target version (explicit semver or `patch`/`minor`/`major`).
  *   2. Refuse to run on a dirty worktree or when not on `main` (override with
  *      `--allow-dirty` / `--allow-branch`).
  *   3. Bump the root `package.json` to the new version.
- *   4. Typecheck + tests + dep-cruise as the pre-publish gate.
+ *   4. Typecheck + docs build + tests + dep-cruise as the pre-publish gate.
  *   5. Rebuild `dist/` fresh.
- *   6. `npm publish` with `--access=public`.
- *   7. Commit the version bump and tag `v<version>`.
+ *   6. Build the macOS packaged artifact used by the curl installer.
+ *   7. Verify package contents exclude raw docs/ but keep generated help.
+ *   8. `npm publish` with `--access=public`.
+ *   9. Commit the version bump and tag `v<version>`.
  *
  * Flags:
  *   --dry-run             Print each step; run everything except `npm publish`
- *                         (uses `npm publish --dry-run`) and skip the commit/tag.
+ *                         (uses `npm publish --dry-run`), skip the commit/tag,
+ *                         and restore package.json before exit.
  *   --skip-tests          Skip step 4. Build still runs.
  *   --allow-dirty         Allow a dirty git tree (e.g. mid-release fix-up).
  *   --allow-branch        Allow publishing from a branch other than `main`.
@@ -27,18 +31,20 @@
  *                         prereleases).
  *
  * Usage:
- *   node scripts/publish.mjs 0.3.0
+ *   node scripts/publish.mjs 0.4.0
  *   node scripts/publish.mjs patch --dry-run
- *   node scripts/publish.mjs 0.3.0-rc.1 --tag next
+ *   node scripts/publish.mjs 0.4.0-rc.1 --tag next
  */
 
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const MANIFEST = join(ROOT, 'package.json')
+const GENERATED_HELP_TOPICS = join(ROOT, 'src/web/generated/help-topics.json')
+const WEB_BUNDLE = join(ROOT, 'dist/web/app.js')
 
 // ---------------------------------------------------------------------------
 // Args
@@ -56,6 +62,13 @@ const flags = {
   allowDirty: args.includes('--allow-dirty'),
   allowBranch: args.includes('--allow-branch'),
   tag: takeFlagValue('--tag') ?? 'latest',
+}
+const originalManifestText = readFileSync(MANIFEST, 'utf-8')
+let restoreManifestOnExit = false
+if (flags.dryRun) {
+  process.on('exit', () => {
+    if (restoreManifestOnExit) writeFileSync(MANIFEST, originalManifestText)
+  })
 }
 const versionArg = args.find((a) => !a.startsWith('--'))
 if (!versionArg) die('Missing version argument. Pass a semver or `patch`/`minor`/`major`.')
@@ -80,17 +93,23 @@ preflightGit()
 // ---------------------------------------------------------------------------
 
 const manifest = readJson(MANIFEST)
-manifest.version = nextVersion
-writeJson(MANIFEST, manifest)
-log(`Bumped package.json to ${nextVersion}.`)
+if (manifest.version !== nextVersion) {
+  manifest.version = nextVersion
+  writeJson(MANIFEST, manifest)
+  restoreManifestOnExit = flags.dryRun
+  log(`Bumped package.json to ${nextVersion}.`)
+} else {
+  log(`package.json already at ${nextVersion}; continuing without a manifest bump.`)
+}
 
 // ---------------------------------------------------------------------------
 // 4. Pre-publish gate
 // ---------------------------------------------------------------------------
 
 if (!flags.skipTests) {
-  log('Running typecheck, lint:deps, and tests…')
+  log('Running typecheck, docs build, lint:deps, and tests...')
   run('pnpm', ['typecheck'])
+  run('pnpm', ['docs:build'])
   run('pnpm', ['lint:deps'])
   run('pnpm', ['test'])
 } else {
@@ -101,32 +120,54 @@ if (!flags.skipTests) {
 // 5. Build the bundle
 // ---------------------------------------------------------------------------
 
-log('Building dist/…')
+log('Building dist/...')
 run('pnpm', ['build'])
 
 // ---------------------------------------------------------------------------
-// 6. Publish
+// 6. Build the macOS packaged artifact
+// ---------------------------------------------------------------------------
+
+log('Building macOS packaged artifact...')
+run('node', ['scripts/build-macos-package.mjs', '--skip-build'])
+
+// ---------------------------------------------------------------------------
+// 7. Package contents guard
+// ---------------------------------------------------------------------------
+
+log('Checking npm package contents...')
+assertNoDocsInPackage()
+
+// ---------------------------------------------------------------------------
+// 8. Publish
 // ---------------------------------------------------------------------------
 
 const publishArgs = ['publish', '--access=public', '--tag', flags.tag]
 if (flags.dryRun) publishArgs.push('--dry-run')
 
-log(`Publishing guildhall@${nextVersion} (tag: ${flags.tag})${flags.dryRun ? ' [dry-run]' : ''}…`)
+log(`Publishing guildhall@${nextVersion} (tag: ${flags.tag})${flags.dryRun ? ' [dry-run]' : ''}...`)
 run('npm', publishArgs)
 
 // ---------------------------------------------------------------------------
-// 7. Commit + tag
+// 9. Commit + tag
 // ---------------------------------------------------------------------------
 
 if (flags.dryRun) {
-  warn('Dry-run: skipping git commit + tag. package.json is still bumped — revert with `git checkout -- package.json` if needed.')
+  warn('Dry-run: skipping git commit + tag and restoring package.json.')
   process.exit(0)
 }
 
-log('Committing version bump + tagging…')
+log('Committing version bump + tagging...')
 run('git', ['add', 'package.json'])
-run('git', ['commit', '-m', `chore(release): guildhall@${nextVersion}`])
-run('git', ['tag', `v${nextVersion}`])
+if (hasStagedDiff(['package.json'])) {
+  run('git', ['commit', '-m', `chore(release): guildhall@${nextVersion}`])
+} else {
+  warn('No package.json version diff to commit; skipping release commit.')
+}
+if (gitRefExists(`refs/tags/v${nextVersion}`)) {
+  warn(`Tag v${nextVersion} already exists; skipping tag creation.`)
+} else {
+  run('git', ['tag', `v${nextVersion}`])
+}
 
 log(`\n✓ Published guildhall@${nextVersion}`)
 log(`  Push when ready:  git push origin main --follow-tags`)
@@ -139,10 +180,11 @@ function printHelp() {
   console.log(`Usage: node scripts/publish.mjs <version> [flags]
 
 Arguments:
-  version            Explicit semver (e.g. 0.3.0) or keyword: patch | minor | major
+  version            Explicit semver (e.g. 0.4.0) or keyword: patch | minor | major
 
 Flags:
-  --dry-run          Do everything except the real publish and the git commit/tag.
+  --dry-run          Do everything except the real publish and the git commit/tag;
+                     restore package.json before exit.
   --skip-tests       Skip the pre-publish gate. Build still runs. Use sparingly.
   --allow-dirty      Permit a dirty worktree.
   --allow-branch     Publish from a branch other than main.
@@ -182,6 +224,85 @@ function run(cmd, argv) {
     execFileSync(cmd, argv, { stdio: 'inherit', cwd: ROOT })
   } catch {
     die(`Command failed: ${cmd} ${argv.join(' ')}`)
+  }
+}
+
+function runCapture(cmd, argv) {
+  try {
+    return execFileSync(cmd, argv, {
+      cwd: ROOT,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'inherit'],
+    })
+  } catch {
+    die(`Command failed: ${cmd} ${argv.join(' ')}`)
+  }
+}
+
+function hasStagedDiff(paths) {
+  const result = spawnSync('git', ['diff', '--cached', '--quiet', '--', ...paths], {
+    cwd: ROOT,
+    stdio: 'ignore',
+  })
+  if (result.status === 0) return false
+  if (result.status === 1) return true
+  die(`Command failed: git diff --cached --quiet -- ${paths.join(' ')}`)
+}
+
+function gitRefExists(ref) {
+  const result = spawnSync('git', ['show-ref', '--verify', '--quiet', ref], {
+    cwd: ROOT,
+    stdio: 'ignore',
+  })
+  if (result.status === 0) return true
+  if (result.status === 1) return false
+  die(`Command failed: git show-ref --verify --quiet ${ref}`)
+}
+
+function assertNoDocsInPackage() {
+  const stdout = runCapture('npm', ['pack', '--dry-run', '--json'])
+  let packs
+  try {
+    packs = JSON.parse(stdout)
+  } catch {
+    die('Could not parse `npm pack --dry-run --json` output.')
+  }
+
+  const files = packs.flatMap((pack) => pack.files ?? [])
+  const docsFiles = files
+    .map((file) => file.path)
+    .filter((path) => path === 'docs' || path.startsWith('docs/'))
+
+  if (docsFiles.length > 0) {
+    die(`Refusing to publish package with docs/ files:\n${docsFiles.map((path) => `  - ${path}`).join('\n')}`)
+  }
+
+  assertHelpSystemInPackage(files)
+
+  log(`Package contents OK (${files.length} files, no raw docs/; generated help is bundled).`)
+}
+
+function assertHelpSystemInPackage(files) {
+  const packedPaths = new Set(files.map((file) => file.path))
+  if (!packedPaths.has('dist/web/app.js')) {
+    die('Refusing to publish package without dist/web/app.js; the help system is bundled into the web app.')
+  }
+
+  let topics
+  try {
+    topics = JSON.parse(readFileSync(GENERATED_HELP_TOPICS, 'utf-8'))
+  } catch {
+    die('Refusing to publish package without generated help topics. Run `pnpm build` before publishing.')
+  }
+
+  const firstTopic = Object.values(topics)[0]
+  if (!firstTopic?.href) {
+    die('Refusing to publish package without generated help topic hrefs.')
+  }
+
+  const webBundle = readFileSync(WEB_BUNDLE, 'utf-8')
+  if (!webBundle.includes(firstTopic.href)) {
+    die('Refusing to publish package because dist/web/app.js does not include generated help topics.')
   }
 }
 

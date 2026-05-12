@@ -19,6 +19,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte'
   import Modal from './Modal.svelte'
+  import Tooltip from './Tooltip.svelte'
   import topics from '../generated/help-topics.json'
 
   type TopicMap = Record<string, { title: string; summary: string; href: string }>
@@ -54,24 +55,26 @@
 {#if variant === 'inline' && label}
   <span class="gh-help-inline">
     <span>{label}</span>
+    <Tooltip text={missing ? `Missing help topic: ${topic}` : summary}>
+      <button
+        type="button"
+        class="gh-help-btn"
+        class:missing
+        aria-label={`Help: ${title}`}
+        onclick={onClick}
+      ><Icon name="help-circle" size={size} /></button>
+    </Tooltip>
+  </span>
+{:else}
+  <Tooltip text={missing ? `Missing help topic: ${topic}` : summary}>
     <button
       type="button"
       class="gh-help-btn"
       class:missing
       aria-label={`Help: ${title}`}
-      title={missing ? `Missing help topic: ${topic}` : summary}
       onclick={onClick}
     ><Icon name="help-circle" size={size} /></button>
-  </span>
-{:else}
-  <button
-    type="button"
-    class="gh-help-btn"
-    class:missing
-    aria-label={`Help: ${title}`}
-    title={missing ? `Missing help topic: ${topic}` : summary}
-    onclick={onClick}
-  ><Icon name="help-circle" size={size} /></button>
+  </Tooltip>
 {/if}
 
 <Modal {open} title={title} onClose={close} size="sm">

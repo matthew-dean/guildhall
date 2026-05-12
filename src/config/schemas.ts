@@ -2,6 +2,48 @@ import { z } from 'zod'
 import { ModelAssignmentConfig, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
 import { mcpServerConfigSchema } from '@guildhall/mcp'
 
+const MODEL_ROLE_KEYS = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker'] as const
+const MODEL_PROVIDER_KEYS = [
+  'claude-oauth',
+  'anthropic-api',
+  'codex',
+  'codex-oauth',
+  'openai-api',
+  'llama-cpp',
+] as const
+type ModelRoleKey = (typeof MODEL_ROLE_KEYS)[number]
+type ModelProviderKey = (typeof MODEL_PROVIDER_KEYS)[number]
+
+const LegacyModelAssignmentPartialSchema = ModelAssignmentConfig.partial().strict()
+
+const ProviderModelShortcutSchema = z.object({
+  all: z.string().optional(),
+  smart: z.string().optional(),
+  workhorse: z.string().optional(),
+  spec: z.string().optional(),
+  coordinator: z.string().optional(),
+  worker: z.string().optional(),
+  reviewer: z.string().optional(),
+  gateChecker: z.string().optional(),
+})
+
+const ProviderModelAssignmentsSchema = z.object({
+  'claude-oauth': ProviderModelShortcutSchema.optional(),
+  'anthropic-api': ProviderModelShortcutSchema.optional(),
+  codex: ProviderModelShortcutSchema.optional(),
+  'codex-oauth': ProviderModelShortcutSchema.optional(),
+  'openai-api': ProviderModelShortcutSchema.optional(),
+  'llama-cpp': ProviderModelShortcutSchema.optional(),
+}).strict()
+
+export const ModelConfigInputSchema = z.union([
+  LegacyModelAssignmentPartialSchema,
+  ProviderModelAssignmentsSchema,
+])
+export type ModelConfigInput = z.infer<typeof ModelConfigInputSchema>
+export type ProviderModelShortcut = z.infer<typeof ProviderModelShortcutSchema>
+export type ProviderModelAssignments = z.infer<typeof ProviderModelAssignmentsSchema>
+
 // ---------------------------------------------------------------------------
 // guildhall.yaml — per-workspace configuration
 // Lives next to the project's code (or in a .guildhall/ subdir).
@@ -20,15 +62,15 @@ export const WorkspaceYamlConfig = z.object({
 
   // Model assignments per agent role.
   // Missing roles fall back to global config, then built-in defaults.
-  models: ModelAssignmentConfig.partial().optional(),
+  models: ModelConfigInputSchema.optional(),
 
   // Which coordinators are active in this workspace.
   // Each coordinator can target a sub-path of projectPath.
   coordinators: z.array(z.object({
     // Unique id for this coordinator (e.g. "looma", "knit")
     id: z.string(),
-    // Display name shown in logs and dashboard
-    name: z.string(),
+    // Legacy display label; current UI derives labels from domain/id.
+    name: z.string().optional(),
     // Short domain label used for task routing (matches task.domain)
     domain: z.string(),
     // Absolute or relative path to the project this coordinator governs.
@@ -79,7 +121,7 @@ export const WorkspaceYamlConfig = z.object({
   }).optional(),
 
   // FR-18: lifecycle hook definitions keyed by HookEvent (session_start,
-  // session_end, pre_tool_use, post_tool_use, …). Each event maps to an array
+  // session_end, pre_tool_use, post_tool_use, ...). Each event maps to an array
   // of hook definitions (command/http/prompt/agent). The structure is left as
   // passthrough here; @guildhall/hooks' zod schema is applied by the runtime
   // when building the HookExecutor. Keeping validation at the edge avoids a
@@ -158,7 +200,11 @@ export type WorkspaceYamlConfig = z.infer<typeof WorkspaceYamlConfig>
 
 export const GlobalConfig = z.object({
   // Default model assignments (merged with per-workspace models)
-  models: ModelAssignmentConfig.partial().optional(),
+  models: ModelConfigInputSchema.optional(),
+
+  // Default preferred provider for this machine. Projects may override it
+  // in local .guildhall/config.yaml when truly necessary.
+  preferredProvider: z.enum(['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api']).optional(),
 
   // Default max revisions
   maxRevisions: z.number().int().positive().default(3),
@@ -166,7 +212,7 @@ export const GlobalConfig = z.object({
   // Default heartbeat interval
   heartbeatInterval: z.number().int().positive().default(5),
 
-  // LM Studio base URL
+  // OpenAI-compatible local server base URL
   lmStudioUrl: z.string().url().default('http://localhost:1234/v1'),
 
   // Anthropic API key (can also be set via ANTHROPIC_API_KEY env var)
@@ -177,6 +223,17 @@ export const GlobalConfig = z.object({
 
   // Dashboard server port for `guildhall serve`
   servePort: z.number().int().min(1024).max(65535).default(7777),
+
+  // Whether a project whose preferred provider is unavailable may fall back
+  // to another paid/cloud provider. Default is deliberately false; projects
+  // can opt in through their local .guildhall/config.yaml.
+  allowPaidProviderFallback: z.boolean().default(false),
+
+  /**
+   * Advanced override for reviewer persona fan-out. Omit to let Guildhall pick
+   * a sane default from the active provider's advertised capacity.
+   */
+  reviewerFanoutConcurrency: z.number().int().positive().max(16).optional(),
 })
 export type GlobalConfig = z.infer<typeof GlobalConfig>
 
@@ -216,8 +273,10 @@ export type WorkspaceRegistry = z.infer<typeof WorkspaceRegistry>
 // memory/agent-overrides.yaml — agent-accumulated configuration
 //
 // Written by agents at runtime via the saveAgentSetting tool.
-// Merged on top of guildhall.yaml during config resolution, so it is the highest-
-// priority config layer (below env vars only).
+// Project-behavior fields are merged on top of guildhall.yaml during config
+// resolution. Model assignments are intentionally not agent-owned; they describe
+// the user's machine and belong in ~/.guildhall/config.yaml unless a human adds
+// an explicit workspace override.
 //
 // Humans can inspect, edit, or revert this file — it is plain YAML.
 // Agents record the rationale for every change in DECISIONS.md so you always
@@ -231,7 +290,7 @@ export type WorkspaceRegistry = z.infer<typeof WorkspaceRegistry>
 export const AgentSettingEntry = z.object({
   // ISO timestamp of when this setting was saved
   savedAt: z.string(),
-  // Which agent role saved this (coordinator, worker, reviewer, …)
+  // Which agent role saved this (coordinator, worker, reviewer, ...)
   agentRole: z.string(),
   // Free-text rationale (also written to DECISIONS.md)
   rationale: z.string(),
@@ -263,8 +322,9 @@ export const AgentSettings = z.object({
   // Schema version for future migration
   version: z.literal(1).default(1),
 
-  // Model overrides — e.g. if the agent found a role's model keeps timing out
-  models: ModelAssignmentConfig.partial().optional(),
+  // Legacy field: parsed for backward compatibility, but config resolution
+  // ignores it. Model defaults are user/machine settings.
+  models: ModelConfigInputSchema.optional(),
 
   // Per-coordinator overrides, keyed by coordinator id (e.g. "looma", "knit")
   coordinators: z.record(z.string(), AgentCoordinatorOverride).default({}),
@@ -305,6 +365,9 @@ export const ResolvedConfig = z.object({
   // Project path (defaults to workspacePath)
   projectPath: z.string(),
 
+  // Optional explicit landing branch for accepted work in this checkout.
+  landingBranch: z.string().optional(),
+
   // Memory directory (always <workspacePath>/memory)
   memoryDir: z.string(),
 
@@ -314,7 +377,7 @@ export const ResolvedConfig = z.object({
   // Coordinator definitions (mirrors WorkspaceYamlConfig.coordinators)
   coordinators: z.array(z.object({
     id: z.string(),
-    name: z.string(),
+    name: z.string().optional(),
     domain: z.string(),
     path: z.string().optional(),
     mandate: z.string(),
@@ -422,6 +485,102 @@ export function slugify(name: string): string {
 }
 
 type ModelAssignmentPartial = { [K in keyof z.infer<typeof ModelAssignmentConfig>]?: string | undefined }
+
+function isRoleKey(key: string): key is ModelRoleKey {
+  return (MODEL_ROLE_KEYS as readonly string[]).includes(key)
+}
+
+function isProviderModelAssignments(
+  value: ModelConfigInput | undefined,
+): value is ProviderModelAssignments {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const keys = Object.keys(value)
+  return keys.some(key => (MODEL_PROVIDER_KEYS as readonly string[]).includes(key))
+}
+
+function normalizeProviderModelKey(
+  provider: string | undefined,
+): ModelProviderKey | null {
+  if (!provider) return null
+  if (provider === 'codex') return 'codex'
+  if (provider === 'codex-oauth') return 'codex-oauth'
+  return (MODEL_PROVIDER_KEYS as readonly string[]).includes(provider)
+    ? (provider as ModelProviderKey)
+    : null
+}
+
+function expandProviderShortcut(
+  shortcut: ProviderModelShortcut | undefined,
+): ModelAssignmentPartial {
+  if (!shortcut) return {}
+  const out: ModelAssignmentPartial = {}
+  if (shortcut.all) {
+    for (const role of MODEL_ROLE_KEYS) out[role] = shortcut.all
+  }
+  if (shortcut.smart) {
+    out.spec = shortcut.smart
+    out.coordinator = shortcut.smart
+  }
+  if (shortcut.workhorse) {
+    out.worker = shortcut.workhorse
+    out.reviewer = shortcut.workhorse
+    out.gateChecker = shortcut.workhorse
+  }
+  for (const role of MODEL_ROLE_KEYS) {
+    const value = shortcut[role]
+    if (value) out[role] = value
+  }
+  return out
+}
+
+export function resolveModelsForProvider(
+  input: ModelConfigInput | undefined,
+  provider?: string,
+): ModelAssignmentPartial {
+  if (!input) return {}
+  if (!isProviderModelAssignments(input)) return input
+  const normalized = normalizeProviderModelKey(provider)
+  if (normalized) {
+    const direct = input[normalized]
+    if (direct) return expandProviderShortcut(direct)
+    if (normalized === 'codex-oauth' && input.codex) return expandProviderShortcut(input.codex)
+    if (normalized === 'codex' && input['codex-oauth']) return expandProviderShortcut(input['codex-oauth'])
+    return {}
+  }
+  const entries = Object.entries(input).filter(([, value]) => value && typeof value === 'object')
+  if (entries.length === 1) {
+    const only = entries[0]?.[1] as ProviderModelShortcut | undefined
+    return expandProviderShortcut(only)
+  }
+  return {}
+}
+
+export function writeModelsForProvider(
+  input: ModelConfigInput | undefined,
+  provider: string | undefined,
+  assignment: ModelAssignmentPartial | undefined,
+): ModelConfigInput | undefined {
+  const normalized = normalizeProviderModelKey(provider)
+  if (!normalized) {
+    return assignment && Object.keys(assignment).length > 0 ? assignment : undefined
+  }
+  const current = isProviderModelAssignments(input) ? { ...input } : {}
+  if (!assignment || Object.keys(assignment).length === 0) {
+    delete current[normalized]
+    if (normalized === 'codex-oauth') delete current.codex
+    if (normalized === 'codex') delete current['codex-oauth']
+    return Object.keys(current).length > 0 ? current : undefined
+  }
+  const explicit: ProviderModelShortcut = {}
+  for (const role of MODEL_ROLE_KEYS) {
+    const value = assignment[role]
+    if (value) explicit[role] = value
+  }
+  current[normalized] = explicit
+  if (normalized === 'codex-oauth') delete current.codex
+  if (normalized === 'codex') delete current['codex-oauth']
+  return current
+}
 
 /** Merge partial model assignments: workspace overrides global overrides defaults */
 export function mergeModels(

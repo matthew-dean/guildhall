@@ -13,7 +13,35 @@ import type { PreRejectionAction } from './pre-rejection-policy.js'
  * the type import).
  */
 export type TickOutcome =
-  | { kind: 'idle'; consecutiveIdleTicks: number; allDone: boolean }
+  | {
+      kind: 'idle'
+      consecutiveIdleTicks: number
+      allDone: boolean
+      summary?: {
+        reason:
+          | 'all_terminal'
+          | 'awaiting_human'
+          | 'blocked_only'
+          | 'dependency_blocked'
+          | 'no_eligible_tasks'
+        message: string
+        counts: {
+          total: number
+          actionable: number
+          terminal: number
+          done: number
+          blocked: number
+          shelved: number
+          waitingOnUser: number
+          draftReview: number
+          awaitingApproval: number
+          dependencyBlocked: number
+          escalated: number
+          active: number
+          fresh: number
+        }
+      }
+    }
   | {
       kind: 'processed'
       taskId: string
@@ -22,10 +50,18 @@ export type TickOutcome =
       afterStatus: TaskStatus
       transitioned: boolean
       revisionCount: number
+      waitingOnUser?: boolean
     }
   | { kind: 'blocked-max-revisions'; taskId: string; revisionCount: number }
   | { kind: 'no-coordinator'; taskId: string; domain: string }
   | { kind: 'agent-error'; taskId: string; agent: string; error: string }
+  | {
+      kind: 'provider-backoff'
+      taskId: string
+      agent: string
+      status: TaskStatus
+      error: string
+    }
   /** FR-10: an agent raised an escalation — task is halted until resolved. */
   | {
       kind: 'escalated'

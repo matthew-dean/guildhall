@@ -132,7 +132,7 @@ if (watch) {
   const webCtx = await context(webBuildOptions)
   await ctx.watch()
   await webCtx.watch()
-  console.log('[guildhall build] Watching for changes…')
+  console.log('[guildhall build] Watching for changes...')
 } else {
   await build(buildOptions)
   await build(webBuildOptions)

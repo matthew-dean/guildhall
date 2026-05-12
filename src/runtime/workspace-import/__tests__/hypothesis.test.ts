@@ -72,6 +72,178 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.stats).toEqual({ inputSignals: 4, drafted: 4, deduped: 0 })
   })
 
+  it('does not copy identical evidence into goal rationale or task description', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'readme',
+          kind: 'goal',
+          title: '✨ **Live conversion** - See changes',
+          evidence: '✨ **Live conversion** - See changes',
+          confidence: 'medium',
+        },
+        {
+          source: 'todo-comments',
+          kind: 'open_work',
+          title: 'Consider caching',
+          evidence: 'Consider caching',
+          confidence: 'low',
+        },
+      ]),
+    )
+    expect(draft.goals[0]!.rationale).toBe('')
+    expect(draft.tasks[0]!.description).toBe('')
+  })
+
+  it('does not promote generic TODOs or bootstrap chores into starter tasks', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'todo-comments',
+          kind: 'open_work',
+          title: 'TODO: Add more features:',
+          evidence: 'TODO: Add more features:',
+          confidence: 'low',
+        },
+        {
+          source: 'todo-comments',
+          kind: 'open_work',
+          title: 'TODO: Could clean up visible type tags here if needed',
+          evidence: 'TODO: Could clean up visible type tags here if needed',
+          confidence: 'low',
+        },
+        {
+          source: 'roadmap',
+          kind: 'open_work',
+          title: 'Verify bootstrap: pnpm install → build → test',
+          evidence: '- [ ] Verify bootstrap: pnpm install → build → test',
+          confidence: 'high',
+        },
+        {
+          source: 'roadmap',
+          kind: 'open_work',
+          title: 'Implement declaration file generation',
+          evidence: '- [ ] Implement declaration file generation',
+          confidence: 'high',
+        },
+      ]),
+    )
+    expect(draft.tasks.map(t => t.title)).toEqual(['Implement declaration file generation'])
+  })
+
+  it('preserves domain hints from multi-project workspace signals', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Fix selection drift',
+          evidence: 'looma/docs/editor-bugs.md: - [ ] Fix selection drift',
+          domainHint: 'looma',
+          confidence: 'high',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Redirect auth callback',
+          evidence: 'knit/PROJECT_STATE.md: - [ ] Redirect auth callback',
+          domainHint: 'knit',
+          confidence: 'high',
+        },
+      ]),
+    )
+    expect(draft.tasks.map((task) => task.domain)).toEqual(['looma', 'knit'])
+  })
+
+  it('filters obvious formatting debris before creating draft tasks', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: '(none)',
+          evidence: 'placeholder',
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Numbered Given/When/Then acceptance criteria',
+          evidence: 'summary line',
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Fix import review affordance',
+          evidence: 'real work item',
+          confidence: 'medium',
+        },
+      ]),
+    )
+    expect(draft.tasks.map((task) => task.title)).toEqual(['Fix import review affordance'])
+  })
+
+  it('filters colon-ended grouping headers from task backlog', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Add missing high-frequency primitives:',
+          evidence: 'group heading',
+          domainHint: 'looma',
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Listbox',
+          evidence: 'child item',
+          domainHint: 'looma',
+          confidence: 'medium',
+        },
+      ]),
+    )
+    expect(draft.tasks.map((task) => task.title)).toEqual(['Listbox'])
+  })
+
+  it('keeps explanatory planning bullets as context instead of task backlog', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Strong recurrence in BlockNote and Plate',
+          evidence: 'comparative editor note',
+          domainHint: 'looma',
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Realtime presence config: supabase.realtime must be enabled in Supabase dashboard for the channel to connect.',
+          evidence: 'environment note',
+          domainHint: 'knit',
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement inline comments',
+          evidence: 'real backlog item',
+          domainHint: 'knit',
+          confidence: 'high',
+        },
+      ]),
+    )
+    expect(draft.tasks.map((task) => task.title)).toEqual(['Implement inline comments'])
+    expect(draft.context.map((entry) => entry.label)).toEqual([
+      'Strong recurrence in BlockNote and Plate',
+      'Realtime presence config: supabase.realtime must be enabled in Supabase dashboard for the channel to connect.',
+    ])
+  })
+
   it('produces stable suggestedId slugs', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
@@ -84,7 +256,7 @@ describe('formWorkspaceHypothesis', () => {
         },
       ]),
     )
-    expect(draft.tasks[0]!.suggestedId).toBe('task-import-add-dark-mode-toggle')
+    expect(draft.tasks[0]!.suggestedId).toMatch(/^task-import-[a-z0-9]{1,7}$/)
     const draft2 = formWorkspaceHypothesis(
       invFrom([
         {
@@ -131,6 +303,32 @@ describe('formWorkspaceHypothesis', () => {
       new Set(['ROADMAP.md', 'src/theme.ts:42']),
     )
     expect(draft.stats.deduped).toBe(1)
+  })
+
+  it('fuzzily dedupes near-identical tasks from the same planning file', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'TypeScript: generate proper types from Supabase (pnpm db:types)',
+          evidence: 'first wording',
+          references: ['/repo/knit/PROJECT_STATE.md'],
+          domainHint: 'knit',
+          confidence: 'high',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'pnpm db:types — generate TypeScript types from Supabase schema',
+          evidence: 'second wording',
+          references: ['/repo/knit/PROJECT_STATE.md'],
+          domainHint: 'knit',
+          confidence: 'high',
+        },
+      ]),
+    )
+    expect(draft.tasks).toHaveLength(1)
   })
 
   it('upgrades confidence when a later signal is stronger', () => {

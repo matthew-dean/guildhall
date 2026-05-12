@@ -17,17 +17,6 @@ const saveAgentSettingInputSchema = z.object({
   agentRole: z.string().describe('Your agent role: coordinator, worker, reviewer, gateChecker, or spec'),
   rationale: z.string().describe('Why are you saving this setting? Be specific about what you observed.'),
 
-  modelOverrides: z
-    .object({
-      spec: z.string().optional(),
-      coordinator: z.string().optional(),
-      worker: z.string().optional(),
-      reviewer: z.string().optional(),
-      gateChecker: z.string().optional(),
-    })
-    .optional()
-    .describe('Override model assignments for specific roles'),
-
   coordinatorId: z.string().optional().describe('Coordinator id to refine (e.g. "looma", "knit")'),
   addConcern: z
     .object({
@@ -60,7 +49,6 @@ export async function saveAgentSetting(input: SaveAgentSettingInput): Promise<Sa
       decisionsPath,
       agentRole,
       rationale,
-      modelOverrides,
       coordinatorId,
       addConcern,
       removeConcernId,
@@ -87,19 +75,12 @@ export async function saveAgentSetting(input: SaveAgentSettingInput): Promise<Sa
       coordinators,
       addIgnore: addIgnorePattern ? [addIgnorePattern] : [],
       history: [],
-      ...(modelOverrides ? { models: modelOverrides } : {}),
       ...(maxRevisions !== undefined ? { maxRevisions } : {}),
     }
 
     updateAgentSettings(workspacePath, patch, { agentRole, rationale })
 
     const changes: string[] = []
-    if (modelOverrides) {
-      const overridden = Object.entries(modelOverrides).filter(([, v]) => v != null)
-      if (overridden.length > 0) {
-        changes.push(`Model overrides: ${overridden.map(([k, v]) => `${k} → ${v}`).join(', ')}`)
-      }
-    }
     if (coordinatorId) {
       if (addConcern) changes.push(`Added concern "${addConcern.id}" to coordinator ${coordinatorId}`)
       if (removeConcernId) changes.push(`Removed concern "${removeConcernId}" from coordinator ${coordinatorId}`)

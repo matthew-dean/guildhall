@@ -18,18 +18,26 @@ Whether workers run in their own git worktree.
 | Position | Effect |
 |---|---|
 | `none` | All workers share the main working tree. Only viable when `concurrent_task_dispatch` is `serial`. |
-| `per_task` | One worktree per task, created at `ready`, torn down on terminal status. |
-| `per_attempt` | Fresh worktree per revision attempt — pristine starting state for every retry. |
+| `per_task` | One isolated task workspace per task. Created when work begins and kept until the work has actually landed or been intentionally cleaned up. |
+| `per_attempt` | Fresh worktree per revision attempt — an advanced/internal escape hatch, not the main recommended product mode. |
 
 ## Worktree paths
 
-Under the project's `.guildhall/worktrees/` directory. Each worktree gets a friendly slug (e.g. `.claude/worktrees/gentle-newton-a7c9d2`).
+New isolated task workspaces should live under Guildhall's user-local runtime
+root instead of inside the repo:
+
+```text
+~/.guildhall/worktrees/<project-id>/<task-id>
+```
+
+That keeps runtime sandboxes out of normal repo status and editor trees.
 
 ## Related levers
 
 - [`concurrent_task_dispatch`](./concurrent-task-dispatch) — fanout requires at least `per_task`.
-- [`merge_policy`](./merge-policy) — determines what happens when a worktree's branch lands.
+- [`landing_strategy`](./merge-policy) — determines what happens when a worktree's accepted commits land.
 
 ## When to change it
 
-`per_task` is a good default once you fan out. `per_attempt` is overkill for most projects but helpful when revisions tend to leave the filesystem in a confusing state (e.g. partially-generated builds).
+`per_task` is the normal recommended mode once you want isolation. `per_attempt`
+is intentionally more niche and should not be the main user-facing story.

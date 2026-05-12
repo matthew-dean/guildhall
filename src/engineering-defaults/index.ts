@@ -16,6 +16,7 @@ const MODULE_DIR = dirname(fileURLToPath(import.meta.url))
 const CONTENT_DIR = join(MODULE_DIR, 'engineering-defaults')
 
 export type EngineeringDefaultTopic =
+  | 'voice'
   | 'coding'
   | 'testing'
   | 'frontend'
@@ -27,6 +28,7 @@ export type EngineeringDefaultTopic =
   | 'review'
 
 const ALL_TOPICS: readonly EngineeringDefaultTopic[] = [
+  'voice',
   'coding',
   'testing',
   'frontend',

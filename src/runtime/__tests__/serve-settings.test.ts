@@ -2,8 +2,14 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { bootstrapWorkspace } from '@guildhall/config'
+import { readProjectConfig } from '@guildhall/config'
+import { defaultAgentSettingsPath, loadLeverSettings, makeDefaultSettings } from '@guildhall/levers'
 import { buildServeApp } from '../serve.js'
+
+const execFileP = promisify(execFile)
 
 // Integration tests for the Settings-page read-only endpoints:
 //   GET /api/config/levers — flatten lever settings into the shape the UI
@@ -11,13 +17,37 @@ import { buildServeApp } from '../serve.js'
 //   workspace is a valid test input.
 
 let tmpDir: string
+let previousHome: string | undefined
+const PROJECT_ID = 'settings-test'
+
+function scoped(pathname: string): string {
+  const separator = pathname.includes('?') ? '&' : '?'
+  return `http://localhost${pathname}${separator}projectId=${encodeURIComponent(PROJECT_ID)}`
+}
+
+async function readTasks(tmpPath: string): Promise<Array<Record<string, any>>> {
+  const tasksPath = path.join(tmpPath, 'memory', 'TASKS.json')
+  const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as
+    | Array<Record<string, any>>
+    | { tasks?: Array<Record<string, any>> }
+  return Array.isArray(raw) ? raw : raw.tasks ?? []
+}
 
 beforeEach(async () => {
+  previousHome = process.env.HOME
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-'))
+  process.env.HOME = tmpDir
   bootstrapWorkspace(tmpDir, { name: 'Settings Test' })
+  await execFileP('git', ['init', '-b', 'main'], { cwd: tmpDir })
+  await execFileP('git', ['config', 'user.name', 'Guildhall Test'], { cwd: tmpDir })
+  await execFileP('git', ['config', 'user.email', 'guildhall@example.test'], { cwd: tmpDir })
+  await execFileP('git', ['add', '.'], { cwd: tmpDir })
+  await execFileP('git', ['commit', '-m', 'init'], { cwd: tmpDir })
 })
 
 afterEach(async () => {
+  if (previousHome === undefined) delete process.env.HOME
+  else process.env.HOME = previousHome
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -62,6 +92,77 @@ describe('GET /api/config/levers', () => {
   })
 })
 
+describe('GET/POST /api/project/local-config', () => {
+  it('reports effective landing config and persists advanced landing updates', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const before = await app.fetch(new Request(scoped('/api/project/local-config')))
+    expect(before.status).toBe(200)
+    const beforeBody = (await before.json()) as {
+      landingBranch: string | null
+      effectiveLandingBranch: string | null
+      landingStrategy: string
+    }
+    expect(beforeBody.landingBranch).toBeNull()
+    expect(beforeBody.effectiveLandingBranch).toBe('main')
+    expect(beforeBody.landingStrategy).toBe('cherry_pick_local')
+
+    const save = await app.fetch(
+      new Request(scoped('/api/project/local-config'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          landingBranch: 'release/mainline',
+          landingStrategy: 'manual_pr',
+        }),
+      }),
+    )
+    expect(save.status).toBe(200)
+    expect(((await save.json()) as { ok?: boolean }).ok).toBe(true)
+
+    const projectCfg = readProjectConfig(tmpDir)
+    expect(projectCfg.landingBranch).toBe('release/mainline')
+
+    const settings = await loadLeverSettings({
+      path: defaultAgentSettingsPath(tmpDir),
+    })
+    expect(settings.project.landing_strategy.position).toBe('manual_pr')
+    expect(settings.project.landing_strategy.setBy).toBe('user-direct')
+  })
+})
+
+describe('POST /api/project/start', () => {
+  it('rejects fanout without worktree isolation with a clear error', async () => {
+    const settings = makeDefaultSettings()
+    settings.project.concurrent_task_dispatch = {
+      position: { kind: 'fanout', n: 3 },
+      rationale: 'fan out tasks',
+      setAt: new Date().toISOString(),
+      setBy: 'user-direct',
+    }
+    settings.project.worktree_isolation = {
+      position: 'none',
+      rationale: 'bad combo',
+      setAt: new Date().toISOString(),
+      setBy: 'user-direct',
+    }
+    const settingsPath = defaultAgentSettingsPath(tmpDir)
+    // write the invalid historical file directly to simulate a bad legacy/edit state
+    await fs.mkdir(path.dirname(settingsPath), { recursive: true })
+    await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf8')
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error?: string; code?: string; actionHref?: string }
+    expect(body.code).toBe('invalid_lever_combo')
+    expect(body.error).toContain('fanout_N requires worktree_isolation')
+    expect(body.actionHref).toBe('/settings/advanced')
+  })
+})
+
 // Recovery path: if the on-disk agent-settings.yaml is missing a lever that
 // was added to the Zod schema, `GET /api/config/levers` throws
 // LeverSettingsCorruptError. POST /api/config/levers/reset wipes the file and
@@ -81,7 +182,7 @@ describe('POST /api/config/levers/reset', () => {
 
     // Reset → ok.
     const reset = await app.fetch(
-      new Request('http://localhost/api/config/levers/reset', { method: 'POST' }),
+      new Request(scoped('/api/config/levers/reset'), { method: 'POST' }),
     )
     expect(reset.status).toBe(200)
     expect(((await reset.json()) as { ok?: boolean }).ok).toBe(true)
@@ -113,7 +214,7 @@ describe('POST /api/project/bootstrap/run — auto-detect fallback', () => {
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/bootstrap/run', { method: 'POST' }),
+      new Request(scoped('/api/project/bootstrap/run'), { method: 'POST' }),
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
@@ -148,12 +249,32 @@ describe('GET /api/project/facts', () => {
     expect(body.identity.name).toBeDefined()
     expect(body.identity.id).toBeDefined()
     expect(typeof body.identity.editHref).toBe('string')
+    expect(body.identity.editHref).toBe('/settings/advanced')
     expect(body.environment.editHref).toBe('/settings')
     expect(body.workspace.reviewHref).toBe('/workspace-import')
-    expect(body.coordinators.editHref).toBe('/coordinators')
+    expect(body.coordinators.editHref).toBe('/settings/routing')
     expect(body.designSystem.editHref).toBe('/settings')
-    // Environment defaults to unknown when bootstrap hasn't run yet.
-    expect(body.environment.packageManager).toBe('unknown')
+    expect(Array.isArray(body.environment.packageManagers)).toBe(true)
+    expect(body.environment.packageManagers).toEqual(['unknown'])
+  })
+
+  it('reports multiple package managers when the repo clearly spans ecosystems', async () => {
+    await fs.mkdir(path.join(tmpDir, 'frontend'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'frontend', 'package.json'),
+      JSON.stringify({ name: 'frontend', packageManager: 'pnpm@10.0.0' }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'frontend', 'pnpm-lock.yaml'), 'lockfileVersion: 9.0', 'utf8')
+    await fs.mkdir(path.join(tmpDir, 'backend'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'backend', 'backend.csproj'), '<Project />', 'utf8')
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request('http://localhost/api/project/facts'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { environment: { packageManagers: string[] } }
+    expect(body.environment.packageManagers).toContain('pnpm')
+    expect(body.environment.packageManagers).toContain('NuGet')
   })
 })
 
@@ -173,7 +294,7 @@ describe('POST /api/project/workspace-import/dismiss', () => {
     expect(beforeBody.items.some(i => i.kind === 'workspace_import_pending')).toBe(true)
 
     const dismiss = await app.fetch(
-      new Request('http://localhost/api/project/workspace-import/dismiss', { method: 'POST' }),
+      new Request(scoped('/api/project/workspace-import/dismiss'), { method: 'POST' }),
     )
     expect(dismiss.status).toBe(200)
     expect(((await dismiss.json()) as { ok?: boolean }).ok).toBe(true)
@@ -286,7 +407,7 @@ describe('Workspace Import review endpoints', () => {
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const approve = await app.fetch(
-      new Request('http://localhost/api/project/workspace-import/approve', {
+      new Request(scoped('/api/project/workspace-import/approve'), {
         method: 'POST',
       }),
     )
@@ -303,6 +424,274 @@ describe('Workspace Import review endpoints', () => {
     expect(body.ok).toBe(true)
     // Detector should have produced at least one goal from the README.
     expect((body.goalsRecorded ?? 0) + (body.tasksAdded ?? 0)).toBeGreaterThan(0)
+  })
+
+  it('reuses learned import defaults after a narrowed approval', async () => {
+    await fs.mkdir(path.join(tmpDir, 'looma', 'docs'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'knit', 'docs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'looma', 'docs', 'component-roadmap.md'),
+      '- [ ] Listbox\n- [ ] Combobox\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'knit', 'docs', 'feature-roadmap.md'),
+      '- [ ] Auth callback redirect\n- [ ] Collections parity\n',
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'ws-learn' }), 'utf8')
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const before = await app.fetch(new Request('http://localhost/api/project/workspace-import/draft'))
+    const beforeBody = (await before.json()) as {
+      detected: {
+        review: { sourceGroups: Array<{ key: string; areaKey: string; taskIds: string[] }> }
+        learning: { defaults: { selectedAreaKeys: string[]; selectedSourceKeys: string[] } }
+      }
+    }
+    const loomaSource = beforeBody.detected.review.sourceGroups.find(group => group.areaKey === 'looma')
+    expect(loomaSource).toBeDefined()
+
+    const approve = await app.fetch(
+      new Request(scoped('/api/project/workspace-import/approve'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          areaKeys: ['looma'],
+          sourceKeys: [loomaSource!.key],
+          taskIds: [loomaSource!.taskIds[0]],
+        }),
+      }),
+    )
+    expect(approve.status).toBe(200)
+
+    const after = await app.fetch(new Request('http://localhost/api/project/workspace-import/draft'))
+    const afterBody = (await after.json()) as {
+      detected: {
+        learning: {
+          defaults: {
+            selectedAreaKeys: string[]
+            selectedSourceKeys: string[]
+            selectedTaskIds: string[]
+            note: string | null
+          }
+        }
+      }
+    }
+    expect(afterBody.detected.learning.defaults.selectedAreaKeys).toEqual(['looma'])
+    expect(afterBody.detected.learning.defaults.selectedSourceKeys).toEqual([loomaSource!.key])
+    expect(afterBody.detected.learning.defaults.selectedTaskIds).toEqual(loomaSource!.taskIds)
+    expect(afterBody.detected.learning.defaults.note).toContain('approved last time')
+  })
+
+  it('rerun reseeds the reserved import task even when the project already has tasks', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'README.md'),
+      '# Knit\n\n## Goals\n\n- Ship Looma primitives cleanly\n',
+      'utf8',
+    )
+    await fs.mkdir(path.join(tmpDir, 'docs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'feature-roadmap.md'),
+      '## Next up\n\n- [ ] Turn planning docs into real intake tasks\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'workspace-goals.json'),
+      JSON.stringify({ dismissed: true, dismissedAt: '2026-01-01T00:00:00Z' }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'TASKS.json'),
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00Z',
+          tasks: [
+            {
+              id: 'task-001',
+              title: 'Existing user task',
+              description: 'Existing imported work.',
+              status: 'done',
+              domain: 'core',
+              priority: 'normal',
+              projectPath: tmpDir,
+              acceptanceCriteria: [],
+              outOfScope: [],
+              dependsOn: [],
+              notes: [],
+              gateResults: [],
+              reviewVerdicts: [],
+              adjudications: [],
+              escalations: [],
+              agentIssues: [],
+              revisionCount: 0,
+              remediationAttempts: 0,
+              origination: 'human',
+              createdAt: '2026-01-01T00:00:00Z',
+              updatedAt: '2026-01-01T00:00:00Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(scoped('/api/project/workspace-import/rerun'), { method: 'POST' }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      ok?: boolean
+      draft?: { tasks?: number; goals?: number }
+    }
+    expect(body.ok).toBe(true)
+    expect((body.draft?.tasks ?? 0) + (body.draft?.goals ?? 0)).toBeGreaterThan(0)
+
+    const tasks = await readTasks(tmpDir)
+    const importTask = tasks.find((task) => task.id === 'task-workspace-import')
+    expect(importTask?.status).toBe('exploring')
+
+    const goalsState = JSON.parse(
+      await fs.readFile(path.join(tmpDir, 'memory', 'workspace-goals.json'), 'utf8'),
+    ) as { dismissed?: boolean }
+    expect(goalsState.dismissed).toBeUndefined()
+  })
+})
+
+describe('GET/POST /api/project/learning', () => {
+  it('returns learned import behavior and supports reset', async () => {
+    await fs.mkdir(path.join(tmpDir, 'looma', 'docs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'looma', 'docs', 'component-roadmap.md'),
+      '- [ ] Listbox\n- [ ] Combobox\n',
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'learning-api' }), 'utf8')
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const draftRes = await app.fetch(new Request('http://localhost/api/project/workspace-import/draft'))
+    const draftBody = (await draftRes.json()) as {
+      detected: { review: { sourceGroups: Array<{ key: string; areaKey: string; taskIds: string[] }> } }
+    }
+    const source = draftBody.detected.review.sourceGroups[0]
+    expect(source).toBeDefined()
+    await app.fetch(
+      new Request(scoped('/api/project/workspace-import/approve'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          areaKeys: ['looma'],
+          sourceKeys: [source!.key],
+          taskIds: [source!.taskIds[0]],
+        }),
+      }),
+    )
+
+    const learning = await app.fetch(new Request('http://localhost/api/project/learning'))
+    const learningBody = (await learning.json()) as {
+      effective: { defaults: { selectedAreaKeys: string[] } } | null
+      project: { workspaceImport: { approvedRuns: number } } | null
+    }
+    expect(learningBody.project?.workspaceImport.approvedRuns).toBe(1)
+    expect(learningBody.effective?.defaults.selectedAreaKeys).toEqual(['looma'])
+
+    const reset = await app.fetch(
+      new Request(scoped('/api/project/learning/reset'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scope: 'project' }),
+      }),
+    )
+    expect(reset.status).toBe(200)
+
+    const afterReset = await app.fetch(new Request('http://localhost/api/project/learning'))
+    const afterResetBody = (await afterReset.json()) as {
+      project: { workspaceImport: { approvedRuns: number } } | null
+    }
+    expect(afterResetBody.project?.workspaceImport.approvedRuns).toBe(0)
+  })
+})
+
+describe('POST /api/project/meta-intake/rerun', () => {
+  it('resets the reserved task back to exploring and reseeds the transcript', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'TASKS.json'),
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00Z',
+          tasks: [
+            {
+              id: 'task-meta-intake',
+              title: 'Inspect the repo and draft starter tasks',
+              description: 'Inspect the codebase, infer the project structure, and draft the first starter tasks. Ask only if confidence is low and being wrong would matter.',
+              status: 'done',
+              domain: '_meta',
+              priority: 'critical',
+              projectPath: tmpDir,
+              spec: 'old draft',
+              notes: [
+                {
+                  agentId: 'worker-agent',
+                  role: 'worker-agent',
+                  content: 'stale',
+                  timestamp: '2026-01-01T00:30:00Z',
+                },
+              ],
+              acceptanceCriteria: [],
+              outOfScope: [],
+              dependsOn: [],
+              gateResults: [],
+              reviewVerdicts: [],
+              adjudications: [],
+              escalations: [],
+              agentIssues: [],
+              revisionCount: 0,
+              remediationAttempts: 0,
+              origination: 'system',
+              createdAt: '2026-01-01T00:00:00Z',
+              updatedAt: '2026-01-01T00:00:00Z',
+              completedAt: '2026-01-01T01:00:00Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+    await fs.mkdir(path.join(tmpDir, 'memory', 'exploring'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'exploring', 'task-meta-intake.md'),
+      'stale transcript\n',
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(scoped('/api/project/meta-intake/rerun'), { method: 'POST' }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok?: boolean; taskId?: string }
+    expect(body.ok).toBe(true)
+    expect(body.taskId).toBe('task-meta-intake')
+
+    const tasks = await readTasks(tmpDir)
+    const metaTask = tasks.find((task) => task.id === 'task-meta-intake')
+    expect(metaTask?.status).toBe('exploring')
+    expect(metaTask?.spec).toBeUndefined()
+    expect(metaTask?.completedAt).toBeUndefined()
+
+    const transcript = await fs.readFile(
+      path.join(tmpDir, 'memory', 'exploring', 'task-meta-intake.md'),
+      'utf8',
+    )
+    expect(transcript).toMatch(/You are bootstrapping a new Guildhall workspace/i)
+    expect(transcript).not.toMatch(/stale transcript/)
   })
 })
 
@@ -337,5 +726,93 @@ describe('GET /api/project/inbox — blockers', () => {
       blockers: { bootstrap: boolean; workspaceImport: boolean }
     }
     expect(afterBody.blockers.bootstrap).toBe(false)
+  })
+})
+
+describe('GET /api/project — bootstrap status', () => {
+  it('includes the last bootstrap run status so the shell can explain async start failures', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'bootstrap.json'),
+      JSON.stringify({
+        success: false,
+        lastRunAt: '2026-04-25T00:00:00Z',
+        durationMs: 10,
+        commandHash: 'x',
+        lockfileHash: null,
+        steps: [
+          {
+            kind: 'gate',
+            command: 'pnpm run build',
+            result: 'fail',
+            exitCode: 2,
+            output: 'src/customEditorProvider.ts(6,8): error TS2307',
+            durationMs: 10,
+          },
+        ],
+      }),
+      'utf8',
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request('http://localhost/api/project'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      bootstrapStatus?: { success?: boolean; steps?: Array<{ command?: string; result?: string }> }
+    }
+    expect(body.bootstrapStatus?.success).toBe(false)
+    expect(body.bootstrapStatus?.steps?.[0]?.command).toBe('pnpm run build')
+    expect(body.bootstrapStatus?.steps?.[0]?.result).toBe('fail')
+  })
+
+  it('includes the same inbox snapshot as /api/project/inbox', async () => {
+    const tasksPath = path.join(tmpDir, 'memory', 'TASKS.json')
+    await fs.writeFile(
+      tasksPath,
+      JSON.stringify({
+        tasks: [
+          {
+            id: 'task-1',
+            title: 'Add unit coverage for use-collections behavior',
+            status: 'spec_review',
+            spec: 'Draft spec',
+            createdAt: '2026-05-05T00:00:00Z',
+            updatedAt: '2026-05-05T00:05:00Z',
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+    expect(projectRes.status).toBe(200)
+    const projectBody = (await projectRes.json()) as {
+      inbox?: {
+        items?: Array<{ kind?: string; taskId?: string }>
+        blockers?: { bootstrap?: boolean; workspaceImport?: boolean }
+      }
+    }
+
+    const inboxRes = await app.fetch(new Request('http://localhost/api/project/inbox'))
+    expect(inboxRes.status).toBe(200)
+    const inboxBody = (await inboxRes.json()) as {
+      items?: Array<{ kind?: string; taskId?: string }>
+      blockers?: { bootstrap?: boolean; workspaceImport?: boolean }
+    }
+
+    expect(projectBody.inbox).toEqual(inboxBody)
+    expect(projectBody.inbox?.items?.some(item => item.kind === 'spec_approval' && item.taskId === 'task-1')).toBe(true)
+  })
+
+  it('marks dynamic project payloads as non-cacheable', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+    expect(projectRes.headers.get('cache-control')).toBe('no-store, no-cache, must-revalidate')
+    expect(projectRes.headers.get('pragma')).toBe('no-cache')
+
+    const inboxRes = await app.fetch(new Request('http://localhost/api/project/inbox'))
+    expect(inboxRes.headers.get('cache-control')).toBe('no-store, no-cache, must-revalidate')
+    expect(inboxRes.headers.get('pragma')).toBe('no-cache')
   })
 })

@@ -122,6 +122,7 @@ export class ProcessRegistry {
   async shutdownAll(opts: { graceMs?: number } = {}): Promise<void> {
     const graceMs = opts.graceMs ?? 2000
     const entries = Array.from(this.entries.values())
+    if (entries.length === 0) return
     await Promise.all(
       entries.map(async (e) => {
         try {

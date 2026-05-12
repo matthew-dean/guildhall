@@ -7,10 +7,19 @@ import {
   Orchestrator,
   type OrchestratorAgentSet,
   type ReviewerFanoutRunner,
+  buildDefaultReviewerFanout,
 } from '../orchestrator.js'
 import type { ResolvedConfig } from '@guildhall/config'
 import type { Task, TaskQueue, DesignSystem } from '@guildhall/core'
 import type { PersonaVerdict } from '../reviewer-fanout.js'
+import { defineTool } from '@guildhall/engine'
+import type {
+  ApiMessageRequest,
+  ApiStreamEvent,
+  SupportsStreamingMessages,
+} from '@guildhall/engine'
+import type { ConversationMessage, UsageSnapshot } from '@guildhall/protocol'
+import { z } from 'zod'
 
 // ---------------------------------------------------------------------------
 // Integration test: reviewer fan-out at `review`. The Orchestrator, when
@@ -108,6 +117,46 @@ function stubAgent(name: string) {
   }
 }
 
+interface ScriptedTurn {
+  message: ConversationMessage
+  usage?: UsageSnapshot
+}
+
+class ScriptedApiClient implements SupportsStreamingMessages {
+  private index = 0
+
+  constructor(private readonly script: ScriptedTurn[]) {}
+
+  async *streamMessage(_request: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
+    const turn = this.script[this.index]
+    if (!turn) throw new Error(`ScriptedApiClient exhausted at ${this.index}`)
+    this.index += 1
+    yield {
+      type: 'message_complete',
+      message: turn.message,
+      usage: turn.usage ?? { input_tokens: 0, output_tokens: 0 },
+      stop_reason: null,
+    }
+  }
+}
+
+class HangingApiClient implements SupportsStreamingMessages {
+  async *streamMessage(_request: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
+    await new Promise((_resolve, _reject) => {})
+  }
+}
+
+function assistantMsg(text: string): ConversationMessage {
+  return { role: 'assistant', content: [{ type: 'text', text }] }
+}
+
+function assistantToolUse(name: string, input: Record<string, unknown> = {}): ConversationMessage {
+  return {
+    role: 'assistant',
+    content: [{ type: 'tool_use', id: `toolu_${name}`, name, input }],
+  }
+}
+
 function agentSet(): OrchestratorAgentSet {
   return {
     spec: stubAgent('spec-agent'),
@@ -150,7 +199,114 @@ async function writeDesignSystem(ds: DesignSystem): Promise<void> {
   )
 }
 
+function builtContextStub() {
+  return {
+    taskSummary: '',
+    projectMemory: '',
+    recentProgress: '',
+    recentDecisions: '',
+    exploringTranscript: '',
+    personaPrompt: '',
+    applicableGuildSlugs: [],
+    primaryEngineerSlug: null,
+    reviewerSlugs: [],
+    envelope: '',
+    designSystem: '',
+    reviewRubrics: '',
+    formatted: '',
+  }
+}
+
 describe('Orchestrator — reviewer fan-out at review', () => {
+  it('default fanout reviewers inspect files from the task projectPath', async () => {
+    let observedCwd: string | null = null
+    const cwdProbe = defineTool<Record<string, never>>({
+      name: 'cwd-probe',
+      description: 'records cwd',
+      inputSchema: z.object({}),
+      jsonSchema: { type: 'object', properties: {}, additionalProperties: false },
+      execute: async (_input, ctx) => {
+        observedCwd = ctx.cwd
+        return { output: 'ok', is_error: false }
+      },
+    })
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('cwd-probe') },
+      {
+        message: assistantMsg(
+          [
+            '**Rubric:**',
+            '- review: yes - checked',
+            '',
+            '**Verdict:** approve',
+            '',
+            '**Reasoning:** Project path was readable.',
+          ].join('\n'),
+        ),
+      },
+    ])
+    const runner = buildDefaultReviewerFanout(
+      { apiClient: client, modelId: 'm' },
+      { extraTools: [cwdProbe] },
+    )
+
+    const verdicts = await runner({
+      task: mkTask(),
+      personas: [
+        {
+          slug: 'project-manager',
+          name: 'The Project Manager',
+          blurb: 'Checks handoff quality.',
+          role: 'overseer',
+          principles: 'Check handoff quality.',
+          rubric: [{ id: 'review', question: 'Is the review packet usable?', weight: 1 }],
+          deterministicChecks: [],
+          applicable: () => true,
+        },
+      ],
+      builtContext: builtContextStub(),
+      context: 'Review the task.',
+      memoryDir,
+      projectPath: tmpDir,
+    })
+
+    expect(observedCwd).toBe(tmpDir)
+    expect(verdicts[0]?.verdict).toBe('approve')
+  })
+
+  it('times out a hanging persona call instead of stalling review forever', async () => {
+    const runner = buildDefaultReviewerFanout(
+      { apiClient: new HangingApiClient(), modelId: 'm' },
+      { personaTimeoutMs: 25 },
+    )
+
+    const startedAt = Date.now()
+    const verdicts = await runner({
+      task: mkTask(),
+      personas: [
+        {
+          slug: 'project-manager',
+          name: 'The Project Manager',
+          blurb: 'Checks handoff quality.',
+          role: 'overseer',
+          principles: 'Check handoff quality.',
+          rubric: [{ id: 'review', question: 'Is the review packet usable?', weight: 1 }],
+          deterministicChecks: [],
+          applicable: () => true,
+        },
+      ],
+      builtContext: builtContextStub(),
+      context: 'Review the task.',
+      memoryDir,
+      projectPath: tmpDir,
+    })
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000)
+    expect(verdicts).toHaveLength(1)
+    expect(verdicts[0]?.verdict).toBe('revise')
+    expect(verdicts[0]?.reasoning).toContain('timed out')
+  })
+
   it('advances the task to gate_check when every persona approves', async () => {
     await writeDesignSystem(minimalDS)
     const task = mkTask()
@@ -248,8 +404,53 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     expect((agents.reviewer as ReturnType<typeof stubAgent>).calls.length).toBeGreaterThan(0)
     const q = await readQueue()
     const after = q.tasks[0]!
-    // Legacy reviewer didn't transition (stub doesn't mutate task) — status unchanged.
-    expect(after.status).toBe('review')
+    // Legacy reviewer fell back to the deterministic review path when the
+    // stub returned prose without a task-state mutation.
+    expect(after.status).toBe('in_progress')
+  })
+
+  it('falls through to the legacy single reviewer when fanout only produces infra failures', async () => {
+    await writeDesignSystem(minimalDS)
+    const task = mkTask()
+    await writeQueue([task])
+    const approvingReviewer = stubAgent('reviewer-agent')
+    approvingReviewer.generate = async function (prompt: string) {
+      this.calls.push({ prompt })
+      const q = await readQueue()
+      q.tasks[0]!.status = 'gate_check'
+      q.tasks[0]!.updatedAt = '2026-04-01T00:00:02Z'
+      q.lastUpdated = '2026-04-01T00:00:02Z'
+      await fs.writeFile(tasksPath, JSON.stringify(q, null, 2), 'utf-8')
+      return { text: 'ok' }
+    }
+    const agents = {
+      ...agentSet(),
+      reviewer: approvingReviewer,
+    }
+
+    const runner: ReviewerFanoutRunner = async ({ personas }) =>
+      personas.map(
+        (persona): PersonaVerdict => ({
+          guildSlug: persona.slug,
+          guildName: persona.name,
+          verdict: 'revise',
+          reasoning:
+            `${persona.name} failed to produce a verdict (API error: OpenAI-compatible API HTTP 429: {"status":429,"title":"Too Many Requests"}). Treating as revise per strict-all policy.`,
+          revisionItems: [],
+          rawOutput: '**Verdict:** revise',
+        }),
+      )
+
+    const orch = new Orchestrator({ config: baseConfig(), agents, reviewerFanout: runner })
+    await orch.tick()
+
+    expect(approvingReviewer.calls).toHaveLength(1)
+    const q = await readQueue()
+    const after = q.tasks[0]!
+    expect(after.status).toBe('gate_check')
+    expect(after.reviewVerdicts).toHaveLength(1)
+    expect(after.reviewVerdicts[0]!.reviewerPath).toBe('llm')
+    expect(after.reviewVerdicts[0]!.verdict).toBe('approve')
   })
 
   it('raises escalation when fan-out keeps rejecting past maxRevisions', async () => {
@@ -281,5 +482,55 @@ describe('Orchestrator — reviewer fan-out at review', () => {
       return false
     }
     expect(hasBlocked(outcome)).toBe(true)
+  })
+
+  it('does not immediately re-escalate fan-out dissent after a resolved max-revisions retry', async () => {
+    await writeDesignSystem(minimalDS)
+    const task = mkTask({
+      revisionCount: 8,
+      escalations: [
+        {
+          id: 'esc-task-001-1',
+          taskId: 'task-001',
+          agentId: 'reviewer-fanout',
+          reason: 'max_revisions_exceeded',
+          summary: 'Exceeded maxRevisions (3). Reviewer fan-out keeps rejecting.',
+          raisedAt: '2026-04-01T00:00:00Z',
+          resolvedAt: '2026-04-01T01:00:00Z',
+          resolvedBy: 'human',
+          resolution: 'Retry after guardrail fix.',
+        },
+      ],
+    })
+    await writeQueue([task])
+    const agents = agentSet()
+
+    const runner: ReviewerFanoutRunner = async ({ personas }) =>
+      personas.map(
+        (persona): PersonaVerdict => ({
+          guildSlug: persona.slug,
+          guildName: persona.name,
+          verdict: 'revise',
+          reasoning: `${persona.name} still wants a change.`,
+          revisionItems: ['Fix it.'],
+          riskItems: [],
+          followUpItems: [],
+          rawOutput: '**Verdict:** revise',
+        }),
+      )
+
+    const orch = new Orchestrator({ config: baseConfig(), agents, reviewerFanout: runner })
+    const outcome = await orch.tick()
+
+    expect(outcome.kind).toBe('processed')
+    const q = await readQueue()
+    const after = q.tasks[0]!
+    expect(after.status).toBe('in_progress')
+    expect(after.retryWindow).toEqual({
+      startedAt: '2026-04-01T01:00:00Z',
+      baseRevisionCount: 8,
+    })
+    expect(after.escalations).toHaveLength(1)
+    expect(after.escalations[0]!.resolvedAt).toBe('2026-04-01T01:00:00Z')
   })
 })

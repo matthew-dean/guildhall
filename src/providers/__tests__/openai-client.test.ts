@@ -45,11 +45,13 @@ describe('OpenAICompatibleClient', () => {
         model: 'llama-3',
         messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
         max_tokens: 64,
+        temperature: 0.1,
         tools: [],
       }),
     )
     expect(captured?.model).toBe('llama-3')
     expect(captured?.max_tokens).toBe(64)
+    expect(captured?.temperature).toBe(0.1)
     const deltas = events.filter((e) => e.type === 'text_delta')
     expect(deltas.map((e) => (e as { text: string }).text).join('')).toBe('Hello')
     const terminal = events.at(-1)
@@ -59,6 +61,93 @@ describe('OpenAICompatibleClient', () => {
       expect(terminal.usage).toEqual({ input_tokens: 7, output_tokens: 2 })
       expect(terminal.stop_reason).toBe('stop')
     }
+  })
+
+  it('passes an abort signal and reports timeout errors clearly', async () => {
+    let signalSeen = false
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      signalSeen = init?.signal instanceof AbortSignal
+      throw new DOMException('The operation timed out.', 'TimeoutError')
+    }) as unknown as typeof fetch
+    const client = new OpenAICompatibleClient({
+      fetch: fakeFetch,
+      requestTimeoutMs: 12_000,
+    })
+
+    let caught: unknown = null
+    try {
+      await collect(
+        client.streamMessage({
+          model: 'llama-3',
+          messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+          max_tokens: 64,
+          tools: [],
+        }),
+      )
+    } catch (err) {
+      caught = err
+    }
+
+    expect(signalSeen).toBe(true)
+    expect(caught).toBeInstanceOf(OpenAIApiError)
+    if (caught instanceof OpenAIApiError) {
+      expect(caught.message).toContain('timed out after 12s')
+      expect(caught.retryable).toBe(false)
+    }
+  })
+
+  it('omits temperature when the request does not set one', async () => {
+    let captured: Record<string, unknown> | undefined
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      captured = JSON.parse((init?.body as string) ?? '{}') as Record<string, unknown>
+      return sseResponse([
+        dataFrame({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }),
+        'data: [DONE]\n\n',
+      ])
+    }) as unknown as typeof fetch
+    const client = new OpenAICompatibleClient({ fetch: fakeFetch })
+    await collect(
+      client.streamMessage({
+        model: 'llama-3',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+        max_tokens: 64,
+        tools: [],
+      }),
+    )
+    expect(captured).not.toHaveProperty('temperature')
+  })
+
+  it('honors an external abort signal without reporting it as a timeout', async () => {
+    let signalSeen: AbortSignal | null = null
+    const controller = new AbortController()
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      signalSeen = init?.signal instanceof AbortSignal ? init.signal : null
+      controller.abort()
+      throw new DOMException('Request aborted.', 'AbortError')
+    }) as unknown as typeof fetch
+    const client = new OpenAICompatibleClient({
+      fetch: fakeFetch,
+      requestTimeoutMs: 12_000,
+    })
+
+    let caught: unknown = null
+    try {
+      await collect(
+        client.streamMessage({
+          model: 'llama-3',
+          messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+          max_tokens: 64,
+          tools: [],
+          signal: controller.signal,
+        }),
+      )
+    } catch (err) {
+      caught = err
+    }
+
+    expect(signalSeen).toBeInstanceOf(AbortSignal)
+    expect(caught).toBeInstanceOf(DOMException)
+    expect((caught as DOMException).name).toBe('AbortError')
   })
 
   it('reassembles streamed tool_calls into a tool_use block', async () => {
@@ -390,7 +479,7 @@ describe('stripThinkBlocks', () => {
     expect(stripThinkBlocks('before<think>hidden</think>after')).toEqual(['beforeafter', ''])
   })
 
-  it('holds back an unclosed <think>…', () => {
+  it('holds back an unclosed <think>...', () => {
     const [visible, leftover] = stripThinkBlocks('ok<think>partial')
     expect(visible).toBe('ok')
     expect(leftover).toBe('<think>partial')

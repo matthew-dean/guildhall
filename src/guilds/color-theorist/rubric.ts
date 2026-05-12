@@ -28,7 +28,7 @@ export const COLOR_THEORIST_RUBRIC: SoftGateRubricItem[] = [
   {
     id: 'color-role-before-value',
     question:
-      'Does the change describe its color in terms of role (primary, danger, on-surface, …) rather than a specific hue?',
+      'Does the change describe its color in terms of role (primary, danger, on-surface, ...) rather than a specific hue?',
     weight: 0.5,
   },
 ]

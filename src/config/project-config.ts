@@ -1,15 +1,15 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
 import { z } from 'zod'
-import { ModelAssignmentConfig } from '@guildhall/core'
+import { ModelConfigInputSchema } from './schemas.js'
 
 // ---------------------------------------------------------------------------
 // Project-local Guildhall config — <project>/.guildhall/config.yaml
 //
 // This file holds per-project Guildhall runtime state that does not belong in
-// `guildhall.yaml` (which is usually checked in): provider API keys,
-// preferred local model endpoints, the chosen serve port, etc.
+// `guildhall.yaml` (which is usually checked in): local overrides,
+// per-project landing-branch state, and escape-hatch runtime knobs.
 //
 // Guildhall never writes to a shared ~/.guildhall/ directory; version
 // isolation between projects is provided by each project's pinned
@@ -22,7 +22,7 @@ export const PROJECT_CONFIG_FILENAME = 'config.yaml'
 
 export const ProjectGuildhallConfig = z.object({
   /** Default model assignments (merged with per-workspace models) */
-  models: ModelAssignmentConfig.partial().optional(),
+  models: ModelConfigInputSchema.optional(),
 
   /** Default max revisions before a task is escalated */
   maxRevisions: z.number().int().positive().default(3),
@@ -30,7 +30,7 @@ export const ProjectGuildhallConfig = z.object({
   /** Default heartbeat interval (seconds) */
   heartbeatInterval: z.number().int().positive().default(5),
 
-  /** llama.cpp / LM Studio base URL */
+  /** OpenAI-compatible local server URL */
   lmStudioUrl: z.string().url().default('http://localhost:1234/v1'),
 
   /** Anthropic API key (can also be set via ANTHROPIC_API_KEY env var) */
@@ -43,20 +43,58 @@ export const ProjectGuildhallConfig = z.object({
   servePort: z.number().int().min(1024).max(65535).default(7777),
 
   /**
-   * Which provider the wizard chose last. Drives fallback order when
-   * multiple providers are reachable.
+   * Project override for falling back from an unavailable preferred provider
+   * to another paid/cloud provider. Omitted means "use global default".
+   */
+  allowPaidProviderFallback: z.boolean().optional(),
+
+  /**
+   * Project-specific override for the machine-wide preferred provider.
+   * Omit in normal use so the global default applies across projects.
    */
   preferredProvider: z.enum(['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api']).optional(),
 
   /**
-   * How many persona reviewer agents to run concurrently during
-   * `review` fan-out. Default `1` (sequential) is safe for any provider
-   * — LM Studio / llama.cpp can't service concurrent requests on a
-   * single session. Raise to 2–4 when the reviewer is a cloud provider
-   * (Anthropic, OpenAI, Codex) whose rate limits comfortably exceed the
-   * roster size — wall-clock review latency drops roughly linearly.
+   * Which branch accepted task work should land back onto in this checkout.
+   * Omit to use the repo's current branch at orchestrator start.
    */
-  reviewerFanoutConcurrency: z.number().int().positive().max(16).default(1),
+  landingBranch: z.string().min(1).optional(),
+
+  /**
+   * How many spec/intake tasks may run at once. Default `1` keeps the
+   * conversational intake surface focused; raise it only when you want Guildhall
+   * shaping multiple unrelated asks in parallel.
+   */
+  specLaneConcurrency: z.number().int().positive().max(16).optional(),
+
+  /**
+   * How many worker tasks may run at once. The effective value is also capped
+   * by the `concurrent_task_dispatch` lever and any runtime slot limits.
+   */
+  workerLaneConcurrency: z.number().int().positive().max(16).optional(),
+
+  /**
+   * Advanced override for persona reviewer fan-out within one `review` pass.
+   *
+   * Omit this in normal use. Guildhall auto-derives reviewer concurrency from
+   * the active provider's capacity (`1` for local servers, higher for hosted
+   * providers). This knob remains as an escape hatch for unusual repos.
+   */
+  reviewerFanoutConcurrency: z.number().int().positive().max(16).optional(),
+
+  /**
+   * How many distinct review/gate tasks may run at once. This is separate from
+   * `reviewerFanoutConcurrency`, which controls persona fan-out *within* one
+   * review task.
+   */
+  reviewLaneConcurrency: z.number().int().positive().max(16).optional(),
+
+  /**
+   * How many coordinator/policy tasks may run at once. Default `1` keeps
+   * adjudication and proposal/policy handling serialized unless a workspace
+   * explicitly opts into more parallel judgment.
+   */
+  coordinatorLaneConcurrency: z.number().int().positive().max(16).optional(),
 })
 export type ProjectGuildhallConfig = z.infer<typeof ProjectGuildhallConfig>
 
@@ -66,6 +104,30 @@ export function projectConfigDir(projectPath: string): string {
 
 export function projectConfigPath(projectPath: string): string {
   return join(projectConfigDir(projectPath), PROJECT_CONFIG_FILENAME)
+}
+
+/**
+ * Ensure project-local Guildhall state is created and ignored by the host repo.
+ * This is safe to call repeatedly from init/setup paths.
+ */
+export function ensureProjectLocalStateIgnored(projectPath: string): void {
+  const projectRoot = resolve(projectPath)
+  if (!existsSync(projectRoot)) mkdirSync(projectRoot, { recursive: true })
+  const dir = projectConfigDir(projectRoot)
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+
+  const rootGitignore = join(projectRoot, '.gitignore')
+  const entry = '.guildhall/'
+  const existing = existsSync(rootGitignore) ? readFileSync(rootGitignore, 'utf8') : ''
+  const alreadyIgnored = existing
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+#.*$/, '').trim())
+    .some((line) => line === '.guildhall' || line === '.guildhall/' || line === '/.guildhall' || line === '/.guildhall/')
+
+  if (alreadyIgnored) return
+
+  const prefix = existing.length === 0 ? '' : existing.endsWith('\n') ? existing : `${existing}\n`
+  writeFileSync(rootGitignore, `${prefix}${entry}\n`, 'utf8')
 }
 
 /**
@@ -93,14 +155,7 @@ export function readProjectConfig(projectPath: string): ProjectGuildhallConfig {
  * File permissions are 0600 because this stores API keys.
  */
 export function writeProjectConfig(projectPath: string, config: ProjectGuildhallConfig): void {
-  const dir = projectConfigDir(projectPath)
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  const gitignorePath = join(dir, '.gitignore')
-  if (!existsSync(gitignorePath)) {
-    // Keep .guildhall/ untracked without requiring the user to edit their
-    // outer repo's .gitignore — config may hold API keys.
-    writeFileSync(gitignorePath, '*\n!.gitignore\n', 'utf8')
-  }
+  ensureProjectLocalStateIgnored(projectPath)
   const validated = ProjectGuildhallConfig.parse(config)
   const yaml = yamlDump(validated, { lineWidth: 120, noRefs: true })
   writeFileSync(projectConfigPath(projectPath), yaml, { encoding: 'utf8', mode: 0o600 })

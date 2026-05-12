@@ -9,6 +9,7 @@ import {
   type Task,
 } from '@guildhall/core'
 import { logProgress } from './memory-tools.js'
+import { atomicWriteText } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-10 Escalation protocol
@@ -77,7 +78,7 @@ export async function raiseEscalation(
     task.updatedAt = now
     queue.lastUpdated = now
 
-    await fs.writeFile(input.tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
 
     if (input.progressPath) {
       const entry: ProgressEntry = {
@@ -102,7 +103,29 @@ export const raiseEscalationTool = defineTool({
   description:
     "Raise a structured escalation on a task. This halts the task (sets status='blocked') and records a typed event to PROGRESS.md. Use this — not a plain note — whenever the task needs a human decision or cannot proceed autonomously.",
   inputSchema: raiseEscalationInputSchema,
-  jsonSchema: { type: 'object' },
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      tasksPath: { type: 'string', description: 'Absolute path to TASKS.json' },
+      progressPath: { type: 'string', description: 'Absolute path to PROGRESS.md' },
+      taskId: { type: 'string' },
+      agentId: { type: 'string' },
+      reason: {
+        type: 'string',
+        enum: [
+          'spec_ambiguous',
+          'max_revisions_exceeded',
+          'human_judgment_required',
+          'decision_required',
+          'gate_hard_failure',
+          'scope_boundary',
+        ],
+      },
+      summary: { type: 'string' },
+      details: { type: 'string' },
+    },
+    required: ['taskId', 'agentId', 'reason', 'summary'],
+  },
   isReadOnly: () => false,
   execute: async (input) => {
     const result = await raiseEscalation(input)
@@ -141,6 +164,57 @@ export interface ResolveEscalationResult {
   error?: string
 }
 
+function normalizeAssignmentForResolvedStatus(task: Task, nextStatus: z.infer<typeof resolveEscalationInputSchema>['nextStatus']): void {
+  task.status = nextStatus
+  switch (nextStatus) {
+    case 'in_progress':
+      task.assignedTo = 'worker-agent'
+      return
+    case 'review':
+      task.assignedTo = 'reviewer-agent'
+      return
+    case 'gate_check':
+      task.assignedTo = 'gate-checker-agent'
+      return
+    case 'exploring':
+    case 'spec_review':
+    case 'ready':
+      delete task.assignedTo
+      return
+  }
+}
+
+function supportsRetryWindow(status: Task['status']): boolean {
+  return status === 'in_progress' || status === 'review' || status === 'gate_check'
+}
+
+export function ensureRetryWindow(task: Task): boolean {
+  const latestResolvedRetry = latestResolvedRetryEscalationAt(task)
+  if (!latestResolvedRetry) return false
+  if (!supportsRetryWindow(task.status)) return false
+
+  if (task.retryWindow?.startedAt === latestResolvedRetry) return false
+  task.retryWindow = {
+    startedAt: latestResolvedRetry,
+    baseRevisionCount: task.revisionCount,
+  }
+  return true
+}
+
+export function currentRevisionCycleCount(task: Pick<Task, 'status' | 'revisionCount' | 'retryWindow' | 'escalations'>): number {
+  const latestResolvedRetry = latestResolvedRetryEscalationAt(task as Task)
+  if (!latestResolvedRetry || !supportsRetryWindow(task.status as Task['status'])) {
+    return task.revisionCount
+  }
+  if (task.retryWindow?.startedAt === latestResolvedRetry) {
+    return Math.max(0, task.revisionCount - task.retryWindow.baseRevisionCount)
+  }
+  // Legacy self-heal: once a retry was explicitly approved by a human, do not
+  // let historical revision debt immediately re-block the task before we have
+  // established a fresh retry window in persisted task state.
+  return 0
+}
+
 export async function resolveEscalation(
   input: ResolveEscalationInput,
 ): Promise<ResolveEscalationResult> {
@@ -171,13 +245,14 @@ export async function resolveEscalation(
 
     const stillOpen = task.escalations.some((e) => !e.resolvedAt)
     if (!stillOpen) {
-      task.status = input.nextStatus
+      normalizeAssignmentForResolvedStatus(task, input.nextStatus)
+      if (esc.reason === 'max_revisions_exceeded') ensureRetryWindow(task)
       delete task.blockReason
     }
     task.updatedAt = now
     queue.lastUpdated = now
 
-    await fs.writeFile(input.tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
 
     if (input.progressPath) {
       const entry: ProgressEntry = {
@@ -218,10 +293,73 @@ export const resolveEscalationTool = defineTool({
   },
 })
 
+type TaskEscalation = Task['escalations'][number]
+
+export function isEscalationActive(task: Task, escalation: TaskEscalation): boolean {
+  if (escalation.resolvedAt) return false
+  if (task.status === 'blocked') return true
+
+  const raisedAt = Date.parse(escalation.raisedAt)
+  const updatedAt = Date.parse(task.updatedAt)
+  if (Number.isFinite(raisedAt) && Number.isFinite(updatedAt) && updatedAt > raisedAt) {
+    return false
+  }
+
+  return true
+}
+
+export function activeEscalations(task: Task): TaskEscalation[] {
+  const escalations = Array.isArray(task.escalations) ? task.escalations : []
+  return escalations.filter((escalation) => isEscalationActive(task, escalation))
+}
+
+export function resolveSupersededEscalations(
+  task: Task,
+  opts: {
+    now?: string
+    resolvedBy?: string
+    resolution?: string
+  } = {},
+): string[] {
+  const now = opts.now ?? task.updatedAt
+  const resolvedBy = opts.resolvedBy ?? 'system'
+  const resolution =
+    opts.resolution ??
+    `Superseded after task continued in ${task.status}.`
+
+  const resolvedIds: string[] = []
+  for (const escalation of Array.isArray(task.escalations) ? task.escalations : []) {
+    if (escalation.resolvedAt) continue
+    if (isEscalationActive(task, escalation)) continue
+    escalation.resolvedAt = now
+    escalation.resolvedBy = resolvedBy
+    escalation.resolution = resolution
+    resolvedIds.push(escalation.id)
+  }
+
+  if (resolvedIds.length > 0 && activeEscalations(task).length === 0) {
+    delete task.blockReason
+  }
+
+  return resolvedIds
+}
+
+export function latestResolvedRetryEscalationAt(task: Task): string | null {
+  const resolved = (Array.isArray(task.escalations) ? task.escalations : [])
+    .filter(
+      (escalation) =>
+        escalation.reason === 'max_revisions_exceeded' &&
+        typeof escalation.resolvedAt === 'string' &&
+        escalation.resolvedAt.trim().length > 0,
+    )
+    .sort((a, b) => Date.parse(b.resolvedAt ?? '') - Date.parse(a.resolvedAt ?? ''))
+  return resolved[0]?.resolvedAt ?? null
+}
+
 /**
  * Returns true if the task has at least one unresolved escalation. Used by the
  * orchestrator to halt routing regardless of surface status.
  */
 export function hasOpenEscalation(task: Task): boolean {
-  return task.escalations.some((e) => !e.resolvedAt)
+  return activeEscalations(task).length > 0
 }

@@ -74,6 +74,7 @@ describe('ClaudeOauthClient', () => {
         model: 'claude-sonnet-4-6',
         messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
         max_tokens: 256,
+        temperature: 0.2,
         tools: [],
       }),
     )
@@ -90,6 +91,7 @@ describe('ClaudeOauthClient', () => {
     const headers = captured?.headers as Record<string, string>
     expect(headers.authorization).toBe('Bearer at')
     expect(headers['anthropic-beta']).toContain('oauth-2025-04-20')
+    expect(JSON.parse(String(captured?.body))?.temperature).toBe(0.2)
   })
 
   it('reassembles tool_use blocks from input_json_delta frames', async () => {

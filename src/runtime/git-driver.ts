@@ -48,12 +48,20 @@ export interface PullRequestResult {
 export interface GitDriver {
   /** Current branch name in the repo root (e.g. `main`, `master`). */
   currentBranch(repoRoot: string): Promise<string>
+  /** True when the repo root has no uncommitted changes. */
+  isClean(repoRoot: string): Promise<boolean>
   /** Create a new worktree at `worktreePath` with a fresh branch off `baseBranch`. */
   createWorktree(repoRoot: string, opts: CreateWorktreeOptions): Promise<void>
   /** Remove a worktree (and its branch ref). Safe to call on missing paths. */
   removeWorktree(repoRoot: string, worktreePath: string): Promise<void>
   /** Fast-forward merge `branch` into `baseBranch`. Non-ff → returned as `ok:false`. */
   fastForwardMerge(
+    repoRoot: string,
+    branch: string,
+    baseBranch: string,
+  ): Promise<MergeResult>
+  /** Cherry-pick commits from `branch` onto `baseBranch` in commit order. */
+  cherryPickBranch(
     repoRoot: string,
     branch: string,
     baseBranch: string,
@@ -77,6 +85,22 @@ export class NodeGitDriver implements GitDriver {
       cwd: repoRoot,
     })
     return stdout.trim()
+  }
+
+  async isClean(repoRoot: string): Promise<boolean> {
+    const { stdout } = await execFileP('git', ['status', '--porcelain'], {
+      cwd: repoRoot,
+    })
+    const lines = stdout
+      .split('\n')
+      .map((line) => line.trimEnd())
+      .filter((line) => line.trim().length > 0)
+    const meaningful = lines.filter((line) => {
+      if (!line.startsWith('?? ')) return true
+      const file = line.slice(3).trim()
+      return !(file === '.guildhall/' || file.startsWith('.guildhall/'))
+    })
+    return meaningful.length === 0
   }
 
   async createWorktree(
@@ -116,6 +140,36 @@ export class NodeGitDriver implements GitDriver {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       const conflict = /not possible to fast-forward|conflict/i.test(message)
+      return { ok: false, detail: message, conflict }
+    }
+  }
+
+  async cherryPickBranch(
+    repoRoot: string,
+    branch: string,
+    baseBranch: string,
+  ): Promise<MergeResult> {
+    try {
+      await execFileP('git', ['checkout', baseBranch], { cwd: repoRoot })
+      const { stdout } = await execFileP(
+        'git',
+        ['rev-list', '--reverse', `${baseBranch}..${branch}`],
+        { cwd: repoRoot },
+      )
+      const commits = stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+      if (commits.length > 0) {
+        await execFileP('git', ['cherry-pick', ...commits], { cwd: repoRoot })
+      }
+      const { stdout: head } = await execFileP('git', ['rev-parse', 'HEAD'], {
+        cwd: repoRoot,
+      })
+      return { ok: true, commitSha: head.trim() }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      const conflict = /cherry-pick failed|after resolving the conflicts|conflict/i.test(message)
       return { ok: false, detail: message, conflict }
     }
   }
@@ -171,12 +225,14 @@ export interface InMemoryGitDriverState {
   createdWorktrees: CreateWorktreeOptions[]
   removedWorktrees: string[]
   merges: { branch: string; baseBranch: string; result: MergeResult }[]
+  cherryPicks: { branch: string; baseBranch: string; result: MergeResult }[]
   pushes: { branch: string; result: PushResult }[]
   prs: { branch: string; baseBranch: string; title: string; result: PullRequestResult }[]
 }
 
 export interface InMemoryGitDriverOptions {
   currentBranch?: string
+  clean?: boolean
   /** If set, the next `fastForwardMerge` call returns this result then clears. */
   nextMergeResult?: MergeResult
   /** If set, the next `push` call returns this result then clears. */
@@ -187,6 +243,7 @@ export interface InMemoryGitDriverOptions {
 
 export class InMemoryGitDriver implements GitDriver {
   readonly state: InMemoryGitDriverState
+  private clean: boolean
   private nextMerge: MergeResult | undefined
   private nextPush: PushResult | undefined
   private nextPr: PullRequestResult | undefined
@@ -197,9 +254,11 @@ export class InMemoryGitDriver implements GitDriver {
       createdWorktrees: [],
       removedWorktrees: [],
       merges: [],
+      cherryPicks: [],
       pushes: [],
       prs: [],
     }
+    this.clean = opts.clean ?? true
     this.nextMerge = opts.nextMergeResult
     this.nextPush = opts.nextPushResult
     this.nextPr = opts.nextPrResult
@@ -215,9 +274,16 @@ export class InMemoryGitDriver implements GitDriver {
   setNextPrResult(r: PullRequestResult): void {
     this.nextPr = r
   }
+  setClean(clean: boolean): void {
+    this.clean = clean
+  }
 
   async currentBranch(_repoRoot: string): Promise<string> {
     return this.state.currentBranch
+  }
+
+  async isClean(_repoRoot: string): Promise<boolean> {
+    return this.clean
   }
 
   async createWorktree(
@@ -242,6 +308,22 @@ export class InMemoryGitDriver implements GitDriver {
     }
     this.nextMerge = undefined
     this.state.merges.push({ branch, baseBranch, result })
+    return result
+  }
+
+  async cherryPickBranch(
+    _repoRoot: string,
+    branch: string,
+    baseBranch: string,
+  ): Promise<MergeResult> {
+    const result =
+      this.nextMerge ??
+      ({
+        ok: true,
+        commitSha: `inmem-${this.state.cherryPicks.length + 1}`,
+      } satisfies MergeResult)
+    this.nextMerge = undefined
+    this.state.cherryPicks.push({ branch, baseBranch, result })
     return result
   }
 

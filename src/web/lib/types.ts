@@ -25,6 +25,18 @@ export interface ProductBrief {
   authoredBy?: string
 }
 
+/**
+ * Agent → user question. Mirrors `AgentQuestion` in src/core/task.ts.
+ * Producers MUST classify any prompt to the user into one of these kinds —
+ * no free-prose questions. The UI renders each kind with a fixed deterministic
+ * affordance (see web/lib/AgentQuestion.svelte).
+ */
+export type AgentQuestion =
+  | { kind: 'confirm'; id: string; askedBy: string; askedAt: string; restatement: string; draftAnswer?: string; answeredAt?: string; answer?: string }
+  | { kind: 'yesno'; id: string; askedBy: string; askedAt: string; prompt: string; draftAnswer?: string; answeredAt?: string; answer?: string }
+  | { kind: 'choice'; id: string; askedBy: string; askedAt: string; prompt: string; choices: string[]; selectionMode?: 'single' | 'multiple' | undefined; draftAnswer?: string; answeredAt?: string; answer?: string }
+  | { kind: 'text'; id: string; askedBy: string; askedAt: string; prompt: string; draftAnswer?: string; answeredAt?: string; answer?: string }
+
 export interface AcceptanceCriterion {
   description?: string
   text?: string
@@ -71,18 +83,59 @@ export interface Task {
   status?: string
   domain?: string
   priority?: string
-  assignedTo?: string
+  assignedTo?: string | null
   revisionCount?: number
   remediationAttempts?: number
   blockReason?: string
   shelveReason?: ShelveReason
   productBrief?: ProductBrief
+  openQuestions?: AgentQuestion[]
   spec?: string
   acceptanceCriteria?: AcceptanceCriterion[]
   gateResults?: GateResult[]
   reviewVerdicts?: ReviewVerdict[]
   escalations?: Escalation[]
   notes?: TaskNote[]
+  latestReviewerSummary?: string
+  latestSelfCritique?: string
+  latestCheckpoint?: {
+    step?: number
+    agentId?: string
+    intent?: string
+    nextPlannedAction?: string
+    filesTouched?: string[]
+    writtenAt?: string
+  }
+  worktreePath?: string
+  branchName?: string
+  baseBranch?: string
+  mergeRecord?: {
+    fromBranch?: string
+    toBranch?: string
+    strategy?:
+      | 'cherry_pick_local'
+      | 'cherry_pick_with_push'
+      | 'manual_pr'
+      | 'ff_only_local'
+      | 'ff_only_with_push'
+      | string
+    result?:
+      | 'merged'
+      | 'pushed'
+      | 'push_failed_degraded'
+      | 'pending_pr'
+      | 'conflict'
+      | 'skipped'
+      | string
+    commitSha?: string
+    prUrl?: string
+    mergedAt?: string
+    detail?: string
+  }
+  terminalSummary?: {
+    headline?: string
+    detail?: string
+  }
   origination?: string
   proposedBy?: string
   proposalRationale?: string
@@ -94,12 +147,153 @@ export interface Task {
   dependsOn?: string[]
 }
 
+export interface ContextSectionStat {
+  key?: string
+  label?: string
+  chars?: number
+  included?: boolean
+}
+
+export interface ContextHealthWarning {
+  code?: string
+  severity?: 'info' | 'warn' | 'error' | string
+  message?: string
+}
+
+export interface ContextDebugRecord {
+  id?: string
+  at?: string
+  taskId?: string
+  taskTitle?: string
+  taskStatus?: string
+  domain?: string
+  agentName?: string
+  agentRole?: string
+  modelId?: string
+  workspacePath?: string
+  taskProjectPath?: string
+  activeWorktreePath?: string
+  promptChars?: number
+  contextChars?: number
+  promptPreview?: string
+  snapshotPath?: string
+  sections?: ContextSectionStat[]
+  health?: ContextHealthWarning[]
+  reasons?: string[]
+  applicableGuildSlugs?: string[]
+  reviewerSlugs?: string[]
+  primaryEngineerSlug?: string | null
+  openQuestionCount?: number
+  acceptanceCriteriaCount?: number
+}
+
 export interface DrawerPayload {
   task: Task
   recentEvents?: unknown[]
+  contextDebug?: ContextDebugRecord[]
+  threadTurns?: TaskThreadTurn[]
 }
 
-export type DrawerTab = 'spec' | 'transcript' | 'experts' | 'history' | 'provenance'
+export type DrawerTab = 'current' | 'spec' | 'transcript' | 'experts' | 'history' | 'provenance'
+
+export interface TaskTurnLiveAgent {
+  name: string
+  startedAt?: string
+  lastEventAt?: string
+  lastEventLabel?: string
+  silentMs?: number
+  stalled?: boolean
+}
+
+export interface TaskTurnLiveActivity {
+  at?: string
+  label: string
+  tone: 'neutral' | 'running' | 'ok' | 'warn' | 'danger'
+  detail?: string
+}
+
+export interface TaskTurnChecklistStep {
+  id: string
+  title: string
+  why: string
+  status: 'done' | 'active' | 'pending' | 'skipped'
+}
+
+export interface TaskTurnChecklist {
+  title: string
+  doneCount: number
+  totalSteps: number
+  activeStepId: string | null
+  steps: TaskTurnChecklistStep[]
+}
+
+export interface TaskThreadTurnBase {
+  id: string
+  at: string
+  persona: 'intake' | 'spec' | 'worker' | 'reviewer' | 'coord' | 'system'
+  status: 'done' | 'active' | 'pending'
+  phase: 'setup' | 'intake' | 'spec' | 'ready' | 'inflight' | 'blocked' | 'done'
+  taskId: string
+  taskTitle: string
+}
+
+export interface TaskThreadBriefTurn extends TaskThreadTurnBase {
+  kind: 'brief_approval'
+  brief: {
+    userJob?: string
+    successMetric?: string
+    successCriteria?: string
+    antiPatterns?: string[]
+    rolloutPlan?: string
+    authoredBy?: string
+  }
+  liveAgent?: TaskTurnLiveAgent
+  approvedAt?: string | null
+}
+
+export interface TaskThreadQuestionTurn extends TaskThreadTurnBase {
+  kind: 'agent_question'
+  liveAgent?: TaskTurnLiveAgent
+  question: AgentQuestion
+}
+
+export interface TaskThreadSpecReviewTurn extends TaskThreadTurnBase {
+  kind: 'spec_review'
+  spec: string
+}
+
+export interface TaskThreadReviewFeedbackTurn extends TaskThreadTurnBase {
+  kind: 'review_feedback'
+  summary: string
+  feedback: string
+  revisionCount?: number
+}
+
+export interface TaskThreadEscalationTurn extends TaskThreadTurnBase {
+  kind: 'escalation'
+  escalationId: string
+  summary: string
+  details?: string
+  activity?: TaskTurnLiveActivity[]
+}
+
+export interface TaskThreadInFlightTurn extends TaskThreadTurnBase {
+  kind: 'inflight'
+  taskStatus?: string
+  summary: string
+  importedDraft?: boolean
+  liveAgent?: TaskTurnLiveAgent
+  activity?: TaskTurnLiveActivity[]
+  checklist?: TaskTurnChecklist
+}
+
+export type TaskThreadTurn =
+  | TaskThreadBriefTurn
+  | TaskThreadQuestionTurn
+  | TaskThreadSpecReviewTurn
+  | TaskThreadReviewFeedbackTurn
+  | TaskThreadEscalationTurn
+  | TaskThreadInFlightTurn
 
 /**
  * Task card view — a trimmed Task with just the fields the mini-card renders.
@@ -114,20 +308,181 @@ export interface TaskLite {
   priority?: string
   revisionCount?: number
   escalations?: Escalation[]
+  latestReviewerSummary?: string
+  latestSelfCritique?: string
+  latestCheckpoint?: Task['latestCheckpoint']
+  terminalSummary?: Task['terminalSummary']
 }
 
 export interface CoordinatorConfig {
   id?: string
   name?: string
   domain?: string
+  path?: string
   mandate?: string
+  concerns?: Array<{
+    id?: string
+    description?: string
+    reviewQuestions?: string[]
+  }>
+  autonomousDecisions?: string[]
+  escalationTriggers?: string[]
 }
 
 export interface ProjectRun {
   status?: string
+  mode?: 'continuous' | 'one_task' | string
   startedAt?: string
   stoppedAt?: string
   error?: string
+  stopSummary?: {
+    ticks?: number
+    stopReason?: string
+    stopMessage?: string
+    idleSummary?: {
+      reason?: string
+      message?: string
+      counts?: Record<string, number>
+    }
+  }
+  providerStatus?: ProviderStatus
+}
+
+export interface ProviderStatus {
+  health?: {
+    pooled: boolean
+    state: 'idle' | 'healthy' | 'degraded'
+    lastUsedAt?: string
+    lastSuccessAt?: string
+    lastFailureAt?: string
+    consecutiveFailures: number
+    retryableFailures: number
+    fatalFailures: number
+    lastError?: string
+  } | null
+  decisions?: Array<{
+    code: string
+    severity: 'info' | 'warn' | 'error'
+    basis: 'availability' | 'capability' | 'compatibility'
+    message: string
+  }>
+  laneConcurrency?: {
+    spec: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    worker: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    review: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    coordinator: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+    reviewerFanout: {
+      requested: number
+      effective: number
+      recommended: number | null
+      clamped: boolean
+    }
+  }
+  preferredCapabilities?: {
+    streaming: boolean
+    toolCalls: boolean
+    resumableSessions: boolean
+    reasoningSideChannel: 'none' | 'compatible'
+    browserAppControl: boolean
+    recommendedConcurrency: number
+    localServer: boolean
+  } | null
+  preferredProvider?: string | null
+  preferredProviderFamily?: string | null
+  preferredProviderLabel?: string | null
+  activeProvider?: string | null
+  activeCapabilities?: {
+    streaming: boolean
+    toolCalls: boolean
+    resumableSessions: boolean
+    reasoningSideChannel: 'none' | 'compatible'
+    browserAppControl: boolean
+    recommendedConcurrency: number
+    localServer: boolean
+  } | null
+  activeProviderFamily?: string | null
+  activeProviderLabel?: string | null
+  warnings?: Array<{
+    code: string
+    severity: 'info' | 'warn' | 'error'
+    message: string
+  }>
+  fallback?: boolean
+  allowPaidProviderFallback?: boolean
+  selectedAt?: string
+  reason?: string
+  activeModel?: string | null
+  models?: {
+    spec?: string
+    coordinator?: string
+    worker?: string
+    reviewer?: string
+    gateChecker?: string
+  } | null
+}
+
+export interface StartReadiness {
+  canStart: boolean
+  code?: string
+  message?: string
+  actionHref?: string
+}
+
+export interface BootstrapStep {
+  kind?: 'command' | 'gate' | string
+  command?: string
+  result?: 'pass' | 'fail' | string
+  exitCode?: number
+  output?: string
+  durationMs?: number
+}
+
+export interface BootstrapStatus {
+  success?: boolean
+  lastRunAt?: string
+  durationMs?: number
+  commandHash?: string
+  lockfileHash?: string | null
+  steps?: BootstrapStep[]
+}
+
+export interface ProjectInbox {
+  items?: Array<{
+    kind?: string
+    severity?: 'high' | 'medium' | 'low' | string
+    taskId?: string
+    title?: string
+    detail?: string
+    actionHref?: string
+    defaultCount?: number
+    dismissEndpoint?: string
+    signals?: string[]
+    missingSteps?: string[]
+  }>
+  blockers?: {
+    bootstrap?: boolean
+    workspaceImport?: boolean
+  }
 }
 
 export interface ProjectDetail {
@@ -141,9 +496,43 @@ export interface ProjectDetail {
     [k: string]: unknown
   }
   tasks?: Task[]
+  inbox?: ProjectInbox
   run?: ProjectRun | null
+  providerStatus?: ProviderStatus | null
+  startReadiness?: StartReadiness | null
+  bootstrapStatus?: BootstrapStatus
   recentEvents?: EventEnvelope[]
   error?: string
+}
+
+export interface ServiceProjectSummary {
+  id: string
+  path: string
+  name: string
+  initializationNeeded?: boolean
+  selected?: boolean
+  tags?: string[]
+  summary?: string | null
+  taskCounts?: {
+    total: number
+    active: number
+    blocked: number
+    done: number
+    shelved: number
+  }
+  highlights?: {
+    activeTaskTitle?: string | null
+    blockedTaskTitle?: string | null
+    recentCompletedTaskTitle?: string | null
+  }
+  run?: ProjectRun | null
+}
+
+export interface ServiceDetail {
+  pid?: number
+  selectedProject?: Pick<ServiceProjectSummary, 'id' | 'path' | 'name' | 'initializationNeeded'> | null
+  foregroundProject?: Pick<ServiceProjectSummary, 'id' | 'path' | 'name' | 'initializationNeeded'> | null
+  projects?: ServiceProjectSummary[]
 }
 
 export interface EventInner {
@@ -168,10 +557,10 @@ export interface EventEnvelope {
 }
 
 export type ProjectView =
+  | 'thread'
   | 'inbox'
   | 'work'
   | 'planner'
-  | 'coordinators'
   | 'timeline'
   | 'release'
   | 'settings'
@@ -179,11 +568,10 @@ export type ProjectView =
   | 'facts'
 
 /**
- * Sub-path within a ProjectView. Only `settings`, `coordinators`, and
- * `release` surface a sub-nav in the left rail; everything else stays null.
+ * Sub-path within a ProjectView. Only `settings` and `release` surface a
+ * sub-nav in the left rail; everything else stays null.
  *
- *  - settings:     'ready' | 'coordinators' | 'advanced'
+ *  - settings:     'ready' | 'routing' | 'advanced'
  *  - release:      'verdict' | 'criteria'
- *  - coordinators: 'all' | '<coordinator-id>'
  */
 export type ProjectSubView = string | null

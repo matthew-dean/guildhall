@@ -1,0 +1,795 @@
+# Guildhall 0.5.0 Project Service Pivot Design
+
+## Goal
+
+Reframe Guildhall as a macOS-first, user-local service that operates over many projects, with a friendly installer and a top-level Projects experience. `0.5.0` should make the product feel like "Guildhall runs on my projects" rather than "Guildhall is a package I install inside one repo."
+
+## Problem
+
+The current `0.4.x` story is caught between two models:
+
+- Guildhall already has a global registry and multi-workspace/service concepts.
+- The UI still feels primarily like a single-project app.
+- Packaging still teaches a "Node package in a repo" mental model instead of a product/service mental model.
+
+That mismatch creates avoidable confusion:
+
+- `guildhall serve` sounds like a simple "open Guildhall" action, but the product underneath behaves more like a manually managed local app server.
+- The product does not yet clearly separate the global view of many projects from the inside of one project.
+- Install/distribution is not yet optimized for the best user experience.
+
+`0.5.0` should resolve those mismatches instead of layering more behavior on top of them.
+
+## Product Direction
+
+### Summary
+
+Guildhall becomes:
+
+- a **macOS-first local service**
+- managing **many user-local projects**
+- with a **Projects** home screen at the top level
+- and the current Guildhall UI living **inside a selected project**
+
+## Guided Wizard Philosophy
+
+Guildhall should treat guided setup and approval flows as a wizard, not a
+document review system.
+
+The product rule is simple:
+
+- one screen or card should ask for one decision
+- one decision should be phrased as one clear question
+- supporting detail should be optional, collapsible, and secondary
+- the user should never be asked to approve a bundled manifesto that hides
+  many implicit sub-decisions
+
+This applies everywhere, not only to first-run setup:
+
+- project intake
+- project split and project-area drafts
+- task brief approval
+- spec approval
+- review and escalation follow-ups
+
+When Guildhall infers structure, proposes wording, or drafts policy, the UI
+should turn that into small explicit choices such as:
+
+- "Guildhall found 2 work areas. Is that split right?"
+- "Is this task summary what you want?"
+- "Should Guildhall keep this check strict?"
+
+The user should always know:
+
+- what Guildhall is asking
+- what specific thing they are agreeing to or correcting
+- what happens next if they click the primary action
+
+If a card needs a wall of prose to be understandable, the product should
+change the step rather than asking the user to read harder.
+
+## Guided Journey Principle
+
+Guildhall should design product journeys as a sequence of discrete user jobs,
+not as a series of generated artifacts to approve.
+
+That means each guided flow should move through clear stages such as:
+
+- orient
+- choose scope
+- inspect evidence
+- confirm candidates
+- commit
+
+The product should avoid collapsing these into one mixed screen. In practice:
+
+- source discovery should not be the same step as task confirmation
+- task summaries should not be the same step as final task creation
+- existing state should not be mixed into candidate-import decisions
+
+Users should always know:
+
+- where they are in the journey
+- what level of abstraction they are looking at
+- what exact outcome the primary action will cause
+
+If a flow forces the user to decode whether they are approving:
+
+- a source list
+- a draft summary
+- a task list
+- or a final write
+
+then the journey is not designed tightly enough.
+
+### User-facing terminology
+
+Use **project** as the primary user-facing term.
+
+`workspace` may remain an internal/config/runtime term if it is useful for code and file layout, but the product should not teach users that concept unless there is a real distinction worth learning.
+
+## Primary User Experience
+
+### Install
+
+The recommended install path is:
+
+```bash
+curl -fsSL <installer-url> | sh
+```
+
+That installer should install a packaged executable with its runtime included, so the recommended path does **not** require the user to think about Node.
+
+Also supported:
+
+```bash
+npm install -g guildhall
+```
+
+But npm-global is secondary and should not be the primary onboarding path.
+
+### Launch
+
+`guildhall serve` becomes the friendly "Guildhall for dummies" path.
+
+Expected behavior:
+
+- ensure the local Guildhall service is running
+- open the web UI
+- if invoked from inside a project folder, bias the UI toward that project
+- if invoked elsewhere, open Guildhall with no project selected
+
+This lets normal users think "open Guildhall" rather than "manage a daemon."
+
+### Background service
+
+The underlying macOS service should use a **LaunchAgent**.
+
+Advanced lifecycle commands should exist:
+
+- `guildhall start` — start background service only
+- `guildhall stop` — stop background service only
+- `guildhall open` — open the web UI
+
+But the main product story should lead with `guildhall serve`.
+
+## Top-level Information Architecture
+
+### Root screen
+
+The top level becomes a **Projects** screen.
+
+Each project card should show:
+
+- project name
+- local path
+- current agent/service status for that project
+- a concise health summary
+- a concise work summary
+- obvious `Open`, `Start`, and `Stop` actions
+
+Projects are startable/stoppable **per project**, not globally.
+
+### Project shell
+
+Opening a project enters the current Guildhall experience for that project:
+
+- Thread
+- Work
+- Project areas
+- Settings
+- Release
+- and other current project-specific surfaces
+
+The product should provide a persistent way to go:
+
+- back to **Projects**
+- or otherwise "up" one level
+
+### Project creation / attachment
+
+The Projects screen should support **New Project**.
+
+The first action is:
+
+- **Pick an existing folder**
+
+Guildhall should intentionally make the user do a little pre-thought instead of generating a new folder/project structure first.
+
+After folder selection:
+
+1. inspect the folder
+2. if Guildhall config/state already exists:
+   - register it locally
+   - open the project
+3. if Guildhall config/state does not yet exist:
+   - register/open it as an **uninitialized project**
+   - let setup happen inside the project shell
+
+This slow path is important because it also supports the case where:
+
+- a Guildhall project was already started on another machine
+- the user picks that folder on this machine
+- Guildhall detects the existing config and simply adds it to the local project list
+
+## Runtime / Service Model
+
+### Local registry
+
+Guildhall should keep a user-local registry of known projects.
+
+This remains the local "projects I know about on this machine" list, not the ultimate source of truth for project identity.
+
+### Project source of truth
+
+Each project's own config/state remains inside the project folder.
+
+That means:
+
+- attaching an existing project should be reversible and local
+- moving across machines should still work by picking the same project folder
+- the local registry should point at projects, not redefine them
+
+### Serve semantics
+
+`guildhall serve` should feel project-aware without being project-bound.
+
+If invoked inside a project folder:
+
+- Guildhall may preselect or foreground that project in the UI
+
+If invoked outside any project folder:
+
+- Guildhall should open the Projects screen with no project selected
+
+The local service itself should not be thought of as "serving one project." It serves Guildhall as a whole.
+
+## Coordination Model
+
+### Summary
+
+Guildhall should move toward a simpler model:
+
+- one coordinating layer per project
+- user-facing project goals, tasks, and concrete repo/product boundaries when they matter
+- internal perspectives selected per task/decision
+
+The product should not require the user to build and maintain a visible roster
+of stewards in order to get good routing or review quality.
+
+### Why this pivot matters
+
+The earlier steward/coordinator story was trying to solve a real problem:
+
+- different work needs different judgment
+- some tasks need UI scrutiny
+- some need integration-risk scrutiny
+- some need accessibility or release thinking
+
+But the user-facing steward model adds too much cognitive overhead too early:
+
+- the user has to understand why a steward exists
+- the user has to name or approve steward-like lanes
+- the product has to explain how those lanes differ
+- interconnected systems like Looma + Knit do not always split cleanly into
+  separate long-lived stewardship units
+
+That means the product can end up teaching an internal org chart before it has
+proven that the org chart helps the user.
+
+### Preferred model
+
+Guildhall should expose:
+
+- projects
+- concrete work structure only when it is genuinely useful to the user
+- tasks
+- decisions
+
+Guildhall should manage underneath:
+
+- which perspectives are relevant right now
+- which context should be assembled
+- which checks should be applied
+- which review lenses should weigh in
+
+Those perspectives are situational, not permanent:
+
+- a task may need UI + accessibility
+- the next may need integration-risk + release
+- the next may need market/product research
+
+The coordinating layer should be able to pull those perspectives in, then
+discard or replace them as the work moves on.
+
+### What remains real under the hood
+
+This does not mean routing or policy separation disappears. Internally,
+Guildhall may still keep:
+
+- domain/path scope hints
+- lane-level policy differences
+- ownership of adjudication when perspectives conflict
+
+But those should be implementation details unless the user is drilling into
+advanced inspection or settings.
+
+## Task Workspace Model
+
+### Summary
+
+Task workspaces should move out of the project repo and into Guildhall's
+user-local runtime area.
+
+For `0.5.0`, use:
+
+- `~/.guildhall/worktrees/<project-id>/<task-id>`
+
+This replaces the older repo-local shape under `.guildhall/worktrees/`.
+
+### Why
+
+Repo-local task workspaces create the wrong product impression:
+
+- they clutter normal `git status`
+- they show up as noisy folders in editors
+- they blur the line between durable project state and ephemeral runtime state
+- they make Guildhall feel like it is spilling implementation guts into the repo
+
+The `0.5.0` service pivot gives us a better model:
+
+- project-local config and durable memory stay with the project
+- ephemeral execution sandboxes live under Guildhall's user-local control
+
+That matches the new "local service over projects" product story much more
+cleanly.
+
+### One task, one workspace
+
+Guildhall should use a single isolated workspace per task.
+
+Do not expose or foreground a "fresh workspace per revision attempt" model in
+`0.5.0`.
+
+Review/revise cycles are normal task iteration, not a special failure mode, so
+the default mental model should stay simple:
+
+- one task
+- one isolated workspace
+
+If Guildhall cannot safely iterate within one task workspace, that is a runtime
+hygiene problem to fix rather than a user-facing concept to normalize.
+
+### Cleanup semantics
+
+Guildhall should not delete a task workspace merely because a task reached a
+locally successful state. Cleanup should be tied to whether the work has
+actually landed.
+
+Rules:
+
+- if Guildhall merged the task branch into the base branch locally, the task
+  workspace can be removed immediately after that merge succeeds
+- if the project uses PR-based merge flow, keep the task workspace while the PR
+  is still pending
+- once Guildhall can confirm the PR landed, remove the task workspace
+- do not delete task workspaces prematurely just because a task entered
+  `pending_pr`
+
+For PR-based flows, "landed" should be based on PR merge state, not only branch
+or commit ancestry heuristics. This matters because squash merges may not leave
+the original branch commit in mainline history.
+
+### Migration posture
+
+`0.5.0` should:
+
+- create new task workspaces only in the user-local root
+- tolerate older repo-local task workspace records if they already exist
+- clean up legacy workspaces when tasks naturally terminate or land
+- avoid a brittle one-shot migration step
+
+## Settings and UX Requirements For Task Workspaces
+
+Task workspace policy should be mostly invisible in normal use.
+
+### Main settings surface
+
+In project settings, expose only a calm, human-readable workspace mode choice:
+
+- `Shared project workspace`
+- `Isolated task workspaces` (recommended)
+
+Do not force users to reason about path templates, revision-sandbox models, or
+other orchestrator internals.
+
+### Advanced information
+
+The settings surface may show an informational note that isolated task
+workspaces are stored under:
+
+- `~/.guildhall/worktrees`
+
+But this should be explanatory, not the center of the UI.
+
+### Task detail visibility
+
+If a user wants the exact path, it should appear in the task details /
+provenance surface, for example:
+
+- workspace mode
+- sandbox path
+- branch name
+
+That keeps the product calm by default while still supporting power-user
+inspection.
+
+## Chosen approach
+
+For `0.5.0`, use:
+
+- **Approach A: Node-based packaged executable + LaunchAgent**
+
+### Why this approach
+
+It gives the best balance of:
+
+- better user experience
+- lower migration risk
+- less architectural churn inside the existing codebase
+
+It lets us improve the packaging/distribution layer and product shell without coupling `0.5.0` to a large runtime rewrite.
+
+## Deno evaluation
+
+Deno should still be evaluated as a packaging/distribution option, because it may offer a cleaner bundled-executable story.
+
+But for `0.5.0`, Deno should be treated as a **comparison spike**, not as the default direction unless it clearly wins on practical criteria.
+
+### Comparison criteria
+
+Node-packaged executable vs Deno-packaged executable should be compared on:
+
+- artifact size
+- startup reliability
+- service management friendliness on macOS
+- local file/network/process access needs
+- release/build complexity
+- developer workflow disruption
+- future portability
+
+The goal of that spike is to confirm the packaging choice, not to reopen the whole product direction.
+
+## UI / Navigation Requirements
+
+`0.5.0` should introduce an explicit two-level structure:
+
+1. **Projects level**
+2. **Inside one project**
+
+That means:
+
+- current project surfaces should no longer masquerade as the whole app
+- header/nav/state should reflect whether the user is looking at:
+  - all projects
+  - or one selected project
+
+The current UI should be preserved where it still works, but nested appropriately.
+
+## UI Architecture Requirements
+
+`0.5.0` should also use this pivot as an opportunity to revisit the UI
+component structure itself, not only the route structure.
+
+The goal is to avoid a Projects shell that is built from one-off bespoke
+project-specific UI/data components with muddy responsibilities.
+
+### Required qualities
+
+The UI should move toward components that are:
+
+- **sensible** — clear responsibilities and naming
+- **responsive** — layouts work cleanly across supported viewport sizes
+- **consistent** — repeated patterns behave and look the same
+- **atomic/composable** — reusable building blocks instead of one-off blobs
+- **separated by concern** — presentation, view composition, and data shaping
+  should not be unnecessarily fused together
+
+### Practical implications
+
+This means `0.5.0` should include a deliberate pass over the current project UI
+surface to identify:
+
+- components that should become reusable shell/layout primitives
+- components that should become reusable project-summary/task-summary cards
+- places where project-specific fetching/transformation logic is too tightly
+  coupled to rendering
+- places where top-level navigation concerns and project-detail concerns are
+  currently mixed together
+
+### Non-goal
+
+This is **not** a mandate for a vanity rewrite or a giant design-system detour.
+
+The intent is:
+
+- improve structure where the new Projects-first architecture touches the UI
+- create cleaner boundaries and reusable pieces while doing that work
+- avoid carrying forward bespoke project-view code that will make the new
+  top-level product harder to evolve
+
+### Proof requirement
+
+The `0.5.0` implementation should leave the UI in a state where:
+
+- the Projects screen is assembled from intentional reusable pieces
+- the project shell uses clearer shared layout/navigation primitives
+- project-specific data handling is more clearly separated from presentational
+  components than it is today
+
+## Init / Setup Requirements
+
+Initialization should move inside the project shell for uninitialized projects.
+
+That means:
+
+- selecting a folder should not force an immediate full wizard before the user sees the project shell
+- instead, an uninitialized project should show:
+  - what Guildhall detected
+  - what is missing
+  - the next obvious setup action
+
+This slower posture supports both:
+
+- brand-new projects
+- existing Guildhall projects coming from another machine
+
+## Action Layer and Companion Chat
+
+Guildhall should grow toward a three-layer product model:
+
+1. **Navigation layer**
+   - where the user is
+   - what surface they are in
+   - what kind of decision or work is happening there
+2. **Action layer**
+   - the canonical verbs Guildhall can perform
+   - these should be callable both from UI buttons and from an MCP server
+3. **Conversation layer**
+   - a future companion chat/control surface
+   - used for summaries, explanation, and natural-language invocation of the same actions
+
+### Important product rule
+
+The structured app must remain the primary product.
+
+Chat should **not** become the only way to understand or operate Guildhall.
+
+The app still needs to make sense to a cold user through visible navigation,
+clear state, and obvious next actions.
+
+### Action-layer direction
+
+Any important coordinator/user action should eventually exist as a canonical
+callable action, not only as a button with bespoke UI-only behavior.
+
+Examples:
+
+- project actions
+  - `attach_project`
+  - `open_project`
+  - `start_run`
+  - `stop_run`
+  - `run_one_task`
+- task actions
+  - `open_task`
+  - `pause_task`
+  - `shelve_task`
+  - `unshelve_task`
+  - `add_task_note`
+- approval actions
+  - `approve_brief`
+  - `request_brief_changes`
+  - `approve_spec`
+  - `request_spec_changes`
+  - `approve_project_areas`
+- rerun actions
+  - `rerun_meta_intake`
+  - `rerun_workspace_import`
+  - `rerun_spec_draft`
+  - `rerun_review`
+  - `rerun_gates`
+- question actions
+  - `answer_question`
+  - `submit_staged_answers`
+
+### Companion chat direction
+
+Later, Guildhall can add a lightweight chat/control pane that:
+
+- summarizes project or task state
+- explains blockers and approvals
+- suggests the next obvious action
+- invokes the same canonical actions as the UI
+
+This chat should be a **companion** surface, not the primary navigation model.
+
+### Contextual conversation direction
+
+One promising extension of the companion-chat idea is a **scoped
+conversation-in-context** surface.
+
+The point would not be to replace structured flows. The point would be to give
+Guildhall a better tool for the cases where a rigid wizard forces too much
+advance choreography and too many bespoke branch screens.
+
+In that model:
+
+- a task, draft, setup step, or import candidate can open a local
+  conversation surface
+- the conversation is anchored to that exact object
+- Guildhall knows the structured end state it is trying to reach
+- Guildhall asks clarifying follow-ups only until it can finalize that shape
+- the result is written back into structured product state
+
+Examples:
+
+- shaping one imported draft into a complete task brief
+- clarifying a project split proposal
+- filling in missing success criteria or acceptance criteria for one task
+
+This should remain tightly bounded:
+
+- not a global freeform prompt box
+- not the primary way to navigate the product
+- not an excuse to avoid designing good structured flows
+
+It is best thought of as a **contextual clarification lane** that sits beside
+the structured UI and uses the same canonical actions/tool calls underneath.
+
+### Near-term implication
+
+This is not a reason to pause `0.5.0` for a large architecture project.
+
+For now, it should serve as a design constraint:
+
+- avoid inventing important UI-only actions
+- keep labels aligned with user intent instead of runtime internals
+- make future MCP exposure straightforward by keeping actions explicit and bounded
+
+## Future Capability: Model Diagnostics Lab
+
+Guildhall should eventually grow a dedicated model-evaluation surface for
+comparing providers and models against real Guildhall-shaped work.
+
+This is not the main `0.5.0` focus, but it is worth preserving as a future
+direction because model selection should be based on observed fit, not
+marketing claims or one-off anecdotes.
+
+### Goal
+
+Let a user run a repeatable bakeoff across multiple models/providers and see
+which ones are best for different Guildhall jobs such as:
+
+- spec drafting
+- intake and project-shaping questions
+- review quality
+- gate-check quality
+- coding / worker execution
+
+### Product shape
+
+Guildhall should offer a diagnostics page or lab where the user can:
+
+- select one or more models/providers
+- select one or more benchmark tasks or task slices
+- run the same evaluation flow across each candidate
+- compare results over time
+
+### Storage and evidence
+
+Results should live in user-local Guildhall storage so the user can build up a
+history of what actually works well for their machine, projects, and provider
+mix.
+
+That storage should preserve:
+
+- the model/provider tested
+- the task or benchmark scenario
+- timestamps
+- success/failure outcome
+- cost and latency signals when available
+- qualitative notes or rubric scores
+- a user-facing conclusion, such as `good for review` or `too flaky for worker runs`
+
+### Product purpose
+
+The point is not just "benchmarking." It is decision support.
+
+Guildhall should help the user answer questions like:
+
+- which model is good enough for fast review?
+- which model is too unreliable for autonomous worker runs?
+- which cheap model is surprisingly strong for intake/spec work?
+- how has a provider changed over time?
+
+### Constraint
+
+This should remain a companion diagnostic surface, not a distraction from the
+main product. The primary bar is still that a user can understand the app and
+get real work done. The diagnostics lab helps choose better models for that work.
+
+## Testing and Proof Requirements
+
+Before `0.5.0` ships, prove:
+
+1. installer path works on macOS
+2. packaged executable runs correctly
+3. LaunchAgent service lifecycle works
+4. `guildhall serve` correctly starts/opens the product in the friendly path
+5. project registry and attach flow work
+6. existing project detection works
+7. per-project start/stop behavior works
+8. nested project UI still supports the current proven task flow
+
+This release is not only about product structure. It must still preserve the narrow-lane autonomy proof we established in `0.4.0`.
+
+## Non-goals
+
+For `0.5.0`, do **not**:
+
+- optimize for Linux-first or Windows-first packaging
+- make "create a brand-new folder/project" the default new-project path
+- teach a complex daemon-management story to normal users
+- re-architect the core runtime purely for aesthetic reasons
+- switch to Deno unless the packaging spike produces a clearly better overall outcome
+
+## Risks
+
+### Packaging risk
+
+Bundled executable + LaunchAgent work can sprawl if treated as an open-ended packaging rewrite.
+
+Mitigation:
+
+- keep the runtime mostly intact
+- treat Deno as evaluation, not assumption
+- stay macOS-first
+
+### UI scope risk
+
+Moving from a single-project-feeling UI to a projects-first UI can accidentally turn into a full redesign.
+
+Mitigation:
+
+- preserve current project surfaces where possible
+- focus on information architecture first
+
+### State-model risk
+
+Confusion between local registry state and project-owned config/state could create brittle behavior.
+
+Mitigation:
+
+- keep project config/state in the project
+- keep the registry as a local list of known projects
+
+## Recommendation
+
+Ship `0.5.0` as:
+
+- a macOS-first project/service pivot
+- with a packaged executable
+- a LaunchAgent-backed local service
+- `guildhall serve` as the friendly entrypoint
+- a top-level Projects screen
+- existing Guildhall UI nested inside each project
+- attach-existing-folder as the only new-project entry path
+- npm-global still supported, but no longer the primary story
+
+After implementation and proof:
+
+1. publish `0.5.0`
+2. recover the VitePress WIP worktree
+3. rewrite docs to match the new product truth
+4. get the VitePress docs experience up and running cleanly

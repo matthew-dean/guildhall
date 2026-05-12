@@ -137,7 +137,22 @@ export const writeCheckpointTool = defineTool({
   description:
     "Write a durable checkpoint for the current task. Call this at tool boundaries: before destructive filesystem changes, after subprocess success, on explicit checkpoint markers in the spec, and immediately before engine compaction. One checkpoint per task is persisted (overwritten on each call); the step counter auto-increments. On crash, the orchestrator uses this as input to the FR-32 remediation loop's restart_from_checkpoint decision.",
   inputSchema: writeCheckpointInputSchema,
-  jsonSchema: { type: 'object' },
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      tasksPath: { type: 'string', description: 'Absolute path to TASKS.json' },
+      memoryDir: { type: 'string', description: 'Absolute path to the workspace memory directory' },
+      taskId: { type: 'string' },
+      agentId: { type: 'string' },
+      intent: { type: 'string' },
+      nextPlannedAction: { type: 'string' },
+      filesTouched: { type: 'array', items: { type: 'string' } },
+      lastCommittedSha: { type: 'string' },
+      engineSessionId: { type: 'string' },
+      step: { type: 'number' },
+    },
+    required: ['taskId', 'agentId', 'intent', 'nextPlannedAction', 'filesTouched'],
+  },
   isReadOnly: () => false,
   execute: async (input) => {
     const result = await writeCheckpoint(input)

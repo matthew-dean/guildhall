@@ -10,7 +10,8 @@
   import Card from '../lib/Card.svelte'
   import Button from '../lib/Button.svelte'
   import { onEvent } from '../lib/events.js'
-  import { nav } from '../lib/nav.svelte.js'
+  import { nav, path } from '../lib/nav.svelte.js'
+  import { projectFetch } from '../lib/project-routes.js'
 
   interface InboxItem {
     kind: string
@@ -26,10 +27,11 @@
 
   async function load(): Promise<void> {
     try {
-      const r = await fetch('/api/project/inbox')
-      if (!r.ok) return
-      const j = (await r.json()) as { items?: InboxItem[] }
-      items = j.items ?? []
+      const inboxRes = await projectFetch('/api/project/inbox')
+      if (inboxRes.ok) {
+        const j = (await inboxRes.json()) as { items?: InboxItem[] }
+        items = j.items ?? []
+      }
     } catch {
       /* keep prior */
     } finally {
@@ -47,7 +49,8 @@
         t.startsWith('task_') ||
         t.startsWith('escalation_') ||
         t.startsWith('bootstrap_') ||
-        t.startsWith('supervisor_')
+        t.startsWith('supervisor_') ||
+        t.startsWith('config_')
       ) {
         void load()
       }
@@ -72,6 +75,13 @@
           button: 'Open Ready',
           href: item.actionHref ?? '/settings/ready',
         }
+      case 'setup_pending':
+        return {
+          verb: item.title,
+          why: item.detail ?? 'Finish the next setup step before moving on.',
+          button: 'Open setup',
+          href: item.actionHref ?? '/thread',
+        }
       case 'open_escalation':
         return {
           verb: `Resolve the escalation${id}`,
@@ -79,33 +89,54 @@
           button: 'Open task',
           href: item.actionHref ?? '/work',
         }
+      case 'agent_question_pending':
+        return {
+          verb: `Answer Guildhall’s question${id}`,
+          why: item.detail ?? 'Guildhall needs one answer before it can continue shaping the work.',
+          button: 'Answer in Thread',
+          href: item.actionHref ?? '/thread',
+        }
+      case 'import_draft_queue':
+        return {
+          verb: 'Shape the imported drafts',
+          why: item.detail ?? 'Guildhall imported planning work that still needs a quick shaping pass.',
+          button: 'Review next draft',
+          href: item.actionHref ?? '/thread',
+        }
       case 'brief_approval':
         return {
           verb: `Review the product brief${id}`,
           why: 'The spec agent is waiting for you to confirm the brief (or correct it).',
-          button: 'Open brief',
-          href: item.actionHref ?? '/work',
+          button: 'Review in Thread',
+          href: '/thread',
         }
       case 'spec_approval':
         return {
           verb: `Approve the spec${id}`,
           why: 'The worker can’t start until the spec is approved.',
-          button: 'Open spec',
-          href: item.actionHref ?? '/work',
+          button: 'Review in Thread',
+          href: '/thread',
         }
       case 'workspace_import_pending':
         return {
-          verb: 'Review what the repo scan found',
-          why: item.detail ?? 'README + project files detected. Import or dismiss.',
-          button: 'Open import',
+          verb: 'Review existing project work',
+          why: item.detail ?? 'Guildhall found planning notes and possible tasks in this project.',
+          button: 'Open review',
           href: item.actionHref ?? '/workspace-import',
         }
       case 'lever_questions':
         return {
-          verb: 'Confirm your policy levers',
-          why: item.detail ?? 'Some policies are still at system defaults.',
+          verb: 'Review project policies',
+          why: item.detail ?? 'Defaults are still in effect for some project policies.',
           button: 'Open advanced',
           href: item.actionHref ?? '/settings/advanced',
+        }
+      case 'spec_fill_pending':
+        return {
+          verb: `Finish the spec${id}`,
+          why: item.detail ?? 'Shape the task so the reviewer has something to verify.',
+          button: 'Open in Thread',
+          href: '/thread',
         }
       default:
         return {
@@ -117,33 +148,81 @@
     }
   }
 
-  const top = $derived(items[0])
-  const rx = $derived(top ? prescribe(top) : null)
-  const more = $derived(Math.max(0, items.length - 1))
-  const tone = $derived(top?.severity === 'high' ? 'danger' : top?.severity === 'medium' ? 'warn' : 'neutral')
+  function routeOnly(href: string): string {
+    return href.split('?')[0]?.split('#')[0] ?? href
+  }
+
+  interface TopSource {
+    verb: string
+    why: string
+    button: string
+    href: string
+    severity: 'high' | 'medium' | 'low'
+    moreLabel: string
+    moreHref: string
+  }
+
+  const prescribedItems = $derived.by(() => items.map(item => ({ item, prescription: prescribe(item) })))
+  const topItemIsCurrentPage = $derived(
+    prescribedItems[0]
+      ? routeOnly(prescribedItems[0].prescription.href) === path.value
+      : false,
+  )
+  const visibleItems = $derived.by(() =>
+    topItemIsCurrentPage
+      ? []
+      : prescribedItems.filter(({ prescription }) => routeOnly(prescription.href) !== path.value),
+  )
+  const actionableItems = $derived.by(() =>
+    visibleItems.filter(({ item }) => item.severity !== 'low'),
+  )
+  const source = $derived<TopSource | null>(
+    actionableItems[0]
+        ? (() => {
+            const top = actionableItems[0]!
+            return {
+              verb: top.prescription.verb,
+              why: top.prescription.why,
+              button: top.prescription.button,
+              href: top.prescription.href,
+              severity: top.item.severity,
+              moreLabel: `${visibleItems.length - 1} more in Inbox ›`,
+              moreHref: '/inbox',
+            }
+          })()
+        : null,
+  )
+  const tone = $derived(
+    source?.severity === 'high'
+      ? 'danger'
+      : source?.severity === 'medium'
+        ? 'warn'
+        : 'neutral',
+  )
+  const moreCount = $derived(visibleItems.length - 1)
 
   function go(href: string) {
     nav(href)
   }
 </script>
 
-{#if loaded && top && rx}
+{#if loaded && source}
   <Card {tone}>
     <div class="row">
       <div class="text">
         <div class="eyebrow">Do this next</div>
-        <div class="verb">{rx.verb}</div>
-        {#if rx.why}
-          <div class="why">{rx.why}</div>
+        <div class="verb">{source.verb}</div>
+        {#if source.why}
+          <div class="why">{source.why}</div>
         {/if}
       </div>
       <div class="actions">
-        <Button variant="primary" onclick={() => go(rx.href)}>
-          {rx.button} →
+        <Button variant="primary" onclick={() => go(source.href)}>
+          {source.button} →
         </Button>
-        {#if more > 0}
+        {#if moreCount > 0}
           <button type="button" class="more" onclick={() => go('/inbox')}>
-            {more} more in Inbox ›
+            {moreCount} more in Inbox ›
           </button>
         {/if}
       </div>

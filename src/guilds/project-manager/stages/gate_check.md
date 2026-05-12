@@ -11,10 +11,10 @@ Hard gates run. These are shell commands that must exit 0 (FR-05). Pass/fail is 
 
 ## How this stage is evaluated
 
-- All gates green → `done` and the merge path (FR-25) runs per lever `merge_policy`.
+- All gates green → `done` and the landing path (FR-25) runs per lever `landing_strategy`.
 - Any gate red → task returns to `in_progress` (or `blocked` if at `max_revisions`); the failing gate's output is surfaced to the worker's next prompt.
 
 ## Handoff
 
-- Pass: status → `done` (or `pending_pr` under `merge_policy: manual_pr`). Trigger merge-dispatcher.
+- Pass: status → `done` (or `pending_pr` under `landing_strategy: manual_pr`). Trigger merge-dispatcher.
 - Fail: status → `in_progress` with gate output appended to task notes. Increment `revisionCount`.

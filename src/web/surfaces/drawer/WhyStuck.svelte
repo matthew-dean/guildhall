@@ -2,7 +2,7 @@
   Banner at the top of the Spec tab when a task is blocked, shelved, or has
   an open escalation. Primary/secondary/overflow IA:
     · Primary: one-line reason headline + chip row (reason code + role).
-    · Secondary: single action row (Retry gates / Resolve…).
+    · Secondary: single action row (Retry gates / Resolve...).
     · Overflow: details collapsed behind a <details> toggle.
 -->
 <script lang="ts">
@@ -12,8 +12,10 @@
   import Button from '../../lib/Button.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Markdown from '../../lib/Markdown.svelte'
+  import { activeEscalations } from '../../lib/escalation.js'
   import {
     escalationReasonLabel,
+    escalationPrimaryAction,
     roleLabel,
     roleBlurb,
   } from '../../lib/escalation-labels.js'
@@ -29,7 +31,7 @@
   let { task, busy = false, onUnshelve, onResolve }: Props = $props()
 
   const openEscalations = $derived(
-    (task.escalations ?? []).filter((e) => !e.resolvedAt),
+    activeEscalations(task),
   )
   const firstOpen = $derived<Escalation | undefined>(openEscalations[0])
 
@@ -62,6 +64,7 @@
   const roleTitle = $derived(
     firstOpen ? roleBlurb(firstOpen.agentId) : '',
   )
+  const primaryAction = $derived(escalationPrimaryAction(firstOpen))
 </script>
 
 <Card tone="danger" title="Why is this stuck?">
@@ -102,14 +105,14 @@
           disabled={busy}
           onclick={() => onResolve(firstOpen, 'retry')}
         >
-          Retry gates
+          {primaryAction.label}
         </Button>
         <Button
           variant="primary"
           disabled={busy}
           onclick={() => onResolve(firstOpen, 'resolve')}
         >
-          Resolve…
+          Resolve...
         </Button>
       {/if}
     </Row>

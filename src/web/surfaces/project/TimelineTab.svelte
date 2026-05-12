@@ -1,11 +1,12 @@
 <!--
-  Timeline view: full orchestrator event log, newest first. SSE appends to
+  Timeline view: full coordinator event log, newest first. SSE appends to
   the top so the user sees new events without scrolling.
 -->
 <script lang="ts">
   import Card from '../../lib/Card.svelte'
   import { onEvent, summarizeEvent, eventTaskId, eventCssClass } from '../../lib/events.js'
-  import { nav } from '../../lib/nav.svelte.js'
+  import { nav, path } from '../../lib/nav.svelte.js'
+  import { currentTaskHref } from '../../lib/project-routes.js'
   import type { ProjectDetail, EventEnvelope } from '../../lib/types.js'
 
   interface Props {
@@ -31,13 +32,13 @@
 
   function onClickEvent(ev: EventEnvelope) {
     const id = eventTaskId(ev)
-    if (id) nav('/task/' + encodeURIComponent(id))
+    if (id) nav(currentTaskHref(id), { backgroundPath: path.value })
   }
 </script>
 
-<Card title="Orchestrator timeline">
+<Card title="Coordinator timeline">
   {#if events.length === 0}
-    <p class="muted">No events recorded yet. Start the orchestrator to populate the timeline.</p>
+    <p class="muted">No events recorded yet. Start the coordinator to populate the timeline.</p>
   {:else}
     <div class="feed">
       {#each events as ev, i (i)}

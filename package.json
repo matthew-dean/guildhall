@@ -1,6 +1,6 @@
 {
   "name": "guildhall",
-  "version": "0.2.0-dev",
+  "version": "0.4.0",
   "description": "A general-purpose multi-agent operating system for software projects.",
   "license": "LicenseRef-FLL-1.2",
   "licenses": [
@@ -22,7 +22,10 @@
   "scripts": {
     "build": "pnpm build:ui && node ./build.mjs",
     "build:ui": "pnpm --filter @guildhall/ui build",
+    "build:macos-package": "node ./scripts/build-macos-package.mjs",
     "dev": "node ./build.mjs --watch",
+    "dev:install": "node ./scripts/dev-install.mjs",
+    "dev:uninstall": "node ./scripts/dev-uninstall.mjs",
     "typecheck": "tsgo -p tsconfig.json --noEmit && pnpm typecheck:ui",
     "typecheck:ui": "pnpm --filter @guildhall/ui typecheck",
     "test": "vitest run",
@@ -35,7 +38,9 @@
     "docs:check-help-sync": "node scripts/check-help-sync.mjs",
     "docs:dev": "npm run docs:extract-help && vitepress dev docs",
     "docs:build": "npm run docs:extract-help && vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "service:install": "node ./scripts/install-launch-agent.mjs",
+    "service:uninstall": "node ./scripts/uninstall-launch-agent.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.1",
@@ -45,6 +50,7 @@
     "js-yaml": "^4.1.0",
     "lucide-svelte": "~1.0.1",
     "marked": "~18.0.2",
+    "svelte-sonner": "~1.1.1",
     "yaml": "^2.6.1",
     "zod": "^3.24.1"
   },

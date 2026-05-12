@@ -5,7 +5,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
 
-  type Variant = 'primary' | 'secondary' | 'danger' | 'ghost'
+  type Variant = 'primary' | 'secondary' | 'danger' | 'ghost' | 'human' | 'agent'
   type Size = 'sm' | 'md'
 
   interface Props {
@@ -14,6 +14,8 @@
     disabled?: boolean
     type?: 'button' | 'submit'
     ariaLabel?: string
+    title?: string
+    className?: string
     onclick?: (e: MouseEvent) => void
     children?: Snippet
   }
@@ -24,17 +26,20 @@
     disabled = false,
     type = 'button',
     ariaLabel,
+    title,
+    className = '',
     onclick,
     children,
   }: Props = $props()
 </script>
 
 <button
-  class="btn v-{variant} s-{size}"
+  class={`btn v-${variant} s-${size} ${className}`.trim()}
   {type}
   {disabled}
   {onclick}
   aria-label={ariaLabel}
+  {title}
 >
   {@render children?.()}
 </button>
@@ -54,6 +59,12 @@
     line-height: 1;
     min-height: var(--control-h);
     white-space: nowrap;
+    transition:
+      background-color 120ms ease,
+      border-color 120ms ease,
+      color 120ms ease,
+      box-shadow 120ms ease,
+      filter 120ms ease;
   }
   .btn :global(svg) {
     display: block;
@@ -70,15 +81,40 @@
   .v-primary {
     background: var(--accent);
     color: white;
+    border-color: color-mix(in srgb, var(--accent) 65%, white 18%);
+  }
+  .v-human {
+    background: var(--accent);
+    color: white;
+    border-color: color-mix(in srgb, var(--accent) 65%, white 18%);
+  }
+  .v-agent {
+    background: var(--accent-2);
+    color: var(--bg-base);
+    border-color: color-mix(in srgb, var(--accent-2) 72%, white 14%);
+  }
+  .v-agent:not(:disabled):hover {
+    background: color-mix(in srgb, var(--accent-2) 88%, white 12%);
+    border-color: color-mix(in srgb, var(--accent-2) 62%, white 24%);
+    filter: none;
   }
   .v-secondary {
     background: var(--bg-raised-2);
     color: var(--text);
-    border-color: var(--border);
+    border-color: var(--border-strong);
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
+      0 1px 0 color-mix(in srgb, black 22%, transparent);
+  }
+  .v-secondary:not(:disabled):hover {
+    background: color-mix(in srgb, var(--bg-raised-2) 82%, white 18%);
+    border-color: color-mix(in srgb, var(--border-strong) 68%, var(--text) 32%);
+    filter: none;
   }
   .v-danger {
     background: var(--danger);
     color: white;
+    border-color: color-mix(in srgb, var(--danger) 70%, white 14%);
   }
   .v-ghost {
     background: transparent;

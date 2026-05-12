@@ -10,6 +10,8 @@ import {
   type WorkspaceImportDraft,
   type WorkspaceInventory,
 } from './workspace-import/index.js'
+import { normalizeImportedDraftTask } from './import-drafts.js'
+import { resolveTaskProjectPath } from './task-project-path.js'
 
 // ---------------------------------------------------------------------------
 // FR-34: reserved workspace-importer task.
@@ -37,10 +39,11 @@ function tasksPathFor(memoryDir: string): string {
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
   const raw = await fs.readFile(tasksPathFor(memoryDir), 'utf-8')
   const parsed = JSON.parse(raw)
-  if (Array.isArray(parsed)) {
-    return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-  }
-  return TaskQueue.parse(parsed)
+  const queue = Array.isArray(parsed)
+    ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+    : TaskQueue.parse(parsed)
+  for (const task of queue.tasks) normalizeImportedDraftTask(task)
+  return queue
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
@@ -195,6 +198,29 @@ export interface CreateWorkspaceImportResult {
   draft: WorkspaceImportDraft
 }
 
+async function writeWorkspaceImportTranscript(
+  memoryDir: string,
+  inventory: WorkspaceInventory,
+  draft: WorkspaceImportDraft,
+  seedMessage?: string,
+): Promise<string> {
+  const transcriptPath = path.join(
+    memoryDir,
+    'exploring',
+    `${WORKSPACE_IMPORT_TASK_ID}.md`,
+  )
+  await fs.mkdir(path.dirname(transcriptPath), { recursive: true })
+  const seed =
+    seedMessage ??
+    [
+      WORKSPACE_IMPORT_SEED_PREAMBLE,
+      formatDraftForTranscript(inventory, draft),
+      WORKSPACE_IMPORT_SEED_FORMAT,
+    ].join('\n')
+  await fs.writeFile(transcriptPath, `${seed}\n`, 'utf-8')
+  return transcriptPath
+}
+
 /**
  * Seed the workspace with the reserved importer task. Idempotent — if the
  * task already exists, returns `alreadyExists: true` without re-running
@@ -232,7 +258,7 @@ export async function createWorkspaceImportTask(
   const now = new Date().toISOString()
   const task: Task = {
     id: WORKSPACE_IMPORT_TASK_ID,
-    title: 'Import existing workspace artifacts into TASKS.json',
+    title: 'Review existing project work',
     description:
       'Refine the detector-produced draft of goals, tasks, and milestones with the user, then emit YAML fences for the merge step.',
     domain: WORKSPACE_IMPORT_DOMAIN,
@@ -283,6 +309,87 @@ export async function createWorkspaceImportTask(
     taskId: WORKSPACE_IMPORT_TASK_ID,
     transcriptPath: appendResult.path,
     alreadyExists: false,
+    inventory,
+    draft,
+  }
+}
+
+export async function rerunWorkspaceImportTask(
+  input: CreateWorkspaceImportInput,
+): Promise<CreateWorkspaceImportResult> {
+  const queue = await readQueue(input.memoryDir)
+  const inventory =
+    input.inventory ??
+    (await detectWorkspaceSignals({ projectPath: input.projectPath }))
+  const draft = input.draft ?? formWorkspaceHypothesis(inventory)
+  const now = new Date().toISOString()
+  const existingIndex = queue.tasks.findIndex((t) => t.id === WORKSPACE_IMPORT_TASK_ID)
+  const transcriptPath = await writeWorkspaceImportTranscript(
+    input.memoryDir,
+    inventory,
+    draft,
+    input.seedMessage,
+  )
+
+  const task: Task = {
+    id: WORKSPACE_IMPORT_TASK_ID,
+    title: 'Import project notes and plans',
+    description:
+      'Refine the detector-produced draft of goals, tasks, and milestones with the user, then emit YAML fences for the merge step.',
+    domain: WORKSPACE_IMPORT_DOMAIN,
+    projectPath: input.projectPath,
+    status: 'exploring',
+    priority: 'high',
+    dependsOn: [],
+    outOfScope: [],
+    acceptanceCriteria: [],
+    notes: [
+      {
+        role: 'system',
+        agentId: 'workspace-importer-agent',
+        timestamp: now,
+        content: 'Workspace import was explicitly re-run from the UI.',
+      },
+    ],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    escalations: [],
+    agentIssues: [],
+    revisionCount: 0,
+    remediationAttempts: 0,
+    origination: 'system',
+    createdAt: existingIndex >= 0 ? (queue.tasks[existingIndex]?.createdAt ?? now) : now,
+    updatedAt: now,
+  }
+
+  if (existingIndex >= 0) {
+    queue.tasks[existingIndex] = task
+  } else {
+    queue.tasks.unshift(task)
+  }
+  queue.lastUpdated = now
+  await writeQueue(input.memoryDir, queue)
+
+  const goalsPath = path.join(input.memoryDir, WORKSPACE_GOALS_FILE)
+  if (await fs.stat(goalsPath).then(() => true).catch(() => false)) {
+    try {
+      const raw = JSON.parse(await fs.readFile(goalsPath, 'utf-8')) as Record<string, unknown>
+      if (raw.dismissed) {
+        delete raw.dismissed
+        delete raw.dismissedAt
+        raw.recordedAt = now
+        await fs.writeFile(goalsPath, JSON.stringify(raw, null, 2), 'utf-8')
+      }
+    } catch {
+      // Ignore malformed dismissed-state files; the rerun task/transcript are the source of truth.
+    }
+  }
+
+  return {
+    taskId: WORKSPACE_IMPORT_TASK_ID,
+    transcriptPath,
+    alreadyExists: existingIndex >= 0,
     inventory,
     draft,
   }
@@ -375,6 +482,19 @@ function normStringList(value: unknown): string[] {
   return value.filter((v): v is string => typeof v === 'string')
 }
 
+function normalizeImportText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[`*_~]/g, '')
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function supportingText(title: string, value: string): string {
+  return normalizeImportText(title) === normalizeImportText(value) ? '' : value
+}
+
 /**
  * Pulls the `goals:` / `tasks:` / `milestones:` fences out of the importer
  * task's spec. Each section is independent: the agent can emit just one if
@@ -392,8 +512,9 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
         const g = raw as Record<string, unknown>
         const id = typeof g['id'] === 'string' ? g['id'] : undefined
         const title = typeof g['title'] === 'string' ? g['title'] : undefined
-        const rationale = typeof g['rationale'] === 'string' ? g['rationale'] : ''
+        const rawRationale = typeof g['rationale'] === 'string' ? g['rationale'] : ''
         if (!id || !title) continue
+        const rationale = supportingText(title, rawRationale)
         goals.push({ id, title, rationale })
       }
     }
@@ -403,7 +524,7 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
         const t = raw as Record<string, unknown>
         const id = typeof t['id'] === 'string' ? t['id'] : undefined
         const title = typeof t['title'] === 'string' ? t['title'] : undefined
-        const description =
+        const rawDescription =
           typeof t['description'] === 'string' ? t['description'] : ''
         const domain = typeof t['domain'] === 'string' ? t['domain'] : 'core'
         const rawPriority = t['priority']
@@ -415,7 +536,7 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
         tasks.push({
           id,
           title,
-          description,
+          description: supportingText(title, rawDescription),
           domain,
           priority,
           references: normStringList(t['references']),
@@ -456,7 +577,7 @@ export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
     for (const g of draft.goals) {
       lines.push(`  - id: ${escape(g.id)}`)
       lines.push(`    title: ${escape(g.title)}`)
-      lines.push(`    rationale: ${escape(g.rationale || '')}`)
+      if (g.rationale) lines.push(`    rationale: ${escape(g.rationale)}`)
     }
     lines.push('```')
     lines.push('')
@@ -495,6 +616,8 @@ export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
 export interface ApproveWorkspaceImportInput {
   memoryDir: string
   projectPath: string
+  coordinatorProjectPaths?: Record<string, string>
+  draftOverride?: WorkspaceImportDraft
 }
 
 export interface ApproveWorkspaceImportResult {
@@ -518,10 +641,9 @@ function uniqueTaskId(existingIds: Set<string>, suggested: string): string {
 
 /**
  * Consume the workspace-import draft: parse fences, append tasks as
- * `ready` + `origination='human'` (the Approve click in the UI is the
- * human approval — FR-21 task_origination only governs agent-originated
- * proposals), record milestones to PROGRESS.md, persist goals into
- * `memory/workspace-goals.json`, and mark the reserved task done.
+ * `import_draft` + `origination='human'`, record milestones to PROGRESS.md,
+ * persist goals into `memory/workspace-goals.json`, and mark the reserved
+ * task done.
  *
  * Safe to call multiple times: tasks with ids already present are
  * skipped (the reserved task's spec is the source of truth).
@@ -537,15 +659,18 @@ export async function approveWorkspaceImport(
       error: `No workspace-import task found (id: ${WORKSPACE_IMPORT_TASK_ID})`,
     }
   }
-  if (!task.spec || task.spec.trim().length === 0) {
+  const parsed = input.draftOverride
+    ? parseWorkspaceImport(formatDetectedDraftAsSpec(input.draftOverride))
+    : (!task.spec || task.spec.trim().length === 0)
+        ? null
+        : parseWorkspaceImport(task.spec)
+  if (!parsed) {
     return {
       success: false,
       error:
         'Workspace-import task has no spec yet; ask the importer agent to emit the YAML fences first.',
     }
   }
-
-  const parsed = parseWorkspaceImport(task.spec)
   if (
     parsed.goals.length === 0 &&
     parsed.tasks.length === 0 &&
@@ -560,7 +685,7 @@ export async function approveWorkspaceImport(
 
   const now = new Date().toISOString()
 
-  // Merge tasks into the queue as `proposed`. Dup ids get suffixed.
+  // Merge tasks into the queue as intake candidates. Dup ids get suffixed.
   const existingIds = new Set(queue.tasks.map((t) => t.id))
   let tasksAdded = 0
   for (const t of parsed.tasks) {
@@ -571,12 +696,16 @@ export async function approveWorkspaceImport(
       title: t.title,
       description: t.description,
       domain: t.domain,
-      projectPath: input.projectPath,
-      // The Approve click in the Workspace Import UI IS the human approval —
-      // land tasks in `ready` directly. Routing them through `proposed` was
-      // dead-end state because evaluateProposal requires origination='agent'
-      // and would throw on these system/human-sourced entries.
-      status: 'ready',
+      projectPath:
+        input.coordinatorProjectPaths?.[t.domain] ??
+        resolveTaskProjectPath({
+          workspaceProjectPath: input.projectPath,
+          domain: t.domain,
+        }),
+      // Import approval means "yes, keep this as a candidate draft", not
+      // "this already has a complete task brief/spec." Imported notes become
+      // shaping drafts first; only after shaping do they enter normal intake.
+      status: 'import_draft',
       priority: t.priority,
       dependsOn: [],
       outOfScope: [],

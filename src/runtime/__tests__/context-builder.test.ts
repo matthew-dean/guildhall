@@ -2,14 +2,19 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { buildContext } from '../context-builder.js'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { buildContext, resolveLikelyTaskFiles } from '../context-builder.js'
 import type { Task } from '@guildhall/core'
+import { writeCheckpoint } from '@guildhall/tools'
 
 // ---------------------------------------------------------------------------
 // Context builder tests (AC-04)
 // Verifies JIT context assembly: keyword ranking, cap enforcement, and
 // correct injection of task summary, memory, progress, and decisions.
 // ---------------------------------------------------------------------------
+
+const execFileP = promisify(execFile)
 
 let tmpDir: string
 
@@ -68,7 +73,27 @@ describe('buildContext — task summary', () => {
 
   it('includes spec when present', async () => {
     const ctx = await buildContext(baseTask, tmpDir)
+    expect(ctx.taskSummary).toContain('### Spec Overview')
     expect(ctx.taskSummary).toContain('ghost button variant')
+  })
+
+  it('keeps only the summary portion of long spec markdown in the task summary', async () => {
+    const ctx = await buildContext({
+      ...baseTask,
+      spec: [
+        '## Summary',
+        'Keep this summary.',
+        '## Acceptance Criteria',
+        '1. This duplicated AC prose should not be echoed inside the spec section.',
+        '## Out of Scope',
+        '- This duplicated out-of-scope prose should not be echoed inside the spec section.',
+      ].join('\n'),
+    }, tmpDir)
+
+    const specSection = ctx.taskSummary.split('### Acceptance Criteria')[0] ?? ctx.taskSummary
+    expect(specSection).toContain('Keep this summary.')
+    expect(specSection).not.toContain('This duplicated AC prose should not be echoed')
+    expect(specSection).not.toContain('This duplicated out-of-scope prose should not be echoed')
   })
 
   it('includes acceptance criteria', async () => {
@@ -77,12 +102,23 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('pnpm build passes')
   })
 
+  it('includes the current blocker when the task is blocked', async () => {
+    const ctx = await buildContext({
+      ...baseTask,
+      status: 'blocked',
+      blockReason: 'worktree bootstrap failed on command `cd knit && pnpm install`',
+    }, tmpDir)
+
+    expect(ctx.taskSummary).toContain('**Current blocker:**')
+    expect(ctx.taskSummary).toContain('worktree bootstrap failed on command `cd knit && pnpm install`')
+  })
+
   it('includes out-of-scope list', async () => {
     const ctx = await buildContext(baseTask, tmpDir)
     expect(ctx.taskSummary).toContain('Knit-specific styling')
   })
 
-  it('includes agent notes (last 5 only)', async () => {
+  it('includes agent notes (last 3 only)', async () => {
     const taskWithNotes: Task = {
       ...baseTask,
       notes: Array.from({ length: 7 }, (_, i) => ({
@@ -93,11 +129,306 @@ describe('buildContext — task summary', () => {
       })),
     }
     const ctx = await buildContext(taskWithNotes, tmpDir)
-    // Should include last 5 notes, not all 7
+    // Should include last 3 notes, not all 7
     expect(ctx.taskSummary).toContain('Note number 7')
-    expect(ctx.taskSummary).toContain('Note number 3')
+    expect(ctx.taskSummary).toContain('Note number 5')
+    expect(ctx.taskSummary).not.toContain('Note number 4')
     expect(ctx.taskSummary).not.toContain('Note number 1')
-    expect(ctx.taskSummary).not.toContain('Note number 2')
+  })
+
+
+  it('surfaces likely target files from the spec and automated commands', async () => {
+    const taskWithTargets: Task = {
+      ...baseTask,
+      projectPath: '/projects/knit',
+      worktreePath: '/projects/knit/.guildhall/worktrees/task-001',
+      spec: 'Edit `web/app/composables/use-presence.ts` and verify `tests/unit/composables/use-presence.test.ts`.',
+      acceptanceCriteria: [
+        {
+          id: 'ac-1',
+          description: 'use-presence tests pass',
+          verifiedBy: 'automated',
+          command: 'pnpm --filter @knit-app test -- tests/unit/composables/use-presence.test.ts',
+          met: false,
+        },
+      ],
+    }
+
+    const ctx = await buildContext(taskWithTargets, tmpDir)
+    expect(ctx.taskSummary).toContain('### Likely Target Files')
+    expect(ctx.taskSummary).toContain('/projects/knit/.guildhall/worktrees/task-001/web/app/composables/use-presence.ts')
+    expect(ctx.taskSummary).toContain('/projects/knit/.guildhall/worktrees/task-001/web/tests/unit/composables/use-presence.test.ts')
+  })
+
+  it('ignores contextual test-file mentions, shell commands, and wildcard globs when deriving likely target files', () => {
+    const taskWithNoisyHints: Task = {
+      ...baseTask,
+      projectPath: '/projects/knit',
+      worktreePath: '/projects/knit/.guildhall/worktrees/task-007',
+      title: 'Add unit coverage for use-collections behavior',
+      description:
+        'Add unit tests beyond the existing auth-header checks in `web/tests/unit/composables/use-collections-auth.test.ts`.',
+      spec: [
+        '## Summary',
+        'Add unit test coverage for `web/app/composables/use-collections.ts` beyond the existing auth-header checks in `web/tests/unit/composables/use-collections-auth.test.ts`.',
+        '## Acceptance Criteria',
+        '1. Given the unit suite runs, when `pnpm --filter @knit-app test -- tests/unit/composables/use-collections*.test.ts` executes in `knit/web`, then all targeted tests pass.',
+      ].join('\n'),
+      acceptanceCriteria: [
+        {
+          id: 'ac-7',
+          description: 'use-collections tests pass',
+          verifiedBy: 'automated',
+          command: 'pnpm --filter @knit-app test -- tests/unit/composables/use-collections*.test.ts',
+          met: false,
+        },
+      ],
+    }
+
+    expect(resolveLikelyTaskFiles(taskWithNoisyHints)).toEqual([
+      '/projects/knit/.guildhall/worktrees/task-007/web/app/composables/use-collections.ts',
+    ])
+  })
+
+  it('falls back to backticked spec file paths when no stronger likely-target hints exist', () => {
+    const taskWithBacktickedSpec: Task = {
+      ...baseTask,
+      projectPath: '/projects/knit',
+      worktreePath: '/projects/knit/.guildhall/worktrees/task-012',
+      title: 'Generate TypeScript types from Supabase schema',
+      description: 'Keep the change bounded and reviewable.',
+      spec: [
+        '## Summary',
+        'The generated `Database` interface already exists at `web/app/types/supabase.ts` and is imported by `web/app/composables/use-workspace.ts`.',
+        'This task is about verifying the generation flow works end-to-end and wiring types into the smallest useful consumer set.',
+      ].join('\n'),
+      acceptanceCriteria: [
+        {
+          id: 'ac-1',
+          description: 'typecheck passes',
+          verifiedBy: 'automated',
+          command: 'pnpm -F web typecheck',
+          met: false,
+        },
+      ],
+    }
+
+    expect(resolveLikelyTaskFiles(taskWithBacktickedSpec)).toEqual([
+      '/projects/knit/.guildhall/worktrees/task-012/web/app/types/supabase.ts',
+      '/projects/knit/.guildhall/worktrees/task-012/web/app/composables/use-workspace.ts',
+    ])
+  })
+
+  it('surfaces the active worktree and changed files for resumed worker tasks', async () => {
+    const worktreePath = path.join(tmpDir, 'worktree')
+    await fs.mkdir(path.join(worktreePath, 'web', 'tests', 'unit', 'composables'), { recursive: true })
+    await execFileP('git', ['init'], { cwd: worktreePath })
+    await fs.writeFile(
+      path.join(worktreePath, 'web', 'tests', 'unit', 'composables', 'use-presence.test.ts'),
+      'export const changed = true\n',
+      'utf-8',
+    )
+
+    const ctx = await buildContext({
+      ...baseTask,
+      worktreePath,
+    }, tmpDir)
+
+    expect(ctx.taskSummary).toContain('### Resume From Current Worktree')
+    expect(ctx.taskSummary).toContain(worktreePath)
+    expect(ctx.taskSummary).toContain('use-presence.test.ts')
+  })
+
+  it('surfaces the latest checkpoint and uses its touched files as likely targets for resumed tasks', async () => {
+    const worktreePath = path.join(tmpDir, 'worktree')
+    const memoryTasksDir = path.join(tmpDir, 'tasks', 'task-001')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await fs.mkdir(memoryTasksDir, { recursive: true })
+    await fs.writeFile(
+      path.join(memoryTasksDir, 'checkpoint.json'),
+      JSON.stringify({
+        taskId: 'task-001',
+        agentId: 'worker-agent',
+        step: 1,
+        intent: 'Regenerated supabase types',
+        filesTouched: ['web/app/types/supabase.ts', 'web/app/composables/use-workspace.ts'],
+        nextPlannedAction: 'Run the focused typecheck next',
+        writtenAt: '2026-05-07T18:23:25.747Z',
+      }, null, 2),
+      'utf-8',
+    )
+
+    const ctx = await buildContext({
+      ...baseTask,
+      worktreePath,
+    }, tmpDir)
+
+    expect(ctx.taskSummary).toContain('### Latest Checkpoint')
+    expect(ctx.taskSummary).toContain('Regenerated supabase types')
+    expect(ctx.taskSummary).toContain('Run the focused typecheck next')
+    expect(ctx.taskSummary).toContain(path.join(worktreePath, 'web/app/types/supabase.ts'))
+    expect(ctx.taskSummary).toContain(path.join(worktreePath, 'web/app/composables/use-workspace.ts'))
+  })
+
+  it('treats remove-style spec instructions as actionable file hints for likely target inference', () => {
+    const task: Task = {
+      ...baseTask,
+      projectPath: tmpDir,
+      spec: [
+        '## Summary',
+        '- Remove the unused `deleteTrashRes` binding in `web/server/api/pages/[id]/restore.post.ts`.',
+        '- Keep restore behavior unchanged.',
+      ].join('\n'),
+    }
+
+    const likely = resolveLikelyTaskFiles(task)
+
+    expect(likely).toContain(path.resolve(tmpDir, 'web/server/api/pages/[id]/restore.post.ts'))
+  })
+
+  it('surfaces the latest reviewer revision note as dedicated required feedback', async () => {
+    const taskWithReviewNote: Task = {
+      ...baseTask,
+      notes: [
+        {
+          agentId: 'worker-agent',
+          role: 'worker',
+          content: 'Initial implementation finished.',
+          timestamp: '2026-04-11T00:00:00Z',
+        },
+        {
+          agentId: 'reviewer-fanout',
+          role: 'reviewer',
+          content: 'What must change:\n- Add the missing login redirect tests.',
+          timestamp: '2026-04-11T01:00:00Z',
+        },
+      ],
+    }
+    const ctx = await buildContext(taskWithReviewNote, tmpDir)
+    expect(ctx.taskSummary).toContain('### Latest Required Revisions')
+    expect(ctx.taskSummary).toContain('Add the missing login redirect tests')
+  })
+
+  it('does not duplicate reviewer feedback inside the generic agent-notes section', async () => {
+    const taskWithReviewNote: Task = {
+      ...baseTask,
+      notes: [
+        {
+          agentId: 'worker-agent',
+          role: 'worker',
+          content: 'Worker note.',
+          timestamp: '2026-04-11T00:00:00Z',
+        },
+        {
+          agentId: 'reviewer-fanout',
+          role: 'reviewer',
+          content: 'What must change:\n- Remove the placeholder files.\n- Re-run the targeted tests.',
+          timestamp: '2026-04-11T01:00:00Z',
+        },
+      ],
+    }
+
+    const ctx = await buildContext(taskWithReviewNote, tmpDir)
+    expect(ctx.taskSummary).toContain('### Latest Required Revisions')
+    expect(ctx.taskSummary).toContain('Remove the placeholder files.')
+    expect(ctx.taskSummary).toContain('### Agent Notes')
+    expect(ctx.taskSummary).toContain('Worker note.')
+    const afterAgentNotes = ctx.taskSummary.split('### Agent Notes')[1] ?? ''
+    expect(afterAgentNotes).not.toContain('Remove the placeholder files.')
+  })
+
+  it('surfaces recent resolved escalation decisions as guidance for resumed work', async () => {
+    const taskWithResolution: Task = {
+      ...baseTask,
+      escalations: [
+        {
+          id: 'esc-task-011-5',
+          taskId: 'task-001',
+          agentId: 'worker-agent',
+          reason: 'decision_required',
+          summary: 'Typecheck is failing in unrelated file outside the task target.',
+          details: 'web/app/composables/use-presence.test.ts is already red.',
+          raisedAt: '2026-05-05T18:00:00Z',
+          resolvedAt: '2026-05-05T18:05:00Z',
+          resolvedBy: 'human',
+          resolution:
+            'Treat AC13 as scoped to the task changed file for now and keep unrelated repo-red out of scope unless the same file set is touched.',
+        },
+      ],
+    }
+
+    const ctx = await buildContext(taskWithResolution, tmpDir)
+    expect(ctx.taskSummary).toContain('### Resolved Human Decisions To Honor')
+    expect(ctx.taskSummary).toContain('esc-task-011-5')
+    expect(ctx.taskSummary).toContain('Treat AC13 as scoped to the task changed file')
+    expect(ctx.taskSummary).toContain('Do not reopen these questions unless new evidence appears')
+  })
+
+  it('hides stale reviewer feedback after a max-revisions escalation was resolved for retry', async () => {
+    const taskWithResolvedRetry: Task = {
+      ...baseTask,
+      status: 'in_progress',
+      notes: [
+        {
+          agentId: 'reviewer-fanout',
+          role: 'reviewer',
+          content: 'Recommended task-local revisions:\n- Add broad platform ceremony.',
+          timestamp: '2026-05-09T01:00:00.000Z',
+        },
+      ],
+      escalations: [
+        {
+          id: 'esc-task-001-3',
+          taskId: 'task-001',
+          agentId: 'reviewer-fanout',
+          reason: 'max_revisions_exceeded',
+          summary: 'Exceeded maxRevisions (3). Reviewer fan-out keeps rejecting.',
+          raisedAt: '2026-05-09T01:02:00.000Z',
+          resolvedAt: '2026-05-09T01:05:00.000Z',
+          resolvedBy: 'human',
+          resolution: 'Retry with narrower reviewer scope.',
+        },
+      ],
+    }
+
+    const ctx = await buildContext(taskWithResolvedRetry, tmpDir)
+    expect(ctx.taskSummary).not.toContain('### Latest Required Revisions')
+    expect(ctx.taskSummary).toContain('### Resolved Human Decisions To Honor')
+  })
+
+  it('upgrades stale checkpoint self-critique instructions when a worker persona-role note already contains the self-critique', async () => {
+    const taskWithPersonaSelfCritique: Task = {
+      ...baseTask,
+      status: 'in_progress',
+      notes: [
+        {
+          agentId: 'worker-agent',
+          role: 'Backend Engineer',
+          content: '**Self-critique:**\nFocused restore handler verification passed.',
+          timestamp: '2026-05-09T01:36:13.216Z',
+        },
+      ],
+    }
+
+    await fs.mkdir(path.join(tmpDir, 'tasks'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'TASKS.json'),
+      JSON.stringify({ version: 1, lastUpdated: 'now', tasks: [taskWithPersonaSelfCritique] }, null, 2),
+      'utf-8',
+    )
+    await writeCheckpoint({
+      tasksPath: path.join(tmpDir, 'TASKS.json'),
+      memoryDir: tmpDir,
+      taskId: taskWithPersonaSelfCritique.id,
+      agentId: 'worker-agent',
+      intent: 'Worker recovery checkpoint after verified progress.',
+      nextPlannedAction: 'Resume from the recorded verification evidence, write or refresh the self-critique note, then hand off to review.',
+      filesTouched: ['web/server/api/pages/[id]/restore.post.ts'],
+    })
+
+    const ctx = await buildContext(taskWithPersonaSelfCritique, tmpDir)
+    expect(ctx.taskSummary).toContain('Resume from the latest self-critique and recorded verification evidence, then hand off to review.')
+    expect(ctx.taskSummary).not.toContain('write or refresh the self-critique note')
   })
 })
 

@@ -304,10 +304,10 @@ export function updatePlanMode(
 // ---------------------------------------------------------------------------
 
 function isReadTool(name: string): boolean {
-  return name === 'read_file' || name === 'Read' || name === 'ReadFile'
+  return name === 'read_file' || name === 'Read' || name === 'ReadFile' || name === 'read-file'
 }
 function isBashTool(name: string): boolean {
-  return name === 'bash' || name === 'Bash'
+  return name === 'bash' || name === 'Bash' || name === 'shell'
 }
 function isGrepTool(name: string): boolean {
   return name === 'grep' || name === 'Grep'
@@ -316,10 +316,10 @@ function isGlobTool(name: string): boolean {
   return name === 'glob' || name === 'Glob'
 }
 function isWebFetchTool(name: string): boolean {
-  return name === 'web_fetch' || name === 'WebFetch'
+  return name === 'web_fetch' || name === 'WebFetch' || name === 'web-fetch'
 }
 function isWebSearchTool(name: string): boolean {
-  return name === 'web_search' || name === 'WebSearch'
+  return name === 'web_search' || name === 'WebSearch' || name === 'web-search'
 }
 function isAgentTool(name: string): boolean {
   return name === 'agent' || name === 'Task' || name === 'Agent'
@@ -335,6 +335,12 @@ function isEnterPlanModeTool(name: string): boolean {
 }
 function isExitPlanModeTool(name: string): boolean {
   return name === 'exit_plan_mode' || name === 'ExitPlanMode'
+}
+function isWriteTool(name: string): boolean {
+  return name === 'write-file' || name === 'Write'
+}
+function isEditTool(name: string): boolean {
+  return name === 'edit-file' || name === 'Edit'
 }
 
 export interface RecordToolCarryoverParams {
@@ -429,6 +435,11 @@ export function recordToolCarryover(params: RecordToolCarryoverParams): void {
       toolMetadata,
       `Ran bash command ${command.slice(0, 160)} [${firstLine.slice(0, 120)}]`,
     )
+  } else if ((isWriteTool(toolName) || isEditTool(toolName)) && resolvedFilePath !== null) {
+    rememberVerifiedWork(
+      toolMetadata,
+      `${isEditTool(toolName) ? 'Edited' : 'Wrote'} file ${resolvedFilePath}`,
+    )
   }
 
   // Work log entries (upstream has a parallel switch block for this)
@@ -439,6 +450,10 @@ export function recordToolCarryover(params: RecordToolCarryoverParams): void {
     const firstLine = toolOutput.trim() ? toolOutput.split('\n')[0]!.trim() : 'no output'
     rememberWorkLog(toolMetadata, {
       entry: `Ran bash: ${command.slice(0, 160)} [${firstLine.slice(0, 120)}]`,
+    })
+  } else if ((isWriteTool(toolName) || isEditTool(toolName)) && resolvedFilePath !== null) {
+    rememberWorkLog(toolMetadata, {
+      entry: `${isEditTool(toolName) ? 'Edited' : 'Wrote'} file ${resolvedFilePath}`,
     })
   } else if (isGrepTool(toolName)) {
     const pattern = String(toolInput['pattern'] ?? '').trim()

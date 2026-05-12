@@ -1,12 +1,13 @@
 /**
- * FR-25 attempt-branch merge policy. Runs exactly once per `done` transition:
+ * FR-25 accepted-work landing. Runs exactly once per `done` transition:
  *
- *   • `ff_only_local`      — fast-forward merge into baseBranch; no push.
- *   • `ff_only_with_push`  — fast-forward + push; on push failure, degrade to
- *                            local-only and emit FR-29 markers (PROGRESS.md +
- *                            memory/local-only).
- *   • `manual_pr`          — open a PR via `gh`, hold the task at `pending_pr`
- *                            until the human merges.
+ *   • `cherry_pick_local`      — cherry-pick accepted commits into the landing
+ *                                 branch locally; no push.
+ *   • `cherry_pick_with_push`  — cherry-pick + push; on push failure, degrade
+ *                                 to local-only and emit FR-29 markers
+ *                                 (PROGRESS.md + memory/local-only).
+ *   • `manual_pr`              — open a PR via `gh`, hold the task at
+ *                                 `pending_pr` until the human merges.
  *
  * Merge conflicts surface as a `fixup` task parented to the failing task's
  * goal so the coordinator can decide the next move on its next tick.
@@ -17,16 +18,27 @@ import type { ProjectLevers } from '@guildhall/levers'
 import type { GitDriver } from './git-driver.js'
 import { attemptRemoteSync } from './local-only-mode.js'
 
-export type MergePolicy = ProjectLevers['merge_policy']['position']
+export type LandingStrategy = ProjectLevers['landing_strategy']['position']
 
-export function resolveMergePolicy(project: ProjectLevers): MergePolicy {
-  return project.merge_policy.position
+export function resolveLandingStrategy(project: ProjectLevers): LandingStrategy {
+  const legacy = project.merge_policy?.position
+  if (legacy) {
+    switch (legacy) {
+      case 'ff_only_local':
+        return 'cherry_pick_local'
+      case 'ff_only_with_push':
+        return 'cherry_pick_with_push'
+      case 'manual_pr':
+        return 'manual_pr'
+    }
+  }
+  return project.landing_strategy.position
 }
 
 export interface MergeRecord {
   fromBranch: string
   toBranch: string
-  strategy: MergePolicy
+  strategy: LandingStrategy
   result:
     | 'merged'
     | 'pushed'
@@ -42,7 +54,7 @@ export interface MergeRecord {
 
 export interface DispatchMergeInput {
   task: Task
-  policy: MergePolicy
+  policy: LandingStrategy
   projectPath: string
   memoryDir: string
   gitDriver: GitDriver
@@ -66,7 +78,7 @@ export interface DispatchMergeResult {
    */
   fixupTask?: Task
   /**
-   * True when `ff_only_with_push` degraded to local-only. The orchestrator
+   * True when `cherry_pick_with_push` degraded to local-only. The orchestrator
    * caller uses this to produce a human-readable PROGRESS.md entry beyond
    * what `attemptRemoteSync` already writes.
    */
@@ -138,15 +150,15 @@ export async function dispatchMerge(
     }
   }
 
-  // Fast-forward merge path, used by both `ff_only_local` and `ff_only_with_push`.
-  const merge = await gitDriver.fastForwardMerge(projectPath, fromBranch, toBranch)
+  // Cherry-pick landing path, used by both local and push variants.
+  const merge = await gitDriver.cherryPickBranch(projectPath, fromBranch, toBranch)
   if (!merge.ok) {
     if (merge.conflict) {
       const fixup = buildFixupTask({
         originatingTask: task,
         fromBranch,
         toBranch,
-        detail: merge.detail ?? 'fast-forward failed with conflict',
+          detail: merge.detail ?? 'cherry-pick failed with conflict',
         now,
       })
       return {
@@ -164,13 +176,13 @@ export async function dispatchMerge(
       record: {
         ...mergeBase,
         result: 'skipped',
-        detail: merge.detail ?? 'fast-forward failed; no conflict recorded',
+          detail: merge.detail ?? 'cherry-pick failed; no conflict recorded',
       },
       newStatus: 'blocked',
     }
   }
 
-  if (policy === 'ff_only_local') {
+  if (policy === 'cherry_pick_local') {
     return {
       record: {
         ...mergeBase,
@@ -181,7 +193,7 @@ export async function dispatchMerge(
     }
   }
 
-  // ff_only_with_push: attempt the push through attemptRemoteSync so an
+  // cherry_pick_with_push: attempt the push through attemptRemoteSync so an
   // outage drops us into FR-29 local-only mode instead of failing the task.
   const sync = await attemptRemoteSync(
     memoryDir,

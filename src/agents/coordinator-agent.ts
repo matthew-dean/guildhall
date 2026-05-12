@@ -24,6 +24,31 @@ import type { AnyTool, Compactor, HookExecutor } from '@guildhall/engine'
 // for the same project with different perspectives.
 // ---------------------------------------------------------------------------
 
+const COORDINATOR_NO_TOOL_TURN_NUDGE = `
+Your last response did not use a tool, so Guildhall could not record a durable
+coordinator decision.
+
+Take a concrete coordinator tool step now:
+- If the spec is approved, call update-task to set status to ready.
+- If the spec needs revision, call update-task to send it back to exploring with a clear note.
+- If you are making a meaningful policy call, record it with log-decision.
+- If the task truly needs human judgment, call raise-escalation.
+
+Do not just describe the approval or revision in assistant prose. Persist it
+with a tool in this turn.
+`.trim()
+
+const COORDINATOR_NO_PROGRESS_TURN_NUDGE = `
+You have already inspected enough context to make a coordinator decision.
+Stop re-reading and record the decision durably now:
+- call update-task to move the task to ready or exploring;
+- call log-decision if you need to preserve the rationale;
+- or call raise-escalation if the task really needs a human decision.
+
+Do not do another read-only turn unless a tool result just told you the task
+state or source file was missing.
+`.trim()
+
 function buildCoordinatorPrompt(domain: CoordinatorDomain): string {
   const concernSummary = domain.concerns
     .map(
@@ -57,8 +82,8 @@ ${escalationList}
 
 **Task management:**
 - Read the task queue at the start of every session. Your domain is: ${domain.id}
-- Assign 'ready' tasks to worker agents by updating assignedTo and setting status to 'in_progress'
 - Review specs (tasks in 'spec_review') and either approve them (→ 'ready') or request revision
+- Leave 'ready' task claiming to the orchestrator. A ready task is already approved; the runtime assigns it to worker-agent deterministically.
 - Monitor in_progress and review tasks; unblock or re-assign as needed
 - Break large goals into smaller tasks and add them to the queue
 
@@ -109,6 +134,7 @@ export function createCoordinatorAgent(
     skills?: readonly SkillDefinition[]
     hookExecutor?: HookExecutor
     compactor?: Compactor
+    cwd?: string
     sessionPersistence?: { cwd: string; sessionId?: string }
     /** Optional tools appended to the factory's built-in set (e.g. MCP adapters). */
     extraTools?: readonly AnyTool[]
@@ -118,6 +144,20 @@ export function createCoordinatorAgent(
     name: `coordinator-${domain.id}`,
     llm,
     systemPrompt: buildCoordinatorPrompt(domain),
+    ...(opts.cwd ? { cwd: opts.cwd } : {}),
+    noToolTurnNudge: COORDINATOR_NO_TOOL_TURN_NUDGE,
+    noToolTurnNudgeLimit: 2,
+    noProgressToolNames: [
+      'update-task',
+      'log-decision',
+      'log-progress',
+      'save-agent-setting',
+      'raise-escalation',
+      'resolve-escalation',
+    ],
+    noProgressTurnNudge: COORDINATOR_NO_PROGRESS_TURN_NUDGE,
+    noProgressTurnThreshold: 2,
+    noProgressTurnNudgeLimit: 2,
     tools: [
       readFileTool,
       readTasksTool,

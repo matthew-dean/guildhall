@@ -4,6 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { Buffer } from 'node:buffer'
 import { selectApiClient, inferPreferredProvider } from '../provider-selection.js'
+import { clearProviderClientPool } from '../provider-client-pool.js'
 
 let tmpDir: string
 let claudeCredPath: string
@@ -18,6 +19,7 @@ const CLEAN_ENV_KEYS = [
 const savedEnv: Record<string, string | undefined> = {}
 
 beforeEach(async () => {
+  clearProviderClientPool()
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-provider-'))
   claudeCredPath = path.join(tmpDir, 'claude.json')
   codexCredPath = path.join(tmpDir, 'codex.json')
@@ -28,6 +30,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  clearProviderClientPool()
   await fs.rm(tmpDir, { recursive: true, force: true })
   for (const k of CLEAN_ENV_KEYS) {
     if (savedEnv[k] === undefined) delete process.env[k]
@@ -226,6 +229,63 @@ describe('selectApiClient', () => {
     expect(result.reason).toMatch(/OpenAI API key/)
   })
 
+  it('reports the configured OpenAI-compatible base URL when one is provided', async () => {
+    const result = await selectApiClient({
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+      openaiApiKey: 'sk-openai-test',
+      openaiBaseUrl: 'https://integrate.api.nvidia.com/v1',
+    })
+    expect(result.providerName).toBe('openai-api')
+    expect(result.reason).toMatch(/integrate\.api\.nvidia\.com/)
+  })
+
+  it('reuses the same OpenAI-compatible API client for equivalent runtime config', async () => {
+    const a = await selectApiClient({
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+      openaiApiKey: 'sk-openai-test',
+      openaiBaseUrl: 'https://integrate.api.nvidia.com/v1',
+    })
+    const b = await selectApiClient({
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+      openaiApiKey: 'sk-openai-test',
+      openaiBaseUrl: 'https://integrate.api.nvidia.com/v1',
+    })
+    expect(a.providerName).toBe('openai-api')
+    expect(a.apiClient).toBe(b.apiClient)
+  })
+
+  it('reuses the same local-server client for equivalent runtime config', async () => {
+    const a = await selectApiClient({
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+      llamaCppUrl: 'http://localhost:1234/v1',
+    })
+    const b = await selectApiClient({
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+      llamaCppUrl: 'http://localhost:1234/v1',
+    })
+    expect(a.providerName).toBe('llama-cpp')
+    expect(a.apiClient).toBe(b.apiClient)
+  })
+
+  it('does not pool Claude OAuth clients because they carry resumable session identity', async () => {
+    await writeClaudeCred()
+    const a = await selectApiClient({
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+    })
+    const b = await selectApiClient({
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+    })
+    expect(a.providerName).toBe('claude-oauth')
+    expect(a.apiClient).not.toBe(b.apiClient)
+  })
+
   it('reads ANTHROPIC_API_KEY from the environment', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-env'
     const result = await selectApiClient({
@@ -278,10 +338,22 @@ describe('selectApiClient', () => {
     expect(result.providerName).toBe('codex-oauth')
   })
 
-  it('falls through to the normal chain when preferredProvider is unreachable', async () => {
+  it('does not fall through to a paid provider when preferredProvider is unreachable by default', async () => {
     await writeClaudeCred()
     const result = await selectApiClient({
       preferredProvider: 'llama-cpp',
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+    })
+    expect(result.providerName).toBe('none')
+    expect(result.reason).toMatch(/Paid-provider fallback is disabled/)
+  })
+
+  it('falls through to the normal chain when paid-provider fallback is enabled', async () => {
+    await writeClaudeCred()
+    const result = await selectApiClient({
+      preferredProvider: 'llama-cpp',
+      allowPaidProviderFallback: true,
       claudeCredentialPath: claudeCredPath,
       codexCredentialPath: codexCredPath,
     })
@@ -345,7 +417,7 @@ describe('inferPreferredProvider', () => {
     expect(result).toBe('llama-cpp')
   })
 
-  it('returns "llama-cpp" for unlisted ids that heuristically look local (qwen/, deepseek/, llama/…)', () => {
+  it('returns "llama-cpp" for unlisted ids that heuristically look local (qwen/, deepseek/, llama/...)', () => {
     const result = inferPreferredProvider({
       spec: 'qwen/qwen3.6-35b-a3b',
       coordinator: 'qwen/qwen3.6-35b-a3b',

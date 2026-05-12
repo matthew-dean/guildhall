@@ -23,10 +23,10 @@ function readPrinciples(): string {
 
 const COMPONENT_DESIGNER_SPEC_CONTRIBUTION = `
 When the Component Designer applies, the spec for this task must answer:
-- What **variants** does this component have? (primary, secondary, ghost, destructive, …)
+- What **variants** does this component have? (primary, secondary, ghost, destructive, ...)
 - What **sizes**? Draw from the catalog's shared scale (xs/sm/md/lg/xl) or justify a new one.
 - Is it **controlled**, **uncontrolled**, or both? If both, name the controlled-vs-uncontrolled signature.
-- What **slots** (children, leading/trailing icons, description, error, …) are exposed?
+- What **slots** (children, leading/trailing icons, description, error, ...) are exposed?
 - Is rendering **polymorphic** (\`as\` / \`asChild\`)? If yes, state the allowed element set.
 - What **a11y props** are required on the outer interactive element? (aria-label, aria-describedby, disabled semantics, focus management.)
 - Does the component apply **external margin** to itself? It must not. Spacing is the caller's job via Stack/Row/Grid.

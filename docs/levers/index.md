@@ -18,9 +18,9 @@ The agent should infer only what the conversation supports. Anything uncertain s
 ## How a lever is stored
 
 ```yaml
-merge_policy:
-  position: ff_only_with_push
-  rationale: "Team wants auto-push on green main so CI runs on origin"
+landing_strategy:
+  position: cherry_pick_with_push
+  rationale: "Land accepted work locally, then push the landing branch to origin"
   setAt: "2026-04-10T11:02:00Z"
   setBy: user-direct
 ```
@@ -32,8 +32,8 @@ See [Provenance](./provenance) for the setter enum.
 | Lever | Positions | Default |
 |---|---|---|
 | [`concurrent_task_dispatch`](./concurrent-task-dispatch) | `serial`, `fanout_N` | `serial` |
-| [`worktree_isolation`](./worktree-isolation) | `none`, `per_task`, `per_attempt` | `none` |
-| [`merge_policy`](./merge-policy) | `ff_only_local`, `ff_only_with_push`, `manual_pr` | `ff_only_local` |
+| [`worktree_isolation`](./worktree-isolation) | `none`, `per_task`, `per_attempt` | `per_task` |
+| [`landing_strategy`](./merge-policy) | `cherry_pick_local`, `cherry_pick_with_push`, `manual_pr` | `cherry_pick_local` |
 | [`rejection_dampening`](./rejection-dampening) | `off`, `soft_penalty_after_N`, `hard_suppress_after_N` | `off` |
 | [`business_envelope_strictness`](./business-envelope-strictness) | `strict`, `advisory`, `off` | `advisory` |
 | [`agent_health_strictness`](./agent-health-strictness) | `lax`, `standard`, `strict` | `standard` |

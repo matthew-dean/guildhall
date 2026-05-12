@@ -20,7 +20,9 @@ export interface ApiMessageRequest {
   messages: ConversationMessage[]
   system_prompt?: string
   max_tokens: number
+  temperature?: number
   tools: Array<Record<string, unknown>>
+  signal?: AbortSignal | undefined
 }
 
 export interface ApiTextDeltaEvent {

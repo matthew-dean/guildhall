@@ -19,7 +19,7 @@ import { typescriptEngineerGuild } from './typescript-engineer/index.js'
  * The built-in guild roster. Order is the order they appear at the table
  * when multiple apply — the Project Manager opens, domain experts follow,
  * language/framework experts close. Projects can shadow any entry later via
- * `memory/guilds/<slug>/…`.
+ * `memory/guilds/<slug>/...`.
  */
 export const BUILTIN_GUILDS: readonly GuildDefinition[] = [
   // Overseer first — always at the table.

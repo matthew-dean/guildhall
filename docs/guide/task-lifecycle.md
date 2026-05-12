@@ -18,11 +18,11 @@ Every task in `memory/TASKS.json` has a `status` field that tracks where it sits
 | `proposed` | Raw ask, not yet explored. | Coordinator evaluates; may promote to `exploring` or drop. |
 | `exploring` | Spec Agent is interviewing the user to refine the task. | User or spec agent promotes to `spec_review`. |
 | `spec_review` | Spec is drafted; waiting for coordinator sign-off. | Coordinator approves → `ready`, or requests revision. |
-| `ready` | Spec is approved and the task is waiting for a worker slot. | Orchestrator dispatches → `in_progress`. |
+| `ready` | Spec is approved and the task is waiting for a worker slot. | Coordinator dispatches -> `in_progress`. |
 | `in_progress` | A worker agent is doing the work. | Worker finishes → `review`, or hits a blocker → `blocked`. |
 | `review` | One or more reviewers evaluate the work. | All reviewers pass → `gate_check`; any reviewer rejects → `in_progress` (revision) or `blocked`. |
 | `gate_check` | Deterministic hard gates run (lint, typecheck, tests, custom). | All gates pass → `done`; any fail → `in_progress`. |
-| `done` | Successful completion. Worktree merged per `merge_policy`. | Terminal. |
+| `done` | Successful completion. Accepted work lands per `landing_strategy`. | Terminal. |
 
 Terminal states:
 

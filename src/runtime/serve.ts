@@ -1,17 +1,29 @@
-import { readFileSync, existsSync, promises as fsp } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { readFileSync, existsSync, mkdirSync, statSync, writeFileSync, readdirSync, type Dirent, promises as fsp } from 'node:fs'
+import { dirname, join, resolve, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
+import { atomicWriteText } from '@guildhall/sessions'
 import {
   readWorkspaceConfig,
   writeWorkspaceConfig,
+  listWorkspaces,
+  findWorkspace,
+  registerWorkspace,
+  updateWorkspace,
+  unregisterWorkspace,
   bootstrapWorkspace,
   readProjectConfig,
   updateProjectConfig,
+  readGlobalConfig,
+  updateGlobalConfig,
+  resolveConfig,
   FORGE_YAML_FILENAME,
   slugify,
   readGlobalProviders,
@@ -20,16 +32,31 @@ import {
   markProviderVerified,
   resolveGlobalCredentials,
   migrateProjectProvidersToGlobal,
+  resolveModelsForProvider,
   type ProviderKind,
+  writeModelsForProvider,
 } from '@guildhall/config'
-import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
+import {
+  MODEL_CATALOG,
+  type Checkpoint,
+  DEFAULT_LOCAL_MODEL_ASSIGNMENT,
+  DEFAULT_CLOUD_MODEL_ASSIGNMENT,
+  type ModelAssignmentConfig,
+} from '@guildhall/core'
 import {
   loadLeverSettings,
   saveLeverSettings,
   defaultAgentSettingsPath,
   makeDefaultSettings,
+  projectLeverInvariantError,
 } from '@guildhall/levers'
-import { resolveEscalation, updateDesignSystem } from '@guildhall/tools'
+import {
+  activeEscalations,
+  latestResolvedRetryEscalationAt,
+  readCheckpoint,
+  resolveEscalation,
+  updateDesignSystem,
+} from '@guildhall/tools'
 import { DesignSystem, summarizeDesignSystem } from '@guildhall/core'
 import {
   loadProjectGuildRoster,
@@ -38,11 +65,36 @@ import {
   pickPrimaryEngineer,
 } from '@guildhall/guilds'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
-import { selectApiClient, type PreferredProviderKey } from './provider-selection.js'
+import { resolveFanoutCapacity } from './fanout-dispatcher.js'
+import {
+  normalizePreferredProvider,
+  selectApiClient,
+  type PreferredProviderKey,
+  type ProviderName,
+} from './provider-selection.js'
+import {
+  buildSelectApiClientOptions,
+  getRuntimeProviderConfig,
+  resolveLaneConcurrencyPlan,
+} from './provider-runtime-config.js'
+import {
+  anthropicCompatiblePoolKey,
+  openAiCompatiblePoolKey,
+  providerClientHealth,
+} from './provider-client-pool.js'
+import {
+  providerCapabilitiesForAnyKey,
+  providerFamilyForAnyKey,
+  providerLabelForAnyKey,
+  providerLabelForSetupKey,
+  SETUP_PROVIDER_ORDER,
+} from './provider-metadata.js'
 import {
   createExploringTask,
   approveSpec,
   resumeExploring,
+  rerunTaskStage,
+  shapeImportDraft,
   createBugReportTask,
   parseStackTraceTopFile,
 } from './intake.js'
@@ -52,6 +104,8 @@ import {
   createMetaIntakeTask,
   META_INTAKE_TASK_ID,
   parseCoordinatorDraft,
+  rerunMetaIntakeTask,
+  synthesizeMetaIntakeDraft,
   workspaceNeedsMetaIntake,
 } from './meta-intake.js'
 import {
@@ -66,7 +120,9 @@ import {
 import {
   maybeSeedWorkspaceImport,
   approveWorkspaceImport,
+  createWorkspaceImportTask,
   parseWorkspaceImport,
+  rerunWorkspaceImportTask,
   workspaceNeedsImport,
   WORKSPACE_IMPORT_TASK_ID,
   formatDetectedDraftAsSpec,
@@ -75,17 +131,45 @@ import {
   detectWorkspaceSignals,
   formWorkspaceHypothesis,
 } from './workspace-import/index.js'
+import { buildWorkspaceImportReview, filterWorkspaceImportDraft } from './workspace-import/review.js'
+import {
+  buildLearningSnapshot,
+  recordWorkspaceImportApproval,
+  recordWorkspaceImportDismissal,
+  resetGlobalLearning,
+  resetProjectLearning,
+} from './learning.js'
+import { normalizeImportedDraftTask } from './import-drafts.js'
 import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
+import { buildThread } from './thread.js'
+import {
+  buildCoordinatorProjectPathMap,
+  resolveTaskProjectPath,
+} from './task-project-path.js'
+import { readContextDebugForTask } from './context-observability.js'
+import {
+  buildSnapshot,
+  listWizards,
+  progressFor,
+  readWizardsState,
+  emptyWizardsState,
+  buildTaskSnapshot,
+  listTaskWizards,
+  progressForTask,
+  type WizardsState,
+} from './wizards.js'
+import { stringify as stringifyYaml } from 'yaml'
 
 // ---------------------------------------------------------------------------
-// guildhall serve — single-project dashboard
+// guildhall serve — local service over many projects
 //
-// One `guildhall serve` instance corresponds to one project directory. The
-// project path is resolved on boot (defaults to cwd) and drives every
-// endpoint; there is no cross-project registry here. Cross-project
-// aggregation is guild-pro's job.
+// `guildhall serve` now acts like the friendly entrypoint to a local
+// user-level service. During the 0.5.0 transition, the backend already knows
+// about many registered projects and can surface service-level metadata even
+// while the UI still leans on one foreground project API surface.
 //
 // Routes:
+//   GET    /api/service               → service metadata + current selected project
 //   GET    /                          → SPA (root = project detail or setup)
 //   GET    /setup                     → SPA setup wizard route
 //   GET    /api/project               → project detail (config + tasks + run state)
@@ -102,7 +186,7 @@ import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
 //   POST   /api/project/task/:id/pause              → human override → blocked
 //   POST   /api/project/task/:id/shelve             → human override → shelved
 //   POST   /api/project/task/:id/unshelve           → shelved → proposed (clear shelveReason)
-//   POST   /api/project/task/:id/approve-spec       → exploring → spec_review
+//   POST   /api/project/task/:id/approve-spec       → spec_review → ready
 //   POST   /api/project/task/:id/approve-brief      → mark the product brief as human-approved
 //   POST   /api/project/task/:id/resume             → append follow-up to exploring transcript
 //   POST   /api/project/task/:id/resolve-escalation → close an open escalation; unblocks when none remain
@@ -121,8 +205,14 @@ import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
 
 export interface ServeOptions {
   port?: number
-  /** Absolute path to the project root. Defaults to process.cwd(). */
+  /** Legacy alias; prefer preferredProjectPath for new callers. */
   projectPath?: string
+  /** Optional one-shot initial project selection hint for a fresh service. */
+  preferredProjectPath?: string
+  /** Optional path to the service-state file written by background runs. */
+  serviceStatePath?: string
+  /** Optional folder picker override for tests or alternate shells. */
+  pickProjectFolder?: () => Promise<string | null>
 }
 
 interface ResolvedProject {
@@ -131,6 +221,327 @@ interface ResolvedProject {
   /** Null if guildhall.yaml is missing — wizard handles this case. */
   config: ReturnType<typeof readWorkspaceConfig> | null
   initializationNeeded: boolean
+}
+
+interface ServiceProjectSummary {
+  id: string
+  path: string
+  name: string
+  initializationNeeded: boolean
+  selected?: boolean
+  tags?: string[]
+  summary?: string | null
+  taskCounts?: {
+    total: number
+    active: number
+    blocked: number
+    done: number
+    shelved: number
+  }
+  highlights?: {
+    activeTaskTitle?: string | null
+    blockedTaskTitle?: string | null
+    recentCompletedTaskTitle?: string | null
+  }
+  run?: {
+    status?: string
+    startedAt?: string
+    stoppedAt?: string
+    error?: string
+    stopSummary?: unknown
+    providerStatus?: unknown
+  }
+}
+
+function detectProjectPackageManagers(projectPath: string): string[] {
+  const found = new Set<string>()
+  const visited = new Set<string>()
+  const skipDirs = new Set([
+    '.git',
+    'node_modules',
+    '.next',
+    '.nuxt',
+    'dist',
+    'build',
+    'coverage',
+    '.svelte-kit',
+    '.turbo',
+    '.yarn',
+    'bin',
+    'obj',
+  ])
+
+  const visit = (dir: string, depth: number): void => {
+    if (depth > 3 || visited.has(dir)) return
+    visited.add(dir)
+    let entries: Array<Dirent>
+    try {
+      entries = readDirents(dir)
+    } catch {
+      return
+    }
+
+    const names = new Set(entries.map(entry => entry.name))
+    if (names.has('pnpm-lock.yaml')) found.add('pnpm')
+    if (names.has('yarn.lock')) found.add('yarn')
+    if (names.has('package-lock.json')) found.add('npm')
+    if (names.has('bun.lockb')) found.add('bun')
+    if (names.has('uv.lock')) found.add('uv')
+    if (names.has('poetry.lock')) found.add('poetry')
+    if (names.has('requirements.txt')) found.add('pip')
+    if (names.has('Directory.Packages.props') || names.has('packages.lock.json')) found.add('NuGet')
+    if (entries.some(entry => entry.isFile() && (entry.name.endsWith('.csproj') || entry.name.endsWith('.sln')))) {
+      found.add('NuGet')
+    }
+
+    if (names.has('package.json')) {
+      try {
+        const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { packageManager?: string }
+        const pm = pkg.packageManager?.split('@')[0]
+        if (pm === 'pnpm' || pm === 'yarn' || pm === 'npm' || pm === 'bun') found.add(pm)
+      } catch {
+        // ignore invalid package.json here; Facts should stay best-effort
+      }
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      if (skipDirs.has(entry.name)) continue
+      visit(join(dir, entry.name), depth + 1)
+    }
+  }
+
+  visit(projectPath, 0)
+  return found.size > 0 ? [...found] : ['unknown']
+}
+
+function readDirents(dir: string): Array<Dirent> {
+  return readdirSync(dir, { withFileTypes: true })
+}
+
+const execFileP = promisify(execFile)
+
+function isReviewOwnershipMismatch(task: Record<string, unknown>): boolean {
+  const handoffSequence = Array.isArray(task.handoffSequence) ? task.handoffSequence : []
+  const handoffStep =
+    typeof task.handoffStep === 'number' && Number.isFinite(task.handoffStep)
+      ? task.handoffStep
+      : 0
+  const hasPendingHandoffStep = handoffSequence.length > 0 && handoffStep + 1 < handoffSequence.length
+  return (
+    task.status === 'review' &&
+    task.assignedTo !== 'reviewer-agent' &&
+    !hasPendingHandoffStep
+  )
+}
+
+function isWorkerOwnershipMismatch(task: Record<string, unknown>): boolean {
+  return task.status === 'in_progress' && task.assignedTo !== 'worker-agent'
+}
+
+function isGateCheckOwnershipMismatch(task: Record<string, unknown>): boolean {
+  return task.status === 'gate_check' && task.assignedTo !== 'gate-checker-agent'
+}
+
+function isSpecReviewOwnershipMismatch(task: Record<string, unknown>): boolean {
+  return task.status === 'spec_review' && task.assignedTo != null
+}
+
+function isTerminalOwnershipMismatch(task: Record<string, unknown>): boolean {
+  return (
+    (task.status === 'done' || task.status === 'blocked' || task.status === 'shelved') &&
+    task.assignedTo != null
+  )
+}
+
+  async function readTasksFileNormalized(
+  tasksPath: string,
+): Promise<Array<Record<string, unknown>>> {
+  if (!existsSync(tasksPath)) return []
+  const rawText = await fsp.readFile(tasksPath, 'utf8')
+  const parsed = JSON.parse(rawText) as
+    | { tasks?: Array<Record<string, unknown>>; version?: unknown; lastUpdated?: unknown }
+    | Array<Record<string, unknown>>
+  const tasks = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tasks) ? parsed.tasks : []
+  let changed = false
+  for (const task of tasks) {
+    if (normalizeImportedDraftTask(task as never)) {
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    }
+    if (isWorkerOwnershipMismatch(task)) {
+      task.assignedTo = 'worker-agent'
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    } else if (isReviewOwnershipMismatch(task)) {
+      task.assignedTo = 'reviewer-agent'
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    } else if (isGateCheckOwnershipMismatch(task)) {
+      task.assignedTo = 'gate-checker-agent'
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    } else if (isSpecReviewOwnershipMismatch(task)) {
+      task.assignedTo = null
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    } else if (isTerminalOwnershipMismatch(task)) {
+      task.assignedTo = null
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    }
+  }
+  if (!changed) return tasks
+
+  const rewritten = Array.isArray(parsed)
+    ? tasks
+    : {
+        ...parsed,
+        tasks,
+        lastUpdated: new Date().toISOString(),
+      }
+  await atomicWriteText(tasksPath, JSON.stringify(rewritten, null, 2))
+  return tasks
+}
+
+async function buildProjectInboxSnapshot(input: {
+  projectPath: string
+  initializationNeeded: boolean
+  coordinatorCount: number
+}) {
+  if (input.initializationNeeded) {
+    return { items: [], blockers: { bootstrap: false, workspaceImport: false } }
+  }
+  // Self-healing scan: if the workspace has signals but nobody has run
+  // the scanner yet, kick it off implicitly. The user shouldn't have to
+  // press "Scan" — once a coordinator exists, the agent discovers
+  // existing goals/tasks on its own and surfaces them for review.
+  // No-op if already seeded, off, or not needed.
+  try {
+    const memoryDir = join(input.projectPath, 'memory')
+    const goalsPath = join(memoryDir, 'workspace-goals.json')
+    if (!existsSync(goalsPath) && input.coordinatorCount > 0) {
+      await maybeSeedWorkspaceImport({ memoryDir, projectPath: input.projectPath })
+    }
+  } catch {
+    /* never let self-healing break an inbox read */
+  }
+  const items = buildInbox({ projectPath: input.projectPath })
+  const blockers = buildInboxBlockers(items)
+  return { items, blockers }
+}
+
+// ---------------------------------------------------------------------------
+// Wizards helpers — small shims so serve.ts doesn't have to know about the
+// on-disk layout of memory/wizards.yaml.
+// ---------------------------------------------------------------------------
+function writeWizardsState(projectPath: string, state: WizardsState): void {
+  const memDir = join(projectPath, 'memory')
+  if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true })
+  const path = join(memDir, 'wizards.yaml')
+  writeFileSync(path, stringifyYaml(state), 'utf8')
+}
+
+function mutateSkip(
+  state: WizardsState,
+  wizardId: string,
+  stepId: string,
+  mode: 'add' | 'remove',
+): WizardsState {
+  const prev = state.skipped[wizardId] ?? []
+  const set = new Set(prev)
+  if (mode === 'add') set.add(stepId)
+  else set.delete(stepId)
+  return {
+    ...state,
+    skipped: { ...state.skipped, [wizardId]: Array.from(set) },
+  }
+}
+
+// Exported for tests — runtime doesn't need it directly but the test
+// module benefits from sharing the same writer as the endpoint.
+export { writeWizardsState as _writeWizardsState, mutateSkip as _mutateSkip }
+
+/**
+ * Map short archetype ids to coordinator config seeds. Deliberately minimal —
+ * the intent is "start somewhere real" not "nail the full mandate/concerns
+ * shape" (which is what meta-intake is for). The user can refine later from
+ * Settings → Coordinators.
+ */
+function archetypesToCoordinators(archetypes: string[]): Array<{
+  id: string
+  domain: string
+  mandate: string
+  concerns: Array<{ id: string; description: string; reviewQuestions: string[] }>
+}> {
+  const seeds: Record<string, ReturnType<typeof archetypesToCoordinators>[number]> = {
+    product: {
+      id: 'product',
+      domain: 'product',
+      mandate:
+        'Owns user-facing behavior, product brief coherence, and whether a task is doing the right thing for users before we ask whether it is done correctly.',
+      concerns: [
+        {
+          id: 'user-value',
+          description: 'Every shipped change should be traceable to a stated user need.',
+          reviewQuestions: [
+            'Which user need does this change serve?',
+            'What does "done" look like from the user\'s perspective?',
+          ],
+        },
+      ],
+    },
+    tech: {
+      id: 'tech',
+      domain: 'tech',
+      mandate:
+        'Owns implementation quality, architectural coherence, and making sure the codebase stays maintainable as tasks land.',
+      concerns: [
+        {
+          id: 'maintainability',
+          description: 'Changes should preserve or improve long-term code health.',
+          reviewQuestions: [
+            'Does this change introduce accidental complexity?',
+            'Are there abstractions being invented where simpler code would do?',
+          ],
+        },
+      ],
+    },
+    qa: {
+      id: 'qa',
+      domain: 'qa',
+      mandate:
+        'Owns verification: tests, gates, and making sure we know a change works before it merges.',
+      concerns: [
+        {
+          id: 'test-coverage',
+          description: 'Behavior changes should come with verifiable tests.',
+          reviewQuestions: [
+            'Is this change covered by a test that would fail if the behavior regressed?',
+            'Are the gates (typecheck, build, test) still green?',
+          ],
+        },
+      ],
+    },
+  }
+  const result: Array<ReturnType<typeof archetypesToCoordinators>[number]> = []
+  for (const a of archetypes) {
+    const seed = seeds[a]
+    if (seed) result.push(seed)
+  }
+  return result
 }
 
 function resolveProject(projectPath: string): ResolvedProject {
@@ -143,6 +554,148 @@ function resolveProject(projectPath: string): ResolvedProject {
   const config = readWorkspaceConfig(projectPath)
   const id = config.id ?? slugify(config.name)
   return { path: projectPath, id, config, initializationNeeded: false }
+}
+
+function summarizeProject(project: ResolvedProject): ServiceProjectSummary {
+  return {
+    id: project.id,
+    path: project.path,
+    name: project.config?.name ?? project.id,
+    initializationNeeded: project.initializationNeeded,
+    tags: project.config?.tags ?? [],
+  }
+}
+
+async function chooseProjectFolderMacOS(): Promise<string | null> {
+  try {
+    const { stdout } = await execFileP('osascript', [
+      '-e',
+      'POSIX path of (choose folder with prompt "Choose a project folder to attach to Guildhall")',
+    ])
+    const picked = stdout.trim()
+    return picked.length > 0 ? picked : null
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (/User canceled|cancelled|canceled/i.test(message)) return null
+    throw err
+  }
+}
+
+function registrySummaryForProject(project: ResolvedProject): {
+  id: string
+  path: string
+  name: string
+  tags: string[]
+} {
+  if (project.initializationNeeded) {
+    const folderName = basename(project.path) || project.id || 'Project'
+    return {
+      id: project.id,
+      path: project.path,
+      name: folderName,
+      tags: ['uninitialized'],
+    }
+  }
+  return {
+    id: project.id,
+    path: project.path,
+    name: project.config?.name ?? project.id,
+    tags: project.config?.tags ?? [],
+  }
+}
+
+function syncRegistryEntryForProject(project: ResolvedProject) {
+  const summary = registrySummaryForProject(project)
+  const existing = findWorkspace(project.path)
+  if (!existing) {
+    registerWorkspace(summary)
+    return { attached: true, entryId: summary.id }
+  }
+  if (existing.id !== summary.id) {
+    unregisterWorkspace(existing.id)
+    registerWorkspace(summary)
+    return { attached: false, entryId: summary.id }
+  }
+  updateWorkspace(existing.id, {
+    path: summary.path,
+    name: summary.name,
+    tags: summary.tags,
+  })
+  return { attached: false, entryId: existing.id }
+}
+
+function summarizeTaskCounts(tasks: Array<Record<string, unknown>>): ServiceProjectSummary['taskCounts'] {
+  let active = 0
+  let blocked = 0
+  let done = 0
+  let shelved = 0
+  for (const task of tasks) {
+    const status = typeof task.status === 'string' ? task.status : ''
+    if (status === 'done') done++
+    else if (status === 'blocked') blocked++
+    else if (status === 'shelved') shelved++
+    else if (status) active++
+  }
+  return {
+    total: tasks.length,
+    active,
+    blocked,
+    done,
+    shelved,
+  }
+}
+
+function summarizeProjectText(project: ResolvedProject): string | null {
+  if (project.initializationNeeded) {
+    return 'Attached to this folder. Initialize Guildhall here to inspect the repo, configure providers, and start task flow.'
+  }
+  const briefPath = join(project.path, 'memory', 'project-brief.md')
+  if (existsSync(briefPath)) {
+    const brief = readFileSync(briefPath, 'utf8')
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^#+\s*/, '').trim())
+      .filter((line) => line.length > 0)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (brief.length > 0) {
+      return brief.length > 180 ? `${brief.slice(0, 177).trimEnd()}...` : brief
+    }
+  }
+  const mandates = (project.config?.coordinators ?? [])
+    .map((coordinator) => coordinator.mandate?.replace(/\s+/g, ' ').trim())
+    .filter((mandate): mandate is string => Boolean(mandate))
+  if (mandates.length > 0) {
+    const combined = mandates.join(' ')
+    return combined.length > 180 ? `${combined.slice(0, 177).trimEnd()}...` : combined
+  }
+  if ((project.config?.tags ?? []).length > 0) {
+    return `Tagged ${project.config?.tags?.join(', ')}.`
+  }
+  return null
+}
+
+function latestTaskTitleByStatus(
+  tasks: Array<Record<string, unknown>>,
+  statuses: string[],
+): string | null {
+  const allowed = new Set(statuses)
+  const picked = [...tasks]
+    .filter((task) => typeof task.status === 'string' && allowed.has(task.status))
+    .sort((left, right) => (String(right.updatedAt ?? '')).localeCompare(String(left.updatedAt ?? '')))[0]
+  const title = typeof picked?.title === 'string' ? picked.title.trim() : ''
+  return title || null
+}
+
+function resolveTaskPathForDomain(
+  project: ResolvedProject,
+  domain: string,
+): string {
+  return resolveTaskProjectPath({
+    workspaceProjectPath: project.path,
+    domain,
+    coordinators: project.config?.coordinators ?? [],
+  })
 }
 
 /**
@@ -165,6 +718,196 @@ export function filterEventsForTask<T extends { event?: unknown }>(
   })
 }
 
+function noteMatchesCanonicalAcceptance(
+  note: Record<string, unknown>,
+  canonicalDescriptions: ReadonlySet<string>,
+): boolean {
+  const role = typeof note.role === 'string' ? note.role : ''
+  const content = typeof note.content === 'string' ? note.content.trim() : ''
+  if (role !== 'specifier') return true
+  const prefix = 'Added acceptance criterion: '
+  if (!content.startsWith(prefix)) return true
+  const description = content.slice(prefix.length).trim()
+  if (!description) return true
+  return canonicalDescriptions.has(description)
+}
+
+function normalizeTaskForDrawer(task: Record<string, unknown>): Record<string, unknown> {
+  const canonicalDescriptions = new Set(
+    Array.isArray(task.acceptanceCriteria)
+      ? task.acceptanceCriteria
+          .map((criterion) =>
+            typeof (criterion as { description?: unknown }).description === 'string'
+              ? (criterion as { description: string }).description.trim()
+              : '',
+          )
+          .filter(Boolean)
+      : [],
+  )
+  if (canonicalDescriptions.size === 0 || !Array.isArray(task.notes)) return task
+  const notes = (task.notes as Array<Record<string, unknown>>)
+    .filter((note) => noteMatchesCanonicalAcceptance(note, canonicalDescriptions))
+  return notes.length === task.notes.length ? task : { ...task, notes }
+}
+
+function latestTaskNoteContent(
+  task: Record<string, unknown>,
+  predicate: (note: Record<string, unknown>) => boolean,
+): string | null {
+  const notes = Array.isArray(task.notes) ? task.notes as Array<Record<string, unknown>> : []
+  const match = [...notes]
+    .reverse()
+    .find((note) => {
+      const content = typeof note.content === 'string' ? note.content.trim() : ''
+      return content.length > 0 && predicate(note)
+    })
+  const content = typeof match?.content === 'string' ? match.content.trim() : ''
+  return content || null
+}
+
+function isWorkerSelfCritiqueNote(note: Record<string, unknown>): boolean {
+  const role = typeof note.role === 'string' ? note.role.trim().toLowerCase() : ''
+  const agentId = typeof note.agentId === 'string' ? note.agentId.trim().toLowerCase() : ''
+  const content = typeof note.content === 'string' ? note.content : ''
+  if (content.trim().length === 0 || !/self-critique/i.test(content)) return false
+  if (role === 'self-critique') return true
+  if (agentId === 'worker-agent') return true
+  return role === 'implementation' || role === 'implementer' || role === 'worker'
+}
+
+function taskHasWorkerSelfCritique(task: Record<string, unknown>): boolean {
+  const notes = Array.isArray(task.notes) ? (task.notes as Array<Record<string, unknown>>) : []
+  return [...notes].reverse().some((note) => isWorkerSelfCritiqueNote(note))
+}
+
+function normalizedCheckpointNextPlannedAction(
+  task: Record<string, unknown>,
+  checkpoint: Checkpoint | null,
+): string | null {
+  const nextAction = checkpoint?.nextPlannedAction?.trim() ?? ''
+  if (!nextAction) return null
+  if (
+    taskHasWorkerSelfCritique(task) &&
+    /write or refresh self-critique note|write or refresh the self-critique note/i.test(nextAction)
+  ) {
+    return "Resume from the latest self-critique and recorded verification evidence, then hand off to review."
+  }
+  return nextAction
+}
+
+function buildTerminalSummary(
+  task: Record<string, unknown>,
+): { headline: string; detail?: string } | undefined {
+  const status = typeof task.status === 'string' ? task.status : ''
+  const mergeRecord =
+    task.mergeRecord && typeof task.mergeRecord === 'object'
+      ? (task.mergeRecord as Record<string, unknown>)
+      : null
+
+  if (mergeRecord) {
+    const result = typeof mergeRecord.result === 'string' ? mergeRecord.result : ''
+    const toBranch =
+      typeof mergeRecord.toBranch === 'string' && mergeRecord.toBranch.trim().length > 0
+        ? mergeRecord.toBranch.trim()
+        : 'the base branch'
+    const detail =
+      typeof mergeRecord.detail === 'string' && mergeRecord.detail.trim().length > 0
+        ? mergeRecord.detail.trim()
+        : undefined
+    const prUrl =
+      typeof mergeRecord.prUrl === 'string' && mergeRecord.prUrl.trim().length > 0
+        ? mergeRecord.prUrl.trim()
+        : ''
+
+    switch (result) {
+      case 'merged':
+        return { headline: `Merged locally into ${toBranch}.` }
+      case 'pushed':
+        return { headline: `Merged and pushed to ${toBranch}.` }
+      case 'push_failed_degraded':
+        return {
+          headline: `Merged locally into ${toBranch}; push did not complete.`,
+          ...(detail ? { detail } : {}),
+        }
+      case 'pending_pr':
+        return {
+          headline: prUrl ? 'PR opened and awaiting human merge.' : 'Awaiting human PR merge.',
+          ...(prUrl ? { detail: prUrl } : detail ? { detail } : {}),
+        }
+      case 'skipped':
+        return {
+          headline: 'Task completed without an automatic merge.',
+          ...(detail ? { detail } : {}),
+        }
+      case 'conflict':
+        return {
+          headline: `Merge into ${toBranch} hit a conflict.`,
+          ...(detail ? { detail } : {}),
+        }
+      default:
+        break
+    }
+  }
+
+  if (status === 'done') return { headline: 'Task completed.' }
+  if (status === 'pending_pr') return { headline: 'Awaiting human PR merge.' }
+  return undefined
+}
+
+async function enrichTaskForServe(
+  projectPath: string,
+  task: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const normalized = normalizeTaskForDrawer(task)
+  const taskId = typeof normalized.id === 'string' ? normalized.id : ''
+  const memoryDir = join(projectPath, 'memory')
+  const checkpoint = taskId ? await readCheckpoint(memoryDir, taskId) : null
+  const reviewerFeedbackCutoffMs = (() => {
+    const cutoff = latestResolvedRetryEscalationAt(normalized as import('@guildhall/core').Task)
+    const parsed = cutoff ? Date.parse(cutoff) : Number.NaN
+    return Number.isFinite(parsed) ? parsed : null
+  })()
+  const latestReviewerSummary = latestTaskNoteContent(
+    normalized,
+    (note) => {
+      const agentId = typeof note.agentId === 'string' ? note.agentId : ''
+      const role = typeof note.role === 'string' ? note.role : ''
+      if (!(agentId === 'reviewer-fanout' || agentId === 'reviewer-agent' || role === 'reviewer')) {
+        return false
+      }
+      if (reviewerFeedbackCutoffMs === null) return true
+      const timestamp = typeof note.timestamp === 'string' ? Date.parse(note.timestamp) : Number.NaN
+      return Number.isFinite(timestamp) && timestamp > reviewerFeedbackCutoffMs
+    },
+  )
+  const latestSelfCritique = latestTaskNoteContent(
+    normalized,
+    (note) => isWorkerSelfCritiqueNote(note),
+  )
+  const terminalSummary = buildTerminalSummary(normalized)
+
+  return {
+    ...normalized,
+    ...(latestReviewerSummary ? { latestReviewerSummary } : {}),
+    ...(latestSelfCritique ? { latestSelfCritique } : {}),
+    ...(terminalSummary ? { terminalSummary } : {}),
+    ...(checkpoint
+      ? {
+          latestCheckpoint: {
+            step: checkpoint.step,
+            agentId: checkpoint.agentId,
+            intent: checkpoint.intent,
+            nextPlannedAction:
+              normalizedCheckpointNextPlannedAction(normalized, checkpoint) ??
+              checkpoint.nextPlannedAction,
+            filesTouched: checkpoint.filesTouched,
+            writtenAt: checkpoint.writtenAt,
+          },
+        }
+      : {}),
+  }
+}
+
 /**
  * Build the Hono app for a project without binding to a port. Exposed for
  * integration tests that want to call `app.fetch(new Request(...))` directly;
@@ -175,11 +918,92 @@ export function buildServeApp(opts: ServeOptions = {}): {
   supervisor: OrchestratorSupervisor
   projectPath: string
 } {
-  const projectPath = resolve(opts.projectPath ?? process.cwd())
-  let project = resolveProject(projectPath)
+  const preferredProjectPath = opts.preferredProjectPath ?? opts.projectPath ?? null
+  const getRegisteredProjects = () => listWorkspaces()
+  const pickProjectFolder = opts.pickProjectFolder ?? chooseProjectFolderMacOS
+  const explicitProjectPath = preferredProjectPath ? resolve(preferredProjectPath) : null
+  const fallbackProjectPath = explicitProjectPath
+    ?? getRegisteredProjects()[0]?.path
+    ?? process.cwd()
+  const projectPath = resolve(fallbackProjectPath)
+  let selectedProjectPath = resolve(projectPath)
+  const requestProjectPathStore = new AsyncLocalStorage<string>()
+  const syncSelectedProject = (): ResolvedProject => resolveProject(selectedProjectPath)
+  const currentProject = (): ResolvedProject => resolveProject(requestProjectPathStore.getStore() ?? selectedProjectPath)
+  const refreshProject = (path = currentProject().path): ResolvedProject => {
+    const refreshed = resolveProject(path)
+    if (resolve(selectedProjectPath) === resolve(path)) selectedProjectPath = refreshed.path
+    return refreshed
+  }
+  const selectForegroundProject = (path: string): ResolvedProject => {
+    const resolvedPath = resolve(path)
+    selectedProjectPath = resolvedPath
+    return resolveProject(resolvedPath)
+  }
+  const resolveProjectPathForRequest = (c: Context): string | null => {
+    const requestedId = c.req.query('projectId')?.trim()
+    if (!requestedId) return selectedProjectPath
+    const selected = syncSelectedProject()
+    if (selected.id === requestedId) return selected.path
+    const entry = getRegisteredProjects().find(item => item.id === requestedId)
+    if (!entry) return null
+    return resolve(entry.path)
+  }
+  const project = new Proxy({} as ResolvedProject, {
+    get(_target, prop) {
+      return currentProject()[prop as keyof ResolvedProject]
+    },
+    has(_target, prop) {
+      return prop in currentProject()
+    },
+    ownKeys() {
+      return Reflect.ownKeys(currentProject())
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      return Object.getOwnPropertyDescriptor(currentProject(), prop)
+    },
+  })
 
   const supervisor = new OrchestratorSupervisor()
   const app = new Hono()
+  const currentProjectPath = () => currentProject().path
+
+  const bindProjectScope = async (
+    c: Context,
+    next: () => Promise<void>,
+    { requireExplicitForMutation = false }: { requireExplicitForMutation?: boolean } = {},
+  ) => {
+    if (
+      requireExplicitForMutation &&
+      c.req.method !== 'GET' &&
+      c.req.method !== 'HEAD' &&
+      !c.req.query('projectId')?.trim()
+    ) {
+      return c.json({ error: 'projectId is required for project-mutating requests.' }, 400)
+    }
+    const resolvedPath = resolveProjectPathForRequest(c)
+    if (!resolvedPath) {
+      return c.json({ error: 'Unknown project id for this local Guildhall service.' }, 404)
+    }
+    return requestProjectPathStore.run(resolvedPath, next)
+  }
+
+  app.use('/api/project', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
+  app.use('/api/project/*', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
+  app.use('/api/config', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
+  app.use('/api/config/*', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
+  app.use('/api/setup', bindProjectScope)
+  app.use('/api/setup/*', bindProjectScope)
+
+  // Dynamic API surfaces should never be cached. The dashboard depends on
+  // `/api/project`, inbox state, and SSE-adjacent status reads reflecting the
+  // latest orchestrator tick immediately after a stop/start transition.
+  app.use('/api/*', async (c, next) => {
+    await next()
+    c.header('Cache-Control', 'no-store, no-cache, must-revalidate')
+    c.header('Pragma', 'no-cache')
+    c.header('Expires', '0')
+  })
 
   // -------------------------------------------------------------------------
   // API: runtime version (shown next to the "Guildhall" wordmark)
@@ -217,10 +1041,159 @@ export function buildServeApp(opts: ServeOptions = {}): {
     return c.json({ version: readRuntimeVersion() })
   })
 
+  app.get('/api/service', async c => {
+    const runsById = new Map(supervisor.list().map(run => [run.workspaceId, run]))
+    const registeredProjects = getRegisteredProjects()
+    const projects = await Promise.all(
+      registeredProjects.map(async (entry) => {
+        const resolved = resolveProject(entry.path)
+        let taskCounts: ServiceProjectSummary['taskCounts'] = {
+          total: 0,
+          active: 0,
+          blocked: 0,
+          done: 0,
+          shelved: 0,
+        }
+        let highlights: ServiceProjectSummary['highlights'] = undefined
+        try {
+          const tasks = await readTasksFileNormalized(join(entry.path, 'memory', 'TASKS.json'))
+          taskCounts = summarizeTaskCounts(tasks)
+          highlights = {
+            activeTaskTitle: latestTaskTitleByStatus(tasks, ['in_progress', 'review', 'gate_check', 'exploring']),
+            blockedTaskTitle: latestTaskTitleByStatus(tasks, ['blocked']),
+            recentCompletedTaskTitle: latestTaskTitleByStatus(tasks, ['done']),
+          }
+        } catch {
+          // leave zeroed summary for missing/unreadable task files
+        }
+        const run = runsById.get(resolved.id)
+        return {
+          ...summarizeProject(resolved),
+          summary: summarizeProjectText(resolved),
+          selected: resolved.path === resolve(selectedProjectPath),
+          taskCounts,
+          ...(highlights ? { highlights } : {}),
+          ...(run
+            ? {
+                run: {
+                  status: run.status,
+                  startedAt: run.startedAt,
+                  stoppedAt: run.stoppedAt,
+                  error: run.error,
+                  stopSummary: run.stopSummary,
+                  providerStatus: run.providerStatus,
+                },
+              }
+            : {}),
+        } satisfies ServiceProjectSummary
+      }),
+    )
+    return c.json({
+      pid: process.pid,
+      selectedProject: summarizeProject(syncSelectedProject()),
+      foregroundProject: summarizeProject(syncSelectedProject()),
+      projects,
+    })
+  })
+
+  app.post('/api/service/select-project', async c => {
+    const body = await c.req.json().catch(() => ({})) as { projectId?: string; path?: string }
+    const registeredProjects = getRegisteredProjects()
+    const selectedPath =
+      (body.projectId ? registeredProjects.find((entry) => entry.id === body.projectId)?.path : undefined)
+      ?? body.path
+    if (!selectedPath) {
+      return c.json({ error: 'projectId or path is required' }, 400)
+    }
+    const entry = registeredProjects.find((item) => resolve(item.path) === resolve(selectedPath))
+    if (!entry) {
+      return c.json({ error: 'Project is not registered with this local Guildhall service.' }, 404)
+    }
+    const next = selectForegroundProject(entry.path)
+    return c.json({ ok: true, selectedProject: summarizeProject(next) })
+  })
+
+  app.post('/api/service/attach-project', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as { path?: string }
+      const providedPath = body.path?.trim()
+      const pickedPath = providedPath && providedPath.length > 0 ? providedPath : await pickProjectFolder()
+      if (!pickedPath) return c.json({ ok: false, cancelled: true })
+      const resolvedPath = resolve(pickedPath)
+      if (!existsSync(resolvedPath) || !statSync(resolvedPath).isDirectory()) {
+        return c.json({ error: 'Choose an existing project folder.' }, 400)
+      }
+      const next = resolveProject(resolvedPath)
+      const sync = syncRegistryEntryForProject(next)
+      selectForegroundProject(next.path)
+      return c.json({
+        ok: true,
+        attached: sync.attached,
+        selectedProject: summarizeProject(next),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // API: build-info — staleness check.
+  //
+  // Node loads dist/cli.js once at process start; later rebuilds don't take
+  // effect until restart. To stop the silent "I rebuilt but the running
+  // server is yesterday's binary" failure mode, we capture the dist mtime
+  // at startup and re-stat on every request. If they differ, the running
+  // server is stale and the web app shows a "restart needed" banner.
+  // -------------------------------------------------------------------------
+  const distEntryPath = (() => {
+    try {
+      const here = dirname(fileURLToPath(import.meta.url))
+      const candidates = [
+        join(here, 'cli.js'),       // dist/cli.js when serve.js sits in dist/
+        join(here, '..', 'cli.js'), // dist/cli.js when serve.js is dist/runtime/serve.js
+        fileURLToPath(import.meta.url),
+      ]
+      for (const c of candidates) {
+        if (existsSync(c)) return c
+      }
+    } catch {
+      /* fallthrough */
+    }
+    return null
+  })()
+  let bootBuildMtimeMs = 0
+  try {
+    if (distEntryPath) {
+      bootBuildMtimeMs = Math.floor(statSync(distEntryPath).mtimeMs)
+    }
+  } catch {
+    bootBuildMtimeMs = 0
+  }
+  const processStartedAt = new Date().toISOString()
+
+  app.get('/api/build-info', c => {
+    let currentBuildMtimeMs = bootBuildMtimeMs
+    try {
+      if (distEntryPath) {
+        currentBuildMtimeMs = Math.floor(statSync(distEntryPath).mtimeMs)
+      }
+    } catch {
+      /* keep boot value */
+    }
+    return c.json({
+      pid: process.pid,
+      processStartedAt,
+      bootBuildMtimeMs,
+      currentBuildMtimeMs,
+      stale: currentBuildMtimeMs > bootBuildMtimeMs,
+      distPath: distEntryPath,
+    })
+  })
+
   // -------------------------------------------------------------------------
   // API: project
   // -------------------------------------------------------------------------
-  app.get('/api/project', c => {
+  app.get('/api/project', async c => {
     try {
       if (project.initializationNeeded) {
         return c.json({
@@ -230,13 +1203,57 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       }
       const tasksPath = join(project.path, 'memory', 'TASKS.json')
-      let tasks: unknown[] = []
-      if (existsSync(tasksPath)) {
-        const raw = JSON.parse(readFileSync(tasksPath, 'utf8'))
-        tasks = Array.isArray(raw) ? raw : Array.isArray(raw?.tasks) ? raw.tasks : []
-      }
+      const rawTasks = await readTasksFileNormalized(tasksPath)
+      const tasks = await Promise.all(rawTasks.map((task) => enrichTaskForServe(project.path, task)))
       const run = supervisor.get(project.id)
-      const recent = supervisor.recent(project.id)
+      const resolvedConfig = resolveConfig({ workspacePath: project.path })
+      const runtimeProvider = getRuntimeProviderConfig({
+        projectPath: project.path,
+        models: resolvedConfig.models,
+      })
+      const preferredProvider = runtimeProvider.preferredProvider
+      const preferredActiveProvider = preferredProvider
+        ? normalizePreferredProvider(preferredProvider)
+        : undefined
+      const recent = supervisor.recent(project.id, undefined, project.path)
+      const bootstrapStatus = readBootstrapStatus(join(project.path, 'memory'))
+      const preferredHealth = providerHealthForRun({
+        credentials: runtimeProvider.credentials,
+        activeProvider: preferredActiveProvider ?? null,
+      })
+      const providerStatus = run?.providerStatus ?? (
+        preferredActiveProvider
+          ? buildProviderStatusSnapshot({
+              preferredProvider,
+              activeProvider: null,
+              fallback: false,
+              health: preferredHealth,
+              allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
+              activeModel: resolvedConfig.models.worker,
+              models: resolvedConfig.models,
+              laneConcurrency: await providerLaneConcurrencyForRun({
+                projectPath: project.path,
+                activeProvider: preferredActiveProvider ?? null,
+              }),
+              warnings: await providerWarningsForRun({
+                projectPath: project.path,
+                activeProvider: preferredActiveProvider ?? null,
+                health: preferredHealth,
+              }),
+            })
+          : null
+      )
+      const startReadiness = await projectStartReadiness({
+        projectPath: project.path,
+        resolvedConfig,
+        runtimeProvider,
+        allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
+      })
+      const inbox = await buildProjectInboxSnapshot({
+        projectPath: project.path,
+        initializationNeeded: project.initializationNeeded,
+        coordinatorCount: project.config?.coordinators?.length ?? 0,
+      })
       return c.json({
         initializationNeeded: false,
         id: project.id,
@@ -245,25 +1262,501 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tags: project.config?.tags ?? [],
         config: project.config,
         tasks,
+        inbox,
         run: run
           ? {
               status: run.status,
+              mode: run.mode,
               startedAt: run.startedAt,
               stoppedAt: run.stoppedAt,
               error: run.error,
+              ...(run.stopSummary ? { stopSummary: run.stopSummary } : {}),
+              ...(run.providerStatus ? { providerStatus: run.providerStatus } : {}),
             }
           : null,
+        providerStatus,
+        startReadiness,
         recentEvents: recent,
+        ...(bootstrapStatus ? { bootstrapStatus } : {}),
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })
 
+  async function loadedLlamaModelIds(url: string, timeoutMs = 1500): Promise<string[]> {
+    const trimmed = url.trim().replace(/\/$/, '')
+    if (!trimmed) return []
+    const res = await fetch(`${trimmed}/models`, { signal: AbortSignal.timeout(timeoutMs) })
+    if (!res.ok) return []
+    const body = (await res.json().catch(() => ({}))) as { data?: Array<{ id?: unknown }> }
+    return [
+      ...new Set(
+        (body.data ?? [])
+          .map(model => model.id)
+          .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+          .map(id => id.trim()),
+      ),
+    ]
+  }
+
+  function modelAssignmentForSingleModel(modelId: string): ModelAssignmentConfig {
+    return {
+      spec: modelId,
+      coordinator: modelId,
+      worker: modelId,
+      reviewer: modelId,
+      gateChecker: modelId,
+    }
+  }
+
+  const DEFAULT_OPENAI_MODEL_ASSIGNMENT: ModelAssignmentConfig = {
+    spec: 'gpt-4o',
+    coordinator: 'gpt-4o',
+    worker: 'gpt-4o',
+    reviewer: 'gpt-4o-mini',
+    gateChecker: 'gpt-4o-mini',
+  }
+
+  const DEFAULT_CODEX_MODEL_ASSIGNMENT: ModelAssignmentConfig = {
+    spec: 'gpt-5.3-codex',
+    coordinator: 'gpt-5.3-codex',
+    worker: 'gpt-5.3-codex',
+    reviewer: 'gpt-5.3-codex',
+    gateChecker: 'gpt-5.3-codex',
+  }
+
+  function modelLooksCompatibleWithProvider(provider: ProviderName, modelId: string): boolean {
+    const lower = modelId.trim().toLowerCase()
+    if (!lower) return false
+    switch (provider) {
+      case 'claude-oauth':
+      case 'anthropic-api':
+        return lower.startsWith('claude-')
+      case 'codex-oauth':
+        return lower === 'gpt-5-codex' || lower === 'gpt-5.3-codex'
+      case 'openai-api':
+        return lower.length > 0
+      case 'llama-cpp':
+        return true
+      default:
+        return false
+    }
+  }
+
+  function assignmentMatchesProvider(
+    provider: ProviderName,
+    assignment: ModelAssignmentConfig,
+  ): boolean {
+    return [
+      assignment.spec,
+      assignment.coordinator,
+      assignment.worker,
+      assignment.reviewer,
+      assignment.gateChecker,
+    ].every(modelId => modelLooksCompatibleWithProvider(provider, modelId))
+  }
+
+  function defaultAssignmentForProvider(provider: ProviderName): ModelAssignmentConfig | null {
+    switch (provider) {
+      case 'claude-oauth':
+      case 'anthropic-api':
+        return DEFAULT_CLOUD_MODEL_ASSIGNMENT
+      case 'codex-oauth':
+        return DEFAULT_CODEX_MODEL_ASSIGNMENT
+      case 'openai-api':
+        return DEFAULT_OPENAI_MODEL_ASSIGNMENT
+      case 'llama-cpp':
+        return DEFAULT_LOCAL_MODEL_ASSIGNMENT
+      default:
+        return null
+    }
+  }
+
+  function buildProviderStatusSnapshot(input: {
+    preferredProvider?: PreferredProviderKey | ProviderName | null
+    activeProvider?: ProviderName | null
+    health?: {
+      pooled: boolean
+      state: 'idle' | 'healthy' | 'degraded'
+      lastUsedAt?: string
+      lastSuccessAt?: string
+      lastFailureAt?: string
+      consecutiveFailures: number
+      retryableFailures: number
+      fatalFailures: number
+      lastError?: string
+    } | null
+    allowPaidProviderFallback?: boolean
+    selectedAt?: string
+    reason?: string
+    activeModel?: string | null
+    models?: ModelAssignmentConfig | null
+    fallback?: boolean
+    decisions?: Array<{
+      code: string
+      severity: 'info' | 'warn' | 'error'
+      basis: 'availability' | 'capability' | 'compatibility'
+      message: string
+    }>
+    laneConcurrency?: {
+      spec: {
+        requested: number
+        effective: number
+        recommended: number | null
+        clamped: boolean
+      }
+      worker: {
+        requested: number
+        effective: number
+        recommended: number | null
+        clamped: boolean
+      }
+      review: {
+        requested: number
+        effective: number
+        recommended: number | null
+        clamped: boolean
+      }
+      coordinator: {
+        requested: number
+        effective: number
+        recommended: number | null
+        clamped: boolean
+      }
+      reviewerFanout: {
+        requested: number
+        effective: number
+        recommended: number | null
+        clamped: boolean
+      }
+    }
+    warnings?: Array<{
+      code: string
+      severity: 'info' | 'warn' | 'error'
+      message: string
+    }>
+  }) {
+    const preferredProvider = input.preferredProvider ?? null
+    const activeProvider = input.activeProvider ?? 'none'
+    const selectedAt =
+      input.selectedAt ??
+      input.health?.lastUsedAt ??
+      input.health?.lastSuccessAt ??
+      input.health?.lastFailureAt ??
+      'unknown'
+    return {
+      activeProvider,
+      ...(preferredProvider ? {
+        preferredCapabilities: providerCapabilitiesForAnyKey(preferredProvider),
+        preferredProvider,
+        preferredProviderFamily: providerFamilyForAnyKey(preferredProvider),
+        preferredProviderLabel: providerLabelForAnyKey(preferredProvider),
+      } : {}),
+      ...(activeProvider !== 'none' ? {
+        activeCapabilities: providerCapabilitiesForAnyKey(activeProvider),
+        activeProviderFamily: providerFamilyForAnyKey(activeProvider),
+        activeProviderLabel: providerLabelForAnyKey(activeProvider),
+      } : {}),
+      ...(input.health !== undefined ? { health: input.health } : {}),
+      fallback: Boolean(input.fallback),
+      ...(input.allowPaidProviderFallback !== undefined
+        ? { allowPaidProviderFallback: input.allowPaidProviderFallback }
+        : {}),
+      selectedAt,
+      ...(input.reason ? { reason: input.reason } : {}),
+      ...(input.activeModel ? { activeModel: input.activeModel } : {}),
+      ...(input.models ? { models: input.models } : {}),
+      ...(input.decisions && input.decisions.length > 0 ? { decisions: input.decisions } : {}),
+      ...(input.laneConcurrency ? { laneConcurrency: input.laneConcurrency } : {}),
+      ...(input.warnings && input.warnings.length > 0 ? { warnings: input.warnings } : {}),
+    }
+  }
+
+  async function dispatchCapacityForProject(projectPath: string): Promise<number> {
+    try {
+      const settings = await loadLeverSettings({
+        path: defaultAgentSettingsPath(projectPath),
+      })
+      return resolveFanoutCapacity(settings.project)
+    } catch {
+      return readProjectConfig(projectPath).workerLaneConcurrency ?? 1
+    }
+  }
+
+  async function providerWarningsForRun(input: {
+    projectPath: string
+    activeProvider: ProviderName | null | undefined
+    health?: ReturnType<typeof providerHealthForRun>
+  }) {
+    const warnings: Array<{
+      code: string
+      severity: 'info' | 'warn' | 'error'
+      message: string
+    }> = []
+    if (input.health?.state === 'degraded') {
+      warnings.push({
+        code: 'provider_pool_health_degraded',
+        severity: 'warn',
+        message:
+          `${providerLabelForAnyKey(input.activeProvider)} has seen ${input.health.consecutiveFailures} consecutive pooled failures` +
+          `${input.health.lastError ? ` (${input.health.lastError})` : ''}.`,
+      })
+    }
+    return warnings
+  }
+
+  function providerHealthForRun(input: {
+    credentials: {
+      anthropicApiKey?: string
+      openaiApiKey?: string
+      openaiBaseUrl?: string
+      llamaCppUrl?: string
+    }
+    activeProvider: ProviderName | null | undefined
+  }) {
+    const key = providerHealthKeyForRun(input)
+    if (!key) return null
+    return providerClientHealth(key)
+  }
+
+  function providerHealthKeyForRun(input: {
+    credentials: {
+      anthropicApiKey?: string
+      openaiApiKey?: string
+      openaiBaseUrl?: string
+      llamaCppUrl?: string
+    }
+    activeProvider: ProviderName | null | undefined
+  }) {
+    switch (input.activeProvider) {
+      case 'llama-cpp': {
+        const url = input.credentials.llamaCppUrl?.trim()
+        if (!url) return null
+        return openAiCompatiblePoolKey({
+          provider: 'llama-cpp',
+          baseUrl: url,
+        })
+      }
+      case 'openai-api': {
+        const key = input.credentials.openaiApiKey?.trim()
+        if (!key) return null
+        return openAiCompatiblePoolKey({
+          provider: 'openai-api',
+          baseUrl: input.credentials.openaiBaseUrl?.trim() || 'https://api.openai.com/v1',
+          apiKey: key,
+        })
+      }
+      case 'anthropic-api': {
+        const key = input.credentials.anthropicApiKey?.trim()
+        if (!key) return null
+        return anthropicCompatiblePoolKey(key)
+      }
+      default:
+        return null
+    }
+  }
+
+  async function providerLaneConcurrencyForRun(input: {
+    projectPath: string
+    activeProvider: ProviderName | null | undefined
+    dispatchCapacity?: number
+  }) {
+    const dispatchCapacity =
+      input.dispatchCapacity ?? await dispatchCapacityForProject(input.projectPath)
+    const lanePlan = resolveLaneConcurrencyPlan({
+      projectPath: input.projectPath,
+      provider: input.activeProvider,
+      dispatchCapacity,
+    })
+    return {
+      spec: {
+        requested: lanePlan.spec.requestedConcurrency,
+        effective: lanePlan.spec.effectiveConcurrency,
+        recommended: lanePlan.spec.recommendedConcurrency,
+        clamped: lanePlan.spec.clamped,
+      },
+      worker: {
+        requested: lanePlan.worker.requestedConcurrency,
+        effective: lanePlan.worker.effectiveConcurrency,
+        recommended: lanePlan.worker.recommendedConcurrency,
+        clamped: lanePlan.worker.clamped,
+      },
+      review: {
+        requested: lanePlan.review.requestedConcurrency,
+        effective: lanePlan.review.effectiveConcurrency,
+        recommended: lanePlan.review.recommendedConcurrency,
+        clamped: lanePlan.review.clamped,
+      },
+      coordinator: {
+        requested: lanePlan.coordinator.requestedConcurrency,
+        effective: lanePlan.coordinator.effectiveConcurrency,
+        recommended: lanePlan.coordinator.recommendedConcurrency,
+        clamped: lanePlan.coordinator.clamped,
+      },
+      reviewerFanout: {
+        requested: lanePlan.reviewerFanout.requestedConcurrency,
+        effective: lanePlan.reviewerFanout.effectiveConcurrency,
+        recommended: lanePlan.reviewerFanout.recommendedConcurrency,
+        clamped: lanePlan.reviewerFanout.clamped,
+      },
+    }
+  }
+
+  async function selectPaidFallbackProvider(opts: {
+    anthropicApiKey?: string
+    openaiApiKey?: string
+    openaiBaseUrl?: string
+    llamaCppUrl?: string
+  }) {
+    const fallbackOrder: ProviderName[] = [
+      'codex-oauth',
+      'claude-oauth',
+      'anthropic-api',
+      'openai-api',
+    ]
+    for (const provider of fallbackOrder) {
+      const result = await selectApiClient(buildSelectApiClientOptions({
+        providerOverride: provider,
+        credentials: opts,
+      }))
+      if (result.providerName !== 'none') return result
+    }
+    return null
+  }
+
+  function missingAssignedModels(
+    assignment: ModelAssignmentConfig,
+    loadedModels: string[],
+  ): string[] {
+    const loaded = new Set(loadedModels)
+    return [
+      ...new Set([
+        assignment.spec,
+        assignment.coordinator,
+        assignment.worker,
+        assignment.reviewer,
+        assignment.gateChecker,
+      ].filter(model => !loaded.has(model))),
+    ]
+  }
+
+  async function projectStartReadiness(input: {
+    projectPath: string
+    resolvedConfig: ReturnType<typeof resolveConfig>
+    runtimeProvider: ReturnType<typeof getRuntimeProviderConfig>
+    allowPaidProviderFallback: boolean
+  }): Promise<{
+    canStart: boolean
+    code?: string
+    message?: string
+    actionHref?: string
+  }> {
+    try {
+      const settings = await loadLeverSettings({
+        path: defaultAgentSettingsPath(input.projectPath),
+      })
+      const invariant = projectLeverInvariantError(settings.project)
+      if (invariant) {
+        return {
+          canStart: false,
+          code: 'invalid_lever_combo',
+          message: invariant,
+          actionHref: '/settings/advanced',
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (/concurrent_task_dispatch.*worktree_isolation/i.test(message)) {
+        return {
+          canStart: false,
+          code: 'invalid_lever_combo',
+          message,
+          actionHref: '/settings/advanced',
+        }
+      }
+    }
+
+    const preflight = await selectApiClient(input.runtimeProvider.selectOptions)
+    if (preflight.providerName === 'none') {
+      return {
+        canStart: false,
+        code: 'no_provider',
+        message:
+          preflight.reason ??
+          'No provider configured. Open Providers to choose one before starting Guildhall.',
+        actionHref: '/providers',
+      }
+    }
+
+    if (preflight.providerName !== 'llama-cpp') {
+      return { canStart: true }
+    }
+
+    const creds = input.runtimeProvider.credentials
+    if (!creds.llamaCppUrl) return { canStart: true }
+
+    const loadedModels = await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
+    if (loadedModels.length === 0) {
+      const paidFallback = input.allowPaidProviderFallback
+        ? await selectPaidFallbackProvider(creds)
+        : null
+      if (!paidFallback || paidFallback.providerName === 'none') {
+        return {
+          canStart: false,
+          code: 'no_loaded_model',
+          message:
+            'The configured local server is reachable, but Guildhall could not see a loaded model. Load the model you want on that server, then start again.',
+          actionHref: '/providers',
+        }
+      }
+      return { canStart: true }
+    }
+
+    const missingModels = missingAssignedModels(input.resolvedConfig.models, loadedModels)
+    if (missingModels.length === 0) return { canStart: true }
+
+    const paidFallback = input.allowPaidProviderFallback
+      ? await selectPaidFallbackProvider(creds)
+      : null
+    if (paidFallback && paidFallback.providerName !== 'none') {
+      return { canStart: true }
+    }
+    return {
+      canStart: false,
+      code: 'model_unavailable',
+      message:
+        `The configured local server currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
+        'Load one of the configured models on that server, or choose a loaded model in Providers.',
+      actionHref: '/providers',
+    }
+  }
+
   app.post('/api/project/start', async c => {
     try {
       if (project.initializationNeeded) {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      try {
+        const settings = await loadLeverSettings({
+          path: defaultAgentSettingsPath(project.path),
+        })
+        const invariant = projectLeverInvariantError(settings.project)
+        if (invariant) {
+          return c.json(
+            { error: invariant, code: 'invalid_lever_combo', actionHref: '/settings/advanced' },
+            400,
+          )
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        if (/concurrent_task_dispatch.*worktree_isolation/i.test(message)) {
+          return c.json(
+            { error: message, code: 'invalid_lever_combo', actionHref: '/settings/advanced' },
+            400,
+          )
+        }
+        throw err
       }
       // Preflight: a run with no provider is worse than no run — the
       // orchestrator boots, every tick fails, and the UI shows "Running"
@@ -279,14 +1772,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
       } catch {
         /* best-effort */
       }
-      const creds = resolveGlobalCredentials()
-      const preferred = projectCfg.preferredProvider
-      const preflight = await selectApiClient({
-        ...(preferred ? { preferredProvider: preferred } : {}),
-        ...(creds.anthropicApiKey ? { anthropicApiKey: creds.anthropicApiKey } : {}),
-        ...(creds.openaiApiKey ? { openaiApiKey: creds.openaiApiKey } : {}),
-        ...(creds.llamaCppUrl ? { llamaCppUrl: creds.llamaCppUrl } : {}),
+      const resolvedConfig = resolveConfig({ workspacePath: project.path })
+      const runtimeProvider = getRuntimeProviderConfig({
+        projectPath: project.path,
+        models: resolvedConfig.models,
       })
+      const creds = runtimeProvider.credentials
+      const preferred = runtimeProvider.preferredProvider
+      const allowPaidProviderFallback = runtimeProvider.allowPaidProviderFallback
+      let preflight = await selectApiClient(runtimeProvider.selectOptions)
       if (preflight.providerName === 'none') {
         return c.json(
           {
@@ -298,11 +1792,163 @@ export function buildServeApp(opts: ServeOptions = {}): {
           400,
         )
       }
-      const run = supervisor.start({ workspaceId: project.id, workspacePath: project.path })
+      let effectiveProvider = preflight.providerName
+      let effectiveModels = resolvedConfig.models
+      let fallbackReason = preflight.reason
+      const routingDecisions: Array<{
+        code: string
+        severity: 'info' | 'warn' | 'error'
+        basis: 'availability' | 'capability' | 'compatibility'
+        message: string
+      }> = []
+      if (preflight.providerName === 'llama-cpp' && creds.llamaCppUrl && project.config) {
+        const assignedModels = resolvedConfig.models
+        const loadedModels = await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
+        if (loadedModels.length === 0) {
+          const paidFallback = allowPaidProviderFallback
+            ? await selectPaidFallbackProvider(creds)
+            : null
+          if (!paidFallback) {
+            return c.json(
+              {
+                error:
+                  'The configured local server is reachable, but Guildhall could not see a loaded model. To avoid surprise memory pressure from JIT loading, load the model you want on that server, then start again.',
+                code: 'no_loaded_model',
+                provider: 'llama-cpp',
+              },
+              400,
+            )
+          }
+          preflight = paidFallback
+          if (paidFallback.providerName === 'none') {
+            return c.json(
+              { error: paidFallback.reason ?? 'No fallback provider available.', code: 'fallback_unavailable' },
+              400,
+            )
+          }
+          effectiveProvider = paidFallback.providerName
+          effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
+          fallbackReason =
+            'Preferred local server had no loaded model available, so Guildhall switched to a paid fallback provider.'
+          routingDecisions.push({
+            code: 'preferred_provider_missing_loaded_model',
+            severity: 'info',
+            basis: 'availability',
+            message:
+              'The preferred local server had no loaded model available, so Guildhall selected a fallback provider for this run.',
+          })
+        }
+        if (effectiveProvider === 'llama-cpp') {
+          const missingModels = missingAssignedModels(assignedModels, loadedModels)
+          if (missingModels.length > 0) {
+            const paidFallback = allowPaidProviderFallback
+              ? await selectPaidFallbackProvider(creds)
+              : null
+            if (!paidFallback) {
+              return c.json(
+                {
+                  error:
+                    `The configured local server currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
+                    'Guildhall will not JIT-load missing models automatically; load the configured model on that server or choose a loaded model in Providers.',
+                  code: 'model_unavailable',
+                  provider: 'llama-cpp',
+                  loadedModels,
+                  missingModels,
+                },
+                400,
+              )
+            }
+            preflight = paidFallback
+            if (paidFallback.providerName === 'none') {
+              return c.json(
+                { error: paidFallback.reason ?? 'No fallback provider available.', code: 'fallback_unavailable' },
+                400,
+              )
+            }
+            effectiveProvider = paidFallback.providerName
+            effectiveModels = defaultAssignmentForProvider(paidFallback.providerName) ?? resolvedConfig.models
+            fallbackReason =
+              'Preferred local server did not have the configured models loaded, so Guildhall switched to a paid fallback provider.'
+            routingDecisions.push({
+              code: 'preferred_provider_missing_assigned_models',
+              severity: 'info',
+              basis: 'compatibility',
+              message:
+                'The preferred local server did not have this project’s assigned models loaded, so Guildhall selected a fallback provider for this run.',
+            })
+          }
+        }
+      }
+      if (!assignmentMatchesProvider(effectiveProvider, effectiveModels)) {
+        effectiveModels = defaultAssignmentForProvider(effectiveProvider) ?? effectiveModels
+        if (effectiveProvider !== 'llama-cpp') {
+          fallbackReason ??=
+            `Guildhall swapped to models that ${effectiveProvider} can actually serve for this run.`
+          routingDecisions.push({
+            code: 'model_assignment_swapped_for_provider_compatibility',
+            severity: 'info',
+            basis: 'compatibility',
+            message:
+              `Guildhall swapped to models that ${providerLabelForAnyKey(effectiveProvider)} can actually serve for this run.`,
+          })
+        }
+      }
+      const body = await c.req.json().catch(() => ({})) as {
+        mode?: string
+        stopAfterOneTask?: boolean
+        taskId?: string
+      }
+      const stopAfterOneTask =
+        body.stopAfterOneTask === true || body.mode === 'one_task'
+      const normalizedPreferred = preferred
+        ? normalizePreferredProvider(preferred)
+        : undefined
+      const activeHealth = providerHealthForRun({
+        credentials: creds,
+        activeProvider: effectiveProvider,
+      })
+      const activeHealthKey = providerHealthKeyForRun({
+        credentials: creds,
+        activeProvider: effectiveProvider,
+      })
+      const providerStatus = buildProviderStatusSnapshot({
+        preferredProvider: preferred ?? null,
+        activeProvider: effectiveProvider,
+        health: activeHealth,
+        fallback: Boolean(normalizedPreferred && normalizedPreferred !== effectiveProvider),
+        allowPaidProviderFallback,
+        selectedAt: new Date().toISOString(),
+        activeModel: effectiveModels.worker,
+        models: effectiveModels,
+        decisions: routingDecisions,
+        laneConcurrency: await providerLaneConcurrencyForRun({
+          projectPath: project.path,
+          activeProvider: effectiveProvider,
+        }),
+        warnings: await providerWarningsForRun({
+          projectPath: project.path,
+          activeProvider: effectiveProvider,
+          health: activeHealth,
+        }),
+        ...(fallbackReason ? { reason: fallbackReason } : {}),
+      })
+      const run = supervisor.start({
+        workspaceId: project.id,
+        workspacePath: project.path,
+        ...(stopAfterOneTask ? { stopAfterOneTask: true } : {}),
+        ...(body.taskId ? { preferredTaskId: body.taskId } : {}),
+        providerStatus,
+        ...(activeHealthKey ? { providerHealthKey: activeHealthKey } : {}),
+        providerOverride: effectiveProvider,
+        modelAssignmentOverride: effectiveModels,
+      })
       return c.json({
         status: run.status,
+        mode: run.mode,
         startedAt: run.startedAt,
-        provider: preflight.providerName,
+        ...(run.stopSummary ? { stopSummary: run.stopSummary } : {}),
+        provider: effectiveProvider,
+        providerStatus: run.providerStatus,
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -311,9 +1957,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.post('/api/project/stop', async c => {
     try {
-      const stopped = await supervisor.stop(project.id)
-      if (!stopped) return c.json({ error: 'stop timed out' }, 504)
-      return c.json({ ok: true })
+      const stopped = await supervisor.stop(project.id, { waitMs: 1_000 })
+      return c.json({ ok: true, status: stopped ? 'stopped' : 'stopping' })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -336,13 +1981,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const defaultDomain = coordinators[0]?.domain
       const domain = body.domain ?? defaultDomain
       if (!domain) {
-        return c.json({ error: 'Project has no coordinators — run meta-intake first' }, 400)
+        return c.json({ error: 'Guildhall has not inferred repo structure here yet — run repo inspection first' }, 400)
       }
       const result = await createExploringTask({
         memoryDir: join(project.path, 'memory'),
         ask: body.ask,
         domain,
-        projectPath: project.path,
+        projectPath: resolveTaskPathForDomain(project, domain),
         ...(body.title ? { title: body.title } : {}),
       })
       return c.json(result)
@@ -372,7 +2017,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const coordinators = project.config?.coordinators ?? []
       if (coordinators.length === 0) {
-        return c.json({ error: 'Project has no coordinators — run meta-intake first' }, 400)
+        return c.json({ error: 'Guildhall has not inferred repo structure here yet — run repo inspection first' }, 400)
       }
       // Route by stack-trace top file when the reporter didn't pick a domain:
       // match the first frame's file path against each coordinator's `path`,
@@ -388,7 +2033,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       domain = domain ?? coordinators[0]!.domain
       const result = await createBugReportTask({
         memoryDir: join(project.path, 'memory'),
-        projectPath: project.path,
+        projectPath: resolveTaskPathForDomain(project, domain),
         title: body.title,
         body: body.body,
         ...(body.stackTrace ? { stackTrace: body.stackTrace } : {}),
@@ -412,6 +2057,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
         projectPath: project.path,
       })
       return c.json(result)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/meta-intake/rerun', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const result = await rerunMetaIntakeTask({
+        memoryDir: join(project.path, 'memory'),
+        projectPath: project.path,
+      })
+      return c.json({ ok: true, ...result })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -556,7 +2216,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: result.error ?? 'Approval failed' }, 400)
       }
       // Re-resolve so subsequent GETs reflect the newly-added coordinators.
-      project = resolveProject(project.path)
+      refreshProject(project.path)
 
       // Bootstrap the environment eagerly so the user doesn't have to hunt
       // for a separate "Configure" action. Skip install (slow, needs real
@@ -596,6 +2256,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
           },
         },
       })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/meta-intake/synthesize', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const result = await synthesizeMetaIntakeDraft({
+        workspacePath: project.path,
+        memoryDir: join(project.path, 'memory'),
+      })
+      if (!result.success) {
+        return c.json({ error: result.error ?? 'Could not synthesize meta-intake draft' }, 400)
+      }
+      return c.json({ ok: true, drafts: result.drafts ?? [] })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -698,12 +2376,39 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  app.post('/api/project/workspace-import/rerun', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const memoryDir = join(project.path, 'memory')
+      const result = await rerunWorkspaceImportTask({
+        memoryDir,
+        projectPath: project.path,
+      })
+      return c.json({
+        ok: true,
+        seeded: true,
+        outcome: result.alreadyExists ? 'reseeded' : 'seeded',
+        draft: {
+          goals: result.draft.goals.length,
+          tasks: result.draft.tasks.length,
+          milestones: result.draft.milestones.length,
+          context: result.draft.context.length,
+          stats: result.draft.stats,
+        },
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
   app.get('/api/project/workspace-import/draft', async c => {
     try {
       // The same cheap anchor check the inbox chip uses, echoed back so the
       // Workspace Import tab can say "anchors present but nothing extracted"
       // when the semantic detector returns empty — which otherwise produces
-      // the contradictory "Found 5 signals … click Review … No signals
+      // the contradictory "Found 5 signals ... click Review ... No signals
       // detected" UX.
       const anchors = detectRepoAnchors(project.path)
       if (project.initializationNeeded) {
@@ -732,6 +2437,26 @@ export function buildServeApp(opts: ServeOptions = {}): {
         /* treat as not-dismissed */
       }
 
+      let existingTasks: Array<{ title: string; status: string }> = []
+      const tasksPath = join(memoryDir, 'TASKS.json')
+      if (existsSync(tasksPath)) {
+        try {
+          const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+            | { tasks?: Array<Record<string, unknown>> }
+            | Array<Record<string, unknown>>
+          const list = Array.isArray(raw) ? raw : raw.tasks ?? []
+          existingTasks = list
+            .filter(t => (t as { id?: string }).id !== WORKSPACE_IMPORT_TASK_ID)
+            .map(t => ({
+              title: typeof (t as { title?: unknown }).title === 'string' ? (t as { title: string }).title : '',
+              status: typeof (t as { status?: unknown }).status === 'string' ? (t as { status: string }).status : 'unknown',
+            }))
+            .filter(t => t.title.trim().length > 0)
+        } catch {
+          existingTasks = []
+        }
+      }
+
       // Deterministic detector preview — runs regardless of whether the
       // agent has populated the task spec yet. This is what the UI shows
       // first: real findings the user can Approve or Dismiss *now*.
@@ -741,22 +2466,29 @@ export function buildServeApp(opts: ServeOptions = {}): {
         milestones: unknown[]
         context: unknown[]
         stats: { inputSignals: number; drafted: number; deduped: number }
+        review?: unknown
+        learning?: unknown
       } | null = null
       try {
         const inventory = await detectWorkspaceSignals({ projectPath: project.path })
         const draft = formWorkspaceHypothesis(inventory)
+        const review = buildWorkspaceImportReview(draft, existingTasks, projectPath)
         detected = {
           goals: [...draft.goals],
           tasks: [...draft.tasks],
           milestones: [...draft.milestones],
           context: [...draft.context],
           stats: draft.stats,
+          review,
+          learning: buildLearningSnapshot({
+            memoryDir,
+            review,
+            draft,
+          }).effective,
         }
       } catch {
         /* detector best-effort */
       }
-
-      const tasksPath = join(memoryDir, 'TASKS.json')
       if (!existsSync(tasksPath)) {
         return c.json({
           taskExists: false,
@@ -819,46 +2551,122 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
       const memoryDir = join(project.path, 'memory')
+      const body = await c.req.json().catch(() => ({})) as {
+        areaKeys?: string[]
+        sourceKeys?: string[]
+        taskIds?: string[]
+      }
 
-      // Fallback: if the reserved task has no agent-authored spec yet, seed
-      // it from the deterministic detector output. This lets the user
-      // Approve immediately without waiting on the workspace-importer
-      // agent, and is safe because the detector draft uses the same YAML
-      // fence format the agent would have produced.
+      // Fallback: if the reserved task is missing or has no agent-authored
+      // spec yet, create the task (idempotent) and seed the spec from the
+      // deterministic detector output. This lets the user Approve immediately
+      // without waiting on the workspace-importer agent, and is safe because
+      // the detector draft uses the same YAML fence format the agent would
+      // have produced.
       try {
         const tasksPath = join(memoryDir, 'TASKS.json')
-        if (existsSync(tasksPath)) {
-          const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as {
-            tasks?: Array<Record<string, unknown>>
-          }
-          const list = Array.isArray(raw) ? raw : raw.tasks ?? []
-          const idx = list.findIndex(
+        const raw = existsSync(tasksPath)
+          ? (JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+              | Array<Record<string, unknown>>
+              | { tasks?: Array<Record<string, unknown>> })
+          : { tasks: [] as Array<Record<string, unknown>> }
+        const list = Array.isArray(raw) ? raw : raw.tasks ?? []
+        let idx = list.findIndex(
+          (t) => (t as { id?: string }).id === WORKSPACE_IMPORT_TASK_ID,
+        )
+        // Ensure the reserved task exists. createWorkspaceImportTask is
+        // idempotent and seeds the exploring transcript.
+        if (idx < 0) {
+          await createWorkspaceImportTask({
+            memoryDir,
+            projectPath: project.path,
+          })
+          // Re-read after creation.
+          const raw2 = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+            | Array<Record<string, unknown>>
+            | { tasks?: Array<Record<string, unknown>> }
+          const list2 = Array.isArray(raw2) ? raw2 : raw2.tasks ?? []
+          idx = list2.findIndex(
             (t) => (t as { id?: string }).id === WORKSPACE_IMPORT_TASK_ID,
           )
-          const task = idx >= 0 ? (list[idx] as { spec?: string }) : undefined
-          const specEmpty = !task || !task.spec || task.spec.trim().length === 0
+          if (idx >= 0) {
+            const task = list2[idx] as { spec?: string }
+            const inventory = await detectWorkspaceSignals({ projectPath: project.path })
+            const draft = formWorkspaceHypothesis(inventory)
+            const spec = formatDetectedDraftAsSpec(draft)
+            if (spec) {
+              task.spec = spec
+              const next = Array.isArray(raw2) ? list2 : { ...raw2, tasks: list2 }
+              await fsp.writeFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
+            }
+          }
+        } else {
+          const task = list[idx] as { spec?: string }
+          const specEmpty = !task.spec || task.spec.trim().length === 0
           if (specEmpty) {
             const inventory = await detectWorkspaceSignals({ projectPath: project.path })
             const draft = formWorkspaceHypothesis(inventory)
             const spec = formatDetectedDraftAsSpec(draft)
-            if (spec && task) {
-              ;(task as Record<string, unknown>).spec = spec
+            if (spec) {
+              task.spec = spec
               const next = Array.isArray(raw) ? list : { ...raw, tasks: list }
               await fsp.writeFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
             }
           }
         }
-      } catch {
-        /* detector fallback best-effort; real approveWorkspaceImport will surface the error */
+      } catch (e) {
+        // Surface the underlying problem instead of swallowing it — the user
+        // would otherwise see only the generic "No workspace-import task" from
+        // approveWorkspaceImport, which hides the real failure.
+        return c.json(
+          { error: `Could not prepare workspace-import task: ${e instanceof Error ? e.message : String(e)}` },
+          500,
+        )
       }
+
+      const inventory = await detectWorkspaceSignals({ projectPath: project.path })
+      const fullDraft = formWorkspaceHypothesis(inventory)
+      const review = buildWorkspaceImportReview(fullDraft, [], project.path)
+      const selectedSourceKeys = Array.isArray(body.sourceKeys)
+        ? body.sourceKeys
+        : review.sourceGroups.filter(group => group.taskCount > 0).map(group => group.key)
+      const selectedAreaKeys = Array.isArray(body.areaKeys)
+        ? body.areaKeys
+        : review.areaGroups
+            .filter(area =>
+              review.sourceGroups.some(
+                group => selectedSourceKeys.includes(group.key) && group.areaKey === area.key,
+              ),
+            )
+            .map(area => area.key)
+      const selectedTaskIds = Array.isArray(body.taskIds)
+        ? body.taskIds
+        : fullDraft.tasks.map(task => task.suggestedId)
+      const filteredDraft = filterWorkspaceImportDraft(fullDraft, {
+        sourceKeys: selectedSourceKeys,
+        taskIds: selectedTaskIds,
+      })
 
       const result = await approveWorkspaceImport({
         memoryDir,
         projectPath: project.path,
+        coordinatorProjectPaths: buildCoordinatorProjectPathMap(
+          project.path,
+          project.config?.coordinators ?? [],
+        ),
+        draftOverride: filteredDraft,
       })
       if (!result.success) {
         return c.json({ error: result.error ?? 'Approval failed' }, 400)
       }
+      await recordWorkspaceImportApproval({
+        memoryDir,
+        review,
+        draft: fullDraft,
+        selectedAreaKeys,
+        selectedSourceKeys,
+        selectedTaskIds,
+      })
       return c.json({
         ok: true,
         tasksAdded: result.tasksAdded ?? 0,
@@ -935,10 +2743,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
           name: cfg?.name ?? project.id,
           id: project.id,
           path: project.path,
-          editHref: '/settings',
+          editHref: '/settings/advanced',
         },
         environment: {
-          packageManager: b?.packageManager ?? 'unknown',
+          packageManagers: detectProjectPackageManagers(project.path),
           verifiedAt: typeof b?.verifiedAt === 'string' ? b.verifiedAt : null,
           install: b?.install ?? null,
           gates: b?.gates ?? null,
@@ -950,8 +2758,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         },
         coordinators: {
           count: cfg?.coordinators?.length ?? 0,
-          list: (cfg?.coordinators ?? []).map(c => ({ id: c.id, name: c.name })),
-          editHref: '/coordinators',
+          list: (cfg?.coordinators ?? []).map(c => ({ id: c.id, ...(c.domain ? { domain: c.domain } : {}) })),
+          editHref: '/settings/routing',
         },
         designSystem: {
           summary: designSummary,
@@ -977,7 +2785,64 @@ export function buildServeApp(opts: ServeOptions = {}): {
         JSON.stringify({ dismissed: true, dismissedAt: new Date().toISOString() }, null, 2),
         'utf-8',
       )
+      await recordWorkspaceImportDismissal(memoryDir)
       return c.json({ ok: true })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/learning', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({
+          project: null,
+          user: null,
+          effective: null,
+        })
+      }
+      const memoryDir = join(project.path, 'memory')
+      const inventory = await detectWorkspaceSignals({ projectPath: project.path })
+      const draft = formWorkspaceHypothesis(inventory)
+      const tasksPath = join(memoryDir, 'TASKS.json')
+      let existingTasks: Array<{ title: string; status: string }> = []
+      if (existsSync(tasksPath)) {
+        try {
+          const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+            | { tasks?: Array<Record<string, unknown>> }
+            | Array<Record<string, unknown>>
+          const list = Array.isArray(raw) ? raw : raw.tasks ?? []
+          existingTasks = list
+            .filter(t => (t as { id?: string }).id !== WORKSPACE_IMPORT_TASK_ID)
+            .map(t => ({
+              title: typeof (t as { title?: unknown }).title === 'string' ? (t as { title: string }).title : '',
+              status: typeof (t as { status?: unknown }).status === 'string' ? (t as { status: string }).status : 'unknown',
+            }))
+            .filter(t => t.title.trim().length > 0)
+        } catch {
+          existingTasks = []
+        }
+      }
+      const review = buildWorkspaceImportReview(draft, existingTasks, project.path)
+      return c.json(buildLearningSnapshot({ memoryDir, review, draft }))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/learning/reset', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const body = await c.req.json().catch(() => ({})) as {
+        scope?: 'project' | 'all'
+      }
+      const scope = body.scope === 'all' ? 'all' : 'project'
+      const memoryDir = join(project.path, 'memory')
+      await resetProjectLearning(memoryDir)
+      if (scope === 'all') {
+        await resetGlobalLearning()
+      }
+      return c.json({ ok: true, scope })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -985,29 +2850,232 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/project/inbox', async c => {
     try {
+      const inbox = await buildProjectInboxSnapshot({
+        projectPath: project.path,
+        initializationNeeded: project.initializationNeeded,
+        coordinatorCount: project.config?.coordinators?.length ?? 0,
+      })
+      return c.json(inbox)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/thread', async c => {
+    try {
       if (project.initializationNeeded) {
-        return c.json({ items: [], blockers: { bootstrap: false, workspaceImport: false } })
+        return c.json({ turns: [], activeTurnId: null, caughtUp: false })
       }
-      // Self-healing scan: if the workspace has signals but nobody has run
-      // the scanner yet, kick it off implicitly. The user shouldn't have to
-      // press "Scan" — once a coordinator exists, the agent discovers
-      // existing goals/tasks on its own and surfaces them for review.
-      // No-op if already seeded, off, or not needed.
-      try {
-        const memoryDir = join(project.path, 'memory')
-        const goalsPath = join(memoryDir, 'workspace-goals.json')
-        if (
-          !existsSync(goalsPath) &&
-          (project.config?.coordinators?.length ?? 0) > 0
-        ) {
-          await maybeSeedWorkspaceImport({ memoryDir, projectPath: project.path })
-        }
-      } catch {
-        /* never let self-healing break the inbox read */
+      const thread = buildThread({
+        projectPath: project.path,
+        recentEvents: supervisor.recent(project.id, undefined, project.path),
+      })
+      return c.json(thread)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // Wizards — resumable guided checklists (onboard, spec-fill, release, ...).
+  // Progress is derived from on-disk facts; wizards.yaml persists only skip
+  // markers + completedAt stamps. See src/runtime/wizards.ts.
+  //
+  // GET  /api/project/wizards                     → all applicable wizards
+  // POST /api/project/wizards/:id/skip            → { stepId }
+  // POST /api/project/wizards/:id/unskip          → { stepId }
+  // -------------------------------------------------------------------------
+  app.get('/api/project/wizards', c => {
+    try {
+      if (project.initializationNeeded) return c.json({ wizards: [] })
+      const snap = buildSnapshot({ projectPath: project.path })
+      const wizards = listWizards()
+        .filter(w => w.applicable(snap))
+        .map(w => progressFor(w, snap))
+      return c.json({ wizards })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/wizards/:id/skip', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const wizardId = c.req.param('id')
+      const body = (await c.req.json().catch(() => ({}))) as { stepId?: string }
+      const stepId = typeof body?.stepId === 'string' ? body.stepId : ''
+      if (!wizardId || !stepId) return c.json({ error: 'wizardId and stepId required' }, 400)
+      const wizard = listWizards().find(w => w.id === wizardId)
+      if (!wizard) return c.json({ error: `unknown wizard: ${wizardId}` }, 404)
+      const step = wizard.steps.find(s => s.id === stepId)
+      if (!step) return c.json({ error: `unknown step: ${stepId}` }, 404)
+      if (!step.skippable) return c.json({ error: `step is not skippable: ${stepId}` }, 400)
+      const state = readWizardsState(project.path)
+      const next = mutateSkip(state, wizardId, stepId, 'add')
+      writeWizardsState(project.path, next)
+      return c.json({ ok: true, state: next })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/wizards/:id/unskip', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const wizardId = c.req.param('id')
+      const body = (await c.req.json().catch(() => ({}))) as { stepId?: string }
+      const stepId = typeof body?.stepId === 'string' ? body.stepId : ''
+      if (!wizardId || !stepId) return c.json({ error: 'wizardId and stepId required' }, 400)
+      const state = readWizardsState(project.path)
+      const next = mutateSkip(state, wizardId, stepId, 'remove')
+      writeWizardsState(project.path, next)
+      return c.json({ ok: true, state: next })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // Task-scoped wizards. Progress derives from the live task record, so any
+  // edit (spec agent updates the brief, human approves, reviewer appends an
+  // acceptance criterion) auto-flips the corresponding step to done.
+  // -------------------------------------------------------------------------
+  app.get('/api/project/task/:id/wizards', c => {
+    try {
+      if (project.initializationNeeded) return c.json({ wizards: [] })
+      const tasksPath = join(project.path, 'memory', 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+        | { tasks?: Array<Record<string, unknown>> }
+        | Array<Record<string, unknown>>
+      const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
+      const id = c.req.param('id')
+      const task = tasks.find(t => (t as { id?: string }).id === id)
+      if (!task) return c.json({ error: 'task not found' }, 404)
+      const snap = buildTaskSnapshot({
+        projectPath: project.path,
+        task: task as Parameters<typeof buildTaskSnapshot>[0]['task'],
+      })
+      const wizards = listTaskWizards()
+        .filter(w => w.applicable(snap))
+        .map(w => progressForTask(w, snap))
+      return c.json({ wizards })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/task/:id/wizards/:wizardId/skip', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const taskId = c.req.param('id')
+      const wizardId = c.req.param('wizardId')
+      const body = (await c.req.json().catch(() => ({}))) as { stepId?: string }
+      const stepId = typeof body?.stepId === 'string' ? body.stepId : ''
+      if (!taskId || !wizardId || !stepId) {
+        return c.json({ error: 'taskId, wizardId and stepId required' }, 400)
       }
-      const items = buildInbox({ projectPath: project.path })
-      const blockers = buildInboxBlockers(items)
-      return c.json({ items, blockers })
+      const wizard = listTaskWizards().find(w => w.id === wizardId)
+      if (!wizard) return c.json({ error: `unknown task wizard: ${wizardId}` }, 404)
+      const step = wizard.steps.find(s => s.id === stepId)
+      if (!step) return c.json({ error: `unknown step: ${stepId}` }, 404)
+      if (!step.skippable) return c.json({ error: `step is not skippable: ${stepId}` }, 400)
+      const state = readWizardsState(project.path)
+      const next = mutateSkip(state, `${wizardId}:${taskId}`, stepId, 'add')
+      writeWizardsState(project.path, next)
+      return c.json({ ok: true, state: next })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/task/:id/wizards/:wizardId/unskip', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const taskId = c.req.param('id')
+      const wizardId = c.req.param('wizardId')
+      const body = (await c.req.json().catch(() => ({}))) as { stepId?: string }
+      const stepId = typeof body?.stepId === 'string' ? body.stepId : ''
+      if (!taskId || !wizardId || !stepId) {
+        return c.json({ error: 'taskId, wizardId and stepId required' }, 400)
+      }
+      const state = readWizardsState(project.path)
+      const next = mutateSkip(state, `${wizardId}:${taskId}`, stepId, 'remove')
+      writeWizardsState(project.path, next)
+      return c.json({ ok: true, state: next })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // Onboard step backers: coordinators seed + project brief.
+  //
+  // These endpoints exist specifically so onboard step bodies have something
+  // concrete to POST to without needing a full coordinator-editor UI today.
+  // The meta-intake agent remains the "agent-drafted" path; these are the
+  // "I'll just pick one" path.
+  // -------------------------------------------------------------------------
+  app.post('/api/project/coordinators/seed', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const body = (await c.req.json().catch(() => ({}))) as {
+        archetypes?: string[]
+      }
+      const archetypes = Array.isArray(body.archetypes) ? body.archetypes : []
+      if (archetypes.length === 0) return c.json({ error: 'no archetypes selected' }, 400)
+
+      const existing = readWorkspaceConfig(project.path)
+      const existingIds = new Set((existing.coordinators ?? []).map(c => c.id))
+      const seeds = archetypesToCoordinators(archetypes).filter(s => !existingIds.has(s.id))
+      if (seeds.length === 0) {
+        return c.json({ ok: true, added: 0, coordinators: existing.coordinators ?? [] })
+      }
+      const nextConfig = {
+        ...existing,
+        coordinators: [...(existing.coordinators ?? []), ...seeds],
+      }
+      writeWorkspaceConfig(project.path, nextConfig as Parameters<typeof writeWorkspaceConfig>[1])
+      refreshProject(project.path)
+      return c.json({ ok: true, added: seeds.length, coordinators: nextConfig.coordinators })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/brief', c => {
+    try {
+      if (project.initializationNeeded) return c.json({ current: '', seed: { readme: '', roadmap: [] } })
+      const briefPath = join(project.path, 'memory', 'project-brief.md')
+      const current = existsSync(briefPath) ? readFileSync(briefPath, 'utf8') : ''
+      const readmePath = join(project.path, 'README.md')
+      const roadmapPath = join(project.path, 'ROADMAP.md')
+      const readmeFirstPara = existsSync(readmePath)
+        ? (readFileSync(readmePath, 'utf8').split(/\n{2,}/).find(p => p.trim() && !p.trim().startsWith('#')) ?? '').trim().slice(0, 800)
+        : ''
+      const roadmapHeadings = existsSync(roadmapPath)
+        ? readFileSync(roadmapPath, 'utf8')
+            .split(/\r?\n/)
+            .filter(l => /^#{1,3}\s+/.test(l))
+            .map(l => l.replace(/^#{1,3}\s+/, '').trim())
+            .slice(0, 12)
+        : []
+      return c.json({ current, seed: { readme: readmeFirstPara, roadmap: roadmapHeadings } })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/brief', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const body = (await c.req.json().catch(() => ({}))) as { content?: string }
+      const content = typeof body.content === 'string' ? body.content.trim() : ''
+      if (content.length < 40) return c.json({ error: 'brief must be at least 40 characters' }, 400)
+      const memDir = join(project.path, 'memory')
+      if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true })
+      writeFileSync(join(memDir, 'project-brief.md'), content + '\n', 'utf8')
+      return c.json({ ok: true })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -1018,20 +3086,33 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // slice of related context (recent events touching this task) so the UI
   // can show "what's happening right now" without a second round-trip.
   // -------------------------------------------------------------------------
-  app.get('/api/project/task/:id', c => {
+  app.get('/api/project/task/:id', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const tasksPath = join(project.path, 'memory', 'TASKS.json')
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
-        | { tasks?: Array<Record<string, unknown>> }
-        | Array<Record<string, unknown>>
-      const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
+      const tasks = await readTasksFileNormalized(tasksPath)
       const id = c.req.param('id')
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
-      const recent = filterEventsForTask(supervisor.recent(project.id), id)
-      return c.json({ task, recentEvents: recent })
+      const recent = filterEventsForTask(supervisor.recent(project.id, undefined, project.path), id)
+      const contextDebug = await readContextDebugForTask(join(project.path, 'memory'), id)
+      const snapshot = buildSnapshot({ projectPath: project.path })
+      const thread = buildThread({
+        projectPath: project.path,
+        snapshot,
+        recentEvents: supervisor.recent(project.id, undefined, project.path),
+      })
+      const threadTurns = thread.turns.filter(turn => {
+        if (!('taskId' in turn)) return false
+        return turn.taskId === id
+      })
+      return c.json({
+        task: await enrichTaskForServe(project.path, task as Record<string, unknown>),
+        recentEvents: recent,
+        contextDebug,
+        threadTurns,
+      })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -1178,8 +3259,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
   //   pause              → blocked      (any non-terminal task)
   //   shelve             → shelved      (any non-done task)
   //   unshelve           → proposed     (shelved task only; clears shelveReason)
-  //   approve-spec       → spec_review  (exploring task with a drafted spec; body: {approvalNote?})
+  //   approve-spec       → ready  (human approves a spec_review task; body: {approvalNote?})
   //   approve-brief      → mark productBrief.approvedBy/approvedAt = human
+  //   add-acceptance     → append a human-written acceptance criterion
   //   resume             → append a follow-up message to an exploring transcript
   //                        (body: {message?, resolveEscalationId?, resolution?})
   //   resolve-escalation → close a named escalation; unblocks when none remain
@@ -1194,9 +3276,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         'shelve',
         'approve-spec',
         'approve-brief',
+        'add-acceptance',
         'resume',
         'unshelve',
         'resolve-escalation',
+        'stage-answer',
+        'answer-question',
+        'answer-questions',
+        'rerun-stage',
+        'shape-draft',
       ] as const
       if (!(KNOWN_ACTIONS as readonly string[]).includes(action)) {
         return c.json({ error: 'unknown action' }, 400)
@@ -1207,6 +3295,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // approve-spec and resume have their own persistence (intake.ts owns the
       // write). Delegate to them so the exploring-transcript stays in sync.
       if (action === 'approve-spec') {
+        if (id === WORKSPACE_IMPORT_TASK_ID) {
+          return c.json(
+            {
+              error:
+                'Workspace import uses a dedicated approval flow. Use /api/project/workspace-import/approve instead.',
+            },
+            400,
+          )
+        }
         const body = await c.req.json().catch(() => ({})) as { approvalNote?: string }
         const result = await approveSpec({
           memoryDir,
@@ -1222,6 +3319,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           message?: string
           resolveEscalationId?: string
           resolution?: string
+          preserveStatus?: boolean
         }
         if (!body.message && !body.resolveEscalationId) {
           return c.json({ error: 'Provide a message or an escalation to resolve' }, 400)
@@ -1232,9 +3330,35 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ...(body.message ? { message: body.message } : {}),
           ...(body.resolveEscalationId ? { resolveEscalationId: body.resolveEscalationId } : {}),
           ...(body.resolution ? { resolution: body.resolution } : {}),
+          ...(body.preserveStatus ? { preserveStatus: true } : {}),
         })
         if (!result.success) return c.json({ error: result.error ?? 'resume failed' }, 400)
         return c.json({ ok: true })
+      }
+
+      if (action === 'rerun-stage') {
+        const body = await c.req.json().catch(() => ({})) as {
+          stage?: 'spec' | 'review' | 'gate'
+        }
+        if (body.stage !== 'spec' && body.stage !== 'review' && body.stage !== 'gate') {
+          return c.json({ error: 'Missing or invalid stage' }, 400)
+        }
+        const result = await rerunTaskStage({
+          memoryDir,
+          taskId: id,
+          stage: body.stage,
+        })
+        if (!result.success) return c.json({ error: result.error ?? 'rerun failed' }, 400)
+        return c.json({ ok: true, status: result.newStatus })
+      }
+
+      if (action === 'shape-draft') {
+        const result = await shapeImportDraft({
+          memoryDir,
+          taskId: id,
+        })
+        if (!result.success) return c.json({ error: result.error ?? 'shape failed' }, 400)
+        return c.json({ ok: true, status: result.newStatus })
       }
 
       if (action === 'approve-brief') {
@@ -1259,10 +3383,203 @@ export function buildServeApp(opts: ServeOptions = {}): {
         brief.approvedBy = 'human'
         brief.approvedAt = now
         task.productBrief = brief
+        const questions = Array.isArray(task.openQuestions) ? task.openQuestions : []
+        const hasUnansweredQuestions = questions.some((question) => {
+          if (!question || typeof question !== 'object') return false
+          return typeof (question as { answeredAt?: unknown }).answeredAt !== 'string'
+        })
+        const hasConcreteSpecDraft =
+          typeof task.spec === 'string' &&
+          task.spec.trim().length > 0 &&
+          Array.isArray(task.acceptanceCriteria) &&
+          task.acceptanceCriteria.length > 0
+        if (
+          task.status === 'exploring' &&
+          hasConcreteSpecDraft &&
+          !hasUnansweredQuestions
+        ) {
+          task.status = 'spec_review'
+        }
         task.updatedAt = now
         queue.lastUpdated = now
-        await fsp.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        return c.json({ ok: true, status: task.status })
+      }
+
+      if (action === 'add-acceptance') {
+        const body = await c.req.json().catch(() => ({})) as { description?: string }
+        const description = (body.description ?? '').trim()
+        if (!description) return c.json({ error: 'description required' }, 400)
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        const now = new Date().toISOString()
+        const criteria = Array.isArray(task.acceptanceCriteria)
+          ? [...task.acceptanceCriteria as Array<Record<string, unknown>>]
+          : []
+        criteria.push({
+          id: `ac-${criteria.length + 1}`,
+          description,
+          verifiedBy: 'review',
+          met: false,
+        })
+        task.acceptanceCriteria = criteria
+        const notes = Array.isArray(task.notes)
+          ? [...task.notes as Array<Record<string, unknown>>]
+          : []
+        notes.push({
+          agentId: 'human',
+          role: 'specifier',
+          content: `Added acceptance criterion: ${description}`,
+          timestamp: now,
+        })
+        task.notes = notes
+        task.updatedAt = now
+        queue.lastUpdated = now
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        return c.json({ ok: true, count: criteria.length })
+      }
+
+      if (action === 'answer-question') {
+        // Mark an open AgentQuestion as answered. Body: {questionId, answer}.
+        // The answer is also appended to the exploring transcript so the
+        // asking agent picks it up on the next tick (same path as `resume`).
+        const body = (await c.req.json().catch(() => ({}))) as {
+          questionId?: string
+          answer?: string
+        }
+        if (!body.questionId) return c.json({ error: 'Missing questionId' }, 400)
+        if (!body.answer || !body.answer.trim()) {
+          return c.json({ error: 'Missing answer' }, 400)
+        }
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as
+          | Record<string, unknown>
+          | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        const questions = (task.openQuestions as Array<Record<string, unknown>> | undefined) ?? []
+        const q = questions.find(x => (x as { id?: string }).id === body.questionId)
+        if (!q) return c.json({ error: 'question not found' }, 404)
+        const now = new Date().toISOString()
+        delete q.draftAnswer
+        q.answeredAt = now
+        q.answer = body.answer.trim()
+        task.openQuestions = questions
+        task.updatedAt = now
+        queue.lastUpdated = now
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        // Also append to the exploring transcript so the asking agent reads it.
+        await resumeExploring({
+          memoryDir,
+          taskId: id,
+          message: `Answer to "${(q as { id?: string }).id}": ${body.answer.trim()}`,
+        })
         return c.json({ ok: true })
+      }
+
+      if (action === 'stage-answer') {
+        const body = (await c.req.json().catch(() => ({}))) as {
+          questionId?: string
+          answer?: string
+        }
+        if (!body.questionId) return c.json({ error: 'Missing questionId' }, 400)
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as
+          | Record<string, unknown>
+          | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        const questions = (task.openQuestions as Array<Record<string, unknown>> | undefined) ?? []
+        const q = questions.find(x => (x as { id?: string }).id === body.questionId)
+        if (!q) return c.json({ error: 'question not found' }, 404)
+        const nextDraft = (body.answer ?? '').trim()
+        if (nextDraft) q.draftAnswer = nextDraft
+        else delete q.draftAnswer
+        task.openQuestions = questions
+        task.updatedAt = new Date().toISOString()
+        queue.lastUpdated = task.updatedAt as string
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        return c.json({ ok: true, staged: Boolean(nextDraft) })
+      }
+
+      if (action === 'answer-questions') {
+        // Batch-answer multiple open AgentQuestions atomically. Body:
+        //   { answers: [{questionId, answer}, ...] }
+        // Used by the Thread surface when the user fills in a section of
+        // co-active questions and submits them together. The orchestrator
+        // gets ONE resume with all answers stitched into the transcript,
+        // so the asking agent can write a complete brief in one shot
+        // instead of partial-then-partial across N resumes.
+        const body = (await c.req.json().catch(() => ({}))) as {
+          answers?: Array<{ questionId?: string; answer?: string }>
+        }
+        const list = Array.isArray(body.answers) ? body.answers : []
+        if (list.length === 0) return c.json({ error: 'Missing answers' }, 400)
+        for (const a of list) {
+          if (!a.questionId) return c.json({ error: 'Missing questionId in answers[]' }, 400)
+          if (!a.answer || !a.answer.trim()) {
+            return c.json({ error: 'Missing answer in answers[]' }, 400)
+          }
+        }
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as
+          | Record<string, unknown>
+          | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        const questions = (task.openQuestions as Array<Record<string, unknown>> | undefined) ?? []
+        const now = new Date().toISOString()
+        const transcriptLines: string[] = []
+        const missing: string[] = []
+        for (const a of list) {
+          const q = questions.find(x => (x as { id?: string }).id === a.questionId)
+          if (!q) { missing.push(a.questionId!); continue }
+          delete q.draftAnswer
+          q.answeredAt = now
+          q.answer = a.answer!.trim()
+          transcriptLines.push(`Answer to "${a.questionId}": ${a.answer!.trim()}`)
+        }
+        if (missing.length > 0) {
+          return c.json({ error: `question(s) not found: ${missing.join(', ')}` }, 404)
+        }
+        task.openQuestions = questions
+        task.updatedAt = now
+        queue.lastUpdated = now
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        // Single resume with all answers — agent gets the full batch in one
+        // context restart instead of N separate ones.
+        await resumeExploring({
+          memoryDir,
+          taskId: id,
+          message: transcriptLines.join('\n'),
+        })
+        return c.json({ ok: true, count: list.length })
       }
 
       if (action === 'resolve-escalation') {
@@ -1332,7 +3649,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       task.notes = notes
       task.updatedAt = now
       queue.lastUpdated = now
-      await fsp.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+      atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
       return c.json({ ok: true, status: task.status })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -1413,8 +3730,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/config', c => {
     try {
-      const project = readProjectConfig(projectPath)
-      const redacted: Record<string, unknown> = { ...project }
+      const cfg = readProjectConfig(currentProjectPath())
+      const redacted: Record<string, unknown> = { ...cfg }
       if (redacted.anthropicApiKey) redacted.anthropicApiKey = '•••'
       if (redacted.openaiApiKey) redacted.openaiApiKey = '•••'
       return c.json(redacted)
@@ -1430,7 +3747,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/config/levers', async c => {
     try {
       const settings = await loadLeverSettings({
-        path: defaultAgentSettingsPath(projectPath),
+        path: defaultAgentSettingsPath(currentProjectPath()),
       })
       const renderPos = (pos: unknown): string => {
         if (typeof pos === 'string' || typeof pos === 'number') return String(pos)
@@ -1445,13 +3762,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
         return JSON.stringify(pos)
       }
-      const project = Object.entries(settings.project).map(([name, entry]) => ({
-        scope: 'project' as const,
-        name,
-        position: renderPos(entry.position),
-        rationale: entry.rationale,
-        setBy: entry.setBy,
-      }))
+      const project = Object.entries(settings.project)
+        .filter(([name]) => name !== 'merge_policy')
+        .map(([name, entry]) => ({
+          scope: 'project' as const,
+          name,
+          position: renderPos(entry.position),
+          rationale: entry.rationale,
+          setBy: entry.setBy,
+        }))
       const domain = Object.entries(settings.domains.default).map(([name, entry]) => ({
         scope: 'domain:default' as const,
         name,
@@ -1470,7 +3789,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // grew, stale on-disk file is missing a newly-required lever).
   app.post('/api/config/levers/reset', async c => {
     try {
-      const path = defaultAgentSettingsPath(projectPath)
+      const path = defaultAgentSettingsPath(currentProjectPath())
       await saveLeverSettings({ path, settings: makeDefaultSettings() })
       return c.json({ ok: true })
     } catch (err) {
@@ -1584,9 +3903,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           const br = (t as { blockReason?: string }).blockReason
           blockedByAgent.push({ id, title, ...(br ? { reason: br } : {}) })
         }
-        const escs = (t as { escalations?: Array<{ id: string; reason: string; summary: string; resolvedAt?: string }> }).escalations ?? []
-        for (const e of escs) {
-          if (!e.resolvedAt) openEscalations.push({
+        for (const e of activeEscalations(t as import('@guildhall/core').Task)) {
+          openEscalations.push({
             taskId: id,
             taskTitle: title,
             escalationId: e.id,
@@ -1636,11 +3954,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // API: setup wizard
   // -------------------------------------------------------------------------
   app.get('/api/setup/status', c => {
-    const stored = readProjectConfig(projectPath)
+    const stored = readProjectConfig(currentProjectPath())
+    const global = readGlobalConfig()
     return c.json({
       path: project.path,
       initialized: !project.initializationNeeded,
-      providerConfigured: Boolean(stored.preferredProvider),
+      providerConfigured: Boolean(stored.preferredProvider ?? global.preferredProvider),
       name: project.config?.name ?? null,
       id: project.config?.id ?? null,
       coordinatorCount: project.config?.coordinators?.length ?? 0,
@@ -1668,6 +3987,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.post('/api/setup/identity', async c => {
     try {
+      refreshProject(project.path)
       const body = await c.req.json().catch(() => ({})) as {
         name?: string
         id?: string
@@ -1687,7 +4007,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         name,
         id,
         ...(subProjectPath ? { projectPath: subProjectPath } : existing?.projectPath ? { projectPath: existing.projectPath } : {}),
-        models: existing?.models ?? { ...DEFAULT_LOCAL_MODEL_ASSIGNMENT },
+        ...(existing?.models ? { models: existing.models } : {}),
         coordinators: existing?.coordinators ?? [],
         maxRevisions: existing?.maxRevisions ?? 3,
         heartbeatInterval: existing?.heartbeatInterval ?? 5,
@@ -1700,7 +4020,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       writeWorkspaceConfig(project.path, nextConfig as Parameters<typeof writeWorkspaceConfig>[1])
 
-      project = resolveProject(project.path)
+      refreshProject(project.path)
+      syncRegistryEntryForProject(project)
       return c.json({ ok: true, id: project.id, name, path: project.path })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -1717,7 +4038,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // Endpoints:
   //   GET  /api/setup/providers       detection + stored credentials
   //   POST /api/setup/providers/config set/update one provider's credential
-  //                                    or the project's preferredProvider
+  //                                    or the machine-default preferredProvider
   //   POST /api/providers/test        send-test-message roundtrip, marks verified
   //   POST /api/providers/disconnect  revoke a stored credential
   // -------------------------------------------------------------------------
@@ -1727,7 +4048,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     // and cheap (a single YAML read + Zod parse) and means users who
     // upgrade in-place never see stale credentials in their project file.
     try {
-      migrateProjectProvidersToGlobal(projectPath, {
+      migrateProjectProvidersToGlobal(currentProjectPath(), {
         readProject: (p) => readProjectConfig(p),
         writeProject: (p, patch) => updateProjectConfig(p, patch),
       })
@@ -1765,18 +4086,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       const { global, creds, claudeCredPath, codexCredPath, claudeInstalled, codexInstalled } =
         describeProviders()
-      const stored = readProjectConfig(projectPath)
+      const stored = readProjectConfig(currentProjectPath())
 
-      const llamaUrl = creds.llamaCppUrl ?? ''
+      const defaultLlamaUrl = 'http://localhost:1234/v1'
+      const configuredLlamaUrl = creds.llamaCppUrl ?? ''
+      const llamaUrl = configuredLlamaUrl || defaultLlamaUrl
       const llamaReachable = llamaUrl.length > 0 ? await probeLlamaCpp(llamaUrl) : false
+      const configuredOpenAiBaseUrl = creds.openaiBaseUrl ?? ''
 
       const v = (kind: ProviderKind) => global.providers[kind]?.verifiedAt ?? null
 
       return c.json({
-        preferredProvider: stored.preferredProvider ?? null,
+        preferredProvider: stored.preferredProvider ?? readGlobalConfig().preferredProvider ?? null,
         providers: {
           'claude-oauth': {
-            label: 'Claude Pro/Max (via Claude Code CLI)',
+            label: providerLabelForSetupKey('claude-oauth'),
             detected: claudeInstalled,
             verifiedAt: v('claude-oauth'),
             detail: claudeInstalled
@@ -1784,7 +4108,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               : 'Install Claude Code and run `claude auth login`.',
           },
           'codex': {
-            label: 'Codex (via Codex CLI)',
+            label: providerLabelForSetupKey('codex'),
             detected: codexInstalled,
             verifiedAt: v('codex-oauth'),
             detail: codexInstalled
@@ -1792,19 +4116,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
               : 'Install the Codex CLI and run `codex auth login`.',
           },
           'llama-cpp': {
-            label: 'Local llama.cpp / LM Studio',
+            label: providerLabelForSetupKey('llama-cpp'),
             detected: llamaReachable,
             verifiedAt: v('llama-cpp'),
-            url: llamaUrl || null,
+            url: llamaReachable ? llamaUrl : configuredLlamaUrl || null,
             detail:
-              llamaUrl.length === 0
-                ? 'Paste the server URL (e.g. http://localhost:1234/v1) to enable.'
+              configuredLlamaUrl.length === 0 && !llamaReachable
+                ? `Not reachable at ${defaultLlamaUrl}. Start an OpenAI-compatible local server such as LM Studio or llama.cpp, or paste a server URL.`
                 : llamaReachable
                   ? `Reachable at ${llamaUrl}`
-                  : `Not reachable at ${llamaUrl}. Start LM Studio / llama.cpp and click refresh.`,
+                  : `Not reachable at ${llamaUrl}. Start an OpenAI-compatible local server such as LM Studio or llama.cpp and click refresh.`,
           },
           'anthropic-api': {
-            label: 'Anthropic API key',
+            label: providerLabelForSetupKey('anthropic-api'),
             detected: Boolean(creds.anthropicApiKey),
             verifiedAt: v('anthropic-api'),
             detail: global.providers['anthropic-api']?.apiKey
@@ -1814,14 +4138,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
                 : 'Paste an API key to enable.',
           },
           'openai-api': {
-            label: 'OpenAI API key',
+            label: providerLabelForSetupKey('openai-api'),
             detected: Boolean(creds.openaiApiKey),
             verifiedAt: v('openai-api'),
+            baseUrl: configuredOpenAiBaseUrl || null,
             detail: global.providers['openai-api']?.apiKey
-              ? 'Stored in ~/.guildhall/providers.yaml'
+              ? configuredOpenAiBaseUrl
+                ? `Stored in ~/.guildhall/providers.yaml · ${configuredOpenAiBaseUrl}`
+                : 'Stored in ~/.guildhall/providers.yaml · defaults to https://api.openai.com/v1'
               : process.env.OPENAI_API_KEY
-                ? 'Picked up from $OPENAI_API_KEY'
-                : 'Paste an API key to enable.',
+                ? configuredOpenAiBaseUrl
+                  ? `Picked up from $OPENAI_API_KEY · ${configuredOpenAiBaseUrl}`
+                  : 'Picked up from $OPENAI_API_KEY · defaults to https://api.openai.com/v1'
+                : 'Paste an API key to enable. Leave base URL blank to use https://api.openai.com/v1.',
           },
         },
       })
@@ -1836,9 +4165,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         preferredProvider?: string
         anthropicApiKey?: string
         openaiApiKey?: string
+        openaiBaseUrl?: string
         lmStudioUrl?: string
       }
-      const allowed = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api'] as const
+      const allowed = SETUP_PROVIDER_ORDER
       // preferredProvider is machine-level by default. Projects may still
       // override it locally when needed, but the setup flow writes the shared
       // default rather than stamping every project.
@@ -1846,7 +4176,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (!(allowed as readonly string[]).includes(body.preferredProvider)) {
           return c.json({ error: `Unknown provider "${body.preferredProvider}"` }, 400)
         }
-        updateProjectConfig(projectPath, {
+        updateGlobalConfig({
+          ...readGlobalConfig(),
           preferredProvider: body.preferredProvider as (typeof allowed)[number],
         })
       }
@@ -1855,16 +4186,270 @@ export function buildServeApp(opts: ServeOptions = {}): {
         setProvider('anthropic-api', { apiKey: body.anthropicApiKey.trim() })
       }
       if (typeof body.openaiApiKey === 'string' && body.openaiApiKey.trim().length > 0) {
-        setProvider('openai-api', { apiKey: body.openaiApiKey.trim() })
+        const existing = readGlobalProviders().providers['openai-api']
+        const baseUrl = (body.openaiBaseUrl ?? '').trim()
+        setProvider('openai-api', {
+          apiKey: body.openaiApiKey.trim(),
+          ...(baseUrl ? { baseUrl } : {}),
+          ...(existing?.verifiedAt ? { verifiedAt: existing.verifiedAt } : {}),
+        })
+      } else if (typeof body.openaiBaseUrl === 'string') {
+        const existing = readGlobalProviders().providers['openai-api']
+        if (existing?.apiKey) {
+          const baseUrl = body.openaiBaseUrl.trim()
+          setProvider('openai-api', {
+            apiKey: existing.apiKey,
+            ...(baseUrl ? { baseUrl } : {}),
+            ...(existing.verifiedAt ? { verifiedAt: existing.verifiedAt } : {}),
+          })
+        }
       }
       if (typeof body.lmStudioUrl === 'string' && body.lmStudioUrl.trim().length > 0) {
-        setProvider('llama-cpp', { url: body.lmStudioUrl.trim() })
+        const url = body.lmStudioUrl.trim()
+        setProvider('llama-cpp', { url })
       }
       return c.json({ ok: true })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })
+
+  app.get('/api/project/local-config', async c => {
+    try {
+      const workspacePath = currentProjectPath()
+      const projectCfg = readProjectConfig(workspacePath)
+      const settings = await loadLeverSettings({
+        path: defaultAgentSettingsPath(workspacePath),
+      })
+      let effectiveLandingBranch = projectCfg.landingBranch ?? null
+      if (!effectiveLandingBranch) {
+        try {
+          const { stdout } = await execFileP('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+            cwd: workspacePath,
+          })
+          effectiveLandingBranch = stdout.trim() || null
+        } catch {
+          effectiveLandingBranch = null
+        }
+      }
+      return c.json({
+        landingBranch: projectCfg.landingBranch ?? null,
+        effectiveLandingBranch,
+        landingStrategy: settings.project.landing_strategy.position,
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/local-config', async c => {
+    try {
+      const workspacePath = currentProjectPath()
+      const body = (await c.req.json().catch(() => ({}))) as {
+        landingBranch?: string | null
+        landingStrategy?: 'cherry_pick_local' | 'cherry_pick_with_push' | 'manual_pr'
+      }
+      const nextPatch: Record<string, unknown> = {}
+      if ('landingBranch' in body) {
+        const raw = typeof body.landingBranch === 'string' ? body.landingBranch.trim() : ''
+        nextPatch.landingBranch = raw.length > 0 ? raw : undefined
+      }
+      if (Object.keys(nextPatch).length > 0) {
+        updateProjectConfig(workspacePath, nextPatch)
+      }
+      if (body.landingStrategy) {
+        const allowed = ['cherry_pick_local', 'cherry_pick_with_push', 'manual_pr'] as const
+        if (!allowed.includes(body.landingStrategy)) {
+          return c.json({ error: `Unknown landing strategy "${body.landingStrategy}"` }, 400)
+        }
+        const path = defaultAgentSettingsPath(workspacePath)
+        const settings = await loadLeverSettings({ path })
+        settings.project.landing_strategy = {
+          position: body.landingStrategy,
+          rationale: 'Updated from Advanced settings.',
+          setAt: new Date().toISOString(),
+          setBy: 'user-direct',
+        }
+        await saveLeverSettings({ path, settings })
+      }
+      const projectCfg = readProjectConfig(workspacePath)
+      const settings = await loadLeverSettings({
+        path: defaultAgentSettingsPath(workspacePath),
+      })
+      return c.json({
+        ok: true,
+        landingBranch: projectCfg.landingBranch ?? null,
+        landingStrategy: settings.project.landing_strategy.position,
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/config/models', async c => {
+    try {
+      const global = readGlobalConfig()
+      const workspacePath = currentProjectPath()
+      const workspace = readWorkspaceConfig(workspacePath)
+      const projectCfg = readProjectConfig(workspacePath)
+      const preferredProvider = projectCfg.preferredProvider ?? global.preferredProvider
+      const resolved = resolveConfig({ workspacePath })
+      const creds = resolveGlobalCredentials()
+      const loadedModels = creds.llamaCppUrl
+        ? await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
+        : []
+      const missingModels = loadedModels.length > 0
+        ? missingAssignedModels(resolved.models, loadedModels)
+        : []
+      return c.json({
+        globalModels: resolveModelsForProvider(global.models, preferredProvider),
+        projectModels: resolveModelsForProvider(workspace.models, preferredProvider),
+        effectiveModels: resolved.models,
+        loadedModels,
+        missingModels,
+        catalog: [
+          ...new Map(
+            [
+              ...loadedModels.map(id => ({
+                id,
+                provider: 'openai-compatible',
+                notes: 'Loaded on the configured local server',
+              })),
+              ...MODEL_CATALOG.map(m => ({
+                id: m.id,
+                provider: m.provider,
+                notes: m.notes ?? '',
+              })),
+              ...Object.values(resolveModelsForProvider(global.models, preferredProvider)).map(id => ({
+                id,
+                provider: 'openai-compatible',
+                notes: 'Global default',
+              })),
+              ...Object.values(resolveModelsForProvider(workspace.models, preferredProvider)).map(id => ({
+                id,
+                provider: 'openai-compatible',
+                notes: 'Project override',
+              })),
+            ].map(item => [item.id, item]),
+          ).values(),
+        ],
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/config/models', async c => {
+    try {
+      const body = (await c.req.json().catch(() => ({}))) as {
+        scope?: 'global' | 'project' | 'global-default'
+        role?: keyof ModelAssignmentConfig
+        model?: string
+        models?: Partial<ModelAssignmentConfig>
+      }
+      const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker']
+      if (!body.scope) return c.json({ error: 'Missing "scope"' }, 400)
+      const workspacePath = currentProjectPath()
+      const projectCfg = readProjectConfig(workspacePath)
+      const preferredProvider = projectCfg.preferredProvider ?? readGlobalConfig().preferredProvider
+
+      const requestedModels = body.models && typeof body.models === 'object'
+        ? Object.entries(body.models).filter((entry): entry is [keyof ModelAssignmentConfig, string] => {
+            const [role, model] = entry
+            return roles.includes(role as keyof ModelAssignmentConfig) && typeof model === 'string'
+          })
+        : null
+      if (body.models && requestedModels?.length !== Object.keys(body.models).length) {
+        return c.json({ error: 'Unknown model role' }, 400)
+      }
+      if (!requestedModels && (!body.role || !roles.includes(body.role))) {
+        return c.json({ error: 'Unknown model role' }, 400)
+      }
+
+      if (body.scope === 'global') {
+        const global = readGlobalConfig()
+        const nextModels = { ...resolveModelsForProvider(global.models, preferredProvider) }
+        if (requestedModels) {
+          for (const [role, model] of requestedModels) {
+            const trimmed = model.trim()
+            if (!trimmed) return c.json({ error: 'Missing "model"' }, 400)
+            nextModels[role] = trimmed
+          }
+        } else {
+          const model = body.model?.trim()
+          if (!model || !body.role) return c.json({ error: 'Missing "model"' }, 400)
+          nextModels[body.role] = model
+        }
+        updateGlobalConfig({
+          ...global,
+          models: writeModelsForProvider(global.models, preferredProvider, nextModels),
+        })
+        return c.json({ ok: true })
+      }
+
+      const workspace = readWorkspaceConfig(workspacePath)
+      const nextModels = { ...resolveModelsForProvider(workspace.models, preferredProvider) }
+      if (body.scope === 'global-default') {
+        if (requestedModels) {
+          for (const [role] of requestedModels) delete nextModels[role]
+        } else if (body.role) {
+          delete nextModels[body.role]
+        }
+      } else if (body.scope === 'project') {
+        if (requestedModels) {
+          for (const [role, model] of requestedModels) {
+            const trimmed = model.trim()
+            if (!trimmed) return c.json({ error: 'Missing "model"' }, 400)
+            nextModels[role] = trimmed
+          }
+        } else if (body.role) {
+          const model = body.model?.trim()
+          if (!model) return c.json({ error: 'Missing "model"' }, 400)
+          nextModels[body.role] = model
+        }
+      } else {
+        return c.json({ error: 'Unknown model scope' }, 400)
+      }
+
+      const nextConfig = { ...workspace }
+      if (Object.keys(nextModels).length > 0) {
+        nextConfig.models = writeModelsForProvider(workspace.models, preferredProvider, nextModels)
+      } else {
+        delete nextConfig.models
+      }
+      writeWorkspaceConfig(workspacePath, nextConfig)
+      refreshProject(project.path)
+      return c.json({ ok: true })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  function providerRoundtripSampleFromMessage(message: {
+    content?: Array<
+      | { type: 'text'; text: string }
+      | { type: 'reasoning'; text: string }
+      | { type: 'tool_use'; name: string }
+      | Record<string, unknown>
+    >
+  }): string {
+    const blocks = Array.isArray(message.content) ? message.content : []
+    const text = blocks
+      .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+      .map(block => block.text)
+      .join('')
+      .trim()
+    if (text.length > 0) return text
+    const reasoning = blocks
+      .filter((block): block is { type: 'reasoning'; text: string } => block.type === 'reasoning')
+      .map(block => block.text)
+      .join('')
+      .trim()
+    if (reasoning.length > 0) return '[reasoning response]'
+    const toolUse = blocks.find((block): block is { type: 'tool_use'; name: string } => block.type === 'tool_use')
+    if (toolUse) return `[tool call: ${toolUse.name}]`
+    return ''
+  }
 
   // Pick a cheap, widely-available model id for a verification round-trip
   // against each provider. For llama.cpp we ask the server which model is
@@ -1873,15 +4458,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
     name: PreferredProviderKey,
     llamaUrl: string,
   ): Promise<string | undefined> {
+    const configured = resolveModelsForProvider(readGlobalConfig().models, name)
     switch (name) {
       case 'claude-oauth':
       case 'anthropic-api':
-        return 'claude-haiku-4-5-20251001'
+        return configured.worker ?? configured.spec ?? 'claude-haiku-4-5-20251001'
       case 'openai-api':
-        return 'gpt-4o-mini'
+        return configured.worker ?? configured.spec ?? 'gpt-4o-mini'
       case 'codex':
       case 'codex-oauth':
-        return 'gpt-5-codex'
+        return configured.worker ?? configured.spec ?? 'gpt-5.3-codex'
       case 'llama-cpp': {
         if (!llamaUrl) return undefined
         try {
@@ -1919,19 +4505,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ok: false,
         error:
           forced === 'llama-cpp'
-            ? 'No model loaded on the llama.cpp/LM Studio server. Load a model and try again.'
+            ? 'No model loaded on the configured OpenAI-compatible local server. Load a model and try again.'
             : `No default model known for ${forced}.`,
       }
     }
     let selected
     try {
-      const selectOpts: Parameters<typeof selectApiClient>[0] = {
-        provider: forcedInternal,
-      }
-      if (creds.anthropicApiKey) selectOpts.anthropicApiKey = creds.anthropicApiKey
-      if (creds.openaiApiKey) selectOpts.openaiApiKey = creds.openaiApiKey
-      if (creds.llamaCppUrl) selectOpts.llamaCppUrl = creds.llamaCppUrl
-      selected = await selectApiClient(selectOpts)
+      selected = await selectApiClient(buildSelectApiClientOptions({
+        providerOverride: forcedInternal,
+        credentials: creds,
+      }))
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
@@ -1956,6 +4539,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           sample += ev.text
           if (sample.length > 80) break
         } else if (ev.type === 'message_complete') {
+          if (sample.trim().length === 0) sample = providerRoundtripSampleFromMessage(ev.message)
           break
         }
       }
@@ -1975,7 +4559,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.post('/api/providers/test', async c => {
     try {
       const body = (await c.req.json().catch(() => ({}))) as { provider?: string }
-      const allowed = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api'] as const
+      const allowed = SETUP_PROVIDER_ORDER
       const name = body.provider
       if (!name || !(allowed as readonly string[]).includes(name)) {
         return c.json({ ok: false, error: `Unknown provider "${name ?? ''}"` }, 400)
@@ -2002,7 +4586,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.post('/api/providers/disconnect', async c => {
     try {
       const body = (await c.req.json().catch(() => ({}))) as { provider?: string }
-      const allowed = ['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api'] as const
+      const allowed = SETUP_PROVIDER_ORDER
       const name = body.provider
       if (!name || !(allowed as readonly string[]).includes(name)) {
         return c.json({ ok: false, error: `Unknown provider "${name ?? ''}"` }, 400)
@@ -2030,7 +4614,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/events', c => {
     return streamSSE(c, async stream => {
       await stream.writeSSE({ data: JSON.stringify({ type: 'connected', projectId: project.id }) })
-      for (const ev of supervisor.recent(project.id)) {
+      for (const ev of supervisor.recent(project.id, undefined, project.path)) {
         await stream.writeSSE({ data: JSON.stringify(ev) })
       }
       const unsubscribe = supervisor.subscribe(ev => {
@@ -2061,7 +4645,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // -------------------------------------------------------------------------
   // SPA (catch-all)
   // -------------------------------------------------------------------------
-  app.get('*', c => c.html(dashboardHtml()))
+  app.get('*', c => {
+    c.header('Cache-Control', 'no-store, no-cache, must-revalidate')
+    c.header('Pragma', 'no-cache')
+    return c.html(dashboardHtml())
+  })
 
   return { app, supervisor, projectPath }
 }
@@ -2072,14 +4660,49 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   const cfg = readProjectConfig(projectPath)
   const port = opts.port ?? cfg.servePort
 
-  console.log(`[guildhall serve] Project: ${project.path}`)
-  console.log(`[guildhall serve] ${project.initializationNeeded ? '⚠ Not initialized — wizard at /setup' : `✓ ${project.config?.name ?? project.id}`}`)
-  console.log(`[guildhall serve] Dashboard: http://localhost:${port}`)
+  console.log('[guildhall serve] Guildhall local service')
+  if (opts.preferredProjectPath ?? opts.projectPath) {
+    console.log(`[guildhall serve] Initial project: ${resolve(opts.preferredProjectPath ?? opts.projectPath ?? project.path)}`)
+  } else {
+    console.log('[guildhall serve] Initial project: Projects home')
+  }
+  console.log(`[guildhall serve] Selected project: ${project.path}`)
+  console.log(`[guildhall serve] ${project.initializationNeeded ? '⚠ Foreground project not initialized — wizard at /setup' : `✓ ${project.config?.name ?? project.id}`}`)
+  console.log(`[guildhall serve] URL: http://localhost:${port}`)
+  console.log(`[guildhall serve] PID: ${process.pid}`)
+  // Heads-up to any humans: Node loaded the dist into memory at startup.
+  // Subsequent rebuilds need a kill+restart to take effect. The web app
+  // surfaces this as a banner via /api/build-info — this line just makes
+  // the same fact visible from the terminal.
+  try {
+    const here = dirname(fileURLToPath(import.meta.url))
+    const distEntry = [join(here, 'cli.js'), join(here, '..', 'cli.js')].find(p => existsSync(p))
+    if (distEntry) {
+      const mtime = statSync(distEntry).mtimeMs
+      console.log(`[guildhall serve] Loaded build: ${new Date(mtime).toISOString()}  (${distEntry})`)
+      console.log(`[guildhall serve] Rebuild → restart required (kill ${process.pid} + re-run).`)
+    }
+  } catch {
+    /* non-fatal */
+  }
   console.log(`[guildhall serve] Press Ctrl+C to stop.`)
   console.log()
 
   const server = serve({ fetch: app.fetch, port }, info => {
     console.log(`[guildhall serve] ✓ Running at http://localhost:${info.port}`)
+    if (opts.serviceStatePath) {
+      try {
+        mkdirSync(dirname(opts.serviceStatePath), { recursive: true })
+        writeFileSync(opts.serviceStatePath, JSON.stringify({
+          pid: process.pid,
+          port: info.port,
+          url: `http://localhost:${info.port}`,
+          startedAt: new Date().toISOString(),
+        }, null, 2))
+      } catch {
+        /* non-fatal */
+      }
+    }
   })
 
   // FR-28 / AC-19: cooperative shutdown. SIGINT (Ctrl+C) and SIGTERM both
@@ -2089,17 +4712,30 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   // exit 0. Handlers are idempotent — the shuttingDown flag avoids the
   // "Ctrl+C twice" hard-exit being interpreted as a regression.
   let shuttingDown = false
+  const removeServiceStateIfOwned = async (): Promise<void> => {
+    if (!opts.serviceStatePath) return
+    try {
+      const raw = await fsp.readFile(opts.serviceStatePath, 'utf8').catch(() => null)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as { pid?: unknown }
+      if (parsed.pid !== process.pid) return
+      await fsp.rm(opts.serviceStatePath, { force: true })
+    } catch {
+      /* non-fatal */
+    }
+  }
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
     if (shuttingDown) return
     shuttingDown = true
-    console.log(`\n[guildhall serve] ${signal} received — draining…`)
+    console.log(`\n[guildhall serve] Guildhall is shutting down... (${signal})`)
     try {
       await supervisor.stopAll({ reason: `signal:${signal}` })
     } catch (err) {
       console.warn(`[guildhall serve] stopAll error: ${err instanceof Error ? err.message : String(err)}`)
     }
+    await removeServiceStateIfOwned()
     await new Promise<void>(resolve => server.close(() => resolve()))
-    console.log('[guildhall serve] shutdown complete')
+    console.log('[guildhall serve] Shutdown complete.')
     process.exit(0)
   }
   process.on('SIGINT', () => { void shutdown('SIGINT') })
@@ -2122,6 +4758,14 @@ const WEB_DIR = (() => {
   return resolve(here, '..', '..', 'dist', 'web')
 })()
 
+const WEB_ASSET_VERSION = (() => {
+  try {
+    return String(Math.floor(statSync(join(WEB_DIR, 'app.js')).mtimeMs))
+  } catch {
+    return 'dev'
+  }
+})()
+
 async function serveWebAsset(
   c: Context,
   filename: string,
@@ -2133,7 +4777,11 @@ async function serveWebAsset(
   }
   const body = await fsp.readFile(path)
   return new Response(body, {
-    headers: { 'content-type': contentType, 'cache-control': 'no-cache' },
+    headers: {
+      'content-type': contentType,
+      'cache-control': 'no-store, no-cache, must-revalidate',
+      pragma: 'no-cache',
+    },
   })
 }
 
@@ -2148,7 +4796,7 @@ function dashboardHtml(): string {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Guildhall</title>
-  <link rel="stylesheet" href="/web/app.css" />
+  <link rel="stylesheet" href="/web/app.css?v=${WEB_ASSET_VERSION}" />
 </head>
 <body>
   <div id="svelte-root"></div>
@@ -2157,7 +4805,7 @@ function dashboardHtml(): string {
       Guildhall requires JavaScript. Enable it and reload.
     </p>
   </noscript>
-  <script type="module" src="/web/app.js"></script>
+  <script type="module" src="/web/app.js?v=${WEB_ASSET_VERSION}"></script>
 </body>
 </html>`
 }

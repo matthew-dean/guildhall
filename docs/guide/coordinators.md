@@ -1,63 +1,61 @@
 ---
-title: Coordinators & domains
+title: Internal routing
+help_topic: guide.coordinators
+help_summary: |
+  Guildhall keeps one coordinating layer. It infers and stores internal routing
+  slices so tasks can get the right context and review lenses without making
+  the user manage a steward roster.
 ---
 
-# Coordinators & domains
+# Internal routing
 
-A **coordinator** owns a **domain** — a named slice of the project. Tasks belong to exactly one domain, and the coordinator for that domain decides whether tasks advance.
+Guildhall has **one coordinator on the user's system**. That coordinator uses
+an internal routing map to decide:
 
-## Defining a coordinator
+- what kind of task this is
+- what code or repo slice it belongs to
+- what context to gather
+- which review lenses matter
 
-Coordinators live under `coordinators:` in `guildhall.yaml`:
+This routing map is an implementation detail, not the main thing the user is
+supposed to manage.
 
-```yaml
-coordinators:
-  - id: ui
-    name: UI Coordinator
-    domain: ui
-    path: packages/ui         # relative to projectPath
-    mandate: |
-      The UI package is a stack-agnostic component library. Components must be
-      generic, accessible (WCAG 2.1 AA), and documented with a contract README
-      and story.
-    concerns:
-      - id: accessibility
-        description: All components must meet WCAG 2.1 AA.
-        reviewQuestions:
-          - Is this component keyboard-navigable?
-          - Are appropriate ARIA roles and attributes present?
-      - id: api-genericity
-        description: Component APIs must be domain-neutral.
-        reviewQuestions:
-          - Does this API reference any app-specific concepts?
-    autonomousDecisions:
-      - Approve minor spec revisions that do not change scope
-      - Decide API naming for new primitives
-    escalationTriggers:
-      - Any change to the public token API surface
-      - Adding a new package to the monorepo
-```
+## What the routing map is for
 
-## What the coordinator does
+Guildhall still needs a stable way to tell:
 
-At every tick, for every task in its domain, the coordinator agent:
+- UI work from backend work
+- repo-root work from subproject work
+- release/setup work from product-task work
 
-1. Evaluates proposals (promote to `exploring`, defer, or reject).
-2. Reviews drafted specs (promote to `ready` or request revisions).
-3. Selects reviewer personas (guilds) to fan out to.
-4. Adjudicates reviewer disagreements according to [`reviewer_fanout_policy`](../levers/reviewer-fanout-policy).
-5. Decides completion approval per [`completion_approval`](../levers/completion-approval).
+So the runtime stores internal slices under the existing `coordinators:` key in
+`guildhall.yaml`. That key is historical. The important product truth is:
 
-## Autonomous decisions vs escalation triggers
+- users manage projects, tasks, and decisions
+- Guildhall manages routing and review structure underneath
 
-A coordinator will act alone within its listed `autonomousDecisions`. Anything that matches an `escalationTriggers` item raises an **escalation** in the inbox instead. This is the main way you define "don't do X without asking me."
+## How the map gets created
 
-## Meta-intake: generating coordinators
+For a new project, Guildhall should infer the routing map from repo evidence
+first. It should only stop to ask the user when:
 
-For a new project, run:
+1. confidence is low, and
+2. the consequence of being wrong is high enough to matter
 
-```bash
-guildhall meta-intake
-```
+That means the normal flow is:
 
-A meta-intake agent interviews you about the codebase, reads what it needs to read, and drafts coordinator definitions. Run `guildhall approve-meta-intake` to merge the draft into `guildhall.yaml`.
+1. inspect the repo
+2. infer the internal routing slices
+3. move on
+4. ask for confirmation only if a material ambiguity remains
+
+## What the user may still inspect
+
+Advanced users can still inspect the routing map in Settings/Facts to see:
+
+- which domain labels Guildhall is using
+- which paths those labels cover
+- what concerns and escalation triggers were inferred
+
+But that is there for transparency and debugging, not because Guildhall expects
+users to design its internal staffing model by hand.

@@ -1,7 +1,8 @@
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
-import { Task, TaskQueue, TaskStatus } from '@guildhall/core'
+import { AcceptanceCriteria, GateResult, Task, TaskQueue, TaskStatus, parseAcceptanceCriteriaFromSpec } from '@guildhall/core'
+import { atomicWriteText } from '@guildhall/sessions'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -51,9 +52,10 @@ export const readTasksTool = defineTool({
 
 const updateTaskInputSchema = z.object({
   tasksPath: TASKS_PATH_SCHEMA,
-  taskId: z.string(),
+  taskId: z.string().optional(),
+  title: z.string().optional(),
   status: TaskStatus.optional(),
-  assignedTo: z.string().optional(),
+  assignedTo: z.string().nullable().optional(),
   note: z
     .object({
       agentId: z.string(),
@@ -63,53 +65,275 @@ const updateTaskInputSchema = z.object({
     .optional(),
   blockReason: z.string().optional(),
   humanJudgment: z.string().optional(),
+  spec: z.string().optional(),
+  acceptanceCriteria: z.array(AcceptanceCriteria).optional(),
+  gateResults: z.array(GateResult).optional(),
   completedAt: z.string().optional(),
 })
 
 export type UpdateTaskInput = z.input<typeof updateTaskInputSchema>
 export interface UpdateTaskResult {
   success: boolean
+  taskId?: string
   error?: string
 }
 
-export async function updateTask(input: UpdateTaskInput): Promise<UpdateTaskResult> {
+function inferMetadataTaskId(metadata: Record<string, unknown> = {}): string | null {
+  const taskId = metadata['current_task_id']
+  return typeof taskId === 'string' && taskId.trim().length > 0 ? taskId.trim() : null
+}
+
+export async function updateTask(
+  input: UpdateTaskInput,
+  metadata: Record<string, unknown> = {},
+): Promise<UpdateTaskResult> {
   try {
     const raw = await fs.readFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))
-    const task = queue.tasks.find((t) => t.id === input.taskId)
-    if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+    const taskId = input.taskId ?? inferMetadataTaskId(metadata) ?? inferSingleActiveTaskId(queue)
+    if (!taskId) {
+      return {
+        success: false,
+        error: 'Missing taskId (or metadata.current_task_id) and could not infer a single active task',
+      }
+    }
+    const task = queue.tasks.find((t) => t.id === taskId)
+    if (!task) return { success: false, taskId, error: `Task ${taskId} not found` }
 
-    if (input.status) task.status = input.status
-    if (input.assignedTo !== undefined) task.assignedTo = input.assignedTo
-    if (input.blockReason !== undefined) task.blockReason = input.blockReason
-    if (input.humanJudgment !== undefined) task.humanJudgment = input.humanJudgment
-    if (input.completedAt !== undefined) task.completedAt = input.completedAt
+    if (!hasTaskMutation(input)) {
+      return {
+        success: false,
+        taskId,
+        error:
+          'No task mutation provided. Set at least one of title, status, assignedTo, note, blockReason, humanJudgment, spec, acceptanceCriteria, gateResults, or completedAt.',
+      }
+    }
+
+    if (input.title !== undefined) task.title = input.title
+    const explicitStatus = input.status ? TaskStatus.parse(input.status) : undefined
+    if (explicitStatus) task.status = explicitStatus
+    if (input.assignedTo !== undefined) {
+      if ((input.assignedTo ?? '').trim() === '') delete task.assignedTo
+      else task.assignedTo = input.assignedTo
+    }
+    if (input.blockReason !== undefined && input.blockReason.trim() !== '') task.blockReason = input.blockReason
+    if (input.humanJudgment !== undefined && input.humanJudgment.trim() !== '') task.humanJudgment = input.humanJudgment
+    if (input.spec !== undefined && input.spec.trim() !== '') {
+      task.spec = input.spec
+      if (input.title === undefined) {
+        const derivedTitle = deriveImportedTaskTitle(task)
+        if (derivedTitle) task.title = derivedTitle
+      }
+      if (task.acceptanceCriteria.length === 0) {
+        const derivedCriteria = parseAcceptanceCriteriaFromSpec(input.spec)
+        if (derivedCriteria.length > 0) task.acceptanceCriteria = derivedCriteria
+      }
+    }
+    if (
+      input.status === undefined &&
+      input.spec !== undefined &&
+      input.spec.trim() !== '' &&
+      task.status === 'exploring'
+    ) {
+      task.status = 'spec_review'
+    }
+    normalizeAssignmentForStatus(task, {
+      explicitAssignedTo: input.assignedTo !== undefined,
+      explicitStatus,
+    })
+    if (input.acceptanceCriteria !== undefined && input.acceptanceCriteria.length > 0) {
+      task.acceptanceCriteria = z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
+    }
+    if (input.gateResults !== undefined && input.gateResults.length > 0) {
+      task.gateResults = z.array(GateResult).parse(input.gateResults)
+    }
+    if (input.completedAt !== undefined && input.completedAt.trim() !== '') task.completedAt = input.completedAt
     if (input.note) {
       task.notes.push({ ...input.note, timestamp: new Date().toISOString() })
     }
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = new Date().toISOString()
 
-    await fs.writeFile(input.tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
-    return { success: true }
+    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    return { success: true, taskId }
   } catch (err) {
     return { success: false, error: String(err) }
   }
 }
 
+function normalizeAssignmentForStatus(
+  task: z.infer<typeof Task>,
+  opts: { explicitAssignedTo: boolean; explicitStatus?: z.infer<typeof TaskStatus> },
+): void {
+  if (opts.explicitAssignedTo) return
+
+  switch (task.status) {
+    case 'in_progress':
+      task.assignedTo = 'worker-agent'
+      return
+    case 'review':
+      task.assignedTo = 'reviewer-agent'
+      return
+    case 'gate_check':
+      task.assignedTo = 'gate-checker-agent'
+      return
+    case 'ready':
+    case 'spec_review':
+    case 'exploring':
+    case 'proposed':
+    case 'pending_pr':
+    case 'done':
+    case 'shelved':
+    case 'blocked':
+      if (opts.explicitStatus) delete task.assignedTo
+      return
+  }
+}
+
+function hasTaskMutation(input: UpdateTaskInput): boolean {
+  return input.title !== undefined ||
+    input.status !== undefined ||
+    input.assignedTo !== undefined ||
+    input.note !== undefined ||
+    input.blockReason !== undefined ||
+    input.humanJudgment !== undefined ||
+    input.spec !== undefined ||
+    input.acceptanceCriteria !== undefined ||
+    input.gateResults !== undefined ||
+    input.completedAt !== undefined
+}
+
+function inferSingleActiveTaskId(queue: z.infer<typeof TaskQueue>): string | null {
+  const candidates = queue.tasks.filter((t) =>
+    ['in_progress', 'review', 'gate_check', 'spec_review'].includes(t.status),
+  )
+  return candidates.length === 1 ? candidates[0]!.id : null
+}
+
+function deriveImportedTaskTitle(task: z.infer<typeof Task>): string | null {
+  const currentTitle = typeof task.title === 'string' ? task.title.trim() : ''
+  if (!looksLikeImportedFragmentTitle(currentTitle)) return null
+  const area = importedAreaLabel(task)
+  const summary = firstSpecSummaryLine(task.spec)
+  if (!area || !summary) return null
+  return `${area}: ${lowercaseFirst(summary.replace(/[.!?]+$/, '').trim())}`
+}
+
+function looksLikeImportedFragmentTitle(title: string): boolean {
+  if (!title) return false
+  return /\(deferred\)/i.test(title) || /^version diff view$/i.test(title.trim())
+}
+
+function importedAreaLabel(task: z.infer<typeof Task>): string | null {
+  const notes = Array.isArray(task.notes) ? task.notes : []
+  const importerNote = notes.find((note) =>
+    note?.role === 'importer' &&
+    (note?.agentId === 'workspace-importer' || note?.agentId === 'workspace-importer-agent'),
+  )
+  const content = typeof importerNote?.content === 'string' ? importerNote.content : ''
+  if (!content) return null
+  if (/[/\\]knit[/\\]/i.test(content)) return 'Knit'
+  if (/[/\\]looma[/\\]/i.test(content)) return 'Looma'
+  return null
+}
+
+function firstSpecSummaryLine(spec: string | undefined): string | null {
+  if (typeof spec !== 'string' || !spec.trim()) return null
+  const normalized = spec.replace(/^## Summary\s*/i, '').trim()
+  const summaryMatch = normalized.match(/^([\s\S]*?)(?:\n## |\n### |\Z)/i)
+  const summaryBlock = (summaryMatch?.[1] ?? normalized).trim()
+  if (!summaryBlock) return null
+  const firstParagraph = summaryBlock.split(/\n\s*\n/)[0]?.trim() ?? ''
+  if (!firstParagraph) return null
+  const singleLine = firstParagraph.replace(/\s+/g, ' ').trim()
+  if (!singleLine) return null
+  return (singleLine.match(/^(.+?[.!?])(?:\s|$)/)?.[1] ?? singleLine).trim()
+}
+
+function lowercaseFirst(value: string): string {
+  if (!value) return value
+  return value[0]!.toLowerCase() + value.slice(1)
+}
+
 export const updateTaskTool = defineTool({
   name: 'update-task',
   description:
-    "Update a task's status. Optionally add an agent note. Use this to transition tasks through the lifecycle.",
+    "Update a task's title, status, spec, acceptance criteria, assignment, or notes. Use this to transition tasks through the lifecycle.",
   inputSchema: updateTaskInputSchema,
-  jsonSchema: { type: 'object' },
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      tasksPath: { type: 'string', description: 'Absolute path to TASKS.json' },
+      taskId: { type: 'string', description: 'Task id. Omit only when exactly one task is active.' },
+      title: { type: 'string' },
+      status: {
+        type: 'string',
+        enum: [
+          'proposed',
+          'exploring',
+          'spec_review',
+          'ready',
+          'in_progress',
+          'review',
+          'gate_check',
+          'pending_pr',
+          'done',
+          'shelved',
+          'blocked',
+        ],
+      },
+      assignedTo: { type: 'string' },
+      note: {
+        type: 'object',
+        properties: {
+          agentId: { type: 'string' },
+          role: { type: 'string' },
+          content: { type: 'string' },
+        },
+        required: ['agentId', 'role', 'content'],
+      },
+      blockReason: { type: 'string' },
+      humanJudgment: { type: 'string' },
+      spec: { type: 'string' },
+      acceptanceCriteria: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            description: { type: 'string' },
+            verifiedBy: { type: 'string', enum: ['automated', 'review', 'human'] },
+            command: { type: 'string' },
+            met: { type: 'boolean' },
+          },
+          required: ['id', 'description', 'verifiedBy'],
+        },
+      },
+      gateResults: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            gateId: { type: 'string' },
+            type: { type: 'string', enum: ['hard', 'soft'] },
+            passed: { type: 'boolean' },
+            output: { type: 'string' },
+            checkedAt: { type: 'string', description: 'ISO timestamp when the gate ran' },
+          },
+          required: ['gateId', 'type', 'passed', 'checkedAt'],
+        },
+      },
+      completedAt: { type: 'string', description: 'ISO timestamp when the task completed' },
+    },
+    required: ['tasksPath'],
+  },
   isReadOnly: () => false,
-  execute: async (input) => {
-    const result = await updateTask(input)
+  execute: async (input, ctx) => {
+    const result = await updateTask(input, ctx.metadata ?? {})
     return {
       output: result.success
-        ? `Updated task ${input.taskId}`
-        : `Error updating task ${input.taskId}: ${result.error ?? 'unknown'}`,
+        ? `Updated task ${result.taskId ?? input.taskId ?? '(inferred task)'}`
+        : `Error updating task ${input.taskId ?? '(missing taskId)'}: ${result.error ?? 'unknown'}`,
       is_error: !result.success,
       metadata: result as unknown as Record<string, unknown>,
     }
@@ -140,7 +364,7 @@ export async function addTask(input: AddTaskInput): Promise<AddTaskResult> {
     })
     queue.tasks.push(newTask)
     queue.lastUpdated = new Date().toISOString()
-    await fs.writeFile(input.tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
     return { success: true, taskId: newTask.id }
   } catch (err) {
     return { success: false, error: String(err) }

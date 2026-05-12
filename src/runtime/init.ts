@@ -6,9 +6,13 @@ import {
   slugify,
   readWorkspaceConfig,
   writeWorkspaceConfig,
+  readGlobalConfig,
+  resolveModelsForProvider,
+  updateGlobalConfig,
+  writeModelsForProvider,
   FORGE_YAML_FILENAME,
 } from '@guildhall/config'
-import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
+import { MODEL_CATALOG, DEFAULT_LOCAL_MODEL_ASSIGNMENT, type ModelAssignmentConfig } from '@guildhall/core'
 
 // ---------------------------------------------------------------------------
 // guildhall init / guildhall config — interactive setup wizard
@@ -74,18 +78,29 @@ export async function runInit(opts: InitOptions): Promise<void> {
   console.log('━━━ Model Configuration ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
   console.log()
 
-  const modelStrategy = await select({
+  const modelScope = await select({
+    message: 'Model assignments:',
+    choices: [
+      { name: 'Use global defaults from ~/.guildhall/config.yaml', value: 'global-default' },
+      { name: 'Set global defaults for this machine', value: 'global' },
+      { name: 'Override only this workspace', value: 'workspace' },
+    ],
+    default: 'global-default',
+  })
+
+  let models: Partial<ModelAssignmentConfig> | undefined
+
+  const modelStrategy = modelScope === 'global-default' ? 'skip' : await select({
     message: 'How are you running your LLMs?',
     choices: [
-      { name: 'LM Studio (local models — recommended for privacy)', value: 'local' },
+      { name: 'Local OpenAI-compatible server (for example LM Studio)', value: 'local' },
       { name: 'Mix: local workers, cloud reasoning (spec/coordinator)', value: 'mixed' },
       { name: 'Cloud only (Anthropic or OpenAI)', value: 'cloud' },
-      { name: 'Skip — use built-in defaults, configure guildhall.yaml later', value: 'skip' },
     ],
     default: 'local',
   })
 
-  const models: Record<string, string> = { ...DEFAULT_LOCAL_MODEL_ASSIGNMENT }
+  const selectedModels: ModelAssignmentConfig = { ...DEFAULT_LOCAL_MODEL_ASSIGNMENT }
 
   if (modelStrategy !== 'skip') {
     const localChoices = MODEL_CATALOG
@@ -102,15 +117,15 @@ export async function runInit(opts: InitOptions): Promise<void> {
         choices: localChoices,
         default: DEFAULT_LOCAL_MODEL_ASSIGNMENT.worker,
       })
-      models['worker'] = workerModel
+      selectedModels.worker = workerModel
 
       const reviewerModel = await select({
         message: 'Reviewer / gate-checker model (fast evaluation):',
         choices: localChoices,
         default: DEFAULT_LOCAL_MODEL_ASSIGNMENT.reviewer,
       })
-      models['reviewer'] = reviewerModel
-      models['gateChecker'] = reviewerModel
+      selectedModels.reviewer = reviewerModel
+      selectedModels.gateChecker = reviewerModel
     }
 
     if (modelStrategy === 'mixed') {
@@ -119,8 +134,8 @@ export async function runInit(opts: InitOptions): Promise<void> {
         choices: [...cloudChoices, ...localChoices],
         default: 'claude-sonnet-4-6',
       })
-      models['spec'] = reasoningModel
-      models['coordinator'] = reasoningModel
+      selectedModels.spec = reasoningModel
+      selectedModels.coordinator = reasoningModel
     }
 
     if (modelStrategy === 'cloud') {
@@ -129,18 +144,19 @@ export async function runInit(opts: InitOptions): Promise<void> {
         choices: cloudChoices,
         default: 'claude-sonnet-4-6',
       })
-      models['spec'] = primaryModel
-      models['coordinator'] = primaryModel
-      models['worker'] = primaryModel
+      selectedModels.spec = primaryModel
+      selectedModels.coordinator = primaryModel
+      selectedModels.worker = primaryModel
 
       const fastModel = await select({
         message: 'Fast model for reviewer + gate-checker:',
         choices: cloudChoices,
         default: 'claude-haiku-4-5',
       })
-      models['reviewer'] = fastModel
-      models['gateChecker'] = fastModel
+      selectedModels.reviewer = fastModel
+      selectedModels.gateChecker = fastModel
     }
+    models = selectedModels
   }
 
   // -------------------------------------------------------------------------
@@ -153,7 +169,6 @@ export async function runInit(opts: InitOptions): Promise<void> {
 
   type CoordEntry = {
     id: string
-    name: string
     domain: string
     path?: string | undefined
     mandate: string
@@ -175,14 +190,9 @@ export async function runInit(opts: InitOptions): Promise<void> {
     let addAnother = true
     while (addAnother) {
       console.log()
-      const coordName = await input({
-        message: 'Coordinator display name (e.g. "Looma Coordinator"):',
-        validate: (v: string) => v.trim().length > 0 || 'Name is required',
-      })
-
       const coordDomain = await input({
         message: 'Domain ID for task routing (e.g. "looma"):',
-        default: slugify(coordName),
+        default: '',
         validate: (v: string) => /^[a-z0-9-]+$/.test(v) || 'Use lowercase letters, numbers, dashes',
       })
 
@@ -193,12 +203,11 @@ export async function runInit(opts: InitOptions): Promise<void> {
 
       const mandate = await input({
         message: 'One-line mandate (what does this coordinator oversee?):',
-        default: `Coordinate work for the ${coordName} domain.`,
+        default: `Coordinate work for the ${coordDomain} domain.`,
       })
 
       coordinators.push({
         id: coordDomain,
-        name: coordName,
         domain: coordDomain,
         ...(coordPath.trim() ? { path: coordPath.trim() } : {}),
         mandate,
@@ -207,7 +216,7 @@ export async function runInit(opts: InitOptions): Promise<void> {
         escalationTriggers: ['Any change to a public API surface', 'Unresolvable disagreement between agents'],
       })
 
-      console.log(`  ✓ Added: ${coordName}`)
+      console.log(`  ✓ Added: ${coordDomain}`)
 
       addAnother = await confirm({ message: 'Add another coordinator?', default: false })
     }
@@ -249,9 +258,17 @@ export async function runInit(opts: InitOptions): Promise<void> {
   console.log(`  ID:           ${id}`)
   console.log(`  Directory:    ${absPath}`)
   if (projectPath) console.log(`  Project:      ${projectPath}`)
-  console.log(`  Coordinators: ${coordinators.length > 0 ? coordinators.map(c => c.name).join(', ') : 'none'}`)
-  console.log(`  Worker:       ${models['worker']}`)
-  console.log(`  Spec:         ${models['spec']}`)
+  console.log(`  Coordinators: ${coordinators.length > 0 ? coordinators.map(c => c.domain).join(', ') : 'none'}`)
+  if (modelScope === 'global-default') {
+    const globalModels = resolveModelsForProvider(readGlobalConfig().models)
+    console.log(`  Models:       global defaults`)
+    console.log(`  Worker:       ${globalModels.worker ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.worker}`)
+    console.log(`  Spec:         ${globalModels.spec ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.spec}`)
+  } else {
+    console.log(`  Models:       ${modelScope === 'global' ? 'write global defaults' : 'workspace override'}`)
+    console.log(`  Worker:       ${models?.worker ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.worker}`)
+    console.log(`  Spec:         ${models?.spec ?? DEFAULT_LOCAL_MODEL_ASSIGNMENT.spec}`)
+  }
   console.log()
 
   const go = await confirm({
@@ -271,12 +288,23 @@ export async function runInit(opts: InitOptions): Promise<void> {
     name,
     id,
     ...(projectPath ? { projectPath } : {}),
-    models,
+    ...(modelScope === 'workspace' && models ? { models } : {}),
     coordinators,
     maxRevisions,
     heartbeatInterval,
     ignore: existing?.ignore ?? ['node_modules', 'dist', '.git', 'coverage'],
     tags: existing?.tags ?? [],
+  }
+
+  if (modelScope === 'global' && models) {
+    const global = readGlobalConfig()
+    updateGlobalConfig({
+      ...global,
+      models: writeModelsForProvider(global.models, undefined, {
+        ...resolveModelsForProvider(global.models),
+        ...models,
+      }),
+    })
   }
 
   if (hasExisting) {

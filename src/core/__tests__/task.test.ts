@@ -3,7 +3,7 @@ import { Task, TaskQueue, TaskStatus, TaskPriority, AcceptanceCriteria } from '.
 
 describe('TaskStatus', () => {
   it('accepts all valid statuses', () => {
-    const statuses = ['exploring', 'spec_review', 'ready', 'in_progress', 'review', 'gate_check', 'done', 'blocked']
+    const statuses = ['import_draft', 'exploring', 'spec_review', 'ready', 'in_progress', 'review', 'gate_check', 'done', 'blocked']
     for (const s of statuses) {
       expect(TaskStatus.parse(s)).toBe(s)
     }
@@ -11,6 +11,10 @@ describe('TaskStatus', () => {
 
   it('rejects unknown status', () => {
     expect(() => TaskStatus.parse('unknown')).toThrow()
+  })
+
+  it('normalizes legacy pending status to ready', () => {
+    expect(TaskStatus.parse('pending')).toBe('ready')
   })
 })
 
@@ -40,6 +44,11 @@ describe('Task', () => {
     expect(result.revisionCount).toBe(0)
   })
 
+  it('normalizes legacy pending tasks to ready', () => {
+    const result = Task.parse({ ...validTask, status: 'pending' })
+    expect(result.status).toBe('ready')
+  })
+
   it('applies default priority of normal', () => {
     const { priority, ...withoutPriority } = validTask
     const result = Task.parse(withoutPriority)
@@ -66,6 +75,15 @@ describe('Task', () => {
     expect(result.spec).toContain('Ghost variant')
     expect(result.completedAt).toBeDefined()
   })
+
+  it('normalizes legacy null blockReason to undefined', () => {
+    const result = Task.parse({
+      ...validTask,
+      status: 'ready',
+      blockReason: null,
+    })
+    expect(result.blockReason).toBeUndefined()
+  })
 })
 
 describe('AcceptanceCriteria', () => {
@@ -89,6 +107,25 @@ describe('AcceptanceCriteria', () => {
       command: 'pnpm build',
     })
     expect(result.command).toBe('pnpm build')
+  })
+
+  it('normalizes command-like verifiedBy values from agent-written criteria', () => {
+    const result = AcceptanceCriteria.parse({
+      id: 'ac-1',
+      description: 'Tests pass',
+      verifiedBy: 'vitest run',
+    })
+    expect(result.verifiedBy).toBe('automated')
+    expect(result.command).toBe('vitest run')
+  })
+
+  it('normalizes unknown non-command verifiedBy values to reviewer judgment', () => {
+    const result = AcceptanceCriteria.parse({
+      id: 'ac-1',
+      description: 'Copy reads clearly',
+      verifiedBy: 'copywriter',
+    })
+    expect(result.verifiedBy).toBe('review')
   })
 })
 

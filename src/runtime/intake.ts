@@ -1,10 +1,12 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { TaskQueue, type Task, type TaskStatus } from '@guildhall/core'
+import { atomicWriteText } from '@guildhall/sessions'
 import {
   appendExploringTranscript,
   resolveEscalation,
 } from '@guildhall/tools'
+import { normalizeImportedDraftTask, promoteImportDraftToExploring } from './import-drafts.js'
 
 // ---------------------------------------------------------------------------
 // FR-12: exploratory task intake.
@@ -30,14 +32,15 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
   // The bootstrap seeds TASKS.json as a bare `[]` for legacy reasons, so be
   // permissive on intake: if we see a bare array, promote it to a full queue.
   const parsed = JSON.parse(raw)
-  if (Array.isArray(parsed)) {
-    return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-  }
-  return TaskQueue.parse(parsed)
+  const queue = Array.isArray(parsed)
+    ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+    : TaskQueue.parse(parsed)
+  for (const task of queue.tasks) normalizeImportedDraftTask(task)
+  return queue
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  await fs.writeFile(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2), 'utf-8')
+  atomicWriteText(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2) + '\n')
 }
 
 function nextTaskId(queue: TaskQueue): string {
@@ -138,17 +141,17 @@ export interface ApproveSpecResult {
 }
 
 /**
- * Mark a task's spec as approved by the human. Transitions `exploring` →
- * `spec_review`, where the domain coordinator picks it up next.
+ * Mark a task's spec as approved by the human. Transitions `spec_review` →
+ * `ready`, where the domain coordinator can assign a worker.
  */
 export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecResult> {
   const queue = await readQueue(input.memoryDir)
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
-  if (task.status !== 'exploring') {
+  if (task.status !== 'spec_review') {
     return {
       success: false,
-      error: `Task ${input.taskId} is in status '${task.status}', expected 'exploring'`,
+      error: `Task ${input.taskId} is in status '${task.status}', expected 'spec_review'`,
     }
   }
   if (!task.spec || task.spec.trim().length === 0) {
@@ -159,7 +162,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
   }
 
   const now = new Date().toISOString()
-  task.status = 'spec_review'
+  task.status = 'ready'
   task.updatedAt = now
   queue.lastUpdated = now
 
@@ -180,10 +183,10 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     role: 'system',
     content: input.approvalNote
       ? `Spec approved by human. Note: ${input.approvalNote}`
-      : 'Spec approved by human. Task advanced to spec_review.',
+      : 'Spec approved by human. Task advanced to ready.',
   })
 
-  return { success: true, newStatus: 'spec_review' }
+  return { success: true, newStatus: 'ready' }
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +293,34 @@ export interface ResumeExploringInput {
   resolution?: string
   /** The next human message to inject into the transcript */
   message?: string
+  /**
+   * For an already-dispatched task, a Thread reply is a steering note for the
+   * current worker/reviewer. It should not reopen spec intake.
+   */
+  preserveStatus?: boolean | undefined
+}
+
+export interface RerunTaskStageInput {
+  memoryDir: string
+  taskId: string
+  stage: 'spec' | 'review' | 'gate'
+}
+
+export interface RerunTaskStageResult {
+  success: boolean
+  newStatus?: TaskStatus
+  error?: string
+}
+
+export interface ShapeImportDraftInput {
+  memoryDir: string
+  taskId: string
+}
+
+export interface ShapeImportDraftResult {
+  success: boolean
+  newStatus?: TaskStatus
+  error?: string
 }
 
 /**
@@ -302,6 +333,9 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
   const queue = await readQueue(input.memoryDir)
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+  if (task.status === 'done' || task.status === 'shelved') {
+    return { success: false, error: `Task ${input.taskId} is ${task.status}` }
+  }
 
   if (input.resolveEscalationId) {
     const result = await resolveEscalation({
@@ -316,7 +350,20 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
     if (!result.success) return { success: false, error: result.error ?? 'unknown' }
   }
 
-  if (input.message) {
+  if (input.message && input.preserveStatus) {
+    task.notes.push({
+      agentId: 'human',
+      role: 'human',
+      content: input.message,
+      timestamp: new Date().toISOString(),
+    })
+    await appendExploringTranscript({
+      memoryDir: input.memoryDir,
+      taskId: task.id,
+      role: 'user',
+      content: input.message,
+    })
+  } else if (input.message) {
     await appendExploringTranscript({
       memoryDir: input.memoryDir,
       taskId: task.id,
@@ -325,5 +372,119 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
     })
   }
 
+  if (input.message && !input.preserveStatus && task.status !== 'blocked') {
+    task.status = 'exploring'
+    task.updatedAt = new Date().toISOString()
+    queue.lastUpdated = task.updatedAt
+    await writeQueue(input.memoryDir, queue)
+  } else if (input.message && input.preserveStatus) {
+    task.updatedAt = new Date().toISOString()
+    queue.lastUpdated = task.updatedAt
+    await writeQueue(input.memoryDir, queue)
+  }
+
   return { success: true }
+}
+
+export async function shapeImportDraft(
+  input: ShapeImportDraftInput,
+): Promise<ShapeImportDraftResult> {
+  const queue = await readQueue(input.memoryDir)
+  const task = queue.tasks.find((t) => t.id === input.taskId)
+  if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+  if (task.status === 'done' || task.status === 'shelved' || task.status === 'blocked') {
+    return { success: false, error: `Task ${input.taskId} is ${task.status}` }
+  }
+  if (task.status !== 'import_draft') {
+    return {
+      success: false,
+      error: `Task ${input.taskId} is in status '${task.status}', expected 'import_draft'`,
+    }
+  }
+
+  await promoteImportDraftToExploring(task, input.memoryDir)
+  queue.lastUpdated = task.updatedAt ?? new Date().toISOString()
+  await writeQueue(input.memoryDir, queue)
+  return { success: true, newStatus: 'exploring' }
+}
+
+export async function rerunTaskStage(
+  input: RerunTaskStageInput,
+): Promise<RerunTaskStageResult> {
+  const queue = await readQueue(input.memoryDir)
+  const task = queue.tasks.find((t) => t.id === input.taskId)
+  if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+  if (task.status === 'done' || task.status === 'shelved' || task.status === 'blocked') {
+    return { success: false, error: `Task ${input.taskId} is ${task.status}` }
+  }
+
+  const now = new Date().toISOString()
+
+  if (input.stage === 'spec') {
+    if (task.id === 'task-meta-intake' || task.id === 'task-workspace-import') {
+      return {
+        success: false,
+        error: 'Reserved setup tasks have their own rerun controls.',
+      }
+    }
+    task.status = 'exploring'
+    task.assignedTo = null
+    task.updatedAt = now
+    queue.lastUpdated = now
+    task.notes.push({
+      agentId: 'human',
+      role: 'human',
+      content: 'Human requested a fresh spec pass from the current project reality.',
+      timestamp: now,
+    })
+    await writeQueue(input.memoryDir, queue)
+    await appendExploringTranscript({
+      memoryDir: input.memoryDir,
+      taskId: task.id,
+      role: 'system',
+      content:
+        'Human requested a fresh spec pass. Re-read the task, update the brief/spec from current project reality, and ask only the minimum clarifying questions needed.',
+    })
+    return { success: true, newStatus: 'exploring' }
+  }
+
+  if (input.stage === 'review') {
+    if (!['review', 'gate_check'].includes(task.status)) {
+      return {
+        success: false,
+        error: `Task ${input.taskId} is in status '${task.status}', expected 'review' or 'gate_check'`,
+      }
+    }
+    task.status = 'review'
+    task.assignedTo = 'reviewer-agent'
+    task.updatedAt = now
+    queue.lastUpdated = now
+    task.notes.push({
+      agentId: 'human',
+      role: 'human',
+      content: 'Human requested a fresh review pass.',
+      timestamp: now,
+    })
+    await writeQueue(input.memoryDir, queue)
+    return { success: true, newStatus: 'review' }
+  }
+
+  if (task.status !== 'gate_check') {
+    return {
+      success: false,
+      error: `Task ${input.taskId} is in status '${task.status}', expected 'gate_check'`,
+    }
+  }
+  task.status = 'gate_check'
+  task.assignedTo = 'gate-checker-agent'
+  task.updatedAt = now
+  queue.lastUpdated = now
+  task.notes.push({
+    agentId: 'human',
+    role: 'human',
+    content: 'Human requested a fresh gate-check pass.',
+    timestamp: now,
+  })
+  await writeQueue(input.memoryDir, queue)
+  return { success: true, newStatus: 'gate_check' }
 }

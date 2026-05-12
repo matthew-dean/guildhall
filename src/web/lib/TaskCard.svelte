@@ -4,8 +4,12 @@
   /task/:id and lets Router swap the drawer on).
 -->
 <script lang="ts">
-  import { nav } from './nav.svelte.js'
+  import { nav, path } from './nav.svelte.js'
+  import { currentTaskHref } from './project-routes.js'
   import Icon, { type IconName } from './Icon.svelte'
+  import StatusLight from './StatusLight.svelte'
+  import { friendlyDomain, friendlyStatus } from './display.js'
+  import { activeEscalations } from './escalation.js'
   import type { TaskLite } from './types.js'
 
   const ACTIVE_STATUSES = new Set([
@@ -13,50 +17,116 @@
     'review',
     'gate_check',
     'exploring',
-    'spec_review',
   ])
 
   type StatusTone = 'danger' | 'warn' | 'ok' | 'accent' | 'neutral'
+  interface TaskCardSummary {
+    label: string
+    text: string
+  }
 
   interface Props {
     task: TaskLite
-    orchestratorRunning?: boolean
+    coordinatorRunning?: boolean
+    displayStatusLabel?: string
+    displayStatusTone?: StatusTone
+    displayStatusIcon?: IconName
   }
 
-  let { task, orchestratorRunning = false }: Props = $props()
+  let {
+    task,
+    coordinatorRunning = false,
+    displayStatusLabel,
+    displayStatusTone,
+    displayStatusIcon,
+  }: Props = $props()
 
   const status = $derived(task.status ?? 'unknown')
+  const statusLabel = $derived(displayStatusLabel ?? friendlyStatus(status))
   const isQueued = $derived(ACTIVE_STATUSES.has(status))
-  const isActive = $derived(isQueued && orchestratorRunning)
+  const isActive = $derived(isQueued && coordinatorRunning)
   const prio = $derived(task.priority && task.priority !== 'normal' ? task.priority : '')
+  const domainLabel = $derived(friendlyDomain(task.domain))
   const hasEscalations = $derived(
-    Array.isArray(task.escalations) && task.escalations.some(e => !e.resolvedAt),
+    activeEscalations(task).length > 0,
   )
+  const reviewerBlurb = $derived.by(() => {
+    const raw = typeof task.latestReviewerSummary === 'string' ? task.latestReviewerSummary : ''
+    if (!raw) return ''
+    const cleaned = raw
+      .replace(/\*\*/g, '')
+      .replace(/^#+\s*/gm, '')
+      .replace(/^- /gm, '')
+      .replace(/\n+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!cleaned) return ''
+    return cleaned.length > 180 ? `${cleaned.slice(0, 177).trimEnd()}...` : cleaned
+  })
+  const checkpointBlurb = $derived.by(() => {
+    const next = typeof task.latestCheckpoint?.nextPlannedAction === 'string'
+      ? task.latestCheckpoint.nextPlannedAction.trim()
+      : ''
+    if (!next) return ''
+    return next.length > 140 ? `${next.slice(0, 137).trimEnd()}...` : next
+  })
+  const terminalHeadline = $derived.by(() => {
+    const raw = typeof task.terminalSummary?.headline === 'string'
+      ? task.terminalSummary.headline.trim()
+      : ''
+    if (!raw) return ''
+    return raw.length > 140 ? `${raw.slice(0, 137).trimEnd()}...` : raw
+  })
+  const terminalDetail = $derived.by(() => {
+    const raw = typeof task.terminalSummary?.detail === 'string'
+      ? task.terminalSummary.detail.trim()
+      : ''
+    if (!raw) return ''
+    return raw.length > 140 ? `${raw.slice(0, 137).trimEnd()}...` : raw
+  })
+  const summary = $derived.by<TaskCardSummary | null>(() => {
+    if (
+      reviewerBlurb &&
+      (task.revisionCount ?? 0) > 0 &&
+      ['review', 'gate_check', 'blocked'].includes(status)
+    ) return { label: 'Latest review', text: reviewerBlurb }
+    if (checkpointBlurb && status === 'in_progress') return { label: 'Next', text: checkpointBlurb }
+    if (terminalHeadline && ['done', 'pending_pr'].includes(status)) {
+      return {
+        label: 'Outcome',
+        text: terminalDetail ? `${terminalHeadline} ${terminalDetail}` : terminalHeadline,
+      }
+    }
+    return null
+  })
 
   const statusTone = $derived<StatusTone>(
-    status === 'blocked'
-      ? 'danger'
-      : status === 'shelved'
-        ? 'warn'
-        : status === 'done'
-          ? 'ok'
-          : isActive
-            ? 'accent'
-            : 'neutral',
+    displayStatusTone ??
+      (status === 'blocked'
+        ? 'danger'
+        : status === 'shelved'
+          ? 'warn'
+          : status === 'pending_pr'
+            ? 'warn'
+          : status === 'done'
+            ? 'ok'
+            : isActive
+              ? 'accent'
+              : 'neutral'),
   )
 
   const statusIcon = $derived<IconName>(
-    status === 'blocked'
+    displayStatusIcon ?? (status === 'blocked'
       ? 'alert-triangle'
       : status === 'done'
         ? 'check-circle-2'
         : isActive
           ? 'loader'
-          : 'circle',
+          : 'circle'),
   )
 
   function open() {
-    nav('/task/' + encodeURIComponent(task.id))
+    nav(currentTaskHref(task.id), { backgroundPath: path.value })
   }
 
   function onKey(e: KeyboardEvent) {
@@ -65,6 +135,7 @@
       open()
     }
   }
+
 </script>
 
 <div
@@ -78,28 +149,36 @@
 >
   <div class="tc-head">
     <span class="tc-status chip-{statusTone}" class:chip-loud={status === 'blocked'}>
-      <Icon name={statusIcon} size={12} spin={statusIcon === 'loader'} />
-      <span>{status}</span>
+      {#if isActive}
+        <StatusLight pulse />
+      {:else}
+        <Icon name={statusIcon} size={12} />
+      {/if}
+      <span>{statusLabel}</span>
     </span>
-    {#if isQueued && !orchestratorRunning}
-      <span class="tc-queued" title="Queued — orchestrator is stopped">paused</span>
+    {#if isQueued && !coordinatorRunning}
+      <span class="tc-queued" title="Queued — coordinator is stopped">paused</span>
     {/if}
     {#if hasEscalations}
       <span class="tc-flag" title="Open escalation">
         <Icon name="alert-triangle" size={12} />
       </span>
     {/if}
-    <span class="grow"></span>
-    <span class="tc-id">{task.id}</span>
   </div>
   <div class="tc-title">{task.title ?? '(untitled)'}</div>
   <div class="tc-meta">
-    {#if task.domain}<span>{task.domain}</span>{/if}
+    {#if domainLabel}<span>{domainLabel}</span>{/if}
     {#if prio}<span>· {prio}</span>{/if}
     {#if (task.revisionCount ?? 0) > 0}
       <span class="tc-rev">r{task.revisionCount}</span>
     {/if}
   </div>
+  {#if summary}
+    <div class="tc-summary">
+      <span class="tc-summary-label">{summary.label}:</span>
+      <span>{summary.text}</span>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -128,10 +207,12 @@
     background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised));
   }
   .st-done {
-    opacity: 0.6;
+    background: color-mix(in srgb, var(--accent-2) 6%, var(--bg-raised));
+    border-color: color-mix(in srgb, var(--accent-2) 24%, var(--border-strong));
   }
   .st-shelved {
-    opacity: 0.6;
+    background: color-mix(in srgb, var(--warn) 6%, var(--bg-raised));
+    border-color: color-mix(in srgb, var(--warn) 24%, var(--border-strong));
   }
   .st-blocked-bold {
     background: color-mix(in srgb, var(--danger) 8%, var(--bg-raised));
@@ -176,17 +257,6 @@
     font-weight: 800;
     box-shadow: 0 0 0 1px var(--danger);
   }
-  .grow {
-    flex: 1;
-  }
-  .tc-id {
-    font-family: 'SF Mono', monospace;
-    text-transform: none;
-    letter-spacing: 0;
-    font-weight: 400;
-    color: var(--text-muted);
-    font-size: var(--fs-0);
-  }
   .tc-queued {
     color: var(--warn);
     text-transform: none;
@@ -209,6 +279,36 @@
     display: flex;
     gap: var(--s-2);
     align-items: center;
+  }
+  .tc-summary {
+    font-size: var(--fs-1);
+    color: color-mix(in srgb, var(--text) 78%, var(--text-muted));
+    line-height: var(--lh-body);
+    display: grid;
+    gap: 2px;
+    overflow: hidden;
+  }
+  .tc-summary > span:last-child {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+    word-break: break-word;
+  }
+  .tc-summary-label {
+    font-size: var(--fs-0);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+    color: var(--text-dim);
+  }
+  .st-done .tc-title,
+  .st-shelved .tc-title {
+    color: color-mix(in srgb, var(--text) 88%, var(--text-muted));
+  }
+  .st-done .tc-meta,
+  .st-shelved .tc-meta {
+    color: color-mix(in srgb, var(--text-muted) 88%, var(--text-dim));
   }
   .tc-rev {
     font-family: 'SF Mono', monospace;

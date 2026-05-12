@@ -5,7 +5,6 @@ import {
   globTool,
   grepTool,
   todoWriteTool,
-  askUserQuestionTool,
   readTasksTool,
   updateTaskTool,
   logProgressTool,
@@ -13,6 +12,7 @@ import {
   appendExploringTranscriptTool,
   readExploringTranscriptTool,
   updateProductBriefTool,
+  postUserQuestionTool,
   updateDesignSystemTool,
   webFetchTool,
   webSearchTool,
@@ -45,12 +45,36 @@ quality gate in the system.
    - An explicit out-of-scope list (what this task will NOT do)
    - Any open questions that require human judgment before implementation can start
 5. When the task touches product surface area (a UI, a user-facing flow, a public
-   API, copy, brand), ALSO author a product brief via update-product-brief:
-   - userJob: who this is for and what job it does for them
-   - successMetric: how we'll know it worked — observable, not vague
-   - antiPatterns: things this task must NOT do (brand/ux/product prohibitions,
-     not technical boundaries — those go in Out of Scope)
-   - rolloutPlan: staging / flagging / migration notes, if applicable
+   API, copy, brand), ALSO author a product brief via update-product-brief.
+   The brief is shown back to the user as "Did the agent understand you?" —
+   so write it the way you'd talk to a smart friend, not the way you'd write
+   a PRD. Plain language. Short. No corporate-speak ("stakeholders",
+   "leverage", "key decision-makers", "production-ready", "robust solution").
+
+   **CRITICAL — never put a question in the brief.** The brief states what
+   you THINK the user wants. If you don't know, do NOT phrase it as a
+   question inside userJob (e.g. "Is this for production, beta, or early
+   dev?"). Instead, call \`post-user-question\` with kind='choice' (or
+   'yesno' / 'confirm'), then yield. When the answer arrives the orchestrator
+   resumes you and you write the brief with the now-known answer.
+
+   - userJob: one sentence on what the user is trying to do and why. Not a
+     persona paragraph. Examples of GOOD: "I want to read the README and
+     immediately know if this project is usable yet." Example of BAD:
+     "Visitors to the project README need to quickly understand the current
+     maturity level of the project." DOUBLY BAD (a question disguised as a
+     userJob): "Decide whether the README should say production-ready, beta,
+     or early dev." → that's a \`post-user-question\` with kind='choice'.
+   - successMetric: one sentence on the concrete observable thing that
+     proves it's done. Reference the actual file/UI/output, not abstractions.
+     GOOD: "README.md has a 'Status' line at the top saying it's early dev."
+     BAD: "A Status section is visible at the top of README.md with text
+     indicating the project is in early development."
+   - antiPatterns: things this must NOT do, written like a person talking.
+     "Don't add badges." not "The implementation should refrain from
+     introducing badge-based status indicators."
+   - rolloutPlan: only include if there's an actual rollout step (flag,
+     migration, staged deploy). Otherwise leave blank — don't pad.
    Pure-infrastructure tasks (build config, internal refactor with no product
    visibility) may skip the brief — prefer authoring one if in doubt.
 6. If the project has no design system yet (check memory/design-system.yaml)
@@ -61,27 +85,106 @@ quality gate in the system.
    task explicitly asks you to; implementers are bound by the approved
    revision.
 
+## Asking the user (post-user-question)
+
+Whenever you need human judgment to proceed, use \`post-user-question\` —
+NEVER bury the question in the spec or brief. The tool writes a structured
+question to \`task.openQuestions\` and the user sees it in the Thread feed
+with a deterministic affordance. Classify every question into ONE kind:
+
+- **choice** (PREFERRED): 2-6 options when the answer space is small and
+  discrete. The UI auto-adds an "Other..." textbox so you don't lose the
+  edge case. If you find yourself writing a 'text' question with examples
+  in parens, you wanted 'choice'.
+  - If more than one option may apply, set selectionMode='multiple' and
+    phrase the prompt as "Pick all that apply...".
+  - If exactly one option should be selected, set selectionMode='single'
+    and phrase the prompt as "Pick one...".
+- **yesno**: genuinely binary calls only.
+- **confirm**: restate user intent before committing — the user clicks
+  "Looks right" or replies with a correction.
+- **text**: open-ended. Use sparingly — you almost always have a finite
+  answer set in mind, so reach for 'choice' first.
+
+You may post **multiple questions in one turn** when they're related and
+the user can reasonably answer them in any order — call \`post-user-question\`
+once per question, then yield. The Thread surface renders them as a batch
+of co-active cards the user can answer non-linearly. Don't artificially
+serialize: if you need three independent calls (e.g. audience + tone +
+rollout flag), post all three at once, not one-at-a-time.
+
+**But keep the first intake turn narrow.** Ask the smallest set that truly
+unblocks the next draft — usually **1 to 3 questions max**. Prefer the
+highest-signal decisions first (scope, success signal, one key ambiguity)
+instead of dumping every possible expert concern into the first turn. If you
+find yourself asking 5+ questions, you are probably over-batching.
+
+**Sequencing — draft the best-guess brief FIRST, then post questions,
+then yield.** When the answers will change the brief, call
+\`update-product-brief\` with your best guess BEFORE you post the
+questions. The user sees both cards in Thread; the brief gives them
+framing for why you're asking, and the gating logic blocks brief
+approval until the questions are answered — so a wrong guess is safe.
+Posting questions with no brief leaves the user staring at choices with
+no context.
+
+Default to the strongest repo-backed interpretation of the ask. Do NOT stop
+and ask a broad kickoff question like "What should this first starter task
+focus on?" just because the task could branch in multiple directions. If the
+user ask already names a plausible focus and repo evidence lets you draft a
+best-guess spec, do that work. Ask only when two materially different task
+directions are both plausible, the consequence of choosing wrong is high, and
+you truly cannot pick a safe default from the ask plus repo evidence.
+
+After posting, end your turn (yield). Do NOT keep working on the spec
+without the answer; you'd be guessing. The orchestrator resumes you when
+the user answers.
+
+If the task already has an unanswered open question that covers the same
+decision, do NOT ask it again in new words. Reuse the pending question,
+wait for the answer, and spend your turn on the best draft/spec progress
+you can still make around that constraint.
+
 ## Consult the experts
 
 When your injected context contains an **"## Expert contributions to the spec"**
 block, treat each listed expert's questions as load-bearing. Those experts
 (Component Designer, Visual Designer, Copywriter, Color Theorist, API Designer,
 Accessibility Specialist, Security Engineer, Test Engineer, Performance
-Engineer, …) will review the finished work through their rubrics; any question
+Engineer, ...) will review the finished work through their rubrics; any question
 of theirs you leave unanswered in the spec becomes a guess the engineer has to
 make, and those guesses are what fails review.
 
 During elicitation:
 - Work through each expert's questions in plain project terms (never "the API
-  Designer wants to know…" — ask the user about the endpoint, the error shape,
+  Designer wants to know..." — ask the user about the endpoint, the error shape,
   the pagination). The experts' voices are for your context; the user only
   hears the underlying question.
-- If the user can't answer a load-bearing question, record it as a **planned
-  escalation trigger** on the task rather than guessing.
+- If you can't answer a load-bearing question from context, post it via
+  \`post-user-question\` (kind='choice' if discrete, kind='text' if open).
+  If the user has explicitly said they don't know either, then record it
+  as a **planned escalation trigger** on the task — but the default is to
+  ask via post-user-question first.
 - When you draft the spec, structure it so each expert's concerns map to
   specific sections the reviewer can find at review time — don't bury a
   pagination decision inside a prose paragraph if the API Designer will check
   for it.
+
+## When repo evidence says the task may already be partly or fully done
+
+Do not keep spelunking indefinitely once you have enough evidence to say
+"this is already wired" or "only a smaller delta remains."
+
+Within the next turn or two, you MUST do one of these:
+- write a best-guess product brief via \`update-product-brief\`
+- ask the one focused user question that resolves the remaining ambiguity via
+  \`post-user-question\`
+- write the spec for the remaining delta via \`update-task\`
+- or raise a scoped escalation if the ask and the repo reality genuinely
+  conflict
+
+\`append-exploring-transcript\` is useful for preserving the conversation, but
+it does NOT count as finishing intake by itself.
 
 ## Propose a handoff sequence when the work spans specialist lanes
 
@@ -126,12 +229,29 @@ At the start of a resumed intake, call read-exploring-transcript to pick up the
 conversation where it left off.
 `.trim()
 
+const SPEC_AGENT_NO_TOOL_TURN_NUDGE = `
+Your last response did not use a tool, so Guildhall could not turn it into
+durable spec progress.
+
+Take a concrete tool step now:
+- If you are asking the user something, call post-user-question.
+- If you wrote or rephrased anything in exploring, call append-exploring-transcript.
+- If the spec is ready, call update-task to write it and move to spec_review.
+- If you need context, call read-exploring-transcript, read-tasks, read-file, grep, or web tools.
+- If you are blocked, call raise-escalation.
+
+Do not ask the user a question only in assistant prose. Persist it structurally
+with tools in this turn. Ask only the top 1-3 highest-signal questions needed
+to unblock the next draft; do not dump a long questionnaire.
+`.trim()
+
 export function createSpecAgent(
   llm: AgentLLM,
   opts: {
     skills?: readonly SkillDefinition[]
     hookExecutor?: HookExecutor
     compactor?: Compactor
+    cwd?: string
     sessionPersistence?: { cwd: string; sessionId?: string }
     /** Optional tools appended to the factory's built-in set (e.g. MCP adapters). */
     extraTools?: readonly AnyTool[]
@@ -141,6 +261,19 @@ export function createSpecAgent(
     name: 'spec-agent',
     llm,
     systemPrompt: SPEC_AGENT_PROMPT,
+    ...(opts.cwd ? { cwd: opts.cwd } : {}),
+    noToolTurnNudge: SPEC_AGENT_NO_TOOL_TURN_NUDGE,
+    noToolTurnNudgeLimit: 2,
+    noProgressToolNames: [
+      'update-task',
+      'update-product-brief',
+      'post-user-question',
+      'raise-escalation',
+    ],
+    noProgressTurnNudge:
+      'You have enough evidence. Stop researching and record durable intake progress now: write the best-guess brief, ask the top 1 focused user question, draft the remaining-delta spec, or raise a scoped escalation. append-exploring-transcript alone is not enough.',
+    noProgressTurnNudgeLimit: 2,
+    noProgressTurnThreshold: 2,
     tools: [
       readFileTool,
       writeFileTool,
@@ -148,10 +281,10 @@ export function createSpecAgent(
       globTool,
       grepTool,
       todoWriteTool,
-      askUserQuestionTool,
       readTasksTool,
       updateTaskTool,
       updateProductBriefTool,
+      postUserQuestionTool,
       updateDesignSystemTool,
       logProgressTool,
       raiseEscalationTool,

@@ -41,10 +41,72 @@ export class LeverSettingsCorruptError extends Error {
   }
 }
 
+export function projectLeverInvariantError(
+  project: Pick<ProjectLevers, 'concurrent_task_dispatch' | 'worktree_isolation'>,
+): string | null {
+  const dispatch = project.concurrent_task_dispatch.position
+  const isolation = project.worktree_isolation.position
+  if (dispatch.kind === 'fanout' && isolation === 'none') {
+    return 'concurrent_task_dispatch: fanout_N requires worktree_isolation to be per_task or per_attempt.'
+  }
+  return null
+}
+
+function assertLeverSettingsInvariants(
+  settings: LeverSettings,
+  path: string,
+): LeverSettings {
+  const invariant = projectLeverInvariantError(settings.project)
+  if (invariant) throw new LeverSettingsCorruptError(path, invariant)
+  return settings
+}
+
 function formatIssues(issues: readonly ZodIssue[]): string {
   return issues
     .map((i) => `${i.path.length > 0 ? i.path.join('.') : '<root>'}: ${i.message}`)
     .join('; ')
+}
+
+function mapLegacyMergePolicyPosition(
+  value: 'ff_only_local' | 'ff_only_with_push' | 'manual_pr',
+): ProjectLevers['landing_strategy']['position'] {
+  switch (value) {
+    case 'ff_only_local':
+      return 'cherry_pick_local'
+    case 'ff_only_with_push':
+      return 'cherry_pick_with_push'
+    case 'manual_pr':
+      return 'manual_pr'
+  }
+}
+
+function normalizeLegacySettings(raw: unknown): unknown {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return raw
+  const settings = raw as Record<string, unknown>
+  const project =
+    settings.project && typeof settings.project === 'object' && !Array.isArray(settings.project)
+      ? { ...(settings.project as Record<string, unknown>) }
+      : null
+  if (!project) return raw
+
+  const legacy = project.merge_policy
+  const next = project.landing_strategy
+  if (legacy && !next && typeof legacy === 'object' && !Array.isArray(legacy)) {
+    const typed = legacy as Record<string, unknown>
+    const position = typed.position
+    if (
+      position === 'ff_only_local' ||
+      position === 'ff_only_with_push' ||
+      position === 'manual_pr'
+    ) {
+      project.landing_strategy = {
+        ...typed,
+        position: mapLegacyMergePolicyPosition(position),
+      }
+    }
+  }
+
+  return { ...settings, project }
 }
 
 export async function loadLeverSettings(opts: LoadOptions): Promise<LeverSettings> {
@@ -65,8 +127,9 @@ export async function loadLeverSettings(opts: LoadOptions): Promise<LeverSetting
   } catch (err) {
     throw new LeverSettingsCorruptError(opts.path, (err as Error).message)
   }
+  parsed = normalizeLegacySettings(parsed)
   const result = leverSettingsSchema.safeParse(parsed)
-  if (result.success) return result.data
+  if (result.success) return assertLeverSettingsInvariants(result.data, opts.path)
 
   // Self-heal path: the most common corruption in practice is "schema grew a
   // new required lever; on-disk file doesn't have it yet". Deep-merge the
@@ -76,8 +139,9 @@ export async function loadLeverSettings(opts: LoadOptions): Promise<LeverSetting
   const merged = mergeWithDefaults(parsed, makeDefaultSettings(opts.now?.()))
   const reparsed = leverSettingsSchema.safeParse(merged)
   if (reparsed.success) {
-    await saveLeverSettings({ path: opts.path, settings: reparsed.data })
-    return reparsed.data
+    const healed = assertLeverSettingsInvariants(reparsed.data, opts.path)
+    await saveLeverSettings({ path: opts.path, settings: healed })
+    return healed
   }
   throw new LeverSettingsCorruptError(opts.path, formatIssues(result.error.issues))
 }
@@ -127,7 +191,7 @@ export function validateLeverSettings(settings: LeverSettings): LeverSettings {
   if (!parsed.success) {
     throw new LeverSettingsCorruptError('<in-memory>', formatIssues(parsed.error.issues))
   }
-  return parsed.data
+  return assertLeverSettingsInvariants(parsed.data, '<in-memory>')
 }
 
 export interface SaveOptions {
@@ -136,6 +200,7 @@ export interface SaveOptions {
 }
 
 export async function saveLeverSettings(opts: SaveOptions): Promise<void> {
+  assertLeverSettingsInvariants(opts.settings, opts.path)
   await fs.mkdir(dirname(opts.path), { recursive: true })
   const yaml = stringifyYaml(opts.settings, {
     // Stable key ordering is not guaranteed by `yaml`, but for a

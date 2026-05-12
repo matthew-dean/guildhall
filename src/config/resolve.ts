@@ -1,7 +1,8 @@
 import { resolve, join, isAbsolute } from 'node:path'
 import { readGlobalConfig } from './global-config.js'
 import { readWorkspaceConfig, resolveMemoryDir, readAgentSettings } from './workspace-config.js'
-import { ResolvedConfig, mergeModels, slugify } from './schemas.js'
+import { readProjectConfig } from './project-config.js'
+import { ResolvedConfig, mergeModels, resolveModelsForProvider, slugify } from './schemas.js'
 import type { WorkspaceYamlConfig, AgentSettings } from './schemas.js'
 
 // ---------------------------------------------------------------------------
@@ -9,9 +10,9 @@ import type { WorkspaceYamlConfig, AgentSettings } from './schemas.js'
 //
 // Priority (highest → lowest):
 //   1. Environment variables (LM_STUDIO_BASE_URL, etc.)
-//   2. memory/agent-overrides.yaml ← agents write here at runtime
-//   3. guildhall.yaml                  ← human intent
-//   4. ~/.guildhall/config.yaml        ← global defaults
+//   2. memory/agent-overrides.yaml ← agents write learned project behavior here
+//   3. guildhall.yaml              ← human project intent
+//   4. ~/.guildhall/config.yaml    ← global model/runtime defaults
 //   5. Built-in defaults           ← Zod schema defaults
 // ---------------------------------------------------------------------------
 
@@ -25,17 +26,11 @@ export interface ResolveOptions {
  * - Appends learned concerns, decisions, triggers
  * - Removes concerns flagged for removal
  * - Appends mandate addendum
- * - Applies model overrides
  */
 function applyAgentSettings(
   workspace: WorkspaceYamlConfig,
   agentSettings: AgentSettings,
 ): WorkspaceYamlConfig {
-  // Model overrides from agents (highest specificity)
-  const models = agentSettings.models
-    ? { ...(workspace.models ?? {}), ...agentSettings.models }
-    : workspace.models
-
   // Coordinator overrides
   const coordinators = workspace.coordinators.map(coord => {
     const override = agentSettings.coordinators[coord.id]
@@ -74,7 +69,6 @@ function applyAgentSettings(
 
   return {
     ...workspace,
-    models,
     coordinators,
     ignore,
     maxRevisions: agentSettings.maxRevisions ?? workspace.maxRevisions,
@@ -91,6 +85,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
 
   // Layer 1: global defaults
   const global = readGlobalConfig()
+  const project = readProjectConfig(workspacePath)
 
   // Layer 2: workspace config (guildhall.yaml)
   const workspaceRaw = readWorkspaceConfig(workspacePath)
@@ -101,8 +96,13 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
   // Apply agent settings on top of guildhall.yaml
   const workspace = applyAgentSettings(workspaceRaw, agentSettings)
 
-  // Merge models: built-in defaults ← global ← guildhall.yaml ← agent-settings
-  const models = mergeModels(global.models ?? {}, workspace.models)
+  // Merge models: built-in defaults ← global preferred-provider default ←
+  // project preferred-provider override + workspace model map
+  const preferredProvider = project.preferredProvider ?? global.preferredProvider
+  const models = mergeModels(
+    resolveModelsForProvider(global.models, preferredProvider),
+    resolveModelsForProvider(workspace.models, preferredProvider),
+  )
 
   // Resolve project path
   const projectPath = workspace.projectPath
@@ -135,6 +135,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
     workspaceName: workspace.name,
     workspacePath,
     projectPath,
+    landingBranch: project.landingBranch,
     memoryDir,
     models,
     coordinators,

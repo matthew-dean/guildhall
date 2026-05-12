@@ -6,6 +6,8 @@ import {
   WorkspaceRegistryEntry,
   slugify,
   mergeModels,
+  resolveModelsForProvider,
+  writeModelsForProvider,
 } from '../schemas.js'
 import { DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
 
@@ -60,6 +62,74 @@ describe('mergeModels', () => {
     const result = mergeModels({}, { spec: 'qwen2.5-coder-32b-instruct' })
     // Other roles should still be defaults
     expect(result.coordinator).toBe(DEFAULT_LOCAL_MODEL_ASSIGNMENT.coordinator)
+  })
+})
+
+describe('resolveModelsForProvider', () => {
+  it('expands all/smart/workhorse provider shortcuts', () => {
+    const result = resolveModelsForProvider({
+      'openai-api': {
+        smart: 'big-brain',
+        workhorse: 'steady-hand',
+      },
+    }, 'openai-api')
+    expect(result).toEqual({
+      spec: 'big-brain',
+      coordinator: 'big-brain',
+      worker: 'steady-hand',
+      reviewer: 'steady-hand',
+      gateChecker: 'steady-hand',
+    })
+  })
+
+  it('lets explicit roles override all', () => {
+    const result = resolveModelsForProvider({
+      'openai-api': {
+        all: 'baseline',
+        reviewer: 'strict-eye',
+      },
+    }, 'openai-api')
+    expect(result.reviewer).toBe('strict-eye')
+    expect(result.worker).toBe('baseline')
+  })
+
+  it('falls back to the only provider-scoped entry when no preferred provider is set', () => {
+    const result = resolveModelsForProvider({
+      'openai-api': {
+        all: 'only-model',
+      },
+    })
+    expect(result.worker).toBe('only-model')
+  })
+
+  it('does not bleed a single other-provider block into an explicit preferred provider', () => {
+    const result = resolveModelsForProvider({
+      'llama-cpp': {
+        all: 'local-only-model',
+      },
+    }, 'openai-api')
+    expect(result).toEqual({})
+  })
+})
+
+describe('writeModelsForProvider', () => {
+  it('writes explicit role assignments under the selected provider', () => {
+    const result = writeModelsForProvider(undefined, 'openai-api', {
+      spec: 'qwen/qwen3.5-122b-a10b',
+      coordinator: 'qwen/qwen3.5-122b-a10b',
+      worker: 'qwen/qwen3.5-122b-a10b',
+      reviewer: 'qwen/qwen3.5-122b-a10b',
+      gateChecker: 'qwen/qwen3.5-122b-a10b',
+    })
+    expect(result).toEqual({
+      'openai-api': {
+        spec: 'qwen/qwen3.5-122b-a10b',
+        coordinator: 'qwen/qwen3.5-122b-a10b',
+        worker: 'qwen/qwen3.5-122b-a10b',
+        reviewer: 'qwen/qwen3.5-122b-a10b',
+        gateChecker: 'qwen/qwen3.5-122b-a10b',
+      },
+    })
   })
 })
 
@@ -174,12 +244,23 @@ describe('WorkspaceYamlConfig', () => {
 // GlobalConfig
 // ---------------------------------------------------------------------------
 describe('GlobalConfig', () => {
+  it('disables paid-provider fallback by default', () => {
+    const config = GlobalConfig.parse({})
+    expect(config.allowPaidProviderFallback).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GlobalConfig
+// ---------------------------------------------------------------------------
+describe('GlobalConfig', () => {
   it('parses with all defaults', () => {
     const config = GlobalConfig.parse({})
     expect(config.maxRevisions).toBe(3)
     expect(config.heartbeatInterval).toBe(5)
     expect(config.lmStudioUrl).toBe('http://localhost:1234/v1')
     expect(config.servePort).toBe(7777)
+    expect(config.reviewerFanoutConcurrency).toBeUndefined()
   })
 
   it('validates servePort range', () => {

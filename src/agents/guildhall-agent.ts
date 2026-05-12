@@ -65,6 +65,12 @@ export interface GuildhallAgentOptions {
    * instead of failing the whole conversation.
    */
   compactor?: Compactor
+  noToolTurnNudge?: string | undefined
+  noToolTurnNudgeLimit?: number | undefined
+  noProgressToolNames?: readonly string[] | undefined
+  noProgressTurnNudge?: string | undefined
+  noProgressTurnNudgeLimit?: number | undefined
+  noProgressTurnThreshold?: number | undefined
   /**
    * FR-20: automatic session persistence. When set, a snapshot is written
    * after every successful `generate()` turn so the agent can resume from
@@ -126,13 +132,38 @@ export class GuildhallAgent {
       cwd: options.cwd ?? process.cwd(),
       maxTurns: options.maxTurns ?? 8,
       maxTokens: options.maxTokens ?? 4096,
+      ...(options.llm.temperature !== undefined
+        ? { temperature: options.llm.temperature }
+        : {}),
       ...(options.hookExecutor ? { hookExecutor: options.hookExecutor } : {}),
       ...(options.compactor ? { compactor: options.compactor } : {}),
+      ...(options.noToolTurnNudge !== undefined
+        ? { noToolTurnNudge: options.noToolTurnNudge }
+        : {}),
+      ...(options.noToolTurnNudgeLimit !== undefined
+        ? { noToolTurnNudgeLimit: options.noToolTurnNudgeLimit }
+        : {}),
+      ...(options.noProgressToolNames !== undefined
+        ? { noProgressToolNames: options.noProgressToolNames }
+        : {}),
+      ...(options.noProgressTurnNudge !== undefined
+        ? { noProgressTurnNudge: options.noProgressTurnNudge }
+        : {}),
+      ...(options.noProgressTurnNudgeLimit !== undefined
+        ? { noProgressTurnNudgeLimit: options.noProgressTurnNudgeLimit }
+        : {}),
+      ...(options.noProgressTurnThreshold !== undefined
+        ? { noProgressTurnThreshold: options.noProgressTurnThreshold }
+        : {}),
     })
   }
 
   get permissionMode(): PermissionMode {
     return this.currentMode
+  }
+
+  loadToolMetadata(metadata: Record<string, unknown>): void {
+    this.engine.loadToolMetadata(metadata)
   }
 
   /**
@@ -155,16 +186,29 @@ export class GuildhallAgent {
    * the full message list and usage snapshot.
    */
   async generate(prompt: string): Promise<GenerateResult> {
-    for await (const _event of this.engine.submitMessage(prompt)) {
-      void _event
+    return await this.generateWithEvents(prompt)
+  }
+
+  async generateWithEvents(
+    prompt: string,
+    onEvent?: (event: StreamEvent) => void | Promise<void>,
+    opts?: { signal?: AbortSignal | undefined },
+  ): Promise<GenerateResult> {
+    let streamError: string | null = null
+    try {
+      for await (const event of this.engine.submitMessage(prompt, opts)) {
+        if (event.type === 'error') streamError = event.message
+        if (onEvent) await onEvent(event)
+      }
+    } finally {
+      // Persist even on max-turn/API/tool failures. runQuery mutates the
+      // engine history as it goes, so a crash or restart can still recover
+      // the last coherent turn rather than silently dropping progress.
+      this.persistSession()
     }
+    if (streamError) throw new Error(streamError)
     const messages = this.engine.messages
-    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
-    const text = lastAssistant ? extractText(lastAssistant) : ''
-    // FR-20: persist a fresh snapshot at the turn boundary. Failures here are
-    // logged but never propagate — snapshotting is best-effort; the caller
-    // already has the in-memory result.
-    this.persistSession()
+    const text = extractLatestAssistantText(messages)
     return {
       text,
       messages,
@@ -203,14 +247,23 @@ export class GuildhallAgent {
    * when a snapshot was found and applied. Never throws — an absent snapshot
    * is a normal "fresh session" state.
    */
-  loadSession(opts: { cwd: string; sessionId?: string }): boolean {
+  loadSession(opts: {
+    cwd: string
+    sessionId?: string | undefined
+    onlyPending?: boolean | undefined
+  }): boolean {
     const snapshot = opts.sessionId
       ? loadSessionById(opts.cwd, opts.sessionId)
       : loadSessionSnapshot(opts.cwd)
     if (!snapshot) return false
+    if (snapshot.model && snapshot.model !== this.engine.getModel()) return false
     this.engine.loadMessages(snapshot.messages)
     this.engine.loadUsage(snapshot.usage)
     this.engine.loadToolMetadata(snapshot.tool_metadata)
+    if (opts.onlyPending && !this.engine.hasPendingContinuation()) {
+      this.engine.clear()
+      return false
+    }
     return true
   }
 
@@ -232,9 +285,17 @@ export class GuildhallAgent {
     for await (const _event of this.engine.continuePending()) void _event
     this.persistSession()
     const messages = this.engine.messages
-    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
-    const text = lastAssistant ? extractText(lastAssistant) : ''
+    const text = extractLatestAssistantText(messages)
     return { text, messages, usage: this.engine.totalUsage }
+  }
+
+  /**
+   * Clear the in-memory conversation and persist the empty snapshot so later
+   * resumes do not reload a poisoned session.
+   */
+  resetConversation(): void {
+    this.engine.clear()
+    this.persistSession()
   }
 
   private persistSession(): void {
@@ -270,6 +331,10 @@ export class GuildhallAgent {
 
   get totalUsage(): UsageSnapshot {
     return this.engine.totalUsage
+  }
+
+  getToolMetadata(): Record<string, unknown> {
+    return this.engine.getToolMetadata()
   }
 }
 
@@ -329,4 +394,13 @@ function extractText(message: ConversationMessage): string {
     }
   }
   return parts.join('')
+}
+
+function extractLatestAssistantText(messages: readonly ConversationMessage[]): string {
+  for (const message of [...messages].reverse()) {
+    if (message.role !== 'assistant') continue
+    const text = extractText(message)
+    if (text.trim().length > 0) return text
+  }
+  return ''
 }

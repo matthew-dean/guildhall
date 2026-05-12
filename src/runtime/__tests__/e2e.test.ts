@@ -6,6 +6,9 @@ import {
   bootstrapWorkspace,
   readWorkspaceConfig,
   resolveConfig,
+  registerWorkspace,
+  setProvider,
+  updateProjectConfig,
 } from '@guildhall/config'
 import {
   Orchestrator,
@@ -38,6 +41,7 @@ import {
 } from '@guildhall/levers'
 import { PermissionMode } from '@guildhall/engine'
 import { LivenessTracker } from '../liveness.js'
+import { buildServeApp } from '../serve.js'
 
 // ---------------------------------------------------------------------------
 // End-to-end integration tests
@@ -58,9 +62,14 @@ let tmpDir: string
 let memoryDir: string
 let tasksPath: string
 let progressPath: string
+let originalHome: string | undefined
+let testHomeDir: string
 
 beforeEach(async () => {
+  originalHome = process.env.HOME
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-e2e-'))
+  testHomeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-home-'))
+  process.env.HOME = testHomeDir
   bootstrapWorkspace(tmpDir, { name: 'E2E Workspace' })
   memoryDir = path.join(tmpDir, 'memory')
   tasksPath = path.join(memoryDir, 'TASKS.json')
@@ -68,7 +77,10 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  if (originalHome === undefined) delete process.env.HOME
+  else process.env.HOME = originalHome
   await fs.rm(tmpDir, { recursive: true, force: true })
+  await fs.rm(testHomeDir, { recursive: true, force: true }).catch(() => {})
 })
 
 async function readQueue(): Promise<TaskQueue> {
@@ -91,6 +103,14 @@ async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
 async function setTaskSpec(id: string, spec: string): Promise<void> {
   const queue = await readQueue()
   queue.tasks.find((t) => t.id === id)!.spec = spec
+  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+}
+
+async function setTaskSpecForReview(id: string, spec: string): Promise<void> {
+  const queue = await readQueue()
+  const task = queue.tasks.find((t) => t.id === id)!
+  task.spec = spec
+  task.status = 'spec_review'
   await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
 }
 
@@ -178,8 +198,9 @@ describe('E2E AC-03: task lifecycle exploring → done', () => {
     const initialTask = initialQueue.tasks.find((t) => t.id === intake.taskId)!
     expect(initialTask.status).toBe('exploring')
 
-    // Human approves the spec → exploring → spec_review.
-    await setTaskSpec(
+    // Spec Agent finishes the draft → spec_review; human approval then
+    // advances it to ready for the deterministic claimer.
+    await setTaskSpecForReview(
       intake.taskId,
       '## Summary\nAdd a ghost button variant.\n## AC\n1. renders.',
     )
@@ -189,20 +210,16 @@ describe('E2E AC-03: task lifecycle exploring → done', () => {
       approvalNote: 'LGTM',
     })
     expect(specApproval.success).toBe(true)
-    expect(specApproval.newStatus).toBe('spec_review')
+    expect(specApproval.newStatus).toBe('ready')
 
-    // Scripted agents drive the remaining transitions. Each agent reads the
-    // current status from disk and advances it by one state.
+    // Scripted agents drive the remaining transitions. Ready claiming is now
+    // deterministic and orchestrator-owned; agents only handle implementation,
+    // review, and gates.
     const coord = stubAgent('looma-coordinator', async () => {
       const q = await readQueue()
       const t = q.tasks.find((x) => x.id === intake.taskId)!
       if (t.status === 'spec_review') {
         await mutateTask(intake.taskId, { status: 'ready' })
-      } else if (t.status === 'ready') {
-        await mutateTask(intake.taskId, {
-          status: 'in_progress',
-          assignedTo: 'worker-agent',
-        })
       }
     })
     const worker = stubAgent('worker-agent', async () => {
@@ -238,10 +255,10 @@ describe('E2E AC-03: task lifecycle exploring → done', () => {
       if (outcome.kind === 'idle' && outcome.allDone) break
     }
 
-    // The spine claim: every intermediate state is visited in order, ending
-    // in `done`. `exploring` and `spec_review` are asserted above (pre-orch).
+    // The spine claim: every orchestrator-owned intermediate state is visited
+    // in order, ending in `done`. `exploring`, `spec_review`, and `ready` are
+    // asserted above (pre-orch).
     expect(observedStatuses).toEqual([
-      'ready',
       'in_progress',
       'review',
       'gate_check',
@@ -328,18 +345,18 @@ coordinators:
 
     // 5. Simulate the Spec Agent drafting a spec on the orchestrator's next
     //    tick, then approve it via FR-12 approveSpec.
-    await setTaskSpec(intake.taskId, '## Summary\nAdd a ghost button variant.\n## AC\n1. renders.')
+    await setTaskSpecForReview(intake.taskId, '## Summary\nAdd a ghost button variant.\n## AC\n1. renders.')
     const specApproval = await approveSpec({
       memoryDir,
       taskId: intake.taskId,
       approvalNote: 'LGTM',
     })
     expect(specApproval.success).toBe(true)
-    expect(specApproval.newStatus).toBe('spec_review')
+    expect(specApproval.newStatus).toBe('ready')
 
     // 6. Stand up the orchestrator with real config + stub agents that drive
-    //    the task forward through spec_review → ready → in_progress → review
-    //    → gate_check → done.
+    //    the task forward through ready → in_progress → review → gate_check
+    //    → done. The ready claim is orchestrator-owned.
     const config = resolveBootstrapped()
 
     // Coordinator stub: read the current task status from disk (just like a
@@ -349,8 +366,6 @@ coordinators:
       const t = q.tasks.find((x) => x.id === intake.taskId)!
       if (t.status === 'spec_review') {
         await mutateTask(intake.taskId, { status: 'ready' })
-      } else if (t.status === 'ready') {
-        await mutateTask(intake.taskId, { status: 'in_progress', assignedTo: 'worker-agent' })
       }
     })
     const worker = stubAgent('worker-agent', async () => {
@@ -388,7 +403,6 @@ coordinators:
     }
 
     expect(observedStatuses).toEqual([
-      'ready',
       'in_progress',
       'review',
       'gate_check',
@@ -402,9 +416,11 @@ coordinators:
     expect(progress).toContain('gate_check → done')
     expect(progress).toContain('looma')
 
-    // 8. Every agent that acted should have been asked for FULL_AUTO by the
-    //    orchestrator (no permissionMode override on the task).
-    expect(coord.modeCalls).toContain(PermissionMode.FULL_AUTO)
+    // 8. Every model-backed agent that acted should have been asked for
+    //    FULL_AUTO by the orchestrator (no permissionMode override on the
+    //    task). The coordinator does not act on the ready claim anymore; the
+    //    orchestrator owns ready -> in_progress directly.
+    expect(coord.modeCalls).toEqual([])
     expect(worker.modeCalls).toContain(PermissionMode.FULL_AUTO)
     expect(reviewer.modeCalls).toContain(PermissionMode.FULL_AUTO)
     expect(gateChecker.modeCalls).toContain(PermissionMode.FULL_AUTO)
@@ -417,6 +433,159 @@ coordinators:
     expect(transcript).toContain('Add a ghost button variant')
     expect(transcript).toContain('Spec approved')
   })
+})
+
+describe('E2E 0.5.0: service over projects', () => {
+  it('supports fleet-level service selection, attach/init flow, per-project lifecycle, and nested project proof', async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true })
+    await fs.mkdir(tmpDir, { recursive: true })
+    bootstrapWorkspace(tmpDir, {
+      name: 'Service Proof',
+      coordinators: [
+        {
+          id: 'core',
+          name: 'Core Coordinator',
+          domain: 'core',
+          mandate: 'Own low-blast-radius product work.',
+          concerns: [],
+          autonomousDecisions: ['Small local fixes'],
+          escalationTriggers: ['Large public API shifts'],
+        },
+      ],
+    })
+    memoryDir = path.join(tmpDir, 'memory')
+    tasksPath = path.join(memoryDir, 'TASKS.json')
+    progressPath = path.join(memoryDir, 'PROGRESS.md')
+
+    const intake = await createExploringTask({
+      memoryDir,
+      ask: 'Remove one stale binding in a narrow file',
+      domain: 'core',
+      projectPath: tmpDir,
+    })
+    await setTaskSpecForReview(
+      intake.taskId,
+      '## Summary\nRemove the stale binding.\n## AC\n1. the binding is removed.\n2. no behavior changes.',
+    )
+    await approveSpec({
+      memoryDir,
+      taskId: intake.taskId,
+      approvalNote: 'ship it',
+    })
+
+    const worker = stubAgent('worker-agent', async () => {
+      await mutateTask(intake.taskId, { status: 'review' })
+    })
+    const reviewer = stubAgent('reviewer-agent', async () => {
+      await mutateTask(intake.taskId, { status: 'gate_check' })
+    })
+    const gateChecker = stubAgent('gate-checker-agent', async () => {
+      await mutateTask(intake.taskId, {
+        status: 'done',
+        completedAt: '2026-05-09T00:00:00Z',
+      })
+    })
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker,
+      reviewer,
+      gateChecker,
+      coordinators: { core: stubAgent('core-coordinator') },
+    }
+    const orch = new Orchestrator({
+      config: resolveConfig({ workspacePath: tmpDir }),
+      agents,
+      idleShutdownAfterTicks: 2,
+    })
+    for (let i = 0; i < 12; i++) {
+      const outcome = await orch.tick()
+      if (outcome.kind === 'processed' && outcome.afterStatus === 'done') break
+    }
+
+    const uninitializedProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-uninitialized-'))
+    registerWorkspace({ id: 'service-proof', name: 'Service Proof', path: tmpDir, tags: ['proof'] })
+    const { app, supervisor } = buildServeApp({})
+    try {
+      const fleetRes = await app.fetch(new Request('http://localhost/api/service'))
+      expect(fleetRes.status).toBe(200)
+      const fleetBody = (await fleetRes.json()) as {
+        selectedProject: { id: string } | null
+        projects: Array<{ id: string }>
+      }
+      expect(fleetBody.selectedProject?.id).toBe('service-proof')
+      expect(fleetBody.projects.map(project => project.id)).toContain('service-proof')
+
+      const attachRes = await app.fetch(new Request('http://localhost/api/service/attach-project', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: uninitializedProject }),
+      }))
+      expect(attachRes.status).toBe(200)
+      const attachBody = (await attachRes.json()) as {
+        selectedProject?: { initializationNeeded?: boolean }
+      }
+      expect(attachBody.selectedProject?.initializationNeeded).toBe(true)
+
+      const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+      const projectBody = (await projectRes.json()) as { initializationNeeded?: boolean }
+      expect(projectBody.initializationNeeded).toBe(true)
+
+      const setupRes = await app.fetch(new Request('http://localhost/api/setup/identity', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Attached Project', id: 'attached-project', tags: ['extension'] }),
+      }))
+      expect(setupRes.status).toBe(200)
+
+      const afterSetupRes = await app.fetch(new Request('http://localhost/api/service'))
+      const afterSetup = (await afterSetupRes.json()) as {
+        projects: Array<{ id: string; initializationNeeded: boolean }>
+      }
+      expect(afterSetup.projects).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: 'attached-project', initializationNeeded: false }),
+        ]),
+      )
+
+      setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+      updateProjectConfig(tmpDir, { allowPaidProviderFallback: true })
+      const selectRes = await app.fetch(new Request('http://localhost/api/service/select-project', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ projectId: 'service-proof' }),
+      }))
+      expect(selectRes.status).toBe(200)
+
+      const projectSnapshot = await app.fetch(new Request('http://localhost/api/project'))
+      const snapshotBody = (await projectSnapshot.json()) as {
+        initializationNeeded?: boolean
+        name?: string
+        tasks?: Array<{ id: string; status: string }>
+      }
+      expect(snapshotBody.initializationNeeded).toBe(false)
+      expect(snapshotBody.name).toBe('Service Proof')
+      expect(snapshotBody.tasks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: intake.taskId, status: 'done' }),
+        ]),
+      )
+
+      const startRes = await app.fetch(new Request('http://localhost/api/project/start', { method: 'POST' }))
+      expect(startRes.status).toBe(200)
+      const activityRes = await app.fetch(new Request('http://localhost/api/project/activity'))
+      const activity = (await activityRes.json()) as { running?: boolean; runStatus?: string }
+      expect(activity.running).toBe(true)
+      expect(activity.runStatus).toBe('running')
+
+      const stopRes = await app.fetch(new Request('http://localhost/api/project/stop', { method: 'POST' }))
+      expect(stopRes.status).toBe(200)
+      const stopped = (await stopRes.json()) as { ok?: boolean }
+      expect(stopped.ok).toBe(true)
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+      await fs.rm(uninitializedProject, { recursive: true, force: true })
+    }
+  }, 15_000)
 })
 
 describe('E2E: FR-10 escalation round-trip', () => {

@@ -16,9 +16,23 @@
     detected: boolean
     verifiedAt: string | null
     url?: string
+    baseUrl?: string | null
+  }
+  interface ModelCatalogItem {
+    id: string
+    provider: string
+    notes: string
+  }
+  interface ModelConfig {
+    globalModels: Record<string, string>
+    effectiveModels: Record<string, string>
+    loadedModels: string[]
+    missingModels: string[]
+    catalog: ModelCatalogItem[]
   }
 
   let providers = $state<Record<string, ProviderMeta> | null>(null)
+  let models = $state<ModelConfig | null>(null)
   let status = $state<{ text: string; error: boolean } | null>(null)
   let loadError = $state<string | null>(null)
   let testing = $state<string | null>(null)
@@ -28,9 +42,17 @@
   // Editable fields (only for providers that accept a pasted credential).
   let anthropicKey = $state('')
   let openaiKey = $state('')
+  let openaiBaseUrl = $state('')
   let llamaUrl = $state('')
 
   const ORDER = ['claude-oauth', 'codex', 'anthropic-api', 'openai-api', 'llama-cpp']
+  const MODEL_ROLES = [
+    { id: 'spec', label: 'Spec author' },
+    { id: 'coordinator', label: 'Coordinator' },
+    { id: 'worker', label: 'Worker' },
+    { id: 'reviewer', label: 'Reviewer' },
+    { id: 'gateChecker', label: 'Gate checker' },
+  ]
 
   async function load() {
     try {
@@ -42,6 +64,10 @@
       }
       providers = j.providers as Record<string, ProviderMeta>
       if (providers['llama-cpp']?.url && !llamaUrl) llamaUrl = providers['llama-cpp'].url
+      openaiBaseUrl = providers['openai-api']?.baseUrl ?? ''
+      const modelRes = await fetch('/api/config/models')
+      const modelJson = await modelRes.json()
+      if (!modelJson.error) models = modelJson as ModelConfig
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err)
     }
@@ -66,8 +92,10 @@
         if (!anthropicKey.trim()) return flash('Paste a key first', true)
         body.anthropicApiKey = anthropicKey.trim()
       } else if (key === 'openai-api') {
-        if (!openaiKey.trim()) return flash('Paste a key first', true)
-        body.openaiApiKey = openaiKey.trim()
+        const existingKey = providers?.['openai-api']?.detected ?? false
+        if (!openaiKey.trim() && !existingKey) return flash('Paste a key first', true)
+        if (openaiKey.trim()) body.openaiApiKey = openaiKey.trim()
+        body.openaiBaseUrl = openaiBaseUrl.trim()
       } else if (key === 'llama-cpp') {
         if (!llamaUrl.trim()) return flash('Enter a URL first', true)
         body.lmStudioUrl = llamaUrl.trim()
@@ -126,6 +154,23 @@
     }
   }
 
+  async function saveGlobalModel(role: string, model: string) {
+    saving = role
+    try {
+      const r = await fetch('/api/config/models', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scope: 'global', role, model }),
+      })
+      const j = await r.json()
+      if (j.error) return flash(j.error, true)
+      flash('Global default saved', false)
+      await load()
+    } finally {
+      saving = null
+    }
+  }
+
   function isOauth(key: string) {
     return key === 'claude-oauth' || key === 'codex'
   }
@@ -157,7 +202,7 @@
   }
 </script>
 
-<PageHeader title="LLM providers" helpTopic="web.providers" />
+<PageHeader title="Providers" helpTopic="web.providers" />
 
 <div class="page">
   {#if loadError}
@@ -165,7 +210,7 @@
       <p class="muted">{loadError}</p>
     </Card>
   {:else if !providers}
-    <p class="muted">Loading providers…</p>
+    <p class="muted">Loading providers...</p>
   {:else}
     <Card title="Providers">
       <Stack gap="3">
@@ -196,14 +241,14 @@
                     disabled={testing === key}
                     onclick={() => runTest(key)}
                   >
-                    {testing === key ? 'Testing…' : 'Test'}
+                    {testing === key ? 'Testing...' : 'Test'}
                   </Button>
                   <Button
                     variant="danger"
                     disabled={disconnecting === key}
                     onclick={() => disconnect(key)}
                   >
-                    {disconnecting === key ? 'Removing…' : 'Disconnect'}
+                    {disconnecting === key ? 'Removing...' : 'Disconnect'}
                   </Button>
                 {/if}
               </div>
@@ -214,7 +259,7 @@
               <div class="row-edit">
                 <Input
                   type="password"
-                  placeholder="sk-ant-…"
+                  placeholder="sk-ant-..."
                   value={anthropicKey}
                   oninput={v => (anthropicKey = v)}
                 />
@@ -223,25 +268,31 @@
                   disabled={saving === key || !anthropicKey.trim()}
                   onclick={() => saveCreds('anthropic-api')}
                 >
-                  {saving === key ? 'Saving…' : 'Save'}
+                  {saving === key ? 'Saving...' : 'Save'}
                 </Button>
               </div>
             {:else if key === 'openai-api'}
-              <div class="row-edit">
+              <div class="row-edit openai-edit">
                 <Input
                   type="password"
-                  placeholder="sk-…"
+                  placeholder="sk-..."
                   value={openaiKey}
                   oninput={v => (openaiKey = v)}
                 />
+                <Input
+                  placeholder="https://api.openai.com/v1"
+                  value={openaiBaseUrl}
+                  oninput={v => (openaiBaseUrl = v)}
+                />
                 <Button
                   variant="primary"
-                  disabled={saving === key || !openaiKey.trim()}
+                  disabled={saving === key || (!openaiKey.trim() && !providers['openai-api']?.detected)}
                   onclick={() => saveCreds('openai-api')}
                 >
-                  {saving === key ? 'Saving…' : 'Save'}
+                  {saving === key ? 'Saving...' : 'Save'}
                 </Button>
               </div>
+              <p class="muted helper">Leave base URL blank to use real OpenAI.</p>
             {:else if key === 'llama-cpp'}
               <div class="row-edit">
                 <Input
@@ -254,7 +305,7 @@
                   disabled={saving === key || !llamaUrl.trim()}
                   onclick={() => saveCreds('llama-cpp')}
                 >
-                  {saving === key ? 'Saving…' : 'Save'}
+                  {saving === key ? 'Saving...' : 'Save'}
                 </Button>
               </div>
             {/if}
@@ -263,6 +314,50 @@
 
         {#if status}
           <div class="status" class:error={status.error}>{status.text}</div>
+        {/if}
+      </Stack>
+    </Card>
+
+    <Card title="Global model defaults">
+      <Stack gap="3">
+        <p class="muted">
+          These defaults apply to every Guildhall project on this machine. A project can override a role in Settings.
+        </p>
+        {#if models?.missingModels?.length}
+          <div class="model-warning" role="status">
+            <strong>Model not loaded.</strong>
+            <span>
+              The configured local server reports {models.loadedModels.length ? models.loadedModels.join(', ') : 'no loaded models'}.
+              Load {models.missingModels.join(', ')} or choose a loaded model here.
+            </span>
+          </div>
+        {/if}
+        {#if !models}
+          <p class="muted">Loading models...</p>
+        {:else}
+          <div class="model-list">
+            {#each MODEL_ROLES as role (role.id)}
+              {@const current = models.globalModels[role.id] ?? models.effectiveModels[role.id] ?? ''}
+              <label class="model-row">
+                <span class="model-copy">
+                  <span class="label">{role.label}</span>
+                  <span class="row-detail muted">{current}</span>
+                </span>
+                <select
+                  value={current}
+                  disabled={saving === role.id}
+                  onchange={(e) => void saveGlobalModel(role.id, e.currentTarget.value)}
+                >
+                  {#each models.catalog as item (item.id)}
+                    <option value={item.id}>{item.id}</option>
+                  {/each}
+                  {#if current && !models.catalog.some(item => item.id === current)}
+                    <option value={current}>{current}</option>
+                  {/if}
+                </select>
+              </label>
+            {/each}
+          </div>
         {/if}
       </Stack>
     </Card>
@@ -334,6 +429,60 @@
   }
   .row-edit :global(input) {
     flex: 1;
+  }
+  .openai-edit {
+    flex-wrap: wrap;
+  }
+  .helper {
+    margin: calc(var(--s-1) * -1) 0 0;
+  }
+  .model-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .model-row {
+    display: grid;
+    grid-template-columns: minmax(150px, 1fr) minmax(260px, 1.4fr);
+    gap: var(--s-2);
+    align-items: center;
+    padding: var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+  }
+  .model-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  select {
+    width: 100%;
+    min-width: 0;
+    padding: var(--s-2);
+    border-radius: var(--r-1);
+    border: 1px solid var(--border);
+    background: var(--bg-raised);
+    color: var(--text);
+    font: inherit;
+  }
+  .model-warning {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--s-3);
+    border: 1px solid var(--warn);
+    border-radius: var(--r-2);
+    color: var(--text);
+    background: color-mix(in srgb, var(--warn) 14%, transparent);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+  @media (max-width: 640px) {
+    .model-row {
+      grid-template-columns: 1fr;
+    }
   }
 
   .chip {

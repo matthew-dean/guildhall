@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { load as yamlLoad } from 'js-yaml'
+import { dump as yamlDump, load as yamlLoad } from 'js-yaml'
 import { TaskQueue, type Task } from '@guildhall/core'
+import { atomicWriteText } from '@guildhall/sessions'
 import { readWorkspaceConfig, writeWorkspaceConfig } from '@guildhall/config'
 import { appendExploringTranscript } from '@guildhall/tools'
 import {
@@ -14,15 +15,15 @@ import {
 } from '@guildhall/levers'
 
 // ---------------------------------------------------------------------------
-// FR-14: coordinator bootstrapping via meta-intake.
+// FR-14: routing bootstrapping via meta-intake.
 //
 // When a workspace has no coordinators defined, the first exploring task is a
-// meta-intake: the Spec Agent interviews the user about the codebase and
-// writes a draft list of coordinator definitions (mandate, concerns,
-// autonomous decisions, escalation triggers) into the task's `spec`.
+// meta-intake: the Spec Agent inspects the codebase, infers the internal
+// routing slices the single local coordinator should use, and writes that
+// draft into the task's `spec`.
 //
 // When the user approves, `approveMetaIntake` parses the draft, merges the
-// resulting coordinators into guildhall.yaml, and marks the task done.
+// resulting internal routing slices into guildhall.yaml, and marks the task done.
 //
 // All the LLM work happens on the normal orchestrator loop — this module just
 // owns the reserved task, the draft-format parser, and the config merge.
@@ -45,19 +46,47 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  await fs.writeFile(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2), 'utf-8')
+  atomicWriteText(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2) + '\n')
 }
 
-const META_INTAKE_SEED = `You are bootstrapping a new Guildhall workspace. Your job in this conversation is to produce a DRAFT list of coordinator definitions for this codebase AND infer initial lever positions from the user's project-guidance answers.
+const META_INTAKE_SEED = `You are bootstrapping a new Guildhall workspace. Your job in this conversation is to infer the internal routing slices the single local coordinator should use for this codebase, then infer initial lever positions from the user's project-guidance answers.
 
-Interview the user with short, focused PROJECT questions. Work toward answers for:
+Default to drafting from repo evidence. Do the analysis yourself first. Ask the
+user only for the minimum missing PROJECT signal needed to avoid a materially
+wrong draft. If you have enough repository evidence, write the best-guess draft
+instead of continuing to interview.
 
-1. What are the major *zones of concern* in this codebase (e.g. UI layer, data/API layer, infra, docs, release/ops)? Each zone becomes one coordinator.
-2. For each zone: one-paragraph mandate — what outcomes does it protect?
-3. For each zone: 2–4 concerns (id, one-line description, 1–3 review questions each).
-4. For each zone: which tweaks the coordinator may approve without human review (autonomousDecisions)?
-5. For each zone: what MUST be escalated to a human (escalationTriggers)?
-6. Optional sub-path inside the project that scopes this coordinator (blank if workspace root).
+When you ask questions:
+- Ask at most two questions before drafting.
+- Only interrupt when BOTH are true:
+  1. confidence is genuinely low, and
+  2. being wrong would materially affect routing or task quality.
+- Treat this as an interrupt threshold:
+  - critical / high consequence + low confidence -> ask
+  - medium consequence + low confidence -> usually still infer unless the
+    ambiguity will clearly change task routing
+  - low consequence -> do not ask; infer and move on
+- Prefer one confirm/correct question over one question per inferred part.
+- Do not ask the user to build Guildhall's internal map. Infer it first, then
+  ask for confirmation only if the threshold above is crossed.
+- Ask in concrete repo or product terms, not Guildhall terms. Never ask the
+  user to pick "coordinator domains", "project areas", or "review lanes".
+- Choice labels must be friendly names with enough context for a human to
+  choose, e.g. "VS Code extension UI - editor-facing commands and views", not
+  "vscode-extension-ui" or another slug.
+- Do not ask for every coordinator mandate one at a time. Infer mandates from
+  paths, README, package names, tests, and the user's project guidance.
+- A wrong draft is recoverable because the user reviews it before merge; a
+  long interview blocks setup.
+
+Work toward answers for:
+
+1. What are the major internal routing slices in this codebase (e.g. UI layer, data/API layer, infra, docs, release/ops)?
+2. For each slice: one-paragraph mandate — what outcomes does the coordinator protect here?
+3. For each slice: 2–4 concerns (id, one-line description, 1–3 review questions each).
+4. For each slice: which tweaks the coordinator may approve without human review (autonomousDecisions)?
+5. For each slice: what MUST be escalated to a human (escalationTriggers)?
+6. Optional sub-path inside the project that scopes this slice (blank if workspace root).
 
 Lever inference — CRITICAL
 =========================
@@ -70,17 +99,16 @@ While you interview, INFER lever positions from the user's answers. Do NOT ask d
 - User has a small or solo team, wants minimal friction → \`remediation_autonomy: auto\`, \`task_origination: agent_proposed_coordinator_approved\`.
 - User mentions no local LLM / cost concerns → leave \`reviewer_mode: llm_with_deterministic_fallback\` (cheapest default) or tighten to \`deterministic_only\`.
 
-Emit inferred lever positions in a SECOND YAML codefence, alongside the coordinators fence. Every inferred lever MUST include a short \`rationale\` that cites the conversational signal (e.g. "user said the codebase ships to paying customers"). Omit levers you could not infer — they will stay at system default.
+Emit inferred lever positions in a SECOND YAML codefence, alongside the internal routing fence. Every inferred lever MUST include a short \`rationale\` that cites the conversational signal (e.g. "user said the codebase ships to paying customers"). Omit levers you could not infer — they will stay at system default.
 
 Output format
 =============
 
-Put both fences into the task spec (via the update-task tool):
+Put both fences into the task spec (via the update-task tool). The first fence still uses \`coordinators:\` because that is the current internal config key, but treat it as implementation detail rather than user-facing language:
 
 \`\`\`yaml
 coordinators:
   - id: <slug>
-    name: <human-readable name>
     domain: <slug, used for task routing>
     path: <optional sub-path>
     mandate: |
@@ -145,7 +173,7 @@ bootstrap:
         stderr: <short excerpt>
 \`\`\`
 
-When the user approves the draft, run the \`guildhall approve-meta-intake\` CLI command — the runtime will parse all three fences, merge coordinators + bootstrap into \`guildhall.yaml\`, record lever positions in \`memory/agent-settings.yaml\` with \`setBy: 'spec-agent-intake'\`, and mark this task done.`
+When the user approves the draft, run the \`guildhall approve-meta-intake\` CLI command — the runtime will parse all three fences, merge the inferred routing slices + bootstrap into \`guildhall.yaml\`, record lever positions in \`memory/agent-settings.yaml\` with \`setBy: 'spec-agent-intake'\`, and mark this task done.`
 
 export interface CreateMetaIntakeInput {
   memoryDir: string
@@ -161,6 +189,20 @@ export interface CreateMetaIntakeResult {
   taskId: string
   transcriptPath: string
   alreadyExists: boolean
+}
+
+async function writeMetaIntakeTranscript(
+  memoryDir: string,
+  seedMessage?: string,
+): Promise<string> {
+  const transcriptPath = path.join(
+    memoryDir,
+    'exploring',
+    `${META_INTAKE_TASK_ID}.md`,
+  )
+  await fs.mkdir(path.dirname(transcriptPath), { recursive: true })
+  await fs.writeFile(transcriptPath, `${seedMessage ?? META_INTAKE_SEED}\n`, 'utf-8')
+  return transcriptPath
 }
 
 /**
@@ -187,9 +229,9 @@ export async function createMetaIntakeTask(
   const now = new Date().toISOString()
   const task: Task = {
     id: META_INTAKE_TASK_ID,
-    title: 'Bootstrap coordinators for this workspace',
+    title: 'Inspect the repo and draft starter tasks',
     description:
-      'Interview the user about the codebase, then draft coordinator definitions for guildhall.yaml.',
+      'Inspect the codebase, infer the project structure, and draft the first starter tasks. Ask only if confidence is low and being wrong would matter.',
     domain: META_INTAKE_DOMAIN,
     projectPath: input.projectPath,
     status: 'exploring',
@@ -228,6 +270,61 @@ export async function createMetaIntakeTask(
   return { taskId: META_INTAKE_TASK_ID, transcriptPath: appendResult.path, alreadyExists: false }
 }
 
+export async function rerunMetaIntakeTask(
+  input: CreateMetaIntakeInput,
+): Promise<CreateMetaIntakeResult> {
+  const queue = await readQueue(input.memoryDir)
+  const now = new Date().toISOString()
+  const existingIndex = queue.tasks.findIndex((t) => t.id === META_INTAKE_TASK_ID)
+  const transcriptPath = await writeMetaIntakeTranscript(input.memoryDir, input.seedMessage)
+
+  const resetTask: Task = {
+    id: META_INTAKE_TASK_ID,
+    title: 'Inspect the repo and draft starter tasks',
+    description:
+      'Inspect the codebase, infer the project structure, and draft the first starter tasks. Ask only if confidence is low and being wrong would matter.',
+    domain: META_INTAKE_DOMAIN,
+    projectPath: input.projectPath,
+    status: 'exploring',
+    priority: 'critical',
+    dependsOn: [],
+    outOfScope: [],
+    acceptanceCriteria: [],
+    notes: [
+      {
+        agentId: 'spec-agent',
+        role: 'system',
+        timestamp: now,
+        content: 'Meta-intake was explicitly re-run from the UI.',
+      },
+    ],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    escalations: [],
+    agentIssues: [],
+    revisionCount: 0,
+    remediationAttempts: 0,
+    origination: 'system',
+    createdAt: existingIndex >= 0 ? (queue.tasks[existingIndex]?.createdAt ?? now) : now,
+    updatedAt: now,
+  }
+
+  if (existingIndex >= 0) {
+    queue.tasks[existingIndex] = resetTask
+  } else {
+    queue.tasks.unshift(resetTask)
+  }
+  queue.lastUpdated = now
+  await writeQueue(input.memoryDir, queue)
+
+  return {
+    taskId: META_INTAKE_TASK_ID,
+    transcriptPath,
+    alreadyExists: existingIndex >= 0,
+  }
+}
+
 /**
  * Is a meta-intake required for the given workspace? Yes iff guildhall.yaml has
  * no coordinators defined.
@@ -249,7 +346,7 @@ export function workspaceNeedsMetaIntake(workspacePath: string): boolean {
  */
 export interface DraftCoordinator {
   id: string
-  name: string
+  name?: string
   domain: string
   path?: string
   mandate: string
@@ -257,6 +354,25 @@ export interface DraftCoordinator {
   autonomousDecisions: string[]
   escalationTriggers: string[]
 }
+
+export interface SynthesizeMetaIntakeDraftInput {
+  workspacePath: string
+  memoryDir: string
+}
+
+export interface SynthesizeMetaIntakeDraftResult {
+  success: boolean
+  drafts?: DraftCoordinator[]
+  error?: string
+}
+
+const FALLBACK_SYNTH_DOMAIN_IDS = new Set([
+  'converter-core',
+  'extension-ui',
+  'dts-generation',
+  'testing-qa',
+  'docs',
+])
 
 /**
  * Extract the `coordinators:` YAML codefence from a meta-intake spec and parse
@@ -283,20 +399,20 @@ export function parseCoordinatorDraft(spec: string): DraftCoordinator[] | null {
       if (!entry || typeof entry !== 'object') continue
       const e = entry as Record<string, unknown>
       const id = typeof e['id'] === 'string' ? e['id'] : undefined
-      const name = typeof e['name'] === 'string' ? e['name'] : undefined
       const domain = typeof e['domain'] === 'string' ? e['domain'] : id
       const mandate = typeof e['mandate'] === 'string' ? e['mandate'].trim() : ''
-      if (!id || !name || !domain) continue
+      const name = typeof e['name'] === 'string' ? e['name'] : undefined
+      if (!id || !domain) continue
       const pth = typeof e['path'] === 'string' ? e['path'] : undefined
       const draft: DraftCoordinator = {
         id,
-        name,
         domain,
         mandate,
         concerns: normalizeConcerns(e['concerns']),
         autonomousDecisions: normalizeStringList(e['autonomousDecisions']),
         escalationTriggers: normalizeStringList(e['escalationTriggers']),
       }
+      if (name?.trim()) draft.name = name.trim()
       if (pth) draft.path = pth
       drafts.push(draft)
     }
@@ -326,6 +442,265 @@ function normalizeConcerns(value: unknown): DraftCoordinator['concerns'] {
     })
   }
   return out
+}
+
+function titleizeDomain(id: string): string {
+  return id
+    .replace(/[-_]+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map(part => {
+      const lower = part.toLowerCase()
+      if (['ui', 'api', 'cli', 'qa', 'dts', 'js', 'ts', 'vscode'].includes(lower)) {
+        return lower === 'vscode' ? 'VS Code' : lower.toUpperCase()
+      }
+      return lower.charAt(0).toUpperCase() + lower.slice(1)
+    })
+    .join(' ')
+}
+
+function slugifyDomain(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function splitDomainAnswer(answer: string): string[] {
+  return answer
+    .split(',')
+    .map(s => slugifyDomain(s.trim()))
+    .filter(Boolean)
+}
+
+function questionAnswer(task: Task, includes: string): string | undefined {
+  const questions = Array.isArray(task.openQuestions) ? task.openQuestions : []
+  const needle = includes.toLowerCase()
+  const found = questions.find(q => {
+    const prompt = 'prompt' in q && typeof q.prompt === 'string' ? q.prompt : ''
+    return prompt.toLowerCase().includes(needle) && typeof q.answer === 'string' && q.answer.trim().length > 0
+  })
+  return found && typeof found.answer === 'string' ? found.answer.trim() : undefined
+}
+
+function selectedDomainsFromAnswers(task: Task): string[] {
+  const questions = Array.isArray(task.openQuestions) ? task.openQuestions : []
+  const domainQuestion = questions.find(q => {
+    const prompt = 'prompt' in q && typeof q.prompt === 'string' ? q.prompt : ''
+    return /coordinator domains|project areas|review lanes/i.test(prompt) &&
+      typeof q.answer === 'string' &&
+      q.answer.trim().length > 0
+  })
+  if (domainQuestion && typeof domainQuestion.answer === 'string') {
+    const parsed = splitDomainAnswer(domainQuestion.answer)
+    const supported = parsed.filter(id => FALLBACK_SYNTH_DOMAIN_IDS.has(id))
+    if (supported.length > 0) return [...new Set(supported)]
+  }
+  return ['converter-core', 'extension-ui', 'testing-qa', 'docs']
+}
+
+function coordinatorTemplate(id: string, task: Task): DraftCoordinator {
+  const templates: Record<string, Omit<DraftCoordinator, 'id' | 'domain'>> = {
+    'converter-core': {
+      name: 'Converter Core',
+      mandate: questionAnswer(task, 'converter-core mandate') ??
+        'Protect the TypeScript-to-JSDoc conversion engine so edits round-trip correctly between the in-editor TypeScript view and saved JavaScript.',
+      concerns: [
+        {
+          id: 'round-trip-correctness',
+          description: 'Type annotations, comments, generics, and supported TypeScript syntax survive conversion without semantic drift.',
+          reviewQuestions: [
+            'Does this preserve runtime JavaScript while improving the TypeScript editing view?',
+            'Are edge cases covered by converter tests?',
+          ],
+        },
+      ],
+      autonomousDecisions: ['Approve small parser or formatting fixes covered by converter tests.'],
+      escalationTriggers: ['A change cannot round-trip without losing user-authored code or comments.'],
+    },
+    'extension-ui': {
+      name: 'Editor Extension Experience',
+      path: 'packages/extension',
+      mandate: 'Protect the VS Code/Cursor command flow, virtual document behavior, save lifecycle, and user-facing extension ergonomics.',
+      concerns: [
+        {
+          id: 'editor-workflow',
+          description: 'Opening, editing, and saving JavaScript as TypeScript feels predictable inside the editor.',
+          reviewQuestions: [
+            'Can a user tell whether they are editing the virtual TypeScript view or the saved JavaScript file?',
+            'Does the save path avoid data loss and stale editor state?',
+          ],
+        },
+      ],
+      autonomousDecisions: ['Approve command labels and small editor-state fixes that do not change conversion semantics.'],
+      escalationTriggers: ['A change alters save behavior, file ownership, or editor trust boundaries.'],
+    },
+    'dts-generation': {
+      name: 'Declaration File Generation',
+      mandate: 'Protect optional .d.ts generation so generated declarations match saved JavaScript and never surprise users by default.',
+      concerns: [
+        {
+          id: 'declaration-safety',
+          description: 'Declaration output is opt-in, reproducible, and aligned with the converter output.',
+          reviewQuestions: [
+            'Is declaration generation still off by default unless the user opts in?',
+            'Do generated declarations match the saved JavaScript API?',
+          ],
+        },
+      ],
+      autonomousDecisions: ['Approve narrow declaration formatting fixes covered by tests.'],
+      escalationTriggers: ['A change writes new files automatically or changes default generation behavior.'],
+    },
+    'testing-qa': {
+      name: 'Testing and Quality',
+      mandate: 'Protect the project gates and test coverage for converter behavior, extension workflow, and release readiness.',
+      concerns: [
+        {
+          id: 'gate-coverage',
+          description: 'Build, lint, and tests remain meaningful signals for project health.',
+          reviewQuestions: [
+            'Does this add or update tests for changed behavior?',
+            'Are failing gates treated as work to fix rather than ignored?',
+          ],
+        },
+      ],
+      autonomousDecisions: ['Approve test-only changes that clarify existing behavior.'],
+      escalationTriggers: ['A gate is removed, weakened, or marked optional without a clear reason.'],
+    },
+    docs: {
+      name: 'Documentation',
+      mandate: questionAnswer(task, 'docs mandate') ??
+        'Keep README, usage guidance, and developer docs aligned with how the extension and converter actually work.',
+      concerns: [
+        {
+          id: 'docs-match-product',
+          description: 'Documentation explains the real user workflow and current feature support.',
+          reviewQuestions: [
+            'Would a new user understand what the extension does and how to try it?',
+            'Do examples match supported converter behavior?',
+          ],
+        },
+      ],
+      autonomousDecisions: ['Approve wording fixes that clarify current behavior without changing product promises.'],
+      escalationTriggers: ['Docs promise unsupported TypeScript features or a release channel that does not exist yet.'],
+    },
+    'release-publishing': {
+      name: 'Release and Publishing',
+      mandate: 'Protect packaging, versioning, marketplace readiness, and publish-time checks.',
+      concerns: [
+        {
+          id: 'release-safety',
+          description: 'Published artifacts are built, tested, versioned, and documented consistently.',
+          reviewQuestions: [
+            'Are package metadata and marketplace assets ready for the intended release?',
+            'Do release commands use verified build outputs?',
+          ],
+        },
+      ],
+      autonomousDecisions: ['Approve metadata corrections that do not publish or change credentials.'],
+      escalationTriggers: ['A change publishes, signs, or creates persistent credentials.'],
+    },
+  }
+
+  const fallback: Omit<DraftCoordinator, 'id' | 'domain'> = {
+    name: titleizeDomain(id),
+    mandate: `Protect the ${titleizeDomain(id)} area of the project as future tasks are planned and reviewed.`,
+    concerns: [
+      {
+        id: 'area-quality',
+        description: `Changes in ${titleizeDomain(id)} stay scoped, testable, and understandable.`,
+        reviewQuestions: ['Does this change preserve the intended behavior for this project area?'],
+      },
+    ],
+    autonomousDecisions: ['Approve small, tested fixes within this area.'],
+    escalationTriggers: ['The change crosses project boundaries or changes user-visible behavior without a clear spec.'],
+  }
+  const base = templates[id] ?? fallback
+  return {
+    id,
+    domain: id,
+    name: base.name,
+    ...(base.path ? { path: base.path } : {}),
+    mandate: base.mandate,
+    concerns: base.concerns,
+    autonomousDecisions: base.autonomousDecisions,
+    escalationTriggers: base.escalationTriggers,
+  }
+}
+
+async function packageScripts(workspacePath: string): Promise<Record<string, string>> {
+  try {
+    const raw = await fs.readFile(path.join(workspacePath, 'package.json'), 'utf-8')
+    const parsed = JSON.parse(raw) as { scripts?: Record<string, unknown> }
+    const scripts: Record<string, string> = {}
+    for (const [name, value] of Object.entries(parsed.scripts ?? {})) {
+      if (typeof value === 'string') scripts[name] = value
+    }
+    return scripts
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Deterministic escape hatch for meta-intake. If the LLM has already asked and
+ * received enough setup answers but failed to emit YAML, synthesize a reviewable
+ * draft from the saved answers and repo package metadata.
+ */
+export async function synthesizeMetaIntakeDraft(
+  input: SynthesizeMetaIntakeDraftInput,
+): Promise<SynthesizeMetaIntakeDraftResult> {
+  const queue = await readQueue(input.memoryDir)
+  const task = queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)
+  if (!task) return { success: false, error: `No meta-intake task found (id: ${META_INTAKE_TASK_ID})` }
+  const existing = parseCoordinatorDraft(task.spec ?? '')
+  if (existing && existing.length > 0) return { success: true, drafts: existing }
+
+  const domains = selectedDomainsFromAnswers(task)
+  const drafts = domains.map(domain => coordinatorTemplate(domain, task))
+  if (drafts.length === 0) return { success: false, error: 'Could not infer any coordinator roles from saved answers.' }
+
+  const scripts = await packageScripts(input.workspacePath)
+  const successGates = ['build', 'test', 'lint']
+    .filter(name => typeof scripts[name] === 'string')
+    .map(name => `pnpm run ${name}`)
+
+  const specParts = [
+    'Deterministic fallback draft from saved meta-intake answers. Review before merging.',
+    '',
+    '```yaml',
+    yamlDump({ coordinators: drafts }, { lineWidth: 100, noRefs: true }).trim(),
+    '```',
+  ]
+  if (successGates.length > 0) {
+    specParts.push(
+      '',
+      '```yaml',
+      yamlDump({
+        bootstrap: {
+          commands: ['pnpm install'],
+          successGates,
+          timeoutMs: 300_000,
+        },
+      }, { lineWidth: 100, noRefs: true }).trim(),
+      '```',
+    )
+  }
+
+  const now = new Date().toISOString()
+  task.spec = specParts.join('\n') + '\n'
+  task.status = 'spec_review'
+  task.updatedAt = now
+  queue.lastUpdated = now
+  await writeQueue(input.memoryDir, queue)
+  await appendExploringTranscript({
+    memoryDir: input.memoryDir,
+    taskId: META_INTAKE_TASK_ID,
+    role: 'system',
+    content: 'Synthesized a meta-intake draft from saved answers after the agent failed to emit YAML.',
+  })
+
+  return { success: true, drafts }
 }
 
 // ---------------------------------------------------------------------------
@@ -659,7 +1034,6 @@ export async function approveMetaIntake(
     if (existingIds.has(draft.id)) continue
     merged.push({
       id: draft.id,
-      name: draft.name,
       domain: draft.domain,
       ...(draft.path ? { path: draft.path } : {}),
       mandate: draft.mandate,

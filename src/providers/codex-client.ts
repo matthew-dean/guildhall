@@ -230,8 +230,24 @@ function convertToolsToCodex(tools: Array<Record<string, unknown>>): Array<Recor
     type: 'function',
     name: tool.name,
     description: (tool.description as string | undefined) ?? '',
-    parameters: (tool.input_schema as Record<string, unknown> | undefined) ?? {},
+    parameters: normalizeToolParameters(
+      tool.input_schema as Record<string, unknown> | undefined,
+    ),
   }))
+}
+
+// The Codex Responses endpoint validates function schemas strictly: an object
+// schema must include `properties`, even when the tool takes no arguments.
+function normalizeToolParameters(
+  raw: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const base: Record<string, unknown> =
+    raw && typeof raw === 'object' ? { ...raw } : {}
+  if (base.type == null) base.type = 'object'
+  if (base.type === 'object' && (base.properties == null || typeof base.properties !== 'object')) {
+    base.properties = {}
+  }
+  return base
 }
 
 function formatCodexError(status: number, payload: string): string {

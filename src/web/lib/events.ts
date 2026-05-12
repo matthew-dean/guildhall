@@ -8,11 +8,13 @@
  */
 
 import type { EventEnvelope } from './types.js'
+import { withCurrentProjectQuery } from './project-routes.js'
 
 type Listener = (ev: EventEnvelope) => void
 
 const listeners = new Set<Listener>()
 let current: EventSource | null = null
+let currentUrl: string | null = null
 
 export type SseStatus = 'connecting' | 'live' | 'error'
 type StatusListener = (s: SseStatus) => void
@@ -37,9 +39,12 @@ function setStatus(next: SseStatus) {
 }
 
 export function connectStream(): void {
+  const nextUrl = withCurrentProjectQuery('/api/project/events')
+  if (current && currentUrl === nextUrl) return
   if (current) current.close()
+  currentUrl = nextUrl
   setStatus('connecting')
-  const es = new EventSource('/api/project/events')
+  const es = new EventSource(nextUrl)
   current = es
   es.onopen = () => setStatus('live')
   es.onerror = () => setStatus('error')
@@ -67,10 +72,20 @@ export function summarizeEvent(env: EventEnvelope): string {
       return 'ERROR: ' + (inner.message ?? '')
     case 'agent_issue':
       return `issue [${inner.severity}/${inner.code}] ${inner.task_id} — ${inner.reason ?? ''}`
+    case 'agent_started':
+      return `${inner.agent_name ?? 'agent'} started ${inner.task_id ?? ''}`
+    case 'agent_finished':
+      return `${inner.agent_name ?? 'agent'} finished ${inner.task_id ?? ''}`
     case 'supervisor_started':
     case 'supervisor_stopped':
     case 'supervisor_error':
-      return type.replace('supervisor_', '') + (inner.message ? ': ' + inner.message : '')
+      return (
+        type.replace('supervisor_', '') +
+        (inner.reason ? ` (${inner.reason})` : '') +
+        (inner.message ? ': ' + inner.message : '')
+      )
+    case 'provider_health_changed':
+      return 'provider health' + (inner.message ? ': ' + inner.message : '')
     case 'heartbeat':
     case 'connected':
       return ''
@@ -92,6 +107,8 @@ export function eventCssClass(env: EventEnvelope): string {
   if (type === 'escalation_raised') return 'escalation'
   if (type === 'error') return 'error'
   if (type === 'agent_issue') return 'issue'
+  if (type === 'agent_started' || type === 'agent_finished') return 'supervisor'
   if (type.startsWith('supervisor_')) return 'supervisor'
+  if (type === 'provider_health_changed') return 'issue'
   return ''
 }

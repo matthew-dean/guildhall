@@ -1,14 +1,26 @@
-import { describe, it, expect } from 'vitest'
+import { afterAll, describe, it, expect } from 'vitest'
 import type { Task } from '@guildhall/core'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import {
   computeBranchName,
   computeWorktreePath,
   ensureWorktreeForDispatch,
   cleanupWorktreeForTerminal,
-  DEFAULT_WORKTREE_ROOT_SEGMENT,
   worktreeRootFor,
 } from '../worktree-manager.js'
 import { InMemoryGitDriver } from '../git-driver.js'
+
+const ORIGINAL_GUILDHALL_CONFIG_DIR = process.env.GUILDHALL_CONFIG_DIR
+const TEST_GUILDHALL_HOME = path.join(os.tmpdir(), `guildhall-worktree-home-${process.pid}`)
+
+process.env.GUILDHALL_CONFIG_DIR = TEST_GUILDHALL_HOME
+
+afterAll(() => {
+  if (ORIGINAL_GUILDHALL_CONFIG_DIR === undefined) delete process.env.GUILDHALL_CONFIG_DIR
+  else process.env.GUILDHALL_CONFIG_DIR = ORIGINAL_GUILDHALL_CONFIG_DIR
+})
 
 function task(overrides: Partial<Task> = {}): Task {
   const now = '2026-04-22T00:00:00.000Z'
@@ -42,8 +54,8 @@ describe('computeBranchName / computeWorktreePath', () => {
   it('per_task uses stable names across revisions', () => {
     const t = task({ id: 'abc/123', revisionCount: 2 })
     expect(computeBranchName(t, 'per_task')).toBe('guildhall/task-abc_123')
-    expect(computeWorktreePath('/repo', t, 'per_task')).toBe(
-      `/repo/${DEFAULT_WORKTREE_ROOT_SEGMENT}/abc_123`,
+    expect(computeWorktreePath('demo-project', t, 'per_task')).toBe(
+      path.join(TEST_GUILDHALL_HOME, 'worktrees', 'demo-project', 'abc_123'),
     )
   })
 
@@ -52,14 +64,14 @@ describe('computeBranchName / computeWorktreePath', () => {
     expect(computeBranchName(t, 'per_attempt')).toBe(
       'guildhall/task-abc/attempt-3',
     )
-    expect(computeWorktreePath('/repo', t, 'per_attempt')).toBe(
-      `/repo/${DEFAULT_WORKTREE_ROOT_SEGMENT}/abc/attempt-3`,
+    expect(computeWorktreePath('demo-project', t, 'per_attempt')).toBe(
+      path.join(TEST_GUILDHALL_HOME, 'worktrees', 'demo-project', 'abc', 'attempt-3'),
     )
   })
 
-  it('worktreeRootFor joins under .guildhall/worktrees', () => {
-    expect(worktreeRootFor('/some/project')).toBe(
-      `/some/project/${DEFAULT_WORKTREE_ROOT_SEGMENT}`,
+  it('worktreeRootFor joins under ~/.guildhall/worktrees/<project-id>', () => {
+    expect(worktreeRootFor('some-project')).toBe(
+      path.join(TEST_GUILDHALL_HOME, 'worktrees', 'some-project'),
     )
   })
 })
@@ -70,6 +82,7 @@ describe('ensureWorktreeForDispatch', () => {
     const r = await ensureWorktreeForDispatch({
       task: task(),
       mode: 'none',
+      projectId: 'demo-project',
       projectPath: '/repo',
       baseBranch: 'main',
       gitDriver: driver,
@@ -84,6 +97,7 @@ describe('ensureWorktreeForDispatch', () => {
     const r = await ensureWorktreeForDispatch({
       task: task({ id: 'abc' }),
       mode: 'per_task',
+      projectId: 'demo-project',
       projectPath: '/repo',
       baseBranch: 'main',
       gitDriver: driver,
@@ -105,12 +119,47 @@ describe('ensureWorktreeForDispatch', () => {
     const r = await ensureWorktreeForDispatch({
       task: seeded,
       mode: 'per_task',
+      projectId: 'demo-project',
       projectPath: '/repo',
       baseBranch: 'main',
       gitDriver: driver,
     })
     expect(r.created).toBe(false)
     expect(driver.state.createdWorktrees).toHaveLength(0)
+  })
+
+  it('backfills runtime links when reusing an existing worktree', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-runtime-reuse-'))
+    const projectPath = path.join(tmp, 'knit')
+    const worktreePath = path.join(TEST_GUILDHALL_HOME, 'worktrees', 'demo-project', 'abc')
+    await fs.mkdir(path.join(projectPath, 'node_modules'), { recursive: true })
+    await fs.mkdir(path.join(projectPath, 'web', 'node_modules'), { recursive: true })
+    await fs.writeFile(path.join(projectPath, 'web', 'package.json'), '{}')
+    await fs.mkdir(worktreePath, { recursive: true })
+
+    const driver = new InMemoryGitDriver()
+    const seeded = task({
+      id: 'abc',
+      projectPath,
+      worktreePath,
+      branchName: 'guildhall/task-abc',
+      baseBranch: 'main',
+    })
+    const result = await ensureWorktreeForDispatch({
+      task: seeded,
+      mode: 'per_task',
+      projectId: 'demo-project',
+      projectPath,
+      baseBranch: 'main',
+      gitDriver: driver,
+    })
+    expect(result.created).toBe(false)
+    expect(await fs.readlink(path.join(worktreePath, 'node_modules'))).toBe(
+      path.relative(path.join(worktreePath), path.join(projectPath, 'node_modules')),
+    )
+    expect(await fs.readlink(path.join(worktreePath, 'web', 'node_modules'))).toBe(
+      path.relative(path.join(worktreePath, 'web'), path.join(projectPath, 'web', 'node_modules')),
+    )
   })
 
   it('creates a new per_attempt worktree when revision bumps', async () => {
@@ -125,12 +174,62 @@ describe('ensureWorktreeForDispatch', () => {
     const r = await ensureWorktreeForDispatch({
       task: seeded,
       mode: 'per_attempt',
+      projectId: 'demo-project',
       projectPath: '/repo',
       baseBranch: 'main',
       gitDriver: driver,
     })
     expect(r.created).toBe(true)
     expect(r.branchName).toBe('guildhall/task-abc/attempt-1')
+  })
+
+  it('creates sibling repo symlinks for nested multi-repo worktrees', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-worktree-'))
+    const workspacePath = path.join(tmp, 'workspace')
+    const knitPath = path.join(workspacePath, 'knit')
+    const loomaPath = path.join(workspacePath, 'looma')
+    await fs.mkdir(knitPath, { recursive: true })
+    await fs.mkdir(loomaPath, { recursive: true })
+    await fs.writeFile(path.join(knitPath, '.git'), '')
+    await fs.writeFile(path.join(loomaPath, 'package.json'), '{}')
+
+    const driver = new InMemoryGitDriver()
+    await ensureWorktreeForDispatch({
+      task: task({ id: 'abc', projectPath: knitPath }),
+      mode: 'per_task',
+      projectId: 'knit',
+      projectPath: knitPath,
+      workspacePath,
+      baseBranch: 'main',
+      gitDriver: driver,
+    })
+
+    const linkPath = path.join(TEST_GUILDHALL_HOME, 'worktrees', 'knit', 'looma')
+    expect(await fs.readlink(linkPath)).toBe(path.relative(path.dirname(linkPath), loomaPath))
+  })
+
+  it('mirrors project node_modules into the task worktree for runnable package commands', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-runtime-links-'))
+    const projectPath = path.join(tmp, 'knit')
+    const webPath = path.join(projectPath, 'web')
+    await fs.mkdir(path.join(projectPath, 'node_modules'), { recursive: true })
+    await fs.mkdir(path.join(webPath, 'node_modules'), { recursive: true })
+    await fs.writeFile(path.join(webPath, 'package.json'), '{}')
+
+    const driver = new InMemoryGitDriver()
+    const result = await ensureWorktreeForDispatch({
+      task: task({ id: 'runtime-links', projectPath }),
+      mode: 'per_task',
+      projectId: 'knit',
+      projectPath,
+      baseBranch: 'main',
+      gitDriver: driver,
+    })
+
+    const rootLink = path.join(result.worktreePath, 'node_modules')
+    const webLink = path.join(result.worktreePath, 'web', 'node_modules')
+    expect(await fs.readlink(rootLink)).toBe(path.relative(path.dirname(rootLink), path.join(projectPath, 'node_modules')))
+    expect(await fs.readlink(webLink)).toBe(path.relative(path.dirname(webLink), path.join(webPath, 'node_modules')))
   })
 })
 

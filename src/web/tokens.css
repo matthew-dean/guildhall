@@ -5,7 +5,16 @@
  */
 
 :root {
-  /* colors — semantic */
+  /* colors — semantic
+     These are the only palette families UI code should use. They represent:
+     - neutral structure
+     - guided emphasis
+     - healthy / confirmed states
+     - caution / partial confidence
+     - danger / failure
+
+     New surfaces should map back to these roles instead of inventing
+     near-match local hues. */
   --bg: #0f0f11;
   --bg-base: #0f0f11;        /* page background */
   --bg-raised: #1a1a1f;      /* rails, sections, inset surfaces */
@@ -19,6 +28,33 @@
   --text-muted: #888899;
   --danger: #e05252;
   --warn: #d4a23c;
+
+  /* semantic tints
+     Surface treatments for notices, selected cards, and grouped emphasis.
+     Keep these aligned with the core role families above. */
+  --surface-neutral: #1f1f27;
+  --surface-neutral-strong: #262632;
+  --surface-accent: #1f1f27;
+  --surface-accent-strong: #262632;
+  --surface-ok: #1d2b29;
+  --surface-ok-strong: #25403a;
+  --surface-warn: #322816;
+  --surface-warn-strong: #49371c;
+  --surface-danger: #351d22;
+  --surface-danger-strong: #4b252d;
+
+  /* chip tokens
+     Chips are the compact expression of the same semantic palette. */
+  --chip-neutral-bg: #383844;
+  --chip-neutral-fg: #ececf6;
+  --chip-ok-bg: rgba(78, 204, 163, 0.15);
+  --chip-ok-fg: var(--accent-2);
+  --chip-warn-bg: rgba(212, 162, 60, 0.15);
+  --chip-warn-fg: var(--warn);
+  --chip-danger-bg: rgba(224, 82, 82, 0.15);
+  --chip-danger-fg: var(--danger);
+  --chip-accent-bg: #584ab0;
+  --chip-accent-fg: #fbfaff;
 
   /* status stripes — saturated 3px left borders for cards/rows.
      Kept as solid colors (not tints) so the stripe remains legible on
@@ -60,6 +96,40 @@
   --control-h: 26px;
   --control-pad-y: 4px;
   --control-pad-x: 10px;
+
+  /* app chrome */
+  --app-header-h: 34px;
+  --app-top-stack-h: calc(var(--app-header-h) + var(--app-banner-h, 0px));
+
+  /* layering contract
+     1. in-flow sticky UI (section heads, page headers)
+     2. shell chrome (topbar, app header)
+     3. global banners/alerts
+     4. drawer overlays
+     5. modals
+     6. ephemeral overlays (tooltips) */
+  --z-sticky-local: 5;
+  --z-topbar: 20;
+  --z-app-header: 30;
+  --z-banner: 40;
+  --z-popover: 50;
+  --z-drawer-backdrop: 120;
+  --z-drawer: 130;
+  --z-modal-backdrop: 140;
+  --z-modal: 150;
+  --z-tooltip: 160;
+}
+
+html,
+body,
+#svelte-root {
+  height: 100%;
+  min-height: 100%;
+  overflow: hidden;
+}
+
+html {
+  height: 100%;
 }
 
 *, *::before, *::after {
@@ -71,10 +141,12 @@
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: 'Inter', system-ui, sans-serif;
+  /* Rounded Sans - https://github.com/system-fonts/modern-font-stacks#rounded-sans */
+  font-family: ui-rounded, 'Hiragino Maru Gothic ProN', Quicksand, Comfortaa, Manjari, 'Arial Rounded MT', 'Arial Rounded MT Bold', Calibri, source-sans-pro, sans-serif;
   font-size: var(--fs-2);
   line-height: var(--lh-body);
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 h1, h2, h3, h4 { line-height: var(--lh-tight); font-weight: 600; }

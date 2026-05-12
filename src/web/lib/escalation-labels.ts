@@ -36,6 +36,7 @@ const ROLE_LABEL: Record<string, string> = {
   'spec-agent': 'Spec author',
   'reviewer-agent': 'Reviewer',
   'gate-checker': 'Gate checker',
+  'gate-checker-agent': 'Gate checker',
   'coordinator-agent': 'Coordinator',
   human: 'Human',
 }
@@ -57,4 +58,49 @@ const ROLE_BLURB: Record<string, string> = {
 export function roleBlurb(agentId: string | undefined | null): string {
   if (!agentId) return ''
   return ROLE_BLURB[agentId] ?? ''
+}
+
+export type EscalationAction = {
+  label: string
+  nextStatus: 'ready' | 'gate_check' | 'in_progress' | 'exploring' | 'spec_review' | 'review'
+  resolution: string
+}
+
+export function escalationPrimaryAction(
+  escalation: {
+    reason?: string | undefined
+    agentId?: string | undefined
+    summary?: string | undefined
+    details?: string | undefined
+  } | undefined | null,
+): EscalationAction {
+  const reason = escalation?.reason ?? ''
+  const agentId = escalation?.agentId ?? ''
+  const text = `${escalation?.summary ?? ''}\n${escalation?.details ?? ''}`
+  if (reason === 'gate_hard_failure') {
+    return {
+      label: 'Retry gates',
+      nextStatus: 'gate_check',
+      resolution: 'Retrying gates after addressing the failure.',
+    }
+  }
+  if (agentId === 'worker-agent' && /turn limit|maximum turn/i.test(text)) {
+    return {
+      label: 'Resume worker',
+      nextStatus: 'in_progress',
+      resolution: 'Resume the worker with the current spec and continue from the last attempt.',
+    }
+  }
+  if (reason === 'spec_ambiguous') {
+    return {
+      label: 'Rework spec',
+      nextStatus: 'exploring',
+      resolution: 'Reopening intake so the spec can be clarified.',
+    }
+  }
+  return {
+    label: 'Resume task',
+    nextStatus: 'ready',
+    resolution: 'Resolved by human; continue from the coordinator.',
+  }
 }

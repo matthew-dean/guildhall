@@ -1,12 +1,21 @@
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import { runGates } from './gate-runner.js'
+import fs from 'node:fs/promises'
+import type { HardGate } from '@guildhall/core'
+import {
+  parseAuthoritativeCommands,
+  reconcileRequestedGatesWithAuthority,
+} from './gate-command-authority.js'
+import { summarizeScopedHardGateDisposition } from './gate-scope-exceptions.js'
 
-// ---------------------------------------------------------------------------
-// run-gates engine tool — lets a gate-checker agent execute hard gates and
-// receive structured pass/fail results. For deterministic callers (the
-// orchestrator, tests) use runGates() directly from gate-runner.ts.
-// ---------------------------------------------------------------------------
+export { reconcileRequestedGatesWithAuthority } from './gate-command-authority.js'
+
+function metadataStringArray(metadata: Record<string, unknown>, key: string): string[] {
+  return Array.isArray(metadata[key])
+    ? (metadata[key] as unknown[]).filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : []
+}
 
 const hardGateSchema = z.object({
   id: z.string(),
@@ -26,6 +35,53 @@ const runGatesInputSchema = z.object({
 })
 
 export type RunGatesToolInput = z.input<typeof runGatesInputSchema>
+
+async function persistGateResultsForCurrentTask(input: {
+  metadata: Record<string, unknown>
+  results: Array<{ gateId: string; type: 'hard' | 'soft'; passed: boolean; output?: string; checkedAt: string }>
+}): Promise<boolean> {
+  const taskId = typeof input.metadata['current_task_id'] === 'string'
+    ? input.metadata['current_task_id']
+    : ''
+  const tasksPath = typeof input.metadata['tasks_path'] === 'string'
+    ? input.metadata['tasks_path']
+    : ''
+  if (!taskId || !tasksPath) return false
+
+  try {
+    const raw = await fs.readFile(tasksPath, 'utf8')
+    const queue = JSON.parse(raw) as {
+      version: number
+      lastUpdated: string
+      tasks: Array<Record<string, unknown>>
+    }
+    const task = queue.tasks.find((candidate) => candidate['id'] === taskId)
+    if (!task) return false
+
+    const resultIds = new Set(input.results.map((result) => result.gateId))
+    const existing = Array.isArray(task['gateResults']) ? task['gateResults'] : []
+    task['gateResults'] = [
+      ...existing.filter((entry) => {
+        if (!entry || typeof entry !== 'object') return true
+        const gateId = typeof (entry as Record<string, unknown>)['gateId'] === 'string'
+          ? (entry as Record<string, unknown>)['gateId'] as string
+          : ''
+        const type = typeof (entry as Record<string, unknown>)['type'] === 'string'
+          ? (entry as Record<string, unknown>)['type'] as string
+          : ''
+        return !(type === 'hard' && resultIds.has(gateId))
+      }),
+      ...input.results,
+    ]
+    const now = new Date().toISOString()
+    task['updatedAt'] = now
+    queue.lastUpdated = now
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+    return true
+  } catch {
+    return false
+  }
+}
 
 export const runGatesTool = defineTool({
   name: 'run-gates',
@@ -56,21 +112,49 @@ export const runGatesTool = defineTool({
     required: ['cwd', 'gates'],
   },
   isReadOnly: () => false,
-  execute: async (input) => {
-    const summary = await runGates({
-      cwd: input.cwd,
-      gates: input.gates.map((g) => ({
+  execute: async (input, ctx) => {
+    const authoritativeCommands = parseAuthoritativeCommands(ctx.metadata)
+    const effective = reconcileRequestedGatesWithAuthority(
+      input.gates.map((g) => ({
         id: g.id,
         label: g.label,
         command: g.command,
         timeoutMs: g.timeoutMs ?? 120_000,
       })),
+      authoritativeCommands,
+    )
+    const summary = await runGates({
+      cwd: input.cwd,
+      gates: effective.gates,
       failFast: input.failFast ?? false,
       ...(input.maxOutputBytes !== undefined ? { maxOutputBytes: input.maxOutputBytes } : {}),
     })
+    const scopeDisposition = summarizeScopedHardGateDisposition(
+      {
+        projectPath:
+          typeof ctx.metadata['current_task_project_path'] === 'string'
+            ? ctx.metadata['current_task_project_path']
+            : input.cwd,
+        likelyTargetFiles: metadataStringArray(ctx.metadata, 'current_task_likely_target_files'),
+        resolvedDecisionTexts: metadataStringArray(ctx.metadata, 'current_task_resolved_scope_decisions'),
+      },
+      summary.results,
+    )
+    const persistedTaskGateResults = await persistGateResultsForCurrentTask({
+      metadata: ctx.metadata,
+      results: summary.results,
+    })
+    const effectiveAllPassed = scopeDisposition?.shouldPass ?? summary.allPassed
 
     const lines = [
-      `Gates: ${summary.allPassed ? 'ALL PASS' : 'SOME FAIL'} (${summary.results.filter((r) => r.passed).length}/${summary.results.length})`,
+      ...(effective.usedAuthority ? ['Using authoritative task-scoped hard gates.', ''] : []),
+      ...(scopeDisposition?.exemptedFailures.length
+        ? [
+            `Scoped exception: ${scopeDisposition.exemptedFailures.map((gate) => gate.gateId).join(', ')} failed only outside the task target files and is exempt from blocking this task.`,
+            '',
+          ]
+        : []),
+      `Gates: ${effectiveAllPassed ? 'ALL PASS' : 'SOME FAIL'} (${summary.results.filter((r) => r.passed).length}/${summary.results.length} raw)`,
       ...summary.results.map(
         (r) => `- ${r.gateId}: ${r.passed ? 'pass' : 'FAIL'}${r.output ? `\n  ${r.output.split('\n').slice(0, 3).join('\n  ')}` : ''}`,
       ),
@@ -78,8 +162,15 @@ export const runGatesTool = defineTool({
 
     return {
       output: lines.join('\n'),
-      is_error: !summary.allPassed,
-      metadata: summary as unknown as Record<string, unknown>,
+      is_error: !effectiveAllPassed,
+      metadata: {
+        ...(summary as unknown as Record<string, unknown>),
+        effectiveGates: effective.gates as unknown as Record<string, unknown>,
+        usedAuthoritativeTaskGates: effective.usedAuthority,
+        persistedTaskGateResults,
+        effectiveAllPassed,
+        scopeExemptFailures: scopeDisposition?.exemptedFailures as unknown as Record<string, unknown>,
+      },
     }
   },
 })

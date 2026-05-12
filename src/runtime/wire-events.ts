@@ -61,6 +61,17 @@ export function tickOutcomeToBackendEvent(outcome: TickOutcome): BackendEvent | 
         agent_name: outcome.agent,
       }
 
+    case 'provider-backoff':
+      return {
+        type: 'error',
+        message:
+          `${outcome.agent} hit a retryable provider throttle on ${outcome.taskId}. ` +
+          `Guildhall kept the task in ${outcome.status} so the next run can resume gate verification without rework.`,
+        task_id: outcome.taskId,
+        agent_name: outcome.agent,
+        reason: 'provider_backoff',
+      }
+
     case 'proposal-decided':
       // FR-21: promotions present as a task_transition so subscribers already
       // rendering transitions pick them up without a schema extension. The
@@ -122,7 +133,13 @@ function humanizeAgentError(agent: string, taskId: string, error: string): strin
   if (maxTurnsMatch) {
     return (
       `${agent} ran its step budget (${maxTurnsMatch[1]} steps) on ${taskId} and saved progress. ` +
-      `The next orchestrator tick will pick up where it left off — no action needed.`
+      `The next coordinator pass will pick up where it left off — no action needed.`
+    )
+  }
+  if (/Model returned an empty assistant message/.test(error)) {
+    return (
+      `${agent} got an empty model reply while working on ${taskId}. ` +
+      `Guildhall kept the task state intact; retry the run or switch providers if this keeps happening.`
     )
   }
   return `Agent ${agent} failed on ${taskId}: ${error}`

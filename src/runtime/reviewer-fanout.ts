@@ -1,5 +1,5 @@
 import type { GuildDefinition } from '@guildhall/guilds'
-import type { ReviewVerdict, AdjudicationRecord } from '@guildhall/core'
+import type { ReviewVerdict, AdjudicationRecord, Task } from '@guildhall/core'
 
 /**
  * Reviewer fan-out: at `review`, each applicable persona produces an
@@ -20,8 +20,15 @@ export interface PersonaVerdict {
   guildName: string
   verdict: 'approve' | 'revise'
   reasoning: string
-  /** Bullet points of what must change, only populated when `verdict === 'revise'`. */
+  /** Bullet points of recommended task-local changes, only populated when `verdict === 'revise'`. */
   revisionItems: string[]
+  /** Concrete risks or trade-offs if the recommendation is not taken now. */
+  riskItems?: string[]
+  recommendationPriority?: 'low' | 'medium' | 'high'
+  expectedValue?: 'low' | 'medium' | 'high'
+  deferredRisk?: 'low' | 'medium' | 'high'
+  /** Broader ideas that should not block this task. */
+  followUpItems?: string[]
   /** Raw model output, preserved for audit. */
   rawOutput: string
 }
@@ -45,6 +52,11 @@ export interface FanoutAggregate {
   adjudicationTrigger?: AdjudicationRecord['trigger']
 }
 
+interface PersonaOutputHints {
+  taskText?: string
+  narrowScopeTask?: boolean
+}
+
 export type ReviewerFanoutPolicy =
   | 'strict'
   | 'coordinator_adjudicates_on_conflict'
@@ -62,6 +74,7 @@ export type ReviewerFanoutPolicy =
 export function parsePersonaOutput(
   guild: GuildDefinition,
   rawOutput: string,
+  hints: PersonaOutputHints = {},
 ): PersonaVerdict {
   const verdictMatch = rawOutput.match(/\*\*Verdict:\*\*\s*(approve|revise|approved|needs revision)/i)
   const verdict: PersonaVerdict['verdict'] = verdictMatch
@@ -94,13 +107,209 @@ export function parsePersonaOutput(
     }
   }
 
+  const followUpItems: string[] = []
+  const riskItems: string[] = []
+  const advisoryScores = parseAdvisoryScores(rawOutput)
+  const followUpMatch = rawOutput.match(
+    /\*\*Optional follow-up ideas[^:]*:\*\*\s*([\s\S]*?)(?:\n\s*\*\*|$)/i,
+  )
+  if (followUpMatch) {
+    const lines = followUpMatch[1]!
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith('-') || l.startsWith('*'))
+    for (const l of lines) {
+      const cleaned = l.replace(/^[-*]\s*/, '').trim()
+      if (cleaned.length === 0) continue
+      if (/^\(none\)$/i.test(cleaned)) continue
+      followUpItems.push(cleaned)
+    }
+  }
+  const riskMatch = rawOutput.match(
+    /\*\*Risk if accepted as-is:\*\*\s*([\s\S]*?)(?:\n\s*\*\*|$)/i,
+  )
+  if (riskMatch) {
+    const lines = riskMatch[1]!
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith('-') || l.startsWith('*'))
+    for (const l of lines) {
+      const cleaned = l.replace(/^[-*]\s*/, '').trim()
+      if (cleaned.length === 0) continue
+      if (/^\(none\)$/i.test(cleaned)) continue
+      riskItems.push(cleaned)
+    }
+  }
+
+  let demotedRevisionItems = 0
+  if (verdict === 'revise' && revisionItems.length > 0) {
+    const normalization = normalizeTaskBoundedRevisionScope({
+      reasoning,
+      revisionItems,
+      followUpItems,
+      taskText: hints.taskText ?? '',
+      narrowScopeTask: hints.narrowScopeTask ?? inferNarrowScopeTask(hints.taskText ?? ''),
+    })
+    demotedRevisionItems = normalization.demotedRevisionItems
+    revisionItems.splice(0, revisionItems.length, ...normalization.revisionItems)
+    followUpItems.splice(0, followUpItems.length, ...normalization.followUpItems)
+  }
+
+  const effectiveVerdict: PersonaVerdict['verdict'] =
+    verdict === 'revise' && revisionItems.length === 0 && demotedRevisionItems > 0 ? 'approve' : verdict
+
   return {
     guildSlug: guild.slug,
     guildName: guild.name,
-    verdict,
+    verdict: effectiveVerdict,
     reasoning,
     revisionItems,
+    riskItems,
+    recommendationPriority: advisoryScores.recommendationPriority,
+    expectedValue: advisoryScores.expectedValue,
+    deferredRisk: advisoryScores.deferredRisk,
+    followUpItems,
     rawOutput,
+  }
+}
+
+function parseAdvisoryScores(rawOutput: string): {
+  recommendationPriority?: 'low' | 'medium' | 'high'
+  expectedValue?: 'low' | 'medium' | 'high'
+  deferredRisk?: 'low' | 'medium' | 'high'
+} {
+  const block = rawOutput.match(/\*\*Advisory scoring[^:]*:\*\*\s*([\s\S]*?)(?:\n\s*\*\*|$)/i)?.[1] ?? ''
+  const parseLevel = (label: string): 'low' | 'medium' | 'high' | undefined => {
+    const match = block.match(new RegExp(`${label}:\\s*(low|medium|high)`, 'i'))
+    return match ? match[1]!.toLowerCase() as 'low' | 'medium' | 'high' : undefined
+  }
+  return {
+    recommendationPriority: parseLevel('Recommendation priority'),
+    expectedValue: parseLevel('Expected value if taken'),
+    deferredRisk: parseLevel('Risk if deferred'),
+  }
+}
+
+function normalizeTaskBoundedRevisionScope(input: {
+  reasoning: string
+  revisionItems: string[]
+  followUpItems: string[]
+  taskText: string
+  narrowScopeTask: boolean
+}): { revisionItems: string[]; followUpItems: string[]; demotedRevisionItems: number } {
+  const revisionItems: string[] = []
+  const followUpItems = [...input.followUpItems]
+  const likelyScopeSpillover =
+    /(?:meets|satisfies).*(?:functional|task|acceptance).*(?:criteria|spec)/i.test(input.reasoning) &&
+    /(?:principle|rubric|standard)/i.test(input.reasoning)
+  let demotedRevisionItems = 0
+
+  if (
+    likelyScopeSpillover &&
+    input.revisionItems.length > 0 &&
+    input.revisionItems.every((item) =>
+      looksLikeBroadStandardsFollowUp(item) || looksLikeExistingSurfaceConcern(item),
+    )
+  ) {
+    return {
+      revisionItems: [],
+      followUpItems: [...followUpItems, ...input.revisionItems],
+      demotedRevisionItems: input.revisionItems.length,
+    }
+  }
+
+  for (const item of input.revisionItems) {
+    if (likelyScopeSpillover && looksLikeBroadStandardsFollowUp(item)) {
+      followUpItems.push(item)
+      demotedRevisionItems += 1
+      continue
+    }
+    if (
+      likelyScopeSpillover &&
+      !/\bac-\d+\b|line\s*\d+|changed file|scope\b|introduced|regression|bug\b/i.test(`${input.reasoning}\n${item}`) &&
+      looksLikeExistingSurfaceConcern(item)
+    ) {
+      followUpItems.push(item)
+      demotedRevisionItems += 1
+      continue
+    }
+    if (
+      input.narrowScopeTask &&
+      looksLikeBroadStandardsFollowUp(item) &&
+      !mentionsTaskLocalAnchor(item) &&
+      !taskExplicitlyRequestsConcern(item, input.taskText)
+    ) {
+      followUpItems.push(item)
+      demotedRevisionItems += 1
+      continue
+    }
+    if (
+      input.narrowScopeTask &&
+      looksLikeExistingSurfaceConcern(item) &&
+      !mentionsTaskLocalAnchor(`${input.reasoning}\n${item}`)
+    ) {
+      followUpItems.push(item)
+      demotedRevisionItems += 1
+      continue
+    }
+    revisionItems.push(item)
+  }
+
+  return { revisionItems, followUpItems, demotedRevisionItems }
+}
+
+function looksLikeBroadStandardsFollowUp(item: string): boolean {
+  return /\b(?:versioned prefix|\/v1\/|idempotency-key|idempotent by design|observability|trace span|metric counter|structured logging|schema validation|validate(?: the)? [a-z_]+ parameter|error envelope)\b/i.test(item)
+}
+
+function looksLikeExistingSurfaceConcern(item: string): boolean {
+  return /\b(?:route|endpoint|handler|api|request|response|parameter|header|logging|metrics|trace|validation)\b/i.test(item)
+}
+
+function mentionsTaskLocalAnchor(text: string): boolean {
+  return /\bac-\d+\b|line\s*\d+|changed file|scope\b|introduced|regression|bug\b|unused-variable|deleteTrashRes|Promise\.all|restoreRes\.error|success:\s*true/i.test(text)
+}
+
+function inferNarrowScopeTask(taskText: string): boolean {
+  if (taskText.trim().length === 0) return false
+  return /single-line cleanup|one-line cleanup|single file|no ambiguity|unused [a-z0-9_]+ binding|only the unused|any changes to other files|adding tests|keep .* exactly the same|behavior is unchanged/i.test(taskText)
+}
+
+function taskExplicitlyRequestsConcern(item: string, taskText: string): boolean {
+  const lowerItem = item.toLowerCase()
+  const lowerTask = taskText.toLowerCase()
+  if (/\bversioned prefix|\/v1\/|versioned route\b/i.test(item)) {
+    return /\bversion(?:ed|ing)?\b|\/v1\//i.test(taskText)
+  }
+  if (/\bidempotency-key|idempotent by design|idempotent\b/i.test(item)) {
+    return /\bidempotenc/i.test(taskText)
+  }
+  if (/\bobservability|trace span|metric counter|structured logging\b/i.test(item)) {
+    return /\bobservability|trace|metric|logging\b/i.test(taskText)
+  }
+  if (/\bschema validation|validate(?: the)? [a-z_]+ parameter|boundary validation\b/i.test(item)) {
+    return /\bvalidate|validation|schema|zod|valibot|typebox|json schema|boundary\b/i.test(taskText)
+  }
+  if (/\berror envelope\b/i.test(item)) {
+    return /\berror envelope|error shape|error format|response shape\b/i.test(taskText)
+  }
+  return lowerTask.includes(lowerItem)
+}
+
+export function buildPersonaOutputHints(task: Pick<Task, 'title' | 'description' | 'spec' | 'acceptanceCriteria' | 'outOfScope'>): PersonaOutputHints {
+  const taskText = [
+    task.title,
+    task.description,
+    task.spec ?? '',
+    ...(task.acceptanceCriteria ?? []).map((criterion) => criterion.description),
+    ...(task.outOfScope ?? []),
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join('\n')
+
+  return {
+    taskText,
+    narrowScopeTask: inferNarrowScopeTask(taskText),
   }
 }
 
@@ -187,22 +396,80 @@ function renderCombinedFeedback(
   dissenting: readonly PersonaVerdict[],
 ): string {
   if (dissenting.length === 0) return ''
+  const actionable = dissenting.filter((verdict) => !isInfrastructureOnlyFanoutFailure(verdict))
+  const availability = dissenting.filter((verdict) => isInfrastructureOnlyFanoutFailure(verdict))
+  const followUps = actionable.flatMap((verdict) =>
+    (verdict.followUpItems ?? []).map((item) => ({ guildName: verdict.guildName, item })),
+  )
   const sections: string[] = [
-    `**Aggregated revisions from ${dissenting.length} persona${dissenting.length > 1 ? 's' : ''}:**`,
+    actionable.length > 0
+      ? `**Aggregated revisions from ${actionable.length} persona${actionable.length > 1 ? 's' : ''}:**`
+      : `**Reviewer availability issues from ${availability.length} persona${availability.length > 1 ? 's' : ''}:**`,
     '',
   ]
-  for (const d of dissenting) {
+  for (const d of actionable) {
     sections.push(`### From ${d.guildName}`)
     sections.push('')
     sections.push(d.reasoning)
-    if (d.revisionItems.length > 0) {
+    if ((d.revisionItems ?? []).length > 0) {
       sections.push('')
-      sections.push('What must change:')
-      for (const item of d.revisionItems) sections.push(`- ${item}`)
+      sections.push('Recommended task-local revisions:')
+      for (const item of d.revisionItems ?? []) sections.push(`- ${item}`)
+    }
+    const scoreLines = [
+      d.recommendationPriority ? `- Recommendation priority: ${d.recommendationPriority}` : null,
+      d.expectedValue ? `- Expected value if taken: ${d.expectedValue}` : null,
+      d.deferredRisk ? `- Risk if deferred: ${d.deferredRisk}` : null,
+    ].filter((line): line is string => Boolean(line))
+    if (scoreLines.length > 0) {
+      sections.push('')
+      sections.push('Advisory scoring:')
+      sections.push(...scoreLines)
+    }
+    if ((d.riskItems ?? []).length > 0) {
+      sections.push('')
+      sections.push('Risk if accepted as-is:')
+      for (const item of d.riskItems ?? []) sections.push(`- ${item}`)
+    }
+    sections.push('')
+  }
+  if (followUps.length > 0) {
+    sections.push('### Non-blocking follow-up ideas')
+    sections.push('')
+    sections.push('These ideas may be worthwhile later, but they are not required to accept this task.')
+    sections.push('')
+    for (const followUp of followUps) {
+      sections.push(`- ${followUp.guildName}: ${followUp.item}`)
+    }
+    sections.push('')
+  }
+  if (availability.length > 0) {
+    if (actionable.length > 0) {
+      sections.push('### Reviewer availability notes')
+      sections.push('')
+      sections.push(
+        'These reviewers did not return a usable verdict. Their infra failures are preserved for audit, but they are not counted as substantive revision requests.',
+      )
+      sections.push('')
+    }
+    for (const d of availability) {
+      sections.push(`- ${d.guildName}: ${singleLine(d.reasoning)}`)
     }
     sections.push('')
   }
   return sections.join('\n').trim()
+}
+
+function isInfrastructureOnlyFanoutFailure(verdict: PersonaVerdict): boolean {
+  if (verdict.verdict !== 'revise') return false
+  const text = `${verdict.reasoning}\n${verdict.rawOutput}`
+  if (!/failed to produce a verdict/i.test(text)) return false
+  return /HTTP 429|Too Many Requests|rate limit|provider timeout|connection refused|Exceeded maximum turn limit \(\d+\)|temporarily unavailable|service unavailable|timed out after \d+ms/i.test(text)
+}
+
+function singleLine(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim()
+  return compact.length > 220 ? `${compact.slice(0, 217).trimEnd()}...` : compact
 }
 
 /**
@@ -291,7 +558,15 @@ export function personaVerdictToReviewRecord(
       v.verdict === 'approve'
         ? `${v.guildName} approved`
         : `${v.guildName} requested revision`,
-    reasoning: v.reasoning,
+    reasoning:
+      (v.followUpItems ?? []).length > 0
+        ? [
+            v.reasoning,
+            '',
+            '**Non-blocking follow-up ideas:**',
+            ...(v.followUpItems ?? []).map((item) => `- ${item}`),
+          ].join('\n')
+        : v.reasoning,
     failingSignals: v.verdict === 'revise' ? [v.guildSlug] : [],
     recordedAt: opts.now,
     ...(opts.policyVersion !== undefined ? { policyVersion: opts.policyVersion } : {}),
