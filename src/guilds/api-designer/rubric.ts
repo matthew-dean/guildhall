@@ -16,7 +16,7 @@ export const API_DESIGNER_RUBRIC: SoftGateRubricItem[] = [
   {
     id: 'api-versioned',
     question:
-      'Are new endpoints under the declared versioned prefix (e.g. /v1/…)?',
+      'Are new endpoints under the declared versioned prefix (e.g. /v1/...)?',
     weight: 0.7,
   },
   {

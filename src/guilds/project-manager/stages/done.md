@@ -1,6 +1,6 @@
 # Stage: `done` (terminal)
 
-All gates passed; merge completed per lever `merge_policy`. The task is terminal. No further edits happen under this task id.
+All gates passed; accepted work landed per lever `landing_strategy`. The task is terminal. No further edits happen under this task id.
 
 ## What "good" looks like
 

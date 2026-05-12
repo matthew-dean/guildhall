@@ -20,9 +20,9 @@ The lever system is GuildHall's policy surface. Instead of scattered hardcoded d
 Every lever entry has the same shape:
 
 ```yaml
-merge_policy:
-  position: ff_only_with_push
-  rationale: "Team wants auto-push on green main so CI runs on origin"
+landing_strategy:
+  position: cherry_pick_with_push
+  rationale: "Land accepted work locally, then push the landing branch to origin"
   setAt: "2026-04-10T11:02:00Z"
   setBy: user-direct
 ```

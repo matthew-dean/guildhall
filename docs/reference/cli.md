@@ -2,9 +2,9 @@
 title: CLI reference
 help_topic: reference.cli
 help_summary: |
-  Every `guildhall` subcommand — init, register, list, run, serve, config,
-  intake, approve-spec, resume, meta-intake, approve-meta-intake — with
-  flags and examples.
+  Every `guildhall` subcommand — init, register, list, run, serve, start,
+  stop, open, config, intake, approve-spec, resume, meta-intake,
+  approve-meta-intake — with flags and examples.
 ---
 
 # CLI reference
@@ -36,7 +36,7 @@ Print all registered workspaces with id, name, and absolute path.
 
 ## `guildhall run [id|path]`
 
-Run the orchestrator. Blocks until Ctrl-C or no work remains.
+Run the coordinator. Blocks until Ctrl-C or no work remains.
 
 Flags:
 
@@ -47,12 +47,45 @@ Flags:
 
 ## `guildhall serve [path]`
 
-Start the web dashboard.
+Friendly entrypoint for normal humans. Ensures the local Guildhall service is
+running, then opens the web UI. If you pass a path — or run it from inside a
+project — Guildhall remembers that as the preferred project bias for this run.
 
 Flags:
 
-- `--port <n>` (default `7842`).
+- `--port <n>` (default `7777`).
 - `--no-open` — don't open a browser.
+
+The default service state file lives at `~/.guildhall/service.json`.
+
+## `guildhall start [path]`
+
+Start the local Guildhall service without opening a browser.
+
+Use this when you want Guildhall running in the background and plan to open the
+UI later.
+
+Flags:
+
+- `--port <n>` (default `7777`).
+
+## `guildhall stop`
+
+Stop the local Guildhall service.
+
+If you installed Guildhall through the macOS packaged installer, the background
+service is managed by a LaunchAgent at
+`~/Library/LaunchAgents/io.guildhall.agent.plist`.
+
+## `guildhall open [path]`
+
+Open the running Guildhall service in a browser. If the service is not running
+yet, this starts it first. An optional path can be used as a preferred project
+bias when the service is first started.
+
+Flags:
+
+- `--port <n>` (default `7777`).
 
 ## `guildhall config [id|path]`
 
@@ -84,7 +117,9 @@ Flags: `--workspace <id|path>`, `--message <string>`, `--resolve-escalation <id>
 
 ## `guildhall meta-intake`
 
-Bootstrap coordinators by interviewing the agent about your codebase (FR-14). Writes a draft; does not modify `guildhall.yaml` until approved.
+Let Guildhall inspect the repo, infer its internal routing map, and draft
+starter tasks (FR-14). Writes a draft; does not modify `guildhall.yaml` until
+approved.
 
 Flags: `--workspace <id|path>`, `--force` (re-run even if already bootstrapped).
 
@@ -102,4 +137,7 @@ guildhall run my-app --domain ui
 guildhall intake "add a ghost button" --workspace my-app --domain ui
 guildhall approve-spec task-001 --workspace my-app
 guildhall serve
+guildhall start
+guildhall open
+guildhall stop
 ```

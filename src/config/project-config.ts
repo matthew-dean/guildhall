@@ -8,8 +8,8 @@ import { ModelConfigInputSchema } from './schemas.js'
 // Project-local Guildhall config — <project>/.guildhall/config.yaml
 //
 // This file holds per-project Guildhall runtime state that does not belong in
-// `guildhall.yaml` (which is usually checked in): provider API keys,
-// preferred local model endpoints, the chosen serve port, etc.
+// `guildhall.yaml` (which is usually checked in): local overrides,
+// per-project landing-branch state, and escape-hatch runtime knobs.
 //
 // Guildhall never writes to a shared ~/.guildhall/ directory; version
 // isolation between projects is provided by each project's pinned
@@ -49,10 +49,16 @@ export const ProjectGuildhallConfig = z.object({
   allowPaidProviderFallback: z.boolean().optional(),
 
   /**
-   * Which provider the wizard chose last. Drives fallback order when
-   * multiple providers are reachable.
+   * Project-specific override for the machine-wide preferred provider.
+   * Omit in normal use so the global default applies across projects.
    */
   preferredProvider: z.enum(['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api']).optional(),
+
+  /**
+   * Which branch accepted task work should land back onto in this checkout.
+   * Omit to use the repo's current branch at orchestrator start.
+   */
+  landingBranch: z.string().min(1).optional(),
 
   /**
    * How many spec/intake tasks may run at once. Default `1` keeps the

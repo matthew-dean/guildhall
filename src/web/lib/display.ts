@@ -10,9 +10,15 @@ export function friendlyDomain(domain: string | undefined): string {
     .join(' ')
 }
 
+export function friendlyStewardName(_legacyName: string | undefined, domain?: string, id?: string): string {
+  const source = friendlyDomain(domain) || friendlyDomain(id) || 'Project'
+  return source
+}
+
 export function friendlyStatus(status: string | undefined): string {
   switch (status) {
     case 'proposed': return 'Backlog'
+    case 'import_draft': return 'Needs shaping'
     case 'exploring': return 'Intake'
     case 'spec_review': return 'Awaiting approval'
     case 'pending': return 'Ready'

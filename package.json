@@ -21,7 +21,10 @@
   ],
   "scripts": {
     "build": "node ./build.mjs",
+    "build:macos-package": "node ./scripts/build-macos-package.mjs",
     "dev": "node ./build.mjs --watch",
+    "dev:install": "node ./scripts/dev-install.mjs",
+    "dev:uninstall": "node ./scripts/dev-uninstall.mjs",
     "typecheck": "tsgo -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
@@ -33,7 +36,9 @@
     "docs:check-help-sync": "node scripts/check-help-sync.mjs",
     "docs:dev": "npm run docs:extract-help && vitepress dev docs",
     "docs:build": "npm run docs:extract-help && vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "service:install": "node ./scripts/install-launch-agent.mjs",
+    "service:uninstall": "node ./scripts/uninstall-launch-agent.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.1",

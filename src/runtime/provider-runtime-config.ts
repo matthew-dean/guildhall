@@ -88,7 +88,7 @@ export function getRuntimeProviderConfig(input: {
   const globalCfg = readGlobalConfig()
   const credentials = resolveGlobalCredentials()
   const preferredProvider =
-    projectCfg.preferredProvider ?? inferPreferredProvider(input.models)
+    projectCfg.preferredProvider ?? globalCfg.preferredProvider ?? inferPreferredProvider(input.models)
   const preferredProviderFamily = preferredProvider
     ? providerFamilyForPreferredKey(preferredProvider)
     : undefined

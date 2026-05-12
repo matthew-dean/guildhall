@@ -328,6 +328,7 @@ export class OrchestratorSupervisor {
     workspaceId: string
     workspacePath: string
     stopAfterOneTask?: boolean
+    preferredTaskId?: string
     providerStatus?: ProviderRunStatus
     providerHealthKey?: string
     providerOverride?: string
@@ -387,6 +388,7 @@ export class OrchestratorSupervisor {
           ...(opts.providerOverride ? { providerOverride: opts.providerOverride } : {}),
           ...(opts.modelAssignmentOverride ? { modelAssignmentOverride: opts.modelAssignmentOverride } : {}),
           ...(opts.stopAfterOneTask ? { stopAfterOneTask: true } : {}),
+          ...(opts.preferredTaskId ? { preferredTaskId: opts.preferredTaskId } : {}),
         })
         run.stopSummary = result
         run.status = 'stopped'

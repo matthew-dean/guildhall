@@ -82,6 +82,7 @@ import {
   effectiveBootstrapGateCommands,
   renderTaskScopedGateInstructions,
   renderTaskScopedVerificationInstructions,
+  resolveEffectiveTaskBootstrapBlock,
   resolveEffectiveTaskProjectPath,
   resolveEffectiveTaskSuccessGates,
   resolveEffectiveTaskVerificationCommands,
@@ -128,8 +129,8 @@ import {
 import {
   dispatchMerge,
   appendFixupTask,
-  resolveMergePolicy,
-  type MergePolicy,
+  resolveLandingStrategy,
+  type LandingStrategy,
 } from './merge-dispatcher.js'
 import { atomicWriteText, loadSessionById, type SessionSnapshot } from '@guildhall/sessions'
 import {
@@ -185,6 +186,30 @@ const PROPOSAL_PROMOTER_AGENT_ID = 'proposal-promoter'
 const PRE_REJECTION_POLICY_AGENT_ID = 'pre-rejection-policy'
 
 type AgentGenerateResult = Awaited<ReturnType<OrchestratorAgent['generate']>>
+
+function hasConcreteSpecDraft(task: Task): boolean {
+  return (
+    task.status === 'spec_review' &&
+    typeof task.spec === 'string' &&
+    task.spec.trim().length > 0 &&
+    Array.isArray(task.acceptanceCriteria) &&
+    task.acceptanceCriteria.length > 0
+  )
+}
+
+function isObsoleteStarterTaskFocusQuestion(task: Task, question: Record<string, unknown>): boolean {
+  if (!hasConcreteSpecDraft(task)) return false
+  const text =
+    (typeof question.restatement === 'string' && question.restatement) ||
+    (typeof question.prompt === 'string' && question.prompt) ||
+    ''
+  if (!/what should .*?(first|starter) task focus on|pick the focus for this first task/i.test(text)) {
+    return false
+  }
+  const askedAt = typeof question.askedAt === 'string' ? Date.parse(question.askedAt) : Number.NaN
+  const updatedAt = typeof task.updatedAt === 'string' ? Date.parse(task.updatedAt) : Number.NaN
+  return !Number.isFinite(askedAt) || !Number.isFinite(updatedAt) || askedAt <= updatedAt
+}
 
 function friendlyRuntimeAgentName(agentName: string): string {
   if (agentName.startsWith('coordinator-')) return 'Coordinator'
@@ -288,6 +313,17 @@ function streamMessageText(message: { content?: unknown }): string {
     }
   }
   return parts.join('')
+}
+
+function shouldSkipGitIsolation(
+  task: Pick<Task, 'id' | 'status'>,
+  agentName?: string,
+): boolean {
+  return (
+    task.id === META_INTAKE_TASK_ID ||
+    task.id === WORKSPACE_IMPORT_TASK_ID ||
+    (agentName === 'spec-agent' && task.status === 'exploring')
+  )
 }
 
 function findMetaIntakeDraftText(result: AgentGenerateResult): string | null {
@@ -445,6 +481,7 @@ export interface OrchestratorRunOptions {
   maxTicks?: number
   tickDelayMs?: number
   stopAfterOneTask?: boolean
+  preferredTaskId?: string
 }
 
 export interface OrchestratorRunResult {
@@ -465,6 +502,7 @@ export interface OrchestratorRunResult {
 
 interface OrchestratorTickOptions {
   dispatchLimit?: FanoutCapacity
+  preferredTaskId?: string
 }
 
 const ONE_TASK_STOP_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
@@ -1086,6 +1124,7 @@ export class Orchestrator {
       blocked: 0,
       shelved: 0,
       waitingOnUser: 0,
+      draftReview: 0,
       awaitingApproval: 0,
       dependencyBlocked: 0,
       escalated: 0,
@@ -1110,6 +1149,10 @@ export class Orchestrator {
       }
       if (task.status === 'exploring' && taskHasUnansweredOpenQuestion(task)) {
         counts.waitingOnUser += 1
+        continue
+      }
+      if (task.status === 'import_draft') {
+        counts.draftReview += 1
         continue
       }
       if (task.status === 'spec_review' && Boolean(task.spec?.trim())) {
@@ -1137,12 +1180,20 @@ export class Orchestrator {
         counts,
       }
     }
-    if (counts.waitingOnUser > 0 || counts.awaitingApproval > 0) {
+    if (counts.waitingOnUser > 0 || counts.draftReview > 0 || counts.awaitingApproval > 0) {
+      const fragments: string[] = []
+      if (counts.waitingOnUser > 0) {
+        fragments.push(`${counts.waitingOnUser} waiting on user answers`)
+      }
+      if (counts.draftReview > 0) {
+        fragments.push(`${counts.draftReview} draft task(s) waiting for review`)
+      }
+      if (counts.awaitingApproval > 0) {
+        fragments.push(`${counts.awaitingApproval} awaiting approval`)
+      }
       return {
         reason: 'awaiting_human',
-        message:
-          `No actionable tasks remain right now: ${counts.waitingOnUser} waiting on user answers and ` +
-          `${counts.awaitingApproval} awaiting approval.`,
+        message: `No runnable tasks remain right now: ${fragments.join(', ')}.`,
         counts,
       }
     }
@@ -1203,6 +1254,7 @@ export class Orchestrator {
         coordinator: lanePlan.coordinator.effectiveConcurrency,
       },
       ...(this.opts.domainFilter ? { domainFilter: this.opts.domainFilter } : {}),
+      ...(opts.preferredTaskId ? { preferredTaskId: opts.preferredTaskId } : {}),
     })
 
     // Structural-reliability hard precondition: refuse to dispatch if the
@@ -1289,7 +1341,7 @@ export class Orchestrator {
     }
 
     // Guild deterministic-check pre-pass at `gate_check`: each applicable
-    // guild's pure-function checks (WCAG contrast, OKLab near-duplicates, …)
+    // guild's pure-function checks (WCAG contrast, OKLab near-duplicates, ...)
     // run *before* the LLM gate-checker. Failures short-circuit straight to
     // `in_progress` — there's no point running build/test if a token pair
     // fails WCAG. All-pass (or no applicable checks) falls through to the
@@ -1337,7 +1389,7 @@ export class Orchestrator {
     }
 
     // Reviewer fan-out at `review`: each applicable persona (Component
-    // Designer, Accessibility Specialist, Color Theorist, …) reviews
+    // Designer, Accessibility Specialist, Color Theorist, ...) reviews
     // independently through its own lens. Aggregation is strict — any revise
     // bounces the task to `in_progress` with combined feedback. Falls
     // through to the legacy single-reviewer dispatch when no fan-out runner
@@ -1383,24 +1435,48 @@ export class Orchestrator {
       this.opts.config.projectPath,
     )
     let activeWorktreePath = effectiveTaskProjectPath
-    if (worktreeMode !== 'none') {
+    if (worktreeMode !== 'none' && !shouldSkipGitIsolation(task, agent.name)) {
       if (!task.worktreePath) {
         const repoClean = await this.gitDriver.isClean(effectiveTaskProjectPath)
         if (!repoClean) {
           const message = `base repo has uncommitted changes at ${effectiveTaskProjectPath}`
+          const queue = await this.readQueue()
+          const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
+          const now = this.now()
+          if (queuedTask) {
+            queuedTask.status = 'blocked'
+            queuedTask.assignedTo = null
+            queuedTask.blockReason =
+              `Guildhall could not start work because the target repo is dirty: ${message}. ` +
+              'Commit or stash those changes, then resume the task.'
+            queuedTask.notes.push({
+              agentId: 'coordinator',
+              role: 'bootstrap-failure',
+              content:
+                `Blocked before worktree creation. ${message}. ` +
+                'Guildhall stopped retrying until the repo is clean and the task is resumed.',
+              timestamp: now,
+            })
+            queuedTask.updatedAt = now
+            queue.lastUpdated = now
+            await this.writeQueue(queue)
+          }
           await this.logTickProgress({
             task,
             agent: agent.name,
             beforeStatus,
-            afterStatus: beforeStatus,
-            transitioned: false,
+            afterStatus: 'blocked',
+            transitioned: true,
             note: `error: worktree setup blocked — ${message}`,
           })
           return {
-            kind: 'agent-error',
+            kind: 'processed',
             taskId: task.id,
             agent: agent.name,
-            error: `worktree setup blocked: ${message}`,
+            beforeStatus,
+            afterStatus: 'blocked',
+            transitioned: true,
+            revisionCount: task.revisionCount,
           }
         }
       }
@@ -1409,6 +1485,7 @@ export class Orchestrator {
         const ensured = await ensureWorktreeForDispatch({
           task,
           mode: worktreeMode,
+          projectId: this.opts.config.workspaceId,
           projectPath: effectiveTaskProjectPath,
           workspacePath: this.opts.config.projectPath,
           baseBranch,
@@ -1440,19 +1517,43 @@ export class Orchestrator {
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
+        const queue = await this.readQueue()
+        const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
+        const now = this.now()
+        if (queuedTask) {
+          queuedTask.status = 'blocked'
+          queuedTask.assignedTo = null
+          queuedTask.blockReason =
+            `Guildhall could not create a task worktree: ${message}. ` +
+            'Fix the worktree setup issue, then resume the task.'
+          queuedTask.notes.push({
+            agentId: 'coordinator',
+            role: 'bootstrap-failure',
+            content:
+              `Blocked during worktree setup. ${message}. ` +
+              'Guildhall stopped retrying until a human fixes the worktree issue and resumes the task.',
+            timestamp: now,
+          })
+          queuedTask.updatedAt = now
+          queue.lastUpdated = now
+          await this.writeQueue(queue)
+        }
         await this.logTickProgress({
           task,
           agent: agent.name,
           beforeStatus,
-          afterStatus: beforeStatus,
-          transitioned: false,
+          afterStatus: 'blocked',
+          transitioned: true,
           note: `error: worktree setup failed — ${message}`,
         })
         return {
-          kind: 'agent-error',
+          kind: 'processed',
           taskId: task.id,
           agent: agent.name,
-          error: `worktree setup failed: ${message}`,
+          beforeStatus,
+          afterStatus: 'blocked',
+          transitioned: true,
+          revisionCount: task.revisionCount,
         }
       }
     }
@@ -1463,7 +1564,11 @@ export class Orchestrator {
     // so the project's shared memory isn't trampled and the cache disappears
     // naturally when the worktree is cleaned up. A failure here aborts the
     // dispatch — better to surface it than hand the worker a broken tree.
-    const wtBootstrap = this.opts.config.bootstrap
+    const wtBootstrap = resolveEffectiveTaskBootstrapBlock({
+      task,
+      workspaceProjectPath: this.opts.config.projectPath,
+      workspaceBootstrap: this.opts.config.bootstrap ?? undefined,
+    })
     if (
       wtBootstrap &&
       wtBootstrap.commands.length > 0 &&
@@ -1477,7 +1582,7 @@ export class Orchestrator {
         wtBootstrap.successGates,
       )
       if (needed) {
-        console.log(`[guildhall] bootstrapping worktree ${activeWorktreePath}…`)
+        console.log(`[guildhall] bootstrapping worktree ${activeWorktreePath}...`)
         const res = runBootstrap({
           projectPath: activeWorktreePath,
           memoryDir: wtMemoryDir,
@@ -1488,19 +1593,43 @@ export class Orchestrator {
         if (!res.success) {
           const failed = res.steps.find((s) => s.result === 'fail')
           const msg = `worktree bootstrap failed on ${failed?.kind ?? 'step'} \`${failed?.command ?? ''}\` (exit ${failed?.exitCode ?? '?'})`
+          const queue = await this.readQueue()
+          const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
+          const now = this.now()
+          if (queuedTask) {
+            queuedTask.status = 'blocked'
+            queuedTask.assignedTo = null
+            queuedTask.blockReason =
+              `Guildhall could not start work because task setup failed: ${msg}. ` +
+              'Fix the task bootstrap command or project install state, then resume the task.'
+            queuedTask.notes.push({
+              agentId: 'coordinator',
+              role: 'bootstrap-failure',
+              content:
+                `Blocked after repeated task setup failure. ${msg}. ` +
+                'Guildhall stopped retrying until a human fixes the environment and resumes the task.',
+              timestamp: now,
+            })
+            queuedTask.updatedAt = now
+            queue.lastUpdated = now
+            await this.writeQueue(queue)
+          }
           await this.logTickProgress({
             task,
             agent: agent.name,
             beforeStatus,
-            afterStatus: beforeStatus,
-            transitioned: false,
+            afterStatus: 'blocked',
+            transitioned: true,
             note: `error: ${msg}`,
           })
           return {
-            kind: 'agent-error',
+            kind: 'processed',
             taskId: task.id,
             agent: agent.name,
-            error: msg,
+            beforeStatus,
+            afterStatus: 'blocked',
+            transitioned: true,
+            revisionCount: task.revisionCount,
           }
         }
       }
@@ -1977,14 +2106,11 @@ export class Orchestrator {
           transitioned = true
         }
 
-        if (
-          beforeStatus === 'exploring' &&
-          taskAfter.status === 'spec_review' &&
-          typeof taskAfter.spec === 'string' &&
-          taskAfter.spec.trim().length > 0
-        ) {
+        if (taskAfter.status === 'spec_review' && typeof taskAfter.spec === 'string' && taskAfter.spec.trim().length > 0) {
           const existingQuestions = Array.isArray(taskAfter.openQuestions) ? taskAfter.openQuestions : []
-          const retainedQuestions = existingQuestions.filter((question) => Boolean(question.answeredAt))
+          const retainedQuestions = existingQuestions.filter((question) =>
+            Boolean(question.answeredAt) || !isObsoleteStarterTaskFocusQuestion(taskAfter, question as Record<string, unknown>),
+          )
           if (retainedQuestions.length !== existingQuestions.length) {
             taskAfter.openQuestions = retainedQuestions
             taskAfter.updatedAt = this.now()
@@ -2144,15 +2270,20 @@ export class Orchestrator {
           this.clearExploringNoProgress(task.id)
         }
 
+        const taskRepoRootAfter = resolveEffectiveTaskProjectPath(taskAfter, this.opts.config.projectPath)
         const hasDirtyWorktreeAfter =
           beforeStatus === 'in_progress' &&
           typeof taskAfter.worktreePath === 'string' &&
           taskAfter.worktreePath.trim().length > 0 &&
           !(await this.gitDriver.isClean(taskAfter.worktreePath))
+        const checkpointTouchedFiles = this.checkpointTouchedFilesFromMetadata(
+          successfulAgentMetadata,
+          taskRepoRootAfter,
+        )
         const hasCheckpointScopedVerifiedProgress =
           beforeStatus === 'in_progress' &&
           this.hasDurableWorkerHandoffEvidence(successfulAgentMetadata, task.id) &&
-          this.checkpointTouchedFilesFromMetadata(successfulAgentMetadata).length > 0
+          checkpointTouchedFiles.length > 0
         if (
           agent.name === 'worker-agent' &&
           beforeStatus === 'in_progress' &&
@@ -2260,13 +2391,13 @@ export class Orchestrator {
       // a fixup task queued) — `afterStatus` is updated so the post-merge
       // cleanup / progress logging see the final state.
       if (afterStatus === 'done' && beforeStatus !== 'done') {
-        const mergePolicy = await this.resolveMergePolicySafe()
+        const landingStrategy = await this.resolveLandingStrategySafe()
         if (worktreeMode === 'none' || !taskAfter.branchName || !taskAfter.baseBranch) {
           if (!taskAfter.mergeRecord) {
             taskAfter.mergeRecord = {
               fromBranch: taskAfter.branchName ?? '<unknown>',
               toBranch: taskAfter.baseBranch ?? '<unknown>',
-              strategy: mergePolicy,
+              strategy: landingStrategy,
               result: 'skipped',
               mergedAt: this.now(),
               detail:
@@ -2278,7 +2409,7 @@ export class Orchestrator {
         } else {
           const mergeOutcome = await dispatchMerge({
             task: taskAfter,
-            policy: mergePolicy,
+            policy: landingStrategy,
             projectPath: effectiveTaskProjectPath,
             memoryDir: this.opts.config.memoryDir,
             gitDriver: this.gitDriver,
@@ -2376,7 +2507,12 @@ export class Orchestrator {
    * at start; each tick self-reports to PROGRESS.md.
    */
   async run(opts: OrchestratorRunOptions = {}): Promise<OrchestratorRunResult> {
-    const { maxTicks = Infinity, tickDelayMs = 2000, stopAfterOneTask = false } = opts
+    const {
+      maxTicks = Infinity,
+      tickDelayMs = 2000,
+      stopAfterOneTask = false,
+      preferredTaskId,
+    } = opts
     const idleLimit = this.opts.idleShutdownAfterTicks ?? DEFAULT_IDLE_SHUTDOWN
     let finalResult: OrchestratorRunResult | null = null
 
@@ -2416,7 +2552,7 @@ export class Orchestrator {
         bootstrap.successGates,
       )
       if (needed) {
-        console.log('[guildhall] running bootstrap…')
+        console.log('[guildhall] running bootstrap...')
         const res = runBootstrap({
           projectPath: this.opts.config.projectPath,
           memoryDir: this.opts.config.memoryDir,
@@ -2466,7 +2602,10 @@ export class Orchestrator {
     let tick = 0
     while (tick < maxTicks) {
       tick++
-      const raw = await this.tick(stopAfterOneTask ? { dispatchLimit: 1 } : {})
+      const raw = await this.tick({
+        ...(stopAfterOneTask ? { dispatchLimit: 1 } : {}),
+        ...(preferredTaskId ? { preferredTaskId } : {}),
+      })
 
       // FR-24: flatten batch outcomes from fanout dispatch so the logging /
       // backend-event paths keep their one-entry-per-task shape.
@@ -2613,7 +2752,7 @@ export class Orchestrator {
     finalResult.ticks = tick
 
     console.log(
-      `[guildhall] Orchestrator stopped after ${tick} ticks (${finalResult.stopReason}).`,
+      `[guildhall] Coordinator stopped after ${tick} ticks (${finalResult.stopReason}).`,
     )
 
     // FR-18: SESSION_END fires after the loop exits for any reason (idle
@@ -4076,34 +4215,37 @@ export class Orchestrator {
   }
 
   /**
-   * FR-25: read the `merge_policy` lever. Falls back to `ff_only_local` so
-   * a lever outage never pushes or opens a PR unexpectedly.
+   * FR-25: read the accepted-work landing strategy. Falls back to
+   * `cherry_pick_local` so a lever outage never pushes or opens a PR
+   * unexpectedly.
    */
-  private async resolveMergePolicySafe(): Promise<MergePolicy> {
+  private async resolveLandingStrategySafe(): Promise<LandingStrategy> {
     try {
       const settings = await this.readLeverSettings()
-      return resolveMergePolicy(settings.project)
+      return resolveLandingStrategy(settings.project)
     } catch {
-      return 'ff_only_local'
+      return 'cherry_pick_local'
     }
   }
 
   /**
-   * FR-24: the base branch used when minting fresh per-task worktrees.
+   * FR-24: the landing branch used when minting fresh per-task worktrees.
    * Cached after the first lookup — the default branch of a repo does not
    * change during an orchestrator run.
    */
-  private readonly cachedBaseBranches = new Map<string, string>()
+  private readonly cachedLandingBranches = new Map<string, string>()
   private async resolveBaseBranch(projectPath: string): Promise<string> {
-    const cached = this.cachedBaseBranches.get(projectPath)
+    const explicit = this.opts.config.landingBranch?.trim()
+    if (explicit) return explicit
+    const cached = this.cachedLandingBranches.get(projectPath)
     if (cached) return cached
     try {
       const branch = await this.gitDriver.currentBranch(projectPath)
-      this.cachedBaseBranches.set(projectPath, branch)
+      this.cachedLandingBranches.set(projectPath, branch)
       return branch
     } catch {
       // Best-effort default — InMemoryGitDriver in tests defaults to 'main'.
-      this.cachedBaseBranches.set(projectPath, 'main')
+      this.cachedLandingBranches.set(projectPath, 'main')
       return 'main'
     }
   }
@@ -4119,8 +4261,7 @@ export class Orchestrator {
   ): Promise<void> {
     const isTerminal =
       task.status === 'done' ||
-      task.status === 'shelved' ||
-      task.status === 'blocked'
+      task.status === 'shelved'
     const preservingForPr = task.status === 'pending_pr'
     if (!isTerminal && !preservingForPr) return
     const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(
@@ -4507,14 +4648,45 @@ export class Orchestrator {
     return evidenceMatchesTask || hasMeaningfulVerifiedWork
   }
 
-  private checkpointTouchedFilesFromMetadata(metadata: Record<string, unknown> | undefined): string[] {
+  private checkpointTouchedFilesFromMetadata(
+    metadata: Record<string, unknown> | undefined,
+    repoRoot?: string,
+  ): string[] {
     if (!metadata) return []
     const raw = metadata['current_task_checkpoint_files_touched']
-    if (!Array.isArray(raw)) return []
-    return raw
-      .filter((value): value is string => typeof value === 'string')
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0)
+    const explicitFiles = Array.isArray(raw)
+      ? raw
+          .filter((value): value is string => typeof value === 'string')
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0)
+      : []
+    if (explicitFiles.length > 0) return [...new Set(explicitFiles)]
+
+    const recentVerifiedWork = Array.isArray(metadata['recent_verified_work'])
+      ? (metadata['recent_verified_work'] as unknown[])
+          .filter((value): value is string => typeof value === 'string')
+      : []
+    const normalizedRepoRoot = repoRoot?.trim() ? path.resolve(repoRoot) : null
+    const inferredFiles = recentVerifiedWork
+      .map((entry) => {
+        const match = entry.trim().match(/^(Edited file|Wrote file)\s+(.+)$/)
+        if (!match) return null
+        const rawPath = match[2]?.trim() ?? ''
+        if (!rawPath) return null
+        if (normalizedRepoRoot && path.isAbsolute(rawPath)) {
+          const relative = path.relative(normalizedRepoRoot, rawPath)
+          if (
+            relative.length > 0 &&
+            !relative.startsWith('..') &&
+            !path.isAbsolute(relative)
+          ) {
+            return relative
+          }
+        }
+        return rawPath
+      })
+      .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    return [...new Set(inferredFiles)]
   }
 
   private async preserveDurableProgressAfterEmptyAssistant(input: {
@@ -4532,7 +4704,10 @@ export class Orchestrator {
       task.worktreePath.trim().length > 0 &&
       !(await this.gitDriver.isClean(task.worktreePath))
     if (!this.hasDurableWorkerHandoffEvidence(input.agentMetadata, task.id)) return null
-    const checkpointTouchedFiles = this.checkpointTouchedFilesFromMetadata(input.agentMetadata)
+    const checkpointTouchedFiles = this.checkpointTouchedFilesFromMetadata(
+      input.agentMetadata,
+      resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath),
+    )
     if (!hasDirtyWorktree && checkpointTouchedFiles.length === 0) return null
 
     const checkpointWritten = await this.writeWorkerRecoveryCheckpoint({
@@ -4810,7 +4985,10 @@ export class Orchestrator {
 
     let filesTouched = await this.changedFilesForTask(input.task)
     if (filesTouched.length === 0) {
-      filesTouched = this.checkpointTouchedFilesFromMetadata(input.metadata)
+      filesTouched = this.checkpointTouchedFilesFromMetadata(
+        input.metadata,
+        resolveEffectiveTaskProjectPath(input.task, this.opts.config.projectPath),
+      )
     }
     const recentVerifiedWork = Array.isArray(input.metadata?.['recent_verified_work'])
       ? (input.metadata?.['recent_verified_work'] as unknown[])
@@ -4929,6 +5107,17 @@ export class Orchestrator {
         task.updatedAt = now
         queue.lastUpdated = now
         fallbackBriefAuthored = true
+      }
+    }
+
+    if (task.id === WORKSPACE_IMPORT_TASK_ID) {
+      if (fallbackBriefAuthored) {
+        await this.writeQueue(queue)
+      }
+      return {
+        transcriptAppended,
+        fallbackBriefAuthored,
+        fallbackQuestionPosted: false,
       }
     }
 
@@ -5141,7 +5330,7 @@ export class Orchestrator {
     console.log(`  worker:      ${c.models.worker}`)
     console.log(`  reviewer:    ${c.models.reviewer}`)
     console.log(`  gateChecker: ${c.models.gateChecker}`)
-    console.log('[guildhall] Orchestrator started.')
+    console.log('[guildhall] Coordinator started.')
   }
 }
 
@@ -5690,7 +5879,7 @@ function taskModeToPermissionMode(mode: TaskPermissionMode): PermissionMode {
  * - `1` (default) — strictly sequential. Safe for LM Studio and any
  *   single-session local model; wall-clock cost is `N * per-persona`.
  * - `n > 1` — up to `n` personas in flight simultaneously. Appropriate
- *   for cloud providers (Anthropic, OpenAI, …) whose rate limits
+ *   for cloud providers (Anthropic, OpenAI, ...) whose rate limits
  *   comfortably exceed `n`. Wall-clock cost collapses to roughly
  *   `ceil(N / n) * per-persona`.
  *

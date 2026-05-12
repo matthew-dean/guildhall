@@ -1,13 +1,15 @@
 <!--
   Project Facts — what the agent knows about this project, aggregated from
   on-disk state (guildhall.yaml, memory/design-system.yaml, workspace-goals.json,
-  coordinators). Read-only for now; each section links out to the canonical
+  internal routing). Read-only for now; each section links out to the canonical
   place to modify.
 -->
 <script lang="ts">
   import Card from '../../lib/Card.svelte'
   import Stack from '../../lib/Stack.svelte'
+  import { friendlyStewardName } from '../../lib/display.js'
   import { nav } from '../../lib/nav.svelte.js'
+  import { projectFetch } from '../../lib/project-routes.js'
 
   interface GateEntry {
     command?: string
@@ -17,7 +19,7 @@
   interface Facts {
     identity: { name: string; id: string; path: string; editHref: string }
     environment: {
-      packageManager: string
+      packageManagers: string[]
       verifiedAt: string | null
       install: unknown
       gates: Record<string, GateEntry> | null
@@ -33,7 +35,7 @@
       } | null
       reviewHref: string
     }
-    coordinators: { count: number; list: Array<{ id: string; name: string }>; editHref: string }
+    coordinators: { count: number; list: Array<{ id: string; domain?: string }>; editHref: string }
     designSystem: { summary: string | null; editHref: string }
   }
 
@@ -41,7 +43,7 @@
   let error = $state<string | null>(null)
 
   $effect(() => {
-    fetch('/api/project/facts')
+    projectFetch('/api/project/facts')
       .then(r => r.json())
       .then(j => {
         if (j.error) {
@@ -69,7 +71,7 @@
   }
 </script>
 
-<div class="wrap">
+<Stack gap="3">
   <header class="head">
     <h2>Project facts</h2>
     <p class="sub">What the agent knows about this project. Edits live in the section owners — follow the links.</p>
@@ -80,26 +82,27 @@
       <p class="muted">Couldn't load facts: {error}</p>
     </Card>
   {:else if !facts}
-    <p class="muted">Loading…</p>
+    <p class="muted">Loading...</p>
   {:else}
-    <Stack gap="3">
-      <Card title="Identity">
-        {#snippet actions()}
-          <a class="edit-link" href={facts.identity.editHref} onclick={editLink(facts.identity.editHref)}>Edit →</a>
-        {/snippet}
-        <dl class="kv">
-          <dt>Name</dt><dd>{facts.identity.name}</dd>
-          <dt>Id</dt><dd><code>{facts.identity.id}</code></dd>
-          <dt>Path</dt><dd><code>{facts.identity.path}</code></dd>
-        </dl>
-      </Card>
+    <Card title="Identity">
+      {#snippet actions()}
+        <a class="edit-link" href={facts.identity.editHref} onclick={editLink(facts.identity.editHref)}>Edit →</a>
+      {/snippet}
+      <dl class="kv">
+        <dt>Name</dt><dd>{facts.identity.name}</dd>
+        <dt>Id</dt><dd><code>{facts.identity.id}</code></dd>
+        <dt>Path</dt><dd><code>{facts.identity.path}</code></dd>
+      </dl>
+    </Card>
 
-      <Card title="Environment">
-        {#snippet actions()}
-          <a class="edit-link" href={facts.environment.editHref} onclick={editLink(facts.environment.editHref)}>Edit →</a>
-        {/snippet}
+    <Card title="Environment">
+      {#snippet actions()}
+        <a class="edit-link" href={facts.environment.editHref} onclick={editLink(facts.environment.editHref)}>Edit →</a>
+      {/snippet}
+      <Stack gap="2">
         <dl class="kv">
-          <dt>Package manager</dt><dd>{facts.environment.packageManager}</dd>
+          <dt>{facts.environment.packageManagers.length > 1 ? 'Package managers' : 'Package manager'}</dt>
+          <dd>{facts.environment.packageManagers.join(', ')}</dd>
           <dt>Last verified</dt>
           <dd>
             {facts.environment.verifiedAt
@@ -122,60 +125,64 @@
         {:else}
           <p class="muted">No gate data yet — run Configure on Settings.</p>
         {/if}
-      </Card>
+      </Stack>
+    </Card>
 
-      <Card title="Workspace discoveries">
-        {#snippet actions()}
-          <a class="edit-link" href={facts.workspace.reviewHref} onclick={editLink(facts.workspace.reviewHref)}>Review →</a>
-        {/snippet}
-        {#if !facts.workspace.goals}
-          <p class="muted">No scan run yet.</p>
-        {:else if facts.workspace.goals.dismissed}
-          <p class="muted">Scan dismissed. <a href={facts.workspace.reviewHref} onclick={editLink(facts.workspace.reviewHref)}>Re-review</a>.</p>
-        {:else if facts.workspace.goals.imported}
-          <dl class="kv">
-            <dt>Goals</dt><dd>{facts.workspace.goals.goalCount}</dd>
-            <dt>Tasks</dt><dd>{facts.workspace.goals.taskCount}</dd>
-            <dt>Milestones</dt><dd>{facts.workspace.goals.milestoneCount}</dd>
-          </dl>
-        {:else}
-          <p class="muted">Pending review.</p>
-        {/if}
-      </Card>
+    <Card title="Workspace discoveries">
+      {#snippet actions()}
+        <a class="edit-link" href={facts.workspace.reviewHref} onclick={editLink(facts.workspace.reviewHref)}>Review →</a>
+      {/snippet}
+      {#if !facts.workspace.goals}
+        <p class="muted">No scan run yet.</p>
+      {:else if facts.workspace.goals.dismissed}
+        <p class="muted">Scan dismissed. <a href={facts.workspace.reviewHref} onclick={editLink(facts.workspace.reviewHref)}>Re-review</a>.</p>
+      {:else if facts.workspace.goals.imported}
+        <dl class="kv">
+          <dt>Goals</dt><dd>{facts.workspace.goals.goalCount}</dd>
+          <dt>Tasks</dt><dd>{facts.workspace.goals.taskCount}</dd>
+          <dt>Milestones</dt><dd>{facts.workspace.goals.milestoneCount}</dd>
+        </dl>
+      {:else}
+        <p class="muted">Pending review.</p>
+      {/if}
+    </Card>
 
-      <Card title="Coordinators ({facts.coordinators.count})">
-        {#snippet actions()}
-          <a class="edit-link" href={facts.coordinators.editHref} onclick={editLink(facts.coordinators.editHref)}>Open →</a>
-        {/snippet}
-        {#if facts.coordinators.count === 0}
-          <p class="muted">None configured.</p>
-        {:else}
-          <ul class="coord-list">
-            {#each facts.coordinators.list as c (c.id)}
-              <li><strong>{c.name}</strong> <code class="muted">({c.id})</code></li>
-            {/each}
-          </ul>
-        {/if}
-      </Card>
+    <Card title="Internal routing ({facts.coordinators.count})">
+      {#snippet actions()}
+        <a class="edit-link" href={facts.coordinators.editHref} onclick={editLink(facts.coordinators.editHref)}>Inspect →</a>
+      {/snippet}
+      {#if facts.coordinators.count === 0}
+        <p class="muted">No routing map configured yet.</p>
+      {:else}
+        <ul class="coord-list">
+          {#each facts.coordinators.list as c (c.id)}
+            <li><strong>{friendlyStewardName(undefined, c.domain, c.id)}</strong> <code class="muted">({c.id})</code></li>
+          {/each}
+        </ul>
+      {/if}
+    </Card>
 
-      <Card title="Design system">
-        {#snippet actions()}
-          <a class="edit-link" href={facts.designSystem.editHref} onclick={editLink(facts.designSystem.editHref)}>Edit →</a>
-        {/snippet}
-        {#if facts.designSystem.summary}
-          <pre class="summary">{facts.designSystem.summary}</pre>
-        {:else}
-          <p class="muted">Not defined.</p>
-        {/if}
-      </Card>
-    </Stack>
+    <Card title="Design system">
+      {#snippet actions()}
+        <a class="edit-link" href={facts.designSystem.editHref} onclick={editLink(facts.designSystem.editHref)}>Edit →</a>
+      {/snippet}
+      {#if facts.designSystem.summary}
+        <pre class="summary">{facts.designSystem.summary}</pre>
+      {:else}
+        <p class="muted">Not defined.</p>
+      {/if}
+    </Card>
   {/if}
-</div>
+</Stack>
 
 <style>
-  .wrap { display: flex; flex-direction: column; gap: var(--s-3); }
+  .head {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-1);
+  }
   .head h2 { margin: 0; font-size: var(--fs-4); font-weight: 700; }
-  .sub { margin: var(--s-1) 0 0 0; color: var(--text-muted); font-size: var(--fs-1); }
+  .sub { margin: 0; color: var(--text-muted); font-size: var(--fs-1); }
   .muted { color: var(--text-muted); font-size: var(--fs-2); }
   .kv {
     display: grid;
@@ -197,7 +204,6 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: var(--s-2);
-    margin-top: var(--s-2);
   }
   .gate {
     padding: var(--s-2);

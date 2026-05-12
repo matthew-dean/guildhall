@@ -120,6 +120,10 @@ export async function updateTask(
     if (input.humanJudgment !== undefined && input.humanJudgment.trim() !== '') task.humanJudgment = input.humanJudgment
     if (input.spec !== undefined && input.spec.trim() !== '') {
       task.spec = input.spec
+      if (input.title === undefined) {
+        const derivedTitle = deriveImportedTaskTitle(task)
+        if (derivedTitle) task.title = derivedTitle
+      }
       if (task.acceptanceCriteria.length === 0) {
         const derivedCriteria = parseAcceptanceCriteriaFromSpec(input.spec)
         if (derivedCriteria.length > 0) task.acceptanceCriteria = derivedCriteria
@@ -204,6 +208,51 @@ function inferSingleActiveTaskId(queue: z.infer<typeof TaskQueue>): string | nul
     ['in_progress', 'review', 'gate_check', 'spec_review'].includes(t.status),
   )
   return candidates.length === 1 ? candidates[0]!.id : null
+}
+
+function deriveImportedTaskTitle(task: z.infer<typeof Task>): string | null {
+  const currentTitle = typeof task.title === 'string' ? task.title.trim() : ''
+  if (!looksLikeImportedFragmentTitle(currentTitle)) return null
+  const area = importedAreaLabel(task)
+  const summary = firstSpecSummaryLine(task.spec)
+  if (!area || !summary) return null
+  return `${area}: ${lowercaseFirst(summary.replace(/[.!?]+$/, '').trim())}`
+}
+
+function looksLikeImportedFragmentTitle(title: string): boolean {
+  if (!title) return false
+  return /\(deferred\)/i.test(title) || /^version diff view$/i.test(title.trim())
+}
+
+function importedAreaLabel(task: z.infer<typeof Task>): string | null {
+  const notes = Array.isArray(task.notes) ? task.notes : []
+  const importerNote = notes.find((note) =>
+    note?.role === 'importer' &&
+    (note?.agentId === 'workspace-importer' || note?.agentId === 'workspace-importer-agent'),
+  )
+  const content = typeof importerNote?.content === 'string' ? importerNote.content : ''
+  if (!content) return null
+  if (/[/\\]knit[/\\]/i.test(content)) return 'Knit'
+  if (/[/\\]looma[/\\]/i.test(content)) return 'Looma'
+  return null
+}
+
+function firstSpecSummaryLine(spec: string | undefined): string | null {
+  if (typeof spec !== 'string' || !spec.trim()) return null
+  const normalized = spec.replace(/^## Summary\s*/i, '').trim()
+  const summaryMatch = normalized.match(/^([\s\S]*?)(?:\n## |\n### |\Z)/i)
+  const summaryBlock = (summaryMatch?.[1] ?? normalized).trim()
+  if (!summaryBlock) return null
+  const firstParagraph = summaryBlock.split(/\n\s*\n/)[0]?.trim() ?? ''
+  if (!firstParagraph) return null
+  const singleLine = firstParagraph.replace(/\s+/g, ' ').trim()
+  if (!singleLine) return null
+  return (singleLine.match(/^(.+?[.!?])(?:\s|$)/)?.[1] ?? singleLine).trim()
+}
+
+function lowercaseFirst(value: string): string {
+  if (!value) return value
+  return value[0]!.toLowerCase() + value.slice(1)
 }
 
 export const updateTaskTool = defineTool({

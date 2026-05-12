@@ -11,6 +11,7 @@
 
 import path from 'node:path'
 import fs from 'node:fs/promises'
+import { homedir } from 'node:os'
 import type { Task } from '@guildhall/core'
 import type { ProjectLevers } from '@guildhall/levers'
 import type { GitDriver } from './git-driver.js'
@@ -22,9 +23,16 @@ export function resolveWorktreeMode(project: ProjectLevers): WorktreeMode {
 }
 
 export const DEFAULT_WORKTREE_ROOT_SEGMENT = path.join('.guildhall', 'worktrees')
+export const GLOBAL_WORKTREE_ROOT_SEGMENT = 'worktrees'
 
-export function worktreeRootFor(projectPath: string): string {
-  return path.join(projectPath, DEFAULT_WORKTREE_ROOT_SEGMENT)
+function guildhallHomeDir(): string {
+  const override = process.env['GUILDHALL_CONFIG_DIR']?.trim()
+  if (override) return override
+  return path.join(homedir(), '.guildhall')
+}
+
+export function worktreeRootFor(projectId: string): string {
+  return path.join(guildhallHomeDir(), GLOBAL_WORKTREE_ROOT_SEGMENT, projectId)
 }
 
 /**
@@ -44,11 +52,11 @@ export function computeBranchName(
 }
 
 export function computeWorktreePath(
-  projectPath: string,
+  projectId: string,
   task: Task,
   mode: WorktreeMode,
 ): string {
-  const root = worktreeRootFor(projectPath)
+  const root = worktreeRootFor(projectId)
   const safeId = task.id.replace(/[^A-Za-z0-9_-]/g, '_')
   if (mode === 'per_attempt') {
     return path.join(root, safeId, `attempt-${task.revisionCount}`)
@@ -59,6 +67,7 @@ export function computeWorktreePath(
 export interface EnsureWorktreeInput {
   task: Task
   mode: WorktreeMode
+  projectId: string
   projectPath: string
   workspacePath?: string
   baseBranch: string
@@ -91,7 +100,7 @@ export interface EnsureWorktreeResult {
 export async function ensureWorktreeForDispatch(
   input: EnsureWorktreeInput,
 ): Promise<EnsureWorktreeResult> {
-  const { task, mode, projectPath, workspacePath, baseBranch, gitDriver } = input
+  const { task, mode, projectId, projectPath, workspacePath, baseBranch, gitDriver } = input
 
   if (mode === 'none') {
     return {
@@ -103,26 +112,27 @@ export async function ensureWorktreeForDispatch(
   }
 
   const expectedBranch = computeBranchName(task, mode)
-  const expectedPath = computeWorktreePath(projectPath, task, mode)
+  const expectedPath = computeWorktreePath(projectId, task, mode)
 
   // Reuse the existing worktree when the task already owns one and the
-  // mode + branch line up (per_task across ticks, or per_attempt within the
-  // same revision).
+  // branch line up (per_task across ticks, or per_attempt within the
+  // same revision). This also preserves legacy repo-local worktree paths
+  // until the task naturally exits.
   if (
-    task.worktreePath === expectedPath &&
+    task.worktreePath &&
     task.branchName === expectedBranch
   ) {
     await ensureProjectRuntimeLinks({
       projectPath,
-      worktreePath: expectedPath,
+      worktreePath: task.worktreePath,
     })
     await ensureWorkspaceSiblingLinks({
       workspacePath,
       projectPath,
-      worktreePath: expectedPath,
+      worktreePath: task.worktreePath,
     })
     return {
-      worktreePath: expectedPath,
+      worktreePath: task.worktreePath,
       branchName: expectedBranch,
       baseBranch: task.baseBranch ?? baseBranch,
       created: false,

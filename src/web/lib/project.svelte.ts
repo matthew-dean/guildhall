@@ -5,6 +5,7 @@
  */
 
 import type { ProjectDetail } from './types.js'
+import { projectFetch } from './project-routes.js'
 
 class ProjectStore {
   detail: ProjectDetail | null = $state(null)
@@ -17,7 +18,7 @@ class ProjectStore {
     const requestSeq = ++this.#requestSeq
     this.loading = true
     try {
-      const r = await fetch('/api/project', { cache: 'no-store' })
+      const r = await projectFetch('/api/project', { cache: 'no-store' })
       const j = (await r.json()) as ProjectDetail
       if (requestSeq < this.#appliedSeq) return this.detail
       if (j.error) {

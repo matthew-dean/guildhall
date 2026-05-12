@@ -133,7 +133,7 @@ function humanizeAgentError(agent: string, taskId: string, error: string): strin
   if (maxTurnsMatch) {
     return (
       `${agent} ran its step budget (${maxTurnsMatch[1]} steps) on ${taskId} and saved progress. ` +
-      `The next orchestrator tick will pick up where it left off — no action needed.`
+      `The next coordinator pass will pick up where it left off — no action needed.`
     )
   }
   if (/Model returned an empty assistant message/.test(error)) {

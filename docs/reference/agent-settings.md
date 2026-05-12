@@ -20,8 +20,8 @@ project:
     rationale: "system default"
     setAt: "2026-04-10T10:00:00Z"
     setBy: system-default
-  merge_policy:
-    position: ff_only_local
+  landing_strategy:
+    position: cherry_pick_local
     rationale: "system default"
     setAt: "2026-04-10T10:00:00Z"
     setBy: system-default

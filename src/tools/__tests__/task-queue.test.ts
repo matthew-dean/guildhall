@@ -167,6 +167,36 @@ describe('updateTask', () => {
     expect(raw.tasks[0].spec).toContain('Build the thing')
   })
 
+  it('retitles imported deferred tasks from spec summary once a real spec exists', async () => {
+    const importedQueue = {
+      ...seedQueue,
+      tasks: [
+        {
+          ...seedQueue.tasks[0],
+          title: 'Version diff view (deferred)',
+          notes: [
+            {
+              agentId: 'workspace-importer',
+              role: 'importer',
+              content: 'Imported from: /repo/knit/PROJECT_STATE.md',
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        },
+      ],
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(importedQueue), 'utf-8')
+
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      spec: '## Summary\nAdd a version diff view to page history.',
+    })
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].title).toBe('Knit: add a version diff view to page history')
+  })
+
   it('derives structured acceptance criteria from the spec when none are provided explicitly', async () => {
     await updateTask({
       tasksPath,

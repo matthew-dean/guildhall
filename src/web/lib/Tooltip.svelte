@@ -4,17 +4,23 @@
   interface Props {
     text: string
     placement?: 'top' | 'right' | 'bottom' | 'left'
+    disabled?: boolean
     className?: string | undefined
     children: Snippet
   }
 
-  let { text, placement = 'top', className = '', children }: Props = $props()
+  let { text, placement = 'top', disabled = false, className = '', children }: Props = $props()
 
   let open = $state(false)
   let anchor = $state<HTMLSpanElement | null>(null)
   let bubbleStyle = $state('')
 
+  $effect(() => {
+    if (disabled) open = false
+  })
+
   function show() {
+    if (disabled) return
     open = true
     updatePosition()
   }
@@ -48,7 +54,7 @@
   onfocusout={hide}
 >
   {@render children()}
-  {#if open}
+  {#if open && !disabled}
     <span class="gh-tooltip-bubble" role="tooltip" style={bubbleStyle}>{text}</span>
   {/if}
 </span>
@@ -61,7 +67,7 @@
   }
   .gh-tooltip-bubble {
     position: fixed;
-    z-index: var(--z-tooltip);
+    z-index: calc(var(--z-tooltip) + 20);
     max-width: min(260px, 80vw);
     width: max-content;
     padding: 6px 8px;

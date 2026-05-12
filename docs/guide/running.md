@@ -1,10 +1,10 @@
 ---
-title: Running the orchestrator
+title: Running the coordinator
 ---
 
-# Running the orchestrator
+# Running the coordinator
 
-The orchestrator is the process that advances tasks. It ticks through each domain, asks coordinators to evaluate their queues, dispatches workers, collects reviews, and runs gates.
+The coordinator is the process that advances tasks. It walks the live queue, assembles the right context for the current task, dispatches workers, collects reviews, and runs gates.
 
 ## From the CLI
 
@@ -24,11 +24,24 @@ guildhall run --one-task         # finish one task, then stop
 guildhall serve
 ```
 
-Opens the dashboard at `http://localhost:7842`. The **Run** control on the project page starts and stops the orchestrator with the same semantics as the CLI.
+`guildhall serve` is the friendly path: it starts the local Guildhall service
+if needed, then opens the web UI at `http://localhost:7777`.
+
+If you want a little more control:
+
+```bash
+guildhall start           # start the local service only
+guildhall open            # open the UI (starts the service if needed)
+guildhall stop            # stop the local service
+guildhall serve ~/work/x  # open Guildhall with a preferred project bias
+```
+
+The **Run** control inside a project starts and stops that project's
+coordinator lane with the same semantics as the CLI.
 
 ## Fanout
 
-By default the orchestrator runs one task at a time per domain. Set [`concurrent_task_dispatch`](../levers/concurrent-task-dispatch) to `fanout_N` to run up to N tasks in parallel. Combined with [`worktree_isolation: per_task`](../levers/worktree-isolation), each parallel task runs in its own git worktree.
+By default the coordinator runs one task at a time per domain. Set [`concurrent_task_dispatch`](../levers/concurrent-task-dispatch) to `fanout_N` to run up to N tasks in parallel. Combined with [`worktree_isolation: per_task`](../levers/worktree-isolation), each parallel task runs in its own git worktree.
 
 ## Stop, pause, resume
 

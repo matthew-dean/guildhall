@@ -43,9 +43,18 @@ A starter `.gitignore` snippet:
 memory/events.ndjson
 memory/sessions/
 .guildhall/config.yaml
-.guildhall/worktrees/
 ```
 
 ## Global data
 
 Session snapshots can alternately live in `~/.cache/guildhall/sessions/` keyed by `SHA1(projectPath)` — this is the default when `GUILDHALL_DATA_DIR` is unset.
+
+Task workspaces are runtime infrastructure, not project state. New isolated task
+workspaces should live under:
+
+```text
+~/.guildhall/worktrees/<project-id>/<task-id>
+```
+
+That keeps repos cleaner and leaves only durable project state inside the
+project itself.

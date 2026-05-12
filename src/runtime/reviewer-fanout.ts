@@ -469,7 +469,7 @@ function isInfrastructureOnlyFanoutFailure(verdict: PersonaVerdict): boolean {
 
 function singleLine(text: string): string {
   const compact = text.replace(/\s+/g, ' ').trim()
-  return compact.length > 220 ? `${compact.slice(0, 217).trimEnd()}…` : compact
+  return compact.length > 220 ? `${compact.slice(0, 217).trimEnd()}...` : compact
 }
 
 /**

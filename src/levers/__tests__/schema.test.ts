@@ -104,6 +104,11 @@ describe('default LeverSettings', () => {
     const settings = makeDefaultSettings(frozen)
     expect(settings.project.agent_health_strictness.setAt).toBe('2026-04-20T17:30:00.000Z')
   })
+
+  it('defaults worktree isolation to per_task', () => {
+    const settings = makeDefaultSettings()
+    expect(settings.project.worktree_isolation.position).toBe('per_task')
+  })
 })
 
 describe('parameterized lever positions round-trip', () => {
@@ -133,8 +138,8 @@ describe('parameterized lever positions round-trip', () => {
 
   it('accepts coordinator:<name> as a valid setter', () => {
     const settings = makeDefaultSettings()
-    settings.project.merge_policy = {
-      position: 'ff_only_with_push',
+    settings.project.landing_strategy = {
+      position: 'cherry_pick_with_push',
       rationale: 'team is ready for auto-push',
       setAt: new Date().toISOString(),
       setBy: 'coordinator:release',
@@ -146,7 +151,7 @@ describe('parameterized lever positions round-trip', () => {
   it('rejects an unknown setter value', () => {
     const settings = makeDefaultSettings()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(settings.project.merge_policy as any).setBy = 'some-random-agent'
+    ;(settings.project.landing_strategy as any).setBy = 'some-random-agent'
     const result = leverSettingsSchema.safeParse(settings)
     expect(result.success).toBe(false)
   })

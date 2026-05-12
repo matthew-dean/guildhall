@@ -5,9 +5,11 @@
   moved to the bottom of the left rail.
 -->
 <script lang="ts">
-  import { nav } from '../lib/nav.svelte.js'
+  import Icon from '../lib/Icon.svelte'
+  import { nav, path } from '../lib/nav.svelte.js'
   import { onStatus, type SseStatus } from '../lib/events.js'
   import StatusDot from '../lib/StatusDot.svelte'
+  import { parseProjectRoute } from '../lib/project-routes.js'
 
   let sseStatus = $state<SseStatus>('connecting')
   let version = $state<string | null>(null)
@@ -30,16 +32,26 @@
     sseStatus === 'live' ? 'active' : sseStatus === 'error' ? 'warn' : 'idle',
   )
   const sseLabel = $derived(
-    sseStatus === 'live' ? 'live' : sseStatus === 'error' ? 'reconnecting…' : 'connecting…',
+    sseStatus === 'live' ? 'live' : sseStatus === 'error' ? 'reconnecting...' : 'connecting...',
   )
+  const showProjectMenu = $derived(path.value.startsWith('/project') || parseProjectRoute(path.value).projectScoped)
 
   function goHome() {
     nav('/')
   }
+
+  function toggleProjectNav() {
+    window.dispatchEvent(new CustomEvent('guildhall:toggle-project-nav'))
+  }
 </script>
 
 <header class="app-header">
-  <button type="button" class="brand" onclick={goHome} aria-label="Workspace home">
+  {#if showProjectMenu}
+    <button type="button" class="project-menu" onclick={toggleProjectNav} aria-label="Open project navigation">
+      <Icon name="menu" size={18} />
+    </button>
+  {/if}
+  <button type="button" class="brand" onclick={goHome} aria-label="Projects home">
     Guildhall
   </button>
   {#if version}
@@ -61,8 +73,6 @@
     min-height: var(--app-header-h);
     border-bottom: 1px solid var(--border);
     background: var(--bg-raised);
-    position: sticky;
-    top: 0;
     z-index: var(--z-app-header);
   }
   .brand {
@@ -79,6 +89,22 @@
   }
   .brand:hover {
     color: var(--accent);
+  }
+  .project-menu {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-1);
+    background: var(--bg-elevated);
+    color: var(--text);
+    cursor: pointer;
+    padding: 0;
+  }
+  .project-menu:hover {
+    background: var(--bg-raised-2);
   }
   .version {
     font-size: var(--fs-0);
@@ -99,5 +125,10 @@
     letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--text-muted);
+  }
+  @media (max-width: 1100px) {
+    .project-menu {
+      display: inline-flex;
+    }
   }
 </style>

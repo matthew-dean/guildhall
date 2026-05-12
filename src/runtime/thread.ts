@@ -19,7 +19,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { Task } from '@guildhall/core'
 import { activeEscalations } from '@guildhall/tools'
 import {
@@ -31,7 +31,8 @@ import {
   specFillWizard,
   type ProjectSnapshot,
 } from './wizards.js'
-import { parseCoordinatorDraft } from './meta-intake.js'
+import { shouldUseImportDraftState } from './import-drafts.js'
+import { META_INTAKE_TASK_ID, parseCoordinatorDraft } from './meta-intake.js'
 import { thresholdMs } from './liveness.js'
 
 // ---------------------------------------------------------------------------
@@ -117,6 +118,7 @@ export interface AgentQuestionTurn extends TurnBase {
     id: string
     askedBy: string
     askedAt: string
+    draftAnswer?: string | undefined
     answeredAt?: string | undefined
     answer?: string | undefined
     restatement?: string | undefined
@@ -134,7 +136,7 @@ export interface SpecReviewTurn extends TurnBase {
   spec: string
   draftCoordinators?: Array<{
     id: string
-    name: string
+    name?: string
     domain: string
     path?: string | undefined
     mandate: string
@@ -170,6 +172,7 @@ export interface InFlightTurn extends TurnBase {
   taskTitle: string
   taskStatus?: string | undefined
   summary: string
+  importedDraft?: boolean | undefined
   liveAgent?: {
     name: string
     startedAt?: string | undefined
@@ -251,6 +254,144 @@ function tasksArray(raw: unknown): Task[] {
   return []
 }
 
+function isTerminalQuestionState(status: string): boolean {
+  return status === 'done' || status === 'shelved' || status === 'blocked' || status === 'pending_pr'
+}
+
+function isGuildhallQueuedTurn(turn: ThreadTurn): boolean {
+  return (
+    turn.kind === 'inflight' &&
+    turn.status === 'active' &&
+    !turn.liveAgent &&
+    !turn.importedDraft &&
+    (
+      turn.taskStatus === 'ready' ||
+      turn.taskStatus === 'exploring' ||
+      turn.taskStatus === 'in_progress' ||
+      turn.taskStatus === 'review' ||
+      turn.taskStatus === 'gate_check'
+    )
+  )
+}
+
+function isHumanOwnedActiveTurn(turn: ThreadTurn): boolean {
+  if (turn.status !== 'active') return false
+  switch (turn.kind) {
+    case 'setup_step':
+    case 'agent_question':
+    case 'brief_approval':
+    case 'spec_review':
+    case 'escalation':
+      return true
+    case 'inflight':
+      return Boolean(turn.importedDraft)
+    default:
+      return false
+  }
+}
+
+function hasRoutingDraft(taskSpec: string): boolean {
+  return !!parseCoordinatorDraft(taskSpec) || /```ya?ml[\s\S]*?\bcoordinators:\b[\s\S]*?```/i.test(taskSpec)
+}
+
+function hasSpecDraftContent(task: Pick<Task, 'spec' | 'acceptanceCriteria'>): boolean {
+  return (
+    typeof task.spec === 'string' &&
+    task.spec.trim().length > 0 &&
+    Array.isArray(task.acceptanceCriteria) &&
+    task.acceptanceCriteria.length > 0
+  )
+}
+
+function hasApprovedProductBrief(task: Pick<Task, 'productBrief'>): boolean {
+  return Boolean(
+    task.productBrief &&
+    typeof task.productBrief === 'object' &&
+    typeof task.productBrief.approvedAt === 'string' &&
+    task.productBrief.approvedAt.trim().length > 0,
+  )
+}
+
+function hasConcreteSpecDraft(task: Task): boolean {
+  return (
+    typeof task.status === 'string' &&
+    task.status === 'spec_review' &&
+    hasSpecDraftContent(task)
+  )
+}
+
+function isQueuedSpecRevision(task: Task): boolean {
+  return (
+    task.status === 'exploring' &&
+    hasSpecDraftContent(task) &&
+    hasApprovedProductBrief(task)
+  )
+}
+
+function firstSpecSummaryLine(spec: string | undefined): string | undefined {
+  if (typeof spec !== 'string' || !spec.trim()) return undefined
+  const summaryMatch = spec.match(/## Summary\s+([\s\S]*?)(?:\n## |\n### |\Z)/i)
+  const summaryBlock = (summaryMatch?.[1] ?? spec).trim()
+  if (!summaryBlock) return undefined
+  const firstParagraph = summaryBlock.split(/\n\s*\n/)[0]?.trim() ?? ''
+  if (!firstParagraph) return undefined
+  const singleLine = firstParagraph.replace(/\s+/g, ' ').trim()
+  if (!singleLine) return undefined
+  const sentence = singleLine.match(/^(.+?[.!?])(?:\s|$)/)?.[1] ?? singleLine
+  return sentence.trim()
+}
+
+function truncateDisplayTitle(value: string, max = 72): string {
+  const singleLine = value.replace(/\s+/g, ' ').trim()
+  if (singleLine.length <= max) return singleLine
+  return `${singleLine.slice(0, max - 1).trim()}...`
+}
+
+function displayTaskTitle(task: Task): string {
+  if (task.id === META_INTAKE_TASK_ID) return 'Inspect the repo and draft starter tasks'
+  if (task.id === 'task-workspace-import') return 'Review existing project work'
+  const raw = typeof task.title === 'string' ? task.title.trim() : ''
+  if (isQueuedSpecRevision(task) && /^Draft a first starter task for /i.test(raw)) {
+    const summary = firstSpecSummaryLine(task.spec)
+    if (summary) return `Starter task spec: ${truncateDisplayTitle(summary)}`
+    return 'Starter task spec draft'
+  }
+  return raw || task.id
+}
+
+function isObsoleteMetaRoutingQuestion(taskId: string, taskSpec: string, question: Record<string, unknown>): boolean {
+  if (taskId !== META_INTAKE_TASK_ID) return false
+  if (!hasRoutingDraft(taskSpec)) return false
+  const text =
+    (typeof question.restatement === 'string' && question.restatement) ||
+    (typeof question.prompt === 'string' && question.prompt) ||
+    ''
+  return /project areas|review lanes|coordinator domains?|coordinators for/i.test(text)
+}
+
+function isObsoleteStarterTaskFocusQuestion(task: Task, question: Record<string, unknown>): boolean {
+  if (!hasConcreteSpecDraft(task)) return false
+  const text =
+    (typeof question.restatement === 'string' && question.restatement) ||
+    (typeof question.prompt === 'string' && question.prompt) ||
+    ''
+  if (!/what should .*?(first|starter) task focus on|pick the focus for this first task/i.test(text)) {
+    return false
+  }
+  const askedAt = typeof question.askedAt === 'string' ? Date.parse(question.askedAt) : Number.NaN
+  const updatedAt = typeof task.updatedAt === 'string' ? Date.parse(task.updatedAt) : Number.NaN
+  return !Number.isFinite(askedAt) || !Number.isFinite(updatedAt) || askedAt <= updatedAt
+}
+
+function isObsoleteVisibleQuestion(task: Task, question: Record<string, unknown>): boolean {
+  const taskId = typeof task.id === 'string' ? task.id : ''
+  const taskSpec = typeof task.spec === 'string' ? task.spec : ''
+  return (
+    isObsoleteMetaRoutingQuestion(taskId, taskSpec, question) ||
+    isObsoleteStarterTaskFocusQuestion(task, question)
+  )
+}
+
 function stripMarkdown(value: string): string {
   return value
     .replace(/```[\s\S]*?```/g, ' ')
@@ -288,7 +429,7 @@ function compactEscalationDetails(value: string | undefined): string | undefined
   }
 
   const summary = parts.join(' ')
-  return summary.length > 220 ? `${summary.slice(0, 217).trimEnd()}…` : summary
+  return summary.length > 220 ? `${summary.slice(0, 217).trimEnd()}...` : summary
 }
 
 function guessedProjectDirection(projectPath: string): string {
@@ -298,24 +439,76 @@ function guessedProjectDirection(projectPath: string): string {
     const raw = readFileSync(readmePath, 'utf8')
     const lines = raw.split(/\r?\n/)
     const title = stripMarkdown(lines.find(line => line.trim().startsWith('# '))?.replace(/^#\s+/, '') ?? '')
-    const body = lines
-      .map(line => stripMarkdown(line))
-      .filter(line =>
-        line.length > 0 &&
-        !line.startsWith('!') &&
-        !/^status\s*:/i.test(line) &&
-        !/^[-*]\s/.test(line),
-      )
-      .find(line => title ? line.toLowerCase() !== title.toLowerCase() : true)
-    const parts = [
-      title ? `${title} is this project.` : '',
-      body ? `From the README, the project appears to be about ${body.charAt(0).toLowerCase()}${body.slice(1)}` : '',
-      'Review or replace this guess so Guildhall routes future tasks with the right product intent.',
-    ].filter(Boolean)
-    return parts.join(' ')
+    const cleaned = lines.map(line => stripMarkdown(line).trim())
+    let body = ''
+    for (let i = 0; i < lines.length; i += 1) {
+      const rawLine = lines[i] ?? ''
+      const line = cleaned[i] ?? ''
+      if (
+        line.length === 0 ||
+        line.startsWith('!') ||
+        /^status\s*:/i.test(line) ||
+        (title && line.toLowerCase() === title.toLowerCase())
+      ) {
+        continue
+      }
+      if (/^[-*]\s/.test(rawLine.trim())) continue
+      if (/:$/.test(line)) {
+        const bullets: string[] = []
+        for (let j = i + 1; j < lines.length; j += 1) {
+          const nextRaw = lines[j] ?? ''
+          if (!/^[-*]\s/.test(nextRaw.trim())) break
+          const nextLine = stripMarkdown(nextRaw)
+            .trim()
+            .replace(/^[-*]\s*/, '')
+            .replace(/^(primary|also)\s*:\s*/i, '')
+          if (nextLine) bullets.push(nextLine)
+        }
+        if (bullets.length > 0) {
+          body = `${line.replace(/:\s*$/, '')} ${bullets.join('; ')}.`
+          break
+        }
+      }
+      body = line
+      break
+    }
+    const lead = body ? firstSentence(body).replace(/\s+/g, ' ').trim() : ''
+    if (lead) return lead
+    return title ? `${title}.` : ''
   } catch {
     return ''
   }
+}
+
+function isLegacyGeneratedProjectDirection(value: string): boolean {
+  return /from the readme, the project appears to be about/i.test(value) ||
+    /guildhall should treat the main goal as/i.test(value)
+}
+
+function normalizeOpenQuestionPrompt(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function openQuestionSignature(question: Record<string, unknown>): string {
+  const body = normalizeOpenQuestionPrompt(
+    typeof question.prompt === 'string'
+      ? question.prompt
+      : typeof question.restatement === 'string'
+        ? question.restatement
+        : '',
+  )
+  const choices = Array.isArray(question.choices)
+    ? (question.choices as unknown[])
+      .filter((choice): choice is string => typeof choice === 'string')
+      .map((choice) => normalizeOpenQuestionPrompt(choice))
+      .join('|')
+    : ''
+  const selectionMode =
+    question.selectionMode === 'single' || question.selectionMode === 'multiple'
+      ? question.selectionMode
+      : ''
+  const kind = typeof question.kind === 'string' ? question.kind : ''
+  return [kind, body, choices, selectionMode].join('::')
 }
 
 function specFillChecklist(
@@ -381,18 +574,13 @@ const SETUP_STEP_ACTIONS: Record<string, SetupAction> = {
   },
   bootstrap: {
     affordance: 'inline-button',
-    actionLabel: 'Verify',
+    actionLabel: 'Run checks',
     submitEndpoint: '/api/project/bootstrap/run',
   },
   coordinator: {
-    affordance: 'inline-choice',
-    actionLabel: 'Add',
-    submitEndpoint: '/api/project/coordinators/seed',
-    choices: [
-      { value: 'tech', label: 'Tech' },
-      { value: 'product', label: 'Product' },
-      { value: 'qa', label: 'QA' },
-    ],
+    affordance: 'inline-button',
+    actionLabel: 'Let Guildhall inspect the repo',
+    submitEndpoint: '/api/project/meta-intake',
   },
   direction: {
     affordance: 'inline-textarea',
@@ -402,12 +590,12 @@ const SETUP_STEP_ACTIONS: Record<string, SetupAction> = {
   },
   workspaceImport: {
     affordance: 'link',
-    actionLabel: 'Review',
+    actionLabel: 'Open review',
     actionHref: '/workspace-import',
   },
   firstTask: {
     affordance: 'inline-text',
-    actionLabel: 'Create',
+    actionLabel: 'Create task',
     submitEndpoint: '/api/project/intake',
     placeholder: 'First task',
   },
@@ -420,6 +608,9 @@ function setupCurrentValue(stepId: string, snap: ProjectSnapshot, projectPath: s
   if (!existsSync(briefPath)) return guessedProjectDirection(projectPath)
   try {
     const existing = readFileSync(briefPath, 'utf8').trim()
+    if (existing && isLegacyGeneratedProjectDirection(existing)) {
+      return guessedProjectDirection(projectPath)
+    }
     return existing || guessedProjectDirection(projectPath)
   } catch {
     return guessedProjectDirection(projectPath)
@@ -440,8 +631,10 @@ function phaseForTurn(turn: ThreadTurn): TurnPhase {
     case 'escalation':
       return 'blocked'
     case 'inflight':
+      if (turn.phase === 'setup') return 'setup'
+      if (turn.phase === 'spec') return 'spec'
       if (turn.taskStatus === 'ready') return 'ready'
-      if (turn.taskStatus === 'exploring') return 'intake'
+      if (turn.taskStatus === 'exploring' || turn.taskStatus === 'import_draft') return 'intake'
       return 'inflight'
   }
 }
@@ -600,6 +793,12 @@ function liveEventTone(
 function truncateDetail(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim()
   if (!trimmed) return undefined
+  const dirtyRepoMatch = trimmed.match(/worktree setup blocked: base repo has uncommitted changes at (.+)$/i)
+  if (dirtyRepoMatch) {
+    const repoPath = dirtyRepoMatch[1]?.trim() ?? ''
+    const repoName = repoPath ? basename(repoPath) : 'the repo'
+    return `Guildhall is blocked because ${repoName} has uncommitted changes. Commit or stash that repo, then try again.`
+  }
   if (
     trimmed.includes('Invalid input for edit-file') &&
     /"path"\s*:\s*\[\s*"oldString"\s*\]/.test(trimmed)
@@ -734,9 +933,19 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     typeof t.status === 'string' &&
     !['done', 'shelved'].includes(t.status),
   )
-
   // ---- Setup section: onboard wizard steps as chat turns -------------------
   const onboardProgress = progressFor(onboardWizard, snap)
+  const providerSetupPending = onboardProgress.steps.some(
+    (step) => step.id === 'provider' && step.status === 'pending',
+  )
+  const bootstrapSetupPending = onboardProgress.steps.some(
+    (step) => step.id === 'bootstrap' && step.status === 'pending',
+  )
+  const activeSetupStepId = onboardProgress.activeStepId
+  const setupStillBlockingMetaIntake = providerSetupPending || bootstrapSetupPending
+  const metaIntakeCanLeadSetup =
+    activeSetupStepId === 'routing' &&
+    (metaIntakeDraftReady || (metaIntakeInProgress && !setupStillBlockingMetaIntake))
   let activeAssigned = false
   // Synthetic timestamps so setup steps order-deterministically before any
   // real task turns. Using epoch=0 + minute offsets keeps sort stable.
@@ -747,7 +956,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         ? 'done'
         : step.status === 'skipped'
           ? 'done'
-          : metaIntakeDraftReady || metaIntakeInProgress
+          : metaIntakeCanLeadSetup
             ? 'pending'
             : !activeAssigned
             ? 'active'
@@ -775,9 +984,14 @@ export function buildThread(opts: BuildThreadOptions): Thread {
   }
 
   // ---- Task-derived turns --------------------------------------------------
+  const importDraftTasks = tasks.filter((task) => {
+    const taskStatus = typeof task.status === 'string' ? task.status : ''
+    return taskStatus === 'import_draft' || shouldUseImportDraftState(task)
+  })
+  const leadingImportDraftId = typeof importDraftTasks[0]?.id === 'string' ? importDraftTasks[0].id : null
   for (const t of tasks) {
     const taskId = typeof t.id === 'string' ? t.id : ''
-    const taskTitle = typeof t.title === 'string' ? t.title : taskId
+    const taskTitle = displayTaskTitle(t)
     if (!taskId) continue
     const taskStatus = typeof t.status === 'string' ? t.status : ''
     const createdAt =
@@ -828,14 +1042,20 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     }
 
     // Open agent questions
-    const openQs = Array.isArray(t.openQuestions)
-      ? (t.openQuestions as Array<Record<string, unknown>>)
-      : []
+    const openQs = isTerminalQuestionState(taskStatus)
+      ? []
+      : (Array.isArray(t.openQuestions)
+          ? (t.openQuestions as Array<Record<string, unknown>>)
+          : []).filter((q) => !isObsoleteVisibleQuestion(t, q))
+    const seenQuestionSignatures = new Set<string>()
     for (const q of openQs) {
+      const signature = openQuestionSignature(q)
+      const answeredAt = typeof q.answeredAt === 'string' ? q.answeredAt : undefined
+      if (!answeredAt && signature && seenQuestionSignatures.has(signature)) continue
       const qid = typeof q.id === 'string' ? q.id : ''
       const askedAt = typeof q.askedAt === 'string' ? q.askedAt : createdAt
       if (!qid) continue
-      const answeredAt = typeof q.answeredAt === 'string' ? q.answeredAt : undefined
+      if (!answeredAt && signature) seenQuestionSignatures.add(signature)
       // Agent questions are co-active: any unanswered question on the task
       // is independently 'active' so the user can answer them in any order.
       // We DO NOT bump `activeAssigned` here — that flag gates the strictly
@@ -859,6 +1079,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
           id: qid,
           askedBy: typeof q.askedBy === 'string' ? q.askedBy : 'agent',
           askedAt,
+          draftAnswer: typeof q.draftAnswer === 'string' ? q.draftAnswer : undefined,
           answeredAt,
           answer: typeof q.answer === 'string' ? q.answer : undefined,
           restatement: typeof q.restatement === 'string' ? q.restatement : undefined,
@@ -870,38 +1091,6 @@ export function buildThread(opts: BuildThreadOptions): Thread {
             ? q.selectionMode
             : undefined,
         },
-      })
-    }
-
-    // Spec review
-    if (taskStatus === 'spec_review') {
-      const status: TurnStatus = !activeAssigned ? 'active' : 'pending'
-      if (status === 'active') activeAssigned = true
-      const spec = typeof t.spec === 'string' ? t.spec : ''
-      const draftCoordinators = taskId === 'task-meta-intake'
-        ? parseCoordinatorDraft(spec)?.map((draft) => ({
-            id: draft.id,
-            name: draft.name,
-            domain: draft.domain,
-            path: draft.path,
-            mandate: draft.mandate,
-            concerns: draft.concerns.map((concern) => ({
-              id: concern.id,
-              description: concern.description,
-            })),
-          }))
-        : undefined
-      turns.push({
-        kind: 'spec_review',
-        id: `spec:${taskId}`,
-        at: typeof t.updatedAt === 'string' ? t.updatedAt : createdAt,
-        persona: 'spec',
-        status,
-        phase: status === 'active' ? 'spec' : 'intake',
-        taskId,
-        taskTitle,
-        spec,
-        draftCoordinators,
       })
     }
 
@@ -953,25 +1142,91 @@ export function buildThread(opts: BuildThreadOptions): Thread {
 
     const hasUnansweredQuestions = openQs.some(q => !q.answeredAt)
     const hasActiveBriefTurn = !!brief && !approvedAt && taskStatus === 'exploring'
+    const importedDraft = taskStatus === 'import_draft' || shouldUseImportDraftState(t)
+    if (importedDraft && taskId !== leadingImportDraftId) {
+      continue
+    }
+
+    // Spec review
+    if (taskStatus === 'spec_review' && !hasUnansweredQuestions) {
+      const status: TurnStatus = hasUnansweredQuestions
+        ? 'pending'
+        : !activeAssigned
+          ? 'active'
+          : 'pending'
+      if (status === 'active') activeAssigned = true
+      const spec = typeof t.spec === 'string' ? t.spec : ''
+      const draftCoordinators = taskId === 'task-meta-intake'
+        ? parseCoordinatorDraft(spec)?.map((draft) => ({
+            id: draft.id,
+            ...(draft.name ? { name: draft.name } : {}),
+            domain: draft.domain,
+            path: draft.path,
+            mandate: draft.mandate,
+            concerns: draft.concerns.map((concern) => ({
+              id: concern.id,
+              description: concern.description,
+            })),
+          }))
+        : undefined
+      turns.push({
+        kind: 'spec_review',
+        id: `spec:${taskId}`,
+        at: typeof t.updatedAt === 'string' ? t.updatedAt : createdAt,
+        persona: 'spec',
+        status,
+        phase: status === 'active' ? 'spec' : 'intake',
+        taskId,
+        taskTitle,
+        spec,
+        draftCoordinators,
+      })
+    }
+
     if (
-      ['exploring', 'in_progress', 'gate_check', 'review', 'ready'].includes(taskStatus) &&
+      ['import_draft', 'exploring', 'in_progress', 'gate_check', 'review', 'ready'].includes(taskStatus) &&
       !hasUnansweredQuestions &&
       !hasActiveBriefTurn
     ) {
       const status: TurnStatus = !activeAssigned ? 'active' : 'pending'
       if (status === 'active') activeAssigned = true
       const livePersona = personaForAgent(liveAgent?.name)
-      const persona = livePersona ?? (taskStatus === 'exploring' ? 'spec' : 'worker')
+      const persona = livePersona ?? (taskStatus === 'exploring' || taskStatus === 'import_draft' ? 'spec' : 'worker')
+      const queuedSpecRevision = isQueuedSpecRevision(t)
       const phase = taskStatus === 'ready'
         ? 'ready'
-        : taskStatus === 'exploring' || livePersona === 'spec'
+        : taskId === META_INTAKE_TASK_ID && setupStillBlockingMetaIntake && !liveAgent
+          ? 'setup'
+        : queuedSpecRevision
+          ? 'spec'
+        : taskStatus === 'exploring' || taskStatus === 'import_draft' || livePersona === 'spec'
           ? 'intake'
           : 'inflight'
       const summary =
         liveAgent
-          ? `${friendlyAgentName(liveAgent.name)} is working on this now.`
-          : taskStatus === 'exploring'
-            ? 'The spec author is shaping this task.'
+          ? importedDraft && liveAgent.name === 'spec-agent'
+            ? 'Guildhall is shaping this imported draft now.'
+            : taskId === META_INTAKE_TASK_ID
+              ? 'Guildhall is inspecting the repo and drafting starter tasks now.'
+            : `${friendlyAgentName(liveAgent.name)} is working on this now.`
+          : taskId === META_INTAKE_TASK_ID
+            ? providerSetupPending
+              ? 'Setup is waiting on provider configuration before Guildhall can inspect the repo.'
+              : bootstrapSetupPending
+                ? 'Setup checks still need to run before Guildhall can inspect the repo.'
+                : 'Guildhall has a partial setup draft here.'
+          : taskStatus === 'import_draft'
+            ? importDraftTasks.length > 1
+              ? `Imported draft waiting for shaping. ${importDraftTasks.length - 1} more drafts are queued behind it.`
+              : 'Imported draft waiting for shaping.'
+            : taskStatus === 'exploring'
+              ? importedDraft
+                ? importDraftTasks.length > 1
+                  ? `Imported draft waiting for shaping. ${importDraftTasks.length - 1} more drafts are queued behind it.`
+                  : 'Imported draft waiting for shaping.'
+              : queuedSpecRevision
+                ? 'Guildhall has your latest answers and a spec draft. The next step is for Guildhall to revise the spec.'
+              : 'The spec author is shaping this task.'
             : taskStatus === 'ready'
               ? 'Approved and queued for work.'
               : taskStatus === 'gate_check'
@@ -990,9 +1245,17 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         taskTitle,
         taskStatus,
         summary,
+        importedDraft,
         liveAgent,
         activity: liveActivity.get(taskId),
-        checklist: taskStatus === 'exploring' ? specFillChecklist(opts.projectPath, t) : undefined,
+        checklist:
+          taskStatus === 'exploring' &&
+          !queuedSpecRevision &&
+          taskId !== META_INTAKE_TASK_ID &&
+          taskId !== 'task-workspace-import' &&
+          (!importedDraft || Boolean(liveAgent))
+            ? specFillChecklist(opts.projectPath, t)
+            : undefined,
       })
     }
 
@@ -1040,7 +1303,14 @@ export function buildThread(opts: BuildThreadOptions): Thread {
   )
   const hadOnlySetupActive =
     !hasActiveTaskTurn && turns.some((turn) => turn.kind === 'setup_step' && turn.status === 'active')
-  if (hasActiveTaskTurn || hadOnlySetupActive) {
+  const hasPendingNonSetupTurnBeyondSetup = turns.some(
+    (turn) =>
+      turn.kind !== 'setup_step' &&
+      turn.status === 'pending' &&
+      turn.phase !== 'setup',
+  )
+  const setupCanYieldToTaskTurns = activeSetupStepId === 'routing'
+  if (setupCanYieldToTaskTurns && (hasActiveTaskTurn || (hadOnlySetupActive && hasPendingNonSetupTurnBeyondSetup))) {
     for (const turn of turns) {
       if (turn.kind === 'setup_step' && turn.status === 'active') {
         turn.status = 'pending'
@@ -1048,12 +1318,21 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       }
     }
   }
-  if (hadOnlySetupActive) {
+  if (setupCanYieldToTaskTurns && hadOnlySetupActive && hasPendingNonSetupTurnBeyondSetup) {
     for (let index = turns.length - 1; index >= 0; index -= 1) {
       const turn = turns[index]
       if (!turn || turn.kind === 'setup_step' || turn.status !== 'pending') continue
       turn.status = 'active'
       break
+    }
+  }
+
+  const hasHumanOwnedActiveTurn = turns.some(isHumanOwnedActiveTurn)
+  if (hasHumanOwnedActiveTurn) {
+    for (const turn of turns) {
+      if (isGuildhallQueuedTurn(turn)) {
+        turn.status = 'pending'
+      }
     }
   }
 

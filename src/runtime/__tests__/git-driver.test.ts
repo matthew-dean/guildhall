@@ -41,6 +41,14 @@ describe('InMemoryGitDriver', () => {
     expect(driver.state.merges).toHaveLength(1)
   })
 
+  it('defaults cherryPickBranch to ok:true with a synthetic commit sha', async () => {
+    const driver = new InMemoryGitDriver()
+    const r = await driver.cherryPickBranch('/repo', 'feature', 'main')
+    expect(r.ok).toBe(true)
+    expect(r.commitSha).toBe('inmem-1')
+    expect(driver.state.cherryPicks).toHaveLength(1)
+  })
+
   it('honors setNextMergeResult once, then returns to default', async () => {
     const driver = new InMemoryGitDriver()
     driver.setNextMergeResult({ ok: false, conflict: true, detail: 'boom' })

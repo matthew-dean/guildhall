@@ -10,6 +10,7 @@ import {
   type WorkspaceImportDraft,
   type WorkspaceInventory,
 } from './workspace-import/index.js'
+import { normalizeImportedDraftTask } from './import-drafts.js'
 import { resolveTaskProjectPath } from './task-project-path.js'
 
 // ---------------------------------------------------------------------------
@@ -38,10 +39,11 @@ function tasksPathFor(memoryDir: string): string {
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
   const raw = await fs.readFile(tasksPathFor(memoryDir), 'utf-8')
   const parsed = JSON.parse(raw)
-  if (Array.isArray(parsed)) {
-    return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-  }
-  return TaskQueue.parse(parsed)
+  const queue = Array.isArray(parsed)
+    ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+    : TaskQueue.parse(parsed)
+  for (const task of queue.tasks) normalizeImportedDraftTask(task)
+  return queue
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
@@ -196,6 +198,29 @@ export interface CreateWorkspaceImportResult {
   draft: WorkspaceImportDraft
 }
 
+async function writeWorkspaceImportTranscript(
+  memoryDir: string,
+  inventory: WorkspaceInventory,
+  draft: WorkspaceImportDraft,
+  seedMessage?: string,
+): Promise<string> {
+  const transcriptPath = path.join(
+    memoryDir,
+    'exploring',
+    `${WORKSPACE_IMPORT_TASK_ID}.md`,
+  )
+  await fs.mkdir(path.dirname(transcriptPath), { recursive: true })
+  const seed =
+    seedMessage ??
+    [
+      WORKSPACE_IMPORT_SEED_PREAMBLE,
+      formatDraftForTranscript(inventory, draft),
+      WORKSPACE_IMPORT_SEED_FORMAT,
+    ].join('\n')
+  await fs.writeFile(transcriptPath, `${seed}\n`, 'utf-8')
+  return transcriptPath
+}
+
 /**
  * Seed the workspace with the reserved importer task. Idempotent — if the
  * task already exists, returns `alreadyExists: true` without re-running
@@ -233,7 +258,7 @@ export async function createWorkspaceImportTask(
   const now = new Date().toISOString()
   const task: Task = {
     id: WORKSPACE_IMPORT_TASK_ID,
-    title: 'Import existing workspace artifacts into TASKS.json',
+    title: 'Review existing project work',
     description:
       'Refine the detector-produced draft of goals, tasks, and milestones with the user, then emit YAML fences for the merge step.',
     domain: WORKSPACE_IMPORT_DOMAIN,
@@ -284,6 +309,87 @@ export async function createWorkspaceImportTask(
     taskId: WORKSPACE_IMPORT_TASK_ID,
     transcriptPath: appendResult.path,
     alreadyExists: false,
+    inventory,
+    draft,
+  }
+}
+
+export async function rerunWorkspaceImportTask(
+  input: CreateWorkspaceImportInput,
+): Promise<CreateWorkspaceImportResult> {
+  const queue = await readQueue(input.memoryDir)
+  const inventory =
+    input.inventory ??
+    (await detectWorkspaceSignals({ projectPath: input.projectPath }))
+  const draft = input.draft ?? formWorkspaceHypothesis(inventory)
+  const now = new Date().toISOString()
+  const existingIndex = queue.tasks.findIndex((t) => t.id === WORKSPACE_IMPORT_TASK_ID)
+  const transcriptPath = await writeWorkspaceImportTranscript(
+    input.memoryDir,
+    inventory,
+    draft,
+    input.seedMessage,
+  )
+
+  const task: Task = {
+    id: WORKSPACE_IMPORT_TASK_ID,
+    title: 'Import project notes and plans',
+    description:
+      'Refine the detector-produced draft of goals, tasks, and milestones with the user, then emit YAML fences for the merge step.',
+    domain: WORKSPACE_IMPORT_DOMAIN,
+    projectPath: input.projectPath,
+    status: 'exploring',
+    priority: 'high',
+    dependsOn: [],
+    outOfScope: [],
+    acceptanceCriteria: [],
+    notes: [
+      {
+        role: 'system',
+        agentId: 'workspace-importer-agent',
+        timestamp: now,
+        content: 'Workspace import was explicitly re-run from the UI.',
+      },
+    ],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    escalations: [],
+    agentIssues: [],
+    revisionCount: 0,
+    remediationAttempts: 0,
+    origination: 'system',
+    createdAt: existingIndex >= 0 ? (queue.tasks[existingIndex]?.createdAt ?? now) : now,
+    updatedAt: now,
+  }
+
+  if (existingIndex >= 0) {
+    queue.tasks[existingIndex] = task
+  } else {
+    queue.tasks.unshift(task)
+  }
+  queue.lastUpdated = now
+  await writeQueue(input.memoryDir, queue)
+
+  const goalsPath = path.join(input.memoryDir, WORKSPACE_GOALS_FILE)
+  if (await fs.stat(goalsPath).then(() => true).catch(() => false)) {
+    try {
+      const raw = JSON.parse(await fs.readFile(goalsPath, 'utf-8')) as Record<string, unknown>
+      if (raw.dismissed) {
+        delete raw.dismissed
+        delete raw.dismissedAt
+        raw.recordedAt = now
+        await fs.writeFile(goalsPath, JSON.stringify(raw, null, 2), 'utf-8')
+      }
+    } catch {
+      // Ignore malformed dismissed-state files; the rerun task/transcript are the source of truth.
+    }
+  }
+
+  return {
+    taskId: WORKSPACE_IMPORT_TASK_ID,
+    transcriptPath,
+    alreadyExists: existingIndex >= 0,
     inventory,
     draft,
   }
@@ -511,6 +617,7 @@ export interface ApproveWorkspaceImportInput {
   memoryDir: string
   projectPath: string
   coordinatorProjectPaths?: Record<string, string>
+  draftOverride?: WorkspaceImportDraft
 }
 
 export interface ApproveWorkspaceImportResult {
@@ -534,7 +641,7 @@ function uniqueTaskId(existingIds: Set<string>, suggested: string): string {
 
 /**
  * Consume the workspace-import draft: parse fences, append tasks as
- * `exploring` + `origination='human'`, record milestones to PROGRESS.md,
+ * `import_draft` + `origination='human'`, record milestones to PROGRESS.md,
  * persist goals into `memory/workspace-goals.json`, and mark the reserved
  * task done.
  *
@@ -552,15 +659,18 @@ export async function approveWorkspaceImport(
       error: `No workspace-import task found (id: ${WORKSPACE_IMPORT_TASK_ID})`,
     }
   }
-  if (!task.spec || task.spec.trim().length === 0) {
+  const parsed = input.draftOverride
+    ? parseWorkspaceImport(formatDetectedDraftAsSpec(input.draftOverride))
+    : (!task.spec || task.spec.trim().length === 0)
+        ? null
+        : parseWorkspaceImport(task.spec)
+  if (!parsed) {
     return {
       success: false,
       error:
         'Workspace-import task has no spec yet; ask the importer agent to emit the YAML fences first.',
     }
   }
-
-  const parsed = parseWorkspaceImport(task.spec)
   if (
     parsed.goals.length === 0 &&
     parsed.tasks.length === 0 &&
@@ -592,10 +702,10 @@ export async function approveWorkspaceImport(
           workspaceProjectPath: input.projectPath,
           domain: t.domain,
         }),
-      // Import approval means "yes, bring this into Guildhall", not "a worker
-      // has a real spec." Imported TODOs and docs need normal spec-agent
-      // intake before workers touch them.
-      status: 'exploring',
+      // Import approval means "yes, keep this as a candidate draft", not
+      // "this already has a complete task brief/spec." Imported notes become
+      // shaping drafts first; only after shaping do they enter normal intake.
+      status: 'import_draft',
       priority: t.priority,
       dependsOn: [],
       outOfScope: [],

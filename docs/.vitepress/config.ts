@@ -166,14 +166,14 @@ export default defineConfig({
         },
       ],
     },
-    socialLinks: [{ icon: 'github', link: 'https://github.com/anthropics/guildhall' }],
+    socialLinks: [{ icon: 'github', link: 'https://github.com/matthew-dean/guildhall' }],
     search: { provider: 'local' },
     footer: {
       message: 'Released under the FLL-1.2 License.',
       copyright: 'Copyright © 2026 GuildHall contributors',
     },
     editLink: {
-      pattern: 'https://github.com/anthropics/guildhall/edit/main/docs/:path',
+      pattern: 'https://github.com/matthew-dean/guildhall/edit/main/docs/:path',
       text: 'Edit this page on GitHub',
     },
   },

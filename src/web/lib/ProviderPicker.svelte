@@ -74,7 +74,7 @@
   <Input
     id="pp-key"
     type="password"
-    placeholder="sk-…"
+    placeholder="sk-..."
     value={apiKey}
     oninput={(v) => onApiKeyChange?.(v)}
   />

@@ -11,26 +11,21 @@
   import Select from '../lib/Select.svelte'
   import Textarea from '../lib/Textarea.svelte'
   import { project } from '../lib/project.svelte.js'
-  import { friendlyDomain } from '../lib/display.js'
-  import type { CoordinatorConfig } from '../lib/types.js'
-
+  import { projectFetch } from '../lib/project-routes.js'
   interface Props {
-    coordinators: CoordinatorConfig[]
     onClose: () => void
   }
 
-  let { coordinators, onClose }: Props = $props()
+  let { onClose }: Props = $props()
 
   type IntakeType = 'feature' | 'bug' | 'question'
   let type = $state<IntakeType>('feature')
   let ask = $state('')
   let title = $state('')
-  let domain = $state('')
 
   let bugTitle = $state('')
   let bugBody = $state('')
   let bugStack = $state('')
-  let bugDomain = $state('')
   let bugPriority = $state<'high' | 'critical' | 'normal' | 'low'>('high')
 
   let busy = $state(false)
@@ -56,8 +51,7 @@
           priority: bugPriority,
         }
         if (bugStack.trim()) payload.stackTrace = bugStack.trim()
-        if (bugDomain) payload.domain = bugDomain
-        const res = await fetch('/api/project/bug-report', {
+        const res = await projectFetch('/api/project/bug-report', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(payload),
@@ -70,9 +64,9 @@
       }
 
       if (!ask.trim()) return (error = 'Please describe the task.')
-      const body: Record<string, unknown> = { ask: ask.trim(), domain }
+      const body: Record<string, unknown> = { ask: ask.trim() }
       if (title.trim()) body.title = title.trim()
-      const res = await fetch('/api/project/intake', {
+      const res = await projectFetch('/api/project/intake', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -80,21 +74,15 @@
       const j = await res.json()
       if (j.error) return (error = 'Intake failed: ' + j.error)
       onClose()
-      const detail = await fetch('/api/project').then(r => r.json())
+      const detail = await projectFetch('/api/project').then(r => r.json())
       if (!detail.run || detail.run.status !== 'running') {
-        await fetch('/api/project/start', { method: 'POST' })
+        await projectFetch('/api/project/start', { method: 'POST' })
       }
       setTimeout(() => void project.refresh(), 400)
     } finally {
       busy = false
     }
   }
-
-  $effect(() => {
-    if (domain === '' && coordinators.length > 0 && coordinators[0].domain) {
-      domain = coordinators[0].domain
-    }
-  })
 
   const typeOptions = [
     { value: 'feature', label: 'Feature / change' },
@@ -109,16 +97,6 @@
     { value: 'low', label: 'Low' },
   ] as const
 
-  const coordOptions = $derived(
-    coordinators.map((c) => ({
-      value: c.domain ?? '',
-      label: c.name || friendlyDomain(c.domain) || 'Coordinator',
-    })),
-  )
-  const bugDomainOptions = $derived([
-    { value: '', label: '(auto — from stack trace, or first coordinator)' },
-    ...coordOptions,
-  ])
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -159,10 +137,6 @@
           />
         </label>
         <label class="field">
-          <span>Domain</span>
-          <Select bind:value={bugDomain} options={bugDomainOptions} />
-        </label>
-        <label class="field">
           <span>Priority</span>
           <Select bind:value={bugPriority} options={priorityOptions} />
         </label>
@@ -172,12 +146,8 @@
           <Textarea
             bind:value={ask}
             rows={5}
-            placeholder="Describe the task in plain language. The spec agent will ask follow-ups before a coordinator assigns work."
+            placeholder="Describe the task in plain language. Guildhall will ask follow-up questions before work starts."
           />
-        </label>
-        <label class="field">
-          <span>Domain (routes to a coordinator)</span>
-          <Select bind:value={domain} options={coordOptions} />
         </label>
         <label class="field">
           <span>Title (optional — auto-generated from the ask)</span>
@@ -192,7 +162,7 @@
       <Row justify="end" gap="2">
         <Button variant="secondary" disabled={busy} onclick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={busy} onclick={submit}>
-          {type === 'bug' ? (busy ? 'Filing…' : 'File bug') : busy ? 'Creating…' : 'Create task'}
+          {type === 'bug' ? (busy ? 'Filing...' : 'File bug') : busy ? 'Creating...' : 'Create task'}
         </Button>
       </Row>
     </Stack>

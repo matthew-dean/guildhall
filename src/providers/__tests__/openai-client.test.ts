@@ -479,7 +479,7 @@ describe('stripThinkBlocks', () => {
     expect(stripThinkBlocks('before<think>hidden</think>after')).toEqual(['beforeafter', ''])
   })
 
-  it('holds back an unclosed <think>…', () => {
+  it('holds back an unclosed <think>...', () => {
     const [visible, leftover] = stripThinkBlocks('ok<think>partial')
     expect(visible).toBe('ok')
     expect(leftover).toBe('<think>partial')

@@ -20,11 +20,11 @@ Served by `src/runtime/serve.ts` (Hono). Default port `7842`. All routes are loc
 | Route | Purpose |
 |---|---|
 | `GET /api/project` | Project detail + tasks + run state. |
-| `POST /api/project/start` | Boot the orchestrator. |
+| `POST /api/project/start` | Start the coordinator. |
 | `POST /api/project/stop` | Graceful stop. |
 | `GET /api/project/activity` | Activity summary (counts by status). |
 | `GET /api/project/progress` | Tail of `PROGRESS.md`. |
-| `GET /api/project/events` | SSE feed of orchestrator events. |
+| `GET /api/project/events` | SSE feed of coordinator events. |
 
 ## Tasks
 
@@ -43,8 +43,20 @@ Served by `src/runtime/serve.ts` (Hono). Default port `7842`. All routes are loc
 | Route | Purpose |
 |---|---|
 | `POST /api/project/meta-intake` | Kick off bootstrap. |
+| `POST /api/project/meta-intake/rerun` | Reset the reserved meta-intake stage and start it fresh again. |
 | `GET /api/project/meta-intake/draft` | Current spec + coordinator draft preview. |
 | `POST /api/project/meta-intake/approve` | Merge draft into `guildhall.yaml`. |
+
+## Workspace import
+
+| Route | Purpose |
+|---|---|
+| `GET /api/project/workspace-import/status` | Import need/status summary. |
+| `POST /api/project/workspace-import` | Seed the reserved import stage if needed. |
+| `POST /api/project/workspace-import/rerun` | Re-run workspace import against the current repo docs/artifacts, even after prior intake. |
+| `GET /api/project/workspace-import/draft` | Detector findings + any agent-refined import draft. |
+| `POST /api/project/workspace-import/approve` | Merge approved goals/tasks/milestones into project state. |
+| `POST /api/project/workspace-import/dismiss` | Dismiss the current import suggestion without deleting the findings. |
 
 ## Config & providers
 

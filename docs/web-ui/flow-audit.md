@@ -14,12 +14,11 @@ updated while auditing `t-minus-t` so another agent can resume without guessing.
 ## Test workspace
 
 - Guildhall repo: `/Users/matthew/git/oss/guildhall`
-- Test project: `/Users/matthew/git/oss/t-minus-t`
-- Serve command: `cd /Users/matthew/git/oss/t-minus-t && pnpm exec guildhall serve --port 4177`
-- Browser target: `http://localhost:4177/`
-- Expected project shape: a VSCode extension that lets users write TypeScript
-  syntax in `.js` files and view/save it as JSDoc-backed JavaScript, with a
-  converter package plus an extension package.
+- Test project: `/Users/matthew/git/oss/looma-knit`
+- Browser target: `http://localhost:7777/project`
+- Expected project shape: a two-subproject workspace containing Looma and
+  Knit, with a large existing planning corpus that should import into a real
+  task backlog instead of a tiny or confusing placeholder set.
 
 ## Current Principle
 
@@ -28,8 +27,86 @@ state, jump across pages for a simple answer, or wait on a vague "agent is
 working" card, fix the flow. The user should be able to answer questions,
 correct the agent, and ask for direct action from Thread.
 
+Wizard flows must stay narrow. One card should ask one clear question about
+one decision. Supporting detail can exist, but it should be collapsible and
+secondary. Guildhall should never ask the user to approve a bundled manifesto
+that hides a dozen implicit decisions.
+
+Journey design matters as much as copy. A good flow cannot just rename labels;
+it must guide the user through discrete steps with one level of abstraction at
+a time. Source discovery, source selection, candidate-task review, and final
+task creation are different user jobs and should not be collapsed into one
+screen.
+
 ## Current Follow-Ups
 
+- [x] Land the Task 4 quality-review hardening pass in the VitePress UI
+  component set. `HeroBand`, `AnnotatedScreenshot`, and `GuildDiagram` now
+  expose typed configurable heading tags; `AnnotatedScreenshot` reserves a
+  stable aspect-ratio frame so lazy image loading does not shift the layout;
+  and `GuildDiagram` now uses instance-safe SVG defs with link geometry that
+  stays reactive when node coordinates change.
+
+- [x] Re-walk the three live projects (`fair-labor-license`, `looma-knit`, `t-minus-t`) as a cold user after the recent coordinator/routing/setup changes. Current truth:
+  - `looma-knit`: Work is more digestible than before, but Thread still tells a contradictory story (`No actionable tasks remain` while a visible `Needs shaping` draft is present) and the surfaced blocker is still a dirty-repo/worktree setup failure in `knit`. Backend state currently has `80 import_draft`, `14 done`, `2 shelved`, `37` open escalations, and no live `thread.turns`, which helps explain why the top-level run summary and the rendered Thread card disagree.
+  - `t-minus-t`: Thread is visually calm, but `Start` is effectively a silent no-op from the user's seat. Backend truth is `run.status: error` after the run attempt, caused by a project payload/schema failure (`tasks[2].blockReason` is `null` where the loader expects a string). The UI did not surface that runtime failure honestly.
+  - `fair-labor-license`: Thread still feels split-brained. The import-review question is understandable enough, but the same task title appears in multiple states and Work still mixes `in_progress` worker implementation with an `Awaiting approval` import task and a top-band summary that says `No actionable tasks remain right now: 0 active, 1 fresh...`. The run/task state is still not being summarized in a way a cold user could trust unattended.
+
+- [x] Move provider preference to the machine-global config by default instead of repeating it into every project's `.guildhall/config.yaml`. Runtime config resolution, provider setup writes, and the config/docs story now treat project-level `preferredProvider` as an override only.
+
+- [ ] Give Looma + Knit a humane recovery path for the dirty `knit` checkout. The stale `No actionable tasks remain` summary is gone and Thread now consistently surfaces the shaping draft plus the real agent failure, but the card still needs a clearer user-facing next move than a raw worktree-blocked error string.
+
+- [x] Stop Thread from lying about active work being `Paused` just because no live agent stream is attached yet. Active steps now distinguish `Now`, `Queued`, and `Paused`, and expanded phase sections have a stronger visual relationship to their contained items.
+
+- [x] Stop Looma/Knit from spamming the same setup failure every tick once a worker preflight fails. Dirty-repo guards, worktree-creation failures, and worktree bootstrap failures now block the task once with a durable note/block reason instead of rethrowing a transient agent error forever.
+
+- [x] Surface `t-minus-t` run failures directly in Thread/top-level status instead of letting `Start` look inert. The legacy `blockReason: null` schema crash is now normalized away, project-scoped start/refresh calls stay on the right slugged project, and the live Thread now advances into an explicit `Worker is stuck` blocker card instead of looking like a no-op.
+
+- [x] Unknot fair-labor-license's mixed `spec_review` + `in_progress` + import-review story. Thread now keeps the auth decision as the single visible active intake card, suppresses the duplicate pending spec-review card for the same workspace-import task, and no longer pairs that with a stale `No actionable tasks remain` banner.
+
+- [x] Pick one public term for the coordinating layer and use it consistently.
+  Guildhall now treats `Coordinator` as the canonical product term in UI copy,
+  operator-facing docs, CLI help, and runtime messaging instead of mixing it
+  with `orchestrator` on neighboring screens.
+- [x] Write the `0.6.0` planning / release-shaping brief instead of letting
+  task execution stay the only real behavior. The new spec defines a
+  coordinator-owned planning layer that groups backlog work into phases,
+  releases, and an active tranche before unattended execution begins.
+- [x] Stop project-mutating endpoints from guessing through a daemon-global
+  selected project. Project pages now route through `/projects/:slug/...`,
+  project-scoped fetch/SSE calls carry `projectId`, and the server resolves
+  `/api/project*`, `/api/config*`, and `/api/setup*` requests against that
+  explicit project instead of whichever workspace happened to be selected most
+  recently in another tab.
+- [x] Keep Projects home from reintroducing the hidden-selection bug. Opening,
+  starting, or stopping a project from the fleet page now targets that
+  project's explicit slug/id instead of first mutating the service-wide
+  selected project and then calling singleton `/api/project/*` endpoints.
+- [x] Count worker edits in the main project checkout as durable progress when
+  worktree isolation is off. Fair-labor-license hit a false
+  `Worker made no visible progress` block because the runtime only credited
+  dirty task worktrees or explicit checkpoint file lists, even though the
+  worker had written real files in the project repo and then got trapped in a
+  read-only verification loop.
+- [x] Keep the outer app shell viewport-full even when the stale-server banner
+  is absent. The top-level shell was reserving a phantom grid row for the
+  banner, which let the main project shell collapse to content height and made
+  the left rail stop short of the bottom of the viewport.
+- [x] Stop Thread from hiding live workspace-import questions behind a later
+  queued worker/spec card. Fair-labor-license currently has a real
+  `task-workspace-import` question waiting on the user, but Thread skips that
+  task and makes `task-003` look like the active story instead.
+- [x] Stop inline "continue/revise" task actions from silently launching
+  one-step runs. If the user wants unattended progress, Thread and drawer
+  agent-owned actions should align with the top-bar `Start` behavior instead
+  of quietly using `mode: one_task`.
+- [x] Make run mode visible in the shell while Guildhall is active. The top
+  bar should not just say `Stop` when the live run is actually a one-step pass.
+- [x] Stop unanswered `spec_review` questions from thrashing the orchestrator
+  when no coordinator can service their reserved domain. The picker now skips
+  `spec_review` work that is still waiting on a user answer, which lets a
+  continuous run either move to other runnable tasks or cleanly stop on human
+  input instead of spamming `_workspace_import` coordinator errors.
 - [x] Delete stale Looma/Knit spec-stall tasks when they surface as false
   `Needs you` items, instead of merely shelving them and leaving inbox noise
   behind.
@@ -78,6 +155,232 @@ correct the agent, and ask for direct action from Thread.
   mismatches.
 - [x] Make retryable gate-provider throttles clear stale escalation residue, so
   resumed `gate_check` tasks do not still halt later runs as falsely escalated.
+- [x] Make stage-based automation re-triggerable from the UI instead of
+  forcing users to simulate retries by creating new tasks. Workspace import,
+  meta-intake, spec drafting, review, and gate reruns now all have explicit
+  rerun actions.
+- [x] Prove re-intake against the real Looma + Knit planning corpus. The bar
+  is not "an importer task existed once"; it must actually reread the
+  substantial documented backlog and surface sensible candidate tasks.
+- [x] Redesign workspace import as a real staged journey. The current flow
+  still mixes source-level review, candidate-task review, existing-task state,
+  and final confirmation into one muddy question lane.
+- [x] Make import gating strict. Source-selection and candidate-review steps
+  should block later wizard steps instead of surfacing as co-active optional
+  cards.
+- [x] Stop imported workspace items from masquerading as normal intake tasks.
+  Newly imported task candidates now land as `import_draft` records, stay out
+  of Work until shaping starts, and only promote into normal `exploring`
+  intake once the user explicitly opens shaping.
+- [x] Keep shaping queues visibly actionable instead of dimming them like dead
+  or disabled cards. Imported draft turns still show one recommended "start
+  here" item, but the rest of the queue should read as live work, not as
+  done history.
+- [x] Teach Guildhall to learn quietly from import corrections. Workspace
+  import approvals and dismissals should feed better future defaults,
+  lightweight steward-gap hints, and builder-facing product suggestions
+  without turning the flow into a settings maze.
+- [x] Re-anchor Guildhall screens to a real UI style guide. Future passes
+  should use consistent heading hierarchy, chip/count treatment, card anatomy,
+  and semantic color roles instead of re-solving layout and text emphasis
+  ad hoc on each screen.
+- [x] Demote project-area/coordinator management out of the primary user
+  journey. The rail no longer gives it a first-class home, new-task/setup
+  flows no longer ask the user to manage it directly, and Settings now treats
+  it as advanced routing state rather than everyday project structure.
+- [x] Add an explicit "system over bespoke" guardrail. When a UI flaw appears,
+  Guildhall should ask whether shared primitives, hierarchy rules, or review
+  questions would have prevented it, not just patch the local screen.
+- [x] Pull shell banners and step cards back into shared patterns. Run
+  status, stale-server warnings, and import-step spacing now have to come
+  from shared band/tone/layout primitives instead of one-off local styling.
+- [x] Make import inspection use a real right-side slide-over instead of
+  rendering a second in-page wall of text. Clicking review items during
+  workspace import should open the same kind of edge overlay the rest of the
+  app uses for details, while selection controls remain separate actions.
+- [x] Make workspace import finish on a truthful handoff instead of silently
+  dumping the user into Work. Import completion now explains that Guildhall
+  created paused draft tasks and offers explicit next steps into Thread or
+  Work.
+- [x] Make imported draft cards read as actionable shaping work instead of
+  inert paused intake. Imported drafts now hide the bulky spec checklist until
+  shaping starts, use `Needs shaping` / `Shape this draft`, and show a
+  `needs you` status chip instead of a dead-looking paused badge.
+- [x] Keep task details anchored to the current surface instead of always
+  bouncing the app back to Thread behind the drawer. Opening a task from Work
+  now keeps Work in place, and closing the drawer returns to the same surface.
+- [x] Make the task drawer start on the task's current actionable state when
+  pending Thread items exist. The drawer now opens on a `Now` tab that reuses
+  the task's live/pending thread state so imported drafts and other pending
+  work do not force a separate jump back to Thread just to understand what
+  needs doing.
+- [x] Separate human review actions from direct Guildhall-run actions on
+  imported draft cards. Thread cards now use a human-facing `Review draft...`
+  entry point, while the right-side details view carries the explicit
+  Guildhall-run action with its own visual treatment. The copy now avoids
+  calling these drafts "paused" when they are really waiting for review or
+  another Guildhall shaping pass.
+- [x] Keep setup blockers louder than half-started meta-intake drafts on new
+  projects. When provider/bootstrap setup is still missing, Thread should keep
+  the actual setup step active, explain why Guildhall cannot continue mapping
+  the project yet, and avoid rendering meta-intake as a generic task checklist.
+- [x] Use the selected project for provider/setup/config reads and writes.
+  Cross-project setup checks and provider/model changes now target the actual
+  foreground project instead of leaking back to the startup workspace.
+- [x] Keep the Inbox in sync with Thread when a task is still waiting on an
+  agent question. `spec_review` no longer surfaces as `spec_approval` in the
+  Inbox while an unanswered question is still the real active step.
+- [x] Surface imported-draft shaping as first-class `Needs you` work.
+  Large imported corpora like Looma + Knit now expose a real shaping queue
+  entry instead of looking falsely idle unless the user happens to inspect
+  Thread first.
+- [x] Stop draft-shaping turns from tripping coding-worktree isolation.
+  Spec-agent shaping is planning work, not code editing, so dirty subrepos
+  should no longer block Guildhall from continuing a draft.
+- [x] Further compact very large imported-draft queues in Thread once the
+  handoff copy is stable. Looma + Knit no longer renders 80 separate
+  `import_draft` turns; Thread now keeps one representative shaping turn with
+  queue context (`79 more drafts are queued behind it`) so the surface reads
+  like a queue instead of an avalanche.
+- [x] Make Looma + Knit's next step singular again. Inbox now lets the setup
+  direction step own the next human action while that brief is still missing,
+  and suppresses the imported-draft queue until setup stops being the real
+  blocker.
+- [x] Make Work honest about imported-draft mass without dumping it into the
+  main task table. Work now keeps normal tasks in the dense list, but adds a
+  grouped imported-draft queue card with the next draft title plus the queued
+  count so the backlog feels inspectable instead of hidden or overwhelming.
+- [x] Replace `t-minus-t`'s early experimental task sediment with a clean
+  current-shape task. `task-003` now keeps the approved brief/spec/ACs but no
+  longer carries old escalations, reviewer piles, or stale question history;
+  it is back in `ready` and can be advanced again as a normal queued task.
+- [x] Treat color as a governed semantic system. Guildhall now explicitly
+  requires one shared palette, applied through shared tokens and reviewed as a
+  collaboration between color theory, UI hierarchy, and accessibility.
+- [x] Capture the future "contextual conversation" direction explicitly.
+  Guildhall remains structured-first, but some narrow clarification problems
+  may be better handled by a task- or setup-scoped chat lane that writes its
+  result back into structured state instead of forcing every ambiguity through
+  a bespoke wizard branch.
+- [x] Pivot the guild model away from user-managed stewards as a primary mental
+  model. Guildhall should expose projects, tasks, decisions, and only the
+  lightest useful work grouping, while a single coordinating layer underneath
+  pulls in the right perspectives and context per task/review/approval as
+  needed.
+- [x] Take the first structural cut of that pivot in the live product. Guildhall
+  no longer exposes a primary `Areas` / `Project areas` surface, setup and
+  meta-intake now frame the routing map as an internal aid rather than a thing
+  the user manages, and the remaining routing-map inspection lives under
+  advanced settings / facts instead of its own project-level home.
+  Live browser check on `http://localhost:7788/project/thread` confirmed the
+  left rail no longer exposes an `Areas` concept and the project-level
+  `/coordinators` route is now demoted into advanced settings instead of a
+  first-class work surface.
+- [x] Stop meta-intake question cards from re-teaching the old coordinator
+  model. The live question card now frames this as Guildhall's draft map of
+  the main project parts, preselects the detected options by default, uses
+  checkbox semantics instead of radio-button visuals for multi-select, and
+  no longer doubles the warn-tone left rail inside the parent Thread card.
+- [x] Make meta-intake inference-first instead of configuration-first. Setup no
+  longer asks the user to manually choose internal lanes just to get Guildhall
+  moving. The setup step now starts repo inspection, the meta-intake agent is
+  instructed to infer structure by default, and confirmation should only
+  happen when consequence is high and confidence is low enough that being
+  wrong would materially affect routing or task quality.
+- [x] Collapse adaptive-steward language into one local coordinator that
+  learns. Settings, learning records, and the adaptive-learning design note
+  now describe one coordinator on the user's machine adapting its checks and
+  defaults, not a growing roster of named stewards the user must manage.
+- [x] Make setup-step actions tell the truth and advance to the next real
+  blocker. Thread now treats `/api/project/bootstrap/run` logical failures as
+  failures instead of silent success, shows toast feedback for setup actions,
+  and derives bootstrap completion from the same persisted runtime status that
+  `bootstrap/status` uses. Live check on `fair-labor-license` confirmed the
+  old dead-end `Run checks` card no longer stays active after successful
+  checks; Thread advances to `Give the project direction` instead.
+- [x] Make the zero-task workspace-import path honest and completable. When
+  Guildhall finds goals/reference notes but no draft task candidates, the
+  import review no longer strands the user behind a disabled "review tasks"
+  button or copy that promises backlog tasks that do not exist. The wizard
+  now explains that it found project context rather than tasks, lets the user
+  continue through source review, and finishes with a truthful "Save import"
+  confirmation.
+- [x] Refresh Thread immediately after first-task creation. The backend was
+  creating the new task right away, but the visible Thread surface could sit
+  on the stale setup card long enough to feel like nothing happened. Setup
+  submits now refresh both Thread data and project shell state before
+  surfacing success.
+- [x] Give post-setup intake cards a real next action. Freshly created
+  `exploring` tasks now lead with `Review draft...` instead of burying the user
+  in a partial-draft card that only advertised `Add note`.
+- [x] Make fleet project switching drive the real `/api/project/*` surface.
+  One live `7777` service can now switch between registered projects without
+  leaving the shell summary and the project APIs out of sync. Live check
+  confirmed that `POST /api/service/select-project` immediately changes the
+  project returned by `/api/project`.
+- [x] Stop relying on the task title as the hidden way into first-task intake.
+  Live fair-labor-license walkthrough showed the Thread card still looked
+  effectively actionless unless the user guessed that the title opened the
+  drawer. Paused `exploring` cards now surface `Review draft...`, `Add note`,
+  and the Guildhall-run action directly on the card, and the run-finished
+  banner now explicitly says to review the updated draft in Thread.
+- [x] Make brief approval preserve or restore the truthful task phase. A task
+  that already has a concrete spec draft plus acceptance criteria should not
+  stay stranded in generic `exploring` after the human approves the brief.
+  `approve-brief` now promotes that case back to `spec_review`, and the live
+  `fair-labor-license` `task-003` record was repaired so Thread shows the
+  actual next step (review the spec) instead of a bogus paused intake card.
+- [x] Demote the remaining routing surface to honest internal language.
+  Facts, advanced settings, and the routing inspector now describe
+  `internal routing` / `routing slices`, not user-facing `project areas`.
+- [x] Capture the next guild-model design thread explicitly. Follow-up design
+  questions around market research, requirements/discovery, deployment,
+  distribution, marketing, internet search, and vision-capable review now live
+  in `docs/superpowers/specs/2026-05-10-guild-model-follow-ups.md` so they can
+  be picked up immediately after the coordination-model pivot.
+- [x] Name the remaining import-model architecture gap explicitly. The guided
+  import journey now has a follow-up spec for durable post-approval
+  provenance, so the structure Guildhall finds does not keep flattening away
+  into plain tasks/goals/milestones immediately after approval.
+- [x] Untangle `Work` vs `Planner`. `Work` now defaults to a dense sortable
+  list for serious backlog management, `Board` is a secondary visualization
+  inside the same surface, and live activity no longer steals width from the
+  board lanes.
+- [ ] Remove `Live activity` from the `Work` list view and only show it where
+  it does not steal width from the main task-management surface. The board
+  width was fixed earlier, but the live list surface is still too cramped.
+- [x] Re-verify the collapsed left-rail reveal against the live app after the
+  shell-level stacking fix. The rail now sits below the full top stack
+  (restart banner plus app header), stays fixed instead of scrolling with
+  page content, and the pinned reveal no longer cuts through the Guildhall
+  brand row.
+- [x] Make the collapsed rail preview behave like one real hover surface. The
+  revealed rail now claims the full preview width at the shell level, stays
+  above adjacent content, suppresses tooltip labels whenever the text labels
+  are already visible, and keeps the preview open while the pointer moves
+  within the revealed panel instead of collapsing on a tiny lateral move.
+- [ ] Add browser-level regression coverage for the project rail. The sticky
+  left rail, hover reveal, pin placement, and mobile overlay behavior are too
+  easy to break with CSS-only changes; this needs real end-to-end coverage,
+  not just code inspection.
+- [x] Remove the accidental duplicate desktop rail toggle from the project
+  top bar. Desktop collapsed navigation should reveal on hover, while the pin
+  control lives inside the expanded rail header instead of creating a second
+  awkward caret button beside `Projects`.
+- [x] Remove the fake selected-project hierarchy from the Projects home cards.
+  The overview is a service dashboard, not a foreground-project chooser, so
+  cards no longer label one project as `Current`.
+- [x] Give Projects home cards a stable footer row for actions. Card bodies
+  now use a grid-based row model so metrics can sit above a separated CTA row,
+  and `Open project` / `Start run` stay right-aligned across cards instead of
+  drifting based on each card's copy length.
+- [x] Keep Projects home controls in plain user language. The overview cards
+  no longer say `Start run` / `Stop run`; they use `Start` / `Stop` because
+  this screen is about simple project controls, not internal supervisor terms.
+- [x] Keep Guildhall self-assessment out of project release surfaces. The
+  Looma + Knit release view no longer renders the hardcoded `0.4.0 shipping
+  claim` block; project release pages should only show project release truth,
+  not Guildhall product-shipping commentary.
 
 ## Automation Backlog
 
@@ -117,6 +420,158 @@ correct the agent, and ask for direct action from Thread.
   debugging and Looma/Knit testing.
 
 ## Latest Progress
+
+- Completed the `0.5.0` macOS packaging slice. Guildhall now has a
+  buildable packaged artifact at `artifacts/macos/guildhall-macos`,
+  a tarball at `artifacts/macos/guildhall-macos.tar.gz`, LaunchAgent install
+  and uninstall scripts, a plist template, and a curl-first installer script.
+  The packaged launcher now resolves correctly through the
+  `~/.guildhall/bin/guildhall` symlink, and the artifact includes a portable
+  production dependency tree instead of assuming the source repo's
+  `node_modules`. Verified with focused tests plus a temp-home installer smoke:
+  the installer wrote the LaunchAgent under `~/Library/LaunchAgents`,
+  started the service, answered `/api/version`, and `guildhall stop` shut it
+  down cleanly.
+- Recorded the packaging-runtime decision for `0.5.0` in
+  `docs/design/deno-vs-node-packaging.md`. Measured result: keep the
+  Node-based packaged executable. The Deno experiment only compiled with
+  `--no-check`, produced a larger binary, started more slowly, and failed the
+  real `serve --no-open` startup path, so it is not the right packaging pivot
+  for this release.
+- Added the `0.5.0` proof tests and release note. Focused proof now covers:
+  fleet-level service start with no selected project, attach-existing-folder,
+  initialization inside the nested project shell, per-project start/stop, and
+  a selected project that still surfaces the proven narrow automation lane as
+  terminal success from inside the new service/project structure.
+- Added repo-local dev installer ergonomics for the macOS packaged artifact.
+  `pnpm dev:install` now builds the current branch artifact, runs the real
+  installer against it, verifies the installed CLI, and surfaces the resolved
+  `guildhall` path. `pnpm dev:uninstall` stops the service, removes the
+  LaunchAgent and packaged runtime, and preserves user project registry/state.
+- Tightened the Projects board for scanability. Project cards now use compact
+  icon-led status chips and metric pills, a clearer navigation button, and a
+  single agent action instead of separate Start/Stop buttons. Status language
+  now reflects human-meaningful project state (`Current`, `Stable`, `Paused`,
+  `Needs attention`) instead of mixed internal selection/run-state labels like
+  `Ready here` and `Idle`. Live browser check on `http://127.0.0.1:7894`
+  confirmed the smaller card layout against the active Looma/Knit + t-minus-t
+  project set.
+- Fixed the project-shell top-bar affordances that were still reading like
+  internal chrome instead of user navigation. `Projects` is now a visible
+  secondary button with a left chevron instead of an invisible ghost control,
+  and the run button now says `Start agents` / `Stop agents` instead of the
+  more internal `Start` / `Stop`.
+- Fixed the provider badge so it no longer concatenates runtime absence with
+  config shape into nonsense like `None | Mixed models`. The shell now shows
+  the configured or active provider as the badge label, with role-model
+  details only in the tooltip/title.
+- Intake failure is now called what it is: for Looma + Knit, importing the
+  real documented backlog did not work in the way the user expected. The
+  existing workspace-import lane proved one tiny artifact flow, but not the
+  actual project planning corpus.
+- Added explicit re-run actions for the two reserved intake stages that were
+  previously stuck in a one-shot shape. `/api/project/meta-intake/rerun` now
+  resets the reserved meta-intake task/transcript back to `exploring`, and
+  `/api/project/workspace-import/rerun` now reseeds the reserved import task
+  from the current repo artifacts even when the project already has tasks.
+- Proved the new workspace-import rerun against the real Looma + Knit corpus
+  on a fresh `serve-internal` build at `http://localhost:7896`. The rerun path
+  surfaced `314` raw signals, folded into `80` task candidates, `132`
+  milestones, and `8` context notes from the actual planning docs and specs,
+  instead of the earlier one-task import artifact.
+- Collapsed the `Work` / `Planner` split into a single Work surface with two
+  views. `Work` stays the primary nav entry, defaults to the easier-to-read
+  list view, and exposes a `Board` toggle for the old kanban-style planner
+  grouping instead of making both pages compete as separate primary tabs.
+- Added task-level rerun controls to the drawer so normal work stages are no
+  longer one-shot flows. Non-reserved tasks can now explicitly re-draft spec,
+  re-run review, or re-run gates from the task details pane, and the backend
+  exposes the same behavior through `POST /api/project/task/:id/rerun-stage`.
+  Verified with focused endpoint coverage plus `pnpm typecheck`, `pnpm build`,
+  and `git diff --check`.
+- Fixed the paused reserved-intake run path for Looma + Knit. `Continue
+  intake` was crashing immediately with `fatal: not a git repository` because
+  reserved meta/workspace-import tasks were still trying to enter the normal
+  git/worktree isolation lane against the non-git umbrella workspace root.
+  Reserved intake tasks now skip git isolation entirely, which matches their
+  job: shape the workspace, not mint a code worktree. Verified with a focused
+  orchestrator regression plus a real `serve-internal` proof on Looma + Knit
+  at `http://localhost:7897`, where `POST /api/project/start` now stays
+  running instead of immediately flipping the project into `run.status=error`.
+- Tightened button affordances at the shared component level. The old dark
+  secondary buttons were blending into their surrounding card/footer surfaces
+  and reading like inert chrome instead of actions. `Button.svelte` now uses a
+  brighter secondary fill, stronger border, and clearer hover state; the
+  ambiguous Looma/Knit meta-intake action label is now `Draft from answers...`
+  instead of `Use saved answers`.
+- Clarified Thread approval cards so they stop implying hidden UI. The old
+  copy said `Answer the open questions below` even when the relevant questions
+  could live in another collapsed Thread phase. Approval gating now reports the
+  question count, says the questions are in Thread, and adds a `Go to
+  questions` action that expands the relevant phase and scrolls to the first
+  active question. Coordinator drafts also now say `Owns` and `Review checks`
+  instead of the murkier `Will watch` / `Will check`.
+- Promoted the wizard rule to a real product principle and started applying it
+  to the renderer. Meta-intake approval no longer leads with `Project areas
+  draft` plus a giant policy dump. Thread and SetupWizard now lead with one
+  decision — "Guildhall found N proposed work areas. Is this the right split
+  for this project?" — keep supporting detail collapsed by default, and stop
+  showing both `Draft from answers...` and `Continue intake` as competing next
+  actions once intake answers are complete.
+- Proved that the Looma + Knit import corpus is not small; the problem is the
+  journey shape, not thin source material. Reading the actual docs gives a
+  conservative floor of at least 43 concrete task-sized items before counting
+  split-up subtasks, while the importer transcript itself reports `signals:
+  314` and `deduped to: 220`. The misleading "six tasks" impression came from
+  a bogus fallback question over existing tasks in `TASKS.json`, not from the
+  imported planning corpus.
+- Wrote a dedicated workspace-import journey redesign spec in
+  `docs/superpowers/specs/2026-05-09-workspace-import-journey-redesign.md`.
+  The key rule is that import must move through explicit steps — sources
+  found, source scope, per-source preview, candidate task review, and final
+  confirmation — instead of asking the user to decode a mixed-abstraction
+  transcript card.
+- Landed the first real implementation of that redesign and proved it live
+  against Looma + Knit on `http://localhost:7899/workspace-import`. The flow
+  now opens with project parts (`Looma`, `Knit`, plus reference-only parts)
+  instead of a raw file list, moves through explicit `Found → Parts → Sources
+  → Tasks → Confirm` stages, and no longer front-loads `TASKS.json`,
+  `exploring`, or other runtime-internal framing.
+- Added the first adaptive-learning loop on top of workspace import. Guildhall
+  now stores project-local import preferences in `memory/learning.json`,
+  stores user-local review style in `~/.guildhall/learning.json`, reuses
+  approved project parts/sources on future import drafts, and switches to a
+  tighter recommended task list when the user repeatedly trims broad drafts.
+  `Settings → Advanced → What Guildhall has learned` now gives a calm
+  inspection/reset surface, and the same learning record can surface
+  confidence-based steward suggestions plus builder-facing product suggestions.
+  Focused proof:
+  `pnpm vitest run src/runtime/__tests__/learning.test.ts src/runtime/__tests__/serve-settings.test.ts src/runtime/__tests__/workspace-import-review.test.ts`,
+  `pnpm typecheck`, `pnpm build`, `git diff --check`. Live browser check on
+  Looma + Knit at `http://localhost:7901/project/settings/advanced` confirmed
+  the new surface stays honest when nothing has been learned yet.
+- Restored breathing room to the project content area after the earlier shell
+  tightening pass. `ProjectView` now gives the page band and body more inset
+  and vertical rhythm, while `WorkspaceImportTab` uses larger internal gaps
+  and row/card padding so the first-step summary no longer feels edge-crammed.
+  Verified live on Looma + Knit at `http://localhost:7902/workspace-import`.
+- Killed the most misleading import fallback shapes. Reserved workspace-import
+  questions no longer render as generic Thread question cards, the importer no
+  longer synthesizes the bogus existing-task `pick one` fallback, and the
+  dedicated review screen now uses consistent user-facing naming around
+  `Review existing project work` instead of bouncing between repo-scan/import
+  jargon.
+- Wrote a repo-local product philosophy doc in
+  `docs/superpowers/specs/2026-05-09-guildhall-product-philosophy.md`. This
+  now captures the cross-cutting rules for every Guildhall screen and card:
+  one decision at a time, one level of abstraction at a time, inspectable
+  detail instead of front-loaded dumps, and a concrete review rubric for
+  asking whether a surface tells the user what it is showing, what it wants,
+  and what the primary action will do.
+- Captured a future product direction for a model diagnostics lab: a user-local
+  bakeoff surface that can run multiple models/providers through Guildhall
+  tasks, store results over time, and help answer "which model is good for
+  which lane?" without relying on one-off impressions.
 
 - Closed the retry-window failure family with live proof on `task-016`.
   Resolved `max_revisions_exceeded` retries now start a persisted fresh
@@ -474,7 +929,7 @@ correct the agent, and ask for direct action from Thread.
   advertised an empty JSON schema, so the turn died and escalated. The tool
   now accepts `prompt` / `restatement` aliases and exposes the real argument
   shape to models.
-- Notifications `Loading…` on Looma/Knit turned out to be a client-side crash,
+- Notifications `Loading...` on Looma/Knit turned out to be a client-side crash,
   not a hung inbox endpoint. `/api/project/inbox` returned immediately, but
   InboxTab keyed rows by `kind + title`, and multiple escalations shared that
   tuple. Svelte threw `each_key_duplicate`, leaving Notifications stuck at
@@ -516,7 +971,7 @@ correct the agent, and ask for direct action from Thread.
   gate-check → completion proof now exists for a real grounded task, even
   though the project still needs better explicit gate truth than the current
   empty-root bootstrap fallback.
-  immediately, with `Loading…` gone and the repeated escalation titles rendered
+  immediately, with `Loading...` gone and the repeated escalation titles rendered
   safely.
 - `guildhall-automation-003` is now complete in the live Looma/Knit flow. The
   spec lane preserves durable progress after turn-limit churn, answered intake
@@ -1617,3 +2072,265 @@ correct the agent, and ask for direct action from Thread.
 - Release pivot: bumped Guildhall to `0.4.0`, added a repo-local `docs/releases/0.4.0.md` note, updated README publish commands/examples, and added a concise Release-tab shipping-claim card so the product now states the honest release story directly: proven end-to-end automation for the narrow cleanup lane, not all task shapes yet.
 - Release hardening for `0.4.0` is now in progress at the repo/runtime layer, not just docs. The dry release surfaced real blockers, and this pass cleared them by (1) restoring sane "few knobs, smart defaults" lane concurrency behavior so worker fanout is not silently forced back to serial by project-config defaults, (2) preserving serial picker priority semantics under lane-capacity fanout so coordinator pre-rejection policy work is not starved behind ordinary worker tasks, (3) updating reviewer-dispatch reasoning tests to the current structured return contract, and (4) making git-driver integration tests hermetic against this machine's global git hook path by neutralizing global git config during throwaway repo commits.
 - PR follow-up hardening for release prep: restored `src/**/__tests__/**` to TypeScript coverage, aligned the orchestrator's lane-capacity fallback with the same project-config defaulting story exposed by `/api/project`, and stabilized idle provider-status snapshots so `selectedAt` no longer churns on every poll when a project is not actively running. Probing a full `exactOptionalPropertyTypes` re-enable still explodes into a much broader runtime cleanup, so that remains explicit follow-up debt rather than getting smuggled into this release-prep fix set.
+- 0.5.0 implementation is now pivoting the product from a single-project-feeling dashboard to a Projects-first local service UX. The active scope is no longer "polish the current shell" — it is "make Guildhall behave like a macOS-first service over many projects while preserving the proven narrow-lane task flow inside each project."
+- The next implementation families are now explicit: (1) project-aware service lifecycle commands and `guildhall serve` semantics, (2) a true top-level Projects shell with per-project start/stop state, (3) attach-existing-folder as the only new-project path with uninitialized-project handling inside the project shell, and (4) a packaging/installer path built around a packaged executable plus LaunchAgent support.
+- UI architecture cleanup is part of the 0.5.0 release work, not a separate cleanup fantasy. The Projects shell and nested project shell should be assembled from clearer reusable layout, summary-card, and data-shaping pieces rather than layering more bespoke project-only view logic onto the current single-project surfaces.
+- First 0.5.0 service-lifecycle slice is now in place. The CLI understands `guildhall start`, `guildhall stop`, and `guildhall open`, while `guildhall serve` now acts like the friendly "ensure the service is running, then open Guildhall" path instead of blocking as the server process itself.
+- The runtime now exposes a service-level `/api/service` contract separate from `/api/project`. It reports the optional preferred project bias, the current foreground project used by the still-legacy project-scoped API surfaces, and the list of registered projects, which gives the upcoming Projects home a truthful root payload instead of forcing it to infer service state from one project's data.
+- The product story is now cleaner even before the Projects shell lands: background service state is tracked explicitly, `serve` logs talk about a local Guildhall service plus foreground project rather than pretending the whole server *is* one project, and docs now teach `serve`/`start`/`open`/`stop` as a family instead of only the old single-command dashboard story.
+- The Projects-first shell now has real runtime footing instead of being a mockup. `/` routes to a dedicated Projects home, `/project/...` is the explicit namespace for the current nested project shell, and the router still accepts the older project-relative paths during transition so we do not have to rewrite every tab/link in one scary pass.
+- The service API now supports real project selection. `/api/service` returns card-ready project summaries (selection state, task counts, and run posture), and `/api/service/select-project` can switch the foreground project for the existing `/api/project*` surfaces. That means project cards can actually `Open`, `Start`, and `Stop` a chosen project instead of faking fleet control off one project's payload.
+- Live smoke on the fresh build: a local service run at `http://localhost:7890` served the new Projects root, `/api/service` returned both Looma/Knit and `t-minus-t` with task counts, and selecting `t-minus-t` through `/api/service/select-project` immediately moved both `selectedProject` and `foregroundProject` to that repo. This completes the Projects-first shell slice well enough to move on to attach/uninitialized flow next.
+- Attach-existing-folder is now a real top-level flow instead of a setup-side escape hatch. `/api/service/attach-project` registers the chosen folder against the live local registry, switches the service foreground project immediately, and opens uninitialized folders inside the project shell rather than auto-bouncing them away to `/setup`. When setup identity later finishes, the temporary uninitialized registry entry is reconciled into the final project id/name/tags so the Projects screen stays truthful across machine-local re-attachment and first-run initialization.
+- Live smoke on a temp HOME proved the full attach flow end to end: a blank local service attached an existing uninitialized folder, `/api/project` surfaced `initializationNeeded` against that attached path, setup identity promoted the temporary registry entry into a final `attach-smoke` project, and `/api/service` plus `~/.guildhall/registry.yaml` both reflected the final initialized project without manual cleanup.
+- The next 0.5.0 UI slice is now pulling structure out of the surfaces instead of letting the new Projects shell and project shell accrete more bespoke markup. Shared `AppShell` / `ProjectShell` / `ProjectsShell` wrappers now own the outer chrome, while a pure `project-data` module owns coordinator columns, work-surface state, event sorting, and thread phase grouping that used to live inline inside `ProjectView`, `WorkTab`, `CoordinatorsTab`, and `ThreadTab`.
+- Visual check on the fresh local service (`http://localhost:7892`) passed: the Projects home now renders as a calmer service-level dashboard with reusable project cards, and the nested project Work view still holds together under the new shell/layout wrappers without the refactor scrambling the rail, top bar, or task grid.
+- Project cards now carry a much better at-a-glance story. The service payload includes tags, a short project blurb, and lightweight task highlights (current active task, current blocked task, or latest completed task), and the card UI now frames those into `Stage`, `Activity`, and `Recent` lines instead of forcing the user to reverse-engineer everything from raw counts alone.
+- Visual check on the refreshed Projects home (`http://localhost:7893`) passed: cards now show whether agents are actively working, whether the project is paused/blocked/stable/needs setup, what the project broadly is, and the most relevant recent task title, while still staying compact enough to scan as a real top-level fleet dashboard.
+- The next `0.5.0` runtime cleanup slice is now explicitly about isolated task workspace placement and lifecycle. The current repo-local `.guildhall/worktrees/...` shape is deterministic but wrong for the product: it clutters editor trees, pollutes normal `git status`, and makes ephemeral runtime sandboxes look like project-owned state. The approved direction is now:
+  - move new isolated task workspaces to `~/.guildhall/worktrees/<project-id>/<task-id>`
+  - keep the main settings story calm: `Shared project workspace` vs `Isolated task workspaces`
+  - show exact sandbox paths only in task details/provenance
+  - keep workspaces until work has actually landed, especially for PR-backed flows
+- First-time-user live audit on `http://localhost:7895` exposed a still-open
+  language/safety problem across the active project shell. Biggest blockers:
+  the global stale-serve banner speaks in raw operator commands instead of
+  user-facing recovery language; project entry still mixes safe navigation with
+  ambiguous state-changing actions like `Start agents`; Notifications,
+  Thread, and the task drawer all re-describe the same approval state with
+  different verbs; and approval/question flows still leak Guildhall internals
+  (`Spec author`, `RESTATING`, `coordinator`, `lever positions`,
+  `stopAfterOneTask`) at the exact moment a new user most needs plain language
+  and confidence about what happens next.
+- Naive-user audit against the live `0.5.0` shell (`http://localhost:7895`) confirmed that the remaining friction is still mostly language + routing, not missing features. The sharpest blockers were: approval items landing in the wrong surface, multi-question answers feeling staged-but-not-submittable, and approval copy slipping back into Guildhall jargon (`Spec author`, `coordinator`, `Approve areas`, etc.) right when a first-time user needs plain-English reassurance.
+- Approval routing is more direct for real Thread decisions now. Brief/spec approvals from `Do this next` and `Inbox` route into `Thread` and use `Review in Thread`, instead of dropping the user into task/work views that do not actually contain the approve affordance.
+- That routing rule turned out to be too blunt for reserved workspace import. The Looma + Knit inbox still surfaced `task-workspace-import` as work that needed a human decision, but `Open in Thread` landed on a dead-looking Thread view because the real action lived in `/workspace-import`, not in any open Thread turn. The fix was to keep brief/spec approvals on `Thread`, but send the reserved import item straight to `/workspace-import` with a truthful `Review import` verb.
+- Thread setup sections also stopped auto-collapsing themselves when the only pending setup work was skippable. That "helpful" collapse made `Optional` feel unopenable because the click immediately got undone by state. Setup phases now stay under direct user control: if a section is visible and the user clicks it, it actually opens.
+- Multi-question Thread answers now surface their own submit affordance inline on every active question card once any answer is staged. The user no longer has to intuit that the real submit button is hiding at the bottom of the section after the last question card.
+- New-task language is calmer for first-time users. The task prompt now says Guildhall will ask follow-up questions before work starts, the field is `Project area (optional)`, and the selector defaults to `Let Guildhall choose` instead of silently preselecting the first coordinator domain.
+- Approval copy is getting more consistent across Thread and the drawer: `Project areas draft`, `Use these areas`, and `Guildhall's draft of your task` now replace some of the older internal phrasing that made the same approval state sound different in each surface.
+- Project-level action language is a little clearer too: the overflow action now says `Run one task` instead of `Finish one`, and the empty inbox state now reads `nothing is waiting on you right now` rather than coordinator-internal wording.
+
+- SetupWizard still had older coordinator-approval copy hard-coded (`Will watch`, `Will check`, `Approve and merge`). That was not stale generated data; it was a stale renderer path. It now matches the newer Thread language: `Project areas draft`, `Purpose`, `Checks on work here`, and `Use these areas`.
+- The next naive-user pass exposed a second layer of "this still feels like an operator console" friction. The main fixes in this batch were: (1) the provider badge now explains configuration vs active runtime in human terms (`This project is set to use ... when you start a run`, `Current run is using ...`) instead of `Configured preferred provider`, (2) project-level run controls now say `Start run` / `Stop run` and task-drawer controls say `Run this task`, `Pause task`, and `Put aside`, and (3) the stale-build banner no longer opens with a panic-y kill command. It now says Guildhall needs a restart to show recent code changes and tucks the exact restart steps behind `Show restart steps`.
+- Workspace import inspection had drifted into another product violation:
+  instead of opening the app's actual right-edge details overlay, clicking a
+  project part or note injected a second column full of prose directly into
+  the page. That made the core flow denser, broke the "no wall of text"
+  rule, and confused "inspect" with "layout." The fix was to remove the
+  inline pane completely and move import inspection onto a real slide-over
+  drawer, while keeping selection actions (`Use this source`, `Leave out`,
+  etc.) separate from inspection clicks.
+- Live fresh-build proof on `http://127.0.0.1:7898`: the top-bar no longer showed raw `stopAfterOneTask reached task-meta-intake (processed).` text. The fallback stop-summary path now normalizes that case to the human-facing `One task finished.` when the richer idle counts payload is absent.
+- The import path is now less state-mushy in the middle steps. Workspace
+  import uses a shared `NoticeBand` family for shell/status messaging, the
+  stale-server warning now sits at the real top of the app instead of below
+  the header, and the source-review step no longer asks the user to parse
+  `Included` as an action. Selected sources now show state on-card (`In this
+  pass`) while the buttons say what will actually happen (`Use this source`,
+  `Leave out`). The step also now carries compact summary chips for sources
+  and kept tasks so the user can feel progress without reading long prose.
+- Shared-component alignment is now starting to bite. The import journey no
+  longer owns a bespoke stepper widget; it uses a reusable `WizardStepper`
+  primitive, and shell/status messaging now shares one `NoticeBand` family.
+  This is the intended direction: the product should make good-looking common
+  patterns easy to reuse instead of letting each flow invent its own local
+  version.
+- Added a short design sketch to the `0.5.0` spec for a future action layer plus companion chat/control surface. The important constraint is that navigation still has to make sense without chat: the app remains the primary product, while MCP-callable actions and a future chat pane should sit on top of the same canonical verbs rather than becoming a substitute for understandable product structure.
+- 2026-05-09 20:45 PDT: user called out a deeper labeling bug, not just stale copy on one screen. Coordinator/steward display labels had been written into config/drafts (`Looma Coordinator`, `Knit Coordinator`) and then re-rendered as if those strings were source-of-truth product state. Cleanup in progress now derives visible steward labels from `domain`/`id`, removes generated coordinator names from live Looma + Knit config plus repo seed configs, and relaxes the config/meta-intake schema so legacy `name` fields are tolerated but no longer required or written back for the normal product path.
+- Fresh cold-user walkthrough on `http://localhost:7908/workspace-import` is finally much closer to a guided review than a dossier. The flow now narrows in a humane sequence (`Found -> Parts -> Sources -> Tasks -> Confirm`), and the user is no longer asked to manage hidden inclusion state before they understand what the choice means. `Choose parts to review`, `Review Looma`, `Review sources in Looma`, and `Create 80 draft tasks?` all read as concrete forward moves instead of vague approval over a blob.
+- The remaining UX gap is no longer primary structure; it is inspectability and confidence. Step 3 (`Review sources in Looma`) still mostly asks for trust because the user can keep or leave out a source without previewing why Guildhall extracted tasks from it. Step 4 improves that by exposing actual task candidates as checkboxes, but the flow still needs a better "show me the source / summary / provenance for this task" affordance so the user is confirming prepared work rather than taking the model's grouping on faith.
+- The import path is now back at a truthful handoff point for real user testing. On the fresh build, a user can start at `Review existing project work`, step through parts, sources, tasks, and the final confirmation screen without the old contradictory button labels or hidden state transitions blocking comprehension. The next meaningful product pass should focus on source/task inspectability and durable provenance rather than another wholesale journey rewrite.
+- Tightened the import journey around one rule: card-level actions refine the
+  current pass, while the bottom primary button is the only forward move.
+  The old flow let "review this thing", "advance to the next thing", and
+  "skip ahead to final review" compete on the same screen. The new pass now
+  makes parts selection explicit (`Add to this pass` / `Remove from this pass`
+  + `Review 2 selected parts`), moves notes one part at a time (`Review Knit
+  next`), removes task pagination, and turns the final step into an actual
+  final task list instead of a count summary with a confusing `Re-read project
+  notes` escape hatch.
+- Import review items are now gaining a real inspectability pattern. The
+  journey should let the user click almost any meaningful item without losing
+  their place: card bodies and file paths open the right-side details pane,
+  while `Use this source` / `Leave out` and similar buttons only change
+  whether something belongs in the current pass. Also fixed the misleading
+  selected-state drift where optional/reference source cards could say `In
+  this pass` without adopting the same selected background as primary sources.
+- Work now behaves more like a real task manager instead of a card pile.
+  `List` is the primary default with a dense sortable table (`Task`, `Stage`,
+  `Steward`, `Priority`, `Revisions`, `Updated`), `Board` is a secondary
+  full-width view with horizontally scrollable lanes, and live activity stays
+  with the list view instead of crushing the board. The project rail also now
+  has an explicit collapse toggle with remembered desktop preference instead
+  of only collapsing as a hidden media-query side effect.
+- The left rail now behaves like two intentional patterns instead of one
+  broken compromise: on desktop, a collapsed rail can reveal its labels on
+  hover/focus without being buried under adjacent surfaces; on smaller
+  windows, the hamburger opens a full-height scrollable navigation overlay
+  instead of a cramped side sheet.
+- The `aside.rail` preview no longer gets to influence unrelated project
+  header controls. The shell was previously coupling rail preview state to the
+  top bar's layout and z-layer, which let pin/reveal behavior hide buttons in a
+  different panel for no product reason. The rail is now treated as fixed app
+  chrome below the header stack, while the project top bar keeps its own layout
+  instead of shifting when the rail preview opens.
+- Setup/meta-intake cards now obey `startReadiness` truth before rendering
+  their primary action. If Guildhall already knows the next step is human setup
+  (`Connect provider...`, `Load model...`, or another setup fix), Thread suppresses
+  the Guildhall-run button and shows the setup action instead of offering a
+  dead "let Guildhall keep setting this up" path.
+- Coordinator/routing cleanup is now leaning harder on the agreed product
+  model: setup/help/reference copy treats `coordinators:` as an internal
+  routing map for one local coordinator, not a user-managed roster. The
+  project-map confirmation affordance now speaks in repo-structure terms
+  instead of pretending the user is configuring review lanes by hand.
+- Accepted-work landing now has a more honest runtime shape. Guildhall can
+  read an explicit per-project `landingBranch`, defaults to the repo's current
+  branch when unset, and the landing path now cherry-picks accepted task
+  commits back onto that branch before optional push/PR handling. Legacy
+  `merge_policy` settings still load, but the product/docs/runtime are moving
+  toward `landing strategy` language instead of pretending parallel task
+  worktrees are just fast-forward merges.
+- Follow-up cleanup: Advanced Settings now exposes the two user-legible knobs
+  that actually matter for this git story — `landingBranch` and
+  `landing_strategy` — instead of leaving them buried in YAML and lever docs.
+  At the same time, the ready checklist and setup/reference copy were scrubbed
+  again so we stop teaching "Project map" / "draft coordinators" language
+  after the product pivot to one local coordinator with internal routing.
+- Remaining cleanup pass tightened the user-facing routing story again: the
+  Facts screen and Settings now link to `/settings/routing`, not
+  `/settings/coordinators`, the dashboard/docs stop describing a coordinator
+  board as part of the normal product surface, and setup/thread test fixtures
+  now reflect inference-first confirmation instead of "pick project areas".
+- The stop-summary semantics are also less misleading now. When a project is
+  full of `import_draft` tasks waiting on human review, Guildhall no longer
+  reports `No actionable tasks remain`; the idle summary classifies those as
+  human-blocked draft review work so the shell can say what is actually true.
+- Project-unblock cleanup pass: Guildhall now ignores stale historical intake
+  questions when the underlying task is already terminal, and it also ignores
+  old meta-intake "pick project areas / review lanes" questions once a valid
+  inferred routing draft already exists on the task. This keeps old task data
+  from blocking Thread/Inbox after the coordinator-model pivot.
+- Live project data cleanup followed immediately after that guardrail:
+  `looma-knit` had a completed workspace-import task still carrying obsolete
+  unanswered questions, so the import-draft shaping queue was being suppressed;
+  those stale questions were cleared. `fair-labor-license` had an obsolete
+  meta-intake question plus no inferred routing written back yet; that project
+  now has approved internal routing, inferred levers, and verified bootstrap
+  recorded from real commands (`pnpm install`, `pnpm --dir frontend build`).
+- Service-model cleanup is now removing the last "project-launched Guildhall"
+  lie. `guildhall serve` still uses `process.cwd()` as a one-shot initial
+  selection hint so the browser can land on that project's Thread or setup,
+  but the running process and `~/.guildhall/service.json` no longer treat that
+  folder as the service identity. `guildhall start` is now explicitly
+  fleet-level: it starts the single background service on `7777` and leaves the
+  UI on Projects instead of binding the daemon to the invoking folder.
+- Facts cleanup: `Identity -> Edit` was pointing at generic Settings instead of
+  the actual identity editor in Advanced Settings, and Environment was
+  overstating a single bootstrap package manager as though it described the
+  whole repo. Facts now links identity edits to Advanced Settings and reports a
+  detected package-manager list across the repo so mixed ecosystems like
+  `pnpm` + `NuGet` read honestly.
+- Facts spacing cleanup landed: the Facts screen now uses shared Stack rhythm
+  for the heading block and the card column instead of mixing wrapper gaps,
+  header margins, and one-off card spacing. The `Do this next` handoff and the
+  Facts cards now read as one vertical system on the live `7777` page.
+- Fair-labor-license first-task intake is less self-defeating now. Guildhall
+  no longer treats a broad kickoff question like `What should this first
+  starter task focus on?` as load-bearing once it has already written a
+  concrete `spec_review` draft with acceptance criteria. Thread and Inbox now
+  ignore that stale question shape, and the spec-agent prompt now tells the
+  agent to choose the strongest repo-backed interpretation of a starter task
+  ask instead of bouncing the user back into a generic scope-selection loop.
+- Live walkthrough follow-up on `2026-05-11`: `t-minus-t` is now in a clean
+  post-setup state — Thread shows one `ready` task as `Approved and queued for
+  work`, Inbox only has low-severity lever-default nudges, and the next move
+  is obvious. `looma-knit` is still not humane: Inbox says `Give the project
+  direction` while Thread's active turn is an import draft, and the Thread
+  feed expands into a giant wall of 80 pending `import_draft` cards. The next
+  fix there is structural, not copy: setup gating should outrank the draft
+  queue when project direction is still missing, and imported drafts need a
+  denser grouped/threaded representation instead of one pending turn per draft.
+- Orchestrator cleanup now matches the Thread/Inbox cleanup for first-task
+  intake. Once a task has a concrete `spec_review` draft with acceptance
+  criteria, Guildhall prunes the obsolete `What should this first starter task
+  focus on?` question from task state itself instead of merely hiding it in
+  the projection layers. Legitimate spec-review questions still remain.
+- Feedback-path cleanup on `2026-05-11`: human follow-up buttons can no longer
+  be note-only dead ends. Thread/drawer feedback that preserves the current
+  task phase now still appends to `memory/exploring/<task-id>.md`, so the next
+  Guildhall start can actually consume that guidance instead of silently
+  dropping it into task notes.
+- Start-story cleanup on `2026-05-11`: the project-level topbar control now
+  needs to teach project advancement, not unattended automation. User-facing
+  labels have been reduced from `Start run` / `Stop run` to `Start` / `Stop`,
+  and one-task actions are being reframed as focused advancement rather than
+  generic "runs."
+- Left-rail shell hardening: the project shell now stretches the rail/main
+  columns explicitly as viewport-sized shell blocks instead of relying on
+  fragile percentage-height propagation, so short content should no longer
+  shrink the rail below the visible page height.
+- Project-direction draft copy no longer leaks inference notes into the
+  editable brief itself. The setup textarea now starts from the strongest
+  README-derived project sentence it can infer, while the "this is editable"
+  guidance stays in the surrounding setup card instead of saying things like
+  `From the README...` or `Guildhall should treat...` inside the user's brief.
+- Agent-question state now survives refreshes and duplicate asks better.
+  Unsubmitted Thread answers persist as per-question draft state instead of
+  living only in browser memory, the `post-user-question` path now refuses to
+  append a duplicate unanswered question with the same prompt/options, and the
+  Thread projection defensively collapses old duplicate question records so one
+  bad task state does not render two identical cards forever.
+- Spec-revision queue cleanup on `2026-05-11`: when a starter task already
+  has a concrete spec draft plus the user's latest answer, Thread should stop
+  pretending that state is generic intake. Queued revision work now projects
+  as spec-phase `Guildhall next` work, hides the intake checklist, and derives
+  a human-readable title from the draft summary instead of repeating the old
+  placeholder `Draft a first starter task...` title.
+- Task-drawer follow-up on `2026-05-11`: `Review draft...` must open the draft,
+  not the same `Now` card the user already sees in Thread. The drawer now
+  defaults to the Spec tab for queued spec-revision states so opening details
+  lands on the actual draft content.
+- Worktree default correction on `2026-05-11`: Guildhall should not quietly
+  default new projects into shared-checkout execution. `worktree_isolation`
+  now defaults to `per_task`, `fair-labor-license` was corrected off the old
+  inherited `none` setting, and the orchestrator harness now pins its own
+  intended isolation mode explicitly so runtime tests no longer depend on the
+  product default.
+- Agent-question hierarchy cleanup on `2026-05-11`: question cards were
+  over-signaling everything at once. `Needs you`, `Now`, and `Choose one`
+  were all chip-styled with the same warn color, which made ownership,
+  temporal state, and input mode look equivalent. The fix is to keep real
+  task state chips grouped in the card header, demote question mode to a quiet
+  eyebrow label, shrink the question prompt copy, and lighten the option rows
+  so the question reads like a decision, not a stack of nested alert panels.
+- Lever invariant enforcement on `2026-05-11`: `concurrent_task_dispatch:
+  fanout_N` is now a hard error when `worktree_isolation` is `none`. The
+  invariant is enforced in lever load/save validation, `/api/project/start`
+  now returns a clear `invalid_lever_combo` error instead of drifting into a
+  broken run, and Advanced Settings surfaces the mismatch inline if an older
+  project file still carries the bad combination.
+- Looma/Knit imported-draft shaping no longer round-trips back to "needs
+  shaping" after the user explicitly hands a draft to Guildhall. The
+  `shape-draft` path now records a durable shaping-request marker on the task,
+  imported-draft normalization refuses to collapse those promoted drafts back
+  to `import_draft`, and the drawer start path now leaves a toast breadcrumb
+  if Guildhall starts and immediately stops with a concrete reason.
+- Looma/Knit subrepo bootstrap hardening on `2026-05-12`: task worktrees that
+  point at a subproject (for example `looma-knit/knit`) can no longer blindly
+  replay workspace-root bootstrap commands like `cd knit && pnpm install`.
+  Guildhall now rewrites workspace-scoped bootstrap/gate commands relative to
+  the task project root before the worker bootstraps the worktree, so the
+  coordinator can advance past the bogus `cd knit` failure and reach real task
+  work again.
+- Agent context hardening on `2026-05-12`: the coordinator/worker prompt now
+  carries the task's current blocker directly in the task summary instead of
+  relying on the model to rediscover it from buried notes. That keeps retries
+  task-scoped and gives each specialist more durable local context about what
+  just failed and what should change next.
+- Bootstrap runner CI hardening on `2026-05-12`: worktree bootstrap commands
+  now run with `CI=true`, which fixes pnpm's non-TTY install abort inside
+  task worktrees (`ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`). Looma/Knit
+  now gets past the bogus install wrapper failure and reaches real spec/task
+  decisions instead of dying in setup.

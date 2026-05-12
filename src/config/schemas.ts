@@ -69,8 +69,8 @@ export const WorkspaceYamlConfig = z.object({
   coordinators: z.array(z.object({
     // Unique id for this coordinator (e.g. "looma", "knit")
     id: z.string(),
-    // Display name shown in logs and dashboard
-    name: z.string(),
+    // Legacy display label; current UI derives labels from domain/id.
+    name: z.string().optional(),
     // Short domain label used for task routing (matches task.domain)
     domain: z.string(),
     // Absolute or relative path to the project this coordinator governs.
@@ -121,7 +121,7 @@ export const WorkspaceYamlConfig = z.object({
   }).optional(),
 
   // FR-18: lifecycle hook definitions keyed by HookEvent (session_start,
-  // session_end, pre_tool_use, post_tool_use, …). Each event maps to an array
+  // session_end, pre_tool_use, post_tool_use, ...). Each event maps to an array
   // of hook definitions (command/http/prompt/agent). The structure is left as
   // passthrough here; @guildhall/hooks' zod schema is applied by the runtime
   // when building the HookExecutor. Keeping validation at the edge avoids a
@@ -201,6 +201,10 @@ export type WorkspaceYamlConfig = z.infer<typeof WorkspaceYamlConfig>
 export const GlobalConfig = z.object({
   // Default model assignments (merged with per-workspace models)
   models: ModelConfigInputSchema.optional(),
+
+  // Default preferred provider for this machine. Projects may override it
+  // in local .guildhall/config.yaml when truly necessary.
+  preferredProvider: z.enum(['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api']).optional(),
 
   // Default max revisions
   maxRevisions: z.number().int().positive().default(3),
@@ -286,7 +290,7 @@ export type WorkspaceRegistry = z.infer<typeof WorkspaceRegistry>
 export const AgentSettingEntry = z.object({
   // ISO timestamp of when this setting was saved
   savedAt: z.string(),
-  // Which agent role saved this (coordinator, worker, reviewer, …)
+  // Which agent role saved this (coordinator, worker, reviewer, ...)
   agentRole: z.string(),
   // Free-text rationale (also written to DECISIONS.md)
   rationale: z.string(),
@@ -361,6 +365,9 @@ export const ResolvedConfig = z.object({
   // Project path (defaults to workspacePath)
   projectPath: z.string(),
 
+  // Optional explicit landing branch for accepted work in this checkout.
+  landingBranch: z.string().optional(),
+
   // Memory directory (always <workspacePath>/memory)
   memoryDir: z.string(),
 
@@ -370,7 +377,7 @@ export const ResolvedConfig = z.object({
   // Coordinator definitions (mirrors WorkspaceYamlConfig.coordinators)
   coordinators: z.array(z.object({
     id: z.string(),
-    name: z.string(),
+    name: z.string().optional(),
     domain: z.string(),
     path: z.string().optional(),
     mandate: z.string(),

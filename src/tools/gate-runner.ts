@@ -65,7 +65,7 @@ export async function runGate(
       const slice = buf.length > remaining ? buf.subarray(0, remaining) : buf
       chunks.push(slice.toString('utf-8'))
       collected += slice.length
-      if (collected >= maxBytes) chunks.push('\n… output truncated …')
+      if (collected >= maxBytes) chunks.push('\n... output truncated ...')
     }
 
     child.stdout.on('data', append)

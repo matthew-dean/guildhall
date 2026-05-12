@@ -1,12 +1,12 @@
 <!--
   Renders ONE agent → user question with a kind-specific deterministic
-  affordance. Every kind also exposes a free-text reply ("Reply differently…")
+  affordance. Every kind also exposes a free-text reply ("Reply differently...")
   so the user is never trapped by a misclassified question.
 
   Kinds:
     confirm — "Here's what I think you want." UI: Approve | Reply
     yesno   — Yes/No. UI: Yes | No | Reply
-    choice  — multiple choice (2..6). UI: chip per choice + Other… textbox
+    choice  — multiple choice (2..6). UI: chip per choice + Other... textbox
     text    — open-ended. UI: textarea + Send
 
   The component is presentational. Parents pass `onAnswer(answer: string)` —
@@ -16,8 +16,6 @@
 <script lang="ts">
   import Button from './Button.svelte'
   import Textarea from './Textarea.svelte'
-  import Card from './Card.svelte'
-  import Chip from './Chip.svelte'
   import Stack from './Stack.svelte'
   import Row from './Row.svelte'
   import Markdown from './Markdown.svelte'
@@ -35,6 +33,10 @@
   let mode = $state<'idle' | 'reply' | 'other'>('idle')
   let replyText = $state('')
   let selectedChoices = $state<string[]>([])
+
+  const isProjectMapQuestion = $derived(
+    /coordinator domains|project areas|review lanes/i.test(question.prompt ?? ''),
+  )
 
   async function send(answer: string): Promise<void> {
     if (!answer.trim()) return
@@ -106,14 +108,18 @@
 
   function displayPrompt(value: string | undefined): string {
     const prompt = value ?? ''
-    if (/coordinator domains/i.test(prompt)) {
-      return 'Pick the project areas that should have their own reviewer. These become coordinator roles: lanes Guildhall uses to route tasks and check finished work.'
+    if (/coordinator domains|project areas|review lanes/i.test(prompt)) {
+      return 'Guildhall inferred this structure from the repo. Confirm it only if it looks materially wrong.'
+    }
+    if (/workspace importer scanned the repo/i.test(prompt) && /importable tasks/i.test(prompt)) {
+      return 'Guildhall found planning notes across several project documents. Which of these should become real tasks? Choose all that apply.'
     }
     return prompt
   }
 
-  // Header label: "Spec author asks…" with kind chip for transparency.
-  const askedBy = $derived(roleLabel(question.askedBy || 'agent'))
+  // User-facing questions should come from the coordinating persona, not a
+  // generic system voice or an internal worker label.
+  const askedBy = $derived('From the coordinator:')
   const isMultiChoice = $derived(
     question.kind === 'choice' &&
       (
@@ -125,60 +131,99 @@
       ),
   )
   const kindLabel = $derived(
-    question.kind === 'confirm'
-      ? 'Restating'
+    isProjectMapQuestion
+      ? 'Confirm only if needed'
+      : question.kind === 'confirm'
+      ? 'Check this'
       : question.kind === 'yesno'
-        ? 'Yes / No'
+        ? 'Yes or no'
         : question.kind === 'choice'
-          ? isMultiChoice ? 'Pick any' : 'Pick one'
+          ? isMultiChoice ? 'Choose any' : 'Choose one'
           : 'Reply',
   )
+
+  const sendLabel = $derived(isProjectMapQuestion ? 'Use this map' : 'Send')
+
+  $effect(() => {
+    if (!isProjectMapQuestion || !isMultiChoice) return
+    if (selectedChoices.length > 0) return
+    selectedChoices = [...question.choices]
+  })
 </script>
 
-<Card tone="warn">
-  {#snippet actions()}
-    <Chip label={kindLabel} tone="warn" />
-  {/snippet}
+<div class="agent-question">
+  <div class="question-head">
+    <div class="meta">{askedBy}</div>
+    <div class="question-kind">{kindLabel}</div>
+  </div>
 
-  <Stack gap="3">
-    <div class="meta">{askedBy} asks:</div>
-
-    {#if question.kind === 'confirm'}
-      <div class="prompt"><Markdown source={displayPrompt(question.restatement)} /></div>
-      {#if mode === 'idle'}
+  {#if question.kind === 'confirm'}
+    <div class="prompt"><Markdown source={displayPrompt(question.restatement)} /></div>
+    {#if mode === 'idle'}
+      <Row justify="end" gap="2">
+        <Button
+          variant="secondary"
+          disabled={busy}
+          onclick={() => (mode = 'reply')}
+        >
+          Reply
+        </Button>
+        <Button variant="primary" disabled={busy} onclick={() => send('Yes, that\u2019s right.')}>
+          Looks right
+        </Button>
+      </Row>
+    {/if}
+  {:else if question.kind === 'yesno'}
+    <div class="prompt"><Markdown source={displayPrompt(question.prompt)} /></div>
+    {#if mode === 'idle'}
+      <Row justify="end" gap="2">
+        <Button variant="ghost" disabled={busy} onclick={() => (mode = 'reply')}>
+          Reply
+        </Button>
+        <Button variant="secondary" disabled={busy} onclick={() => send('No')}>
+          No
+        </Button>
+        <Button variant="primary" disabled={busy} onclick={() => send('Yes')}>
+          Yes
+        </Button>
+      </Row>
+    {/if}
+  {:else if question.kind === 'choice'}
+    <div class="prompt"><Markdown source={displayPrompt(question.prompt)} /></div>
+    {#if mode === 'idle'}
+      {#if isProjectMapQuestion}
+        <div class="inferred-list" aria-label="Guildhall inferred repo structure">
+          {#each question.choices as c (c)}
+            {@const parts = choiceParts(c)}
+            <div class="inferred-item">
+              <span class="inferred-check" aria-hidden="true">✓</span>
+              <span class="choice-copy">
+                <span class="choice-title"><Markdown source={parts.title} inline /></span>
+                {#if parts.detail}
+                  <span class="choice-detail"><Markdown source={parts.detail} inline /></span>
+                {/if}
+              </span>
+            </div>
+          {/each}
+        </div>
         <Row justify="end" gap="2">
-          <Button variant="secondary" disabled={busy} onclick={() => (mode = 'reply')}>
-            Reply
+          <Button variant="secondary" disabled={busy} onclick={() => (mode = 'other')}>
+            Correct it...
           </Button>
-          <Button variant="primary" disabled={busy} onclick={() => send('Yes, that\u2019s right.')}>
-            Looks right
-          </Button>
+          <Button
+            variant="primary"
+            disabled={busy || question.choices.length === 0}
+            onclick={() => send(question.choices.join(', '))}
+          >Looks right</Button>
         </Row>
-      {/if}
-    {:else if question.kind === 'yesno'}
-      <div class="prompt"><Markdown source={displayPrompt(question.prompt)} /></div>
-      {#if mode === 'idle'}
-        <Row justify="end" gap="2">
-          <Button variant="ghost" disabled={busy} onclick={() => (mode = 'reply')}>
-            Reply
-          </Button>
-          <Button variant="secondary" disabled={busy} onclick={() => send('No')}>
-            No
-          </Button>
-          <Button variant="primary" disabled={busy} onclick={() => send('Yes')}>
-            Yes
-          </Button>
-        </Row>
-      {/if}
-    {:else if question.kind === 'choice'}
-      <div class="prompt"><Markdown source={displayPrompt(question.prompt)} /></div>
-      {#if mode === 'idle'}
+      {:else}
         <div class="choices">
           {#each question.choices as c (c)}
             {@const parts = choiceParts(c)}
             <button
               type="button"
               class="choice"
+              class:multi={isMultiChoice}
               class:selected={selectedChoices.includes(c)}
               aria-pressed={isMultiChoice ? selectedChoices.includes(c) : undefined}
               disabled={busy}
@@ -196,12 +241,13 @@
           <button
             type="button"
             class="choice choice-other"
+            class:multi={isMultiChoice}
             disabled={busy}
             onclick={() => (mode = 'other')}
           >
             <span class="choice-mark" aria-hidden="true"></span>
             <span class="choice-copy">
-              <span class="choice-title">Other…</span>
+              <span class="choice-title">Other...</span>
             </span>
           </button>
         </div>
@@ -211,32 +257,16 @@
               variant="primary"
               disabled={busy || selectedChoices.length === 0}
               onclick={sendSelectedChoices}
-            >Send</Button>
+            >{sendLabel}</Button>
           </Row>
         {/if}
       {/if}
-    {:else if question.kind === 'text'}
-      <div class="prompt"><Markdown source={displayPrompt(question.prompt)} /></div>
-      {#if mode === 'idle'}
-        <Textarea bind:value={replyText} rows={3} placeholder="Type your answer…" />
-        <Row justify="end">
-          <Button
-            variant="primary"
-            disabled={busy || replyText.trim().length === 0}
-            onclick={() => send(replyText)}
-          >Send</Button>
-        </Row>
-      {/if}
     {/if}
-
-    {#if mode === 'reply' || mode === 'other'}
-      <Textarea bind:value={replyText} rows={3} placeholder="Type your answer…" />
-      <Row justify="end" gap="2">
-        <Button
-          variant="ghost"
-          disabled={busy}
-          onclick={() => { mode = 'idle'; replyText = '' }}
-        >Cancel</Button>
+  {:else if question.kind === 'text'}
+    <div class="prompt"><Markdown source={displayPrompt(question.prompt)} /></div>
+    {#if mode === 'idle'}
+      <Textarea bind:value={replyText} rows={3} placeholder="Type your answer..." />
+      <Row justify="end">
         <Button
           variant="primary"
           disabled={busy || replyText.trim().length === 0}
@@ -244,19 +274,57 @@
         >Send</Button>
       </Row>
     {/if}
-  </Stack>
-</Card>
+  {/if}
+
+  {#if mode === 'reply' || mode === 'other'}
+    <Textarea bind:value={replyText} rows={3} placeholder="Type your answer..." />
+    <Row justify="end" gap="2">
+      <Button
+        variant="ghost"
+        disabled={busy}
+        onclick={() => { mode = 'idle'; replyText = '' }}
+      >Cancel</Button>
+      <Button
+        variant="primary"
+        disabled={busy || replyText.trim().length === 0}
+        onclick={() => send(replyText)}
+      >Send</Button>
+    </Row>
+  {/if}
+</div>
 
 <style>
+  .agent-question {
+    min-width: 0;
+    display: grid;
+    gap: var(--s-3);
+  }
+  .question-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+  }
   .meta {
-    font-size: var(--fs-1);
+    font-size: var(--fs-0);
+    font-weight: 700;
     color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .question-kind {
+    font-size: var(--fs-0);
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
   }
   .prompt {
     margin: 0;
     font-size: var(--fs-3);
-    font-weight: 400;
-    line-height: var(--lh-tight);
+    font-weight: 550;
+    line-height: 1.12;
     color: var(--text);
   }
   .choices {
@@ -265,7 +333,7 @@
     gap: var(--s-2);
   }
   .choice {
-    background: var(--bg);
+    background: var(--bg-raised);
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: var(--r-2);
@@ -284,11 +352,11 @@
   }
   .choice:hover:not(:disabled) {
     border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+    background: color-mix(in srgb, var(--accent) 5%, var(--bg-raised));
   }
   .choice.selected {
     border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 18%, var(--bg));
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised));
     color: var(--text);
   }
   .choice-mark {
@@ -306,6 +374,9 @@
     margin-top: 1px;
     position: relative;
   }
+  .choice.multi .choice-mark {
+    border-radius: 4px;
+  }
   .choice.selected .choice-mark {
     border-color: var(--accent);
     background: color-mix(in srgb, var(--accent) 16%, var(--bg));
@@ -317,6 +388,16 @@
     border-radius: 50%;
     background: var(--accent);
   }
+  .choice.multi.selected .choice-mark::after {
+    content: '✓';
+    width: auto;
+    height: auto;
+    border-radius: 0;
+    background: none;
+    font-size: 12px;
+    line-height: 1;
+    font-weight: 800;
+  }
   .choice-copy {
     min-width: 0;
     display: flex;
@@ -324,7 +405,7 @@
     gap: 2px;
   }
   .choice-title {
-    font-weight: 400;
+    font-weight: 600;
     line-height: var(--lh-tight);
   }
   .choice-title :global(strong),
@@ -348,5 +429,34 @@
   .choice-other {
     border-style: dashed;
     color: var(--text-muted);
+    background: transparent;
+  }
+  .inferred-list {
+    display: grid;
+    gap: var(--s-2);
+  }
+  .inferred-item {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: var(--s-2);
+    align-items: start;
+    padding: var(--s-2) var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: color-mix(in srgb, var(--bg-elevated) 82%, var(--bg));
+  }
+  .inferred-check {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--accent) 16%, var(--bg));
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1;
+    margin-top: 1px;
   }
 </style>

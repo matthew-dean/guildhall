@@ -11,14 +11,14 @@
  *     version: 1
  *     skipped:
  *       onboard:
- *         - coordinator
+ *         - routing
  *         - direction
  *     completedAt:
  *       onboard: 2026-04-24T...
  *
  * The first registered wizard is `onboard` — the 7-step absolute blocker to
  * agents being able to dispatch work. Subsequent wizards (per-task spec-fill,
- * release-readiness, coordinator-deepen, levers-confirm, invariants-review)
+ * release-readiness, routing-deepen, levers-confirm, invariants-review)
  * plug into the same shape via `registerWizard()`.
  *
  * This module is intentionally pure logic over a `ProjectSnapshot` facts
@@ -32,6 +32,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { readGlobalProviders, type ProviderKind } from '@guildhall/config'
+import { bootstrapNeeded, readBootstrapStatus } from './bootstrap-runner.js'
 
 // ---------------------------------------------------------------------------
 // Facts / snapshot
@@ -57,6 +58,12 @@ export interface ProjectSnapshot {
     }
     coordinators?: Array<{ id?: string; name?: string }>
   }
+  /**
+   * Whether the current bootstrap is already verified in the same sense the
+   * runtime/orchestrator uses: either guildhall.yaml records `verifiedAt`, or
+   * the last persisted bootstrap status is successful and does not need rerun.
+   */
+  bootstrapVerified?: boolean
   /** Whether any non-oauth provider has a stored credential in the global store. */
   hasProvider: boolean
   /** Whether `memory/project-brief.md` exists and has > 40 chars of substance. */
@@ -194,20 +201,17 @@ const onboardSteps: readonly WizardStep[] = [
   },
   {
     id: 'bootstrap',
-    title: 'Verify install + gates',
+    title: 'Check that this project can run',
     why:
       'Agents must run against an environment where tests + build + typecheck are known to pass. Until this is green, agents produce unverifiable PRs.',
     skippable: false,
-    status: snap => {
-      const v = snap.config?.bootstrap?.verifiedAt
-      return typeof v === 'string' && v.length > 0 ? 'done' : 'pending'
-    },
+    status: snap => (snap.bootstrapVerified ? 'done' : 'pending'),
   },
   {
-    id: 'coordinator',
-    title: 'Pick at least one coordinator',
+    id: 'routing',
+    title: 'Let Guildhall inspect the repo',
     why:
-      'Coordinators are the agents that drive intake → spec → dispatch. Without one, no task ever gets picked up.',
+      'Guildhall should infer the repo structure itself. Only interrupt later if the inference is low-confidence and being wrong would matter.',
     skippable: false,
     status: snap =>
       (snap.config?.coordinators?.length ?? 0) > 0 ? 'done' : 'pending',
@@ -216,7 +220,7 @@ const onboardSteps: readonly WizardStep[] = [
     id: 'direction',
     title: 'Give the project direction',
     why:
-      'Start with a brief. Guildhall will use it when it drafts future tasks and specs.',
+      'Start with a short brief you can edit. This helps future task and spec drafts stay aligned with the project.',
     skippable: true,
     status: snap => (snap.hasDirection ? 'done' : 'pending'),
   },
@@ -224,13 +228,13 @@ const onboardSteps: readonly WizardStep[] = [
     id: 'workspaceImport',
     title: 'Review existing work',
     why:
-      'If this is an existing repo, pull the goals, tasks, and milestones already in the README / roadmap / TODOs into the planner instead of starting at zero.',
+      'If this project already has notes, roadmaps, or TODOs, turn the real work hiding in them into backlog tasks instead of starting from zero.',
     skippable: true,
     status: snap => (snap.workspaceImportReviewed ? 'done' : 'pending'),
   },
   {
     id: 'firstTask',
-    title: 'Seed the first task',
+    title: 'Create the first task',
     why:
       'Until there is at least one task, the orchestrator has nothing to tick on.',
     skippable: false,
@@ -356,7 +360,7 @@ const specFillSteps: readonly TaskWizardStep[] = [
   },
   {
     id: 'brief',
-    title: 'Fill in the product brief',
+    title: 'Explain what success looks like',
     why:
       'User need + Done-when are what review gates check. Without them the reviewer has nothing to compare the work against.',
     skippable: true,
@@ -378,9 +382,9 @@ const specFillSteps: readonly TaskWizardStep[] = [
 
 export const specFillWizard: TaskWizard = {
   id: 'spec-fill',
-  title: 'Spec fill',
+  title: 'Task checklist',
   lede:
-    'Shape this task so the agent has enough context to work — and the reviewer has enough to verify.',
+    'Finish the missing pieces so Guildhall can work on this task clearly and review it cleanly.',
   steps: specFillSteps,
   // Applies only while the task is still in intake / approval shaping.
   // Once work or review has started, missing-brief nags are usually stale
@@ -511,6 +515,24 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
   const cfgPath = join(projectPath, 'guildhall.yaml')
   const cfg = existsSync(cfgPath) ? (readYamlSafe(cfgPath) as ProjectSnapshot['config']) : undefined
 
+  let bootstrapVerified = false
+  const verifiedAt = cfg?.bootstrap?.verifiedAt
+  if (typeof verifiedAt === 'string' && verifiedAt.length > 0) {
+    bootstrapVerified = true
+  } else if (cfg?.bootstrap) {
+    const commands = Array.isArray((cfg.bootstrap as { commands?: unknown }).commands)
+      ? ((cfg.bootstrap as { commands?: string[] }).commands ?? [])
+      : []
+    const successGates = Array.isArray((cfg.bootstrap as { successGates?: unknown }).successGates)
+      ? ((cfg.bootstrap as { successGates?: string[] }).successGates ?? [])
+      : []
+    const memoryDir = join(projectPath, 'memory')
+    const status = readBootstrapStatus(memoryDir)
+    if (status?.success && !bootstrapNeeded(memoryDir, projectPath, commands, successGates)) {
+      bootstrapVerified = true
+    }
+  }
+
   // Provider presence: the orchestrator can dispatch if ANY of these is true:
   //   - a stored credential entry exists in the global providers store
   //     (anthropic-api / openai-api / explicit llama-cpp URL), OR
@@ -580,6 +602,7 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
   return {
     projectPath,
     ...(cfg ? { config: cfg } : {}),
+    bootstrapVerified,
     hasProvider,
     hasDirection,
     workspaceImportReviewed,

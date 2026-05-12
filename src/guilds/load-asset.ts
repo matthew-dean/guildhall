@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
  * Each guild's `index.ts` lives at `src/guilds/<slug>/index.ts` in dev/test
  * (MODULE_DIR points there directly) and gets inlined into `dist/cli.js` at
  * build time (MODULE_DIR collapses to `dist/`, with the markdown copied to
- * `dist/guilds/<slug>/…` by the build plugin). This helper resolves an asset
+ * `dist/guilds/<slug>/...` by the build plugin). This helper resolves an asset
  * the same way in both layouts and also honors a project override at
  * `<memoryDir>/guilds/<slug>/<relative>`.
  */
@@ -32,7 +32,7 @@ export function loadGuildAsset(opts: {
   }
 
   // 2. Bundled — try the module dir itself (dev/test), then the
-  //    `guilds/<slug>/…` path used after the esbuild bundle flattens to
+  //    `guilds/<slug>/...` path used after the esbuild bundle flattens to
   //    `dist/`.
   const candidates = [
     join(moduleDir, opts.relative),

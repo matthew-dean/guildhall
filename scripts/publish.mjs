@@ -5,7 +5,8 @@
  * The repo is flat — one package at the root. There is no monorepo and
  * nothing pretends to be a package that isn't. The `dist/` bundle
  * inlines every internal module (src/*) via esbuild, so `npm install
- * guildhall` is the complete install story.
+ * -g guildhall` stays a complete supported install story even though
+ * the recommended 0.5.x UX is the packaged macOS installer.
  *
  * What this script does, in order:
  *   1. Parse the target version (explicit semver or `patch`/`minor`/`major`).
@@ -14,9 +15,10 @@
  *   3. Bump the root `package.json` to the new version.
  *   4. Typecheck + docs build + tests + dep-cruise as the pre-publish gate.
  *   5. Rebuild `dist/` fresh.
- *   6. Verify package contents exclude raw docs/ but keep generated help.
- *   7. `npm publish` with `--access=public`.
- *   8. Commit the version bump and tag `v<version>`.
+ *   6. Build the macOS packaged artifact used by the curl installer.
+ *   7. Verify package contents exclude raw docs/ but keep generated help.
+ *   8. `npm publish` with `--access=public`.
+ *   9. Commit the version bump and tag `v<version>`.
  *
  * Flags:
  *   --dry-run             Print each step; run everything except `npm publish`
@@ -105,7 +107,7 @@ if (manifest.version !== nextVersion) {
 // ---------------------------------------------------------------------------
 
 if (!flags.skipTests) {
-  log('Running typecheck, docs build, lint:deps, and tests…')
+  log('Running typecheck, docs build, lint:deps, and tests...')
   run('pnpm', ['typecheck'])
   run('pnpm', ['docs:build'])
   run('pnpm', ['lint:deps'])
@@ -118,28 +120,35 @@ if (!flags.skipTests) {
 // 5. Build the bundle
 // ---------------------------------------------------------------------------
 
-log('Building dist/…')
+log('Building dist/...')
 run('pnpm', ['build'])
 
 // ---------------------------------------------------------------------------
-// 6. Package contents guard
+// 6. Build the macOS packaged artifact
 // ---------------------------------------------------------------------------
 
-log('Checking npm package contents…')
+log('Building macOS packaged artifact...')
+run('node', ['scripts/build-macos-package.mjs', '--skip-build'])
+
+// ---------------------------------------------------------------------------
+// 7. Package contents guard
+// ---------------------------------------------------------------------------
+
+log('Checking npm package contents...')
 assertNoDocsInPackage()
 
 // ---------------------------------------------------------------------------
-// 7. Publish
+// 8. Publish
 // ---------------------------------------------------------------------------
 
 const publishArgs = ['publish', '--access=public', '--tag', flags.tag]
 if (flags.dryRun) publishArgs.push('--dry-run')
 
-log(`Publishing guildhall@${nextVersion} (tag: ${flags.tag})${flags.dryRun ? ' [dry-run]' : ''}…`)
+log(`Publishing guildhall@${nextVersion} (tag: ${flags.tag})${flags.dryRun ? ' [dry-run]' : ''}...`)
 run('npm', publishArgs)
 
 // ---------------------------------------------------------------------------
-// 8. Commit + tag
+// 9. Commit + tag
 // ---------------------------------------------------------------------------
 
 if (flags.dryRun) {
@@ -147,7 +156,7 @@ if (flags.dryRun) {
   process.exit(0)
 }
 
-log('Committing version bump + tagging…')
+log('Committing version bump + tagging...')
 run('git', ['add', 'package.json'])
 if (hasStagedDiff(['package.json'])) {
   run('git', ['commit', '-m', `chore(release): guildhall@${nextVersion}`])

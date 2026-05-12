@@ -33,6 +33,7 @@ export type TickOutcome =
           blocked: number
           shelved: number
           waitingOnUser: number
+          draftReview: number
           awaitingApproval: number
           dependencyBlocked: number
           escalated: number

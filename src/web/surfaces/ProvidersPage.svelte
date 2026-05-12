@@ -210,7 +210,7 @@
       <p class="muted">{loadError}</p>
     </Card>
   {:else if !providers}
-    <p class="muted">Loading providers…</p>
+    <p class="muted">Loading providers...</p>
   {:else}
     <Card title="Providers">
       <Stack gap="3">
@@ -241,14 +241,14 @@
                     disabled={testing === key}
                     onclick={() => runTest(key)}
                   >
-                    {testing === key ? 'Testing…' : 'Test'}
+                    {testing === key ? 'Testing...' : 'Test'}
                   </Button>
                   <Button
                     variant="danger"
                     disabled={disconnecting === key}
                     onclick={() => disconnect(key)}
                   >
-                    {disconnecting === key ? 'Removing…' : 'Disconnect'}
+                    {disconnecting === key ? 'Removing...' : 'Disconnect'}
                   </Button>
                 {/if}
               </div>
@@ -259,7 +259,7 @@
               <div class="row-edit">
                 <Input
                   type="password"
-                  placeholder="sk-ant-…"
+                  placeholder="sk-ant-..."
                   value={anthropicKey}
                   oninput={v => (anthropicKey = v)}
                 />
@@ -268,14 +268,14 @@
                   disabled={saving === key || !anthropicKey.trim()}
                   onclick={() => saveCreds('anthropic-api')}
                 >
-                  {saving === key ? 'Saving…' : 'Save'}
+                  {saving === key ? 'Saving...' : 'Save'}
                 </Button>
               </div>
             {:else if key === 'openai-api'}
               <div class="row-edit openai-edit">
                 <Input
                   type="password"
-                  placeholder="sk-…"
+                  placeholder="sk-..."
                   value={openaiKey}
                   oninput={v => (openaiKey = v)}
                 />
@@ -289,7 +289,7 @@
                   disabled={saving === key || (!openaiKey.trim() && !providers['openai-api']?.detected)}
                   onclick={() => saveCreds('openai-api')}
                 >
-                  {saving === key ? 'Saving…' : 'Save'}
+                  {saving === key ? 'Saving...' : 'Save'}
                 </Button>
               </div>
               <p class="muted helper">Leave base URL blank to use real OpenAI.</p>
@@ -305,7 +305,7 @@
                   disabled={saving === key || !llamaUrl.trim()}
                   onclick={() => saveCreds('llama-cpp')}
                 >
-                  {saving === key ? 'Saving…' : 'Save'}
+                  {saving === key ? 'Saving...' : 'Save'}
                 </Button>
               </div>
             {/if}
@@ -333,7 +333,7 @@
           </div>
         {/if}
         {#if !models}
-          <p class="muted">Loading models…</p>
+          <p class="muted">Loading models...</p>
         {:else}
           <div class="model-list">
             {#each MODEL_ROLES as role (role.id)}

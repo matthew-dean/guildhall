@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  resolveEffectiveTaskBootstrapBlock,
   resolveEffectiveTaskSuccessGates,
   resolveEffectiveTaskVerificationCommands,
   resolveEffectiveTaskProjectPath,
@@ -26,6 +27,40 @@ describe('resolveEffectiveTaskProjectPath', () => {
         '/tmp/workspace',
       ),
     ).toBe('/tmp/subproject')
+  })
+})
+
+describe('resolveEffectiveTaskBootstrapBlock', () => {
+  it('rewrites workspace-scoped bootstrap commands relative to a subproject task root', () => {
+    const result = resolveEffectiveTaskBootstrapBlock({
+      task: {
+        projectPath: path.join(tmpDir, 'knit'),
+      } as any,
+      workspaceProjectPath: tmpDir,
+      workspaceBootstrap: {
+        commands: ['cd knit && pnpm install'],
+        successGates: [
+          'cd knit/web && pnpm typecheck',
+          'cd knit/web && pnpm build',
+          'cd knit && pnpm lint',
+        ],
+        timeoutMs: 300_000,
+        verifiedAt: '2026-05-03T00:00:00Z',
+        packageManager: 'pnpm',
+        install: { command: 'cd knit && pnpm install', status: 'ok' },
+        gates: {
+          typecheck: { command: 'cd knit/web && pnpm typecheck', available: true },
+          build: { command: 'cd knit/web && pnpm build', available: true },
+          test: { command: 'cd knit && pnpm test', available: false },
+          lint: { command: 'cd knit && pnpm lint', available: true },
+        },
+      } as any,
+    })
+
+    expect(result).toEqual({
+      commands: ['pnpm install'],
+      successGates: ['cd web && pnpm typecheck', 'cd web && pnpm build', 'pnpm lint'],
+    })
   })
 })
 

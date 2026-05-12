@@ -11,6 +11,7 @@
   import Button from '../lib/Button.svelte'
   import { onEvent } from '../lib/events.js'
   import { nav, path } from '../lib/nav.svelte.js'
+  import { projectFetch } from '../lib/project-routes.js'
 
   interface InboxItem {
     kind: string
@@ -26,7 +27,7 @@
 
   async function load(): Promise<void> {
     try {
-      const inboxRes = await fetch('/api/project/inbox')
+      const inboxRes = await projectFetch('/api/project/inbox')
       if (inboxRes.ok) {
         const j = (await inboxRes.json()) as { items?: InboxItem[] }
         items = j.items ?? []
@@ -74,6 +75,13 @@
           button: 'Open Ready',
           href: item.actionHref ?? '/settings/ready',
         }
+      case 'setup_pending':
+        return {
+          verb: item.title,
+          why: item.detail ?? 'Finish the next setup step before moving on.',
+          button: 'Open setup',
+          href: item.actionHref ?? '/thread',
+        }
       case 'open_escalation':
         return {
           verb: `Resolve the escalation${id}`,
@@ -81,25 +89,39 @@
           button: 'Open task',
           href: item.actionHref ?? '/work',
         }
+      case 'agent_question_pending':
+        return {
+          verb: `Answer Guildhall’s question${id}`,
+          why: item.detail ?? 'Guildhall needs one answer before it can continue shaping the work.',
+          button: 'Answer in Thread',
+          href: item.actionHref ?? '/thread',
+        }
+      case 'import_draft_queue':
+        return {
+          verb: 'Shape the imported drafts',
+          why: item.detail ?? 'Guildhall imported planning work that still needs a quick shaping pass.',
+          button: 'Review next draft',
+          href: item.actionHref ?? '/thread',
+        }
       case 'brief_approval':
         return {
           verb: `Review the product brief${id}`,
           why: 'The spec agent is waiting for you to confirm the brief (or correct it).',
-          button: 'Open brief',
-          href: item.actionHref ?? '/work',
+          button: 'Review in Thread',
+          href: '/thread',
         }
       case 'spec_approval':
         return {
           verb: `Approve the spec${id}`,
           why: 'The worker can’t start until the spec is approved.',
-          button: 'Open spec',
-          href: item.actionHref ?? '/work',
+          button: 'Review in Thread',
+          href: '/thread',
         }
       case 'workspace_import_pending':
         return {
-          verb: 'Review what the repo scan found',
-          why: item.detail ?? 'README + project files detected. Import or dismiss.',
-          button: 'Open import',
+          verb: 'Review existing project work',
+          why: item.detail ?? 'Guildhall found planning notes and possible tasks in this project.',
+          button: 'Open review',
           href: item.actionHref ?? '/workspace-import',
         }
       case 'lever_questions':
@@ -113,8 +135,8 @@
         return {
           verb: `Finish the spec${id}`,
           why: item.detail ?? 'Shape the task so the reviewer has something to verify.',
-          button: 'Open task',
-          href: item.actionHref ?? '/work',
+          button: 'Open in Thread',
+          href: '/thread',
         }
       default:
         return {

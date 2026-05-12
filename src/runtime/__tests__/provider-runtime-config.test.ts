@@ -98,6 +98,47 @@ describe('getRuntimeProviderConfig', () => {
     expect(result.selectOptions.allowPaidProviderFallback).toBe(true)
   })
 
+  it('uses the global preferred provider when the project does not override it', () => {
+    updateGlobalConfig({ preferredProvider: 'openai-api' })
+    setProvider('openai-api', {
+      apiKey: 'nvapi-test',
+      baseUrl: 'https://integrate.api.nvidia.com/v1',
+    })
+
+    const result = getRuntimeProviderConfig({
+      projectPath: tmpProject,
+      models: {
+        spec: 'qwen/qwen3.5-122b-a10b',
+        coordinator: 'qwen/qwen3.5-122b-a10b',
+        worker: 'qwen/qwen3.5-122b-a10b',
+        reviewer: 'qwen/qwen3.5-122b-a10b',
+        gateChecker: 'qwen/qwen3.5-122b-a10b',
+      },
+    })
+
+    expect(result.preferredProvider).toBe('openai-api')
+    expect(result.selectOptions.preferredProvider).toBe('openai-api')
+  })
+
+  it('lets a project override win over the global preferred provider', () => {
+    updateGlobalConfig({ preferredProvider: 'openai-api' })
+    updateProjectConfig(tmpProject, { preferredProvider: 'llama-cpp' })
+
+    const result = getRuntimeProviderConfig({
+      projectPath: tmpProject,
+      models: {
+        spec: 'qwen/qwen3.5-122b-a10b',
+        coordinator: 'qwen/qwen3.5-122b-a10b',
+        worker: 'qwen/qwen3.5-122b-a10b',
+        reviewer: 'qwen/qwen3.5-122b-a10b',
+        gateChecker: 'qwen/qwen3.5-122b-a10b',
+      },
+    })
+
+    expect(result.preferredProvider).toBe('llama-cpp')
+    expect(result.selectOptions.preferredProvider).toBe('llama-cpp')
+  })
+
   it('builds consistent select options for forced-provider probes from the same credential shape', () => {
     const selectOptions = buildSelectApiClientOptions({
       providerOverride: 'openai-api',

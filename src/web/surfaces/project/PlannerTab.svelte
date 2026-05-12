@@ -19,7 +19,7 @@
     { key: 'done', label: 'Done / terminal', statuses: ['done', 'shelved', 'blocked'] },
   ]
 
-  const tasks = $derived<Task[]>(detail.tasks ?? [])
+  const tasks = $derived<Task[]>((detail.tasks ?? []).filter(task => task.status !== 'import_draft'))
   const running = $derived((detail.run?.status ?? 'stopped') === 'running')
   const runMode = $derived(detail.run?.mode === 'one_task' ? 'one_task' : 'continuous')
 
@@ -79,30 +79,32 @@
     {/if}
   </div>
 
-  <div class="planner">
-    {#each stages as stage (stage.key)}
-      <div class="col">
-        <div class="col-head">
-          <span>{stage.label}</span>
-          <span class="count">{stage.cards.length}</span>
-        </div>
-        {#if stage.cards.length === 0}
-          <div class="empty">empty</div>
-        {:else}
-          <div class="stack">
-            {#each stage.cards as t (t.id)}
-              <TaskCard
-                task={t}
-                orchestratorRunning={running}
-                displayStatusLabel={isDependencyBlocked(t) ? 'Waiting' : undefined}
-                displayStatusTone={isDependencyBlocked(t) ? 'warn' : undefined}
-                displayStatusIcon={isDependencyBlocked(t) ? 'alert-triangle' : undefined}
-              />
-            {/each}
+  <div class="planner-scroll">
+    <div class="planner">
+      {#each stages as stage (stage.key)}
+        <div class="col">
+          <div class="col-head">
+            <span>{stage.label}</span>
+            <span class="count">{stage.cards.length}</span>
           </div>
-        {/if}
-      </div>
-    {/each}
+          {#if stage.cards.length === 0}
+            <div class="empty">empty</div>
+          {:else}
+            <div class="stack">
+              {#each stage.cards as t (t.id)}
+                <TaskCard
+                  task={t}
+                  coordinatorRunning={running}
+                  displayStatusLabel={isDependencyBlocked(t) ? 'Waiting' : undefined}
+                  displayStatusTone={isDependencyBlocked(t) ? 'warn' : undefined}
+                  displayStatusIcon={isDependencyBlocked(t) ? 'alert-triangle' : undefined}
+                />
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/each}
+    </div>
   </div>
 </div>
 
@@ -139,10 +141,14 @@
     font-size: var(--fs-1);
     white-space: nowrap;
   }
+  .planner-scroll {
+    overflow-x: auto;
+    padding-bottom: var(--s-1);
+  }
   .planner {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    display: flex;
     gap: var(--s-3);
+    min-width: max-content;
   }
   .col {
     background: var(--bg-raised);
@@ -152,7 +158,9 @@
     display: flex;
     flex-direction: column;
     gap: var(--s-2);
-    min-width: 0;
+    flex: 0 0 248px;
+    width: 248px;
+    max-height: calc(100dvh - 260px);
   }
   .col-head {
     display: flex;
@@ -178,13 +186,11 @@
     display: flex;
     flex-direction: column;
     gap: var(--s-2);
+    overflow-y: auto;
+    padding-right: 2px;
   }
   @media (max-width: 1100px) {
-    .planner { grid-template-columns: repeat(2, 1fr); }
     .focus-strip { align-items: flex-start; flex-direction: column; }
     .blocked-count { white-space: normal; }
-  }
-  @media (max-width: 600px) {
-    .planner { grid-template-columns: 1fr; }
   }
 </style>

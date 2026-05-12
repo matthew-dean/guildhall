@@ -14,6 +14,7 @@
   import Textarea from '../lib/Textarea.svelte'
   import Field from '../lib/Field.svelte'
   import SpecTab from './drawer/SpecTab.svelte'
+  import CurrentTab from './drawer/CurrentTab.svelte'
   import TranscriptTab from './drawer/TranscriptTab.svelte'
   import HistoryTab from './drawer/HistoryTab.svelte'
   import ExpertsTab from './drawer/ExpertsTab.svelte'
@@ -21,15 +22,18 @@
   import ResolveEscalationModal from './drawer/ResolveEscalationModal.svelte'
   import type { DrawerPayload, DrawerTab, Escalation } from '../lib/types.js'
   import { onEvent, eventTaskId } from '../lib/events.js'
+  import { currentTaskHref, projectFetch } from '../lib/project-routes.js'
   import { project } from '../lib/project.svelte.js'
   import { onMount, onDestroy } from 'svelte'
+  import { toast } from 'svelte-sonner'
 
   interface Props {
     taskId: string
+    projectId?: string | null
     onClose: () => void
   }
 
-  let { taskId, onClose }: Props = $props()
+  let { taskId, projectId: _projectId = null, onClose }: Props = $props()
 
   let payload = $state<DrawerPayload | null>(null)
   let error = $state<string | null>(null)
@@ -37,12 +41,14 @@
   let runBusy = $state(false)
   let runError = $state<string | null>(null)
   let activeTab = $state<DrawerTab>('spec')
+  let initializedTabForTaskId = $state<string | null>(null)
   let pollHandle: ReturnType<typeof setInterval> | null = null
 
   // Modal state
   let resolveModal = $state<{ escalation: Escalation; mode: 'retry' | 'resolve' } | null>(null)
   let approveSpecOpen = $state(false)
   let approveSpecNote = $state('')
+  let rerunStageBusy = $state<null | 'spec' | 'review' | 'gate'>(null)
 
   function friendlyFetchError(err: unknown): string {
     const message = err instanceof Error ? err.message : String(err)
@@ -52,7 +58,26 @@
     return message
   }
 
-  const TABS = [
+  function firstSpecSummaryLine(spec: string | undefined): string | null {
+    if (typeof spec !== 'string' || !spec.trim()) return null
+    const summaryMatch = spec.match(/## Summary\s+([\s\S]*?)(?:\n## |\n### |\Z)/i)
+    const summaryBlock = (summaryMatch?.[1] ?? spec).trim()
+    if (!summaryBlock) return null
+    const firstParagraph = summaryBlock.split(/\n\s*\n/)[0]?.trim() ?? ''
+    if (!firstParagraph) return null
+    const singleLine = firstParagraph.replace(/\s+/g, ' ').trim()
+    if (!singleLine) return null
+    const sentence = singleLine.match(/^(.+?[.!?])(?:\s|$)/)?.[1] ?? singleLine
+    return sentence.trim()
+  }
+
+  function truncateDisplayTitle(value: string, max = 72): string {
+    const singleLine = value.replace(/\s+/g, ' ').trim()
+    if (singleLine.length <= max) return singleLine
+    return `${singleLine.slice(0, max - 1).trim()}...`
+  }
+
+  const BASE_TABS = [
     { id: 'spec', label: 'Spec' },
     { id: 'transcript', label: 'Transcript' },
     { id: 'experts', label: 'Experts' },
@@ -62,7 +87,7 @@
 
   async function load() {
     try {
-      const res = await fetch(`/api/project/task/${encodeURIComponent(taskId)}`)
+      const res = await projectFetch(`/api/project/task/${encodeURIComponent(taskId)}`)
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         error = body.error ?? `HTTP ${res.status}`
@@ -81,7 +106,7 @@
   ): Promise<boolean> {
     busy = true
     try {
-      const res = await fetch(
+      const res = await projectFetch(
         `/api/project/task/${encodeURIComponent(taskId)}/${action}`,
         {
           method: 'POST',
@@ -104,6 +129,29 @@
     }
   }
 
+  async function answerQuestion(questionId: string, answer: string): Promise<void> {
+    busy = true
+    try {
+      const res = await projectFetch(`/api/project/task/${encodeURIComponent(taskId)}/answer-questions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          answers: [{ questionId, answer }],
+        }),
+      })
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}))
+        error = b.error ?? `HTTP ${res.status}`
+        return
+      }
+      await load()
+    } catch (err) {
+      error = friendlyFetchError(err)
+    } finally {
+      busy = false
+    }
+  }
+
   function handleApproveSpec() {
     approveSpecNote = ''
     approveSpecOpen = true
@@ -116,7 +164,7 @@
     if (taskId === 'task-workspace-import') {
       busy = true
       try {
-        const res = await fetch('/api/project/workspace-import/approve', {
+        const res = await projectFetch('/api/project/workspace-import/approve', {
           method: 'POST',
           headers: body ? { 'content-type': 'application/json' } : undefined,
           body: body ? JSON.stringify(body) : undefined,
@@ -157,8 +205,26 @@
     await post('resume', { message })
   }
 
+  async function handleShapeDraft() {
+    if (!(await post('shape-draft'))) return
+    await project.refresh()
+    await load()
+    toast.success('Draft handed to Guildhall. Starting now.')
+    await runProject('start', taskId)
+  }
+
   async function handleAddAcceptance(description: string) {
     await post('add-acceptance', { description })
+  }
+
+  async function rerunStage(stage: 'spec' | 'review' | 'gate') {
+    rerunStageBusy = stage
+    try {
+      await post('rerun-stage', { stage })
+      await project.refresh()
+    } finally {
+      rerunStageBusy = null
+    }
   }
 
   function confirmed(action: string): boolean {
@@ -167,13 +233,71 @@
 
   const task = $derived(payload?.task)
   const runStatus = $derived(project.detail?.run?.status ?? 'stopped')
+  const hasCurrentTurns = $derived((payload?.threadTurns?.length ?? 0) > 0)
+  const tabs = $derived(
+    hasCurrentTurns
+      ? ([{ id: 'current', label: 'Now' }, ...BASE_TABS] as const)
+      : BASE_TABS,
+  )
   const canPause = $derived(task && task.status !== 'done' && task.status !== 'shelved')
   const canShelve = $derived(task && task.status !== 'done')
   const isShelved = $derived(task?.status === 'shelved')
+  const displayTaskTitle = $derived.by(() => {
+    if (!task) return taskId
+    const raw = typeof task.title === 'string' ? task.title.trim() : ''
+    const spec = typeof task.spec === 'string' ? task.spec : ''
+    const acceptanceCount = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria.length : 0
+    if (
+      task.status === 'exploring' &&
+      acceptanceCount > 0 &&
+      spec.trim().length > 0 &&
+      /^Draft a first starter task for /i.test(raw)
+    ) {
+      const summary = firstSpecSummaryLine(spec)
+      if (summary) return `Starter task spec: ${truncateDisplayTitle(summary)}`
+      return 'Starter task spec draft'
+    }
+    return raw || taskId
+  })
+  const preferSpecTab = $derived.by(() => {
+    if (!task) return false
+    if (!hasCurrentTurns) return false
+    const status = task.status ?? ''
+    const spec = typeof task.spec === 'string' ? task.spec.trim() : ''
+    const acceptanceCount = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria.length : 0
+    return status === 'exploring' && spec.length > 0 && acceptanceCount > 0
+  })
+  const stageRerun = $derived.by(() => {
+    if (!task) return null
+    if (task.id === 'task-meta-intake' || task.id === 'task-workspace-import') return null
+    if (['exploring', 'spec_review', 'ready', 'proposed'].includes(task.status ?? '')) {
+      return { stage: 'spec' as const, label: 'Re-draft spec' }
+    }
+    if (task.status === 'review') {
+      return { stage: 'review' as const, label: 'Re-run review' }
+    }
+    if (task.status === 'gate_check') {
+      return { stage: 'gate' as const, label: 'Re-run gates' }
+    }
+    return null
+  })
 
   $effect(() => {
     void load()
     void project.refresh()
+  })
+
+  $effect(() => {
+    if (!payload) return
+    if (initializedTabForTaskId === taskId) return
+    activeTab = hasCurrentTurns && !preferSpecTab ? 'current' : 'spec'
+    initializedTabForTaskId = taskId
+  })
+
+  $effect(() => {
+    if (activeTab === 'current' && !hasCurrentTurns) {
+      activeTab = 'spec'
+    }
   })
 
   onMount(() => {
@@ -182,14 +306,19 @@
     }, 4000)
   })
 
-  async function runProject(action: 'start' | 'stop') {
+  async function runProject(action: 'start' | 'stop', nextTaskId?: string) {
     runBusy = true
     runError = null
     try {
-      const res = await fetch(`/api/project/${action}`, {
+      const res = await projectFetch(`/api/project/${action}`, {
         method: 'POST',
         headers: action === 'start' ? { 'content-type': 'application/json' } : undefined,
-        body: action === 'start' ? JSON.stringify({ mode: 'one_task' }) : undefined,
+        body: action === 'start'
+          ? JSON.stringify({
+              mode: 'continuous',
+              ...(nextTaskId ? { taskId: nextTaskId } : {}),
+            })
+          : undefined,
       })
       if (!res.ok) {
         const b = await res.json().catch(() => ({}))
@@ -197,6 +326,15 @@
         return
       }
       await project.refresh()
+      await load()
+      if (action === 'start') {
+        const stopMessage = project.detail?.run?.status === 'stopped'
+          ? project.detail?.run?.stopMessage
+          : null
+        if (typeof stopMessage === 'string' && stopMessage.trim()) {
+          toast.info(stopMessage)
+        }
+      }
       setTimeout(() => void project.refresh(), 500)
       setTimeout(() => void project.refresh(), 1800)
     } catch (err) {
@@ -247,7 +385,7 @@
 
 <aside class="gh-drawer" aria-label="Task drawer">
   <header class="gh-drawer-head">
-    <h3>{payload?.task.title ?? taskId}</h3>
+    <h3>{displayTaskTitle}</h3>
     <Button variant="ghost" size="sm" ariaLabel="Close" onclick={onClose}>
       <Icon name="x" size={16} />
     </Button>
@@ -256,7 +394,7 @@
   {#if payload}
     <div class="gh-drawer-tabs">
       <Tabs
-        tabs={TABS}
+        tabs={tabs}
         active={activeTab}
         onselect={(id) => (activeTab = id as DrawerTab)}
       />
@@ -270,7 +408,21 @@
         <Button variant="ghost" size="sm" onclick={() => void load()}>Retry</Button>
       </div>
     {:else if !payload}
-      <p class="loading">Loading…</p>
+      <p class="loading">Loading...</p>
+    {:else if activeTab === 'current'}
+      <CurrentTab
+        task={payload.task}
+        turns={payload.threadTurns ?? []}
+        {busy}
+        {runBusy}
+        {runError}
+        onApproveBrief={() => post('approve-brief')}
+        onApproveSpec={handleApproveSpec}
+        onRunTask={() => runProject('start', taskId)}
+        onShapeDraft={handleShapeDraft}
+        onOpenSpecTab={() => (activeTab = 'spec')}
+        onAnswerQuestion={answerQuestion}
+      />
     {:else if activeTab === 'spec'}
       <SpecTab
         task={payload.task}
@@ -301,34 +453,46 @@
         {#if runError}
           <span class="run-error">{runError}</span>
         {/if}
-        {#if runStatus === 'running'}
-          <Button
-            variant="danger"
-            size="sm"
-            disabled={runBusy}
-            onclick={() => runProject('stop')}
-          >
-            Stop
-          </Button>
-        {:else}
-          <Button
-            variant="primary"
-            size="sm"
-            disabled={runBusy || runStatus === 'stopping'}
-            onclick={() => runProject('start')}
-          >
-            Finish one
-          </Button>
+        {#if !hasCurrentTurns}
+          {#if runStatus === 'running'}
+            <Button
+              variant="danger"
+              size="sm"
+              disabled={runBusy}
+              onclick={() => runProject('stop')}
+            >
+              Stop run
+            </Button>
+          {:else}
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={runBusy || runStatus === 'stopping'}
+              onclick={() => runProject('start')}
+            >
+              Run this task
+            </Button>
+          {/if}
         {/if}
       </div>
       {#if canPause}
+        {#if stageRerun}
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={busy || rerunStageBusy !== null}
+            onclick={() => rerunStage(stageRerun.stage)}
+          >
+            {rerunStageBusy === stageRerun.stage ? 'Re-running...' : stageRerun.label}
+          </Button>
+        {/if}
         <Button
           variant="secondary"
           size="sm"
           disabled={busy}
           onclick={() => confirmed('Pause') && post('pause')}
         >
-          Pause
+          Pause task
         </Button>
       {/if}
       {#if isShelved}
@@ -347,10 +511,10 @@
           disabled={busy}
           onclick={() => confirmed('Shelve') && post('shelve')}
         >
-          Shelve
+          Put aside
         </Button>
       {/if}
-      <a class="copy-link" href="/task/{encodeURIComponent(task.id)}">copy link</a>
+      <a class="copy-link" href={currentTaskHref(task.id)}>copy link</a>
     </footer>
   {/if}
 </aside>

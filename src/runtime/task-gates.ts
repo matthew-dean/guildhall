@@ -57,6 +57,49 @@ function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, ' ')
 }
 
+function isWithin(parent: string, child: string): boolean {
+  const normalizedParent = path.resolve(parent)
+  const normalizedChild = path.resolve(child)
+  return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}${path.sep}`)
+}
+
+function rewriteWorkspaceScopedCommandForTask(
+  command: string,
+  workspaceProjectPath: string,
+  taskProjectPath: string,
+): string {
+  const normalized = normalizeCommand(command)
+  if (!normalized || path.resolve(taskProjectPath) === path.resolve(workspaceProjectPath)) {
+    return normalized
+  }
+
+  const cdMatch = /^cd\s+(\S+)\s*&&\s*(.+)$/i.exec(normalized)
+  if (cdMatch) {
+    const [, rawDir, rest] = cdMatch
+    const absoluteTarget = path.resolve(workspaceProjectPath, rawDir!)
+    if (isWithin(taskProjectPath, absoluteTarget)) {
+      const relativeFromTask = normalizeCommand(path.relative(taskProjectPath, absoluteTarget))
+      return relativeFromTask === '' || relativeFromTask === '.'
+        ? normalizeCommand(rest!)
+        : normalizeCommand(`cd ${relativeFromTask} && ${rest}`)
+    }
+  }
+
+  const dirMatch = /^pnpm\s+--dir\s+(\S+)\s+(.+)$/i.exec(normalized)
+  if (dirMatch) {
+    const [, rawDir, rest] = dirMatch
+    const absoluteTarget = path.resolve(workspaceProjectPath, rawDir!)
+    if (isWithin(taskProjectPath, absoluteTarget)) {
+      const relativeFromTask = normalizeCommand(path.relative(taskProjectPath, absoluteTarget))
+      return relativeFromTask === '' || relativeFromTask === '.'
+        ? normalizeCommand(`pnpm ${rest}`)
+        : normalizeCommand(`pnpm --dir ${relativeFromTask} ${rest}`)
+    }
+  }
+
+  return normalized
+}
+
 type WorkspacePackage = {
   name: string
   dir: string
@@ -581,6 +624,24 @@ export function resolveEffectiveTaskProjectPath(
     return path.resolve(task.projectPath)
   }
   return path.resolve(workspaceProjectPath)
+}
+
+export function resolveEffectiveTaskBootstrapBlock(input: {
+  task: Pick<Task, 'projectPath'>
+  workspaceProjectPath: string
+  workspaceBootstrap?: BootstrapBlock
+}): { commands: readonly string[]; successGates: readonly string[] } | null {
+  const bootstrap = input.workspaceBootstrap
+  if (!bootstrap) return null
+  const taskProjectPath = resolveEffectiveTaskProjectPath(input.task, input.workspaceProjectPath)
+  return {
+    commands: bootstrap.commands.map((command) =>
+      rewriteWorkspaceScopedCommandForTask(command, input.workspaceProjectPath, taskProjectPath),
+    ),
+    successGates: effectiveBootstrapGateCommands(bootstrap).map((command) =>
+      rewriteWorkspaceScopedCommandForTask(command, input.workspaceProjectPath, taskProjectPath),
+    ),
+  }
 }
 
 export function resolveEffectiveTaskSuccessGates(input: {

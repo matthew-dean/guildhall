@@ -96,8 +96,9 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
   // Apply agent settings on top of guildhall.yaml
   const workspace = applyAgentSettings(workspaceRaw, agentSettings)
 
-  // Merge models: built-in defaults ← global/preferred-provider ← guildhall.yaml/preferred-provider
-  const preferredProvider = project.preferredProvider
+  // Merge models: built-in defaults ← global preferred-provider default ←
+  // project preferred-provider override + workspace model map
+  const preferredProvider = project.preferredProvider ?? global.preferredProvider
   const models = mergeModels(
     resolveModelsForProvider(global.models, preferredProvider),
     resolveModelsForProvider(workspace.models, preferredProvider),
@@ -134,6 +135,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
     workspaceName: workspace.name,
     workspacePath,
     projectPath,
+    landingBranch: project.landingBranch,
     memoryDir,
     models,
     coordinators,

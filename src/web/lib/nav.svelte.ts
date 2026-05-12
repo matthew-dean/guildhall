@@ -5,10 +5,12 @@
 
 class Path {
   value: string = $state(location.pathname)
+  state: unknown = $state(history.state)
 
   constructor() {
     window.addEventListener('popstate', () => {
       this.value = location.pathname
+      this.state = history.state
     })
 
     document.addEventListener('click', e => {
@@ -23,19 +25,21 @@ class Path {
     })
   }
 
-  nav(href: string): void {
-    history.pushState({}, '', href)
+  nav(href: string, state: unknown = {}): void {
+    history.pushState(state, '', href)
     this.value = href.split('?')[0]?.split('#')[0] ?? href
+    this.state = state
   }
 
-  replace(href: string): void {
-    history.replaceState({}, '', href)
+  replace(href: string, state: unknown = {}): void {
+    history.replaceState(state, '', href)
     this.value = href.split('?')[0]?.split('#')[0] ?? href
+    this.state = state
   }
 }
 
 export const path = new Path()
 
-export function nav(href: string): void {
-  path.nav(href)
+export function nav(href: string, state?: unknown): void {
+  path.nav(href, state)
 }

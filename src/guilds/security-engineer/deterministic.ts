@@ -57,7 +57,7 @@ export function findSecrets(source: string): SecretFinding[] {
  */
 function redact(line: string): string {
   return line.replace(/[A-Za-z0-9]{10,}/g, (m) =>
-    m.length <= 6 ? m : `${m.slice(0, 3)}…${m.slice(-2)}`,
+    m.length <= 6 ? m : `${m.slice(0, 3)}...${m.slice(-2)}`,
   )
 }
 

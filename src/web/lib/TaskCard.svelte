@@ -4,7 +4,8 @@
   /task/:id and lets Router swap the drawer on).
 -->
 <script lang="ts">
-  import { nav } from './nav.svelte.js'
+  import { nav, path } from './nav.svelte.js'
+  import { currentTaskHref } from './project-routes.js'
   import Icon, { type IconName } from './Icon.svelte'
   import StatusLight from './StatusLight.svelte'
   import { friendlyDomain, friendlyStatus } from './display.js'
@@ -19,10 +20,14 @@
   ])
 
   type StatusTone = 'danger' | 'warn' | 'ok' | 'accent' | 'neutral'
+  interface TaskCardSummary {
+    label: string
+    text: string
+  }
 
   interface Props {
     task: TaskLite
-    orchestratorRunning?: boolean
+    coordinatorRunning?: boolean
     displayStatusLabel?: string
     displayStatusTone?: StatusTone
     displayStatusIcon?: IconName
@@ -30,7 +35,7 @@
 
   let {
     task,
-    orchestratorRunning = false,
+    coordinatorRunning = false,
     displayStatusLabel,
     displayStatusTone,
     displayStatusIcon,
@@ -39,7 +44,7 @@
   const status = $derived(task.status ?? 'unknown')
   const statusLabel = $derived(displayStatusLabel ?? friendlyStatus(status))
   const isQueued = $derived(ACTIVE_STATUSES.has(status))
-  const isActive = $derived(isQueued && orchestratorRunning)
+  const isActive = $derived(isQueued && coordinatorRunning)
   const prio = $derived(task.priority && task.priority !== 'normal' ? task.priority : '')
   const domainLabel = $derived(friendlyDomain(task.domain))
   const hasEscalations = $derived(
@@ -56,50 +61,43 @@
       .replace(/\s+/g, ' ')
       .trim()
     if (!cleaned) return ''
-    return cleaned.length > 180 ? `${cleaned.slice(0, 177).trimEnd()}…` : cleaned
+    return cleaned.length > 180 ? `${cleaned.slice(0, 177).trimEnd()}...` : cleaned
   })
   const checkpointBlurb = $derived.by(() => {
     const next = typeof task.latestCheckpoint?.nextPlannedAction === 'string'
       ? task.latestCheckpoint.nextPlannedAction.trim()
       : ''
     if (!next) return ''
-    return next.length > 140 ? `${next.slice(0, 137).trimEnd()}…` : next
+    return next.length > 140 ? `${next.slice(0, 137).trimEnd()}...` : next
   })
   const terminalHeadline = $derived.by(() => {
     const raw = typeof task.terminalSummary?.headline === 'string'
       ? task.terminalSummary.headline.trim()
       : ''
     if (!raw) return ''
-    return raw.length > 140 ? `${raw.slice(0, 137).trimEnd()}…` : raw
+    return raw.length > 140 ? `${raw.slice(0, 137).trimEnd()}...` : raw
   })
   const terminalDetail = $derived.by(() => {
     const raw = typeof task.terminalSummary?.detail === 'string'
       ? task.terminalSummary.detail.trim()
       : ''
     if (!raw) return ''
-    return raw.length > 140 ? `${raw.slice(0, 137).trimEnd()}…` : raw
+    return raw.length > 140 ? `${raw.slice(0, 137).trimEnd()}...` : raw
   })
-  const summaryLabel = $derived.by(() => {
+  const summary = $derived.by<TaskCardSummary | null>(() => {
     if (
       reviewerBlurb &&
       (task.revisionCount ?? 0) > 0 &&
       ['review', 'gate_check', 'blocked'].includes(status)
-    ) return 'Latest review'
-    if (checkpointBlurb && status === 'in_progress') return 'Next'
-    if (terminalHeadline && ['done', 'pending_pr'].includes(status)) return 'Outcome'
-    return ''
-  })
-  const summaryText = $derived.by(() => {
-    if (
-      reviewerBlurb &&
-      (task.revisionCount ?? 0) > 0 &&
-      ['review', 'gate_check', 'blocked'].includes(status)
-    ) return reviewerBlurb
-    if (checkpointBlurb && status === 'in_progress') return checkpointBlurb
+    ) return { label: 'Latest review', text: reviewerBlurb }
+    if (checkpointBlurb && status === 'in_progress') return { label: 'Next', text: checkpointBlurb }
     if (terminalHeadline && ['done', 'pending_pr'].includes(status)) {
-      return terminalDetail ? `${terminalHeadline} ${terminalDetail}` : terminalHeadline
+      return {
+        label: 'Outcome',
+        text: terminalDetail ? `${terminalHeadline} ${terminalDetail}` : terminalHeadline,
+      }
     }
-    return ''
+    return null
   })
 
   const statusTone = $derived<StatusTone>(
@@ -128,7 +126,7 @@
   )
 
   function open() {
-    nav('/task/' + encodeURIComponent(task.id))
+    nav(currentTaskHref(task.id), { backgroundPath: path.value })
   }
 
   function onKey(e: KeyboardEvent) {
@@ -158,8 +156,8 @@
       {/if}
       <span>{statusLabel}</span>
     </span>
-    {#if isQueued && !orchestratorRunning}
-      <span class="tc-queued" title="Queued — orchestrator is stopped">paused</span>
+    {#if isQueued && !coordinatorRunning}
+      <span class="tc-queued" title="Queued — coordinator is stopped">paused</span>
     {/if}
     {#if hasEscalations}
       <span class="tc-flag" title="Open escalation">
@@ -175,10 +173,10 @@
       <span class="tc-rev">r{task.revisionCount}</span>
     {/if}
   </div>
-  {#if summaryText}
+  {#if summary}
     <div class="tc-summary">
-      <span class="tc-summary-label">{summaryLabel}:</span>
-      <span>{summaryText}</span>
+      <span class="tc-summary-label">{summary.label}:</span>
+      <span>{summary.text}</span>
     </div>
   {/if}
 </div>

@@ -107,7 +107,12 @@ function runStep(
   opts: { projectPath: string; timeoutMs: number },
 ): BootstrapStep {
   const start = Date.now()
-  const res = runShellSync({ command, cwd: opts.projectPath, timeoutMs: opts.timeoutMs })
+  const res = runShellSync({
+    command,
+    cwd: opts.projectPath,
+    timeoutMs: opts.timeoutMs,
+    env: { CI: 'true' },
+  })
   return {
     kind,
     command,

@@ -4,7 +4,7 @@
  * The orchestrator's view of "is this agent alive?" is purely a function of
  * the FR-16 event stream emitted by the agent's QueryEngine: any event the
  * agent emits (`tool_started`, `tool_completed`, `assistant_delta`,
- * `task_transition`, `agent_issue`, …) renews the liveness timestamp. There
+ * `task_transition`, `agent_issue`, ...) renews the liveness timestamp. There
  * is NO separate heartbeat file and NO polling channel — silence IS the
  * signal.
  *

@@ -124,12 +124,12 @@ describe('POST /api/project/coordinators/seed', () => {
     expect(body.ok).toBe(true)
     expect(body.added).toBe(2)
 
-    // Onboard wizard's coordinator step should now be done.
+    // Onboard wizard's routing step should now be done.
     const res2 = await app.fetch(new Request('http://localhost/api/project/wizards'))
     const wb = (await res2.json()) as {
       wizards: Array<{ steps: Array<{ id: string; status: string }> }>
     }
-    const coord = wb.wizards[0]!.steps.find(s => s.id === 'coordinator')
+    const coord = wb.wizards[0]!.steps.find(s => s.id === 'routing')
     expect(coord?.status).toBe('done')
   })
 

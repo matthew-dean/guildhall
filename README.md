@@ -2,183 +2,199 @@
 
 # GuildHall
 
-**A multi-agent operating system for software projects.**
-
-One or more LLM agents work a codebase for hours at a stretch — writing specs, coding, reviewing, and gating each other — without asking you for anything until they have to. Every decision traces to a named lever in `memory/agent-settings.yaml`.
+**A local workspace for running software work with a guild of AI experts.**
 
 [![npm](https://img.shields.io/npm/v/guildhall.svg)](https://www.npmjs.com/package/guildhall)
 [![node](https://img.shields.io/node/v/guildhall.svg)](https://nodejs.org)
 [![license](https://img.shields.io/badge/license-FLL%20v1.2-blue.svg)](./LICENSE)
-[![tests](https://img.shields.io/badge/tests-1175%20passing-brightgreen.svg)](#tests)
 
 </div>
 
 ---
 
-## The pitch
+## What GuildHall is
 
-Most "AI coding" tools are chat-shaped. GuildHall isn't.
+Most agent tools give you a chat box, a pile of tools, and the vague
+instruction to go be clever. GuildHall is for people who would rather **run the
+work** than babysit a prompt loop.
 
-You give it a project directory. It spins up a guild of agents — a **spec writer**, **coordinators** who own domains, **workers**, **reviewers**, **gate-checkers** — and they trade tasks through a persistent queue in `memory/TASKS.json`. You can close your laptop. They keep going. You can interrupt, edit the queue, change a lever, and they pick up from the next tick.
+GuildHall is a **local workspace for software projects**. It gives you a guided
+process for handing work to a guild of specialists: coordinators, workers,
+reviewers, and gate-checkers. They do not just freestyle forever. Work moves
+through explicit stages, review, and gates so you can see what is happening,
+where it is stuck, and when human judgment is actually needed.
 
-The metaphor: a medieval guildhall, where masters, journeymen, and apprentices work under shared standards, and admission to each tier requires producing a verified masterpiece.
+The UI is the point. You open GuildHall, attach a project folder, and work from
+a real product surface instead of memorizing 1,000 CLI spells. The CLI exists,
+but mostly for power users and automation. For everyone else, `guildhall serve`
+is the friendly front door.
 
+Under the hood, GuildHall runs as a **local service over your projects**.
+
+The top level is a **Projects** view. Inside each project, GuildHall keeps the
+queue, transcripts, settings, and live task state together.
+
+## What it does
+
+GuildHall helps with software work that benefits from a little structure:
+
+- intake and shape tasks
+- draft and review specs
+- implement changes
+- run reviews and gates
+- keep a durable audit trail of what happened
+
+The core idea is simple:
+
+- you describe the work
+- GuildHall routes it through the right agents
+- you step in when judgment, clarification, or approval is needed
+
+That structure is what makes it different from open-ended harnesses. GuildHall
+is designed to **guide agents toward good results**, not just let them wander
+around your repo in an infinite while loop and hope for character development.
+
+It is also designed for **longer-running software tasks**, where work may need
+to move through multiple agents, pauses, approvals, and retries without losing
+the thread.
+
+## What it is good at right now
+
+Today, GuildHall has the strongest proof for **narrow, low-blast-radius
+engineering tasks**:
+
+- small cleanups
+- focused fixes
+- low-scope test or type follow-ups
+- local repairs with clear acceptance criteria
+
+That is the lane currently proven end to end, and the product is honest about
+that.
+
+GuildHall is still in **early development**. Ideas, feedback, issue reports,
+and contributions are all very welcome.
+
+It is best suited to coding-oriented models and inference providers that are
+pretty good at **tool-calling** and **writing code**. It does **not** require
+best-in-class expensive inference to be useful. You do not need to burn Codex-
+or-Opus money just to get value out of it.
+
+## Install
+
+Recommended on macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | sh
 ```
-   ┌──────────────────────────── your project ───────────────────────────┐
-   │                                                                     │
-   │   guildhall.yaml        memory/                                     │
-   │   (coordinators,        ├── TASKS.json          ← the work queue    │
-   │    models, ignore)      ├── agent-settings.yaml ← every lever       │
-   │                         ├── sessions/           ← resumable state   │
-   │                         └── transcripts/        ← full audit trail  │
-   │                                                                     │
-   │   .guildhall/config.yaml       (local provider creds; gitignored)   │
-   └─────────────────────────────────────────────────────────────────────┘
-                                      │
-              ┌───────────────────────┼────────────────────────┐
-              ▼                       ▼                        ▼
-      ╭───────────────╮      ╭────────────────╮       ╭────────────────╮
-      │  Spec Agent   │ ───▶ │  Coordinators  │  ───▶ │ Workers (N)    │
-      │  (intake)     │      │  (per-domain)  │       │ in worktrees   │
-      ╰───────────────╯      ╰────────────────╯       ╰────────┬───────╯
-                                      ▲                        │
-                                      │                        ▼
-                             ╭────────┴───────╮        ╭───────────────╮
-                             │ Gate-checkers  │ ◀──── │   Reviewers    │
-                             │ (deterministic)│        │   (LLM/rules) │
-                             ╰────────────────╯        ╰───────────────╯
+
+Also supported:
+
+```bash
+npm install -g guildhall
 ```
 
 ## Quick start
 
-```bash
-# Inside the project you want the guild to work on:
-npx guildhall init
-```
-
-That's it. `init` writes a `guildhall.yaml` and pops open a dashboard at <http://localhost:7777/setup> that walks through:
-
-1. **Identity** — workspace name + slug
-2. **Provider** — Claude (via Claude Code CLI), Codex (via Codex CLI), local `llama.cpp` / LM Studio, or paste-in Anthropic / OpenAI API keys
-3. **Launch** — either kick off the agent-guided bootstrap (the meta-intake agent interviews you about the codebase and drafts coordinators), or skip to the dashboard and hand-edit the YAML
-
-Everything the wizard sets is editable later from the Settings page.
-
-## What makes it different
-
-### 🎚️ Lever-based policy model — "deterministic magic"
-
-Every operational knob is a **named lever** with an enumerated set of positions, persisted in `memory/agent-settings.yaml`. No hidden hardcoded defaults. When the system behaves a certain way, you can trace it to a lever position and know exactly who set it (`system-default`, a specific user, or a coordinator at a specific time).
-
-The *magic* comes from the Spec Agent inferring levers from a natural conversation about your project. The *determinism* comes from every lever being explicit, auditable, and overridable.
-
-Examples of levers you'll actually feel:
-
-| Lever | Effect |
-|---|---|
-| `concurrent_task_dispatch: fanout_4` | Four tasks run in parallel, each in their own git worktree |
-| `merge_policy: ff_only_with_push` | Successful tasks fast-forward into `main` and push to origin |
-| `completion_approval: gates_sufficient` | No human approval needed — gate-checkers are the final word |
-| `spec_completeness: emergent` | Tasks advance to `ready` without a full upfront spec |
-| `reviewer_mode: llm_with_deterministic_fallback` | LLM reviews first; if it whiffs, run the deterministic rule set |
-
-See [SPEC.md §2.1](./SPEC.md) for the full table.
-
-### 🏗️ Persistent, resumable, auditable
-
-Every tick writes to disk. Kill the process; start it again; it resumes mid-turn where it left off. Every task carries its full history: spec, review verdicts, gate results, escalations, merge records. You can replay a run from the transcripts.
-
-### 🪢 Git-native fanout
-
-With `concurrent_task_dispatch: fanout_N` + `worktree_isolation: per_task`, the orchestrator creates one git worktree per task on a `guildhall/task-<id>` branch, dispatches a worker into each with a unique `GUILDHALL_SLOT` / `GUILDHALL_PORT_BASE`, and merges per `merge_policy` when each finishes.
-
-### 🤝 Provider-agnostic
-
-Doesn't care whether you run frontier Claude, Codex via OAuth, or a llama.cpp server on localhost. The same agent guild works with all of them — the quality tradeoff is explicit, not hidden behind a "sorry, that model isn't supported."
-
-## Commands
-
-```
-guildhall init [path]              Launch dashboard + browser-based setup
-guildhall serve [path]             Start only the dashboard (project must already be initialized)
-guildhall run [id|path]            Run the orchestrator headlessly
-guildhall intake "<ask>" --domain  Queue a new task from the CLI
-guildhall help                     Full command list
-```
-
-## Repo layout
-
-GuildHall is a single npm package (`guildhall`) with a flat source tree. `src/` is split into modules, each one reachable from the others only through its `index.ts` — the `@guildhall/<module>` path alias. A per-module dep-cruiser rule forbids relative imports that cross a module boundary, so the internal API surface stays explicit without the overhead of a workspace.
-
-```
-src/
-├── core/               ← task/queue/status types, Zod schemas
-├── protocol/           ← provider-agnostic message & event shapes
-├── engine/             ← the inner loop: tools, tool_result plumbing, resume
-├── sessions/           ← snapshot & restore for mid-turn crashes
-├── compaction/         ← conversation-history compression
-├── config/             ← guildhall.yaml loader / validator
-├── levers/             ← agent-settings.yaml schema + defaults
-├── providers/          ← Claude-OAuth / Codex-OAuth / LM-Studio / API-key adapters
-├── skills/             ← bundled skill markdown (commit, debug, plan, review, …)
-├── hooks/              ← SESSION_START / SESSION_END / user-prompt hooks
-├── tools/              ← every tool the agents can call (Read/Edit/Write/Bash/…)
-├── mcp/                ← MCP client for out-of-process tool servers
-├── agents/             ← agent definitions (spec, worker, reviewer, coordinator, …)
-├── backend-host/       ← OHJSON-framed event wire (for UIs)
-├── runtime/            ← orchestrator + CLI entrypoints
-└── runtime-bundle/     ← assembles engine + agents + providers into one artifact
-```
-
-Boundaries are enforced by [`.dependency-cruiser.cjs`](./.dependency-cruiser.cjs) (`pnpm lint:deps`) rather than by splitting into publishable packages.
-
-## Tests <a id="tests"></a>
-
-```
-pnpm typecheck
-pnpm test
-pnpm lint:deps   # module-boundary check
-pnpm docs:build
-```
-
-Current gate: **1679 tests, 115 test files, all passing** (plus 2 skipped integration tests requiring a live LM Studio endpoint). The `runtime/` module covers the orchestrator, fanout dispatch, worktree lifecycle, session resume, and the full lever matrix.
-
-## Publishing
-
-### 0.4.0 release focus
-
-`0.4.0` is the first release where Guildhall has a live end-to-end proof for a
-bounded but real task lane: narrow, low-blast-radius cleanup work can now move
-through worker implementation, review, gate check, and terminal merge truth
-without manual babysitting.
-
-That is the release claim to make. It is strong enough to ship, and narrow
-enough to be honest.
+Start GuildHall:
 
 ```bash
-# Dry-run the whole pipeline (bumps the manifest, runs gates, packs the tarball, reverts):
-pnpm release:dry 0.4.0
-
-# Actual release: bumps package.json, runs typecheck + docs + lint:deps + tests,
-# builds, publishes guildhall to npm, commits, tags v0.4.0.
-pnpm release 0.4.0
+guildhall serve
 ```
 
-See [scripts/publish.mjs](./scripts/publish.mjs) for what it actually does.
+That will:
+
+- make sure the local GuildHall service is running
+- open the web UI
+- take you to the top-level **Projects** view
+
+From there:
+
+1. **Attach a project** by choosing an existing folder
+2. If the folder already has `guildhall.yaml`, GuildHall registers it and opens it
+3. If not, GuildHall opens it in an uninitialized state and walks you through setup inside the project shell
+
+Setup covers:
+
+1. **Identity** — project name and id
+2. **Provider** — Claude Code CLI, Codex CLI, local OpenAI-compatible server, or API key
+3. **Launch** — start with the dashboard or kick off bootstrap/meta-intake
+
+## The model
+
+Each project has durable local state on disk. The UI is a view over that state,
+not the source of truth.
+
+Typical files look like:
+
+```text
+<project>/
+├── guildhall.yaml
+├── .guildhall/
+└── memory/
+    ├── TASKS.json
+    ├── agent-settings.yaml
+    ├── sessions/
+    └── transcripts/
+```
+
+At runtime, GuildHall coordinates a few core roles:
+
+- **Spec** — shapes and clarifies work
+- **Coordinator** — owns a domain and its tradeoffs
+- **Worker** — implements changes
+- **Reviewer** — checks the task from expert perspectives
+- **Gate checker** — runs the deterministic completion bar
+
+## Why it feels different
+
+Most AI coding tools are still basically chat-shaped.
+
+GuildHall is closer to a **project operations surface**:
+
+- work is a queue, not a conversation transcript
+- state persists to disk
+- runs can continue beyond a single chat moment
+- review and gates are part of the workflow instead of an afterthought
+- decisions are exposed through explicit settings and levers
+
+## Useful commands
+
+```text
+guildhall serve [path]    Start the local service if needed, then open GuildHall
+guildhall start [path]    Start the local service without opening the browser
+guildhall open [path]     Open the running service
+guildhall stop            Stop the local service
+guildhall init [path]     Initialize one project directly
+guildhall run [id|path]   Run the orchestrator headlessly
+guildhall help            Full command list
+```
+
+For the full CLI reference, see [docs/reference/cli.md](./docs/reference/cli.md).
+
+## Learn more
+
+- [Quick start](./docs/guide/quick-start.md)
+- [Introduction](./docs/guide/introduction.md)
+- [Core concepts](./docs/guide/concepts.md)
+- [CLI reference](./docs/reference/cli.md)
+- [Workspace config reference](./docs/reference/workspace-config.md)
+- [0.5.0 release note](./docs/releases/0.5.0.md)
+
+If you want the architecture and internal subsystem detail, the docs still have
+that too:
+
+- [Subsystems](./docs/subsystems/index.md)
+- [Levers](./docs/levers/index.md)
+- [Design notes](./docs/design/index.md)
 
 ## Contributing
 
-This repo is accepting PRs, but the bar is spec-first: all non-trivial changes update [SPEC.md](./SPEC.md) before implementation. Every lever addition requires a row in §2.1 and a referencing FR. Every port from [OpenHarness](https://github.com/HKUDS/OpenHarness) gets an attribution header (upstream path + SHA + explicit changes).
+This repo is spec-first for non-trivial changes:
+
+- update the relevant design/spec material first
+- keep behavioral changes explicit
+- prefer narrow, test-backed changes over fuzzy rewrites
 
 ## License
 
-[Fair Labor License (FLL) v1.2](./LICENSE). Free for individuals and organizations that compensate their workers fairly; paid commercial license required otherwise. Evaluation use is free for 90 days.
-
----
-
-<div align="center">
-<sub>
-Built on top of <a href="https://github.com/HKUDS/OpenHarness">OpenHarness</a> engine primitives.<br/>
-Operational-model additions absorbed from the internal <code>linkcore</code> and <code>jess</code> prototypes.
-</sub>
-</div>
+[Fair Labor License (FLL) v1.2](./LICENSE)

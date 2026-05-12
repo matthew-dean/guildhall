@@ -7,7 +7,7 @@
  *   - No OpenAI SDK dependency — POST /v1/chat/completions with native fetch
  *     and consume the SSE stream via the shared sse.ts parser
  *   - Model-specific `max_completion_tokens` swap for gpt-5/o1/o3/o4 stays
- *   - `<think>…</think>` stripping is preserved since llama.cpp can be
+ *   - `<think>...</think>` stripping is preserved since llama.cpp can be
  *     fronting any model including ones that emit inline reasoning
  *   - Reasoning-content carryover: upstream stashes raw reasoning on
  *     `msg._reasoning` and replays it as `reasoning_content` on the next

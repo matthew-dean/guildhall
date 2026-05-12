@@ -8,11 +8,13 @@
  */
 
 import type { EventEnvelope } from './types.js'
+import { withCurrentProjectQuery } from './project-routes.js'
 
 type Listener = (ev: EventEnvelope) => void
 
 const listeners = new Set<Listener>()
 let current: EventSource | null = null
+let currentUrl: string | null = null
 
 export type SseStatus = 'connecting' | 'live' | 'error'
 type StatusListener = (s: SseStatus) => void
@@ -37,9 +39,12 @@ function setStatus(next: SseStatus) {
 }
 
 export function connectStream(): void {
+  const nextUrl = withCurrentProjectQuery('/api/project/events')
+  if (current && currentUrl === nextUrl) return
   if (current) current.close()
+  currentUrl = nextUrl
   setStatus('connecting')
-  const es = new EventSource('/api/project/events')
+  const es = new EventSource(nextUrl)
   current = es
   es.onopen = () => setStatus('live')
   es.onerror = () => setStatus('error')

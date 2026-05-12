@@ -104,6 +104,18 @@ describe('runBootstrap', () => {
     expect(res.steps[1]?.result).toBe('fail')
   })
 
+  it('runs bootstrap commands with CI=true so non-tty pnpm installs can proceed', () => {
+    const res = runBootstrap({
+      projectPath: dir,
+      memoryDir: join(dir, 'memory'),
+      commands: ['test "$CI" = "true"'],
+      successGates: [],
+      timeoutMs: 5_000,
+    })
+    expect(res.success).toBe(true)
+    expect(res.steps[0]?.result).toBe('pass')
+  })
+
   it('persists status to memory/bootstrap.json with lockfileHash', () => {
     writeFileSync(join(dir, 'pnpm-lock.yaml'), 'x')
     runBootstrap({

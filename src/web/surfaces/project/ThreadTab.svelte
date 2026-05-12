@@ -22,6 +22,7 @@
   import Card from '../../lib/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Button from '../../lib/Button.svelte'
+  import Icon from '../../lib/Icon.svelte'
   import Stack from '../../lib/Stack.svelte'
   import Row from '../../lib/Row.svelte'
   import Input from '../../lib/Input.svelte'
@@ -33,10 +34,14 @@
   import StatusLine from '../../lib/StatusLine.svelte'
   import StateSummary from '../../lib/StateSummary.svelte'
   import Help from '../../lib/Help.svelte'
+  import { friendlyStewardName } from '../../lib/display.js'
   import InteractionCardLayout from '../../lib/InteractionCardLayout.svelte'
   import { onEvent } from '../../lib/events.js'
   import { nav } from '../../lib/nav.svelte.js'
+  import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
+  import { buildThreadPhaseGroups } from '../../lib/project-data.js'
   import { project } from '../../lib/project.svelte.js'
+  import { toast } from 'svelte-sonner'
 
   // ---- Turn shape (mirrors src/runtime/thread.ts) ------------------------
   type TurnPersona = 'intake' | 'spec' | 'worker' | 'reviewer' | 'coord' | 'system'
@@ -86,6 +91,7 @@
     question: {
       kind: 'confirm' | 'yesno' | 'choice' | 'text'
       id: string; askedBy: string; askedAt: string
+      draftAnswer?: string
       answeredAt?: string; answer?: string
       restatement?: string; prompt?: string; choices?: string[]
       selectionMode?: 'single' | 'multiple' | undefined
@@ -97,7 +103,7 @@
     taskId: string; taskTitle: string; spec: string
     draftCoordinators?: Array<{
       id: string
-      name: string
+      name?: string
       domain: string
       path?: string
       mandate: string
@@ -121,6 +127,7 @@
     kind: 'inflight'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string; taskStatus?: string; summary: string
+    importedDraft?: boolean | undefined
     liveAgent?: LiveAgent | undefined
     activity?: LiveActivity[] | undefined
     checklist?: {
@@ -158,6 +165,8 @@
   let replyDrafts = $state<Record<string, string>>({})
   let replyErrors = $state<Record<string, string>>({})
   let sentReplies = $state<Record<string, boolean>>({})
+  let importHandoff = $state<{ tasksAdded: number; sourceCount: number } | null>(null)
+  let importHandoffFocused = $state(false)
   let lastScrolledId = $state<string | null>(null)
   let lastExpandedForId = $state<string | null>(null)
   let expandedPhases = $state<Record<TurnPhase, boolean>>({
@@ -175,25 +184,21 @@
   let runBusy = $state(false)
   let runError = $state<string | null>(null)
   const turnElements = new Map<string, HTMLDivElement>()
-  const phaseOrder: TurnPhase[] = ['setup', 'intake', 'spec', 'ready', 'inflight', 'blocked', 'done']
-  const phaseLabels: Record<TurnPhase, string> = {
-    setup: 'Setup',
-    intake: 'Intake',
-    spec: 'Spec',
-    ready: 'Ready',
-    inflight: 'In flight',
-    blocked: 'Blocked',
-    done: 'Done',
-  }
-  const optionalSetupOnly = $derived.by(() => {
-    const setupTurns = turns.filter(t => t.phase === 'setup')
-    return setupTurns.length > 0 && setupTurns.every(t => t.kind === 'setup_step' && t.skippable)
-  })
+  const startReadiness = $derived(project.detail?.startReadiness ?? null)
+  const runStatus = $derived(project.detail?.run?.status ?? 'stopped')
 
   // Staged answers for co-active agent_question turns. Keyed by question id.
   // Submitted as a batch (per-task) via POST /answer-questions so the agent
   // gets one resume with the full set of answers, not N partial resumes.
   let staged = $state<Record<string, string>>({})
+
+  async function persistDraftAnswer(taskId: string, questionId: string, answer: string): Promise<void> {
+    await projectFetch(`/api/project/task/${encodeURIComponent(taskId)}/stage-answer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ questionId, answer }),
+    })
+  }
 
   function stageAnswer(questionId: string, answer: string): void {
     const trimmed = answer.trim()
@@ -208,7 +213,7 @@
 
   async function load(): Promise<void> {
     try {
-      const r = await fetch('/api/project/thread', { cache: 'no-store' })
+      const r = await projectFetch('/api/project/thread', { cache: 'no-store' })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const j = (await r.json()) as { turns?: Turn[]; activeTurnId?: string | null; caughtUp?: boolean }
       turns = j.turns ?? []
@@ -221,6 +226,14 @@
         }
       }
       sentReplies = nextSentReplies
+      const nextStaged = { ...staged }
+      for (const turn of turns) {
+        if (turn.kind !== 'agent_question') continue
+        if (nextStaged[turn.question.id] === undefined && typeof turn.question.draftAnswer === 'string' && turn.question.draftAnswer.trim()) {
+          nextStaged[turn.question.id] = turn.question.draftAnswer.trim()
+        }
+      }
+      staged = nextStaged
       const nextValues = { ...setupValues }
       for (const turn of j.turns ?? []) {
         if (turn.kind !== 'setup_step') continue
@@ -244,6 +257,20 @@
   }
 
   onMount(() => {
+    try {
+      const raw = sessionStorage.getItem('guildhall:workspace-import-handoff')
+      if (raw) {
+        const parsed = JSON.parse(raw) as { tasksAdded?: number; sourceCount?: number }
+        importHandoff = {
+          tasksAdded: Math.max(0, Number(parsed.tasksAdded ?? 0)),
+          sourceCount: Math.max(0, Number(parsed.sourceCount ?? 0)),
+        }
+        importHandoffFocused = false
+        sessionStorage.removeItem('guildhall:workspace-import-handoff')
+      }
+    } catch {
+      importHandoff = null
+    }
     void load()
     pollHandle = setInterval(() => void load(), 4000)
     clockHandle = setInterval(() => {
@@ -277,7 +304,7 @@
   function personaLabel(p: TurnPersona): string {
     switch (p) {
       case 'intake': return 'Setup guide'
-      case 'spec':   return 'Spec author'
+      case 'spec':   return 'Guildhall'
       case 'worker': return 'Worker'
       case 'reviewer': return 'Reviewer'
       case 'coord':  return 'Coordinator'
@@ -286,28 +313,86 @@
   }
 
   function displayTaskTitle(t: { taskId: string; taskTitle: string }): string {
-    if (t.taskId === 'task-meta-intake') return 'Map project areas and starter tasks'
+    if (t.taskId === 'task-meta-intake') return 'Inspect the repo and draft starter tasks'
+    if (t.taskId === 'task-workspace-import') return 'Review existing project work'
     return t.taskTitle
   }
 
-  function tone(t: Turn): 'ok' | 'warn' | 'neutral' {
-    if (t.status === 'done')   return 'ok'
+  function isQueuedSpecRevision(turn: InFlightTurn): boolean {
+    return (
+      turn.taskStatus === 'exploring' &&
+      !turn.importedDraft &&
+      !turn.liveAgent &&
+      !turn.checklist &&
+      turn.phase === 'spec'
+    )
+  }
+
+  function tone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' {
+    if (t.status === 'done') return 'ok'
+    const owner = ownershipLabel(t)
+    if (owner === 'Needs you') return 'warn'
+    if (owner === 'Guildhall next' || owner === 'Guildhall working') return 'accent'
     if (t.status === 'active') return 'warn'
     return 'neutral'
   }
 
   function turnStatusChipLabel(t: Turn): string {
     if (t.status === 'done') return 'done'
-    if (t.kind === 'inflight' && t.status === 'active' && !t.liveAgent) return 'paused'
+    if (t.kind === 'inflight' && t.taskId === 'task-meta-intake' && !t.liveAgent) {
+      return t.status === 'active' ? 'needs setup' : 'setup next'
+    }
+    if (t.kind === 'inflight' && t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !t.liveAgent) {
+      return 'needs you'
+    }
+    if (t.kind === 'inflight' && t.status === 'active' && !t.liveAgent) {
+      return canStartTaskTurn(t) ? 'queued' : 'paused'
+    }
     if (t.kind === 'spec_review' && t.status === 'active') return 'awaiting approval'
     return t.status === 'active' ? 'now' : 'next'
   }
 
   function turnStatusChipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' {
     if (t.status === 'done') return 'ok'
+    if (t.kind === 'inflight' && t.taskId === 'task-meta-intake' && !t.liveAgent) {
+      return 'warn'
+    }
+    if (t.kind === 'inflight' && t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !t.liveAgent) {
+      return 'accent'
+    }
     if (t.kind === 'inflight' && t.status === 'active' && !t.liveAgent) return 'neutral'
-    if (t.kind === 'spec_review' && t.status === 'active') return 'accent'
-    return t.status === 'active' ? 'warn' : 'neutral'
+    if (t.kind === 'spec_review' && t.status === 'active') return 'neutral'
+    return t.status === 'active' ? 'neutral' : 'neutral'
+  }
+
+  function showStatusChip(t: Turn): boolean {
+    const owner = ownershipLabel(t)?.trim().toLowerCase()
+    const status = turnStatusChipLabel(t).trim().toLowerCase()
+    return !(owner && owner === status)
+  }
+
+  function ownershipLabel(t: Turn): string | null {
+    if (turnLiveAgent(t)) return 'Guildhall working'
+    if (t.kind === 'setup_step') return t.status === 'done' ? null : 'Needs you'
+    if (t.kind === 'agent_question' || t.kind === 'brief_approval' || t.kind === 'spec_review' || t.kind === 'escalation') {
+      return t.status === 'done' ? null : 'Needs you'
+    }
+    if (t.kind === 'review_feedback') return 'Needs you'
+    if (t.kind === 'inflight') {
+      if (t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring')) {
+        return 'Needs you'
+      }
+      if (canStartTaskTurn(t)) return 'Guildhall next'
+    }
+    return null
+  }
+
+  function ownershipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' | 'running' {
+    if (turnLiveAgent(t)) return 'running'
+    const label = ownershipLabel(t)
+    if (label === 'Needs you') return 'warn'
+    if (label === 'Guildhall next') return 'accent'
+    return 'neutral'
   }
 
   function isWorkingTurn(t: Turn): boolean {
@@ -384,24 +469,7 @@
     return shortElapsed(nowMs - parsed)
   }
 
-  const phaseGroups = $derived.by(() => phaseOrder
-    .map(phase => ({
-      phase,
-      turns: turns.filter(t => t.phase === phase),
-    }))
-    .map(group => ({
-      ...group,
-      label:
-        group.phase === 'setup' &&
-        group.turns.every(t => t.kind === 'setup_step' && t.skippable)
-          ? 'Optional'
-          : group.phase === 'inflight' &&
-              group.turns.length > 0 &&
-              group.turns.every(t => t.kind === 'inflight' && !t.liveAgent)
-            ? 'Paused'
-            : phaseLabels[group.phase],
-    }))
-    .filter(group => group.turns.length > 0))
+  const phaseGroups = $derived(buildThreadPhaseGroups(turns))
 
   function captureTurn(node: HTMLDivElement, id: string) {
     turnElements.set(id, node)
@@ -410,6 +478,52 @@
         if (turnElements.get(id) === node) turnElements.delete(id)
       },
     }
+  }
+
+  function openQuestionCountForTask(taskId: string): number {
+    return turns.filter(
+      t => t.kind === 'agent_question' && t.taskId === taskId && t.status === 'active',
+    ).length
+  }
+
+  function revealQuestionsForTask(taskId: string): void {
+    const first = turns.find(
+      t => t.kind === 'agent_question' && t.taskId === taskId && t.status === 'active',
+    )
+    if (!first) return
+    expandedPhases = { ...expandedPhases, [first.phase]: true }
+    queueMicrotask(() => {
+      const el = turnElements.get(first.id)
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
+  }
+
+  function hasPendingSetupStep(stepId: string): boolean {
+    return turns.some(
+      (turn) => turn.kind === 'setup_step' && turn.stepId === stepId && turn.status !== 'done',
+    )
+  }
+
+  function focusSetupPhase(): void {
+    expandOnly('setup')
+    const firstSetup = turns.find((turn) => turn.kind === 'setup_step' && turn.status === 'active')
+    if (!firstSetup) return
+    void tick().then(() => {
+      const el = turnElements.get(firstSetup.id)
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
+  }
+
+  function revealImportedDrafts(): void {
+    const first = turns.find(
+      t => t.kind === 'inflight' && t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring'),
+    )
+    if (!first) return
+    expandedPhases = { ...expandedPhases, [first.phase]: true }
+    queueMicrotask(() => {
+      const el = turnElements.get(first.id)
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
   }
 
   function togglePhase(phase: TurnPhase): void {
@@ -437,8 +551,9 @@
   })
 
   $effect(() => {
-    if (!loaded || activeTurnId || caughtUp || !optionalSetupOnly || !expandedPhases.setup) return
-    expandedPhases = { ...expandedPhases, setup: false }
+    if (!importHandoff || importHandoffFocused || !loaded || turns.length === 0) return
+    importHandoffFocused = true
+    revealImportedDrafts()
   })
 
   $effect(() => {
@@ -456,7 +571,9 @@
   async function approveBrief(turn: BriefTurn): Promise<void> {
     busyTurnId = turn.id
     try {
-      await fetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/approve-brief`, { method: 'POST' })
+      await projectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/approve-brief`, { method: 'POST' })
+      await load()
+      await project.refresh()
       await load()
     } finally { busyTurnId = null }
   }
@@ -469,7 +586,7 @@
         : turn.taskId === 'task-workspace-import'
           ? '/api/project/workspace-import/approve'
         : `/api/project/task/${encodeURIComponent(turn.taskId)}/approve-spec`
-      await fetch(endpoint, { method: 'POST' })
+      await projectFetch(endpoint, { method: 'POST' })
       await load()
     } finally { busyTurnId = null }
   }
@@ -488,7 +605,7 @@
     if (!message) return
     busyTurnId = turn.id
     try {
-      const r = await fetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/resume`, {
+      const r = await projectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/resume`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -516,7 +633,7 @@
     busyTurnId = turn.id
     replyErrors[turn.id] = ''
     try {
-      const r = await fetch('/api/project/meta-intake/synthesize', { method: 'POST' })
+      const r = await projectFetch('/api/project/meta-intake/synthesize', { method: 'POST' })
       if (!r.ok) {
         const j = (await r.json().catch(() => ({}))) as { error?: string }
         throw new Error(j.error ?? `HTTP ${r.status}`)
@@ -562,6 +679,57 @@
     }
   }
 
+  function bootstrapOutputLine(output: string): string | null {
+    const lines = output
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line =>
+        line.length > 0 &&
+        !line.startsWith('>') &&
+        !line.startsWith('Scope:') &&
+        !line.startsWith(' ERR_PNPM_') &&
+        !line.startsWith(' ELIFECYCLE'),
+      )
+    return lines.find(line => /\berror\b|failed|Cannot find module|command not found|spawn ENOENT/i.test(line)) ?? lines[0] ?? null
+  }
+
+  function setupSuccessMessage(turn: SetupStepTurn): string {
+    switch (turn.stepId) {
+      case 'bootstrap':
+        return 'Checks passed.'
+      case 'direction':
+        return 'Project direction saved.'
+      case 'firstTask':
+        return 'First task created.'
+      case 'identity':
+        return 'Project identity saved.'
+      case 'coordinator':
+      case 'routing':
+        return 'Repo inspection started.'
+      default:
+        return `${turn.actionLabel} complete.`
+    }
+  }
+
+  function setupFailureMessage(turn: SetupStepTurn, body: Record<string, unknown>): string {
+    if (typeof body.error === 'string' && body.error.length > 0) return body.error
+    if (turn.stepId === 'bootstrap') {
+      const status = body.status
+      if (status && typeof status === 'object' && Array.isArray((status as { steps?: unknown[] }).steps)) {
+        const failed = (status as { steps: Array<{ result?: string; command?: string; exitCode?: number; output?: string }> }).steps
+          .find(step => step.result === 'fail')
+        if (failed) {
+          const detail = failed.output ? bootstrapOutputLine(failed.output) : null
+          return detail
+            ? `${failed.command ?? 'Bootstrap'} exited ${failed.exitCode ?? '?'}: ${detail}`
+            : `${failed.command ?? 'Bootstrap'} exited ${failed.exitCode ?? '?'}.`
+        }
+      }
+      return 'Checks failed.'
+    }
+    return 'That action failed.'
+  }
+
   async function submitSetup(turn: SetupStepTurn): Promise<void> {
     if (!turn.submitEndpoint) return
     const body = setupBody(turn)
@@ -571,17 +739,27 @@
     }
     busyTurnId = turn.id
     try {
-      const r = await fetch(turn.submitEndpoint, {
+      const r = await projectFetch(turn.submitEndpoint, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       })
-      const j = await r.json().catch(() => ({})) as { error?: string }
-      if (!r.ok || j.error) {
-        setupErrors = { ...setupErrors, [turn.id]: j.error ?? `HTTP ${r.status}` }
+      const j = await r.json().catch(() => ({})) as Record<string, unknown>
+      const logicalFailure =
+        turn.stepId === 'bootstrap'
+          ? j.success === false
+          : false
+      if (!r.ok || typeof j.error === 'string' || logicalFailure) {
+        const message = setupFailureMessage(turn, j)
+        setupErrors = { ...setupErrors, [turn.id]: message || `HTTP ${r.status}` }
+        toast.error(message || `HTTP ${r.status}`)
         return
       }
       await load()
+      const nextErrors = { ...setupErrors }
+      delete nextErrors[turn.id]
+      setupErrors = nextErrors
+      toast.success(setupSuccessMessage(turn))
     } finally {
       busyTurnId = null
     }
@@ -601,7 +779,7 @@
     if (answers.length === 0) return
     busyTaskId = taskId
     try {
-      await fetch(`/api/project/task/${encodeURIComponent(taskId)}/answer-questions`, {
+      await projectFetch(`/api/project/task/${encodeURIComponent(taskId)}/answer-questions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ answers }),
@@ -618,12 +796,13 @@
     const trimmed = answer.trim()
     if (!trimmed) return
     if (totalCountForTask(turn.taskId) > 1) {
+      await persistDraftAnswer(turn.taskId, turn.question.id, trimmed)
       stageAnswer(turn.question.id, trimmed)
       return
     }
     busyTaskId = turn.taskId
     try {
-      await fetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/answer-questions`, {
+      await projectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/answer-questions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ answers: [{ questionId: turn.question.id, answer: trimmed }] }),
@@ -634,19 +813,26 @@
     }
   }
 
+  async function clearStagedQuestion(turn: AgentQuestionTurn): Promise<void> {
+    await persistDraftAnswer(turn.taskId, turn.question.id, '')
+    unstageAnswer(turn.question.id)
+  }
+
   function taskStateLabel(turn: InFlightTurn): string {
-    if (turn.liveAgent?.name === 'spec-agent') return 'Spec'
+    if (turn.liveAgent?.name === 'spec-agent') return turn.importedDraft ? 'Shaping draft' : 'Drafting'
+    if (turn.taskId === 'task-meta-intake' && !turn.liveAgent) return 'Project setup'
     if (turn.liveAgent?.name.startsWith('coordinator-')) return 'Ready'
     if (turn.liveAgent?.name === 'worker-agent') return 'In flight'
     if (turn.liveAgent?.name === 'reviewer-agent') return 'Review'
     if (turn.liveAgent?.name === 'gate-checker-agent') return 'Gates'
     switch (turn.taskStatus) {
-      case 'exploring': return 'Intake'
+      case 'import_draft': return 'Needs shaping'
+      case 'exploring': return turn.importedDraft ? 'Needs shaping' : isQueuedSpecRevision(turn) ? 'Spec revision queued' : 'Intake'
       case 'ready': return 'Ready'
       case 'gate_check': return 'Gates'
       case 'review': return 'Review'
-      case 'in_progress': return turn.liveAgent ? 'In flight' : 'Paused'
-      default: return 'In flight'
+      case 'in_progress': return turn.liveAgent ? 'In flight' : 'Queued'
+      default: return canStartTaskTurn(turn) ? 'Queued' : 'In flight'
     }
   }
 
@@ -657,27 +843,66 @@
     ) {
       return 'Local model is still loading or generating.'
     }
+    if (turn.liveAgent?.name === 'spec-agent') {
+      if (turn.importedDraft) {
+        return 'Guildhall is turning this imported note into a real task draft now.'
+      }
+      return turn.taskId === 'task-workspace-import'
+        ? 'Guildhall is turning your existing project notes into candidate tasks now.'
+        : 'Guildhall is drafting this now.'
+    }
     if (turn.taskStatus === 'ready' && !turn.liveAgent) {
-      return 'Approved and queued. Start work when you want Guildhall to pick this up.'
+      return runStatus === 'running'
+        ? 'Approved and queued. Guildhall is running and can pick this up.'
+        : 'Approved and queued. Start Guildhall when you want it to pick this up.'
+    }
+    if (turn.taskId === 'task-meta-intake' && !turn.liveAgent) {
+      return turn.summary
+    }
+    if (turn.taskStatus === 'import_draft' && !turn.liveAgent) {
+      return 'Imported from your project notes. Review the draft first, then let Guildhall shape it into a complete task.'
     }
     if (turn.taskStatus === 'exploring' && !turn.liveAgent) {
-      return 'Intake is paused. Continue intake when you want Guildhall to keep shaping this task.'
+      return turn.taskId === 'task-workspace-import'
+        ? 'Guildhall already drafted part of this import review. Review it if you want, or press Start to let Guildhall keep turning your project notes into candidate tasks.'
+        : turn.importedDraft
+          ? 'Guildhall shaped part of this draft already. Review it if you want, or press Start to keep shaping it.'
+          : isQueuedSpecRevision(turn)
+            ? 'Guildhall already has the draft spec plus your latest answers. Press Start when you want Guildhall to revise it.'
+            : 'Guildhall drafted a first pass here. Review it if you want, or press Start to let Guildhall revise the draft.'
     }
     if (turn.taskStatus === 'in_progress' && !turn.liveAgent) {
-      return 'Work is paused. Resume work when you want Guildhall to continue.'
+      return runStatus === 'running'
+        ? 'Work is queued. Guildhall is running and can pick this up.'
+        : 'Work is queued. Start Guildhall when you want it to continue.'
     }
     if (turn.taskStatus === 'review' && !turn.liveAgent) {
-      return 'Review is paused. Resume review when you want Guildhall to continue.'
+      return runStatus === 'running'
+        ? 'Review is queued. Guildhall is running and can pick this up.'
+        : 'Review is queued. Start Guildhall when you want it to continue.'
     }
     if (turn.taskStatus === 'gate_check' && !turn.liveAgent) {
-      return 'Gate checks are paused. Resume gates when you want Guildhall to continue.'
+      return runStatus === 'running'
+        ? 'Gate checks are queued. Guildhall is running and can pick this up.'
+        : 'Gate checks are queued. Start Guildhall when you want it to continue.'
     }
     return turn.summary
+  }
+
+  function metaIntakeChecklistComplete(turn: InFlightTurn): boolean {
+    return Boolean(
+      turn.taskId === 'task-meta-intake' &&
+      turn.taskStatus === 'exploring' &&
+      turn.checklist &&
+      turn.checklist.totalSteps > 0 &&
+      turn.checklist.doneCount >= turn.checklist.totalSteps,
+    )
   }
 
   function canStartTaskTurn(turn: InFlightTurn): boolean {
     return !turn.liveAgent && (
       turn.taskStatus === 'ready' ||
+      turn.taskStatus === 'import_draft' ||
       turn.taskStatus === 'exploring' ||
       turn.taskStatus === 'in_progress' ||
       turn.taskStatus === 'review' ||
@@ -686,9 +911,13 @@
   }
 
   function startTaskLabel(turn: InFlightTurn): string {
+    if (metaIntakeChecklistComplete(turn)) return 'Create split proposal'
     switch (turn.taskStatus) {
       case 'ready': return 'Start work'
-      case 'exploring': return 'Continue intake'
+      case 'import_draft': return 'Let Guildhall shape this'
+      case 'exploring':
+        if (turn.taskId === 'task-meta-intake') return 'Let Guildhall keep setting this up'
+        return turn.importedDraft ? 'Continue shaping draft' : isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
       case 'review': return 'Resume review'
       case 'gate_check': return 'Resume gates'
       case 'in_progress': return 'Resume work'
@@ -696,10 +925,23 @@
     }
   }
 
+  function metaSetupActionLabel(): string {
+    switch (startReadiness?.code) {
+      case 'no_provider':
+        return 'Connect provider...'
+      case 'no_loaded_model':
+      case 'model_unavailable':
+        return 'Load model...'
+      default:
+        return 'Fix setup...'
+    }
+  }
+
   function taskStateTone(turn: InFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
     if (turn.liveAgent) return 'running'
     switch (turn.taskStatus) {
       case 'ready': return 'accent'
+      case 'import_draft': return 'accent'
       case 'gate_check': return 'warn'
       case 'review': return 'warn'
       case 'exploring': return 'accent'
@@ -722,19 +964,25 @@
     step: { status: 'done' | 'active' | 'pending' | 'skipped' },
   ): string {
     if (step.status === 'done') return 'Done'
-    if (step.status === 'active') return turn.liveAgent ? 'Now' : 'Paused'
+    if (step.status === 'active') {
+      if (turn.liveAgent) return 'Now'
+      return runStatus === 'running' ? 'Queued' : 'Paused'
+    }
     if (step.status === 'skipped') return 'Skipped'
     return 'Pending'
   }
 
-  async function startOneTaskRun(): Promise<void> {
+  async function startTaskRun(taskId?: string): Promise<void> {
     runBusy = true
     runError = null
     try {
-      const res = await fetch('/api/project/start', {
+      const res = await projectFetch('/api/project/start', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ mode: 'one_task' }),
+        body: JSON.stringify({
+          mode: 'continuous',
+          ...(taskId ? { taskId } : {}),
+        }),
       })
       const body = await res.json().catch(() => ({})) as { error?: string }
       if (!res.ok || body.error) {
@@ -747,6 +995,24 @@
       runError = err instanceof Error ? err.message : String(err)
     } finally {
       runBusy = false
+    }
+  }
+
+  async function shapeDraft(turn: InFlightTurn): Promise<void> {
+    busyTurnId = turn.id
+    try {
+      const res = await projectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/shape-draft`, {
+        method: 'POST',
+      })
+      const body = await res.json().catch(() => ({})) as { error?: string }
+      if (!res.ok || body.error) {
+        replyErrors = { ...replyErrors, [turn.id]: body.error ?? `HTTP ${res.status}` }
+        return
+      }
+      await load()
+      await project.refresh()
+    } finally {
+      busyTurnId = null
     }
   }
 
@@ -789,6 +1055,16 @@
   function totalCountForTask(taskId: string): number {
     return sectionByTask[taskId]?.askedQuestionIds.length ?? 0
   }
+  function hasStagedAnswersForTask(taskId: string): boolean {
+    return stagedCountForTask(taskId) > 0
+  }
+  function stagedSummaryForTask(taskId: string): string {
+    const ready = stagedCountForTask(taskId)
+    const total = totalCountForTask(taskId)
+    if (ready <= 0 || total <= 0) return ''
+    if (ready === total) return `${ready} of ${total} answers ready to submit`
+    return `${ready} of ${total} answers ready so far`
+  }
 
   // True if the task has at least one un-answered agent_question turn.
   // Used to gate brief / spec approval — the user shouldn't approve a
@@ -808,8 +1084,31 @@
     <p class="lede">Decisions, questions, and live task updates.</p>
   </header>
 
+  {#if importHandoff}
+    <Card tone="accent">
+      <Row justify="between" align="center" gap="3" wrap>
+        <div class="handoff-copy">
+          <strong>Import complete.</strong>
+          <span>
+            Guildhall created {importHandoff.tasksAdded} draft task{importHandoff.tasksAdded === 1 ? '' : 's'}
+            from {importHandoff.sourceCount} selected source{importHandoff.sourceCount === 1 ? '' : 's'}.
+            These drafts still need shaping before any worker starts.
+          </span>
+        </div>
+        <Row gap="2" wrap>
+          <Button variant="secondary" size="sm" onclick={revealImportedDrafts}>
+            Jump to first draft
+          </Button>
+          <Button variant="ghost" size="sm" onclick={() => (importHandoff = null)}>
+            Dismiss
+          </Button>
+        </Row>
+      </Row>
+    </Card>
+  {/if}
+
   {#if !loaded}
-    <p class="muted">Loading…</p>
+    <p class="muted">Loading...</p>
   {:else if loadError}
     <Card title="Thread unavailable">
       <p class="muted">Could not load the current thread: {loadError}</p>
@@ -828,6 +1127,7 @@
           <button
             type="button"
             class="phase-head"
+            class:phase-head-open={expandedPhases[group.phase]}
             aria-expanded={expandedPhases[group.phase]}
             onclick={() => togglePhase(group.phase)}
           >
@@ -835,16 +1135,28 @@
             <Chip label={String(group.turns.length)} tone={phaseCountTone(group)} />
           </button>
           {#if expandedPhases[group.phase]}
-            <Stack gap="3">
+            <Stack gap="3" class="phase-body">
               {#each group.turns as t (t.id)}
-        <div class="turn turn-{t.status}" data-turn-id={t.id} use:captureTurn={t.id}>
+        <div
+          class="turn turn-{t.status}"
+          class:turn-import-queue={t.kind === 'inflight' && t.importedDraft && t.status === 'pending'}
+          data-turn-id={t.id}
+          use:captureTurn={t.id}
+        >
           <Card tone={tone(t)}>
             <InteractionCardLayout>
               {#snippet status()}
-                <Chip
-                  label={turnStatusChipLabel(t)}
-                  tone={turnStatusChipTone(t)}
-                />
+                <Row align="center" gap="2">
+                  {#if ownershipLabel(t)}
+                    <Chip label={ownershipLabel(t) ?? ''} tone={ownershipTone(t)} />
+                  {/if}
+                  {#if showStatusChip(t)}
+                    <Chip
+                      label={turnStatusChipLabel(t)}
+                      tone={turnStatusChipTone(t)}
+                    />
+                  {/if}
+                </Row>
               {/snippet}
               {#snippet meta()}
                 <div class="meta">
@@ -854,7 +1166,7 @@
                       type="button"
                       class="task-chip"
                       title={taskTitle}
-                      onclick={() => nav(`/task/${encodeURIComponent(t.taskId)}`)}
+                      onclick={() => nav(currentTaskHref(t.taskId))}
                     >
                       <span class="task-chip-text">{taskTitle}</span>
                     </button>
@@ -896,7 +1208,7 @@
                           oninput={(v) => setSetupValue(t.id, v)}
                         />
                         <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
-                          {busyTurnId === t.id ? 'Saving…' : t.actionLabel}
+                          {busyTurnId === t.id ? 'Saving...' : t.actionLabel}
                         </Button>
                       </div>
                     {:else if t.affordance === 'inline-textarea'}
@@ -910,14 +1222,14 @@
                         />
                         <Row justify="end">
                           <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
-                            {busyTurnId === t.id ? 'Saving…' : t.actionLabel}
+                            {busyTurnId === t.id ? 'Saving...' : t.actionLabel}
                           </Button>
                         </Row>
                       </Stack>
                     {:else if t.affordance === 'inline-button'}
                       <Row justify="end" gap="2">
                         <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
-                          {busyTurnId === t.id ? 'Verifying…' : t.actionLabel}
+                          {busyTurnId === t.id ? 'Verifying...' : t.actionLabel}
                         </Button>
                       </Row>
                     {:else if t.affordance === 'inline-choice'}
@@ -929,7 +1241,7 @@
                           onchange={(v) => setSetupValue(t.id, v)}
                         />
                         <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
-                          {busyTurnId === t.id ? 'Adding…' : t.actionLabel}
+                          {busyTurnId === t.id ? 'Adding...' : t.actionLabel}
                         </Button>
                       </div>
                     {/if}
@@ -959,11 +1271,17 @@
                 {/if}
                 {#if t.status === 'active'}
                   {@const blockedByQuestions = hasOpenQuestionsForTask(t.taskId)}
+                  {@const openQuestionCount = openQuestionCountForTask(t.taskId)}
                   {#if blockedByQuestions}
-                    <p class="lede gating">
-                      Answer the open questions below before approving — the
-                      brief depends on what you say.
-                    </p>
+                    <div class="gating-row">
+                      <p class="lede gating">
+                        Answer {openQuestionCount} open question{openQuestionCount === 1 ? '' : 's'} in Thread before approving — the
+                        brief depends on what you say.
+                      </p>
+                      <Button variant="secondary" size="sm" onclick={() => revealQuestionsForTask(t.taskId)}>
+                        Go to questions
+                      </Button>
+                    </div>
                   {/if}
                   {#if sentReplies[t.id]}
                     <p class="answer">Sent. The spec author has the correction.</p>
@@ -1016,6 +1334,25 @@
 
               {:else if t.kind === 'agent_question'}
                 {#if t.status === 'active'}
+                  {@const hasStaged = hasStagedAnswersForTask(t.taskId)}
+                  {@const stagedSummary = stagedSummaryForTask(t.taskId)}
+                  {@const totalQuestions = totalCountForTask(t.taskId)}
+                  {#if hasStaged && totalQuestions > 1 && sectionFooterTurnId[t.id] === t.taskId}
+                    <div class="question-submit-banner">
+                      <div>
+                        <div class="question-submit-title">Answers are staged</div>
+                        <div class="question-submit-copy">{stagedSummary}</div>
+                      </div>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={busyTaskId === t.taskId}
+                        onclick={() => submitSection(t.taskId)}
+                      >
+                        Submit answers
+                      </Button>
+                    </div>
+                  {/if}
                   {#if staged[t.question.id]}
                     <div class="prompt"><Markdown source={t.question.restatement ?? t.question.prompt ?? ''} /></div>
                     <div class="field"><span class="field-label">Staged</span>
@@ -1025,7 +1362,7 @@
                       <Button
                         variant="ghost"
                         disabled={busyTaskId === t.taskId}
-                        onclick={() => unstageAnswer(t.question.id)}
+                        onclick={() => clearStagedQuestion(t)}
                       >Change</Button>
                     </Row>
                   {:else}
@@ -1046,39 +1383,50 @@
 
               {:else if t.kind === 'spec_review'}
                 {@const missingSpec = t.taskId !== 'task-meta-intake' && t.spec.trim().length === 0}
+                {@const isMetaIntakeDraft = t.taskId === 'task-meta-intake'}
+                {@const proposedCount = t.draftCoordinators?.length ?? 0}
                 <div class="prompt-row">
                   <h3 class="prompt">
-                    {t.taskId === 'task-meta-intake' ? 'Coordinator roles are awaiting approval' : 'Spec awaiting approval'}
+                    {isMetaIntakeDraft
+                      ? `Guildhall inferred ${proposedCount || 0} ${proposedCount === 1 ? 'repo slice' : 'repo slices'}`
+                      : 'Spec draft awaiting approval'}
                   </h3>
-                  {#if t.taskId === 'task-meta-intake'}
-                    <Help topic="guide.coordinators" />
-                  {/if}
                 </div>
-                {#if t.taskId === 'task-meta-intake' && t.draftCoordinators?.length}
+                {#if isMetaIntakeDraft && t.draftCoordinators?.length}
+                  <p class="why decision-question">Guildhall inferred this structure from the repo.</p>
                   <p class="why">
-                    Coordinator roles are review lanes for future work. Guildhall uses them to route
-                    tasks, choose the right reviewer, and decide what an agent may handle without
-                    interrupting you. Approve these if the lanes match how this repo should be split.
+                    Confirm it only if something here is materially wrong. Guildhall should handle the routing and review structure underneath.
                   </p>
-                  <div class="coord-list">
+                  <div class="draft-summary-list">
                     {#each t.draftCoordinators as d (d.id)}
-                      <div class="coord">
-                        <div class="coord-title">
-                          <strong><Markdown source={d.name} inline /></strong>
-                          {#if d.path}<span class="muted"> — {d.path}</span>{/if}
-                        </div>
-                        {#if d.mandate}
-                          <div class="coord-mandate"><strong>Will watch:</strong> <Markdown source={d.mandate} inline /></div>
-                        {/if}
-                        {#if d.concerns?.length}
-                          <div class="coord-concerns">
-                            <strong>Will check:</strong>
-                            {d.concerns.map(c => c.description ?? c.id).join(', ')}
-                          </div>
-                        {/if}
+                      <div class="draft-summary-item">
+                        <strong>{friendlyStewardName(undefined, d.domain, d.id)}</strong>
+                        {#if d.path}<span class="muted"> — {d.path}</span>{/if}
                       </div>
                     {/each}
                   </div>
+                  <details class="draft-details">
+                    <summary>See why Guildhall inferred this structure</summary>
+                    <div class="coord-list">
+                      {#each t.draftCoordinators as d (d.id)}
+                        <div class="coord">
+                          <div class="coord-title">
+                            <strong>{friendlyStewardName(undefined, d.domain, d.id)}</strong>
+                            {#if d.path}<span class="muted"> — {d.path}</span>{/if}
+                          </div>
+                          {#if d.mandate}
+                            <div class="coord-mandate"><strong>Owns:</strong> <Markdown source={d.mandate} inline /></div>
+                          {/if}
+                          {#if d.concerns?.length}
+                            <div class="coord-concerns">
+                              <strong>Review checks:</strong>
+                              {d.concerns.map(c => c.description ?? c.id).join(', ')}
+                            </div>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                  </details>
                 {:else if t.spec}
                   <div class="spec-preview"><Markdown source={t.spec} /></div>
                 {:else if missingSpec}
@@ -1086,10 +1434,16 @@
                 {/if}
                 {#if t.status === 'active'}
                   {@const blockedByQuestions = hasOpenQuestionsForTask(t.taskId)}
+                  {@const openQuestionCount = openQuestionCountForTask(t.taskId)}
                   {#if blockedByQuestions}
-                    <p class="lede gating">
-                      Answer the open questions below before approving the spec.
-                    </p>
+                    <div class="gating-row">
+                      <p class="lede gating">
+                        {openQuestionCount} open question{openQuestionCount === 1 ? '' : 's'} still block{openQuestionCount === 1 ? 's' : ''} this decision.
+                      </p>
+                      <Button variant="secondary" size="sm" onclick={() => revealQuestionsForTask(t.taskId)}>
+                        Go to questions
+                      </Button>
+                    </div>
                   {/if}
                   {#if replyTurnId === t.id}
                     <Stack gap="2">
@@ -1118,18 +1472,18 @@
                     </Stack>
                   {:else}
                   <Row justify="end" gap="2">
-                    <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => nav(`/task/${encodeURIComponent(t.taskId)}`)}>
+                    <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
                       Open task
                     </Button>
                     <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
-                      Revise spec
+                      {isMetaIntakeDraft ? 'Change the split' : 'Request changes'}
                     </Button>
                     <Button
                       variant="primary"
                       disabled={busyTurnId === t.id || blockedByQuestions || missingSpec}
                       onclick={() => approveSpec(t)}
                     >
-                      {t.taskId === 'task-meta-intake' ? 'Approve and merge' : 'Approve spec'}
+                      {isMetaIntakeDraft ? 'Yes, use this split' : 'Approve spec'}
                     </Button>
                   </Row>
                   {/if}
@@ -1157,7 +1511,7 @@
                 {/if}
                 {#if t.status === 'active'}
                   <Row justify="end">
-                    <Button variant="primary" onclick={() => nav(`/task/${encodeURIComponent(t.taskId)}`)}>Open task</Button>
+                    <Button variant="primary" onclick={() => nav(currentTaskHref(t.taskId))}>Open task</Button>
                   </Row>
                 {/if}
               {:else if t.kind === 'review_feedback'}
@@ -1177,7 +1531,7 @@
                     <Button
                       variant="secondary"
                       size="sm"
-                      onclick={() => nav(`/task/${encodeURIComponent(t.taskId)}`)}
+                      onclick={() => nav(currentTaskHref(t.taskId))}
                     >
                       Open task
                     </Button>
@@ -1189,6 +1543,20 @@
                   description={taskStateDescription(t)}
                   tone={taskStateTone(t)}
                 />
+                {#if t.taskStatus === 'exploring' && !t.liveAgent && !isQueuedSpecRevision(t)}
+                  <Row justify="end" gap="2" wrap>
+                    <Button variant="human" onclick={() => nav(currentTaskHref(t.taskId))}>
+                      Review draft...
+                    </Button>
+                    <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
+                      Add note
+                    </Button>
+                    <Button variant="agent" disabled={runBusy || busyTurnId === t.id} onclick={() => startTaskRun(t.taskId)}>
+                      <Icon name="sparkles" size={14} />
+                      {startTaskLabel(t)}
+                    </Button>
+                  </Row>
+                {/if}
                 {#if t.activity?.length}
                   <div class="live-activity" aria-label="Recent agent activity">
                     {#each t.activity as item, index (`${item.at ?? 'event'}:${item.label}:${index}`)}
@@ -1252,27 +1620,89 @@
                       <p class="error">{replyErrors[t.id]}</p>
                     {/if}
                   </Stack>
-                {:else}
+              {:else}
                   <Row justify="end" gap="2">
-                    <Button variant="secondary" onclick={() => nav(`/task/${encodeURIComponent(t.taskId)}`)}>
-                      Open task
-                    </Button>
-                    {#if t.taskId === 'task-meta-intake' && t.taskStatus === 'exploring'}
-                      <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => synthesizeMetaIntake(t)}>
-                        Use saved answers
+                    {#if t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !t.liveAgent}
+                      <Button variant="human" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
+                        Review draft...
                       </Button>
-                    {/if}
-                    {#if canStartTaskTurn(t)}
-                      <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
-                        Add note
+                    {:else if t.taskId === 'task-meta-intake' && !t.liveAgent}
+                      <Button variant="secondary" onclick={focusSetupPhase}>
+                        Open setup
                       </Button>
-                      <Button variant="primary" disabled={runBusy || busyTurnId === t.id} onclick={startOneTaskRun}>
-                        {startTaskLabel(t)}
+                      {#if !startReadiness?.canStart}
+                        {#if startReadiness?.actionHref}
+                          <Button variant="human" onclick={() => nav(startReadiness.actionHref)}>
+                            <Icon name="arrow-right" size={14} />
+                            {metaSetupActionLabel()}
+                          </Button>
+                        {/if}
+                      {:else if canStartTaskTurn(t)}
+                        {#if metaIntakeChecklistComplete(t)}
+                          <Button
+                            variant="agent"
+                            disabled={busyTurnId === t.id}
+                            onclick={() => synthesizeMetaIntake(t)}
+                          >
+                            <Icon name="sparkles" size={14} />
+                            {startTaskLabel(t)}
+                          </Button>
+                        {:else if hasPendingSetupStep('provider')}
+                          <Button variant="secondary" onclick={() => nav('/providers')}>
+                            Connect provider
+                          </Button>
+                        {:else if hasPendingSetupStep('bootstrap')}
+                          <Button variant="secondary" onclick={() => nav(currentProjectHref('/settings'))}>
+                            Run setup checks
+                          </Button>
+                        {:else}
+                          <Button variant="agent" disabled={runBusy || busyTurnId === t.id} onclick={() => startTaskRun(t.taskId)}>
+                            <Icon name="sparkles" size={14} />
+                            {startTaskLabel(t)}
+                          </Button>
+                        {/if}
+                      {/if}
+                    {:else if isQueuedSpecRevision(t)}
+                      <Button variant="secondary" onclick={() => nav(currentTaskHref(t.taskId))}>
+                        Open details
                       </Button>
                     {:else}
-                      <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
-                        Add note
+                      <Button variant={t.taskStatus === 'exploring' ? 'human' : 'secondary'} onclick={() => nav(currentTaskHref(t.taskId))}>
+                        {t.taskStatus === 'exploring' ? 'Review draft...' : 'Open task'}
                       </Button>
+                      {#if canStartTaskTurn(t)}
+                        <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
+                          Add note
+                        </Button>
+                        {#if metaIntakeChecklistComplete(t)}
+                          <Button
+                            variant="primary"
+                            disabled={busyTurnId === t.id}
+                            onclick={() => synthesizeMetaIntake(t)}
+                          >
+                            {startTaskLabel(t)}
+                          </Button>
+                        {:else if t.taskStatus === 'import_draft'}
+                          <Button variant="agent" disabled={busyTurnId === t.id} onclick={() => shapeDraft(t)}>
+                            <Icon name="sparkles" size={14} />
+                            {startTaskLabel(t)}
+                          </Button>
+                        {:else}
+                          <Button variant="primary" disabled={runBusy || busyTurnId === t.id} onclick={() => startTaskRun(t.taskId)}>
+                            {startTaskLabel(t)}
+                          </Button>
+                        {/if}
+                      {:else}
+                        <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
+                          Add note
+                        </Button>
+                      {/if}
+                    {:else}
+                      {#if !t.importedDraft}
+                        <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
+                          Add note
+                        </Button>
+                      {/if}
                     {/if}
                   </Row>
                   {#if runError && canStartTaskTurn(t)}
@@ -1281,7 +1711,7 @@
                   {#if sentReplies[t.id]}
                     <p class="answer">
                       Saved. {canStartTaskTurn(t)
-                        ? 'Guildhall will read it when work starts.'
+                        ? 'Guildhall will read it on the next Start.'
                         : 'The agent will read it on the next run.'}
                     </p>
                   {/if}
@@ -1328,16 +1758,32 @@
     width: 680px;
     max-width: 100%;
     margin: 0 auto;
-    padding: var(--s-3) var(--s-4) var(--s-6);
+    padding: var(--s-4) var(--s-4) var(--s-6);
   }
-  .thread-head { margin-bottom: var(--s-4); }
+  .thread-head {
+    margin-bottom: var(--s-4);
+  }
   .thread-head h1 { margin: 0 0 var(--s-1); font-size: var(--fs-5); }
   .lede { margin: 0; color: var(--text-muted); font-size: var(--fs-2); }
+  .handoff-copy {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-1);
+    max-width: 44rem;
+  }
+  .handoff-copy span {
+    color: var(--text-muted);
+  }
   .phase {
     display: flex;
     flex-direction: column;
     gap: var(--s-2);
     position: relative;
+  }
+  @media (max-width: 1100px) {
+    .thread {
+      padding-top: var(--s-3);
+    }
   }
   .phase-head {
     display: flex;
@@ -1355,12 +1801,25 @@
     font-weight: 700;
     cursor: pointer;
     position: sticky;
-    top: var(--s-2);
+    top: 0;
     z-index: var(--z-sticky-local);
     box-shadow: 0 4px 12px color-mix(in srgb, var(--bg-base) 80%, transparent);
   }
   .phase-head:hover {
     background: var(--bg-raised-2);
+  }
+  .phase-head-open {
+    background: var(--bg-raised-2);
+    border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+    border-bottom-left-radius: var(--r-0);
+    border-bottom-right-radius: var(--r-0);
+  }
+  .phase-body {
+    position: relative;
+    margin-left: var(--s-3);
+    padding-left: var(--s-3);
+    padding-top: var(--s-1);
+    border-left: 2px solid color-mix(in srgb, var(--accent) 24%, var(--border));
   }
   .turn :global(.card) {
     padding: var(--s-3);
@@ -1393,6 +1852,7 @@
     font-size: var(--fs-2);
     font-weight: 550;
     line-height: var(--lh-tight);
+    text-align: left;
   }
   .task-chip:hover {
     color: var(--text);
@@ -1402,9 +1862,9 @@
   .task-chip-text {
     display: block;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: left;
   }
   .prompt { margin: 0; font-size: var(--fs-3); font-weight: 550; line-height: var(--lh-tight); }
   .setup-title {
@@ -1427,7 +1887,36 @@
     line-height: inherit;
   }
   .why { margin: 0; color: var(--text-muted); font-size: var(--fs-2); line-height: var(--lh-body); }
+  .gating-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+  }
   .detail { margin: 0; color: var(--text-muted); font-size: var(--fs-1); }
+  .question-submit-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+    padding: var(--s-2) var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg-raised-2);
+    margin-bottom: var(--s-2);
+    flex-wrap: wrap;
+  }
+  .question-submit-title {
+    font-size: var(--fs-1);
+    font-weight: 700;
+    color: var(--text);
+  }
+  .question-submit-copy {
+    margin-top: 2px;
+    font-size: var(--fs-1);
+    color: var(--text-muted);
+  }
   .field { display: flex; flex-direction: column; gap: var(--s-1); }
   .field :global(.md) {
     font-size: var(--fs-2);
@@ -1480,6 +1969,40 @@
     flex-direction: column;
     gap: var(--s-2);
   }
+  .decision-question {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .draft-summary-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .draft-summary-item {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    padding: var(--s-2) var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+    font-size: var(--fs-2);
+  }
+  .draft-details {
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+    padding: var(--s-2) var(--s-3);
+  }
+  .draft-details summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    font-weight: 600;
+  }
+  .draft-details[open] summary {
+    margin-bottom: var(--s-2);
+  }
   .coord {
     background: var(--bg);
     border: 1px solid var(--border);
@@ -1498,6 +2021,7 @@
   .coord-concerns {
     font-size: var(--fs-1);
     color: var(--text-muted);
+    line-height: var(--lh-body);
   }
   .live-checklist {
     display: flex;
@@ -1584,7 +2108,11 @@
     color: var(--warn);
   }
   .turn-done { opacity: 0.7; }
-  .turn-pending { opacity: 0.5; }
+  .turn-pending { opacity: 0.72; }
+  .turn-import-queue { opacity: 1; }
+  .turn-import-queue :global(.card) {
+    border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  }
   .muted { color: var(--text-muted); }
   .caught-up { text-align: center; padding: var(--s-3); }
   .section-footer {

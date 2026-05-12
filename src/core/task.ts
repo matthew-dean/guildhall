@@ -3,8 +3,8 @@ import { z } from 'zod'
 // ---------------------------------------------------------------------------
 // Task status lifecycle (FR-01)
 //    proposed ─┐
-//    exploring ┼→ spec_review → ready → in_progress → review → gate_check → done
-//              │                                                ↘ blocked
+// import_draft ┼→ exploring → spec_review → ready → in_progress → review → gate_check → done
+//              │                                                     ↘ blocked
 //              └─────────────────────────→ shelved (worker pre-rejection, FR-22)
 //
 // Origination:
@@ -17,6 +17,7 @@ import { z } from 'zod'
 
 const TaskStatusValue = z.enum([
   'proposed',      // FR-21: agent-originated; awaiting promotion per lever `task_origination`
+  'import_draft',  // Workspace-imported draft that still needs shaping before normal intake begins
   'exploring',     // Conversational intake — Spec Agent is building the spec with the user (FR-12)
   'spec_review',   // Spec drafted; awaiting human or coordinator approval
   'ready',         // Spec approved, ready for a worker to pick up
@@ -209,7 +210,7 @@ export type Escalation = z.infer<typeof Escalation>
 //
 // Every prompt an agent puts to the user MUST classify into ONE of four
 // kinds. No free prose. The UI renders each kind with a single deterministic
-// affordance: tap-to-confirm, yes/no, multiple choice with "Other…", or a
+// affordance: tap-to-confirm, yes/no, multiple choice with "Other...", or a
 // long-text reply. This kills the "is the agent asking me or telling me?"
 // confusion that emerges when an agent writes a paragraph that contains a
 // question buried inside.
@@ -226,6 +227,8 @@ const AgentQuestionBase = {
   /** Which agent asked (spec-agent, coordinator, etc.). */
   askedBy: z.string(),
   askedAt: z.string(),
+  /** Persisted-but-unsubmitted answer draft shown back to the user on reload. */
+  draftAnswer: z.string().optional(),
   /** ISO timestamp when the user answered, or undefined if still open. */
   answeredAt: z.string().optional(),
   /** Free-text capture of the user's answer regardless of kind. */
@@ -247,7 +250,7 @@ export const AgentQuestion = z.discriminatedUnion('kind', [
     kind: z.literal('yesno'),
     prompt: z.string(),
   }),
-  // Multiple choice with mandatory "Other…" escape hatch. UI: chip per choice
+  // Multiple choice with mandatory "Other..." escape hatch. UI: chip per choice
   // + free-text fallback.
   z.object({
     ...AgentQuestionBase,
@@ -255,7 +258,7 @@ export const AgentQuestion = z.discriminatedUnion('kind', [
     prompt: z.string(),
     /** Single-choice by default; multiple means checkbox-style selection. */
     selectionMode: z.enum(['single', 'multiple']).optional(),
-    /** Must be 2..6 short labels. UI also surfaces an "Other…" textbox. */
+    /** Must be 2..6 short labels. UI also surfaces an "Other..." textbox. */
     choices: z.array(z.string()).min(2).max(6),
   }),
   // Open-ended. UI: textarea + Send.
@@ -478,8 +481,12 @@ export const Task = z.object({
   // by the orchestrator on `recordRemediationDecision`.
   remediationAttempts: z.number().int().nonnegative().default(0),
 
-  // If blocked: why
-  blockReason: z.string().optional(),
+  // If blocked: why. Some older task snapshots persisted `null`; normalize
+  // that to missing so loading legacy queues does not crash a run.
+  blockReason: z.preprocess(
+    (value) => value == null ? undefined : value,
+    z.string().optional(),
+  ),
 
   // FR-15: per-task permission mode override. When set, the orchestrator
   // tells the dispatched agent to clamp its QueryEngine permission checker to
@@ -552,7 +559,14 @@ export const Task = z.object({
     .object({
       fromBranch: z.string(),
       toBranch: z.string(),
-      strategy: z.enum(['ff_only_local', 'ff_only_with_push', 'manual_pr']),
+      strategy: z.enum([
+        'cherry_pick_local',
+        'cherry_pick_with_push',
+        'manual_pr',
+        // Deprecated compatibility values.
+        'ff_only_local',
+        'ff_only_with_push',
+      ]),
       result: z.enum([
         'merged',
         'pushed',

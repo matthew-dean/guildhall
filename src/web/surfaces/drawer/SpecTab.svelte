@@ -257,9 +257,9 @@
         />
       {/snippet}
       <Stack gap="3">
-        <h3>Did the agent understand you?</h3>
+        <h3>Guildhall's draft of your task</h3>
         <p class="explainer">
-          You wrote a task. Before any code gets written, the spec agent wrote
+          You wrote a task. Before any code gets written, Guildhall wrote
           down what it <em>thinks</em> you want and how it'll know it's done.
           If that matches your intent, approve and the worker starts. If it
           misread you, correct it below.
@@ -343,8 +343,8 @@
         <Chip label="Awaiting your approval" tone="warn" />
       {/snippet}
       <Stack gap="2">
-        <h3>Spec ready for review</h3>
-        <p class="lede">Open in <strong>Thread</strong> to approve.</p>
+        <h3>Spec approval is waiting in Thread</h3>
+        <p class="lede">Open <strong>Thread</strong> to review the draft and approve it.</p>
       </Stack>
     </Card>
   {/if}
@@ -356,7 +356,7 @@
           bind:value={followup}
           rows={4}
           mono
-          placeholder="Answer a question, add a requirement, correct a misunderstanding…"
+          placeholder="Answer a question, add a requirement, correct a misunderstanding..."
         />
         <Row justify="end" gap="2" align="center">
           <span class="hint">Appends to memory/exploring/{task.id}.md</span>

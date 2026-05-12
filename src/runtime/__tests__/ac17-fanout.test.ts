@@ -108,8 +108,8 @@ async function configureLevers(): Promise<void> {
     setAt: '2026-04-22T00:00:00.000Z',
     setBy: 'system-default',
   }
-  settings.project.merge_policy = {
-    position: 'ff_only_with_push',
+  settings.project.landing_strategy = {
+    position: 'cherry_pick_with_push',
     rationale: 'AC-17 test',
     setAt: '2026-04-22T00:00:00.000Z',
     setBy: 'system-default',
@@ -173,7 +173,7 @@ function agentSet(worker: SpyAgent): OrchestratorAgentSet {
   }
 }
 
-describe('AC-17: fanout_2 + per_task + slot_allocation + ff_only_with_push', () => {
+describe('AC-17: fanout_2 + per_task + slot_allocation + cherry_pick_with_push', () => {
   it('runs two tasks in parallel with unique slots, per-task worktrees, and push merges', async () => {
     await configureLevers()
     await seedQueue([
@@ -220,8 +220,8 @@ describe('AC-17: fanout_2 + per_task + slot_allocation + ff_only_with_push', () 
       'guildhall/task-task-b',
     ])
 
-    // FR-25: both tasks got a ff_only_with_push merge → push.
-    expect(gitDriver.state.merges).toHaveLength(2)
+    // FR-25: both tasks got a cherry-pick landing, then push.
+    expect(gitDriver.state.cherryPicks).toHaveLength(2)
     expect(gitDriver.state.pushes).toHaveLength(2)
 
     // Each worker call saw a unique `GUILDHALL_SLOT` / `GUILDHALL_PORT_BASE`

@@ -7,7 +7,7 @@ import { buildThread } from '../thread.js'
 import { emptyWizardsState, type ProjectSnapshot } from '../wizards.js'
 
 describe('buildThread', () => {
-  it('prefers active task work over setup cards when both exist', async () => {
+  it('surfaces active task work once setup is already complete', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
       await mkdir(path.join(projectPath, 'memory'), { recursive: true })
@@ -31,11 +31,12 @@ describe('buildThread', () => {
           id: 'demo',
           name: 'Demo',
           bootstrap: { verifiedAt: new Date().toISOString() },
-          coordinators: [],
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
         },
-        hasProvider: false,
-        hasDirection: false,
-        workspaceImportReviewed: false,
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
         taskCount: 1,
         wizardState: emptyWizardsState(),
       }
@@ -58,6 +59,713 @@ describe('buildThread', () => {
 
       expect(thread.activeTurnId).toBe('inflight:task-1')
       expect(thread.turns.some(t => t.kind === 'setup_step' && t.status === 'active')).toBe(false)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('advances past bootstrap setup when runtime bootstrap truth is already green', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: {},
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: false,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      expect(thread.activeTurnId).toBe('setup:direction')
+      const bootstrapStep = thread.turns.find(turn => turn.id === 'setup:bootstrap')
+      if (!bootstrapStep || bootstrapStep.kind !== 'setup_step') throw new Error('expected bootstrap setup step')
+      expect(bootstrapStep.status).toBe('done')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps project direction active ahead of a large imported-draft queue and collapses the queue to one turn', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-import-a',
+              title: 'Version diff view (deferred)',
+              status: 'import_draft',
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+            },
+            {
+              id: 'task-import-b',
+              title: 'Shared component audit',
+              status: 'import_draft',
+              createdAt: new Date(Date.now() - 590_000).toISOString(),
+              updatedAt: new Date(Date.now() - 290_000).toISOString(),
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: false,
+        workspaceImportReviewed: true,
+        taskCount: 2,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      expect(thread.activeTurnId).toBe('setup:direction')
+      const draftTurns = thread.turns.filter(
+        (turn) => turn.kind === 'inflight' && turn.importedDraft,
+      )
+      expect(draftTurns).toHaveLength(1)
+      const draftTurn = draftTurns[0]
+      if (!draftTurn || draftTurn.kind !== 'inflight') throw new Error('expected draft inflight turn')
+      expect(draftTurn.taskId).toBe('task-import-a')
+      expect(draftTurn.status).toBe('pending')
+      expect(draftTurn.summary).toMatch(/1 more drafts are queued behind it/i)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps a workspace-import question active ahead of later queued work', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const earlier = new Date(Date.now() - 600_000).toISOString()
+      const later = new Date(Date.now() - 60_000).toISOString()
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              status: 'spec_review',
+              domain: '_workspace_import',
+              createdAt: earlier,
+              updatedAt: earlier,
+              openQuestions: [
+                {
+                  id: 'q-workspace-import',
+                  askedBy: 'spec-agent',
+                  askedAt: earlier,
+                  kind: 'choice',
+                  prompt: 'Should auth be treated as partially done or not done?',
+                  selectionMode: 'single',
+                  choices: ['Partially done', 'Not done'],
+                },
+              ],
+            },
+            {
+              id: 'task-003',
+              title: 'Draft a first starter task',
+              status: 'ready',
+              createdAt: earlier,
+              updatedAt: later,
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 2,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      expect(thread.activeTurnId).toBe('q:task-workspace-import:q-workspace-import')
+      const workspaceQuestion = thread.turns.find((turn) => turn.id === 'q:task-workspace-import:q-workspace-import')
+      if (!workspaceQuestion || workspaceQuestion.kind !== 'agent_question') throw new Error('expected workspace import question')
+      expect(workspaceQuestion.status).toBe('active')
+      expect(thread.turns.some((turn) => turn.id === 'spec:task-workspace-import')).toBe(false)
+      const queuedTask = thread.turns.find((turn) => turn.id === 'inflight:task-003')
+      if (!queuedTask || queuedTask.kind !== 'inflight') throw new Error('expected queued task turn')
+      expect(queuedTask.status).toBe('pending')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('drafts project direction as editable brief copy instead of inference narration', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'README.md'),
+        [
+          '# Fair Labor License Platform',
+          '',
+          'Modern licensing platform for open-source maintainers.',
+        ].join('\n'),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: false,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      const directionStep = thread.turns.find(turn => turn.id === 'setup:direction')
+      if (!directionStep || directionStep.kind !== 'setup_step') throw new Error('expected direction setup step')
+      expect(directionStep.currentValue).toBe('Modern licensing platform for open-source maintainers.')
+      expect(directionStep.currentValue).not.toMatch(/from the readme|guildhall should treat/i)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('replaces legacy generated project-direction boilerplate with the cleaner inferred brief', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'README.md'),
+        [
+          '# Fair Labor License Platform',
+          '',
+          'Modern licensing platform for open-source maintainers.',
+        ].join('\n'),
+      )
+      await writeFile(
+        path.join(projectPath, 'memory', 'project-brief.md'),
+        'Fair Labor License Platform is this project. From the README, the project appears to be about modern licensing platform for open-source maintainers. Guildhall should treat the main goal as helping maintainers understand, adopt, publish, and operate the Fair Labor License cleanly.',
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: false,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      const directionStep = thread.turns.find(turn => turn.id === 'setup:direction')
+      if (!directionStep || directionStep.kind !== 'setup_step') throw new Error('expected direction setup step')
+      expect(directionStep.currentValue).toBe('Modern licensing platform for open-source maintainers.')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('folds a lead-in line plus bullets into one readable inferred brief sentence', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'README.md'),
+        [
+          '# Fair Labor License Platform',
+          '',
+          'Modern licensing platform for:',
+          '- **Primary**: OSS projects using Fair Labor License (FLL) v1.2',
+          '- **Also**: Independent developers and small software companies needing basic licensing',
+        ].join('\n'),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: false,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      const directionStep = thread.turns.find(turn => turn.id === 'setup:direction')
+      if (!directionStep || directionStep.kind !== 'setup_step') throw new Error('expected direction setup step')
+      expect(directionStep.currentValue).toBe(
+        'Modern licensing platform for OSS projects using Fair Labor License (FLL) v1.2; Independent developers and small software companies needing basic licensing.',
+      )
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps provider setup active ahead of meta-intake when setup is still blocked', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-meta-intake',
+              title: 'Inspect the repo and draft starter tasks',
+              status: 'exploring',
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          coordinators: [],
+        },
+        hasProvider: false,
+        hasDirection: false,
+        workspaceImportReviewed: false,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      expect(thread.activeTurnId).toBe('setup:provider')
+      const metaTurn = thread.turns.find(
+        (turn) => turn.kind === 'inflight' && turn.taskId === 'task-meta-intake',
+      )
+      if (!metaTurn || metaTurn.kind !== 'inflight') throw new Error('expected meta-intake inflight turn')
+      expect(metaTurn.status).toBe('pending')
+      expect(metaTurn.phase).toBe('setup')
+      expect(metaTurn.summary).toMatch(/provider configuration/i)
+      expect(metaTurn.checklist).toBeUndefined()
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('collapses duplicate unanswered questions with the same prompt into one visible card', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Starter task',
+              status: 'spec_review',
+              createdAt: new Date(Date.now() - 60_000).toISOString(),
+              updatedAt: new Date(Date.now() - 10_000).toISOString(),
+              openQuestions: [
+                {
+                  kind: 'choice',
+                  id: 'q-1',
+                  askedBy: 'spec-agent',
+                  askedAt: new Date(Date.now() - 20_000).toISOString(),
+                  prompt: 'Pick one',
+                  choices: ['A', 'B'],
+                  selectionMode: 'single',
+                },
+                {
+                  kind: 'choice',
+                  id: 'q-2',
+                  askedBy: 'spec-agent',
+                  askedAt: new Date(Date.now() - 10_000).toISOString(),
+                  prompt: 'Pick one',
+                  choices: ['A', 'B'],
+                  selectionMode: 'single',
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      const questionTurns = thread.turns.filter((turn) => turn.kind === 'agent_question')
+      expect(questionTurns).toHaveLength(1)
+      const questionTurn = questionTurns[0]
+      if (!questionTurn || questionTurn.kind !== 'agent_question') throw new Error('expected question turn')
+      expect(questionTurn.question.prompt).toBe('Pick one')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps an unanswered agent question active and demotes spec review until the question is answered', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const now = new Date().toISOString()
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-meta-intake',
+              title: 'Inspect the repo and draft starter tasks',
+              status: 'spec_review',
+              spec: 'draft spec',
+              openQuestions: [
+                {
+                  id: 'q-1',
+                  kind: 'choice',
+                  askedBy: 'spec-agent',
+                  askedAt: now,
+                  prompt: 'Guildhall inferred the repo structure. Confirm?',
+                  selectionMode: 'multiple',
+                  choices: ['Frontend', 'Backend'],
+                },
+              ],
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: now },
+          coordinators: [],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      expect(thread.activeTurnId).toBe('q:task-meta-intake:q-1')
+      const questionTurn = thread.turns.find(turn => turn.id === 'q:task-meta-intake:q-1')
+      const specTurn = thread.turns.find(turn => turn.id === 'spec:task-meta-intake')
+      expect(questionTurn?.status).toBe('active')
+      expect(specTurn).toBeUndefined()
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('treats an exploring task with a concrete spec draft and approved brief as queued spec revision work', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const now = new Date().toISOString()
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-003',
+              title: 'Draft a first starter task for Fair Labor License onboard...',
+              status: 'exploring',
+              spec: '## Summary\n\nWire up the existing auth page scaffolding to real Supabase authentication.\n\n## Acceptance Criteria\n\n1. Works.',
+              acceptanceCriteria: [
+                { id: 'ac-1', description: 'Works.', verifiedBy: 'review', met: false },
+              ],
+              productBrief: {
+                userJob: 'New users can sign up and sign in.',
+                successMetric: 'A new user reaches the dashboard.',
+                approvedAt: now,
+              },
+              openQuestions: [
+                {
+                  id: 'q-1',
+                  kind: 'choice',
+                  askedBy: 'spec-agent',
+                  askedAt: now,
+                  prompt: 'Pick one',
+                  choices: ['A', 'B'],
+                  selectionMode: 'single',
+                  answeredAt: now,
+                  answer: 'A',
+                },
+              ],
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: now },
+          coordinators: [],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      expect(thread.activeTurnId).toBe('inflight:task-003')
+      const inflight = thread.turns.find((turn) => turn.id === 'inflight:task-003')
+      if (!inflight || inflight.kind !== 'inflight') throw new Error('expected inflight turn')
+      expect(inflight.phase).toBe('spec')
+      expect(inflight.checklist).toBeUndefined()
+      expect(inflight.taskTitle).toMatch(/^Starter task spec: Wire up the existing auth page scaffolding/)
+      expect(inflight.summary).toMatch(/latest answers and a spec draft/i)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('ignores obsolete meta-intake routing questions when a valid routing draft already exists', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const now = new Date().toISOString()
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-meta-intake',
+              title: 'Inspect the repo and draft starter tasks',
+              status: 'spec_review',
+              spec: `\`\`\`yaml
+coordinators:
+  - id: frontend
+    domain: frontend
+    mandate: Draft UI routing
+    concerns: []
+    autonomousDecisions: []
+    escalationTriggers: []
+\`\`\``,
+              openQuestions: [
+                {
+                  id: 'q-1',
+                  kind: 'choice',
+                  askedBy: 'spec-agent',
+                  askedAt: now,
+                  prompt: 'Pick the project areas (review lanes) you want coordinators for.',
+                  selectionMode: 'multiple',
+                  choices: ['Frontend'],
+                },
+              ],
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: now },
+          coordinators: [],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      expect(thread.activeTurnId).toBe('spec:task-meta-intake')
+      expect(thread.turns.find(turn => turn.id === 'q:task-meta-intake:q-1')).toBeUndefined()
+      const specTurn = thread.turns.find(turn => turn.id === 'spec:task-meta-intake')
+      expect(specTurn?.status).toBe('active')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('ignores a stale starter-task focus question once a concrete spec draft already exists', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const askedAt = '2026-05-11T20:24:31.428Z'
+      const updatedAt = '2026-05-11T20:24:50.064Z'
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-003',
+              title: 'Draft a first starter task',
+              status: 'spec_review',
+              spec: '## Summary\n\nDraft spec.\n\n## Acceptance Criteria\n\n1. Given...\n\n## Out of Scope\n\n- Nothing\n\n## Open Questions\n\n- None',
+              acceptanceCriteria: [
+                {
+                  id: 'ac-1',
+                  description: 'Given a user lands on /register, when they submit, then auth works.',
+                  verifiedBy: 'review',
+                  met: false,
+                },
+              ],
+              openQuestions: [
+                {
+                  id: 'q-1',
+                  kind: 'choice',
+                  askedBy: 'spec-agent',
+                  askedAt,
+                  prompt: 'What should this first starter task focus on?',
+                  selectionMode: 'single',
+                  choices: ['Onboarding', 'Bootstrap'],
+                },
+              ],
+              createdAt: askedAt,
+              updatedAt,
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: updatedAt },
+          coordinators: [],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      expect(thread.activeTurnId).toBe('spec:task-003')
+      expect(thread.turns.find(turn => turn.id === 'q:task-003:q-1')).toBeUndefined()
+      const specTurn = thread.turns.find(turn => turn.id === 'spec:task-003')
+      expect(specTurn?.status).toBe('active')
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -648,6 +1356,60 @@ describe('buildThread', () => {
       if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
       expect(turn.activity ?? []).toHaveLength(0)
       expect(turn.liveAgent).toBeUndefined()
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('projects imported draft tasks as shaping work instead of generic paused intake', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Imported roadmap task',
+              status: 'exploring',
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+              notes: [
+                {
+                  agentId: 'workspace-importer',
+                  role: 'importer',
+                  content: 'Imported from: looma/docs/component-roadmap.md',
+                  timestamp: new Date(Date.now() - 300_000).toISOString(),
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'looma', name: 'Looma' }],
+        },
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+
+      const turn = thread.turns.find(t => t.kind === 'inflight')
+      if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
+      expect(turn.importedDraft).toBe(true)
+      expect(turn.summary).toBe('Imported draft waiting for shaping.')
+      expect(turn.checklist).toBeUndefined()
+      expect(turn.phase).toBe('intake')
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }

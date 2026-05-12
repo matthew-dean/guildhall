@@ -3,8 +3,8 @@ title: guildhall.yaml
 help_topic: reference.workspace_config
 help_summary: |
   The workspace config file. Defines name, id, projectPath, model assignments
-  per agent role, coordinator domains with mandates/concerns/autonomy, and
-  orchestrator knobs like maxRevisions.
+  per agent role, internal routing slices for the local coordinator, and
+  coordinator/runtime knobs like maxRevisions.
 ---
 
 # `guildhall.yaml` reference
@@ -49,10 +49,14 @@ Each of the five roles must resolve against the model catalog in `src/core/model
 
 ## `coordinators`
 
+This is an internal routing map for Guildhall's single local coordinator. It is
+not a user-facing org chart. In normal use, Guildhall infers this structure and
+only asks for confirmation when confidence is low and the consequence of being
+wrong is high.
+
 ```yaml
 coordinators:
   - id: ui
-    name: UI Coordinator
     domain: ui                   # matches task.domain in TASKS.json
     path: packages/ui            # relative to projectPath
     mandate: |
@@ -68,7 +72,7 @@ coordinators:
       - "..."
 ```
 
-See [Coordinators & domains](../guide/coordinators) for semantics.
+See [Internal routing](../guide/coordinators) for semantics.
 
 ## `bootstrap`
 
