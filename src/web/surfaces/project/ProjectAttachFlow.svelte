@@ -19,7 +19,8 @@
     <h1>{projectName} is attached, but not initialized yet</h1>
     <p class="lede">
       Guildhall found this folder and added it to your local projects list. The next step is to
-      initialize Guildhall inside the project so coordinators, providers, and task flow have a real home.
+      initialize Guildhall inside the project so its provider settings, task flow, and on-disk
+      project state have a real home.
     </p>
     {#if projectPath}
       <p class="path">{projectPath}</p>

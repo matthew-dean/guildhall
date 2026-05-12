@@ -83,33 +83,29 @@ async function writeCodexCred(): Promise<void> {
 }
 
 describe('GET /api/setup/providers', () => {
-  it('reports service metadata with no selected project when the service starts at the fleet level', async () => {
+  it('reports service metadata with a current selected project when the service starts at the fleet level', async () => {
     registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
     const { app } = buildServeApp({})
     const res = await app.fetch(new Request('http://localhost/api/service'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
-      preferredProjectPath: string | null
       selectedProject: { id: string } | null
       foregroundProject: { id: string } | null
       projects: Array<{ id: string }>
     }
-    expect(body.preferredProjectPath).toBeNull()
-    expect(body.selectedProject).toBeNull()
+    expect(body.selectedProject?.id).toBe('provider-test')
     expect(body.foregroundProject?.id).toBe('provider-test')
     expect(body.projects.map(project => project.id)).toContain('provider-test')
   })
 
-  it('reports a preferred project when the service is launched with project bias', async () => {
+  it('reports the hinted project as selected when the service is launched with an initial project hint', async () => {
     const { app } = buildServeApp({ preferredProjectPath: tmpProject })
     const res = await app.fetch(new Request('http://localhost/api/service'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
-      preferredProjectPath: string | null
       selectedProject: { id: string; path: string } | null
       foregroundProject: { id: string } | null
     }
-    expect(body.preferredProjectPath).toBe(tmpProject)
     expect(body.selectedProject).toMatchObject({ id: 'provider-test', path: tmpProject })
     expect(body.foregroundProject).toMatchObject({ id: 'provider-test' })
   })
@@ -165,6 +161,64 @@ describe('GET /api/setup/providers', () => {
 })
 
 describe('POST /api/setup/providers/config', () => {
+  it('applies provider setup reads and writes to the selected project, not the startup project', async () => {
+    const secondProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-providers-proj-'))
+    try {
+      bootstrapWorkspace(secondProject, { name: 'Second Provider Test' })
+      registerWorkspace({ id: 'second-provider-test', name: 'Second Provider Test', path: secondProject, tags: [] })
+      updateProjectConfig(tmpProject, { preferredProvider: 'anthropic-api' })
+      updateProjectConfig(secondProject, { preferredProvider: 'llama-cpp' })
+
+      const { app } = buildServeApp({ projectPath: tmpProject })
+      const selectRes = await app.fetch(
+        new Request('http://localhost/api/service/select-project', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ projectId: 'second-provider-test' }),
+        }),
+      )
+      expect(selectRes.status).toBe(200)
+
+      const before = await app.fetch(new Request('http://localhost/api/setup/providers'))
+      expect(before.status).toBe(200)
+      const beforeBody = (await before.json()) as { preferredProvider?: string | null }
+      expect(beforeBody.preferredProvider).toBe('llama-cpp')
+
+      const configRes = await app.fetch(
+        new Request('http://localhost/api/setup/providers/config', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ preferredProvider: 'openai-api' }),
+        }),
+      )
+      expect(configRes.status).toBe(200)
+
+      const firstRaw = await fs.readFile(path.join(tmpProject, '.guildhall', 'config.yaml'), 'utf8')
+      const secondRaw = await fs.readFile(path.join(secondProject, '.guildhall', 'config.yaml'), 'utf8')
+      expect(firstRaw).toMatch(/preferredProvider:\s*anthropic-api/)
+      expect(secondRaw).toMatch(/preferredProvider:\s*openai-api/)
+
+      const modelsRes = await app.fetch(
+        new Request('http://localhost/api/config/models', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            scope: 'project',
+            role: 'worker',
+            model: 'qwen/qwen3.6-35b-a3b',
+          }),
+        }),
+      )
+      expect(modelsRes.status).toBe(200)
+      expect(
+        resolveModelsForProvider(readWorkspaceConfig(secondProject).models, 'openai-api').worker,
+      ).toBe('qwen/qwen3.6-35b-a3b')
+      expect(readWorkspaceConfig(tmpProject).models).toBeUndefined()
+    } finally {
+      await fs.rm(secondProject, { recursive: true, force: true })
+    }
+  })
+
   it('does not seed workspace model assignments during identity setup', async () => {
     const freshProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-identity-proj-'))
     try {

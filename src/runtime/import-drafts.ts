@@ -1,0 +1,70 @@
+import type { Task } from '@guildhall/core'
+import { appendExploringTranscript } from '@guildhall/tools'
+
+function trimmed(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function noteArray(task: Task): Array<{ agentId?: string; role?: string }> {
+  return Array.isArray(task.notes) ? task.notes : []
+}
+
+export function hasWorkspaceImportProvenance(task: Task): boolean {
+  return noteArray(task).some((note) =>
+    note?.role === 'importer' ||
+    note?.agentId === 'workspace-importer' ||
+    note?.agentId === 'workspace-importer-agent',
+  )
+}
+
+function hasProductBriefShape(task: Task): boolean {
+  const brief = task.productBrief
+  if (!brief) return false
+  return Boolean(
+    trimmed(brief.userJob) ||
+    trimmed(brief.successMetric) ||
+    trimmed(brief.rolloutPlan) ||
+    (Array.isArray(brief.antiPatterns) && brief.antiPatterns.length > 0),
+  )
+}
+
+function hasAnyAcceptanceCriteria(task: Task): boolean {
+  return Array.isArray(task.acceptanceCriteria) && task.acceptanceCriteria.length > 0
+}
+
+function hasOpenQuestions(task: Task): boolean {
+  return Array.isArray(task.openQuestions) && task.openQuestions.length > 0
+}
+
+function hasSpecDraft(task: Task): boolean {
+  return trimmed(task.spec).length > 0
+}
+
+export function shouldUseImportDraftState(task: Task): boolean {
+  if (!hasWorkspaceImportProvenance(task)) return false
+  if (task.status === 'import_draft') return true
+  if (task.status !== 'exploring') return false
+  return !hasSpecDraft(task) && !hasProductBriefShape(task) && !hasAnyAcceptanceCriteria(task) && !hasOpenQuestions(task)
+}
+
+export function normalizeImportedDraftTask(task: Task): boolean {
+  if (!shouldUseImportDraftState(task)) return false
+  if (task.status === 'import_draft') return false
+  task.status = 'import_draft'
+  task.assignedTo = null
+  return true
+}
+
+export async function promoteImportDraftToExploring(task: Task, memoryDir: string): Promise<void> {
+  task.status = 'exploring'
+  task.assignedTo = null
+  const now = new Date().toISOString()
+  task.updatedAt = now
+  await appendExploringTranscript({
+    memoryDir,
+    taskId: task.id,
+    role: 'system',
+    content:
+      'Imported from project notes. Turn this into a complete task by drafting the product brief, defining success, adding starter acceptance criteria, and asking only the minimum clarifying questions needed.',
+  })
+}

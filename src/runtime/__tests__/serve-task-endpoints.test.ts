@@ -281,7 +281,7 @@ describe('GET /api/project/task/:id', () => {
       mergeRecord: {
         fromBranch: 'guildhall/task-1',
         toBranch: 'main',
-        strategy: 'ff_only_local',
+        strategy: 'cherry_pick_local',
         result: 'merged',
         commitSha: 'abc123',
         mergedAt: '2026-05-08T18:47:00.000Z',
@@ -307,7 +307,7 @@ describe('GET /api/project/task/:id', () => {
       mergeRecord: {
         fromBranch: '<unknown>',
         toBranch: '<unknown>',
-        strategy: 'ff_only_local',
+        strategy: 'cherry_pick_local',
         result: 'skipped',
         mergedAt: '2026-05-08T18:47:00.000Z',
         detail: 'worktree isolation disabled — merge skipped',
@@ -687,6 +687,44 @@ describe('POST /api/project/task/:id/resume', () => {
     ) as { tasks: Array<Record<string, any>> }
     expect(queue.tasks[0]!.status).toBe('in_progress')
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('current failure')
+    const transcript = await fs.readFile(
+      path.join(memoryDir, 'exploring', 'task-1.md'),
+      'utf8',
+    )
+    expect(transcript).toMatch(/current failure/)
+  })
+
+  it('promotes an import draft into exploring when shaping starts', async () => {
+    await seedTask('task-1', {
+      status: 'import_draft',
+      acceptanceCriteria: [],
+      notes: [
+        {
+          agentId: 'workspace-importer',
+          role: 'importer',
+          content: 'Imported from: knit/docs/feature-roadmap.md',
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/shape-draft', {
+        method: 'POST',
+      }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.status).toBe('exploring')
+    const queue = JSON.parse(
+      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+    ) as { tasks: Array<Record<string, any>> }
+    expect(queue.tasks[0]!.status).toBe('exploring')
+    const transcript = await fs.readFile(
+      path.join(memoryDir, 'exploring', 'task-1.md'),
+      'utf8',
+    )
+    expect(transcript).toMatch(/Imported from project notes/)
   })
 
   it('rejects resume with neither a message nor an escalation resolution', async () => {
@@ -744,6 +782,36 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     expect(q.tasks[0].productBrief.approvedAt).toMatch(/\d{4}-\d{2}-\d{2}T/)
     // User job + success metric are unchanged by approval.
     expect(q.tasks[0].productBrief.userJob).toMatch(/new user/)
+  })
+
+  it('promotes an exploring task back to spec_review when the brief is approved after a concrete spec draft already exists', async () => {
+    await seedTask('task-1', {
+      status: 'exploring',
+      spec: '## Summary\n\nDraft spec.\n\n## Acceptance Criteria\n\n1. Works.',
+      acceptanceCriteria: [
+        { id: 'ac-1', description: 'Works.', verifiedBy: 'review', met: false },
+      ],
+      openQuestions: [],
+      productBrief: {
+        userJob: 'As a new user I want to X so Y',
+        successMetric: 'Time-to-first-success drops below 60s',
+        antiPatterns: [],
+        authoredBy: 'agent:spec-agent',
+        authoredAt: new Date().toISOString(),
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/approve-brief', { method: 'POST' }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.ok).toBe(true)
+    expect(body.status).toBe('spec_review')
+
+    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const q = JSON.parse(raw)
+    expect(q.tasks[0].status).toBe('spec_review')
   })
 
   it('rejects approve-brief when no brief is drafted', async () => {
@@ -824,6 +892,71 @@ describe('POST /api/project/task/:id/add-acceptance', () => {
     expect(res.status).toBe(400)
     const body = (await res.json()) as Record<string, any>
     expect(body.error).toMatch(/description required/i)
+  })
+})
+
+describe('POST /api/project/task/:id/stage-answer', () => {
+  it('persists a draft answer on the question without marking it answered', async () => {
+    await seedTask('task-1', {
+      status: 'spec_review',
+      openQuestions: [
+        {
+          kind: 'choice',
+          id: 'q-1',
+          askedBy: 'spec-agent',
+          askedAt: new Date().toISOString(),
+          prompt: 'Pick one',
+          choices: ['A', 'B'],
+          selectionMode: 'single',
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/stage-answer', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ questionId: 'q-1', answer: 'A' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+
+    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const q = JSON.parse(raw)
+    expect(q.tasks[0].openQuestions[0].draftAnswer).toBe('A')
+    expect(q.tasks[0].openQuestions[0].answeredAt).toBeUndefined()
+  })
+
+  it('clears the persisted draft answer after final submission', async () => {
+    await seedTask('task-1', {
+      status: 'exploring',
+      openQuestions: [
+        {
+          kind: 'choice',
+          id: 'q-1',
+          askedBy: 'spec-agent',
+          askedAt: new Date().toISOString(),
+          prompt: 'Pick one',
+          choices: ['A', 'B'],
+          selectionMode: 'single',
+          draftAnswer: 'A',
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request('http://localhost/api/project/task/task-1/answer-questions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ answers: [{ questionId: 'q-1', answer: 'A' }] }),
+      }),
+    )
+    expect(res.status).toBe(200)
+
+    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const q = JSON.parse(raw)
+    expect(q.tasks[0].openQuestions[0].draftAnswer).toBeUndefined()
+    expect(q.tasks[0].openQuestions[0].answer).toBe('A')
   })
 })
 

@@ -14,6 +14,7 @@
   import Row from '../../lib/Row.svelte'
   import Chip from '../../lib/Chip.svelte'
   import { nav } from '../../lib/nav.svelte.js'
+  import { projectFetch } from '../../lib/project-routes.js'
 
   interface ProviderMeta {
     label: string
@@ -55,7 +56,7 @@
 
   async function load() {
     try {
-      const r = await fetch('/api/setup/providers')
+      const r = await projectFetch('/api/setup/providers')
       const j = await r.json()
       if (j.error) {
         loadError = j.error
@@ -71,7 +72,7 @@
   }
 
   async function reloadModels(): Promise<boolean> {
-    const modelRes = await fetch('/api/config/models')
+    const modelRes = await projectFetch('/api/config/models')
     const modelJson = await modelRes.json().catch(() => ({}))
     if (!modelRes.ok || modelJson.error) {
       flash(modelJson.error ?? `Model reload failed (HTTP ${modelRes.status})`, true)
@@ -96,7 +97,7 @@
     if (!preferred) return flash('Pick a provider first', true)
     saving = true
     try {
-      const r = await fetch('/api/setup/providers/config', {
+      const r = await projectFetch('/api/setup/providers/config', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ preferredProvider: preferred }),
@@ -113,7 +114,7 @@
   async function saveModel(role: string, scope: 'project' | 'global-default', model?: string) {
     saving = true
     try {
-      const r = await fetch('/api/config/models', {
+      const r = await projectFetch('/api/config/models', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

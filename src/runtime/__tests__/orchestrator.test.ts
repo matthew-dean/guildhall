@@ -43,6 +43,34 @@ beforeEach(async () => {
   await fs.mkdir(memoryDir, { recursive: true })
   tasksPath = path.join(memoryDir, 'TASKS.json')
   progressPath = path.join(memoryDir, 'PROGRESS.md')
+
+  execFileSync('git', ['init', '-b', 'main'], { cwd: tmpDir, stdio: 'ignore' })
+  execFileSync('git', ['config', 'user.name', 'Guildhall Test'], {
+    cwd: tmpDir,
+    stdio: 'ignore',
+  })
+  execFileSync('git', ['config', 'user.email', 'guildhall-tests@example.com'], {
+    cwd: tmpDir,
+    stdio: 'ignore',
+  })
+  await fs.writeFile(path.join(tmpDir, '.gitignore'), 'memory/\n', 'utf-8')
+  execFileSync('git', ['add', '.gitignore'], { cwd: tmpDir, stdio: 'ignore' })
+  execFileSync('git', ['commit', '--no-verify', '-m', 'init'], {
+    cwd: tmpDir,
+    stdio: 'ignore',
+  })
+
+  const settings = makeDefaultSettings(new Date('2026-04-20T00:00:00Z'))
+  settings.project.worktree_isolation = {
+    position: 'none',
+    rationale: 'Most orchestrator tests exercise queue and agent-state behavior, not git isolation defaults.',
+    setAt: '2026-04-20T00:00:00.000Z',
+    setBy: 'user-direct',
+  }
+  await saveLeverSettings({
+    path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+    settings,
+  })
 })
 
 afterEach(async () => {
@@ -346,6 +374,32 @@ describe('pickNextTask', () => {
     expect(pickNextTask(q)?.id).toBe('t-ready')
   })
 
+  it('skips spec-review tasks that are still waiting on a user answer', async () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'now',
+      tasks: [
+        mkTask({
+          id: 'task-workspace-import',
+          domain: '_workspace_import',
+          status: 'spec_review',
+          openQuestions: [
+            {
+              id: 'q1',
+              askedBy: 'spec-agent',
+              askedAt: 'now',
+              kind: 'choice',
+              prompt: 'Should auth be treated as partially done or not done?',
+              choices: ['Partially done', 'Not done'],
+            },
+          ],
+        }),
+        mkTask({ id: 't-ready', status: 'ready' }),
+      ],
+    }
+    expect(pickNextTask(q)?.id).toBe('t-ready')
+  })
+
   it('returns undefined when all tasks are terminal', async () => {
     const q: TaskQueue = {
       version: 1,
@@ -525,6 +579,27 @@ describe('Orchestrator.tick — idle handling', () => {
     })
     expect(result.stopMessage).toMatch(/waiting on user answers/i)
     expect(result.idleSummary?.counts.waitingOnUser).toBe(1)
+  })
+
+  it('returns an awaiting-human stop summary when the queue is only import drafts waiting for review', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'draft-1',
+        status: 'import_draft',
+        title: 'Review imported draft',
+      }),
+    ])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      idleShutdownAfterTicks: 0,
+    })
+    const result = await orch.run({ maxTicks: 2, tickDelayMs: 0 })
+    expect(result).toMatchObject({
+      stopReason: 'awaiting_human',
+    })
+    expect(result.stopMessage).toMatch(/draft task\(s\) waiting for review/i)
+    expect(result.idleSummary?.counts.draftReview).toBe(1)
   })
 })
 
@@ -1014,19 +1089,75 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.openQuestions ?? []).toHaveLength(0)
   })
 
-  it('drops stale unanswered exploring questions once a drafted spec reaches spec_review', async () => {
+  it('drops stale starter-task focus questions once a drafted spec reaches spec_review', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
+    const askedAt = '2026-05-11T20:24:31.428Z'
+    const updatedAt = '2026-05-11T20:24:50.064Z'
+    const spec = stubAgent('spec-agent', async () => {
+      await mutateTask('a', {
+        status: 'spec_review',
+        spec: '## Summary\\nDrafted spec.',
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'A real acceptance criterion exists.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        openQuestions: [{
+          kind: 'choice',
+          id: 'q-stale',
+          askedBy: 'spec-agent',
+          askedAt,
+          prompt: 'What should this first starter task focus on?',
+          choices: ['Onboarding', 'Bootstrap'],
+          selectionMode: 'single',
+        }],
+        updatedAt,
+        notes: [{
+          agentId: 'spec-agent',
+          role: 'spec',
+          content: 'Drafted spec.',
+          timestamp: updatedAt,
+        }],
+      })
+    }, 'Draft complete.')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('spec_review')
+    expect((task.openQuestions ?? []).filter((q) => !q.answeredAt)).toHaveLength(0)
+  })
+
+  it('keeps legitimate unanswered spec-review questions after drafting the spec', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
     const spec = stubAgent('spec-agent', async () => {
       await mutateTask('a', {
         status: 'spec_review',
         spec: '## Summary\\nDrafted spec.',
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'A real acceptance criterion exists.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
         openQuestions: [{
           kind: 'choice',
-          id: 'q-stale',
+          id: 'q-real',
           askedBy: 'spec-agent',
           askedAt: new Date().toISOString(),
-          prompt: 'Old fallback question',
-          choices: ['one', 'two'],
+          prompt: 'Should register require only email and password, or also a display name?',
+          choices: ['Email + password only', 'Require display name too'],
           selectionMode: 'single',
         }],
         notes: [{
@@ -1048,7 +1179,10 @@ describe('Orchestrator.tick — routing', () => {
     const queue = await readQueue()
     const task = queue.tasks[0]!
     expect(task.status).toBe('spec_review')
-    expect((task.openQuestions ?? []).filter((q) => !q.answeredAt)).toHaveLength(0)
+    expect((task.openQuestions ?? []).filter((q) => !q.answeredAt)).toHaveLength(1)
+    expect(task.openQuestions?.[0]).toMatchObject({
+      prompt: 'Should register require only email and password, or also a display name?',
+    })
   })
 
   it('parses markdown-headed numbered questions and a "my read" brief into structured state', async () => {
@@ -2805,6 +2939,77 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(checkpoint.nextPlannedAction).toContain('hand off to review')
   })
 
+  it('preserves worker progress in the main project checkout when worktree isolation is off', async () => {
+    const projectPath = tmpDir
+    const editedFile = path.join(projectPath, 'frontend', 'app', 'pages', 'register.vue')
+    await fs.mkdir(path.dirname(editedFile), { recursive: true })
+    await fs.writeFile(editedFile, '<template />\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'worker-project-progress',
+        status: 'in_progress',
+        projectPath,
+        updatedAt: '2026-04-01T00:00:00Z',
+      }),
+    ])
+
+    const worker: StubAgent = {
+      name: 'worker-agent',
+      calls: [],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: 'Updated the registration page and verified the flow.' }
+      },
+      getToolMetadata() {
+        return {
+          review_handoff_evidence: {
+            taskId: 'worker-project-progress',
+            inspectedImplementationFile: true,
+            changedOrVerified: true,
+          },
+          recent_verified_work: [
+            'Ran bash command pnpm --dir frontend build [PASS]',
+            `Edited file ${editedFile}`,
+          ],
+        }
+      },
+    }
+    class DirtyProjectGitDriver extends InMemoryGitDriver {
+      override async isClean(repoRoot: string): Promise<boolean> {
+        if (repoRoot === projectPath) return false
+        return true
+      }
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new DirtyProjectGitDriver(),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(false)
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'worker-project-progress')
+    expect(task?.updatedAt).not.toBe('2026-04-01T00:00:00Z')
+
+    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-project-progress', 'checkpoint.json')
+    const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
+      intent: string
+      nextPlannedAction: string
+      filesTouched: string[]
+    }
+    expect(checkpoint.intent).toContain('progress but no status transition')
+    expect(checkpoint.filesTouched).toContain(path.join('frontend', 'app', 'pages', 'register.vue'))
+    expect(checkpoint.nextPlannedAction).toContain('hand off to review')
+  })
+
   it('reuses worker persona-role self-critique notes when building a recovery checkpoint next action', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'worker-persona-self-critique')
     await fs.mkdir(path.join(worktreePath, 'web', 'server', 'api', 'pages', '[id]'), { recursive: true })
@@ -3186,7 +3391,7 @@ describe('Orchestrator.run — full loops', () => {
               mergeRecord: {
                 fromBranch: 'guildhall/task-a',
                 toBranch: 'main',
-                strategy: 'ff_only_local',
+                strategy: 'cherry_pick_local',
                 result: 'merged',
                 commitSha: 'abc123',
                 mergedAt: '2026-04-29T00:00:00.000Z',
@@ -3218,7 +3423,7 @@ describe('Orchestrator.run — full loops', () => {
     expect(packet).toContain('- Status: done')
     expect(packet).toContain('- [x] ac-1: Thing is done')
     expect(packet).toContain('## Merge')
-    expect(packet).toContain('- merged: guildhall/task-a -> main via ff_only_local (abc123); 2026-04-29T00:00:00.000Z')
+    expect(packet).toContain('- merged: guildhall/task-a -> main via cherry_pick_local (abc123); 2026-04-29T00:00:00.000Z')
     expect(packet).toContain('Task is complete and merged.')
   })
 
@@ -3323,9 +3528,9 @@ describe('Orchestrator.run — full loops', () => {
         return super.createWorktree(repoRoot, opts)
       }
 
-      override async fastForwardMerge(repoRoot: string, branch: string, baseBranch: string) {
+      override async cherryPickBranch(repoRoot: string, branch: string, baseBranch: string) {
         this.mergeRoots.push(repoRoot)
-        return super.fastForwardMerge(repoRoot, branch, baseBranch)
+        return super.cherryPickBranch(repoRoot, branch, baseBranch)
       }
 
       override async removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {
@@ -3500,6 +3705,66 @@ describe('Orchestrator.run — full loops', () => {
 
       override async createWorktree(): Promise<void> {
         throw new Error('reserved intake should not create worktrees')
+      }
+    }
+
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+      gitDriver: new ExplodingGitDriver(),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    expect(spec.calls).toHaveLength(1)
+  })
+
+  it('does not touch git isolation for spec-intake shaping work', async () => {
+    const subrepo = path.join(tmpDir, 'knit')
+    await fs.mkdir(subrepo, { recursive: true })
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    await writeQueue([
+      mkTask({
+        id: 'task-import-shape',
+        domain: 'knit',
+        status: 'exploring',
+        projectPath: subrepo,
+        notes: [
+          {
+            agentId: 'workspace-importer',
+            role: 'importer',
+            content: 'Imported from: knit/docs/feature-roadmap.md',
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      }),
+    ])
+
+    class ExplodingGitDriver extends InMemoryGitDriver {
+      override async isClean(): Promise<boolean> {
+        throw new Error('spec shaping should not probe git cleanliness')
+      }
+
+      override async currentBranch(): Promise<string> {
+        throw new Error('spec shaping should not resolve git branch')
+      }
+
+      override async createWorktree(): Promise<void> {
+        throw new Error('spec shaping should not create worktrees')
       }
     }
 
@@ -3725,6 +3990,12 @@ describe('Orchestrator.run — full loops', () => {
 
   it('stops with explicit blocked accounting when unattended work runs into a human question', async () => {
     const settings: LeverSettings = makeDefaultSettings(new Date('2026-05-02T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'none',
+      rationale: 'This test exercises unattended queue accounting, not git isolation.',
+      setAt: '2026-05-02T00:00:00Z',
+      setBy: 'user-direct',
+    }
     settings.project.concurrent_task_dispatch = {
       position: { kind: 'fanout', n: 2 },
       rationale: 'test fanout',
@@ -4280,7 +4551,9 @@ describe('Orchestrator.tick — FR-21 proposal promotion', () => {
 
   it('seeds default lever settings when agent-settings.yaml is missing and routes proposal accordingly', async () => {
     // Default task_origination is `agent_proposed_coordinator_approved`.
-    // No writeLevers call — let the orchestrator seed defaults on first read.
+    // Remove the seeded test settings so the orchestrator exercises first-read
+    // materialization against true missing-file state.
+    await fs.rm(path.join(memoryDir, AGENT_SETTINGS_FILENAME), { force: true })
     await writeQueue([proposal()])
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
     const out = await orch.tick()
@@ -4956,9 +5229,10 @@ describe('Orchestrator — FR-30 liveness tracking', () => {
   })
 
   it('refreshLivenessStrictness falls back to standard on missing lever file', async () => {
+    await fs.rm(path.join(memoryDir, AGENT_SETTINGS_FILENAME), { force: true })
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
-    // No lever file written — refresh should not throw and should leave
-    // tracker in a usable state.
+    // Refresh should not throw and should leave the tracker in a usable state
+    // even when the settings file is truly absent.
     await orch.refreshLivenessStrictness()
     orch.liveness.register('w', 't')
     expect(
@@ -5456,6 +5730,12 @@ describe('Orchestrator — FR-24 slot allocation / runtime isolation', () => {
     dispatch?: { kind: 'serial' } | { kind: 'fanout'; n: number }
   } = {}): Promise<void> {
     const settings: LeverSettings = makeDefaultSettings(new Date('2026-04-20T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'none',
+      rationale: 'These tests cover runtime slot allocation, not per-task git worktrees.',
+      setAt: '2026-04-20T00:00:00Z',
+      setBy: 'user-direct',
+    }
     if (overrides.runtime) {
       settings.project.runtime_isolation = {
         position: overrides.runtime,
@@ -5504,7 +5784,7 @@ describe('Orchestrator — FR-24 slot allocation / runtime isolation', () => {
   })
 
   it('falls back to null when agent-settings.yaml is missing', async () => {
-    // No writeSettings call — file absent
+    await fs.rm(path.join(memoryDir, AGENT_SETTINGS_FILENAME), { force: true })
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
     const allocator = await orch.ensureSlotAllocator()
     expect(allocator).toBeNull()
@@ -5683,6 +5963,12 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
     const settings: LeverSettings = makeDefaultSettings(
       new Date('2026-04-21T00:00:00Z'),
     )
+    settings.project.worktree_isolation = {
+      position: 'none',
+      rationale: 'Reviewer fallback tests isolate reviewer-mode behavior, not git worktree setup.',
+      setAt: '2026-04-21T00:00:00Z',
+      setBy: 'user-direct',
+    }
     settings.domains.default.reviewer_mode = {
       position: mode,
       rationale: 'test override',

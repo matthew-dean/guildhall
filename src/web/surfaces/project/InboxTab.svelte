@@ -1,13 +1,14 @@
 <!--
-  Coordinator inbox — prioritized list of things the human must resolve so
-  the coordinator can plan and dispatch. Lands as the default view for every
-  project; tasks move down to the Work tab.
+  Human inbox — prioritized list of things the user must resolve before
+  Guildhall can keep moving. Lands as the default view for every project;
+  tasks move down to the Work tab.
 -->
 <script lang="ts">
   import Card from '../../lib/Card.svelte'
   import Icon, { type IconName } from '../../lib/Icon.svelte'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
   import { nav } from '../../lib/nav.svelte.js'
+  import { projectFetch } from '../../lib/project-routes.js'
 
   interface Props {
     items?: InboxItem[]
@@ -41,7 +42,7 @@
       return
     }
     try {
-      const r = await fetch('/api/project/inbox')
+      const r = await projectFetch('/api/project/inbox')
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const j = (await r.json()) as { items?: InboxItem[] }
       localItems = j.items ?? []
@@ -71,7 +72,7 @@
     e.stopPropagation()
     if (!item.dismissEndpoint) return
     try {
-      const r = await fetch(item.dismissEndpoint, { method: 'POST' })
+      const r = await projectFetch(item.dismissEndpoint, { method: 'POST' })
       const j = (await r.json().catch(() => ({}))) as { error?: string }
       if (!r.ok || j.error) {
         handlingMessage = `Dismiss failed: ${j.error ?? `HTTP ${r.status}`}`
@@ -90,7 +91,7 @@
     handlingIndex = index
     handlingMessage = null
     try {
-      const r = await fetch(cfg.endpoint, { method: 'POST' })
+      const r = await projectFetch(cfg.endpoint, { method: 'POST' })
       const j = (await r.json().catch(() => ({}))) as { error?: string }
       if (!r.ok || j.error) {
         handlingMessage = `Failed: ${j.error ?? `HTTP ${r.status}`}`
@@ -113,6 +114,8 @@
   const ICONS: Record<InboxItem['kind'], IconName> = {
     bootstrap_missing: 'wrench',
     workspace_import_pending: 'package',
+    agent_question_pending: 'message-square-more',
+    import_draft_queue: 'list-todo',
     brief_approval: 'file-text',
     spec_approval: 'file-check',
     open_escalation: 'alert-triangle',
@@ -120,17 +123,30 @@
     spec_fill_pending: 'help-circle',
   }
 
-  const VERBS: Record<InboxItem['kind'], string> = {
+  const DEFAULT_VERBS: Record<InboxItem['kind'], string> = {
     bootstrap_missing: 'Configure',
-    workspace_import_pending: 'Review',
-    brief_approval: 'Review',
-    spec_approval: 'Review',
+    workspace_import_pending: 'Review import',
+    agent_question_pending: 'Answer question',
+    import_draft_queue: 'Review next draft',
+    brief_approval: 'Review in Thread',
+    spec_approval: 'Review in Thread',
     open_escalation: 'Resolve',
     lever_questions: 'Review',
-    spec_fill_pending: 'Review',
+    spec_fill_pending: 'Open details',
+  }
+
+  function actionVerb(item: InboxItem): string {
+    if (item.kind === 'spec_fill_pending' && item.taskId === 'task-workspace-import') {
+      return 'Review import'
+    }
+    return DEFAULT_VERBS[item.kind]
   }
 
   function goTo(item: InboxItem): void {
+    if (item.kind === 'brief_approval' || item.kind === 'spec_approval') {
+      nav('/thread')
+      return
+    }
     if (item.actionHref) nav(item.actionHref)
   }
 
@@ -155,7 +171,7 @@
   {:else if items.length === 0}
     <div class="empty">
       <Icon name="check-circle-2" size={24} />
-      <p>All caught up — coordinator has no open questions.</p>
+      <p>All caught up — nothing is waiting on you right now.</p>
     </div>
   {:else}
     {#if priorityItems.length === 0}
@@ -185,7 +201,7 @@
                   <div class="title" title={item.title}>{item.title}</div>
                   <div class="detail" title={item.detail}>{item.detail}</div>
                 </div>
-                <span class="verb">{VERBS[item.kind]} →</span>
+                <span class="verb">{actionVerb(item)} →</span>
               </button>
               {#if handler}
                 <button
@@ -238,7 +254,7 @@
                     <div class="title" title={item.title}>{item.title}</div>
                     <div class="detail" title={item.detail}>{item.detail}</div>
                   </div>
-                  <span class="verb">{VERBS[item.kind]} →</span>
+                  <span class="verb">{actionVerb(item)} →</span>
                 </button>
               </div>
             </li>

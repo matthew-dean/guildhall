@@ -512,7 +512,7 @@ describe('E2E 0.5.0: service over projects', () => {
         selectedProject: { id: string } | null
         projects: Array<{ id: string }>
       }
-      expect(fleetBody.selectedProject).toBeNull()
+      expect(fleetBody.selectedProject?.id).toBe('service-proof')
       expect(fleetBody.projects.map(project => project.id)).toContain('service-proof')
 
       const attachRes = await app.fetch(new Request('http://localhost/api/service/attach-project', {

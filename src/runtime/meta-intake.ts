@@ -15,15 +15,15 @@ import {
 } from '@guildhall/levers'
 
 // ---------------------------------------------------------------------------
-// FR-14: coordinator bootstrapping via meta-intake.
+// FR-14: routing bootstrapping via meta-intake.
 //
 // When a workspace has no coordinators defined, the first exploring task is a
-// meta-intake: the Spec Agent interviews the user about the codebase and
-// writes a draft list of coordinator definitions (mandate, concerns,
-// autonomous decisions, escalation triggers) into the task's `spec`.
+// meta-intake: the Spec Agent inspects the codebase, infers the internal
+// routing slices the single local coordinator should use, and writes that
+// draft into the task's `spec`.
 //
 // When the user approves, `approveMetaIntake` parses the draft, merges the
-// resulting coordinators into guildhall.yaml, and marks the task done.
+// resulting internal routing slices into guildhall.yaml, and marks the task done.
 //
 // All the LLM work happens on the normal orchestrator loop — this module just
 // owns the reserved task, the draft-format parser, and the config merge.
@@ -49,19 +49,28 @@ async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
   atomicWriteText(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2) + '\n')
 }
 
-const META_INTAKE_SEED = `You are bootstrapping a new Guildhall workspace. Your job in this conversation is to produce a DRAFT list of coordinator definitions for this codebase AND infer initial lever positions from the user's project-guidance answers.
+const META_INTAKE_SEED = `You are bootstrapping a new Guildhall workspace. Your job in this conversation is to infer the internal routing slices the single local coordinator should use for this codebase, then infer initial lever positions from the user's project-guidance answers.
 
-Default to drafting from repo evidence. Ask the user only for the minimum
-missing PROJECT signal needed to avoid a bad coordinator split. If you have
-enough repository evidence plus one user answer, write the best-guess draft
+Default to drafting from repo evidence. Do the analysis yourself first. Ask the
+user only for the minimum missing PROJECT signal needed to avoid a materially
+wrong draft. If you have enough repository evidence, write the best-guess draft
 instead of continuing to interview.
 
 When you ask questions:
 - Ask at most two questions before drafting.
-- Prefer one multi-select or confirm/correct question over one question per
-  coordinator.
-- Ask in product terms. Say "project areas" or "review lanes", not
-  "coordinator domains".
+- Only interrupt when BOTH are true:
+  1. confidence is genuinely low, and
+  2. being wrong would materially affect routing or task quality.
+- Treat this as an interrupt threshold:
+  - critical / high consequence + low confidence -> ask
+  - medium consequence + low confidence -> usually still infer unless the
+    ambiguity will clearly change task routing
+  - low consequence -> do not ask; infer and move on
+- Prefer one confirm/correct question over one question per inferred part.
+- Do not ask the user to build Guildhall's internal map. Infer it first, then
+  ask for confirmation only if the threshold above is crossed.
+- Ask in concrete repo or product terms, not Guildhall terms. Never ask the
+  user to pick "coordinator domains", "project areas", or "review lanes".
 - Choice labels must be friendly names with enough context for a human to
   choose, e.g. "VS Code extension UI - editor-facing commands and views", not
   "vscode-extension-ui" or another slug.
@@ -72,12 +81,12 @@ When you ask questions:
 
 Work toward answers for:
 
-1. What are the major *zones of concern* in this codebase (e.g. UI layer, data/API layer, infra, docs, release/ops)? Each zone becomes one coordinator.
-2. For each zone: one-paragraph mandate — what outcomes does it protect?
-3. For each zone: 2–4 concerns (id, one-line description, 1–3 review questions each).
-4. For each zone: which tweaks the coordinator may approve without human review (autonomousDecisions)?
-5. For each zone: what MUST be escalated to a human (escalationTriggers)?
-6. Optional sub-path inside the project that scopes this coordinator (blank if workspace root).
+1. What are the major internal routing slices in this codebase (e.g. UI layer, data/API layer, infra, docs, release/ops)?
+2. For each slice: one-paragraph mandate — what outcomes does the coordinator protect here?
+3. For each slice: 2–4 concerns (id, one-line description, 1–3 review questions each).
+4. For each slice: which tweaks the coordinator may approve without human review (autonomousDecisions)?
+5. For each slice: what MUST be escalated to a human (escalationTriggers)?
+6. Optional sub-path inside the project that scopes this slice (blank if workspace root).
 
 Lever inference — CRITICAL
 =========================
@@ -90,17 +99,16 @@ While you interview, INFER lever positions from the user's answers. Do NOT ask d
 - User has a small or solo team, wants minimal friction → \`remediation_autonomy: auto\`, \`task_origination: agent_proposed_coordinator_approved\`.
 - User mentions no local LLM / cost concerns → leave \`reviewer_mode: llm_with_deterministic_fallback\` (cheapest default) or tighten to \`deterministic_only\`.
 
-Emit inferred lever positions in a SECOND YAML codefence, alongside the coordinators fence. Every inferred lever MUST include a short \`rationale\` that cites the conversational signal (e.g. "user said the codebase ships to paying customers"). Omit levers you could not infer — they will stay at system default.
+Emit inferred lever positions in a SECOND YAML codefence, alongside the internal routing fence. Every inferred lever MUST include a short \`rationale\` that cites the conversational signal (e.g. "user said the codebase ships to paying customers"). Omit levers you could not infer — they will stay at system default.
 
 Output format
 =============
 
-Put both fences into the task spec (via the update-task tool):
+Put both fences into the task spec (via the update-task tool). The first fence still uses \`coordinators:\` because that is the current internal config key, but treat it as implementation detail rather than user-facing language:
 
 \`\`\`yaml
 coordinators:
   - id: <slug>
-    name: <human-readable name>
     domain: <slug, used for task routing>
     path: <optional sub-path>
     mandate: |
@@ -165,7 +173,7 @@ bootstrap:
         stderr: <short excerpt>
 \`\`\`
 
-When the user approves the draft, run the \`guildhall approve-meta-intake\` CLI command — the runtime will parse all three fences, merge coordinators + bootstrap into \`guildhall.yaml\`, record lever positions in \`memory/agent-settings.yaml\` with \`setBy: 'spec-agent-intake'\`, and mark this task done.`
+When the user approves the draft, run the \`guildhall approve-meta-intake\` CLI command — the runtime will parse all three fences, merge the inferred routing slices + bootstrap into \`guildhall.yaml\`, record lever positions in \`memory/agent-settings.yaml\` with \`setBy: 'spec-agent-intake'\`, and mark this task done.`
 
 export interface CreateMetaIntakeInput {
   memoryDir: string
@@ -221,9 +229,9 @@ export async function createMetaIntakeTask(
   const now = new Date().toISOString()
   const task: Task = {
     id: META_INTAKE_TASK_ID,
-    title: 'Map project areas and starter tasks',
+    title: 'Inspect the repo and draft starter tasks',
     description:
-      'Scan the codebase, ask for missing context, then propose review lanes and starter tasks.',
+      'Inspect the codebase, infer the project structure, and draft the first starter tasks. Ask only if confidence is low and being wrong would matter.',
     domain: META_INTAKE_DOMAIN,
     projectPath: input.projectPath,
     status: 'exploring',
@@ -272,9 +280,9 @@ export async function rerunMetaIntakeTask(
 
   const resetTask: Task = {
     id: META_INTAKE_TASK_ID,
-    title: 'Map project areas and starter tasks',
+    title: 'Inspect the repo and draft starter tasks',
     description:
-      'Scan the codebase, ask for missing context, then propose review lanes and starter tasks.',
+      'Inspect the codebase, infer the project structure, and draft the first starter tasks. Ask only if confidence is low and being wrong would matter.',
     domain: META_INTAKE_DOMAIN,
     projectPath: input.projectPath,
     status: 'exploring',
@@ -338,7 +346,7 @@ export function workspaceNeedsMetaIntake(workspacePath: string): boolean {
  */
 export interface DraftCoordinator {
   id: string
-  name: string
+  name?: string
   domain: string
   path?: string
   mandate: string
@@ -357,6 +365,14 @@ export interface SynthesizeMetaIntakeDraftResult {
   drafts?: DraftCoordinator[]
   error?: string
 }
+
+const FALLBACK_SYNTH_DOMAIN_IDS = new Set([
+  'converter-core',
+  'extension-ui',
+  'dts-generation',
+  'testing-qa',
+  'docs',
+])
 
 /**
  * Extract the `coordinators:` YAML codefence from a meta-intake spec and parse
@@ -383,20 +399,20 @@ export function parseCoordinatorDraft(spec: string): DraftCoordinator[] | null {
       if (!entry || typeof entry !== 'object') continue
       const e = entry as Record<string, unknown>
       const id = typeof e['id'] === 'string' ? e['id'] : undefined
-      const name = typeof e['name'] === 'string' ? e['name'] : undefined
       const domain = typeof e['domain'] === 'string' ? e['domain'] : id
       const mandate = typeof e['mandate'] === 'string' ? e['mandate'].trim() : ''
-      if (!id || !name || !domain) continue
+      const name = typeof e['name'] === 'string' ? e['name'] : undefined
+      if (!id || !domain) continue
       const pth = typeof e['path'] === 'string' ? e['path'] : undefined
       const draft: DraftCoordinator = {
         id,
-        name,
         domain,
         mandate,
         concerns: normalizeConcerns(e['concerns']),
         autonomousDecisions: normalizeStringList(e['autonomousDecisions']),
         escalationTriggers: normalizeStringList(e['escalationTriggers']),
       }
+      if (name?.trim()) draft.name = name.trim()
       if (pth) draft.path = pth
       drafts.push(draft)
     }
@@ -477,7 +493,8 @@ function selectedDomainsFromAnswers(task: Task): string[] {
   })
   if (domainQuestion && typeof domainQuestion.answer === 'string') {
     const parsed = splitDomainAnswer(domainQuestion.answer)
-    if (parsed.length > 0) return [...new Set(parsed)]
+    const supported = parsed.filter(id => FALLBACK_SYNTH_DOMAIN_IDS.has(id))
+    if (supported.length > 0) return [...new Set(supported)]
   }
   return ['converter-core', 'extension-ui', 'testing-qa', 'docs']
 }
@@ -1017,7 +1034,6 @@ export async function approveMetaIntake(
     if (existingIds.has(draft.id)) continue
     merged.push({
       id: draft.id,
-      name: draft.name,
       domain: draft.domain,
       ...(draft.path ? { path: draft.path } : {}),
       mandate: draft.mandate,

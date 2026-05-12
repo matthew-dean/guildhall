@@ -1,31 +1,35 @@
 ---
-title: merge_policy
-help_topic: lever.merge_policy
+title: landing_strategy
+help_topic: lever.landing_strategy
 help_summary: |
-  What happens when a task completes. `ff_only_local` fast-forwards into
-  main locally; `ff_only_with_push` also pushes to origin; `manual_pr`
-  opens a pull request and stops.
+  What happens when a task completes. `cherry_pick_local` lands accepted
+  commits onto the local landing branch; `cherry_pick_with_push` also pushes
+  to origin; `manual_pr` opens a pull request and stops.
 ---
 
-# `merge_policy`
+# `landing_strategy`
 
-**Scope:** project • **Default:** `ff_only_local`
+**Scope:** project • **Default:** `cherry_pick_local`
 
-How a completed task's worktree branch lands in `main`.
+How a completed task's accepted commits land on the configured landing branch.
 
 ## Positions
 
 | Position | Effect |
 |---|---|
-| `ff_only_local` | Fast-forward merge into local `main`. No push. Conflicts abort and surface as an escalation. |
-| `ff_only_with_push` | Same as above, then `git push` to origin. |
+| `cherry_pick_local` | Cherry-pick the task branch's accepted commits onto the local landing branch. No push. Conflicts abort and surface as an escalation. |
+| `cherry_pick_with_push` | Same as above, then `git push` the landing branch to origin. |
 | `manual_pr` | Push the branch, open a PR via `gh pr create`, and stop. Human reviews and merges. |
 
-## Non-fast-forwardable branches
+## Notes
 
-When a merge would require a real merge commit (not a fast-forward), the task is marked `blocked` with a "needs rebase" escalation. Workers don't do rebases silently — you're always the one to resolve divergent history.
+- Guildhall can also read a project-level `landingBranch` override from
+  `.guildhall/config.yaml`. If unset, it lands onto whatever branch the repo
+  is currently on when the orchestrator starts.
+- Older files may still use the internal `merge_policy` key. Guildhall maps
+  that forward for compatibility.
 
 ## Related
 
 - `worktree_isolation` — how the branch was produced in the first place.
-- `completion_approval` — whether a human must sign off before the merge runs.
+- `completion_approval` — whether a human must sign off before landing runs.

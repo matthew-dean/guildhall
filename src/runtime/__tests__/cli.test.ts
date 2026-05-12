@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { resolveServiceLifecycleIntent } from '../cli.js'
 
 describe('resolveServiceLifecycleIntent', () => {
-  it('treats serve as a friendly open-and-start path with project bias', () => {
+  it('treats serve as a friendly open-and-start path with a cwd launch hint', () => {
     const intent = resolveServiceLifecycleIntent('serve', [], {
       cwd: '/tmp/example-project',
     })
@@ -12,11 +12,11 @@ describe('resolveServiceLifecycleIntent', () => {
       kind: 'serve',
       port: 7777,
       openBrowser: true,
-      preferredProjectPath: '/tmp/example-project',
+      launchProjectPath: '/tmp/example-project',
     })
   })
 
-  it('treats start as a background service command with no project selected by default', () => {
+  it('treats start as a fleet-level background service command', () => {
     const intent = resolveServiceLifecycleIntent('start', [], {
       cwd: '/tmp/not-a-project',
     })
@@ -24,12 +24,12 @@ describe('resolveServiceLifecycleIntent', () => {
     expect(intent).toMatchObject({
       kind: 'start',
       port: 7777,
-      preferredProjectPath: null,
+      launchProjectPath: null,
       openBrowser: false,
     })
   })
 
-  it('lets serve preserve an explicit project-path bias without rebinding service identity', () => {
+  it('lets serve preserve an explicit project launch hint without rebinding service identity', () => {
     const intent = resolveServiceLifecycleIntent('serve', ['~/work/demo', '--port', '9001'], {
       cwd: '/tmp/elsewhere',
       homeDir: '/Users/tester',
@@ -37,8 +37,8 @@ describe('resolveServiceLifecycleIntent', () => {
 
     expect(intent).toMatchObject({
       kind: 'serve',
-      port: 9001,
-      preferredProjectPath: '/Users/tester/work/demo',
+      port: 7777,
+      launchProjectPath: '/Users/tester/work/demo',
       openBrowser: true,
     })
   })

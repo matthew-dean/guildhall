@@ -169,7 +169,6 @@ export async function runInit(opts: InitOptions): Promise<void> {
 
   type CoordEntry = {
     id: string
-    name: string
     domain: string
     path?: string | undefined
     mandate: string
@@ -191,14 +190,9 @@ export async function runInit(opts: InitOptions): Promise<void> {
     let addAnother = true
     while (addAnother) {
       console.log()
-      const coordName = await input({
-        message: 'Coordinator display name (e.g. "Looma Coordinator"):',
-        validate: (v: string) => v.trim().length > 0 || 'Name is required',
-      })
-
       const coordDomain = await input({
         message: 'Domain ID for task routing (e.g. "looma"):',
-        default: slugify(coordName),
+        default: '',
         validate: (v: string) => /^[a-z0-9-]+$/.test(v) || 'Use lowercase letters, numbers, dashes',
       })
 
@@ -209,12 +203,11 @@ export async function runInit(opts: InitOptions): Promise<void> {
 
       const mandate = await input({
         message: 'One-line mandate (what does this coordinator oversee?):',
-        default: `Coordinate work for the ${coordName} domain.`,
+        default: `Coordinate work for the ${coordDomain} domain.`,
       })
 
       coordinators.push({
         id: coordDomain,
-        name: coordName,
         domain: coordDomain,
         ...(coordPath.trim() ? { path: coordPath.trim() } : {}),
         mandate,
@@ -223,7 +216,7 @@ export async function runInit(opts: InitOptions): Promise<void> {
         escalationTriggers: ['Any change to a public API surface', 'Unresolvable disagreement between agents'],
       })
 
-      console.log(`  ✓ Added: ${coordName}`)
+      console.log(`  ✓ Added: ${coordDomain}`)
 
       addAnother = await confirm({ message: 'Add another coordinator?', default: false })
     }
@@ -265,7 +258,7 @@ export async function runInit(opts: InitOptions): Promise<void> {
   console.log(`  ID:           ${id}`)
   console.log(`  Directory:    ${absPath}`)
   if (projectPath) console.log(`  Project:      ${projectPath}`)
-  console.log(`  Coordinators: ${coordinators.length > 0 ? coordinators.map(c => c.name).join(', ') : 'none'}`)
+  console.log(`  Coordinators: ${coordinators.length > 0 ? coordinators.map(c => c.domain).join(', ') : 'none'}`)
   if (modelScope === 'global-default') {
     const globalModels = resolveModelsForProvider(readGlobalConfig().models)
     console.log(`  Models:       global defaults`)

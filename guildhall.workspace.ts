@@ -27,7 +27,6 @@ export default defineWorkspace({
   coordinators: [
     {
       id: 'looma',
-      name: 'Looma Coordinator',
       mandate: `
         Looma is a stack-agnostic UI library built on web standards. It must stay general-purpose:
         no Knit-specific vocabulary in component APIs, no app business logic, no tight coupling
@@ -74,7 +73,6 @@ export default defineWorkspace({
     },
     {
       id: 'knit',
-      name: 'Knit Coordinator',
       mandate: `
         Knit is a wiki app for small teams. It uses Looma as its design system and must
         migrate progressively toward Looma primitives. Its primary obligation is product

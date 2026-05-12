@@ -10,6 +10,7 @@ import {
   type WorkspaceImportDraft,
   type WorkspaceInventory,
 } from './workspace-import/index.js'
+import { normalizeImportedDraftTask } from './import-drafts.js'
 import { resolveTaskProjectPath } from './task-project-path.js'
 
 // ---------------------------------------------------------------------------
@@ -38,10 +39,11 @@ function tasksPathFor(memoryDir: string): string {
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
   const raw = await fs.readFile(tasksPathFor(memoryDir), 'utf-8')
   const parsed = JSON.parse(raw)
-  if (Array.isArray(parsed)) {
-    return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-  }
-  return TaskQueue.parse(parsed)
+  const queue = Array.isArray(parsed)
+    ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+    : TaskQueue.parse(parsed)
+  for (const task of queue.tasks) normalizeImportedDraftTask(task)
+  return queue
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
@@ -639,7 +641,7 @@ function uniqueTaskId(existingIds: Set<string>, suggested: string): string {
 
 /**
  * Consume the workspace-import draft: parse fences, append tasks as
- * `exploring` + `origination='human'`, record milestones to PROGRESS.md,
+ * `import_draft` + `origination='human'`, record milestones to PROGRESS.md,
  * persist goals into `memory/workspace-goals.json`, and mark the reserved
  * task done.
  *
@@ -700,10 +702,10 @@ export async function approveWorkspaceImport(
           workspaceProjectPath: input.projectPath,
           domain: t.domain,
         }),
-      // Import approval means "yes, bring this into Guildhall", not "a worker
-      // has a real spec." Imported TODOs and docs need normal spec-agent
-      // intake before workers touch them.
-      status: 'exploring',
+      // Import approval means "yes, keep this as a candidate draft", not
+      // "this already has a complete task brief/spec." Imported notes become
+      // shaping drafts first; only after shaping do they enter normal intake.
+      status: 'import_draft',
       priority: t.priority,
       dependsOn: [],
       outOfScope: [],

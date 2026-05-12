@@ -55,6 +55,31 @@ failure modes.
 The default surface should be concise. Extra detail should be available when
 the user wants it, not forced on them before they can act.
 
+Sometimes the right form of "inspection" is a short back-and-forth, not a
+larger card tree.
+
+Guildhall should stay structured-first, but it should not force every
+clarification path into a rigid wizard if a scoped conversation would be more
+natural and less confusing.
+
+A good conversational checkpoint has these traits:
+
+- it is anchored to one object or decision
+- it has a clear end goal
+- it knows what shape it is trying to produce
+- it can ask follow-up questions only until that shape is complete
+- it closes cleanly back into structured state
+
+Examples:
+
+- "Shape task 27 into a complete task brief"
+- "Clarify the project split for this workspace"
+- "Resolve the missing success criteria for this imported draft"
+
+This is not a license to turn Guildhall into a prompt box. It is a reminder
+that a tightly scoped conversation can sometimes be the most humane way to
+reach a structured outcome.
+
 ### 4. Explain user meaning, not system internals
 
 Labels should describe what something means to a person, not what it is called
@@ -63,6 +88,7 @@ inside the runtime.
 Avoid leading with:
 
 - coordinator
+- steward
 - lever
 - spec-agent
 - stop reason
@@ -138,6 +164,116 @@ If a step feels tedious, mentally expensive, or like the user is doing the
 agent's unfinished homework, Guildhall has asked too early or prepared too
 poorly.
 
+In some cases, the best preparation is:
+
+- a recommended structured path, plus
+- a contextual conversation lane for clarifying the few things Guildhall still
+  cannot confidently infer
+
+That conversation should live inside the work item it is clarifying, not as a
+global escape hatch detached from context.
+
+### 9. Build systems, not one-off screens
+
+Guildhall should assume that LLMs naturally drift toward bespoke output unless
+the product constrains them.
+
+That means every UI or journey fix should also ask:
+
+- would Guildhall have prevented this mistake if it were building itself?
+- was a shared primitive missing?
+- was a review rubric missing?
+- was the product philosophy too vague at the moment of implementation?
+- did the system leave too much room for ad hoc interpretation?
+
+If the answer is "yes," the right fix is not just the local screen polish.
+The right fix also includes a stronger system:
+
+- clearer shared primitives
+- clearer content hierarchy rules
+- stronger review questions
+- better defaults for future agents
+
+Guildhall should be designed so that future builders are guided into the right
+answer instead of merely corrected after they guessed wrong.
+
+### 10. Expose work structure, hide judgment structure
+
+Guildhall should expose the structure the user actually manages:
+
+- projects
+- project goals, tasks, and real product boundaries
+- tasks
+- approvals
+- goals
+
+Guildhall should not require the user to model Guildhall's internal staffing
+theory in order to use the product well.
+
+That means the product should prefer:
+
+- one coordinating layer per project
+- visible work structure only when it helps the user understand the project
+- internal perspective selection underneath
+
+over:
+
+- user-managed steward rosters
+- pseudo-org-chart setup
+- task assignment to named stewards as a primary mental model
+
+The coordinating layer should assemble the right context and pull in the right
+perspectives for the decision at hand:
+
+- UI clarity
+- accessibility
+- integration risk
+- release readiness
+- product quality
+- market research
+
+Those perspectives may change from one task, approval, or review to the next.
+They should not have to exist as fixed user-facing actors just to preserve
+judgment quality.
+
+If a perspective helps the product reason better, Guildhall may use it.
+If the perspective does not help the user think better, Guildhall should avoid
+forcing the user to configure or manage it directly.
+
+### 11. Use color as a semantic system
+
+Guildhall should have one coherent color palette that is applied on purpose.
+
+Color is not there to make individual screens look nicer in isolation. It is
+there to help the user understand:
+
+- what is primary
+- what is healthy
+- what needs caution
+- what is broken
+- what is quiet metadata
+
+That means color decisions should never belong to just one discipline. They
+should be treated as a collaboration between:
+
+- color theory
+- UI hierarchy
+- accessibility
+
+If a screen introduces a one-off blue, green, yellow, or red that does not map
+back to a shared semantic role, the product has drifted.
+
+Guildhall should be able to answer:
+
+- why is this color here?
+- what semantic role does it carry?
+- where else is that same role used?
+- is it visually distinct enough to support the decision without relying on
+  color alone?
+
+The product should feel like it has one palette and one visual language, not a
+series of attractive local guesses.
+
 ## The Journey Model
 
 Most guided Guildhall flows should move through some version of this sequence:
@@ -164,6 +300,16 @@ Not every flow needs all five stages, but the shape should remain legible.
 
 Guildhall should not skip from orientation to final approval if the user has
 not yet seen the candidate items they are being asked to approve.
+
+When a flow gets stuck because the remaining ambiguity is narrow but awkward to
+model, Guildhall should be allowed to switch from a rigid wizard step into a
+scoped conversational step. That conversation should still respect the same
+journey rules:
+
+- one object
+- one decision family
+- one known outcome shape
+- clear return to the main flow
 
 Within that journey, Guildhall should actively steer toward the best likely
 result. A guided flow is not just a sequence of steps; it is a sequence of

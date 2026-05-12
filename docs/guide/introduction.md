@@ -4,7 +4,7 @@ title: Introduction
 
 # Introduction
 
-GuildHall is a **multi-agent operating system** for software projects. You point it at a project directory and it spins up a guild of agents — a **spec writer**, **coordinators** who own domains, **workers**, **reviewers**, **gate-checkers** — that trade tasks through a persistent queue in `memory/TASKS.json`.
+GuildHall is a **multi-agent operating system** for software projects. You point it at a project directory and it runs one local coordinating layer that pulls in the right worker, reviewer, and gate-check context as tasks move through a persistent queue in `memory/TASKS.json`.
 
 You can close your laptop. They keep going. You can interrupt, edit the queue, change a lever, and they resume from the next tick.
 

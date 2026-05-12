@@ -11,7 +11,10 @@ describe('buildWorkSurface', () => {
   it('extracts work-surface state without component logic', () => {
     const detail: ProjectDetail = {
       config: { coordinators: [] },
-      tasks: [{ id: 'task-1', status: 'review', title: 'Review something' }],
+      tasks: [
+        { id: 'task-1', status: 'review', title: 'Review something' },
+        { id: 'task-2', status: 'import_draft', title: 'Imported draft' },
+      ],
       run: { status: 'running' },
       recentEvents: [
         { at: '2026-05-09T21:00:05.000Z' } as EventEnvelope,
@@ -23,6 +26,8 @@ describe('buildWorkSurface', () => {
     expect(model.needsMeta).toBe(true)
     expect(model.running).toBe(true)
     expect(model.tasks).toHaveLength(1)
+    expect(model.importDraftCount).toBe(1)
+    expect(model.nextImportDraft?.id).toBe('task-2')
     expect(model.events.map((event) => event.at)).toEqual([
       '2026-05-09T21:00:01.000Z',
       '2026-05-09T21:00:05.000Z',

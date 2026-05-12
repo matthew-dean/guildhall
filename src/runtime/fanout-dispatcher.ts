@@ -37,6 +37,7 @@ export interface PickNextTasksInput {
   capacity: FanoutCapacity
   laneCapacities?: Partial<Record<TaskLane, number>>
   domainFilter?: string
+  preferredTaskId?: string
   /**
    * Ids already in flight (or claimed by an earlier pass in the same tick).
    * Those tasks are skipped during selection so the caller never dispatches
@@ -69,7 +70,13 @@ export function pickNextTasks(input: PickNextTasksInput): Task[] {
       const attemptExcluded = new Set(excluded)
       let next: Task | undefined
       while (true) {
-        const candidate = pickNextTask(input.queue, input.domainFilter, attemptExcluded)
+        const candidate = pickNextTask(
+          input.queue,
+          input.domainFilter,
+          attemptExcluded,
+          undefined,
+          input.preferredTaskId,
+        )
         if (!candidate) break
         const lane = laneForTask(candidate)
         if (lane && remainingByLane[lane] > 0) {
@@ -88,7 +95,13 @@ export function pickNextTasks(input: PickNextTasksInput): Task[] {
     return picks
   }
   for (let i = 0; i < input.capacity; i++) {
-    const next = pickNextTask(input.queue, input.domainFilter, excluded)
+    const next = pickNextTask(
+      input.queue,
+      input.domainFilter,
+      excluded,
+      undefined,
+      input.preferredTaskId,
+    )
     if (!next) break
     picks.push(next)
     excluded.add(next.id)

@@ -128,9 +128,22 @@ approval until the questions are answered — so a wrong guess is safe.
 Posting questions with no brief leaves the user staring at choices with
 no context.
 
+Default to the strongest repo-backed interpretation of the ask. Do NOT stop
+and ask a broad kickoff question like "What should this first starter task
+focus on?" just because the task could branch in multiple directions. If the
+user ask already names a plausible focus and repo evidence lets you draft a
+best-guess spec, do that work. Ask only when two materially different task
+directions are both plausible, the consequence of choosing wrong is high, and
+you truly cannot pick a safe default from the ask plus repo evidence.
+
 After posting, end your turn (yield). Do NOT keep working on the spec
 without the answer; you'd be guessing. The orchestrator resumes you when
 the user answers.
+
+If the task already has an unanswered open question that covers the same
+decision, do NOT ask it again in new words. Reuse the pending question,
+wait for the answer, and spend your turn on the best draft/spec progress
+you can still make around that constraint.
 
 ## Consult the experts
 

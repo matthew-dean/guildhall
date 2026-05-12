@@ -55,6 +55,12 @@ export const ProjectGuildhallConfig = z.object({
   preferredProvider: z.enum(['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api']).optional(),
 
   /**
+   * Which branch accepted task work should land back onto in this checkout.
+   * Omit to use the repo's current branch at orchestrator start.
+   */
+  landingBranch: z.string().min(1).optional(),
+
+  /**
    * How many spec/intake tasks may run at once. Default `1` keeps the
    * conversational intake surface focused; raise it only when you want Guildhall
    * shaping multiple unrelated asks in parallel.

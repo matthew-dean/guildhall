@@ -20,11 +20,11 @@ Served by `src/runtime/serve.ts` (Hono). Default port `7842`. All routes are loc
 | Route | Purpose |
 |---|---|
 | `GET /api/project` | Project detail + tasks + run state. |
-| `POST /api/project/start` | Boot the orchestrator. |
+| `POST /api/project/start` | Start the coordinator. |
 | `POST /api/project/stop` | Graceful stop. |
 | `GET /api/project/activity` | Activity summary (counts by status). |
 | `GET /api/project/progress` | Tail of `PROGRESS.md`. |
-| `GET /api/project/events` | SSE feed of orchestrator events. |
+| `GET /api/project/events` | SSE feed of coordinator events. |
 
 ## Tasks
 

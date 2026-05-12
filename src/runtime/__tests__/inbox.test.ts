@@ -47,7 +47,7 @@ function fullSystemDefaultSettings(): unknown {
     project: {
       concurrent_task_dispatch: entry({ kind: 'serial' }),
       worktree_isolation: entry('none'),
-      merge_policy: entry('ff_only_local'),
+      landing_strategy: entry('cherry_pick_local'),
       rejection_dampening: entry({ kind: 'off' }),
       business_envelope_strictness: entry('advisory'),
       agent_health_strictness: entry('standard'),
@@ -112,7 +112,13 @@ describe('buildInbox', () => {
     await writeYaml('memory/agent-settings.yaml', userSet)
     await writeJson('memory/TASKS.json', { version: 1, lastUpdated: '', tasks: [] })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({
+      projectPath: tmpDir,
+      snapshotOptions: {
+        readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+        detectOauthProviders: () => ({ claude: false, codex: false }),
+      },
+    })
     expect(items).toEqual([])
   })
 
@@ -134,7 +140,13 @@ describe('buildInbox', () => {
       },
     })
     await writeJson('memory/workspace-goals.json', { goals: [] })
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({
+      projectPath: tmpDir,
+      snapshotOptions: {
+        readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+        detectOauthProviders: () => ({ claude: false, codex: false }),
+      },
+    })
     expect(items.find(i => i.kind === 'bootstrap_missing')).toBeUndefined()
   })
 
@@ -150,7 +162,13 @@ describe('buildInbox', () => {
       },
     })
     await writeJson('memory/workspace-goals.json', { goals: [] })
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({
+      projectPath: tmpDir,
+      snapshotOptions: {
+        readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+        detectOauthProviders: () => ({ claude: false, codex: false }),
+      },
+    })
     expect(items.find(i => i.kind === 'bootstrap_missing')).toBeDefined()
   })
 
@@ -194,6 +212,42 @@ describe('buildInbox', () => {
     expect(hit.title).toBe('Bootstrap failed')
     expect(hit.detail).toContain('pnpm run build failed with exit 2')
     expect(hit.detail).toContain('Cannot find module')
+  })
+
+  it('setup_pending: emitted for the next meaningful setup step after provider/bootstrap/routing are already done', async () => {
+    await writeYaml('guildhall.yaml', {
+      name: 'Ready for direction',
+      id: 'ready-for-direction',
+      coordinators: [{ id: 'frontend', name: 'Frontend' }],
+      bootstrap: {
+        verifiedAt: '2026-05-11T00:00:00.000Z',
+        commands: ['pnpm install'],
+        successGates: ['pnpm build'],
+      },
+    })
+    await writeJson('memory/bootstrap.json', {
+      success: true,
+      lastRunAt: '2026-05-11T00:00:00.000Z',
+      durationMs: 10,
+      commandHash: 'a',
+      lockfileHash: 'b',
+      steps: [],
+    })
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+
+    const items = buildInbox({
+      projectPath: tmpDir,
+      snapshotOptions: {
+        readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+        detectOauthProviders: () => ({ claude: false, codex: false }),
+      },
+    })
+    const hit = items.find(i => i.kind === 'setup_pending')
+    expect(hit).toBeDefined()
+    if (!hit || hit.kind !== 'setup_pending') throw new Error('unreachable')
+    expect(hit.stepId).toBe('direction')
+    expect(hit.title).toBe('Give the project direction')
+    expect(hit.actionHref).toBe('/thread')
   })
 
   it('workspace_import_pending: emitted when README + package.json present but goals file missing', async () => {
@@ -243,6 +297,244 @@ describe('buildInbox', () => {
     if (!hit || hit.kind !== 'brief_approval') throw new Error('unreachable')
     expect(hit.taskId).toBe('task-a')
     expect(hit.actionHref).toBe('/task/task-a')
+  })
+
+  it('agent_question_pending: emitted when a task has an unanswered agent question', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-q',
+          title: 'Bootstrap coordinators for this workspace',
+          status: 'exploring',
+          openQuestions: [
+            {
+              id: 'q-1',
+              kind: 'confirm',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-11T00:00:00.000Z',
+              restatement: 'Is this the right split for this project?',
+            },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    const hit = items.find(i => i.kind === 'agent_question_pending')
+    expect(hit).toBeDefined()
+    if (!hit || hit.kind !== 'agent_question_pending') throw new Error('unreachable')
+    expect(hit.taskId).toBe('task-q')
+    expect(hit.detail).toContain('right split')
+    expect(hit.actionHref).toBe('/task/task-q')
+  })
+
+  it('import_draft_queue: emitted when imported drafts are waiting to be shaped', async () => {
+    await writeYaml('guildhall.yaml', {
+      name: 'Inbox Test',
+      id: 'inbox-test',
+      coordinators: [{ id: 'frontend', name: 'Frontend' }],
+      bootstrap: {
+        verifiedAt: '2026-05-11T00:00:00.000Z',
+        install: ['pnpm install'],
+        gates: ['pnpm typecheck'],
+      },
+    })
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeFile('memory/project-brief.md', 'Fair Labor License helps projects ship with a fair labor license.')
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-import-a',
+          title: 'Inspect the repo and draft starter tasks',
+          status: 'import_draft',
+        },
+        {
+          id: 'task-import-b',
+          title: 'Review workspace roadmap',
+          status: 'import_draft',
+        },
+      ],
+    })
+
+    const items = buildInbox({
+      projectPath: tmpDir,
+      snapshotOptions: {
+        readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+        detectOauthProviders: () => ({ claude: false, codex: false }),
+      },
+    })
+    const hit = items.find(i => i.kind === 'import_draft_queue')
+    expect(hit).toBeDefined()
+    if (!hit || hit.kind !== 'import_draft_queue') throw new Error('unreachable')
+    expect(hit.severity).toBe('medium')
+    expect(hit.taskId).toBe('task-import-a')
+    expect(hit.title).toBe('2 imported drafts need shaping')
+    expect(hit.detail).toMatch(/Inspect the repo and draft starter tasks/)
+    expect(hit.actionHref).toBe('/task/task-import-a')
+  })
+
+  it('suppresses import_draft_queue while a later setup step still owns the next user action', async () => {
+    await writeYaml('guildhall.yaml', {
+      name: 'Inbox Test',
+      id: 'inbox-test',
+      coordinators: [{ id: 'frontend', name: 'Frontend' }],
+      bootstrap: {
+        verifiedAt: '2026-05-11T00:00:00.000Z',
+        install: ['pnpm install'],
+        gates: ['pnpm typecheck'],
+      },
+    })
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-import-a',
+          title: 'Version diff view (deferred)',
+          status: 'import_draft',
+        },
+      ],
+    })
+
+    const items = buildInbox({
+      projectPath: tmpDir,
+      snapshotOptions: {
+        readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+        detectOauthProviders: () => ({ claude: false, codex: false }),
+      },
+    })
+
+    expect(items.some(i => i.kind === 'setup_pending' && i.stepId === 'direction')).toBe(true)
+    expect(items.some(i => i.kind === 'import_draft_queue')).toBe(false)
+  })
+
+  it('suppresses import_draft_queue while the reserved workspace import question still needs an answer', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-workspace-import',
+          title: 'Review existing project work',
+          status: 'spec_review',
+          openQuestions: [
+            {
+              id: 'q-import',
+              kind: 'choice',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-11T00:00:00.000Z',
+              prompt: 'Which planning docs should become tasks?',
+              choices: ['A', 'B'],
+              selectionMode: 'multiple',
+            },
+          ],
+        },
+        {
+          id: 'task-import-a',
+          title: 'Version diff view (deferred)',
+          status: 'import_draft',
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.some(i => i.kind === 'agent_question_pending' && i.taskId === 'task-workspace-import')).toBe(true)
+    expect(items.some(i => i.kind === 'import_draft_queue')).toBe(false)
+  })
+
+  it('does not let stale unanswered questions on a done workspace-import task suppress the import draft queue', async () => {
+    await writeYaml('guildhall.yaml', {
+      name: 'Inbox Test',
+      id: 'inbox-test',
+      coordinators: [{ id: 'frontend', name: 'Frontend' }],
+      bootstrap: {
+        verifiedAt: '2026-05-11T00:00:00.000Z',
+        install: ['pnpm install'],
+        gates: ['pnpm typecheck'],
+      },
+    })
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeFile('memory/project-brief.md', 'Looma and Knit are one coordinated product effort.')
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-workspace-import',
+          title: 'Review existing project work',
+          status: 'done',
+          openQuestions: [
+            {
+              id: 'q-import',
+              kind: 'choice',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-11T00:00:00.000Z',
+              prompt: 'Which planning docs should become tasks?',
+              choices: ['A', 'B'],
+              selectionMode: 'multiple',
+            },
+          ],
+        },
+        {
+          id: 'task-import-a',
+          title: 'Version diff view (deferred)',
+          status: 'import_draft',
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.some(i => i.kind === 'agent_question_pending' && i.taskId === 'task-workspace-import')).toBe(false)
+    expect(items.some(i => i.kind === 'import_draft_queue')).toBe(true)
+  })
+
+  it('suppresses obsolete meta-intake routing questions once a valid routing draft already exists', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-meta-intake',
+          title: 'Inspect the repo and draft starter tasks',
+          status: 'spec_review',
+          spec: `\`\`\`yaml
+coordinators:
+  - id: frontend
+    domain: frontend
+    mandate: Draft UI routing
+    concerns: []
+    autonomousDecisions: []
+    escalationTriggers: []
+\`\`\``,
+          openQuestions: [
+            {
+              id: 'q-routing',
+              kind: 'choice',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-11T00:00:00.000Z',
+              prompt: 'Pick the project areas (review lanes) you want coordinators for.',
+              choices: ['Frontend/UI'],
+              selectionMode: 'multiple',
+            },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.some(i => i.kind === 'agent_question_pending' && i.taskId === 'task-meta-intake')).toBe(false)
+    expect(items.some(i => i.kind === 'spec_approval' && i.taskId === 'task-meta-intake')).toBe(true)
   })
 
   it('brief_approval: not emitted once the task has moved beyond intake', async () => {
@@ -312,6 +604,68 @@ describe('buildInbox', () => {
       version: 1,
       lastUpdated: '',
       tasks: [{ id: 'task-b', title: 'Wire auth', status: 'spec_review' }],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    const hit = items.find(i => i.kind === 'spec_approval')
+    expect(hit).toBeDefined()
+    if (!hit || hit.kind !== 'spec_approval') throw new Error('unreachable')
+    expect(hit.taskId).toBe('task-b')
+  })
+
+  it('spec_approval: suppressed while a spec-review task still has an unanswered question', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [{
+        id: 'task-b',
+        title: 'Wire auth',
+        status: 'spec_review',
+        openQuestions: [
+          {
+            id: 'q-1',
+            kind: 'confirm',
+            askedBy: 'spec-agent',
+            askedAt: '2026-05-11T00:00:00.000Z',
+            restatement: 'Is this the right split?',
+          },
+        ],
+      }],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.find(i => i.kind === 'spec_approval')).toBeUndefined()
+  })
+
+  it('spec_approval: not suppressed by a stale starter-task focus question once a concrete spec exists', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [{
+        id: 'task-b',
+        title: 'Wire auth',
+        status: 'spec_review',
+        updatedAt: '2026-05-11T20:24:50.064Z',
+        spec: '## Summary\n\nDraft spec.\n\n## Acceptance Criteria\n\n1. Given...\n\n## Out of Scope\n\n- None\n\n## Open Questions\n\n- None',
+        acceptanceCriteria: [
+          { id: 'ac-1', description: 'Real AC', verifiedBy: 'review', met: false },
+        ],
+        openQuestions: [
+          {
+            id: 'q-1',
+            kind: 'choice',
+            askedBy: 'spec-agent',
+            askedAt: '2026-05-11T20:24:31.428Z',
+            prompt: 'What should this first starter task focus on?',
+            selectionMode: 'single',
+            choices: ['Onboarding', 'Bootstrap'],
+          },
+        ],
+      }],
     })
 
     const items = buildInbox({ projectPath: tmpDir })

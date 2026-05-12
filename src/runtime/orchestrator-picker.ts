@@ -93,6 +93,7 @@ export function pickNextTask(
   domain?: string,
   exclude?: ReadonlySet<string>,
   lane?: TaskLane,
+  preferredTaskId?: string,
 ): Task | undefined {
   const priority = ['critical', 'high', 'normal', 'low'] as const
   const isExcluded = exclude
@@ -101,6 +102,20 @@ export function pickNextTask(
   const matchesLane = lane
     ? (t: Task) => laneForTask(t) === lane
     : (_t: Task) => true
+  const matchesStatusSlot = (
+    task: Task,
+    status: TaskStatus,
+    priorityLevel: (typeof priority)[number],
+  ): boolean =>
+    task.status === status &&
+    !(task.status === 'spec_review' && Boolean(task.spec?.trim()) && holdsDraftedSpecReviewForManualApproval(task)) &&
+    !((task.status === 'exploring' || task.status === 'spec_review') && hasUnansweredOpenQuestion(task)) &&
+    matchesLane(task) &&
+    task.priority === priorityLevel &&
+    (!domain || task.domain === domain) &&
+    dependenciesSatisfied(queue, task) &&
+    !hasOpenEscalation(task) &&
+    !isExcluded(task)
 
   // FR-22: worker-shelved tasks pending `pre_rejection_policy` are serviced
   // first — they're cheap (no LLM) and keeping the board clear of unresolved
@@ -134,20 +149,21 @@ export function pickNextTask(
     'ready',
   ]
 
+  if (preferredTaskId) {
+    const preferred = queue.tasks.find((task) => task.id === preferredTaskId)
+    if (preferred) {
+      for (const status of [...activeStatuses, ...freshStatuses]) {
+        for (const p of priority) {
+          if (matchesStatusSlot(preferred, status, p)) return preferred
+        }
+      }
+    }
+  }
+
   for (const status of [...activeStatuses, ...freshStatuses]) {
     for (const p of priority) {
       const task = queue.tasks.find(
-        (t) =>
-          t.status === status &&
-          !(t.status === 'spec_review' && Boolean(t.spec?.trim()) && holdsDraftedSpecReviewForManualApproval(t)) &&
-          !(t.status === 'exploring' && hasUnansweredOpenQuestion(t)) &&
-          matchesLane(t) &&
-          t.priority === p &&
-          (!domain || t.domain === domain) &&
-          dependenciesSatisfied(queue, t) &&
-          // FR-10: halt any task with an unresolved escalation regardless of status
-          !hasOpenEscalation(t) &&
-          !isExcluded(t),
+        (t) => matchesStatusSlot(t, status, p),
       )
       if (task) return task
     }

@@ -9,6 +9,7 @@
   import Chip from '../../lib/Chip.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import type { ReviewVerdict, GateResult } from '../../lib/types.js'
+  import { projectFetch } from '../../lib/project-routes.js'
 
   interface Props {
     taskId: string
@@ -37,7 +38,7 @@
 
   async function load() {
     try {
-      const res = await fetch(
+      const res = await projectFetch(
         `/api/project/task/${encodeURIComponent(taskId)}/experts`,
       )
       if (!res.ok) {

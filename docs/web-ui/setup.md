@@ -4,7 +4,8 @@ help_topic: web.setup
 help_summary: |
   First-run onboarding at http://localhost:7842/setup. Collects workspace
   identity, detects installed providers, collects API keys or CLI auth,
-  and optionally kicks off the meta-intake agent to draft coordinators.
+  and optionally kicks off the meta-intake agent to inspect the repo and
+  infer internal routing.
 ---
 
 # Setup wizard

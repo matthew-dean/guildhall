@@ -105,6 +105,43 @@ describe('postUserQuestionTool', () => {
     })
   })
 
+  it('does not append a duplicate unanswered question with the same prompt and choices', async () => {
+    const metadata: Record<string, unknown> = {
+      tasks_path: tasksPath,
+      current_task_id: 'task-001',
+      current_agent_id: 'spec-agent',
+    }
+
+    const first = await postUserQuestionTool.execute(
+      {
+        kind: 'choice',
+        body: 'Pick one',
+        choices: ['A', 'B'],
+        selectionMode: 'single',
+      },
+      { cwd: '/tmp', metadata },
+    )
+    const second = await postUserQuestionTool.execute(
+      {
+        kind: 'choice',
+        body: 'Pick one',
+        choices: ['A', 'B'],
+        selectionMode: 'single',
+      },
+      { cwd: '/tmp', metadata },
+    )
+
+    expect(first.is_error).toBe(false)
+    expect(second.is_error).toBe(false)
+    expect(second.metadata?.questionId).toBe(first.metadata?.questionId)
+
+    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
+      tasks: Array<{ openQuestions?: Array<{ prompt?: string }> }>
+    }
+    expect(queue.tasks[0]?.openQuestions).toHaveLength(1)
+    expect(queue.tasks[0]?.openQuestions?.[0]?.prompt).toBe('Pick one')
+  })
+
   it('infers structured choice questions from last_assistant_text when the model calls it with {}', async () => {
     const metadata: Record<string, unknown> = {
       tasks_path: tasksPath,

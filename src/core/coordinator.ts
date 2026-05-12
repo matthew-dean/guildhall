@@ -21,8 +21,8 @@ export type CoordinatorConcern = z.infer<typeof CoordinatorConcern>
 
 export const CoordinatorDomain = z.object({
   id: z.string(),
-  name: z.string(),
   // One-paragraph description of what this coordinator cares about
+  name: z.string().optional(),
   mandate: z.string(),
   // The project path(s) this coordinator governs
   projectPaths: z.array(z.string()),

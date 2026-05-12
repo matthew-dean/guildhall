@@ -29,7 +29,6 @@ describe('summarizeProjects', () => {
         id: 'guildhall',
         name: 'Guildhall',
         path: '/work/guildhall',
-        selected: true,
         statusLabel: 'Running',
         tone: 'active',
         stageLabel: 'Running',
@@ -39,7 +38,7 @@ describe('summarizeProjects', () => {
         tags: ['cli', 'orchestrator'],
         counts: { total: 10, active: 2, blocked: 1, done: 6, shelved: 1 },
         actionLabel: 'Open project',
-        runActionLabel: 'Stop agents',
+        runActionLabel: 'Stop',
         canOpen: true,
         canStart: false,
         canStop: true,
@@ -54,7 +53,6 @@ describe('summarizeProjects', () => {
           id: 'looma',
           name: 'Looma',
           path: '/work/looma',
-          selected: false,
           taskCounts: { total: 0, active: 0, blocked: 0, done: 0, shelved: 0 },
           run: { status: 'stopped' },
         },
@@ -67,7 +65,7 @@ describe('summarizeProjects', () => {
       stageLabel: 'Ready',
       activityLabel: 'No task activity yet.',
       actionLabel: 'Open project',
-      runActionLabel: 'Start agents',
+      runActionLabel: 'Start',
       canStart: true,
       canStop: false,
     })
@@ -81,7 +79,6 @@ describe('summarizeProjects', () => {
           name: 'scratch-pad',
           path: '/work/scratch-pad',
           initializationNeeded: true,
-          selected: false,
         },
       ],
     }
@@ -125,14 +122,14 @@ describe('summarizeProjects', () => {
       stageLabel: 'Needs attention',
       activityLabel: '1 blocked task needs attention.',
       recentLabel: 'Blocked on: Repair staging auth flow',
-      runActionLabel: 'Start agents',
+      runActionLabel: 'Start',
     })
     expect(summarizeProjects(service)[1]).toMatchObject({
       statusLabel: 'Stable',
       stageLabel: 'Stable',
       activityLabel: '4 of 4 tasks are done.',
       recentLabel: 'Recently completed: Audit primitive integration',
-      runActionLabel: 'Start agents',
+      runActionLabel: 'Start',
     })
   })
 
@@ -155,7 +152,7 @@ describe('summarizeProjects', () => {
       stageLabel: 'Paused',
       activityLabel: '1 task is paused.',
       recentLabel: 'Working on: Build TypeScript-JSDoc round-trip conversion',
-      runActionLabel: 'Start agents',
+      runActionLabel: 'Start',
     })
   })
 })

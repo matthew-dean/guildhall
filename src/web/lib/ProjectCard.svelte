@@ -40,22 +40,23 @@
   )
 </script>
 
-<Card tone={summary.tone === 'warn' ? 'warn' : summary.tone === 'active' ? 'ok' : summary.tone === 'success' ? 'accent' : 'default'}>
+<Card
+  className="project-card"
+  tone={summary.tone === 'warn' ? 'warn' : summary.tone === 'active' ? 'ok' : summary.tone === 'success' ? 'accent' : 'default'}
+>
   {#snippet actions()}
     <div class="top-chips">
-      {#if summary.selected}
-        <Chip label="Current" tone="accent" />
-      {/if}
       <Chip label={summary.statusLabel} tone={statusTone} />
     </div>
   {/snippet}
 
-  <div class="stack">
-    <div class="title-block">
-      <h3>{summary.name}</h3>
-      <p class="path" title={summary.path}>{summary.path}</p>
-      {#if summary.blurb}
-        <p class="blurb">{summary.blurb}</p>
+  <div class="card-layout">
+    <div class="stack">
+      <div class="title-block">
+        <h3>{summary.name}</h3>
+        <p class="path" title={summary.path}>{summary.path}</p>
+        {#if summary.blurb}
+          <p class="blurb">{summary.blurb}</p>
       {/if}
     </div>
 
@@ -100,6 +101,7 @@
       {/if}
     </div>
 
+    </div>
     <div class="actions">
       <Button variant="secondary" size="sm" disabled={busy || !summary.canOpen} onclick={() => onOpen?.(summary.id)}>
         <FolderOpen size={14} />
@@ -121,6 +123,24 @@
 </Card>
 
 <style>
+  :global(section.project-card) {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  :global(section.project-card .card-body) {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  .card-layout {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
   h3 {
     margin: 0;
     font-size: var(--fs-4);
@@ -130,12 +150,13 @@
     display: flex;
     gap: var(--s-2);
     flex-wrap: wrap;
-    justify-content: flex-end;
+    justify-content: flex-start;
   }
   .stack {
     display: flex;
     flex-direction: column;
     gap: var(--s-3);
+    min-width: 0;
   }
   .title-block {
     min-width: 0;
@@ -161,6 +182,7 @@
   .story {
     display: grid;
     gap: var(--s-2);
+    align-content: start;
   }
   .activity,
   .recent {
@@ -189,6 +211,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--s-2);
+    align-content: start;
   }
   .metric {
     display: inline-flex;
@@ -221,7 +244,21 @@
   }
   .actions {
     display: flex;
+    width: 100%;
     gap: var(--s-2);
     flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    margin-top: auto;
+    padding-top: var(--s-4);
+    border-top: 1px solid var(--border);
+  }
+  @media (max-width: 640px) {
+    .actions {
+      justify-content: stretch;
+    }
+    .actions :global(button) {
+      flex: 1 1 12rem;
+    }
   }
 </style>

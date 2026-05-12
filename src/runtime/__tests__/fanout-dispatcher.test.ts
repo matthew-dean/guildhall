@@ -21,7 +21,7 @@ function makeProject(
   return {
     concurrent_task_dispatch: entry(dispatch),
     worktree_isolation: entry('none' as const),
-    merge_policy: entry('ff_only_local' as const),
+    landing_strategy: entry('cherry_pick_local' as const),
     rejection_dampening: entry({ kind: 'off' as const }),
     business_envelope_strictness: entry('off' as const),
     agent_health_strictness: entry('standard' as const),
@@ -154,6 +154,19 @@ describe('pickNextTasks', () => {
     ])
     const picks = pickNextTasks({ queue: q, capacity: 5, domainFilter: 'core' })
     expect(picks.map((t) => t.id)).toEqual(['t2'])
+  })
+
+  it('prefers an explicitly requested task when it is actionable', () => {
+    const q = queue([
+      task({ id: 't-active', status: 'review', priority: 'normal' }),
+      task({ id: 't-requested', status: 'ready', priority: 'low' }),
+    ])
+    const picks = pickNextTasks({
+      queue: q,
+      capacity: 1,
+      preferredTaskId: 't-requested',
+    })
+    expect(picks.map((t) => t.id)).toEqual(['t-requested'])
   })
 
   it('uses lane capacities to keep spec intake moving alongside worker progress', () => {

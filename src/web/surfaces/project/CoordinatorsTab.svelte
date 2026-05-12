@@ -1,9 +1,10 @@
 <!--
-  Coordinators view: one column per coordinator with a textual sparkline of
-  recent task statuses, mandate line, and the tasks in that domain.
+  Internal routing view: one column per routing slice with a textual sparkline
+  of recent task statuses, mandate line, and the tasks in that slice.
 -->
 <script lang="ts">
   import TaskCard from '../../lib/TaskCard.svelte'
+  import { friendlyStewardName } from '../../lib/display.js'
   import { nav } from '../../lib/nav.svelte.js'
   import { buildCoordinatorsSurface } from '../../lib/project-data.js'
   import type { ProjectDetail } from '../../lib/types.js'
@@ -44,46 +45,46 @@
 </script>
 
 {#if coordinators.length === 0}
-  <p class="muted">No coordinators yet. Bootstrap the project first.</p>
+  <p class="muted">No internal routing slices yet. Finish setup first.</p>
 {:else}
   <section class="intro">
     <div class="intro-head">
-      <h2>{selectedColumn ? `${selectedColumn.c.name ?? selectedColumn.c.id} policy` : 'Coordinator ownership'}</h2>
-      <button type="button" class="linkbtn" onclick={() => nav('/settings/coordinators')}>
-        How coordinators work →
+      <h2>{selectedColumn ? friendlyStewardName(undefined, selectedColumn.c.domain, selectedColumn.c.id) : 'Internal routing'}</h2>
+      <button type="button" class="linkbtn" onclick={() => nav('/settings/routing')}>
+        How routing works →
       </button>
     </div>
     {#if selectedColumn}
       <p class="intro-copy">
-        This lane owns <code>{selectedColumn.c.domain ?? 'unknown'}</code>. Use this view to inspect
-        what it protects, what it can decide alone, what it must escalate, and which tasks are
-        currently routed through it.
+        This routing slice covers <code>{selectedColumn.c.domain ?? 'unknown'}</code>. Use this view to
+        inspect what kind of work lands here, what context and checks Guildhall tends to apply, and which
+        tasks are currently routed through it.
       </p>
     {:else}
       <p class="intro-copy">
-        Coordinators are review lanes. This board shows which domains exist, what each one
-        protects, and where work is currently landing.
+        This is Guildhall's internal routing map. The single local coordinator uses it to decide
+        what context, checks, and review lenses each task should get.
       </p>
     {/if}
-    <div class="intro-meta">
-      <span><code>domain</code> routes tasks.</span>
-      <span><code>path</code> is optional and only narrows scope when a coordinator owns a subproject.</span>
-      <span>Editing still lives in <code>guildhall.yaml</code>.</span>
-    </div>
+    <ul class="intro-meta">
+      <li><code>domain</code> is the routing label Guildhall uses for tasks.</li>
+      <li><code>path</code> is optional and only narrows scope when a slice covers a subproject.</li>
+      <li>Editing still lives in <code>guildhall.yaml</code>.</li>
+    </ul>
   </section>
   {#if selectedColumn}
     <section class="detail-shell">
       <div class="detail-main">
         <div class="detail-card">
-          <div class="detail-head">
-            <div class="detail-meta-row">
+            <div class="detail-head">
+              <div class="detail-meta-row">
               <span class="domain-chip">Domain: {selectedColumn.c.domain ?? 'unknown'}</span>
               <span class="scope-chip">Scope: {scopeLabel(selectedColumn.c.path)}</span>
+              </div>
+              <button type="button" class="linkbtn" onclick={() => nav('/routing')}>
+              View all routing →
+              </button>
             </div>
-            <button type="button" class="linkbtn" onclick={() => nav('/coordinators')}>
-              View all lanes →
-            </button>
-          </div>
           <div class="detail-section">
             <div class="label">Protects</div>
             <p class="detail-copy">{fullMandate(selectedColumn.c.mandate)}</p>
@@ -157,7 +158,7 @@
   {#if selectedColumn}
     <section class="lane-tasks">
       <div class="lane-tasks-head">
-        <h3>Tasks in this lane</h3>
+        <h3>Tasks in this routing slice</h3>
         <span class="muted">Showing the highest-priority items first.</span>
       </div>
       {#if selectedColumn.domainTasks.length === 0}
@@ -165,7 +166,7 @@
       {:else}
         <div class="stack">
           {#each selectedColumn.visibleTasks as t (t.id)}
-            <TaskCard task={t} orchestratorRunning={running} />
+            <TaskCard task={t} coordinatorRunning={running} />
           {/each}
         </div>
         {#if selectedColumn.domainTasks.length > selectedColumn.visibleTasks.length}
@@ -177,10 +178,10 @@
     </section>
   {:else}
     <div class="board">
-      {#each columns as col (col.c.id ?? col.c.name)}
+      {#each columns as col (col.c.id ?? col.c.domain)}
         <div class="col">
           <div class="col-head">
-            <span class="name">{col.c.name ?? col.c.id ?? '—'}</span>
+            <span class="name">{friendlyStewardName(undefined, col.c.domain, col.c.id)}</span>
             <div class="meta-row">
               <span class="domain-chip">Domain: {col.c.domain ?? 'unknown'}</span>
               <span class="scope-chip">Scope: {scopeLabel(col.c.path)}</span>
@@ -202,8 +203,8 @@
             <div class="mandate">{protectsLabel(col.c.mandate)}</div>
           </div>
           <div class="card-actions">
-            <button type="button" class="linkbtn" onclick={() => nav('/coordinators/' + encodeURIComponent((col.c.id ?? col.c.name ?? '').toString()))}>
-              View policy →
+            <button type="button" class="linkbtn" onclick={() => nav('/routing/' + encodeURIComponent((col.c.id ?? col.c.domain ?? '').toString()))}>
+              View routing →
             </button>
           </div>
           {#if col.domainTasks.length === 0}
@@ -211,7 +212,7 @@
           {:else}
             <div class="stack">
               {#each col.visibleTasks as t (t.id)}
-                <TaskCard task={t} orchestratorRunning={running} />
+                <TaskCard task={t} coordinatorRunning={running} />
               {/each}
             </div>
             {#if col.domainTasks.length > col.visibleTasks.length}
@@ -253,13 +254,16 @@
     max-width: 72ch;
   }
   .intro-meta {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: var(--s-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
     font-size: var(--fs-1);
     color: var(--text-muted);
   }
-  .intro-meta span {
+  .intro-meta li {
     background: var(--bg-raised);
     border: 1px solid var(--border);
     border-radius: var(--r-1);

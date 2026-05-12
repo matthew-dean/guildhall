@@ -57,16 +57,22 @@ export function sortEventsChronologically(items: EventEnvelope[]): EventEnvelope
 
 export interface WorkSurfaceModel {
   tasks: Task[]
+  importDraftCount: number
+  nextImportDraft: Task | null
   needsMeta: boolean
   running: boolean
   events: EventEnvelope[]
 }
 
 export function buildWorkSurface(detail: ProjectDetail): WorkSurfaceModel {
-  const tasks = detail.tasks ?? []
+  const allTasks = detail.tasks ?? []
+  const importDrafts = allTasks.filter(task => task.status === 'import_draft')
+  const tasks = allTasks.filter(task => task.status !== 'import_draft')
   const coordinators = detail.config?.coordinators ?? []
   return {
     tasks,
+    importDraftCount: importDrafts.length,
+    nextImportDraft: importDrafts[0] ?? null,
     needsMeta: coordinators.length === 0,
     running: (detail.run?.status ?? 'stopped') === 'running',
     events: sortEventsChronologically(detail.recentEvents ?? []),
@@ -82,8 +88,9 @@ const COORDINATOR_STATUS_ORDER: Record<string, number> = {
   exploring: 5,
   ready: 6,
   proposed: 7,
-  shelved: 8,
-  done: 9,
+  import_draft: 8,
+  shelved: 9,
+  done: 10,
 }
 
 const COORDINATOR_GLYPHS: Record<string, string> = {
@@ -95,6 +102,7 @@ const COORDINATOR_GLYPHS: Record<string, string> = {
   exploring: '◐',
   ready: '○',
   proposed: '·',
+  import_draft: '·',
   blocked: '✕',
   shelved: '–',
 }
@@ -143,10 +151,10 @@ export function buildCoordinatorsSurface(detail: ProjectDetail, subView: string 
   const selectedCoordinatorId = subView && subView !== 'all' ? decodeURIComponent(subView) : null
   const coordinators = selectedCoordinatorId
     ? allCoordinators.filter(
-        (coordinator) => (coordinator.id ?? coordinator.name ?? '').toString() === selectedCoordinatorId,
+        (coordinator) => (coordinator.id ?? coordinator.domain ?? '').toString() === selectedCoordinatorId,
       )
     : allCoordinators
-  const tasks = detail.tasks ?? []
+  const tasks = (detail.tasks ?? []).filter(task => task.status !== 'import_draft')
   const columns = coordinators.map((coordinator) => {
     const domainTasks = tasks.filter((task) => task.domain === coordinator.domain)
     return {
@@ -168,7 +176,7 @@ export function buildCoordinatorsSurface(detail: ProjectDetail, subView: string 
     coordinators,
     columns,
     selectedColumn: selectedCoordinatorId
-      ? columns.find((column) => (column.c.id ?? column.c.name ?? '') === selectedCoordinatorId) ?? null
+      ? columns.find((column) => (column.c.id ?? column.c.domain ?? '') === selectedCoordinatorId) ?? null
       : null,
     running: (detail.run?.status ?? 'stopped') === 'running',
   }

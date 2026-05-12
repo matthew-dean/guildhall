@@ -11,6 +11,7 @@
 -->
 <script lang="ts">
   import Stack from '../../lib/Stack.svelte'
+  import { projectFetch } from '../../lib/project-routes.js'
 
   interface Props {
     taskId: string
@@ -43,7 +44,7 @@
 
   async function load() {
     try {
-      const r = await fetch(`/api/project/task/${encodeURIComponent(taskId)}/wizards`)
+      const r = await projectFetch(`/api/project/task/${encodeURIComponent(taskId)}/wizards`)
       if (!r.ok) return
       const j = (await r.json()) as { wizards?: WizardShape[] }
       wizard = (j.wizards ?? []).find(w => w.id === 'spec-fill') ?? null
@@ -60,7 +61,7 @@
   })
 
   async function skip(stepId: string) {
-    await fetch(
+    await projectFetch(
       `/api/project/task/${encodeURIComponent(taskId)}/wizards/spec-fill/skip`,
       {
         method: 'POST',
@@ -72,7 +73,7 @@
   }
 
   async function unskip(stepId: string) {
-    await fetch(
+    await projectFetch(
       `/api/project/task/${encodeURIComponent(taskId)}/wizards/spec-fill/unskip`,
       {
         method: 'POST',
@@ -110,9 +111,9 @@
   <div class="checklist" class:collapsed>
     <header class="head">
       <div class="summary">
-        <strong>Spec fill</strong>
+        <strong>Task checklist</strong>
         <span class="muted">
-          {wizard.doneCount} of {wizard.totalSteps} — finish for the reviewer
+          {wizard.doneCount} of {wizard.totalSteps} — finish this so Guildhall can review the task cleanly
         </span>
       </div>
       <button

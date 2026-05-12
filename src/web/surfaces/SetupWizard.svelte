@@ -15,7 +15,9 @@
   import DefinitionList from '../lib/DefinitionList.svelte'
   import StatusLight from '../lib/StatusLight.svelte'
   import Help from '../lib/Help.svelte'
+  import { friendlyStewardName } from '../lib/display.js'
   import { nav } from '../lib/nav.svelte.js'
+  import { currentProjectHref, projectFetch } from '../lib/project-routes.js'
 
   interface Defaults {
     suggestedName?: string
@@ -36,7 +38,7 @@
     baseUrl?: string | null
   }
   interface DraftCoordinator {
-    name: string
+    name?: string
     domain: string
     path?: string
     mandate?: string
@@ -57,6 +59,12 @@
     updatedAt: string | null
     specLength: number
   }
+
+  interface Props {
+    projectId?: string | null
+  }
+
+  let { projectId: _projectId = null }: Props = $props()
 
   let step = $state<1 | 2 | 3>(1)
   let identity = $state<Status>({})
@@ -87,7 +95,7 @@
   const launchStopped = $derived(Boolean(bootstrapLive && launchActivity && launchActivity.runStatus !== 'running'))
   const launchStatusLabel = $derived(
     launchStopped
-      ? 'Orchestrator paused'
+      ? 'Coordinator paused'
       : launchActivity?.taskStatus === 'spec_review' && launchActivity.specLength === 0
         ? 'Recovering missing draft'
         : 'Model call in progress',
@@ -106,8 +114,8 @@
 
   $effect(() => {
     Promise.all([
-      fetch('/api/setup/defaults').then(r => r.json() as Promise<Defaults>),
-      fetch('/api/setup/status').then(r => r.json() as Promise<Status>),
+      projectFetch('/api/setup/defaults').then(r => r.json() as Promise<Defaults>),
+      projectFetch('/api/setup/status').then(r => r.json() as Promise<Status>),
     ])
       .then(([defaults, status]) => {
         identity = {
@@ -142,7 +150,7 @@
 
   $effect(() => {
     if (step !== 2 || providers) return
-    fetch('/api/setup/providers')
+    projectFetch('/api/setup/providers')
       .then(r => r.json())
       .then(j => {
         if (j.error) return
@@ -175,7 +183,7 @@
       return (idError = 'ID must be lowercase letters, numbers, and dashes only')
     busy = true
     try {
-      const r = await fetch('/api/setup/identity', {
+      const r = await projectFetch('/api/setup/identity', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: nm, id: slug }),
@@ -203,7 +211,7 @@
       if (selectedProvider === 'llama-cpp') {
         body.lmStudioUrl = llamaUrl.trim() || providers?.['llama-cpp']?.url || 'http://localhost:1234/v1'
       }
-      const r = await fetch('/api/setup/providers/config', {
+      const r = await projectFetch('/api/setup/providers/config', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -220,19 +228,19 @@
   }
 
   function skipToDashboard() {
-    nav('/project')
+    nav(currentProjectHref('/thread'))
   }
 
   async function startBootstrap() {
     bootstrapBusy = true
     try {
-      const r = await fetch('/api/project/meta-intake', { method: 'POST' })
+      const r = await projectFetch('/api/project/meta-intake', { method: 'POST' })
       const j = await r.json()
       if (j.error) {
         bootstrapBusy = false
         return alert('Bootstrap failed: ' + j.error)
       }
-      const resumed = await ensureOrchestratorRunning()
+      const resumed = await ensureCoordinatorRunning()
       bootstrapLive = true
       if (resumed) runBootstrapWatch()
     } finally {
@@ -240,11 +248,11 @@
     }
   }
 
-  async function ensureOrchestratorRunning(): Promise<boolean> {
+  async function ensureCoordinatorRunning(): Promise<boolean> {
     try {
-      const detail = await fetch('/api/project', { cache: 'no-store' }).then(r => r.json())
+      const detail = await projectFetch('/api/project', { cache: 'no-store' }).then(r => r.json())
       if (detail?.run?.status === 'running') return true
-      const r = await fetch('/api/project/start', { method: 'POST' })
+      const r = await projectFetch('/api/project/start', { method: 'POST' })
       if (!r.ok) {
         return false
       }
@@ -260,7 +268,7 @@
     bootstrapBusy = true
     bootstrapLive = true
     try {
-      const resumed = await ensureOrchestratorRunning()
+      const resumed = await ensureCoordinatorRunning()
       await refreshLaunchActivity()
       if (resumed) runBootstrapWatch()
     } finally {
@@ -272,8 +280,8 @@
     try {
       activityNow = Date.now()
       const [projectRes, draftRes] = await Promise.all([
-        fetch('/api/project', { cache: 'no-store' }),
-        draft ? Promise.resolve(null) : fetch('/api/project/meta-intake/draft', { cache: 'no-store' }),
+        projectFetch('/api/project', { cache: 'no-store' }),
+        draft ? Promise.resolve(null) : projectFetch('/api/project/meta-intake/draft', { cache: 'no-store' }),
       ])
       const projectDetail = await projectRes.json()
       const draftInfo = draft ?? ((await draftRes?.json()) as MetaIntakeDraft | undefined)
@@ -296,7 +304,7 @@
   const activityItems = $derived([
     ['Task', launchActivity?.taskId],
     ['Agent phase', launchActivity?.taskStatus],
-    ['Orchestrator', launchActivity?.runStatus],
+    ['Coordinator', launchActivity?.runStatus],
     ['Draft', launchActivity?.outputStatus],
     ['Last update', launchActivity?.updatedAt ? new Date(launchActivity.updatedAt).toLocaleTimeString() : null],
     ['Quiet for', launchQuietSeconds === null ? null : formatDuration(launchQuietSeconds)],
@@ -316,7 +324,7 @@
     const poll = async () => {
       if (!bootstrapWatchActive || destroyed) return
       try {
-        const r = await fetch('/api/project/meta-intake/draft')
+        const r = await projectFetch('/api/project/meta-intake/draft')
         const j = (await r.json()) as MetaIntakeDraft
         await refreshLaunchActivity(j)
         if (j.status === 'draft-ready' && j.drafts?.length > 0) {
@@ -328,7 +336,7 @@
         if (j.status === 'approved') {
           bootstrapWatchActive = false
           bootstrapLive = false
-          setTimeout(() => nav('/project'), 400)
+          setTimeout(() => nav(currentProjectHref('/thread')), 400)
           return
         }
       } catch {
@@ -341,7 +349,7 @@
 
   async function hydrateLaunchState(): Promise<void> {
     try {
-      const r = await fetch('/api/project/meta-intake/draft', { cache: 'no-store' })
+      const r = await projectFetch('/api/project/meta-intake/draft', { cache: 'no-store' })
       if (!r.ok) return
       const j = (await r.json()) as MetaIntakeDraft
       await refreshLaunchActivity(j)
@@ -358,7 +366,7 @@
       if (j.taskExists && (j.status === 'in-progress' || j.status === 'spec-but-no-fence')) {
         bootstrapLive = true
         approvalDrafts = null
-        const resumed = await ensureOrchestratorRunning()
+        const resumed = await ensureCoordinatorRunning()
         await refreshLaunchActivity(j)
         if (resumed) runBootstrapWatch()
       }
@@ -376,13 +384,13 @@
     approving = true
     approvalError = null
     try {
-      const r = await fetch('/api/project/meta-intake/approve', { method: 'POST' })
+      const r = await projectFetch('/api/project/meta-intake/approve', { method: 'POST' })
       const j = await r.json()
       if (j.error) {
         approvalError = j.error
         return
       }
-      setTimeout(() => nav('/project'), 500)
+      setTimeout(() => nav(currentProjectHref('/thread')), 500)
     } finally {
       approving = false
     }
@@ -424,7 +432,7 @@
         </Stack>
       </Card>
       <Row justify="end" gap="2">
-        <Button variant="secondary" onclick={() => nav('/project')}>Cancel</Button>
+        <Button variant="secondary" onclick={() => nav(currentProjectHref('/thread'))}>Cancel</Button>
         <Button variant="primary" disabled={busy} onclick={saveIdentity}>
           Save and continue →
         </Button>
@@ -472,8 +480,8 @@
         <Stack gap="3">
           <p class="muted">
             Guildhall has saved your identity and chosen provider. Next, meta-intake will scan the
-            codebase, ask for any missing context, and propose coordinator roles plus starter tasks.
-            A coordinator role is a review lane for future work, not the agent running setup.
+            codebase, infer the project structure, and draft starter tasks. It should only stop to
+            ask you something if confidence is low and the consequence of being wrong is meaningful.
           </p>
           <Row gap="2">
             <Button variant="primary" disabled={bootstrapBusy || bootstrapLive} onclick={startBootstrap}>
@@ -495,7 +503,7 @@
               </strong>
             </Row>
             {#if launchStopped}
-              <p class="muted">The task is saved. Resume the orchestrator to continue meta-intake.</p>
+              <p class="muted">The task is saved. Resume the coordinator to continue meta-intake.</p>
               <Row justify="start">
                 <Button variant="primary" disabled={bootstrapBusy} onclick={resumeBootstrap}>
                   {bootstrapBusy ? 'Resuming...' : 'Resume'}
@@ -520,42 +528,52 @@
         </Card>
       {/if}
       {#if approvalDrafts}
-        <Card title="Coordinator roles are ready for review" tone="warn">
+        {@const proposedCount = approvalDrafts.length}
+        <Card title={`Guildhall inferred ${proposedCount} ${proposedCount === 1 ? 'repo slice' : 'repo slices'}`}>
           <Stack gap="3">
             <div class="section-title">
-              <strong>Review lanes</strong>
-              <Help topic="guide.coordinators" />
+              <strong>Guildhall inferred this from the repo.</strong>
             </div>
             <p class="muted">
-              Coordinator roles are review lanes for future work. Guildhall uses them to route
-              tasks, choose the right reviewer, and decide what an agent may handle without
-              interrupting you. Approve these if the lanes match how this repo should be split.
+              Confirm it only if something here is materially wrong. Guildhall should handle the
+              routing and review structure underneath.
             </p>
-            <div class="coord-list">
+            <div class="draft-summary-list">
               {#each approvalDrafts as d, i (i)}
-                <div class="coord">
-                  <div class="coord-title">
-                    <strong><Markdown source={d.name} inline /></strong>
-                    {#if d.path}<span class="muted"> — {d.path}</span>{/if}
-                  </div>
-                  {#if d.mandate}
-                    <div class="coord-mandate">
-                      <strong>Will watch:</strong>
-                      <Markdown source={d.mandate.trim()} />
-                    </div>
-                  {/if}
-                  {#if d.concerns?.length}
-                    <div class="coord-concerns">
-                      <strong>Will check:</strong> {d.concerns.map(c => c.id).join(', ')}
-                    </div>
-                  {/if}
+                <div class="draft-summary-item">
+                  <strong>{friendlyStewardName(undefined, d.domain, d.domain)}</strong>
+                  {#if d.path}<span class="muted"> — {d.path}</span>{/if}
                 </div>
               {/each}
             </div>
+            <details class="draft-details">
+              <summary>See why Guildhall inferred this</summary>
+              <div class="coord-list">
+                {#each approvalDrafts as d, i (i)}
+                  <div class="coord">
+                    <div class="coord-title">
+                      <strong>{friendlyStewardName(undefined, d.domain, d.domain)}</strong>
+                      {#if d.path}<span class="muted"> — {d.path}</span>{/if}
+                    </div>
+                    {#if d.mandate}
+                      <div class="coord-mandate">
+                        <strong>Owns:</strong>
+                        <Markdown source={d.mandate.trim()} />
+                      </div>
+                    {/if}
+                    {#if d.concerns?.length}
+                      <div class="coord-concerns">
+                        <strong>Review checks:</strong> {d.concerns.map(c => c.id).join(', ')}
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            </details>
             {#if approvalError}<p class="error">Failed: {approvalError}</p>{/if}
             <Row justify="end">
               <Button variant="primary" disabled={approving} onclick={approveDrafts}>
-                {approving ? 'Merging…' : 'Approve and merge'}
+                {approving ? 'Saving…' : 'Looks right'}
               </Button>
             </Row>
           </Stack>
@@ -648,6 +666,36 @@
     display: flex;
     flex-direction: column;
     gap: var(--s-2);
+  }
+  .draft-summary-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .draft-summary-item {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    padding: var(--s-2) var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+    font-size: var(--fs-2);
+  }
+  .draft-details {
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+    padding: var(--s-2) var(--s-3);
+  }
+  .draft-details summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    font-weight: 600;
+  }
+  .draft-details[open] summary {
+    margin-bottom: var(--s-2);
   }
   .coord {
     background: var(--bg);

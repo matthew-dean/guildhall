@@ -134,6 +134,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
     workspaceName: workspace.name,
     workspacePath,
     projectPath,
+    landingBranch: project.landingBranch,
     memoryDir,
     models,
     coordinators,

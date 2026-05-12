@@ -1,9 +1,12 @@
 <script lang="ts">
   import { onEvent } from '../lib/events.js'
   import { nav } from '../lib/nav.svelte.js'
+  import { FolderPlus } from 'lucide-svelte'
+  import Button from '../lib/Button.svelte'
   import ProjectsShell from '../lib/layout/ProjectsShell.svelte'
   import ProjectCard from '../lib/ProjectCard.svelte'
   import { summarizeProjects } from '../lib/project-summary.js'
+  import { projectHref } from '../lib/project-routes.js'
   import type { ServiceDetail } from '../lib/types.js'
 
   let service = $state<ServiceDetail | null>(null)
@@ -26,24 +29,10 @@
     }
   }
 
-  async function selectProject(projectId: string): Promise<void> {
-    const response = await fetch('/api/service/select-project', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ projectId }),
-    })
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}))
-      throw new Error(payload?.error ?? `Unable to select project (${response.status})`)
-    }
-    await refresh()
-  }
-
   async function openProject(projectId: string): Promise<void> {
     busyId = projectId
     try {
-      await selectProject(projectId)
-      nav('/project')
+      nav(projectHref(projectId, '/thread'))
     } finally {
       busyId = null
     }
@@ -52,8 +41,7 @@
   async function startProject(projectId: string): Promise<void> {
     busyId = projectId
     try {
-      await selectProject(projectId)
-      const response = await fetch('/api/project/start', { method: 'POST' })
+      const response = await fetch(`/api/project/start?projectId=${encodeURIComponent(projectId)}`, { method: 'POST' })
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}))
         throw new Error(payload?.error ?? `Unable to start project (${response.status})`)
@@ -69,8 +57,7 @@
   async function stopProject(projectId: string): Promise<void> {
     busyId = projectId
     try {
-      await selectProject(projectId)
-      const response = await fetch('/api/project/stop', { method: 'POST' })
+      const response = await fetch(`/api/project/stop?projectId=${encodeURIComponent(projectId)}`, { method: 'POST' })
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}))
         throw new Error(payload?.error ?? `Unable to stop project (${response.status})`)
@@ -97,7 +84,7 @@
       }
       if (payload?.cancelled) return
       await refresh()
-      nav('/project')
+      if (typeof payload?.selectedProject?.id === 'string') nav(projectHref(payload.selectedProject.id, '/thread'))
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
     } finally {
@@ -136,14 +123,10 @@
       <p class="lede">Open a project, keep a few running, and see which ones need you without dropping into each shell first.</p>
     </div>
     <div class="hero-actions">
-      <button
-        type="button"
-        class="attach-btn"
-        disabled={busyId === '__attach__'}
-        onclick={attachProject}
-      >
+      <Button variant="secondary" disabled={busyId === '__attach__'} onclick={attachProject}>
+        <FolderPlus size={15} />
         {busyId === '__attach__' ? 'Attaching…' : 'Attach project'}
-      </button>
+      </Button>
     </div>
   </header>
   {/snippet}
@@ -186,21 +169,6 @@
   .hero-actions {
     flex: 0 0 auto;
   }
-  .attach-btn {
-    border: 1px solid var(--border);
-    background: var(--accent-9);
-    color: white;
-    border-radius: var(--r-2);
-    padding: 0.75rem 1rem;
-    font: inherit;
-    font-weight: 600;
-    cursor: pointer;
-    min-width: 10rem;
-  }
-  .attach-btn:disabled {
-    cursor: wait;
-    opacity: 0.8;
-  }
   .eyebrow {
     margin: 0 0 var(--s-2);
     color: var(--text-muted);
@@ -242,8 +210,9 @@
   }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
     gap: var(--s-4);
+    align-items: stretch;
   }
   @media (max-width: 720px) {
     .hero {
@@ -251,8 +220,11 @@
       flex-direction: column;
     }
     .hero-actions,
-    .attach-btn {
+    .hero-actions :global(button) {
       width: 100%;
+    }
+    .grid {
+      grid-template-columns: 1fr;
     }
   }
 </style>

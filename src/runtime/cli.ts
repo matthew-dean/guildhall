@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { resolve, join } from 'node:path'
 import { homedir } from 'node:os'
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { runOrchestrator } from './orchestrator.js'
 import { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
@@ -50,14 +50,33 @@ interface ServiceRuntimeState {
   port: number
   url: string
   startedAt: string
-  preferredProjectPath: string | null
-  foregroundProjectPath: string | null
+}
+
+function serviceUrlForPort(port: number): string {
+  return `http://localhost:${port}`
+}
+
+function launchRouteForProject(pathHint: string | null): string {
+  if (!pathHint) return '/projects'
+  const resolved = resolve(pathHint)
+  try {
+    const entry = findWorkspace(resolved)
+    const projectPath = entry?.path ?? resolved
+    return readWorkspaceConfig(projectPath) ? '/project' : '/setup'
+  } catch {
+    return '/setup'
+  }
+}
+
+function printExistingService(state: ServiceRuntimeState): void {
+  console.log('[guildhall] Guildhall is already running.')
+  console.log(`[guildhall] URL: ${state.url}`)
 }
 
 export interface ServiceLifecycleIntent {
   kind: 'serve' | 'start' | 'stop' | 'open'
   port: number
-  preferredProjectPath: string | null
+  launchProjectPath: string | null
   openBrowser: boolean
 }
 
@@ -92,10 +111,6 @@ function readServiceRuntimeState(home = homedir()): ServiceRuntimeState | null {
       port: parsed.port,
       url: parsed.url,
       startedAt: parsed.startedAt,
-      preferredProjectPath:
-        typeof parsed.preferredProjectPath === 'string' ? parsed.preferredProjectPath : null,
-      foregroundProjectPath:
-        typeof parsed.foregroundProjectPath === 'string' ? parsed.foregroundProjectPath : null,
     }
   } catch {
     return null
@@ -104,6 +119,59 @@ function readServiceRuntimeState(home = homedir()): ServiceRuntimeState | null {
 
 function clearServiceRuntimeState(home = homedir()): void {
   rmSync(serviceStatePath(home), { force: true })
+}
+
+function clearServiceRuntimeStateIfOwnedByPid(pid: number, home = homedir()): void {
+  const current = readServiceRuntimeState(home)
+  if (!current || current.pid !== pid) return
+  clearServiceRuntimeState(home)
+}
+
+async function probeLiveService(port = DEFAULT_DASHBOARD_PORT): Promise<ServiceRuntimeState | null> {
+  try {
+    const response = await fetch(`${serviceUrlForPort(port)}/api/service`)
+    if (!response.ok) return null
+    const body = await response.json() as Partial<ServiceRuntimeState>
+    if (typeof body.pid !== 'number') {
+      return null
+    }
+    const state: ServiceRuntimeState = {
+      pid: body.pid,
+      port,
+      url: serviceUrlForPort(port),
+      startedAt: typeof body.startedAt === 'string' ? body.startedAt : new Date().toISOString(),
+    }
+    if (!isPidAlive(state.pid)) return null
+    return state
+  } catch {
+    return null
+  }
+}
+
+function persistServiceRuntimeState(state: ServiceRuntimeState, home = homedir()): void {
+  mkdirSync(join(home, '.guildhall'), { recursive: true })
+  const path = serviceStatePath(home)
+  try {
+    writeFileSync(path, JSON.stringify(state, null, 2))
+  } catch {
+    // non-fatal; callers can still use the live state in-memory
+  }
+}
+
+async function discoverServiceRuntimeState(
+  port = DEFAULT_DASHBOARD_PORT,
+  home = homedir(),
+): Promise<ServiceRuntimeState | null> {
+  const recorded = readServiceRuntimeState(home)
+  if (recorded && isPidAlive(recorded.pid)) return recorded
+  if (recorded && !isPidAlive(recorded.pid)) clearServiceRuntimeState(home)
+
+  const live = await probeLiveService(port)
+  if (live) {
+    persistServiceRuntimeState(live, home)
+    return live
+  }
+  return null
 }
 
 function parseArgs(rawArgs: string[]): {
@@ -137,37 +205,38 @@ export function resolveServiceLifecycleIntent(
 ): ServiceLifecycleIntent | null {
   const cwd = opts.cwd ?? process.cwd()
   const home = opts.homeDir ?? homedir()
-  const { getFlag, positionals } = parseArgs(rawArgs)
-  const port = Number(getFlag('--port') ?? DEFAULT_DASHBOARD_PORT)
+  const { positionals } = parseArgs(rawArgs)
+  const port = DEFAULT_DASHBOARD_PORT
   const explicitPath = positionals[0] ? resolve(expandPath(positionals[0].replace(/^~(?=\/)/, home))) : null
+  const launchProjectPath = explicitPath ?? resolve(cwd)
 
   switch (commandName) {
     case 'serve':
       return {
         kind: 'serve',
         port,
-        preferredProjectPath: explicitPath ?? resolve(cwd),
+        launchProjectPath,
         openBrowser: !rawArgs.includes('--no-open'),
       }
     case 'start':
       return {
         kind: 'start',
         port,
-        preferredProjectPath: explicitPath,
+        launchProjectPath: null,
         openBrowser: false,
       }
     case 'open':
       return {
         kind: 'open',
         port,
-        preferredProjectPath: explicitPath,
+        launchProjectPath,
         openBrowser: true,
       }
     case 'stop':
       return {
         kind: 'stop',
         port,
-        preferredProjectPath: null,
+        launchProjectPath: null,
         openBrowser: false,
       }
     default:
@@ -183,7 +252,7 @@ export function resolveServiceLifecycleIntent(
 //   guildhall register <path>           — register an existing workspace (must have guildhall.yaml)
 //   guildhall unregister <id|path>  — remove a workspace from the registry
 //   guildhall list                      — list all registered workspaces
-//   guildhall run [id|path]             — run the orchestrator for a workspace
+//   guildhall run [id|path]             — run the coordinator for a workspace
 //     --domain <id>                 — only process tasks for one coordinator domain
 //     --max-ticks <n>               — stop after N ticks (useful for testing)
 //     --one-task                    — stop after one task reaches a handoff point
@@ -234,19 +303,16 @@ Usage:
   guildhall unregister <id|path> Remove a workspace from the registry
   guildhall list                     Show all registered workspaces
 
-  guildhall run [id|path]            Run the orchestrator for a workspace
+  guildhall run [id|path]            Run the coordinator for a workspace
     --domain <id>                Filter to tasks in one coordinator domain
     --max-ticks <n>              Stop after N ticks (testing)
     --one-task                   Stop after one task reaches terminal/PR/block
 
-  guildhall serve [path]             Start the local service if needed, then open Guildhall
-    --port <n>                   Override dashboard port (default: 7777)
-    --no-open                    Start/bias the service without opening a browser
-  guildhall start [path]             Start the local service without opening a browser
-    --port <n>                   Override dashboard port (default: 7777)
+  guildhall serve [path]             Start Guildhall in this terminal and open the browser
+    --no-open                    Start without opening a browser
+  guildhall start                    Start Guildhall in the background
   guildhall stop                     Stop the local service
   guildhall open [path]              Open the running service (starts it if needed)
-    --port <n>                   Override dashboard port (default: 7777)
 
   guildhall config [id|path]         Re-run the init wizard on an existing workspace
 
@@ -267,7 +333,7 @@ Usage:
     --resolve-escalation <id>    If set, resolve this escalation before resuming
     --resolution <string>        Resolution text (with --resolve-escalation)
 
-  guildhall meta-intake              Bootstrap coordinators via meta-intake (FR-14)
+  guildhall meta-intake              Inspect the repo and draft internal routing (FR-14)
     --workspace <id|path>        Target workspace (default: current directory)
     --force                      Seed the task even if coordinators already exist
 
@@ -414,13 +480,6 @@ async function cmdRun() {
   })
 }
 
-async function cmdServe() {
-  const intent = resolveServiceLifecycleIntent('serve', args)
-  if (!intent) return
-  const state = await ensureServiceRunning(intent)
-  if (intent.openBrowser) setTimeout(() => openBrowser(state.url), 200)
-}
-
 async function waitForServiceReady(home = homedir(), attempts = 40): Promise<ServiceRuntimeState> {
   for (let attempt = 0; attempt < attempts; attempt++) {
     const state = readServiceRuntimeState(home)
@@ -435,9 +494,8 @@ function cliEntryPath(): string {
 }
 
 async function ensureServiceRunning(intent: ServiceLifecycleIntent): Promise<ServiceRuntimeState> {
-  const existing = readServiceRuntimeState()
-  if (existing && isPidAlive(existing.pid)) return existing
-  if (existing && !isPidAlive(existing.pid)) clearServiceRuntimeState()
+  const existing = await discoverServiceRuntimeState(intent.port)
+  if (existing) return existing
 
   mkdirSync(join(homedir(), '.guildhall'), { recursive: true })
 
@@ -446,7 +504,7 @@ async function ensureServiceRunning(intent: ServiceLifecycleIntent): Promise<Ser
     'serve-internal',
     '--port',
     String(intent.port),
-    ...(intent.preferredProjectPath ? [intent.preferredProjectPath] : []),
+    ...(intent.launchProjectPath ? [intent.launchProjectPath] : []),
     '--service-state',
     serviceStatePath(),
   ]
@@ -459,28 +517,59 @@ async function ensureServiceRunning(intent: ServiceLifecycleIntent): Promise<Ser
   return waitForServiceReady()
 }
 
+async function cmdServe() {
+  const intent = resolveServiceLifecycleIntent('serve', args)
+  if (!intent) return
+  const existing = await discoverServiceRuntimeState(intent.port)
+  if (existing) {
+    printExistingService(existing)
+    return
+  }
+
+  if (intent.openBrowser) {
+    const targetUrl = `${serviceUrlForPort(intent.port)}${launchRouteForProject(intent.launchProjectPath)}`
+    setTimeout(() => openBrowser(targetUrl), 400)
+  }
+
+  await runServe({
+    port: intent.port,
+    ...(intent.launchProjectPath ? { preferredProjectPath: intent.launchProjectPath } : {}),
+    serviceStatePath: serviceStatePath(),
+  })
+}
+
 async function cmdStart() {
   const intent = resolveServiceLifecycleIntent('start', args)
   if (!intent) return
-  await ensureServiceRunning(intent)
+  const existing = await discoverServiceRuntimeState(intent.port)
+  if (existing) {
+    printExistingService(existing)
+    return
+  }
+
+  const state = await ensureServiceRunning(intent)
+  console.log('[guildhall] Guildhall started in the background.')
+  console.log(`[guildhall] URL: ${state.url}`)
 }
 
 async function cmdOpen() {
   const intent = resolveServiceLifecycleIntent('open', args)
   if (!intent) return
+  const existing = await discoverServiceRuntimeState(intent.port)
+  const hasLiveExisting = !!existing
   const state = await ensureServiceRunning(intent)
-  if (intent.openBrowser) openBrowser(state.url)
+  if (intent.openBrowser) {
+    const targetUrl = hasLiveExisting
+      ? state.url
+      : `${state.url}${launchRouteForProject(intent.launchProjectPath)}`
+    openBrowser(targetUrl)
+  }
 }
 
 async function cmdStop() {
-  const state = readServiceRuntimeState()
+  const state = await discoverServiceRuntimeState()
   if (!state) {
     console.log('[guildhall] No running service found.')
-    return
-  }
-  if (!isPidAlive(state.pid)) {
-    clearServiceRuntimeState()
-    console.log('[guildhall] Cleared a stale service record.')
     return
   }
   process.kill(state.pid, 'SIGTERM')
@@ -488,18 +577,17 @@ async function cmdStop() {
     if (!isPidAlive(state.pid)) break
     await new Promise(resolve => setTimeout(resolve, 150))
   }
-  clearServiceRuntimeState()
+  clearServiceRuntimeStateIfOwnedByPid(state.pid)
   console.log('[guildhall] Service stopped.')
 }
 
 async function cmdServeInternal() {
   const { getFlag, positionals } = parseArgs(args)
-  const preferredProjectPath = positionals[0] ? resolve(expandPath(positionals[0])) : undefined
   const portArg = getFlag('--port')
   const serviceState = getFlag('--service-state')
+  void positionals
 
   await runServe({
-    ...(preferredProjectPath ? { preferredProjectPath } : {}),
     ...(portArg ? { port: Number(portArg) } : {}),
     ...(serviceState ? { serviceStatePath: serviceState } : {}),
   })

@@ -4,7 +4,8 @@
   /task/:id and lets Router swap the drawer on).
 -->
 <script lang="ts">
-  import { nav } from './nav.svelte.js'
+  import { nav, path } from './nav.svelte.js'
+  import { currentTaskHref } from './project-routes.js'
   import Icon, { type IconName } from './Icon.svelte'
   import StatusLight from './StatusLight.svelte'
   import { friendlyDomain, friendlyStatus } from './display.js'
@@ -26,7 +27,7 @@
 
   interface Props {
     task: TaskLite
-    orchestratorRunning?: boolean
+    coordinatorRunning?: boolean
     displayStatusLabel?: string
     displayStatusTone?: StatusTone
     displayStatusIcon?: IconName
@@ -34,7 +35,7 @@
 
   let {
     task,
-    orchestratorRunning = false,
+    coordinatorRunning = false,
     displayStatusLabel,
     displayStatusTone,
     displayStatusIcon,
@@ -43,7 +44,7 @@
   const status = $derived(task.status ?? 'unknown')
   const statusLabel = $derived(displayStatusLabel ?? friendlyStatus(status))
   const isQueued = $derived(ACTIVE_STATUSES.has(status))
-  const isActive = $derived(isQueued && orchestratorRunning)
+  const isActive = $derived(isQueued && coordinatorRunning)
   const prio = $derived(task.priority && task.priority !== 'normal' ? task.priority : '')
   const domainLabel = $derived(friendlyDomain(task.domain))
   const hasEscalations = $derived(
@@ -125,7 +126,7 @@
   )
 
   function open() {
-    nav('/task/' + encodeURIComponent(task.id))
+    nav(currentTaskHref(task.id), { backgroundPath: path.value })
   }
 
   function onKey(e: KeyboardEvent) {
@@ -155,8 +156,8 @@
       {/if}
       <span>{statusLabel}</span>
     </span>
-    {#if isQueued && !orchestratorRunning}
-      <span class="tc-queued" title="Queued — orchestrator is stopped">paused</span>
+    {#if isQueued && !coordinatorRunning}
+      <span class="tc-queued" title="Queued — coordinator is stopped">paused</span>
     {/if}
     {#if hasEscalations}
       <span class="tc-flag" title="Open escalation">

@@ -20,7 +20,7 @@ A named slice of the project (e.g. `ui`, `backend`, `infra`) owned by one coordi
 
 ## Coordinator
 
-The persona that owns a domain. Defined in `guildhall.yaml` with a **mandate**, **concerns**, and lists of **autonomous decisions** and **escalation triggers**. The coordinator decides whether tasks in its domain advance; see [Coordinators & domains](./coordinators).
+Guildhall keeps one coordinating layer per project. It uses the repo's inferred internal routing plus the task's current shape to decide what context, review lenses, and next-step policy to apply; see [Coordinators & domains](./coordinators).
 
 ## Agent
 
@@ -32,7 +32,7 @@ A persona with principles, a review rubric, and deterministic checks that sits a
 
 ## Lever
 
-A named decision point — e.g. `merge_policy`, `reviewer_mode`, `worktree_isolation` — with enumerated positions and full provenance (*who set it, when, why*). Every behavioral variation is a lever, not a hardcoded default. See [Levers](../levers/).
+A named decision point — e.g. `landing_strategy`, `reviewer_mode`, `worktree_isolation` — with enumerated positions and full provenance (*who set it, when, why*). Every behavioral variation is a lever, not a hardcoded default. See [Levers](../levers/).
 
 ## Hard gate / soft gate
 

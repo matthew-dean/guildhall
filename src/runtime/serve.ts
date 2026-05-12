@@ -1,9 +1,10 @@
-import { readFileSync, existsSync, mkdirSync, statSync, writeFileSync, promises as fsp } from 'node:fs'
+import { readFileSync, existsSync, mkdirSync, statSync, writeFileSync, readdirSync, type Dirent, promises as fsp } from 'node:fs'
 import { dirname, join, resolve, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
@@ -47,6 +48,7 @@ import {
   saveLeverSettings,
   defaultAgentSettingsPath,
   makeDefaultSettings,
+  projectLeverInvariantError,
 } from '@guildhall/levers'
 import {
   activeEscalations,
@@ -92,6 +94,7 @@ import {
   approveSpec,
   resumeExploring,
   rerunTaskStage,
+  shapeImportDraft,
   createBugReportTask,
   parseStackTraceTopFile,
 } from './intake.js'
@@ -129,6 +132,14 @@ import {
   formWorkspaceHypothesis,
 } from './workspace-import/index.js'
 import { buildWorkspaceImportReview, filterWorkspaceImportDraft } from './workspace-import/review.js'
+import {
+  buildLearningSnapshot,
+  recordWorkspaceImportApproval,
+  recordWorkspaceImportDismissal,
+  resetGlobalLearning,
+  resetProjectLearning,
+} from './learning.js'
+import { normalizeImportedDraftTask } from './import-drafts.js'
 import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
 import { buildThread } from './thread.js'
 import {
@@ -158,7 +169,7 @@ import { stringify as stringifyYaml } from 'yaml'
 // while the UI still leans on one foreground project API surface.
 //
 // Routes:
-//   GET    /api/service               → service metadata + preferred/foreground project
+//   GET    /api/service               → service metadata + current selected project
 //   GET    /                          → SPA (root = project detail or setup)
 //   GET    /setup                     → SPA setup wizard route
 //   GET    /api/project               → project detail (config + tasks + run state)
@@ -196,7 +207,7 @@ export interface ServeOptions {
   port?: number
   /** Legacy alias; prefer preferredProjectPath for new callers. */
   projectPath?: string
-  /** Optional project the operator launched Guildhall toward. */
+  /** Optional one-shot initial project selection hint for a fresh service. */
   preferredProjectPath?: string
   /** Optional path to the service-state file written by background runs. */
   serviceStatePath?: string
@@ -240,6 +251,72 @@ interface ServiceProjectSummary {
     stopSummary?: unknown
     providerStatus?: unknown
   }
+}
+
+function detectProjectPackageManagers(projectPath: string): string[] {
+  const found = new Set<string>()
+  const visited = new Set<string>()
+  const skipDirs = new Set([
+    '.git',
+    'node_modules',
+    '.next',
+    '.nuxt',
+    'dist',
+    'build',
+    'coverage',
+    '.svelte-kit',
+    '.turbo',
+    '.yarn',
+    'bin',
+    'obj',
+  ])
+
+  const visit = (dir: string, depth: number): void => {
+    if (depth > 3 || visited.has(dir)) return
+    visited.add(dir)
+    let entries: Array<Dirent>
+    try {
+      entries = readDirents(dir)
+    } catch {
+      return
+    }
+
+    const names = new Set(entries.map(entry => entry.name))
+    if (names.has('pnpm-lock.yaml')) found.add('pnpm')
+    if (names.has('yarn.lock')) found.add('yarn')
+    if (names.has('package-lock.json')) found.add('npm')
+    if (names.has('bun.lockb')) found.add('bun')
+    if (names.has('uv.lock')) found.add('uv')
+    if (names.has('poetry.lock')) found.add('poetry')
+    if (names.has('requirements.txt')) found.add('pip')
+    if (names.has('Directory.Packages.props') || names.has('packages.lock.json')) found.add('NuGet')
+    if (entries.some(entry => entry.isFile() && (entry.name.endsWith('.csproj') || entry.name.endsWith('.sln')))) {
+      found.add('NuGet')
+    }
+
+    if (names.has('package.json')) {
+      try {
+        const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { packageManager?: string }
+        const pm = pkg.packageManager?.split('@')[0]
+        if (pm === 'pnpm' || pm === 'yarn' || pm === 'npm' || pm === 'bun') found.add(pm)
+      } catch {
+        // ignore invalid package.json here; Facts should stay best-effort
+      }
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      if (skipDirs.has(entry.name)) continue
+      visit(join(dir, entry.name), depth + 1)
+    }
+  }
+
+  visit(projectPath, 0)
+  return found.size > 0 ? [...found] : ['unknown']
+}
+
+function readDirents(dir: string): Array<Dirent> {
+  return readdirSync(dir, { withFileTypes: true })
 }
 
 const execFileP = promisify(execFile)
@@ -288,6 +365,12 @@ function isTerminalOwnershipMismatch(task: Record<string, unknown>): boolean {
   const tasks = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.tasks) ? parsed.tasks : []
   let changed = false
   for (const task of tasks) {
+    if (normalizeImportedDraftTask(task as never)) {
+      if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
+        task.updatedAt = new Date().toISOString()
+      }
+      changed = true
+    }
     if (isWorkerOwnershipMismatch(task)) {
       task.assignedTo = 'worker-agent'
       if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
@@ -564,7 +647,7 @@ function summarizeTaskCounts(tasks: Array<Record<string, unknown>>): ServiceProj
 
 function summarizeProjectText(project: ResolvedProject): string | null {
   if (project.initializationNeeded) {
-    return 'Attached to this folder. Initialize Guildhall here to set up coordinators, providers, and task flow.'
+    return 'Attached to this folder. Initialize Guildhall here to inspect the repo, configure providers, and start task flow.'
   }
   const briefPath = join(project.path, 'memory', 'project-brief.md')
   if (existsSync(briefPath)) {
@@ -843,24 +926,74 @@ export function buildServeApp(opts: ServeOptions = {}): {
     ?? getRegisteredProjects()[0]?.path
     ?? process.cwd()
   const projectPath = resolve(fallbackProjectPath)
-  let selectedProjectPath = explicitProjectPath
-  let selectedProject = explicitProjectPath ? resolveProject(explicitProjectPath) : null
-  let project = resolveProject(projectPath)
-  const refreshProject = (path = project.path): ResolvedProject => {
-    project = resolveProject(path)
-    if (selectedProject?.path === project.path) selectedProject = project
-    return project
+  let selectedProjectPath = resolve(projectPath)
+  const requestProjectPathStore = new AsyncLocalStorage<string>()
+  const syncSelectedProject = (): ResolvedProject => resolveProject(selectedProjectPath)
+  const currentProject = (): ResolvedProject => resolveProject(requestProjectPathStore.getStore() ?? selectedProjectPath)
+  const refreshProject = (path = currentProject().path): ResolvedProject => {
+    const refreshed = resolveProject(path)
+    if (resolve(selectedProjectPath) === resolve(path)) selectedProjectPath = refreshed.path
+    return refreshed
   }
   const selectForegroundProject = (path: string): ResolvedProject => {
     const resolvedPath = resolve(path)
     selectedProjectPath = resolvedPath
-    selectedProject = resolveProject(resolvedPath)
-    project = selectedProject
-    return project
+    return resolveProject(resolvedPath)
   }
+  const resolveProjectPathForRequest = (c: Context): string | null => {
+    const requestedId = c.req.query('projectId')?.trim()
+    if (!requestedId) return selectedProjectPath
+    const selected = syncSelectedProject()
+    if (selected.id === requestedId) return selected.path
+    const entry = getRegisteredProjects().find(item => item.id === requestedId)
+    if (!entry) return null
+    return resolve(entry.path)
+  }
+  const project = new Proxy({} as ResolvedProject, {
+    get(_target, prop) {
+      return currentProject()[prop as keyof ResolvedProject]
+    },
+    has(_target, prop) {
+      return prop in currentProject()
+    },
+    ownKeys() {
+      return Reflect.ownKeys(currentProject())
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      return Object.getOwnPropertyDescriptor(currentProject(), prop)
+    },
+  })
 
   const supervisor = new OrchestratorSupervisor()
   const app = new Hono()
+  const currentProjectPath = () => currentProject().path
+
+  const bindProjectScope = async (
+    c: Context,
+    next: () => Promise<void>,
+    { requireExplicitForMutation = false }: { requireExplicitForMutation?: boolean } = {},
+  ) => {
+    if (
+      requireExplicitForMutation &&
+      c.req.method !== 'GET' &&
+      c.req.method !== 'HEAD' &&
+      !c.req.query('projectId')?.trim()
+    ) {
+      return c.json({ error: 'projectId is required for project-mutating requests.' }, 400)
+    }
+    const resolvedPath = resolveProjectPathForRequest(c)
+    if (!resolvedPath) {
+      return c.json({ error: 'Unknown project id for this local Guildhall service.' }, 404)
+    }
+    return requestProjectPathStore.run(resolvedPath, next)
+  }
+
+  app.use('/api/project', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
+  app.use('/api/project/*', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
+  app.use('/api/config', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
+  app.use('/api/config/*', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
+  app.use('/api/setup', bindProjectScope)
+  app.use('/api/setup/*', bindProjectScope)
 
   // Dynamic API surfaces should never be cached. The dashboard depends on
   // `/api/project`, inbox state, and SSE-adjacent status reads reflecting the
@@ -937,7 +1070,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return {
           ...summarizeProject(resolved),
           summary: summarizeProjectText(resolved),
-          selected: resolved.path === project.path,
+          selected: resolved.path === resolve(selectedProjectPath),
           taskCounts,
           ...(highlights ? { highlights } : {}),
           ...(run
@@ -957,9 +1090,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     )
     return c.json({
       pid: process.pid,
-      preferredProjectPath: selectedProjectPath,
-      selectedProject: selectedProject ? summarizeProject(selectedProject) : null,
-      foregroundProject: summarizeProject(project),
+      selectedProject: summarizeProject(syncSelectedProject()),
+      foregroundProject: summarizeProject(syncSelectedProject()),
       projects,
     })
   })
@@ -1081,11 +1213,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : undefined
       const recent = supervisor.recent(project.id, undefined, project.path)
       const bootstrapStatus = readBootstrapStatus(join(project.path, 'memory'))
-      const inbox = await buildProjectInboxSnapshot({
-        projectPath: project.path,
-        initializationNeeded: project.initializationNeeded,
-        coordinatorCount: project.config?.coordinators?.length ?? 0,
-      })
       const runtimeProvider = getRuntimeProviderConfig({
         projectPath: project.path,
         models: resolvedConfig.models,
@@ -1116,6 +1243,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
             })
           : null
       )
+      const startReadiness = await projectStartReadiness({
+        projectPath: project.path,
+        resolvedConfig,
+        runtimeProvider,
+        allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
+      })
+      const inbox = await buildProjectInboxSnapshot({
+        projectPath: project.path,
+        initializationNeeded: project.initializationNeeded,
+        coordinatorCount: project.config?.coordinators?.length ?? 0,
+      })
       return c.json({
         initializationNeeded: false,
         id: project.id,
@@ -1137,6 +1275,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             }
           : null,
         providerStatus,
+        startReadiness,
         recentEvents: recent,
         ...(bootstrapStatus ? { bootstrapStatus } : {}),
       })
@@ -1502,10 +1641,122 @@ export function buildServeApp(opts: ServeOptions = {}): {
     ]
   }
 
+  async function projectStartReadiness(input: {
+    projectPath: string
+    resolvedConfig: ReturnType<typeof resolveConfig>
+    runtimeProvider: ReturnType<typeof getRuntimeProviderConfig>
+    allowPaidProviderFallback: boolean
+  }): Promise<{
+    canStart: boolean
+    code?: string
+    message?: string
+    actionHref?: string
+  }> {
+    try {
+      const settings = await loadLeverSettings({
+        path: defaultAgentSettingsPath(input.projectPath),
+      })
+      const invariant = projectLeverInvariantError(settings.project)
+      if (invariant) {
+        return {
+          canStart: false,
+          code: 'invalid_lever_combo',
+          message: invariant,
+          actionHref: '/settings/advanced',
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (/concurrent_task_dispatch.*worktree_isolation/i.test(message)) {
+        return {
+          canStart: false,
+          code: 'invalid_lever_combo',
+          message,
+          actionHref: '/settings/advanced',
+        }
+      }
+    }
+
+    const preflight = await selectApiClient(input.runtimeProvider.selectOptions)
+    if (preflight.providerName === 'none') {
+      return {
+        canStart: false,
+        code: 'no_provider',
+        message:
+          preflight.reason ??
+          'No provider configured. Open Providers to choose one before starting Guildhall.',
+        actionHref: '/providers',
+      }
+    }
+
+    if (preflight.providerName !== 'llama-cpp') {
+      return { canStart: true }
+    }
+
+    const creds = input.runtimeProvider.credentials
+    if (!creds.llamaCppUrl) return { canStart: true }
+
+    const loadedModels = await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
+    if (loadedModels.length === 0) {
+      const paidFallback = input.allowPaidProviderFallback
+        ? await selectPaidFallbackProvider(creds)
+        : null
+      if (!paidFallback || paidFallback.providerName === 'none') {
+        return {
+          canStart: false,
+          code: 'no_loaded_model',
+          message:
+            'The configured local server is reachable, but Guildhall could not see a loaded model. Load the model you want on that server, then start again.',
+          actionHref: '/providers',
+        }
+      }
+      return { canStart: true }
+    }
+
+    const missingModels = missingAssignedModels(input.resolvedConfig.models, loadedModels)
+    if (missingModels.length === 0) return { canStart: true }
+
+    const paidFallback = input.allowPaidProviderFallback
+      ? await selectPaidFallbackProvider(creds)
+      : null
+    if (paidFallback && paidFallback.providerName !== 'none') {
+      return { canStart: true }
+    }
+    return {
+      canStart: false,
+      code: 'model_unavailable',
+      message:
+        `The configured local server currently has ${loadedModels.join(', ')} loaded, but this project is configured for ${missingModels.join(', ')}. ` +
+        'Load one of the configured models on that server, or choose a loaded model in Providers.',
+      actionHref: '/providers',
+    }
+  }
+
   app.post('/api/project/start', async c => {
     try {
       if (project.initializationNeeded) {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      try {
+        const settings = await loadLeverSettings({
+          path: defaultAgentSettingsPath(project.path),
+        })
+        const invariant = projectLeverInvariantError(settings.project)
+        if (invariant) {
+          return c.json(
+            { error: invariant, code: 'invalid_lever_combo', actionHref: '/settings/advanced' },
+            400,
+          )
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        if (/concurrent_task_dispatch.*worktree_isolation/i.test(message)) {
+          return c.json(
+            { error: message, code: 'invalid_lever_combo', actionHref: '/settings/advanced' },
+            400,
+          )
+        }
+        throw err
       }
       // Preflight: a run with no provider is worse than no run — the
       // orchestrator boots, every tick fails, and the UI shows "Running"
@@ -1645,6 +1896,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const body = await c.req.json().catch(() => ({})) as {
         mode?: string
         stopAfterOneTask?: boolean
+        taskId?: string
       }
       const stopAfterOneTask =
         body.stopAfterOneTask === true || body.mode === 'one_task'
@@ -1684,6 +1936,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         workspaceId: project.id,
         workspacePath: project.path,
         ...(stopAfterOneTask ? { stopAfterOneTask: true } : {}),
+        ...(body.taskId ? { preferredTaskId: body.taskId } : {}),
         providerStatus,
         ...(activeHealthKey ? { providerHealthKey: activeHealthKey } : {}),
         providerOverride: effectiveProvider,
@@ -1728,7 +1981,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const defaultDomain = coordinators[0]?.domain
       const domain = body.domain ?? defaultDomain
       if (!domain) {
-        return c.json({ error: 'Project has no coordinators — run meta-intake first' }, 400)
+        return c.json({ error: 'Guildhall has not inferred repo structure here yet — run repo inspection first' }, 400)
       }
       const result = await createExploringTask({
         memoryDir: join(project.path, 'memory'),
@@ -1764,7 +2017,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const coordinators = project.config?.coordinators ?? []
       if (coordinators.length === 0) {
-        return c.json({ error: 'Project has no coordinators — run meta-intake first' }, 400)
+        return c.json({ error: 'Guildhall has not inferred repo structure here yet — run repo inspection first' }, 400)
       }
       // Route by stack-trace top file when the reporter didn't pick a domain:
       // match the first frame's file path against each coordinator's `path`,
@@ -2214,17 +2467,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
         context: unknown[]
         stats: { inputSignals: number; drafted: number; deduped: number }
         review?: unknown
+        learning?: unknown
       } | null = null
       try {
         const inventory = await detectWorkspaceSignals({ projectPath: project.path })
         const draft = formWorkspaceHypothesis(inventory)
+        const review = buildWorkspaceImportReview(draft, existingTasks, projectPath)
         detected = {
           goals: [...draft.goals],
           tasks: [...draft.tasks],
           milestones: [...draft.milestones],
           context: [...draft.context],
           stats: draft.stats,
-          review: buildWorkspaceImportReview(draft, existingTasks, projectPath),
+          review,
+          learning: buildLearningSnapshot({
+            memoryDir,
+            review,
+            draft,
+          }).effective,
         }
       } catch {
         /* detector best-effort */
@@ -2292,6 +2552,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const memoryDir = join(project.path, 'memory')
       const body = await c.req.json().catch(() => ({})) as {
+        areaKeys?: string[]
         sourceKeys?: string[]
         taskIds?: string[]
       }
@@ -2364,9 +2625,26 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       const inventory = await detectWorkspaceSignals({ projectPath: project.path })
-      const filteredDraft = filterWorkspaceImportDraft(formWorkspaceHypothesis(inventory), {
-        sourceKeys: Array.isArray(body.sourceKeys) ? body.sourceKeys : undefined,
-        taskIds: Array.isArray(body.taskIds) ? body.taskIds : undefined,
+      const fullDraft = formWorkspaceHypothesis(inventory)
+      const review = buildWorkspaceImportReview(fullDraft, [], project.path)
+      const selectedSourceKeys = Array.isArray(body.sourceKeys)
+        ? body.sourceKeys
+        : review.sourceGroups.filter(group => group.taskCount > 0).map(group => group.key)
+      const selectedAreaKeys = Array.isArray(body.areaKeys)
+        ? body.areaKeys
+        : review.areaGroups
+            .filter(area =>
+              review.sourceGroups.some(
+                group => selectedSourceKeys.includes(group.key) && group.areaKey === area.key,
+              ),
+            )
+            .map(area => area.key)
+      const selectedTaskIds = Array.isArray(body.taskIds)
+        ? body.taskIds
+        : fullDraft.tasks.map(task => task.suggestedId)
+      const filteredDraft = filterWorkspaceImportDraft(fullDraft, {
+        sourceKeys: selectedSourceKeys,
+        taskIds: selectedTaskIds,
       })
 
       const result = await approveWorkspaceImport({
@@ -2381,6 +2659,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!result.success) {
         return c.json({ error: result.error ?? 'Approval failed' }, 400)
       }
+      await recordWorkspaceImportApproval({
+        memoryDir,
+        review,
+        draft: fullDraft,
+        selectedAreaKeys,
+        selectedSourceKeys,
+        selectedTaskIds,
+      })
       return c.json({
         ok: true,
         tasksAdded: result.tasksAdded ?? 0,
@@ -2457,10 +2743,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
           name: cfg?.name ?? project.id,
           id: project.id,
           path: project.path,
-          editHref: '/settings',
+          editHref: '/settings/advanced',
         },
         environment: {
-          packageManager: b?.packageManager ?? 'unknown',
+          packageManagers: detectProjectPackageManagers(project.path),
           verifiedAt: typeof b?.verifiedAt === 'string' ? b.verifiedAt : null,
           install: b?.install ?? null,
           gates: b?.gates ?? null,
@@ -2473,7 +2759,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         coordinators: {
           count: cfg?.coordinators?.length ?? 0,
           list: (cfg?.coordinators ?? []).map(c => ({ id: c.id, ...(c.domain ? { domain: c.domain } : {}) })),
-          editHref: '/settings/coordinators',
+          editHref: '/settings/routing',
         },
         designSystem: {
           summary: designSummary,
@@ -2499,7 +2785,64 @@ export function buildServeApp(opts: ServeOptions = {}): {
         JSON.stringify({ dismissed: true, dismissedAt: new Date().toISOString() }, null, 2),
         'utf-8',
       )
+      await recordWorkspaceImportDismissal(memoryDir)
       return c.json({ ok: true })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/learning', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({
+          project: null,
+          user: null,
+          effective: null,
+        })
+      }
+      const memoryDir = join(project.path, 'memory')
+      const inventory = await detectWorkspaceSignals({ projectPath: project.path })
+      const draft = formWorkspaceHypothesis(inventory)
+      const tasksPath = join(memoryDir, 'TASKS.json')
+      let existingTasks: Array<{ title: string; status: string }> = []
+      if (existsSync(tasksPath)) {
+        try {
+          const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+            | { tasks?: Array<Record<string, unknown>> }
+            | Array<Record<string, unknown>>
+          const list = Array.isArray(raw) ? raw : raw.tasks ?? []
+          existingTasks = list
+            .filter(t => (t as { id?: string }).id !== WORKSPACE_IMPORT_TASK_ID)
+            .map(t => ({
+              title: typeof (t as { title?: unknown }).title === 'string' ? (t as { title: string }).title : '',
+              status: typeof (t as { status?: unknown }).status === 'string' ? (t as { status: string }).status : 'unknown',
+            }))
+            .filter(t => t.title.trim().length > 0)
+        } catch {
+          existingTasks = []
+        }
+      }
+      const review = buildWorkspaceImportReview(draft, existingTasks, project.path)
+      return c.json(buildLearningSnapshot({ memoryDir, review, draft }))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/learning/reset', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const body = await c.req.json().catch(() => ({})) as {
+        scope?: 'project' | 'all'
+      }
+      const scope = body.scope === 'all' ? 'all' : 'project'
+      const memoryDir = join(project.path, 'memory')
+      await resetProjectLearning(memoryDir)
+      if (scope === 'all') {
+        await resetGlobalLearning()
+      }
+      return c.json({ ok: true, scope })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -2754,10 +3097,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!task) return c.json({ error: 'task not found' }, 404)
       const recent = filterEventsForTask(supervisor.recent(project.id, undefined, project.path), id)
       const contextDebug = await readContextDebugForTask(join(project.path, 'memory'), id)
+      const snapshot = buildSnapshot({ projectPath: project.path })
+      const thread = buildThread({
+        projectPath: project.path,
+        snapshot,
+        recentEvents: supervisor.recent(project.id, undefined, project.path),
+      })
+      const threadTurns = thread.turns.filter(turn => {
+        if (!('taskId' in turn)) return false
+        return turn.taskId === id
+      })
       return c.json({
         task: await enrichTaskForServe(project.path, task as Record<string, unknown>),
         recentEvents: recent,
         contextDebug,
+        threadTurns,
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -2926,9 +3280,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         'resume',
         'unshelve',
         'resolve-escalation',
+        'stage-answer',
         'answer-question',
         'answer-questions',
         'rerun-stage',
+        'shape-draft',
       ] as const
       if (!(KNOWN_ACTIONS as readonly string[]).includes(action)) {
         return c.json({ error: 'unknown action' }, 400)
@@ -2996,6 +3352,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ ok: true, status: result.newStatus })
       }
 
+      if (action === 'shape-draft') {
+        const result = await shapeImportDraft({
+          memoryDir,
+          taskId: id,
+        })
+        if (!result.success) return c.json({ error: result.error ?? 'shape failed' }, 400)
+        return c.json({ ok: true, status: result.newStatus })
+      }
+
       if (action === 'approve-brief') {
         const tasksPath = join(memoryDir, 'TASKS.json')
         if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
@@ -3018,10 +3383,27 @@ export function buildServeApp(opts: ServeOptions = {}): {
         brief.approvedBy = 'human'
         brief.approvedAt = now
         task.productBrief = brief
+        const questions = Array.isArray(task.openQuestions) ? task.openQuestions : []
+        const hasUnansweredQuestions = questions.some((question) => {
+          if (!question || typeof question !== 'object') return false
+          return typeof (question as { answeredAt?: unknown }).answeredAt !== 'string'
+        })
+        const hasConcreteSpecDraft =
+          typeof task.spec === 'string' &&
+          task.spec.trim().length > 0 &&
+          Array.isArray(task.acceptanceCriteria) &&
+          task.acceptanceCriteria.length > 0
+        if (
+          task.status === 'exploring' &&
+          hasConcreteSpecDraft &&
+          !hasUnansweredQuestions
+        ) {
+          task.status = 'spec_review'
+        }
         task.updatedAt = now
         queue.lastUpdated = now
         atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
-        return c.json({ ok: true })
+        return c.json({ ok: true, status: task.status })
       }
 
       if (action === 'add-acceptance') {
@@ -3093,6 +3475,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const q = questions.find(x => (x as { id?: string }).id === body.questionId)
         if (!q) return c.json({ error: 'question not found' }, 404)
         const now = new Date().toISOString()
+        delete q.draftAnswer
         q.answeredAt = now
         q.answer = body.answer.trim()
         task.openQuestions = questions
@@ -3106,6 +3489,37 @@ export function buildServeApp(opts: ServeOptions = {}): {
           message: `Answer to "${(q as { id?: string }).id}": ${body.answer.trim()}`,
         })
         return c.json({ ok: true })
+      }
+
+      if (action === 'stage-answer') {
+        const body = (await c.req.json().catch(() => ({}))) as {
+          questionId?: string
+          answer?: string
+        }
+        if (!body.questionId) return c.json({ error: 'Missing questionId' }, 400)
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as
+          | Record<string, unknown>
+          | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        const questions = (task.openQuestions as Array<Record<string, unknown>> | undefined) ?? []
+        const q = questions.find(x => (x as { id?: string }).id === body.questionId)
+        if (!q) return c.json({ error: 'question not found' }, 404)
+        const nextDraft = (body.answer ?? '').trim()
+        if (nextDraft) q.draftAnswer = nextDraft
+        else delete q.draftAnswer
+        task.openQuestions = questions
+        task.updatedAt = new Date().toISOString()
+        queue.lastUpdated = task.updatedAt as string
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        return c.json({ ok: true, staged: Boolean(nextDraft) })
       }
 
       if (action === 'answer-questions') {
@@ -3146,6 +3560,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         for (const a of list) {
           const q = questions.find(x => (x as { id?: string }).id === a.questionId)
           if (!q) { missing.push(a.questionId!); continue }
+          delete q.draftAnswer
           q.answeredAt = now
           q.answer = a.answer!.trim()
           transcriptLines.push(`Answer to "${a.questionId}": ${a.answer!.trim()}`)
@@ -3315,8 +3730,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/config', c => {
     try {
-      const project = readProjectConfig(projectPath)
-      const redacted: Record<string, unknown> = { ...project }
+      const cfg = readProjectConfig(currentProjectPath())
+      const redacted: Record<string, unknown> = { ...cfg }
       if (redacted.anthropicApiKey) redacted.anthropicApiKey = '•••'
       if (redacted.openaiApiKey) redacted.openaiApiKey = '•••'
       return c.json(redacted)
@@ -3332,7 +3747,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/config/levers', async c => {
     try {
       const settings = await loadLeverSettings({
-        path: defaultAgentSettingsPath(projectPath),
+        path: defaultAgentSettingsPath(currentProjectPath()),
       })
       const renderPos = (pos: unknown): string => {
         if (typeof pos === 'string' || typeof pos === 'number') return String(pos)
@@ -3347,13 +3762,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
         return JSON.stringify(pos)
       }
-      const project = Object.entries(settings.project).map(([name, entry]) => ({
-        scope: 'project' as const,
-        name,
-        position: renderPos(entry.position),
-        rationale: entry.rationale,
-        setBy: entry.setBy,
-      }))
+      const project = Object.entries(settings.project)
+        .filter(([name]) => name !== 'merge_policy')
+        .map(([name, entry]) => ({
+          scope: 'project' as const,
+          name,
+          position: renderPos(entry.position),
+          rationale: entry.rationale,
+          setBy: entry.setBy,
+        }))
       const domain = Object.entries(settings.domains.default).map(([name, entry]) => ({
         scope: 'domain:default' as const,
         name,
@@ -3372,7 +3789,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // grew, stale on-disk file is missing a newly-required lever).
   app.post('/api/config/levers/reset', async c => {
     try {
-      const path = defaultAgentSettingsPath(projectPath)
+      const path = defaultAgentSettingsPath(currentProjectPath())
       await saveLeverSettings({ path, settings: makeDefaultSettings() })
       return c.json({ ok: true })
     } catch (err) {
@@ -3537,7 +3954,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // API: setup wizard
   // -------------------------------------------------------------------------
   app.get('/api/setup/status', c => {
-    const stored = readProjectConfig(projectPath)
+    const stored = readProjectConfig(currentProjectPath())
     return c.json({
       path: project.path,
       initialized: !project.initializationNeeded,
@@ -3630,7 +4047,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     // and cheap (a single YAML read + Zod parse) and means users who
     // upgrade in-place never see stale credentials in their project file.
     try {
-      migrateProjectProvidersToGlobal(projectPath, {
+      migrateProjectProvidersToGlobal(currentProjectPath(), {
         readProject: (p) => readProjectConfig(p),
         writeProject: (p, patch) => updateProjectConfig(p, patch),
       })
@@ -3668,7 +4085,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       const { global, creds, claudeCredPath, codexCredPath, claudeInstalled, codexInstalled } =
         describeProviders()
-      const stored = readProjectConfig(projectPath)
+      const stored = readProjectConfig(currentProjectPath())
 
       const defaultLlamaUrl = 'http://localhost:1234/v1'
       const configuredLlamaUrl = creds.llamaCppUrl ?? ''
@@ -3756,7 +4173,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (!(allowed as readonly string[]).includes(body.preferredProvider)) {
           return c.json({ error: `Unknown provider "${body.preferredProvider}"` }, 400)
         }
-        updateProjectConfig(projectPath, {
+        updateProjectConfig(currentProjectPath(), {
           preferredProvider: body.preferredProvider as (typeof allowed)[number],
         })
       }
@@ -3793,13 +4210,86 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  app.get('/api/project/local-config', async c => {
+    try {
+      const workspacePath = currentProjectPath()
+      const projectCfg = readProjectConfig(workspacePath)
+      const settings = await loadLeverSettings({
+        path: defaultAgentSettingsPath(workspacePath),
+      })
+      let effectiveLandingBranch = projectCfg.landingBranch ?? null
+      if (!effectiveLandingBranch) {
+        try {
+          const { stdout } = await execFileP('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+            cwd: workspacePath,
+          })
+          effectiveLandingBranch = stdout.trim() || null
+        } catch {
+          effectiveLandingBranch = null
+        }
+      }
+      return c.json({
+        landingBranch: projectCfg.landingBranch ?? null,
+        effectiveLandingBranch,
+        landingStrategy: settings.project.landing_strategy.position,
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/local-config', async c => {
+    try {
+      const workspacePath = currentProjectPath()
+      const body = (await c.req.json().catch(() => ({}))) as {
+        landingBranch?: string | null
+        landingStrategy?: 'cherry_pick_local' | 'cherry_pick_with_push' | 'manual_pr'
+      }
+      const nextPatch: Record<string, unknown> = {}
+      if ('landingBranch' in body) {
+        const raw = typeof body.landingBranch === 'string' ? body.landingBranch.trim() : ''
+        nextPatch.landingBranch = raw.length > 0 ? raw : undefined
+      }
+      if (Object.keys(nextPatch).length > 0) {
+        updateProjectConfig(workspacePath, nextPatch)
+      }
+      if (body.landingStrategy) {
+        const allowed = ['cherry_pick_local', 'cherry_pick_with_push', 'manual_pr'] as const
+        if (!allowed.includes(body.landingStrategy)) {
+          return c.json({ error: `Unknown landing strategy "${body.landingStrategy}"` }, 400)
+        }
+        const path = defaultAgentSettingsPath(workspacePath)
+        const settings = await loadLeverSettings({ path })
+        settings.project.landing_strategy = {
+          position: body.landingStrategy,
+          rationale: 'Updated from Advanced settings.',
+          setAt: new Date().toISOString(),
+          setBy: 'user-direct',
+        }
+        await saveLeverSettings({ path, settings })
+      }
+      const projectCfg = readProjectConfig(workspacePath)
+      const settings = await loadLeverSettings({
+        path: defaultAgentSettingsPath(workspacePath),
+      })
+      return c.json({
+        ok: true,
+        landingBranch: projectCfg.landingBranch ?? null,
+        landingStrategy: settings.project.landing_strategy.position,
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
   app.get('/api/config/models', async c => {
     try {
       const global = readGlobalConfig()
-      const workspace = readWorkspaceConfig(projectPath)
-      const projectCfg = readProjectConfig(projectPath)
+      const workspacePath = currentProjectPath()
+      const workspace = readWorkspaceConfig(workspacePath)
+      const projectCfg = readProjectConfig(workspacePath)
       const preferredProvider = projectCfg.preferredProvider
-      const resolved = resolveConfig({ workspacePath: projectPath })
+      const resolved = resolveConfig({ workspacePath })
       const creds = resolveGlobalCredentials()
       const loadedModels = creds.llamaCppUrl
         ? await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
@@ -3855,7 +4345,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker']
       if (!body.scope) return c.json({ error: 'Missing "scope"' }, 400)
-      const projectCfg = readProjectConfig(projectPath)
+      const workspacePath = currentProjectPath()
+      const projectCfg = readProjectConfig(workspacePath)
       const preferredProvider = projectCfg.preferredProvider
 
       const requestedModels = body.models && typeof body.models === 'object'
@@ -3892,7 +4383,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ ok: true })
       }
 
-      const workspace = readWorkspaceConfig(projectPath)
+      const workspace = readWorkspaceConfig(workspacePath)
       const nextModels = { ...resolveModelsForProvider(workspace.models, preferredProvider) }
       if (body.scope === 'global-default') {
         if (requestedModels) {
@@ -3922,7 +4413,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       } else {
         delete nextConfig.models
       }
-      writeWorkspaceConfig(projectPath, nextConfig)
+      writeWorkspaceConfig(workspacePath, nextConfig)
       refreshProject(project.path)
       return c.json({ ok: true })
     } catch (err) {
@@ -4165,15 +4656,15 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   const cfg = readProjectConfig(projectPath)
   const port = opts.port ?? cfg.servePort
 
-  console.log('[guildhall serve] Service: Guildhall local service')
+  console.log('[guildhall serve] Guildhall local service')
   if (opts.preferredProjectPath ?? opts.projectPath) {
-    console.log(`[guildhall serve] Preferred project: ${resolve(opts.preferredProjectPath ?? opts.projectPath ?? project.path)}`)
+    console.log(`[guildhall serve] Initial project: ${resolve(opts.preferredProjectPath ?? opts.projectPath ?? project.path)}`)
   } else {
-    console.log('[guildhall serve] Preferred project: none selected')
+    console.log('[guildhall serve] Initial project: Projects home')
   }
-  console.log(`[guildhall serve] Foreground project: ${project.path}`)
+  console.log(`[guildhall serve] Selected project: ${project.path}`)
   console.log(`[guildhall serve] ${project.initializationNeeded ? '⚠ Foreground project not initialized — wizard at /setup' : `✓ ${project.config?.name ?? project.id}`}`)
-  console.log(`[guildhall serve] Dashboard: http://localhost:${port}`)
+  console.log(`[guildhall serve] URL: http://localhost:${port}`)
   console.log(`[guildhall serve] PID: ${process.pid}`)
   // Heads-up to any humans: Node loaded the dist into memory at startup.
   // Subsequent rebuilds need a kill+restart to take effect. The web app
@@ -4203,8 +4694,6 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
           port: info.port,
           url: `http://localhost:${info.port}`,
           startedAt: new Date().toISOString(),
-          preferredProjectPath: opts.preferredProjectPath ?? opts.projectPath ?? null,
-          foregroundProjectPath: project.path,
         }, null, 2))
       } catch {
         /* non-fatal */
@@ -4219,24 +4708,30 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   // exit 0. Handlers are idempotent — the shuttingDown flag avoids the
   // "Ctrl+C twice" hard-exit being interpreted as a regression.
   let shuttingDown = false
+  const removeServiceStateIfOwned = async (): Promise<void> => {
+    if (!opts.serviceStatePath) return
+    try {
+      const raw = await fsp.readFile(opts.serviceStatePath, 'utf8').catch(() => null)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as { pid?: unknown }
+      if (parsed.pid !== process.pid) return
+      await fsp.rm(opts.serviceStatePath, { force: true })
+    } catch {
+      /* non-fatal */
+    }
+  }
   const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
     if (shuttingDown) return
     shuttingDown = true
-    console.log(`\n[guildhall serve] ${signal} received — draining…`)
+    console.log(`\n[guildhall serve] Guildhall is shutting down… (${signal})`)
     try {
       await supervisor.stopAll({ reason: `signal:${signal}` })
     } catch (err) {
       console.warn(`[guildhall serve] stopAll error: ${err instanceof Error ? err.message : String(err)}`)
     }
-    if (opts.serviceStatePath) {
-      try {
-        await fsp.rm(opts.serviceStatePath, { force: true })
-      } catch {
-        /* non-fatal */
-      }
-    }
+    await removeServiceStateIfOwned()
     await new Promise<void>(resolve => server.close(() => resolve()))
-    console.log('[guildhall serve] shutdown complete')
+    console.log('[guildhall serve] Shutdown complete.')
     process.exit(0)
   }
   process.on('SIGINT', () => { void shutdown('SIGINT') })

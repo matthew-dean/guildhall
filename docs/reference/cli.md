@@ -36,7 +36,7 @@ Print all registered workspaces with id, name, and absolute path.
 
 ## `guildhall run [id|path]`
 
-Run the orchestrator. Blocks until Ctrl-C or no work remains.
+Run the coordinator. Blocks until Ctrl-C or no work remains.
 
 Flags:
 
@@ -117,7 +117,9 @@ Flags: `--workspace <id|path>`, `--message <string>`, `--resolve-escalation <id>
 
 ## `guildhall meta-intake`
 
-Bootstrap coordinators by interviewing the agent about your codebase (FR-14). Writes a draft; does not modify `guildhall.yaml` until approved.
+Let Guildhall inspect the repo, infer its internal routing map, and draft
+starter tasks (FR-14). Writes a draft; does not modify `guildhall.yaml` until
+approved.
 
 Flags: `--workspace <id|path>`, `--force` (re-run even if already bootstrapped).
 

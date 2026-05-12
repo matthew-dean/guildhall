@@ -29,7 +29,7 @@ Model IDs resolve against the catalog in `src/core/models.ts`.
 
 ## Cognitive profiles
 
-Each role has a `CognitiveProfile` declaring what it needs from a model — context window, tool use, reasoning. The orchestrator uses these to validate model assignments at boot.
+Each role has a `CognitiveProfile` declaring what it needs from a model — context window, tool use, reasoning. The coordinator uses these to validate model assignments at boot.
 
 ## Permission modes
 

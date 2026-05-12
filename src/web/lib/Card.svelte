@@ -11,6 +11,7 @@
     title?: string
     titleTag?: 'h2' | 'h3' | 'h4'
     tone?: Tone
+    className?: string
     children?: Snippet
     actions?: Snippet
   }
@@ -19,12 +20,13 @@
     title,
     titleTag = 'h3',
     tone = 'default',
+    className = '',
     children,
     actions,
   }: Props = $props()
 </script>
 
-<section class="card tone-{tone}">
+<section class={`card tone-${tone} ${className}`.trim()}>
   {#if title || actions}
     <header class="card-head">
       {#if title}

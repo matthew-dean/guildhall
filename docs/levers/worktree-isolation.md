@@ -35,7 +35,7 @@ That keeps runtime sandboxes out of normal repo status and editor trees.
 ## Related levers
 
 - [`concurrent_task_dispatch`](./concurrent-task-dispatch) — fanout requires at least `per_task`.
-- [`merge_policy`](./merge-policy) — determines what happens when a worktree's branch lands.
+- [`landing_strategy`](./merge-policy) — determines what happens when a worktree's accepted commits land.
 
 ## When to change it
 

@@ -21,7 +21,7 @@ describe('buildProviderIndicator', () => {
     expect(buildProviderIndicator(providerStatus, 'stopped')).toEqual({
       summaryLabel: 'OpenAI-compatible',
       title: [
-        'Configured preferred provider: OpenAI-compatible',
+        'This project is set to use OpenAI-compatible when you start a run.',
         'Worker model: gpt-5.3-codex',
         'Spec: qwen/spec',
         'Coordinator: qwen/coord',
@@ -44,7 +44,7 @@ describe('buildProviderIndicator', () => {
 
     expect(buildProviderIndicator(providerStatus, 'running')).toEqual({
       summaryLabel: 'Claude',
-      title: 'Running on Claude\nWorker model: claude-sonnet-4-6',
+      title: 'Current run is using Claude.\nWorker model: claude-sonnet-4-6',
     })
   })
 })

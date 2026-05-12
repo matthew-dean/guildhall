@@ -19,6 +19,7 @@ import {
 function baseSnap(overrides: Partial<ProjectSnapshot> = {}): ProjectSnapshot {
   return {
     projectPath: '/tmp/example',
+    bootstrapVerified: false,
     hasProvider: false,
     hasDirection: false,
     workspaceImportReviewed: false,
@@ -51,7 +52,7 @@ describe('onboardWizard.progress', () => {
     expect(p.steps[2]!.status).toBe('pending')
   })
 
-  it('treats bootstrap as done only when verifiedAt is a non-empty string', () => {
+  it('treats bootstrap as done when runtime bootstrap truth says it is verified', () => {
     const noVerified = progressFor(
       onboardWizard,
       baseSnap({ config: { id: 'x', bootstrap: {} } }),
@@ -62,6 +63,7 @@ describe('onboardWizard.progress', () => {
       onboardWizard,
       baseSnap({
         config: { id: 'x', bootstrap: { verifiedAt: '2026-04-24T00:00:00Z' } },
+        bootstrapVerified: true,
       }),
     )
     expect(verified.steps.find(s => s.id === 'bootstrap')!.status).toBe('done')
@@ -71,14 +73,23 @@ describe('onboardWizard.progress', () => {
       baseSnap({ config: { id: 'x', bootstrap: { verifiedAt: '' } } }),
     )
     expect(emptyVerified.steps.find(s => s.id === 'bootstrap')!.status).toBe('pending')
+
+    const runtimeVerified = progressFor(
+      onboardWizard,
+      baseSnap({
+        config: { id: 'x', bootstrap: { verifiedAt: '' } },
+        bootstrapVerified: true,
+      }),
+    )
+    expect(runtimeVerified.steps.find(s => s.id === 'bootstrap')!.status).toBe('done')
   })
 
-  it('coordinator step is done once at least one coordinator exists', () => {
+  it('routing step is done once Guildhall has inferred at least one routing slice', () => {
     const p = progressFor(
       onboardWizard,
       baseSnap({ config: { id: 'x', coordinators: [{ id: 'a', name: 'A' }] } }),
     )
-    expect(p.steps.find(s => s.id === 'coordinator')!.status).toBe('done')
+    expect(p.steps.find(s => s.id === 'routing')!.status).toBe('done')
   })
 
   it('skipped markers render as skipped for skippable steps', () => {
@@ -119,6 +130,7 @@ describe('onboardWizard.progress', () => {
           coordinators: [{ id: 'a' }],
           bootstrap: { verifiedAt: '2026-04-24T00:00:00Z' },
         },
+        bootstrapVerified: true,
         hasProvider: true,
         hasDirection: true,
         workspaceImportReviewed: true,
@@ -136,6 +148,7 @@ describe('onboardWizard.progress', () => {
           coordinators: [{ id: 'a' }],
           bootstrap: { verifiedAt: '2026-04-24T00:00:00Z' },
         },
+        bootstrapVerified: true,
         hasProvider: true,
         hasDirection: false,
         workspaceImportReviewed: true,
@@ -152,11 +165,11 @@ describe('onboardWizard.progress', () => {
 
   it('steps declare which are skippable vs hard prerequisites', () => {
     const byId = new Map(onboardWizard.steps.map(s => [s.id, s]))
-    // Hard prerequisites: identity, provider, bootstrap, coordinator, firstTask.
+    // Hard prerequisites: identity, provider, bootstrap, routing, firstTask.
     expect(byId.get('identity')!.skippable).toBe(false)
     expect(byId.get('provider')!.skippable).toBe(false)
     expect(byId.get('bootstrap')!.skippable).toBe(false)
-    expect(byId.get('coordinator')!.skippable).toBe(false)
+    expect(byId.get('routing')!.skippable).toBe(false)
     expect(byId.get('firstTask')!.skippable).toBe(false)
     // Soft — the harness works without them, but quality suffers.
     expect(byId.get('direction')!.skippable).toBe(true)
@@ -187,6 +200,7 @@ describe('buildSnapshot', () => {
     })
     expect(snap.config?.id).toBe('demo')
     expect(snap.config?.bootstrap?.verifiedAt).toBe('2026-04-24T00:00:00Z')
+    expect(snap.bootstrapVerified).toBe(true)
   })
 
   it('hasProvider=true when any non-empty provider entry is present', () => {
@@ -318,5 +332,29 @@ describe('buildSnapshot', () => {
       detectOauthProviders: () => ({ claude: false, codex: false }),
     })
     expect(snap.wizardState.skipped['onboard']).toEqual(['direction'])
+  })
+
+  it('marks bootstrap verified from memory/bootstrap.json when guildhall.yaml lacks verifiedAt', () => {
+    writeFileSync(
+      join(tmp, 'guildhall.yaml'),
+      'id: demo\nname: Demo\nbootstrap: {}\n',
+    )
+    writeFileSync(
+      join(tmp, 'memory', 'bootstrap.json'),
+      JSON.stringify({
+        success: true,
+        lastRunAt: '2026-05-11T00:00:00.000Z',
+        durationMs: 10,
+        commandHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        lockfileHash: null,
+        steps: [],
+      }, null, 2),
+    )
+    const snap = buildSnapshot({
+      projectPath: tmp,
+      readProviders: () => ({ providers: {} }),
+      detectOauthProviders: () => ({ claude: false, codex: false }),
+    })
+    expect(snap.bootstrapVerified).toBe(true)
   })
 })

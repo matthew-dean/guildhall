@@ -47,7 +47,7 @@ you through:
 
 1. **Identity** — workspace name + slug
 2. **Provider** — pick how you'll call LLMs (auto-detects installed CLIs)
-3. **Launch** — either trigger the meta-intake (agent interviews you and drafts coordinators), or skip to the dashboard and hand-edit YAML
+3. **Launch** — trigger repo inspection so Guildhall can infer repo structure and draft starter tasks, or skip ahead and hand-edit YAML
 
 Everything the wizard sets is editable later from the Settings page.
 
@@ -60,7 +60,7 @@ guildhall intake "add a ghost button variant" --domain ui
 # Advance the spec once you're happy with it
 guildhall approve-spec task-001
 
-# Run the orchestrator (blocks; Ctrl-C to stop)
+# Run the coordinator (blocks; Ctrl-C to stop)
 guildhall run
 ```
 

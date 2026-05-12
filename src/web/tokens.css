@@ -5,7 +5,16 @@
  */
 
 :root {
-  /* colors — semantic */
+  /* colors — semantic
+     These are the only palette families UI code should use. They represent:
+     - neutral structure
+     - guided emphasis
+     - healthy / confirmed states
+     - caution / partial confidence
+     - danger / failure
+
+     New surfaces should map back to these roles instead of inventing
+     near-match local hues. */
   --bg: #0f0f11;
   --bg-base: #0f0f11;        /* page background */
   --bg-raised: #1a1a1f;      /* rails, sections, inset surfaces */
@@ -19,6 +28,33 @@
   --text-muted: #888899;
   --danger: #e05252;
   --warn: #d4a23c;
+
+  /* semantic tints
+     Surface treatments for notices, selected cards, and grouped emphasis.
+     Keep these aligned with the core role families above. */
+  --surface-neutral: #1f1f27;
+  --surface-neutral-strong: #262632;
+  --surface-accent: #1f1f27;
+  --surface-accent-strong: #262632;
+  --surface-ok: #1d2b29;
+  --surface-ok-strong: #25403a;
+  --surface-warn: #322816;
+  --surface-warn-strong: #49371c;
+  --surface-danger: #351d22;
+  --surface-danger-strong: #4b252d;
+
+  /* chip tokens
+     Chips are the compact expression of the same semantic palette. */
+  --chip-neutral-bg: #383844;
+  --chip-neutral-fg: #ececf6;
+  --chip-ok-bg: rgba(78, 204, 163, 0.15);
+  --chip-ok-fg: var(--accent-2);
+  --chip-warn-bg: rgba(212, 162, 60, 0.15);
+  --chip-warn-fg: var(--warn);
+  --chip-danger-bg: rgba(224, 82, 82, 0.15);
+  --chip-danger-fg: var(--danger);
+  --chip-accent-bg: #584ab0;
+  --chip-accent-fg: #fbfaff;
 
   /* status stripes — saturated 3px left borders for cards/rows.
      Kept as solid colors (not tints) so the stripe remains legible on
@@ -63,6 +99,7 @@
 
   /* app chrome */
   --app-header-h: 34px;
+  --app-top-stack-h: calc(var(--app-header-h) + var(--app-banner-h, 0px));
 
   /* layering contract
      1. in-flow sticky UI (section heads, page headers)
@@ -86,7 +123,9 @@
 html,
 body,
 #svelte-root {
+  height: 100%;
   min-height: 100%;
+  overflow: hidden;
 }
 
 html {

@@ -39,6 +39,7 @@ const BASE_PRINCIPLES = readAsset('principles.md')
 
 const STAGE_FILES: Record<TaskStatus, string> = {
   proposed: 'stages/proposed.md',
+  import_draft: 'stages/exploring.md',
   exploring: 'stages/exploring.md',
   spec_review: 'stages/spec_review.md',
   ready: 'stages/ready.md',

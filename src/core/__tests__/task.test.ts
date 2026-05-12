@@ -3,7 +3,7 @@ import { Task, TaskQueue, TaskStatus, TaskPriority, AcceptanceCriteria } from '.
 
 describe('TaskStatus', () => {
   it('accepts all valid statuses', () => {
-    const statuses = ['exploring', 'spec_review', 'ready', 'in_progress', 'review', 'gate_check', 'done', 'blocked']
+    const statuses = ['import_draft', 'exploring', 'spec_review', 'ready', 'in_progress', 'review', 'gate_check', 'done', 'blocked']
     for (const s of statuses) {
       expect(TaskStatus.parse(s)).toBe(s)
     }
@@ -74,6 +74,15 @@ describe('Task', () => {
     })
     expect(result.spec).toContain('Ghost variant')
     expect(result.completedAt).toBeDefined()
+  })
+
+  it('normalizes legacy null blockReason to undefined', () => {
+    const result = Task.parse({
+      ...validTask,
+      status: 'ready',
+      blockReason: null,
+    })
+    expect(result.blockReason).toBeUndefined()
   })
 })
 

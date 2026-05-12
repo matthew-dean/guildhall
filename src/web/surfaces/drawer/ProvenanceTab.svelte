@@ -26,7 +26,7 @@
     ['Proposal rationale', task.proposalRationale ?? null],
     ['Task workspace', task.worktreePath ?? null],
     ['Task branch', task.branchName ?? null],
-    ['Base branch', task.baseBranch ?? null],
+    ['Landing branch', task.baseBranch ?? null],
     ['Created at', task.createdAt ?? ''],
     ['Updated at', task.updatedAt ?? ''],
     ['Completed at', task.completedAt ?? null],

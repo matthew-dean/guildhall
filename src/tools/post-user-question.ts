@@ -60,6 +60,25 @@ export interface PostUserQuestionResult {
   error?: string
 }
 
+function normalizeQuestionPrompt(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function questionSignature(question: {
+  kind?: string
+  prompt?: string
+  restatement?: string
+  choices?: string[]
+  selectionMode?: string
+}): string {
+  const body = normalizeQuestionPrompt(question.prompt ?? question.restatement ?? '')
+  const choices = Array.isArray(question.choices)
+    ? question.choices.map((choice) => normalizeQuestionPrompt(choice)).join('|')
+    : ''
+  const selectionMode = question.selectionMode ?? ''
+  return [question.kind ?? '', body, choices, selectionMode].join('::')
+}
+
 interface InferredQuestion {
   kind: 'confirm' | 'yesno' | 'choice' | 'text'
   body: string
@@ -304,6 +323,21 @@ export async function postUserQuestion(
             : { kind: 'text' as const, id, askedBy: input.askedBy, askedAt: now, prompt: input.body }
 
     const existing = task.openQuestions ?? []
+    const existingOpenDuplicate = existing.find((item) => {
+      if (!item || typeof item !== 'object') return false
+      const answeredAt = 'answeredAt' in item ? item.answeredAt : undefined
+      if (typeof answeredAt === 'string' && answeredAt) return false
+      return questionSignature(item as {
+        kind?: string
+        prompt?: string
+        restatement?: string
+        choices?: string[]
+        selectionMode?: string
+      }) === questionSignature(question)
+    }) as { id?: string } | undefined
+    if (existingOpenDuplicate?.id) {
+      return { success: true, questionId: existingOpenDuplicate.id }
+    }
     task.openQuestions = [...existing, question]
     task.updatedAt = now
     queue.lastUpdated = now

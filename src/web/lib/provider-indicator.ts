@@ -1,7 +1,7 @@
 import type { ProviderStatus } from './types.js'
 
 function providerLabel(provider: string | null | undefined): string {
-  if (!provider) return 'Not selected'
+  if (!provider) return 'Not set'
   const labels: Record<string, string> = {
     'claude-oauth': 'Claude',
     'codex-oauth': 'Codex',
@@ -9,7 +9,7 @@ function providerLabel(provider: string | null | undefined): string {
     'llama-cpp': 'Local server',
     'anthropic-api': 'Anthropic',
     'openai-api': 'OpenAI-compatible',
-    none: 'None',
+    none: 'Not set',
   }
   return labels[provider] ?? provider
 }
@@ -67,23 +67,23 @@ export function buildProviderIndicator(
       : providerStatus.activeProvider && providerStatus.activeProvider !== 'none'
         ? activeProviderLabel
         : mixedModels
-          ? 'Configured'
+          ? 'Configured models'
           : 'Providers'
 
   const detailLines: string[] = []
   if (runtimeActive) {
-    detailLines.push(`Running on ${activeProviderLabel}`)
+    detailLines.push(`Current run is using ${activeProviderLabel}.`)
     if (providerStatus.activeModel) detailLines.push(`Worker model: ${providerStatus.activeModel}`)
   } else if (providerStatus.preferredProvider) {
-    detailLines.push(`Configured preferred provider: ${preferredProviderLabel}`)
+    detailLines.push(`This project is set to use ${preferredProviderLabel} when you start a run.`)
     detailLines.push(`Worker model: ${workerModelLabel}`)
   } else if (providerStatus.activeProvider && providerStatus.activeProvider !== 'none') {
-    detailLines.push(`Last active provider: ${activeProviderLabel}`)
+    detailLines.push(`The last run used ${activeProviderLabel}.`)
     detailLines.push(`Worker model: ${workerModelLabel}`)
   } else if (mixedModels) {
-    detailLines.push('Project has model assignments but no provider selected yet.')
+    detailLines.push('Different roles are configured to use different models, but no provider is selected yet.')
   } else {
-    detailLines.push('Provider not selected')
+    detailLines.push('No provider selected yet.')
   }
   if (mixedModels) detailLines.push(mixedModels)
   if (providerStatus.decisions?.length) {

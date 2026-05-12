@@ -47,7 +47,7 @@ The product rule is simple:
 This applies everywhere, not only to first-run setup:
 
 - project intake
-- project split and stewardship drafts
+- project split and project-area drafts
 - task brief approval
 - spec approval
 - review and escalation follow-ups
@@ -176,7 +176,7 @@ Opening a project enters the current Guildhall experience for that project:
 
 - Thread
 - Work
-- Coordinators
+- Project areas
 - Settings
 - Release
 - and other current project-specific surfaces
@@ -243,6 +243,76 @@ If invoked outside any project folder:
 - Guildhall should open the Projects screen with no project selected
 
 The local service itself should not be thought of as "serving one project." It serves Guildhall as a whole.
+
+## Coordination Model
+
+### Summary
+
+Guildhall should move toward a simpler model:
+
+- one coordinating layer per project
+- user-facing project goals, tasks, and concrete repo/product boundaries when they matter
+- internal perspectives selected per task/decision
+
+The product should not require the user to build and maintain a visible roster
+of stewards in order to get good routing or review quality.
+
+### Why this pivot matters
+
+The earlier steward/coordinator story was trying to solve a real problem:
+
+- different work needs different judgment
+- some tasks need UI scrutiny
+- some need integration-risk scrutiny
+- some need accessibility or release thinking
+
+But the user-facing steward model adds too much cognitive overhead too early:
+
+- the user has to understand why a steward exists
+- the user has to name or approve steward-like lanes
+- the product has to explain how those lanes differ
+- interconnected systems like Looma + Knit do not always split cleanly into
+  separate long-lived stewardship units
+
+That means the product can end up teaching an internal org chart before it has
+proven that the org chart helps the user.
+
+### Preferred model
+
+Guildhall should expose:
+
+- projects
+- concrete work structure only when it is genuinely useful to the user
+- tasks
+- decisions
+
+Guildhall should manage underneath:
+
+- which perspectives are relevant right now
+- which context should be assembled
+- which checks should be applied
+- which review lenses should weigh in
+
+Those perspectives are situational, not permanent:
+
+- a task may need UI + accessibility
+- the next may need integration-risk + release
+- the next may need market/product research
+
+The coordinating layer should be able to pull those perspectives in, then
+discard or replace them as the work moves on.
+
+### What remains real under the hood
+
+This does not mean routing or policy separation disappears. Internally,
+Guildhall may still keep:
+
+- domain/path scope hints
+- lane-level policy differences
+- ownership of adjudication when perspectives conflict
+
+But those should be implementation details unless the user is drilling into
+advanced inspection or settings.
 
 ## Task Workspace Model
 
@@ -543,6 +613,39 @@ Later, Guildhall can add a lightweight chat/control pane that:
 - invokes the same canonical actions as the UI
 
 This chat should be a **companion** surface, not the primary navigation model.
+
+### Contextual conversation direction
+
+One promising extension of the companion-chat idea is a **scoped
+conversation-in-context** surface.
+
+The point would not be to replace structured flows. The point would be to give
+Guildhall a better tool for the cases where a rigid wizard forces too much
+advance choreography and too many bespoke branch screens.
+
+In that model:
+
+- a task, draft, setup step, or import candidate can open a local
+  conversation surface
+- the conversation is anchored to that exact object
+- Guildhall knows the structured end state it is trying to reach
+- Guildhall asks clarifying follow-ups only until it can finalize that shape
+- the result is written back into structured product state
+
+Examples:
+
+- shaping one imported draft into a complete task brief
+- clarifying a project split proposal
+- filling in missing success criteria or acceptance criteria for one task
+
+This should remain tightly bounded:
+
+- not a global freeform prompt box
+- not the primary way to navigate the product
+- not an excuse to avoid designing good structured flows
+
+It is best thought of as a **contextual clarification lane** that sits beside
+the structured UI and uses the same canonical actions/tool calls underneath.
 
 ### Near-term implication
 

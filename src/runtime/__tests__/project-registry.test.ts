@@ -69,13 +69,16 @@ describe('POST /api/service/attach-project', () => {
   it('updates the registry entry after setup identity finishes for an attached uninitialized project', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
 
-    await app.fetch(new Request('http://localhost/api/service/attach-project', {
+    const attach = await app.fetch(new Request('http://localhost/api/service/attach-project', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: tmpProject }),
     }))
+    const attachBody = (await attach.json()) as { selectedProject?: { id?: string } }
+    const projectId = attachBody.selectedProject?.id
+    expect(projectId).toBeTruthy()
 
-    const save = await app.fetch(new Request('http://localhost/api/setup/identity', {
+    const save = await app.fetch(new Request(`http://localhost/api/setup/identity?projectId=${encodeURIComponent(projectId ?? '')}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'T Minus T', id: 't-minus-t', tags: ['extension'] }),
@@ -87,5 +90,81 @@ describe('POST /api/service/attach-project', () => {
     expect(entries[0]?.id).toBe('t-minus-t')
     expect(entries[0]?.name).toBe('T Minus T')
     expect(entries[0]?.tags).toEqual(['extension'])
+  })
+})
+
+describe('POST /api/service/select-project', () => {
+  it('switches the active /api/project surface to the selected registered project', async () => {
+    const firstProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-project-first-'))
+    const secondProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-project-second-'))
+    try {
+      bootstrapWorkspace(firstProject, { name: 'First Project' })
+      bootstrapWorkspace(secondProject, { name: 'Second Project' })
+
+      const { registerWorkspace } = await import('@guildhall/config')
+      registerWorkspace({ id: 'first-project', path: firstProject, name: 'First Project', tags: [] })
+      registerWorkspace({ id: 'second-project', path: secondProject, name: 'Second Project', tags: [] })
+
+      const { app } = buildServeApp({ projectPath: firstProject })
+
+      const before = await app.fetch(new Request('http://localhost/api/project'))
+      const beforeBody = (await before.json()) as { name?: string; path?: string }
+      expect(beforeBody.name).toBe('First Project')
+      expect(beforeBody.path).toBe(firstProject)
+
+      const select = await app.fetch(new Request('http://localhost/api/service/select-project', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ projectId: 'second-project' }),
+      }))
+      expect(select.status).toBe(200)
+
+      const after = await app.fetch(new Request('http://localhost/api/project'))
+      const afterBody = (await after.json()) as { name?: string; path?: string }
+      expect(afterBody.name).toBe('Second Project')
+      expect(afterBody.path).toBe(secondProject)
+    } finally {
+      await fs.rm(firstProject, { recursive: true, force: true })
+      await fs.rm(secondProject, { recursive: true, force: true })
+    }
+  })
+
+  it('lets explicit projectId queries target a different project without mutating the selected project', async () => {
+    const firstProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-project-explicit-first-'))
+    const secondProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-project-explicit-second-'))
+    try {
+      bootstrapWorkspace(firstProject, { name: 'First Project' })
+      bootstrapWorkspace(secondProject, { name: 'Second Project' })
+
+      const { registerWorkspace } = await import('@guildhall/config')
+      registerWorkspace({ id: 'first-project', path: firstProject, name: 'First Project', tags: [] })
+      registerWorkspace({ id: 'second-project', path: secondProject, name: 'Second Project', tags: [] })
+
+      const { app } = buildServeApp({ projectPath: firstProject })
+
+      await fs.mkdir(path.join(firstProject, 'memory'), { recursive: true })
+      await fs.mkdir(path.join(secondProject, 'memory'), { recursive: true })
+
+      const saveBrief = await app.fetch(new Request('http://localhost/api/project/brief?projectId=second-project', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content: 'Second brief only, and it is definitely long enough to save.' }),
+      }))
+      expect(saveBrief.status).toBe(200)
+
+      const secondBrief = await fs.readFile(path.join(secondProject, 'memory', 'project-brief.md'), 'utf8')
+      expect(secondBrief).toBe('Second brief only, and it is definitely long enough to save.\n')
+
+      const firstBriefPath = path.join(firstProject, 'memory', 'project-brief.md')
+      expect(existsSync(firstBriefPath)).toBe(false)
+
+      const selected = await app.fetch(new Request('http://localhost/api/project'))
+      const selectedBody = (await selected.json()) as { name?: string; path?: string }
+      expect(selectedBody.name).toBe('First Project')
+      expect(selectedBody.path).toBe(firstProject)
+    } finally {
+      await fs.rm(firstProject, { recursive: true, force: true })
+      await fs.rm(secondProject, { recursive: true, force: true })
+    }
   })
 })

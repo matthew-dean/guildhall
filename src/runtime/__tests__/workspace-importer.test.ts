@@ -343,7 +343,7 @@ describe('approveWorkspaceImport', () => {
     expect(res.error).toContain('Could not find')
   })
 
-  it('inserts tasks as exploring + origination=human, records goals + milestones', async () => {
+  it('inserts tasks as import drafts + origination=human, records goals + milestones', async () => {
     await seedImporterWithSpec(`
 \`\`\`yaml
 goals:
@@ -386,7 +386,7 @@ milestones:
     expect(importerTask.completedAt).toBeTypeOf('string')
 
     const newTask = q.tasks.find((t) => t.id === 't-wire-dashboard')!
-    expect(newTask.status).toBe('exploring')
+    expect(newTask.status).toBe('import_draft')
     expect(newTask.origination).toBe('human')
     expect(newTask.domain).toBe('ui')
     expect(newTask.priority).toBe('high')
@@ -606,7 +606,7 @@ milestones:
     for (const t of seeded.draft.tasks) {
       const landed = qFinal.tasks.find((x) => x.id === t.suggestedId)
       expect(landed, `task ${t.suggestedId}`).toBeDefined()
-      expect(landed!.status).toBe('exploring')
+      expect(landed!.status).toBe('import_draft')
       expect(landed!.origination).toBe('human')
     }
 

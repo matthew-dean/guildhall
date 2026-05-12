@@ -46,12 +46,12 @@ function task(overrides: Partial<Task> = {}): Task {
   }
 }
 
-describe('dispatchMerge — ff_only_local', () => {
-  it('fast-forward merges and marks newStatus=done', async () => {
+describe('dispatchMerge — cherry_pick_local', () => {
+  it('lands accepted commits locally and marks newStatus=done', async () => {
     const driver = new InMemoryGitDriver()
     const r = await dispatchMerge({
       task: task(),
-      policy: 'ff_only_local',
+      policy: 'cherry_pick_local',
       projectPath: '/repo',
       memoryDir,
       gitDriver: driver,
@@ -60,7 +60,7 @@ describe('dispatchMerge — ff_only_local', () => {
     expect(r.newStatus).toBe('done')
     expect(r.record.result).toBe('merged')
     expect(r.record.commitSha).toBe('inmem-1')
-    expect(driver.state.merges).toHaveLength(1)
+    expect(driver.state.cherryPicks).toHaveLength(1)
     expect(driver.state.pushes).toHaveLength(0)
   })
 
@@ -69,7 +69,7 @@ describe('dispatchMerge — ff_only_local', () => {
     driver.setNextMergeResult({ ok: false, conflict: true, detail: 'conflict in x.ts' })
     const r = await dispatchMerge({
       task: task({ id: 'parent', parentGoalId: 'goal-7' }),
-      policy: 'ff_only_local',
+      policy: 'cherry_pick_local',
       projectPath: '/repo',
       memoryDir,
       gitDriver: driver,
@@ -85,12 +85,12 @@ describe('dispatchMerge — ff_only_local', () => {
   })
 })
 
-describe('dispatchMerge — ff_only_with_push', () => {
-  it('merges + pushes successfully and records result=pushed', async () => {
+describe('dispatchMerge — cherry_pick_with_push', () => {
+  it('lands locally, pushes successfully, and records result=pushed', async () => {
     const driver = new InMemoryGitDriver()
     const r = await dispatchMerge({
       task: task(),
-      policy: 'ff_only_with_push',
+      policy: 'cherry_pick_with_push',
       projectPath: '/repo',
       memoryDir,
       gitDriver: driver,
@@ -106,7 +106,7 @@ describe('dispatchMerge — ff_only_with_push', () => {
     driver.setNextPushResult({ ok: false, detail: 'network timeout' })
     const r = await dispatchMerge({
       task: task(),
-      policy: 'ff_only_with_push',
+      policy: 'cherry_pick_with_push',
       projectPath: '/repo',
       memoryDir,
       gitDriver: driver,
@@ -161,7 +161,7 @@ describe('dispatchMerge — defensive skips', () => {
     const driver = new InMemoryGitDriver()
     const r = await dispatchMerge({
       task: task({ branchName: undefined, baseBranch: undefined }),
-      policy: 'ff_only_local',
+      policy: 'cherry_pick_local',
       projectPath: '/repo',
       memoryDir,
       gitDriver: driver,

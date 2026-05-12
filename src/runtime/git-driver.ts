@@ -60,6 +60,12 @@ export interface GitDriver {
     branch: string,
     baseBranch: string,
   ): Promise<MergeResult>
+  /** Cherry-pick commits from `branch` onto `baseBranch` in commit order. */
+  cherryPickBranch(
+    repoRoot: string,
+    branch: string,
+    baseBranch: string,
+  ): Promise<MergeResult>
   /** Push `branch` to `origin`. */
   push(repoRoot: string, branch: string): Promise<PushResult>
   /** Open a PR via `gh` CLI (or return `ok:false` with a graceful detail). */
@@ -138,6 +144,36 @@ export class NodeGitDriver implements GitDriver {
     }
   }
 
+  async cherryPickBranch(
+    repoRoot: string,
+    branch: string,
+    baseBranch: string,
+  ): Promise<MergeResult> {
+    try {
+      await execFileP('git', ['checkout', baseBranch], { cwd: repoRoot })
+      const { stdout } = await execFileP(
+        'git',
+        ['rev-list', '--reverse', `${baseBranch}..${branch}`],
+        { cwd: repoRoot },
+      )
+      const commits = stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+      if (commits.length > 0) {
+        await execFileP('git', ['cherry-pick', ...commits], { cwd: repoRoot })
+      }
+      const { stdout: head } = await execFileP('git', ['rev-parse', 'HEAD'], {
+        cwd: repoRoot,
+      })
+      return { ok: true, commitSha: head.trim() }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      const conflict = /cherry-pick failed|after resolving the conflicts|conflict/i.test(message)
+      return { ok: false, detail: message, conflict }
+    }
+  }
+
   async push(repoRoot: string, branch: string): Promise<PushResult> {
     try {
       await execFileP('git', ['push', 'origin', branch], { cwd: repoRoot })
@@ -189,6 +225,7 @@ export interface InMemoryGitDriverState {
   createdWorktrees: CreateWorktreeOptions[]
   removedWorktrees: string[]
   merges: { branch: string; baseBranch: string; result: MergeResult }[]
+  cherryPicks: { branch: string; baseBranch: string; result: MergeResult }[]
   pushes: { branch: string; result: PushResult }[]
   prs: { branch: string; baseBranch: string; title: string; result: PullRequestResult }[]
 }
@@ -217,6 +254,7 @@ export class InMemoryGitDriver implements GitDriver {
       createdWorktrees: [],
       removedWorktrees: [],
       merges: [],
+      cherryPicks: [],
       pushes: [],
       prs: [],
     }
@@ -270,6 +308,22 @@ export class InMemoryGitDriver implements GitDriver {
     }
     this.nextMerge = undefined
     this.state.merges.push({ branch, baseBranch, result })
+    return result
+  }
+
+  async cherryPickBranch(
+    _repoRoot: string,
+    branch: string,
+    baseBranch: string,
+  ): Promise<MergeResult> {
+    const result =
+      this.nextMerge ??
+      ({
+        ok: true,
+        commitSha: `inmem-${this.state.cherryPicks.length + 1}`,
+      } satisfies MergeResult)
+    this.nextMerge = undefined
+    this.state.cherryPicks.push({ branch, baseBranch, result })
     return result
   }
 

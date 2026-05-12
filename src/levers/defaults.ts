@@ -29,12 +29,12 @@ export function makeDefaultSettings(now: Date = new Date()): LeverSettings {
       ...stub('start serial; Spec Agent widens fanout once project maturity and runtime isolation allow it'),
     },
     worktree_isolation: {
-      position: 'none',
-      ...stub('no isolation until fanout is enabled'),
+      position: 'per_task',
+      ...stub('use one isolated worktree per task by default; only relax isolation when a project explicitly signals that shared checkout work is acceptable'),
     },
-    merge_policy: {
-      position: 'ff_only_local',
-      ...stub('local-first; Spec Agent upgrades to ff_only_with_push or manual_pr on project signal'),
+    landing_strategy: {
+      position: 'cherry_pick_local',
+      ...stub('land accepted task commits back onto the local branch first; upgrade to push or manual PR when the project wants shared landing'),
     },
     rejection_dampening: {
       position: { kind: 'off' },

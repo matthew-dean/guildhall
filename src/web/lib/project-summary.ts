@@ -4,7 +4,6 @@ export interface ProjectCardSummary {
   id: string
   name: string
   path: string
-  selected: boolean
   statusLabel: string
   tone: 'active' | 'warn' | 'success' | 'idle'
   stageLabel: string
@@ -93,14 +92,12 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
     done: project.taskCounts?.done ?? 0,
     shelved: project.taskCounts?.shelved ?? 0,
   }
-  const selected = Boolean(project.selected)
   const running = project.run?.status === 'running'
   const initializationNeeded = Boolean(project.initializationNeeded)
   return {
     id: project.id,
     name: project.name,
     path: project.path,
-    selected,
     statusLabel: statusLabel(project, counts),
     tone:
       initializationNeeded || project.run?.status === 'error'
@@ -119,7 +116,7 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
     tags: project.tags ?? [],
     counts,
     actionLabel: initializationNeeded ? 'Open setup' : 'Open project',
-    runActionLabel: initializationNeeded ? null : running ? 'Stop agents' : 'Start agents',
+    runActionLabel: initializationNeeded ? null : running ? 'Stop' : 'Start',
     canOpen: true,
     canStart: !running && !initializationNeeded,
     canStop: running,

@@ -209,8 +209,8 @@ describe('FR-16 end-to-end: orchestrator → OHJSON stream', () => {
       setAt: '2026-04-22T00:00:00.000Z',
       setBy: 'system-default',
     }
-    settings.project.merge_policy = {
-      position: 'ff_only_local',
+    settings.project.landing_strategy = {
+      position: 'cherry_pick_local',
       rationale: 'fanout-wire test',
       setAt: '2026-04-22T00:00:00.000Z',
       setBy: 'system-default',

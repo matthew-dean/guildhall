@@ -1,13 +1,13 @@
 <!--
   Settings tab. Primary/secondary/overflow IA:
-    · Primary: "Ready to start?" checklist — Bootstrap / Coordinators /
+    · Primary: "Ready to start?" checklist — Bootstrap / Repo structure /
       LLM provider — each a single-line row with status chip + action.
-    · Secondary: Coordinators summary card.
+    · Secondary: Routing summary card.
     · Overflow (<details> "Advanced"): Workspace identity, rename, Levers
       (read-only), Design system.
   Left-rail sub-nav maps:
     /settings            -> subView null | 'ready'       => ready block
-    /settings/coordinators -> 'coordinators'             => coordinators block
+    /settings/routing      -> 'routing'                  => routing summary block
     /settings/advanced   -> 'advanced'                    => advanced block
 -->
 <script lang="ts">
@@ -17,14 +17,17 @@
   import Button from '../../lib/Button.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Input from '../../lib/Input.svelte'
+  import Select from '../../lib/Select.svelte'
   import Byline from '../../lib/Byline.svelte'
   import LogViewer from '../../lib/LogViewer.svelte'
   import DefinitionList from '../../lib/DefinitionList.svelte'
   import FactsTab from './FactsTab.svelte'
   import ProjectProvidersSection from './ProjectProvidersSection.svelte'
   import Help from '../../lib/Help.svelte'
+  import { friendlyStewardName } from '../../lib/display.js'
   import { nav } from '../../lib/nav.svelte.js'
   import { project } from '../../lib/project.svelte.js'
+  import { projectFetch } from '../../lib/project-routes.js'
 
   interface Props {
     subView?: string | null
@@ -60,6 +63,54 @@
   let levers = $state<Lever[] | null>(null)
   let leversError = $state<string | null>(null)
   let designSystem = $state<DesignSystem | null | undefined>(undefined)
+  interface LocalConfigResponse {
+    landingBranch: string | null
+    effectiveLandingBranch: string | null
+    landingStrategy: 'cherry_pick_local' | 'cherry_pick_with_push' | 'manual_pr'
+    error?: string
+  }
+  interface WorkspaceImportLearningState {
+    preferredAreaKeys: string[]
+    preferredSourceKeys: string[]
+    approvedRuns: number
+    dismissedRuns: number
+    averageTaskAcceptanceRatio: number | null
+    lastTaskAcceptanceRatio: number | null
+    taskSelectionMode: 'all' | 'tight'
+    updatedAt: string | null
+  }
+  interface CoordinatorSuggestion {
+    id: string
+    title: string
+    summary: string
+    confidence: 'low' | 'medium' | 'high'
+  }
+  interface ProductSuggestion {
+    id: string
+    title: string
+    summary: string
+    evidence: string[]
+  }
+  interface LearningResponse {
+    project: { workspaceImport: WorkspaceImportLearningState } | null
+    user: { workspaceImport: WorkspaceImportLearningState } | null
+    effective: {
+      workspaceImport: WorkspaceImportLearningState
+      defaults: {
+        selectedAreaKeys: string[]
+        selectedSourceKeys: string[]
+        selectedTaskIds: string[]
+        taskSelectionMode: 'all' | 'tight'
+        note: string | null
+      }
+      coordinatorSuggestions: CoordinatorSuggestion[]
+      productSuggestions: ProductSuggestion[]
+    } | null
+    error?: string
+  }
+  let learning = $state<LearningResponse | null>(null)
+  let learningBusy = $state<null | 'project' | 'all'>(null)
+  let learningError = $state<string | null>(null)
 
   interface BootstrapStep {
     kind: 'command' | 'gate'
@@ -105,9 +156,14 @@
   let providerStatus = $state<ProviderStatus | null>(null)
   let metaIntakeBusy = $state(false)
   let metaIntakeError = $state<string | null>(null)
+  let localConfig = $state<LocalConfigResponse | null>(null)
+  let landingBranchDraft = $state('')
+  let landingStrategyDraft = $state<'cherry_pick_local' | 'cherry_pick_with_push' | 'manual_pr'>('cherry_pick_local')
+  let landingBusy = $state(false)
+  let landingStatus = $state<{ text: string; error: boolean } | null>(null)
 
   $effect(() => {
-    fetch('/api/setup/status')
+    projectFetch('/api/setup/status')
       .then(r => r.json())
       .then(s => {
         initialized = Boolean(s.initialized)
@@ -115,18 +171,27 @@
         id = s.id ?? ''
       })
       .catch(() => (initialized = false))
-    fetch('/api/config/levers')
+    projectFetch('/api/config/levers')
       .then(r => r.json())
       .then(j => {
         if (j.error) leversError = String(j.error)
         else levers = j.levers ?? []
       })
       .catch(err => (leversError = err instanceof Error ? err.message : String(err)))
-    fetch('/api/project/design-system')
+    projectFetch('/api/project/design-system')
       .then(r => r.json())
       .then(j => (designSystem = j?.designSystem ?? null))
       .catch(() => (designSystem = null))
-    fetch('/api/setup/providers')
+    projectFetch('/api/project/local-config')
+      .then(r => r.json())
+      .then((j: LocalConfigResponse) => {
+        if (j?.error) return
+        localConfig = j
+        landingBranchDraft = j.landingBranch ?? ''
+        landingStrategyDraft = j.landingStrategy
+      })
+      .catch(() => (localConfig = null))
+    projectFetch('/api/setup/providers')
       .then(r => (r.ok ? r.json() : null))
       .then(j => {
         if (!j) return
@@ -144,11 +209,29 @@
       })
       .catch(() => (providerStatus = { configured: false }))
     void loadBootstrap()
+    void loadLearning()
   })
+
+  async function loadLearning() {
+    try {
+      learningError = null
+      const r = await projectFetch('/api/project/learning')
+      const j = (await r.json()) as LearningResponse
+      if (j.error) {
+        learningError = j.error
+        learning = null
+        return
+      }
+      learning = j
+    } catch (err) {
+      learningError = err instanceof Error ? err.message : String(err)
+      learning = null
+    }
+  }
 
   async function loadBootstrap() {
     try {
-      const r = await fetch('/api/project/bootstrap/status')
+      const r = await projectFetch('/api/project/bootstrap/status')
       bootstrapInfo = (await r.json()) as BootstrapInfo
     } catch {
       bootstrapInfo = null
@@ -213,7 +296,7 @@
     bootstrapRunning = true
     bootstrapError = null
     try {
-      const r = await fetch('/api/project/bootstrap/run', { method: 'POST' })
+      const r = await projectFetch('/api/project/bootstrap/run', { method: 'POST' })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j?.error) {
         bootstrapError = j?.error ?? `HTTP ${r.status}`
@@ -233,28 +316,54 @@
   async function resetLevers() {
     try {
       leversError = null
-      const r = await fetch('/api/config/levers/reset', { method: 'POST' })
+      const r = await projectFetch('/api/config/levers/reset', { method: 'POST' })
       const j = await r.json().catch(() => ({}))
       if (j?.error) {
         leversError = String(j.error)
         return
       }
-      const fresh = await fetch('/api/config/levers').then(r => r.json())
+      const fresh = await projectFetch('/api/config/levers').then(r => r.json())
       levers = fresh.levers ?? []
     } catch (err) {
       leversError = err instanceof Error ? err.message : String(err)
     }
   }
 
+  async function resetLearning(scope: 'project' | 'all') {
+    try {
+      learningBusy = scope
+      learningError = null
+      const r = await projectFetch('/api/project/learning/reset', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scope }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j?.error) {
+        learningError = j?.error ?? `Reset failed (${r.status})`
+        return
+      }
+      await loadLearning()
+    } catch (err) {
+      learningError = err instanceof Error ? err.message : String(err)
+    } finally {
+      learningBusy = null
+    }
+  }
+
+  function percent(value: number | null): string {
+    if (value === null || Number.isNaN(value)) return '—'
+    return `${Math.round(value * 100)}%`
+  }
+
+  const hasLearnedBehavior = $derived(
+    ((learning?.project?.workspaceImport.approvedRuns ?? 0) + (learning?.project?.workspaceImport.dismissedRuns ?? 0)) > 0,
+  )
+
   const coordinators = $derived(project.detail?.config?.coordinators ?? [])
   const workspaceConfigPath = $derived(
     project.detail?.path ? `${project.detail.path}/guildhall.yaml` : 'guildhall.yaml',
   )
-  const coordinatorExplainer = [
-    'Coordinators are review lanes, not just folders.',
-    'Each task belongs to one coordinator domain.',
-    'A coordinator defines what work it protects, what it can approve autonomously, and what must escalate.',
-  ]
   function scopeLabel(path?: string): string {
     return path?.trim() ? path.trim() : 'workspace root'
   }
@@ -265,11 +374,11 @@
     return text.length > limit ? text.slice(0, limit - 1).trimEnd() + '…' : text
   }
 
-  async function ensureOrchestratorRunning(): Promise<boolean> {
+  async function ensureCoordinatorRunning(): Promise<boolean> {
     try {
-      const detail = await fetch('/api/project', { cache: 'no-store' }).then(r => r.json())
+      const detail = await projectFetch('/api/project', { cache: 'no-store' }).then(r => r.json())
       if (detail?.run?.status === 'running') return true
-      const r = await fetch('/api/project/start', { method: 'POST' })
+      const r = await projectFetch('/api/project/start', { method: 'POST' })
       return r.ok
     } catch {
       return false
@@ -281,13 +390,13 @@
     metaIntakeBusy = true
     metaIntakeError = null
     try {
-      const r = await fetch('/api/project/meta-intake', { method: 'POST' })
+      const r = await projectFetch('/api/project/meta-intake', { method: 'POST' })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j?.error) {
         metaIntakeError = j?.error ?? `HTTP ${r.status}`
         return
       }
-      await ensureOrchestratorRunning()
+      await ensureCoordinatorRunning()
       nav('/thread')
     } catch (err) {
       metaIntakeError = err instanceof Error ? err.message : String(err)
@@ -301,13 +410,13 @@
     metaIntakeBusy = true
     metaIntakeError = null
     try {
-      const r = await fetch('/api/project/meta-intake/rerun', { method: 'POST' })
+      const r = await projectFetch('/api/project/meta-intake/rerun', { method: 'POST' })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j?.error) {
         metaIntakeError = j?.error ?? `HTTP ${r.status}`
         return
       }
-      await ensureOrchestratorRunning()
+      await ensureCoordinatorRunning()
       nav('/thread')
     } catch (err) {
       metaIntakeError = err instanceof Error ? err.message : String(err)
@@ -321,6 +430,11 @@
   )
   const providerReady = $derived(Boolean(providerStatus?.configured))
   const coordinatorsReady = $derived(coordinators.length > 0)
+  const landingStrategyOptions = [
+    { value: 'cherry_pick_local', label: 'Cherry-pick locally' },
+    { value: 'cherry_pick_with_push', label: 'Cherry-pick, then push' },
+    { value: 'manual_pr', label: 'Open a manual PR' },
+  ] as const
 
   function flashIdentity(text: string, error: boolean) {
     identityStatus = { text, error }
@@ -336,7 +450,7 @@
     if (!/^[a-z0-9-]+$/.test(slug)) return flashIdentity('Invalid ID', true)
     savingIdentity = true
     try {
-      const r = await fetch('/api/setup/identity', {
+      const r = await projectFetch('/api/setup/identity', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: nm, id: slug }),
@@ -350,11 +464,48 @@
     }
   }
 
+  function flashLanding(text: string, error: boolean) {
+    landingStatus = { text, error }
+    setTimeout(() => {
+      if (landingStatus?.text === text) landingStatus = null
+    }, 3000)
+  }
+
+  async function saveLandingSettings() {
+    if (landingBusy) return
+    landingBusy = true
+    try {
+      const r = await projectFetch('/api/project/local-config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          landingBranch: landingBranchDraft,
+          landingStrategy: landingStrategyDraft,
+        }),
+      })
+      const j = (await r.json().catch(() => ({}))) as LocalConfigResponse
+      if (!r.ok || j?.error) {
+        flashLanding(j?.error ?? `Save failed (${r.status})`, true)
+        return
+      }
+      const fresh = await projectFetch('/api/project/local-config').then(r => r.json() as Promise<LocalConfigResponse>)
+      localConfig = fresh
+      landingBranchDraft = fresh.landingBranch ?? ''
+      landingStrategyDraft = fresh.landingStrategy
+      flashLanding('Landing settings saved', false)
+      void project.refresh()
+    } catch (err) {
+      flashLanding(err instanceof Error ? err.message : String(err), true)
+    } finally {
+      landingBusy = false
+    }
+  }
+
   async function approveDesignSystem() {
-    const r = await fetch('/api/project/design-system/approve', { method: 'POST' })
+    const r = await projectFetch('/api/project/design-system/approve', { method: 'POST' })
     const j = await r.json()
     if (j.error) return alert('Approve failed: ' + j.error)
-    const reload = await fetch('/api/project/design-system').then(r => r.json())
+    const reload = await projectFetch('/api/project/design-system').then(r => r.json())
     designSystem = reload?.designSystem ?? null
   }
 
@@ -365,6 +516,16 @@
       out.get(l.scope)!.push(l)
     }
     return [...out.entries()]
+  })
+
+  const leverInvariantWarning = $derived.by(() => {
+    const dispatch = levers?.find(l => l.scope === 'project' && l.name === 'concurrent_task_dispatch')?.position
+    const isolation = levers?.find(l => l.scope === 'project' && l.name === 'worktree_isolation')?.position
+    if (!dispatch || !isolation) return null
+    if (dispatch.startsWith('fanout') && isolation === 'none') {
+      return 'Fanout dispatch requires worktree isolation. Set worktree_isolation to per_task or per_attempt before starting Guildhall.'
+    }
+    return null
   })
 
   const dsTokenCount = $derived(
@@ -416,13 +577,13 @@
           {/if}
         </li>
         <li class="check-row">
-          <span class="check-label">Coordinators</span>
+          <span class="check-label">Repo structure</span>
           <Chip
-            label={coordinatorsReady ? `${coordinators.length} defined` : 'none'}
+            label={coordinatorsReady ? 'inferred' : 'not inferred'}
             tone={coordinatorsReady ? 'ok' : 'warn'}
           />
           {#if !coordinatorsReady}
-            <button type="button" class="linkbtn" onclick={() => nav('/')}>Configure →</button>
+            <button type="button" class="linkbtn" onclick={() => nav('/thread')}>Continue setup →</button>
           {/if}
         </li>
         <li class="check-row">
@@ -441,41 +602,36 @@
     </Card>
   {/if}
 
-  {#if section === 'coordinators'}
-    <!-- SECONDARY: Coordinators summary -->
-    <Card title="Coordinators" titleTag="h2">
+  {#if section === 'routing'}
+    <!-- ADVANCED: internal routing summary -->
+    <Card title="Internal routing" titleTag="h2">
       <Stack gap="3">
         <div class="coord-intro">
           <p class="coord-lede">
-            Coordinators are the project&apos;s domain owners. This page explains what they mean.
-            The <strong>Coordinators</strong> board shows how work is currently flowing through them.
+            This is Guildhall's internal routing map. It helps the coordinator decide what context,
+            scope, and review lenses to pull in, but it should not be a primary thing you manage day
+            to day.
           </p>
-          <ul class="coord-bullets">
-            {#each coordinatorExplainer as item (item)}
-              <li>{item}</li>
-            {/each}
-          </ul>
         </div>
 
         <div class="coord-grid">
           <div class="coord-info-card">
-            <div class="coord-info-label">Created via</div>
+            <div class="coord-info-label">How it gets filled in</div>
             <ul class="coord-bullets compact">
-              <li>Meta-intake drafts them for a new project.</li>
-              <li><code>guildhall init</code> can create them manually.</li>
-              <li>The setup flow can seed simple archetypes.</li>
+              <li>Meta-intake infers an initial repo structure from the repo itself.</li>
+              <li>Guildhall uses it internally for routing and scope hints.</li>
               <li>Direct <code>guildhall.yaml</code> edits are still the source of truth.</li>
             </ul>
           </div>
           <div class="coord-info-card">
-            <div class="coord-info-label">Field semantics</div>
+            <div class="coord-info-label">What the fields mean</div>
             <dl class="coord-fields">
               <dt><code>domain</code></dt>
-              <dd>Required. This is the task-routing lane.</dd>
+              <dd>The routing lane attached to tasks behind the scenes.</dd>
               <dt><code>path</code></dt>
-              <dd>Optional. Use it when one coordinator should scope to a subproject or folder.</dd>
+              <dd>Optional. Narrows one lane to a subproject or folder.</dd>
               <dt><code>guildhall.yaml</code></dt>
-              <dd>Current source of truth. The UI summarizes and inspects; it is not a full editor yet.</dd>
+              <dd>Current source of truth. This screen is inspection-only.</dd>
             </dl>
           </div>
         </div>
@@ -485,26 +641,19 @@
           <code class="coord-source-path">{workspaceConfigPath}</code>
         </div>
 
-          <div class="coord-nav-row">
-            <span class="muted">Use the live board to inspect domain ownership and recent task flow.</span>
-            <button type="button" class="linkbtn" onclick={() => nav('/coordinators')}>
-              Open live board →
-            </button>
-          </div>
-
-          <div class="coord-nav-row">
-            <span class="muted">If the coordinator split or starter tasks are stale, run the intake stage again.</span>
-            <button type="button" class="linkbtn" onclick={rerunMetaIntake}>
-              {metaIntakeBusy ? 'Re-running…' : 'Re-run meta-intake →'}
-            </button>
+        <div class="coord-nav-row">
+          <span class="muted">If Guildhall's inferred repo structure or starter tasks are stale, run the setup intake again.</span>
+          <button type="button" class="linkbtn" onclick={rerunMetaIntake}>
+            {metaIntakeBusy ? 'Re-running…' : 'Re-run meta-intake →'}
+          </button>
           </div>
 
       {#if coordinators.length === 0}
-          <div class="coord-empty">
-            <p class="muted">
-              No coordinators yet. Start with meta-intake if you want Guildhall to propose a first
-              domain split from the repo, then review it in Thread.
-            </p>
+        <div class="coord-empty">
+          <p class="muted">
+            No inferred structure yet. Start meta-intake if you want Guildhall to infer an initial split
+            from the repo, then review it in Thread only if something important looks wrong.
+          </p>
             <div class="coord-empty-actions">
               <Button variant="primary" onclick={startMetaIntake} disabled={metaIntakeBusy}>
                 {metaIntakeBusy ? 'Starting…' : 'Start meta-intake'}
@@ -517,11 +666,11 @@
           </div>
       {:else}
           <div class="coord-list">
-            {#each coordinators as c, i (c.id ?? c.name ?? i)}
+            {#each coordinators as c, i (c.id ?? c.domain ?? i)}
               <div class="coord">
                 <div class="coord-title">
                   <div class="coord-heading">
-                    <strong>{c.name ?? c.id}</strong>
+                    <strong>{friendlyStewardName(undefined, c.domain, c.id)}</strong>
                     <span class="muted"> · {c.domain ?? ''}</span>
                   </div>
                   <div class="coord-scope">
@@ -639,6 +788,157 @@
             </Stack>
           </Card>
 
+          <Card title="Landing">
+            <Stack gap="3">
+              <p class="muted">
+                Accepted task work lands back onto one project branch using one landing policy. This
+                is advanced on purpose: leave it alone unless you want Guildhall to land accepted
+                work somewhere other than the current branch, or you want a different post-review
+                landing path.
+              </p>
+              <label class="field">
+                <span>Landing branch</span>
+                <Input bind:value={landingBranchDraft} placeholder="Current branch at runtime start" />
+                <span class="field-note">
+                  {#if localConfig?.effectiveLandingBranch}
+                    Effective right now: <code>{localConfig.effectiveLandingBranch}</code>
+                  {:else}
+                    Leave blank to use the current branch when the coordinator starts.
+                  {/if}
+                </span>
+              </label>
+              <label class="field">
+                <span>Landing strategy</span>
+                <Select bind:value={landingStrategyDraft} options={landingStrategyOptions} ariaLabel="Landing strategy" />
+                <span class="field-note">
+                  Cherry-pick is the normal parallel-work default. Use manual PR when accepted work
+                  should stop for human integration instead.
+                </span>
+              </label>
+              <Row justify="end" gap="2" align="center">
+                {#if landingStatus}
+                  <span class="status" class:error={landingStatus.error}>{landingStatus.text}</span>
+                {/if}
+                <Button variant="primary" disabled={landingBusy} onclick={saveLandingSettings}>
+                  {landingBusy ? 'Saving…' : 'Save landing settings'}
+                </Button>
+              </Row>
+            </Stack>
+          </Card>
+
+          <Card title="What the local coordinator has learned">
+            <Stack gap="3">
+              <p class="muted">
+                Guildhall keeps this light on purpose. The coordinator on this machine remembers the
+                corrections and preferences that keep repeating, so the next pass can start closer to
+                your preferred answer.
+              </p>
+              {#if learningError}
+                <p class="error">Could not load learned behavior: {learningError}</p>
+              {:else if !learning?.effective}
+                <p class="muted">No learned behavior yet.</p>
+              {:else}
+                {#if hasLearnedBehavior}
+                  <div class="learning-grid">
+                    <div class="learning-block">
+                      <span class="coord-info-label">Import defaults</span>
+                      <ul class="coord-bullets compact">
+                        <li>
+                          <strong>Repo slices:</strong>
+                          {learning.effective.defaults.selectedAreaKeys.length > 0
+                            ? learning.effective.defaults.selectedAreaKeys.join(', ')
+                            : 'all task-bearing parts'}
+                        </li>
+                        <li>
+                          <strong>Planning sources:</strong>
+                          {learning.effective.defaults.selectedSourceKeys.length > 0
+                            ? `${learning.effective.defaults.selectedSourceKeys.length} preferred source${learning.effective.defaults.selectedSourceKeys.length === 1 ? '' : 's'}`
+                            : 'all task-bearing sources'}
+                        </li>
+                        <li>
+                          <strong>Task list style:</strong>
+                          {learning.effective.defaults.taskSelectionMode === 'tight'
+                            ? 'tighter recommended task list'
+                            : 'full recommended task list'}
+                        </li>
+                      </ul>
+                      {#if learning.effective.defaults.note}
+                        <p class="muted">{learning.effective.defaults.note}</p>
+                      {/if}
+                    </div>
+
+                    <div class="learning-block">
+                      <span class="coord-info-label">Signals from your approvals</span>
+                      <ul class="coord-bullets compact">
+                        <li><strong>Approved import runs:</strong> {learning.project?.workspaceImport.approvedRuns ?? 0}</li>
+                        <li><strong>Skipped import runs:</strong> {learning.project?.workspaceImport.dismissedRuns ?? 0}</li>
+                        <li><strong>Average kept tasks:</strong> {percent(learning.project?.workspaceImport.averageTaskAcceptanceRatio ?? null)}</li>
+                      </ul>
+                    </div>
+                  </div>
+                {:else}
+                  <div class="learning-block">
+                    <span class="coord-info-label">No learned behavior yet</span>
+                    <p class="muted">
+                      Once you approve or prune a guided import, Guildhall will reuse those choices here instead of making you teach it again.
+                    </p>
+                    <ul class="coord-bullets compact">
+                      <li><strong>Right now it would start with:</strong> all task-bearing project parts and sources</li>
+                      <li><strong>Task list style:</strong> full recommended task list</li>
+                    </ul>
+                  </div>
+                {/if}
+
+                {#if learning.effective.coordinatorSuggestions.length > 0}
+                  <div class="learning-block">
+                    <span class="coord-info-label">Routing suggestions</span>
+                    <Stack gap="2">
+                      {#each learning.effective.coordinatorSuggestions as suggestion (suggestion.id)}
+                        <div class="coord-info-card">
+                          <Row justify="between" gap="2" align="center">
+                            <strong>{suggestion.title}</strong>
+                            <Chip label={suggestion.confidence} tone={suggestion.confidence === 'high' ? 'warn' : 'neutral'} />
+                          </Row>
+                          <p class="muted">{suggestion.summary}</p>
+                        </div>
+                      {/each}
+                    </Stack>
+                  </div>
+                {/if}
+
+                {#if learning.effective.productSuggestions.length > 0}
+                  <div class="learning-block">
+                    <span class="coord-info-label">Product suggestions</span>
+                    <Stack gap="2">
+                      {#each learning.effective.productSuggestions as suggestion (suggestion.id)}
+                        <div class="coord-info-card">
+                          <strong>{suggestion.title}</strong>
+                          <p class="muted">{suggestion.summary}</p>
+                          {#if suggestion.evidence.length > 0}
+                            <ul class="coord-bullets compact">
+                              {#each suggestion.evidence as line (line)}
+                                <li>{line}</li>
+                              {/each}
+                            </ul>
+                          {/if}
+                        </div>
+                      {/each}
+                    </Stack>
+                  </div>
+                {/if}
+
+                <Row justify="end" gap="2" align="center">
+                  <Button variant="secondary" onclick={() => resetLearning('project')} disabled={learningBusy !== null}>
+                    {learningBusy === 'project' ? 'Resetting…' : 'Reset project learning'}
+                  </Button>
+                  <Button variant="secondary" onclick={() => resetLearning('all')} disabled={learningBusy !== null}>
+                    {learningBusy === 'all' ? 'Resetting…' : 'Reset all learning'}
+                  </Button>
+                </Row>
+              {/if}
+            </Stack>
+          </Card>
+
           <Card title="Levers">
             <Stack gap="2">
               <Row align="center" gap="2">
@@ -647,6 +947,12 @@
                 </span>
                 <Help topic="subsystem.levers" />
               </Row>
+              {#if leverInvariantWarning}
+                <div class="failure-detail" role="alert">
+                  <strong>Invalid lever combination</strong>
+                  <p class="muted">{leverInvariantWarning}</p>
+                </div>
+              {/if}
               {#if leversError}
                 <Row justify="between" align="center" gap="2">
                   <span class="error">Could not load levers: {leversError}</span>
@@ -752,6 +1058,11 @@
     color: var(--text-muted);
     font-size: var(--fs-1);
   }
+  .field-note {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
   .status {
     font-size: var(--fs-1);
     color: var(--accent-2);
@@ -847,6 +1158,16 @@
     gap: var(--s-2);
   }
   .coord-intro {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .learning-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: var(--s-2);
+  }
+  .learning-block {
     display: flex;
     flex-direction: column;
     gap: var(--s-2);

@@ -12,6 +12,7 @@
   import Button from '../lib/Button.svelte'
   import Chip from '../lib/Chip.svelte'
   import Icon, { type IconName } from '../lib/Icon.svelte'
+  import NoticeBand from '../lib/NoticeBand.svelte'
   import ProjectShell from '../lib/layout/ProjectShell.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
   import ThreadTab from './project/ThreadTab.svelte'
@@ -20,7 +21,6 @@
   import WorkspaceImportTab from './project/WorkspaceImportTab.svelte'
   import ProjectAttachFlow from './project/ProjectAttachFlow.svelte'
   import FactsTab from './project/FactsTab.svelte'
-  import CoordinatorsTab from './project/CoordinatorsTab.svelte'
   import TimelineTab from './project/TimelineTab.svelte'
   import ReleaseTab from './project/ReleaseTab.svelte'
   import SettingsTab from './project/SettingsTab.svelte'
@@ -29,6 +29,7 @@
   import { project } from '../lib/project.svelte.js'
   import { onEvent } from '../lib/events.js'
   import { path, nav } from '../lib/nav.svelte.js'
+  import { currentProjectHref, projectFetch } from '../lib/project-routes.js'
   import { activeEscalations } from '../lib/escalation.js'
   import { buildProviderIndicator } from '../lib/provider-indicator.js'
   import type { InboxItem } from '../lib/inbox-item-key.js'
@@ -37,6 +38,7 @@
   interface Props {
     initialView?: ProjectView
     initialSub?: string | null
+    projectId?: string | null
   }
 
   const props = $props<Props>()
@@ -49,6 +51,12 @@
   let refreshHandle: ReturnType<typeof setInterval> | null = null
   let actionsMenuEl = $state<HTMLDivElement | null>(null)
   let actionsMenuOpen = $state(false)
+  let railCollapsed = $state(true)
+  let railForcedCollapsed = $state(false)
+  let mobileRailOpen = $state(false)
+  let railPreviewOpen = $state(false)
+  let railPreference = $state<'collapsed' | 'expanded'>('collapsed')
+  const RAIL_PREFERENCE_KEY = 'guildhall:project-rail'
 
   // Inbox blockers drive disabled-state on top-bar actions so hard blockers
   // (e.g. bootstrap not verified) can't be bypassed by pressing Start.
@@ -62,7 +70,7 @@
 
   async function loadInbox(): Promise<void> {
     try {
-      const r = await fetch('/api/project/inbox', { cache: 'no-store' })
+      const r = await projectFetch('/api/project/inbox', { cache: 'no-store' })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const j = (await r.json()) as {
         items?: InboxItem[]
@@ -101,6 +109,7 @@
   })
 
   $effect(() => {
+    path.value
     void project.refresh()
   })
 
@@ -116,6 +125,64 @@
       }
     }
   })
+
+  $effect(() => {
+    const media = window.matchMedia('(max-width: 1100px)')
+    const sync = () => {
+      railForcedCollapsed = media.matches
+      if (!railForcedCollapsed) mobileRailOpen = false
+      if (railForcedCollapsed || railPreference === 'expanded') railPreviewOpen = false
+      railCollapsed = railForcedCollapsed || railPreference === 'collapsed'
+    }
+    const saved = window.localStorage.getItem(RAIL_PREFERENCE_KEY)
+    if (saved === 'expanded' || saved === 'collapsed') {
+      railPreference = saved
+    }
+    sync()
+    media.addEventListener('change', sync)
+    return () => media.removeEventListener('change', sync)
+  })
+
+  function toggleRail(): void {
+    if (railForcedCollapsed) return
+    railPreference = railCollapsed ? 'expanded' : 'collapsed'
+    railCollapsed = railPreference === 'collapsed'
+    railPreviewOpen = false
+    window.localStorage.setItem(RAIL_PREFERENCE_KEY, railPreference)
+  }
+
+  function openRailPreview(): void {
+    if (!railForcedCollapsed && railCollapsed) railPreviewOpen = true
+  }
+
+  function closeRailPreview(event?: FocusEvent | MouseEvent): void {
+    if (railForcedCollapsed || !railCollapsed) return
+    const current = event?.currentTarget
+    const related = event?.relatedTarget
+    if (current instanceof HTMLElement && related instanceof Node && current.contains(related)) return
+    railPreviewOpen = false
+  }
+
+  const railOverlayOpen = $derived(railForcedCollapsed && mobileRailOpen)
+  const railLabelsVisible = $derived(!railCollapsed || railPreviewOpen || railOverlayOpen)
+
+  function closeMobileRail(): void {
+    mobileRailOpen = false
+  }
+
+  function toggleMobileRail(): void {
+    if (!railForcedCollapsed) return
+    mobileRailOpen = !mobileRailOpen
+  }
+
+  $effect(() => {
+    window.addEventListener('guildhall:toggle-project-nav', toggleMobileRail)
+    return () => window.removeEventListener('guildhall:toggle-project-nav', toggleMobileRail)
+  })
+
+  function handleKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape' && mobileRailOpen) closeMobileRail()
+  }
 
   $effect(() => {
     const off = onEvent(ev => {
@@ -137,50 +204,36 @@
   const needsMeta = $derived(coordinators.length === 0)
 
   const entries = $derived<NavEntry[]>([
-    { id: 'thread', label: 'Thread', icon: 'sparkles', path: '/project/thread' },
-    { id: 'inbox', label: 'Notifications', icon: 'inbox', path: '/project/notifications' },
-    { id: 'work', label: 'Work', icon: 'activity', path: '/project/work' },
-    {
-      id: 'coordinators',
-      label: 'Coordinators',
-      icon: 'users',
-      path: '/project/coordinators',
-      subs: [
-        { id: 'all', label: 'All', path: '/project/coordinators' },
-        ...coordinators.map(c => ({
-          id: (c.id ?? c.name ?? '').toString(),
-          label: c.name ?? c.id ?? '—',
-          path: '/project/coordinators/' + encodeURIComponent(c.id ?? c.name ?? ''),
-        })),
-      ],
-    },
-    { id: 'timeline', label: 'Timeline', icon: 'clock', path: '/project/timeline' },
+    { id: 'thread', label: 'Thread', icon: 'sparkles', path: currentProjectHref('/thread') },
+    { id: 'inbox', label: 'Needs you', icon: 'inbox', path: currentProjectHref('/notifications') },
+    { id: 'work', label: 'Work', icon: 'activity', path: currentProjectHref('/work') },
+    { id: 'timeline', label: 'Timeline', icon: 'clock', path: currentProjectHref('/timeline') },
     {
       id: 'release',
       label: 'Release',
       icon: 'rocket',
-      path: '/project/release',
+      path: currentProjectHref('/release'),
       subs: [
-        { id: 'verdict', label: 'Verdict', path: '/project/release' },
-        { id: 'criteria', label: 'Criteria', path: '/project/release/criteria' },
+        { id: 'verdict', label: 'Verdict', path: currentProjectHref('/release') },
+        { id: 'criteria', label: 'Criteria', path: currentProjectHref('/release/criteria') },
       ],
     },
     {
       id: 'settings',
       label: 'Settings',
       icon: 'settings',
-      path: '/project/settings',
+      path: currentProjectHref('/settings'),
       subs: [
-        { id: 'ready', label: 'Ready', path: '/project/settings' },
-        { id: 'coordinators', label: 'Coordinators', path: '/project/settings/coordinators' },
-        { id: 'providers', label: 'Providers', path: '/project/settings/providers' },
-        { id: 'facts', label: 'Facts', path: '/project/settings/facts' },
-        { id: 'advanced', label: 'Advanced', path: '/project/settings/advanced' },
+        { id: 'ready', label: 'Ready', path: currentProjectHref('/settings') },
+        { id: 'providers', label: 'Providers', path: currentProjectHref('/settings/providers') },
+        { id: 'facts', label: 'Facts', path: currentProjectHref('/settings/facts') },
+        { id: 'advanced', label: 'Advanced', path: currentProjectHref('/settings/advanced') },
       ],
     },
   ])
 
   function go(href: string) {
+    closeMobileRail()
     nav(href)
   }
 
@@ -205,7 +258,7 @@
     busy = true
     runError = null
     try {
-      const res = await fetch('/api/project/start', {
+      const res = await projectFetch('/api/project/start', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ mode }),
@@ -237,7 +290,7 @@
     busy = true
     runError = null
     try {
-      const res = await fetch('/api/project/stop', { method: 'POST' })
+      const res = await projectFetch('/api/project/stop', { method: 'POST' })
       if (!res.ok) {
         try {
           const body = (await res.json()) as { error?: string }
@@ -273,7 +326,9 @@
 
   const detail = $derived(project.detail)
   const runStatus = $derived(detail?.run?.status ?? 'stopped')
+  const runMode = $derived(detail?.run?.mode === 'one_task' ? 'one_task' : 'continuous')
   const providerStatus = $derived(detail?.providerStatus ?? detail?.run?.providerStatus ?? null)
+  const startReadiness = $derived(detail?.startReadiness ?? null)
   const providerIndicator = $derived(buildProviderIndicator(providerStatus, runStatus))
   const providerHeaderLabel = $derived(providerIndicator?.summaryLabel ?? null)
   const providerTitle = $derived(providerIndicator?.title ?? 'Provider not selected')
@@ -300,7 +355,86 @@
       ? `${providerHeaderLabel ?? 'Current provider'} has seen ${providerStatus.health.consecutiveFailures} consecutive pooled failures${providerStatus.health.lastError ? ` (${providerStatus.health.lastError})` : ''}.`
       : null,
   )
+  const currentStopSummary = $derived.by(() => {
+    if (runStatus === 'running' || runStatus === 'stopping') return null
+    const tasks = detail?.tasks ?? []
+    if (tasks.length === 0) return null
+    const counts = {
+      active: 0,
+      fresh: 0,
+      done: 0,
+      blocked: 0,
+      shelved: 0,
+      escalated: 0,
+      waitingOnUser: 0,
+      awaitingApproval: 0,
+      draftReview: 0,
+      dependencyBlocked: 0,
+    }
+    for (const task of tasks) {
+      const status = task.status ?? ''
+      const unansweredQuestions = (task.openQuestions ?? []).filter(q => !q.answeredAt).length
+      if (unansweredQuestions > 0) counts.waitingOnUser += 1
+      if ((task.escalations ?? []).some(escalation => !escalation.resolvedAt)) counts.escalated += 1
+      if (status === 'spec_review') counts.awaitingApproval += 1
+      if (status === 'import_draft') counts.draftReview += 1
+      if (status === 'blocked') counts.blocked += 1
+      if (status === 'done') counts.done += 1
+      if (status === 'shelved') counts.shelved += 1
+      if (status === 'proposed' || status === 'ready' || status === 'import_draft') counts.fresh += 1
+      if (status === 'exploring' || status === 'in_progress' || status === 'review' || status === 'gate_check') counts.active += 1
+      const dependencyBlocked =
+        typeof task.blockReason === 'string' &&
+        /dependency/i.test(task.blockReason)
+      if (dependencyBlocked) counts.dependencyBlocked += 1
+    }
+    if (counts.active > 0 || counts.fresh > 0) return null
+    if (counts.waitingOnUser > 0 || counts.awaitingApproval > 0 || counts.draftReview > 0) {
+      return {
+        stopReason: 'awaiting_human',
+        stopMessage: 'Waiting on input.',
+        idleSummary: { counts },
+      }
+    }
+    if (counts.escalated > 0 || counts.blocked > 0) {
+      return {
+        stopReason: 'blocked_only',
+        stopMessage: 'Blocked.',
+        idleSummary: { counts },
+      }
+    }
+    if (counts.dependencyBlocked > 0) {
+      return {
+        stopReason: 'dependency_blocked',
+        stopMessage: 'Blocked on dependencies.',
+        idleSummary: { counts },
+      }
+    }
+    if (counts.done + counts.blocked + counts.shelved === tasks.length) {
+      return {
+        stopReason: 'all_terminal',
+        stopMessage: counts.done ? `Run finished: ${counts.done} done.` : 'Run finished.',
+        idleSummary: { counts },
+      }
+    }
+    return null
+  })
+  const hasCurrentQueueActivity = $derived.by(() => {
+    const tasks = detail?.tasks ?? []
+    return tasks.some((task) => {
+      const status = task.status ?? ''
+      const hasUnansweredQuestion = (task.openQuestions ?? []).some((question) => !question.answeredAt)
+      const hasOpenEscalation = (task.escalations ?? []).some((escalation) => !escalation.resolvedAt)
+      return (
+        hasUnansweredQuestion ||
+        hasOpenEscalation ||
+        ['proposed', 'import_draft', 'exploring', 'spec_review', 'ready', 'in_progress', 'review', 'gate_check'].includes(status)
+      )
+    })
+  })
   const runStopSummary = $derived.by(() => {
+    if (currentStopSummary) return currentStopSummary
+    if (hasCurrentQueueActivity) return null
     if (detail?.run?.stopSummary) return detail.run.stopSummary
     const latestStop = [...(detail?.recentEvents ?? [])]
       .reverse()
@@ -322,13 +456,17 @@
     const summary = runStopSummary
     if (!summary?.stopMessage) return null
     const counts = summary.idleSummary?.counts
-    if (!counts) return summary.stopMessage
+    if (!counts) {
+      if (summary.stopReason === 'one_task') return 'One task finished.'
+      return summary.stopMessage
+    }
     switch (summary.stopReason) {
       case 'all_terminal':
         return counts.done ? `Run finished: ${counts.done} done.` : 'Run finished.'
       case 'awaiting_human': {
         const fragments: string[] = []
         if (counts.waitingOnUser) fragments.push(`${counts.waitingOnUser} waiting on you`)
+        if (counts.draftReview) fragments.push(`${counts.draftReview} draft${counts.draftReview === 1 ? '' : 's'} to review`)
         if (counts.awaitingApproval) fragments.push(`${counts.awaitingApproval} awaiting approval`)
         return fragments.length > 0 ? `Waiting on input: ${fragments.join(' · ')}.` : 'Waiting on input.'
       }
@@ -342,6 +480,14 @@
         return counts.dependencyBlocked
           ? `Blocked on dependencies: ${counts.dependencyBlocked}.`
           : 'Blocked on dependencies.'
+      case 'one_task':
+        return counts.awaitingApproval
+          ? 'One task pass finished. Review the updated draft in Thread.'
+          : counts.waitingOnUser
+            ? 'One task pass finished. Guildhall is waiting on your input.'
+            : counts.done
+              ? `One task pass finished: ${counts.done} done.`
+              : 'One task pass finished.'
       default: {
         const fragments: string[] = []
         if (counts.done) fragments.push(`${counts.done} done`)
@@ -431,11 +577,13 @@
   )
 
   const startDisabledReason = $derived(
-    blockers.bootstrap && !metaIntakePending
-      ? failedBootstrapStep
-        ? 'Fix the bootstrap failure before starting'
-        : 'Complete bootstrap in Thread before starting'
-      : null,
+    !startReadiness?.canStart
+      ? startReadiness?.message ?? 'Finish setup before starting'
+      : blockers.bootstrap && !metaIntakePending
+        ? failedBootstrapStep
+          ? 'Fix the bootstrap failure before starting'
+          : 'Complete bootstrap in Thread before starting'
+        : null,
   )
   const newTaskDisabledReason = $derived(
     needsMeta
@@ -449,19 +597,61 @@
 </script>
 
 <svelte:document onclick={handleDocumentClick} />
+<svelte:window onkeydown={handleKeydown} />
 
 {#if detail?.initializationNeeded}
-  <ProjectShell uninitialized>
+  <ProjectShell
+    uninitialized
+    railCollapsed={railCollapsed && !railOverlayOpen}
+    railPreviewOpen={railPreviewOpen}
+  >
     {#snippet rail()}
-    <aside class="rail" aria-label="Project navigation">
+    {#if railOverlayOpen}
+      <button type="button" class="rail-scrim" aria-label="Close project navigation" onclick={closeMobileRail}></button>
+    {/if}
+    <aside
+      class="rail"
+      class:rail-collapsed={railCollapsed && !railOverlayOpen}
+      class:rail-mobile-open={railOverlayOpen}
+      class:rail-preview-open={railPreviewOpen}
+      aria-label="Project navigation"
+      onmouseenter={openRailPreview}
+      onmouseleave={closeRailPreview}
+      onfocusin={openRailPreview}
+      onfocusout={closeRailPreview}
+    >
       <div class="rail-head" title={detail.path}>
-        <div class="rail-project">{detail.path?.split('/').pop() ?? 'Project'}</div>
+        <div class="rail-head-top">
+          <div class="rail-project">{detail.path?.split('/').pop() ?? 'Project'}</div>
+          <div class="rail-head-actions">
+            <button
+              type="button"
+              class="rail-pin"
+              onclick={toggleRail}
+              aria-label={railCollapsed ? 'Pin project navigation open' : 'Collapse project navigation'}
+              title={railCollapsed ? 'Pin navigation open' : 'Collapse navigation'}
+            >
+              <Icon name={railCollapsed ? 'panel-left-open' : 'panel-left-close'} size={16} />
+            </button>
+          {#if railOverlayOpen}
+              <button
+                type="button"
+                class="rail-close"
+                onclick={closeMobileRail}
+                aria-label="Close project navigation"
+                title="Close navigation"
+              >
+                <Icon name="x" size={16} />
+              </button>
+            {/if}
+          </div>
+        </div>
         <div class="rail-status">
           <Chip label="Needs setup" tone="warn" />
         </div>
       </div>
       <div class="rail-bottom">
-        <Tooltip text="Back to Projects" placement="right" className="rail-tooltip">
+        <Tooltip text="Back to Projects" placement="right" className="rail-tooltip" disabled={railLabelsVisible}>
           <button
             type="button"
             class="rail-item active"
@@ -477,7 +667,7 @@
     {/snippet}
     {#snippet topbar()}
       <header class="topbar topbar--uninitialized">
-        <div class="topbar-leading">
+        <div class="topbar-start">
           <Button
             variant="secondary"
             size="sm"
@@ -490,6 +680,8 @@
             <span class="toolbar-btn-label">Projects</span>
           </Button>
         </div>
+        <div class="topbar-leading"></div>
+        <div class="topbar-actions"></div>
       </header>
     {/snippet}
     <ProjectAttachFlow
@@ -506,11 +698,51 @@
     <p class="muted">Loading project…</p>
   </div>
 {:else}
-  <ProjectShell>
+  <ProjectShell
+    railCollapsed={railCollapsed && !railOverlayOpen}
+    railPreviewOpen={railPreviewOpen}
+  >
     {#snippet rail()}
-    <aside class="rail" aria-label="Project navigation">
+    {#if railOverlayOpen}
+      <button type="button" class="rail-scrim" aria-label="Close project navigation" onclick={closeMobileRail}></button>
+    {/if}
+    <aside
+      class="rail"
+      class:rail-collapsed={railCollapsed && !railOverlayOpen}
+      class:rail-mobile-open={railOverlayOpen}
+      class:rail-preview-open={railPreviewOpen}
+      aria-label="Project navigation"
+      onmouseenter={openRailPreview}
+      onmouseleave={closeRailPreview}
+      onfocusin={openRailPreview}
+      onfocusout={closeRailPreview}
+    >
       <div class="rail-head" title={detail.name}>
-        <div class="rail-project">{detail.name}</div>
+        <div class="rail-head-top">
+          <div class="rail-project">{detail.name}</div>
+          <div class="rail-head-actions">
+            <button
+              type="button"
+              class="rail-pin"
+              onclick={toggleRail}
+              aria-label={railCollapsed ? 'Pin project navigation open' : 'Collapse project navigation'}
+              title={railCollapsed ? 'Pin navigation open' : 'Collapse navigation'}
+            >
+              <Icon name={railCollapsed ? 'panel-left-open' : 'panel-left-close'} size={16} />
+            </button>
+            {#if railOverlayOpen}
+              <button
+                type="button"
+                class="rail-close"
+                onclick={closeMobileRail}
+                aria-label="Close project navigation"
+                title="Close navigation"
+              >
+                <Icon name="x" size={16} />
+              </button>
+            {/if}
+          </div>
+        </div>
         <div class="rail-status">
           <Chip label={phaseLabel} tone={phaseTone} />
         </div>
@@ -518,7 +750,7 @@
       <nav class="rail-nav">
         {#each entries as e (e.id)}
           {@const active = currentView === e.id}
-          <Tooltip text={e.label} placement="right" className="rail-tooltip">
+          <Tooltip text={e.label} placement="right" className="rail-tooltip" disabled={railLabelsVisible}>
             <button
               type="button"
               class="rail-item"
@@ -537,10 +769,8 @@
                 {@const subActive = path.value === s.path ||
                   (e.id === 'settings' && currentSub === s.id) ||
                   (e.id === 'release' && currentSub === s.id) ||
-                  (e.id === 'coordinators' && currentSub === s.id) ||
                   (e.id === 'release' && !currentSub && s.id === 'verdict') ||
-                  (e.id === 'settings' && !currentSub && s.id === 'ready') ||
-                  (e.id === 'coordinators' && !currentSub && s.id === 'all')}
+                  (e.id === 'settings' && !currentSub && s.id === 'ready')}
                 <li>
                   <button
                     type="button"
@@ -557,7 +787,7 @@
         {/each}
       </nav>
       <div class="rail-bottom">
-        <Tooltip text="Providers" placement="right" className="rail-tooltip">
+        <Tooltip text="Providers" placement="right" className="rail-tooltip" disabled={railLabelsVisible}>
           <button
             type="button"
             class="rail-item"
@@ -574,7 +804,7 @@
     {/snippet}
     {#snippet topbar()}
       <header class="topbar">
-        <div class="topbar-leading">
+        <div class="topbar-start">
           <Button
             variant="secondary"
             size="sm"
@@ -586,12 +816,14 @@
             <Icon name="chevron-left" size={16} />
             <span class="toolbar-btn-label">Projects</span>
           </Button>
+        </div>
+        <div class="topbar-leading">
           {#if activeCount > 0 || awaitingApprovalCount > 0 || stuckCount > 0}
             <button
               type="button"
               class="tasks-indicator"
               class:has-stuck={stuckCount > 0}
-              onclick={() => go('/project/work')}
+              onclick={() => go(currentProjectHref('/work'))}
               title="Jump to Work"
               aria-label="{activeCount} {activeCountLabel}, {awaitingApprovalCount} awaiting approval, {stuckCount} stuck"
             >
@@ -609,7 +841,7 @@
               type="button"
               class="inbox-indicator"
               class:warn-only={!inboxHasHighSeverity}
-              onclick={() => go('/project/notifications')}
+              onclick={() => go(currentProjectHref('/notifications'))}
               title="Jump to Notifications"
               aria-label="{inboxActionableCount} notifications need you"
             >
@@ -653,12 +885,20 @@
             className="toolbar-btn toolbar-btn--primary"
             disabled={busy || (runStatus !== 'running' && (runStatus === 'stopping' || startDisabledReason !== null))}
             onclick={runStatus === 'running' ? stop : () => start('continuous')}
-            ariaLabel={runStatus === 'running' ? 'Stop agents' : (startDisabledReason ?? 'Start agents')}
-            title={runStatus === 'running' ? 'Stop agents' : (startDisabledReason ?? 'Start agents')}
+            ariaLabel={
+              runStatus === 'running'
+                ? (runMode === 'one_task' ? 'Stop one-step run' : 'Stop')
+                : (startDisabledReason ?? 'Start')
+            }
+            title={
+              runStatus === 'running'
+                ? (runMode === 'one_task' ? 'Stop the current one-step run' : 'Stop Guildhall')
+                : (startDisabledReason ?? 'Let Guildhall advance this project')
+            }
           >
             <span class="btn-inner">
               <Icon name={runStatus === 'running' ? 'square' : 'play'} size={16} />
-              {runStatus === 'running' ? 'Stop agents' : 'Start agents'}
+              {runStatus === 'running' ? (runMode === 'one_task' ? 'Stop 1' : 'Stop') : 'Start'}
             </span>
           </Button>
           <div class="actions-menu" bind:this={actionsMenuEl}>
@@ -670,7 +910,7 @@
               title="Open actions menu"
               onclick={toggleActionsMenu}
             >
-              <Icon name="ellipsis" size={16} />
+              …
             </Button>
             {#if actionsMenuOpen}
               <div class="actions-menu-panel">
@@ -682,7 +922,7 @@
                   onclick={() => { closeActionsMenu(); start('one_task') }}
                 >
                   <Icon name="check-circle-2" size={16} />
-                  <span>Finish one</span>
+                  <span>Advance one task</span>
                 </button>
               </div>
             {/if}
@@ -690,55 +930,75 @@
         </div>
       </header>
     {/snippet}
+    {#snippet band()}
         {#if runError}
-          <div class="start-error" role="alert">
-            <Icon name="alert-triangle" size={14} />
-            <span>{runError}</span>
+          <NoticeBand tone="danger" icon="alert-triangle" density="compact">
+            <strong>{runError}</strong>
+            {#snippet actions()}
             {#if /provider/i.test(runError)}
               <a href="/providers" onclick={(e) => { e.preventDefault(); nav('/providers') }}>Open Providers</a>
             {/if}
             <button class="dismiss" onclick={() => (runError = null)} aria-label="Dismiss">×</button>
-          </div>
+            {/snippet}
+          </NoticeBand>
         {/if}
         {#if bootstrapFailureText}
-          <div class="start-error" role="alert">
-            <Icon name="alert-triangle" size={14} />
-            <span>{bootstrapFailureText}</span>
-            <a href="/project/settings/ready" onclick={(e) => { e.preventDefault(); nav('/project/settings/ready') }}>Open Ready</a>
-          </div>
+          <NoticeBand tone="danger" icon="alert-triangle" density="compact">
+            <strong>{bootstrapFailureText}</strong>
+            {#snippet actions()}
+              <a href={currentProjectHref('/settings/ready')} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/ready')) }}>Open Ready</a>
+            {/snippet}
+          </NoticeBand>
         {/if}
         {#if providerStatus?.fallback}
-          <div class={`provider-notice ${providerDecisionSeverity}`} role="status">
-            <Icon name="plug" size={14} />
-            <span>{providerNoticeText}</span>
-            <a href="/providers" onclick={(e) => { e.preventDefault(); nav('/providers') }}>Open Providers</a>
-          </div>
+          <NoticeBand
+            tone={providerDecisionSeverity === 'warn' ? 'warn' : providerDecisionSeverity === 'error' ? 'danger' : 'accent'}
+            icon="plug"
+            density="compact"
+          >
+            <strong>{providerNoticeText}</strong>
+            {#snippet actions()}
+              <a href="/providers" onclick={(e) => { e.preventDefault(); nav('/providers') }}>Open Providers</a>
+            {/snippet}
+          </NoticeBand>
         {/if}
         {#if providerWarningText}
-          <div class={`provider-notice ${providerWarningSeverity}`} role="status">
-            <Icon name="alert-triangle" size={14} />
-            <span>{providerWarningText}</span>
-            <a href="/project/settings/providers" onclick={(e) => { e.preventDefault(); nav('/project/settings/providers') }}>Open Settings</a>
-          </div>
+          <NoticeBand
+            tone={providerWarningSeverity === 'warn' ? 'warn' : providerWarningSeverity === 'error' ? 'danger' : 'accent'}
+            icon="alert-triangle"
+            density="compact"
+          >
+            <strong>{providerWarningText}</strong>
+            {#snippet actions()}
+              <a href={currentProjectHref('/settings/providers')} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers')) }}>Open Settings</a>
+            {/snippet}
+          </NoticeBand>
         {/if}
         {#if providerHealthText}
-          <div class="provider-notice warn" role="status">
-            <Icon name="activity" size={14} />
-            <span>{providerHealthText}</span>
-            <a href="/project/settings/providers" onclick={(e) => { e.preventDefault(); nav('/project/settings/providers') }}>Open Settings</a>
-          </div>
+          <NoticeBand tone="warn" icon="activity" density="compact">
+            <strong>{providerHealthText}</strong>
+            {#snippet actions()}
+              <a href={currentProjectHref('/settings/providers')} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers')) }}>Open Settings</a>
+            {/snippet}
+          </NoticeBand>
         {/if}
         {#if runStopSummaryText}
-          <div class={`provider-notice ${runStopSummarySeverity}`} role="status">
-            <Icon name="pause-circle" size={14} />
-            <span>{runStopSummaryText}</span>
-            {#if runStopSummary?.stopReason === 'awaiting_human'}
-              <a href="/project/thread" onclick={(e) => { e.preventDefault(); nav('/project/thread') }}>Open Thread</a>
-            {:else if runStopSummary?.stopReason === 'blocked_only'}
-              <a href="/project/notifications" onclick={(e) => { e.preventDefault(); nav('/project/notifications') }}>Open Notifications</a>
-            {/if}
-          </div>
+          <NoticeBand
+            tone={runStopSummarySeverity === 'warn' ? 'warn' : runStopSummarySeverity === 'error' ? 'danger' : 'accent'}
+            icon={runStopSummarySeverity === 'warn' || runStopSummarySeverity === 'error' ? 'alert-triangle' : 'check-circle-2'}
+            density="compact"
+          >
+            <strong>{runStopSummaryText}</strong>
+            {#snippet actions()}
+              {#if runStopSummary?.stopReason === 'awaiting_human'}
+                <a href={currentProjectHref('/thread')} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/thread')) }}>Open Thread</a>
+              {:else if runStopSummary?.stopReason === 'blocked_only'}
+                <a href={currentProjectHref('/notifications')} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/notifications')) }}>Open Notifications</a>
+              {/if}
+            {/snippet}
+          </NoticeBand>
         {/if}
+    {/snippet}
         {#if currentView !== 'thread' && currentView !== 'inbox'}
           <DoThisNext />
         {/if}
@@ -756,8 +1016,6 @@
             <WorkTab {detail} mode="board" />
           {:else if currentView === 'facts'}
             <FactsTab />
-          {:else if currentView === 'coordinators'}
-            <CoordinatorsTab {detail} subView={currentSub} />
           {:else if currentView === 'timeline'}
             <TimelineTab {detail} />
           {:else if currentView === 'release'}
@@ -768,32 +1026,62 @@
         </div>
 
   {#if intakeOpen}
-    <IntakeModal coordinators={coordinators} onClose={() => (intakeOpen = false)} />
+    <IntakeModal onClose={() => (intakeOpen = false)} />
   {/if}
   </ProjectShell>
 {/if}
 
 <style>
-  .shell {
-    display: grid;
-    grid-template-columns: 220px 1fr;
-    min-height: calc(100dvh - var(--app-header-h));
-    background: var(--bg-base);
-  }
   .rail {
+    width: 240px;
     border-right: 1px solid var(--border);
     background: var(--bg-raised);
     display: flex;
     flex-direction: column;
+    block-size: 100%;
     padding: var(--s-3) 0;
     gap: var(--s-2);
     min-width: 0;
-    position: sticky;
-    top: var(--app-header-h);
-    align-self: start;
-    min-height: calc(100dvh - var(--app-header-h));
-    max-height: calc(100dvh - var(--app-header-h));
+    min-block-size: 0;
+    max-height: 100%;
     overflow-y: auto;
+    transition:
+      width 140ms ease,
+      box-shadow 140ms ease;
+    z-index: 20;
+  }
+  .rail.rail-collapsed {
+    width: 56px;
+    overflow-x: hidden;
+    position: relative;
+  }
+  .rail.rail-collapsed.rail-preview-open {
+    width: 240px;
+    box-shadow: 14px 0 26px rgba(0, 0, 0, 0.22);
+    overflow-x: visible;
+    z-index: calc(var(--z-drawer) + 1);
+  }
+  .rail.rail-mobile-open {
+    position: fixed;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 100vw;
+    min-height: 100%;
+    max-height: none;
+    box-shadow: none;
+    z-index: var(--z-drawer);
+    overflow-y: auto;
+  }
+  .rail-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: calc(var(--z-drawer) - 1);
+    background: rgba(0, 0, 0, 0.36);
+    border: 0;
+    padding: 0;
+    cursor: pointer;
   }
   .rail-nav {
     display: flex;
@@ -874,37 +1162,38 @@
   }
 
   .main {
-    display: flex;
-    flex-direction: column;
     min-width: 0;
   }
   .topbar {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
     gap: var(--s-2);
     padding: var(--s-3) var(--s-4);
     border-bottom: 1px solid var(--border);
     background: var(--bg-raised);
-    position: sticky;
-    top: var(--app-header-h);
-    z-index: var(--z-topbar);
+    min-width: 0;
+  }
+  .topbar-start {
+    display: flex;
+    align-items: center;
+    min-width: 0;
   }
   .topbar-leading {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: var(--s-2);
-    flex: 1 1 360px;
-    min-width: min(100%, 280px);
+    min-width: 0;
+    overflow: hidden;
   }
   .topbar-actions {
     display: flex;
     align-items: center;
+    flex-wrap: nowrap;
     gap: var(--s-2);
-    flex: 0 1 auto;
-    margin-left: auto;
+    min-width: 0;
+    justify-self: end;
   }
   .rail-head {
     padding: var(--s-3) var(--s-3) var(--s-4) var(--s-3);
@@ -913,6 +1202,77 @@
     display: flex;
     flex-direction: column;
     gap: var(--s-2);
+  }
+  .rail-head-top {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    min-width: 0;
+  }
+  .rail-head-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: var(--s-1);
+    flex: 0 0 auto;
+  }
+  .rail-pin {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0;
+  }
+  .rail-close {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    margin-left: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0;
+  }
+  .rail-close:hover {
+    color: var(--text);
+    border-color: var(--border-strong);
+    background: var(--bg-raised-2);
+  }
+  .rail-pin:hover {
+    color: var(--text);
+    border-color: var(--border-strong);
+    background: var(--bg-raised-2);
+  }
+  .rail.rail-collapsed:not(.rail-preview-open) .rail-head {
+    padding-inline: calc((56px - 30px) / 2);
+  }
+  .rail.rail-collapsed:not(.rail-preview-open) .rail-head-top {
+    justify-content: center;
+  }
+  .rail.rail-collapsed:not(.rail-preview-open) .rail-head-actions {
+    margin-left: 0;
+  }
+  .rail.rail-collapsed:not(.rail-preview-open) .rail-project,
+  .rail.rail-collapsed:not(.rail-preview-open) .rail-status,
+  .rail.rail-collapsed:not(.rail-preview-open) .rail-label,
+  .rail.rail-collapsed:not(.rail-preview-open) .rail-subs {
+    display: none;
+  }
+  .rail.rail-collapsed:not(.rail-preview-open) .rail-item {
+    justify-content: center;
+    padding-inline: 0;
   }
   .rail-project {
     font-size: var(--fs-2);
@@ -1056,19 +1416,20 @@
   }
 
   @media (max-width: 1180px) {
-    .topbar {
-      align-items: stretch;
+    .tasks-approval,
+    .tasks-stuck,
+    .provider-fallback {
+      display: none;
     }
-    .topbar-leading,
-    .topbar-actions {
-      flex-basis: 100%;
-    }
-    .topbar-actions {
-      justify-content: flex-start;
+    .toolbar-btn--back .toolbar-btn-label {
+      display: none;
     }
   }
 
   @media (max-width: 900px) {
+    .rail-pin {
+      display: none;
+    }
     .toolbar-btn-label {
       display: none;
     }
@@ -1081,58 +1442,22 @@
   }
 
   .page {
-    padding: var(--s-4);
     display: flex;
     flex-direction: column;
-    gap: var(--s-4);
+    gap: var(--s-5);
+    padding-top: var(--s-5);
     max-width: 1400px;
     margin: 0 auto;
     width: 100%;
   }
+  .band {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
   .page-centered {
-    padding: var(--s-4);
   }
-  .start-error {
-    display: flex;
-    align-items: center;
-    gap: var(--s-2);
-    padding: var(--s-2) var(--s-3);
-    border: 1px solid var(--color-danger, #c0392b);
-    background: var(--color-danger-bg, #fdecea);
-    color: var(--color-danger-fg, #8a1f1a);
-    border-radius: var(--radius-md, 6px);
-    font-size: 13px;
-  }
-  .provider-notice {
-    display: flex;
-    align-items: center;
-    gap: var(--s-2);
-    padding: var(--s-2) var(--s-3);
-    border: 1px solid var(--line);
-    background: var(--bg-raised);
-    color: var(--text);
-    border-radius: var(--radius-md, 6px);
-    font-size: 13px;
-  }
-  .provider-notice.warn {
-    border-color: var(--warn);
-    background: color-mix(in srgb, var(--warn) 12%, var(--bg-raised));
-  }
-  .provider-notice.info {
-    border-color: color-mix(in srgb, var(--accent, #4f46e5) 45%, var(--line));
-    background: color-mix(in srgb, var(--accent, #4f46e5) 8%, var(--bg-raised));
-  }
-  .provider-notice a {
-    color: inherit;
-    text-decoration: underline;
-    margin-left: auto;
-  }
-  .start-error a {
-    color: inherit;
-    text-decoration: underline;
-    margin-left: auto;
-  }
-  .start-error .dismiss {
+  .dismiss {
     background: none;
     border: none;
     color: inherit;
@@ -1143,7 +1468,7 @@
   .body {
     display: flex;
     flex-direction: column;
-    gap: var(--s-4);
+    gap: var(--s-5);
   }
   .muted {
     color: var(--text-muted);
@@ -1151,12 +1476,61 @@
     line-height: var(--lh-body);
   }
 
+  .rail.rail-collapsed:not(.rail-preview-open) .rail-label { display: none; }
+  .rail.rail-collapsed:not(.rail-preview-open) .rail-subs { display: none; }
+  .rail.rail-collapsed:not(.rail-preview-open) .rail-item { justify-content: center; padding: var(--s-2); }
+  .rail.rail-collapsed:not(.rail-preview-open) .rail-project { display: none; }
+  .rail.rail-collapsed:not(.rail-preview-open) .rail-head { padding: var(--s-2); align-items: center; }
+
   @media (max-width: 1100px) {
-    .shell { grid-template-columns: 56px 1fr; }
-    .rail-label { display: none; }
-    .rail-subs { display: none; }
-    .rail-item { justify-content: center; padding: var(--s-2); }
-    .rail-project { display: none; }
-    .rail-head { padding: var(--s-2); align-items: center; }
+    .rail-pin {
+      display: none;
+    }
+    .rail.rail-mobile-open .rail-close {
+      display: inline-flex;
+    }
+    .rail:not(.rail-mobile-open) .rail-label { display: none; }
+    .rail:not(.rail-mobile-open) .rail-subs { display: none; }
+    .rail:not(.rail-mobile-open) .rail-item { justify-content: center; padding: var(--s-2); }
+    .rail:not(.rail-mobile-open) .rail-project { display: none; }
+    .rail:not(.rail-mobile-open) .rail-head { padding: var(--s-2); align-items: center; }
+    .rail.rail-mobile-open {
+      width: 100vw;
+      padding: var(--s-4) 0;
+      gap: var(--s-3);
+    }
+    .rail.rail-mobile-open .rail-head {
+      padding: 0 var(--s-4) var(--s-4) var(--s-4);
+    }
+    .rail.rail-mobile-open .rail-head-top {
+      align-items: center;
+    }
+    .rail.rail-mobile-open .rail-head-actions {
+      margin-left: auto;
+    }
+    .rail.rail-mobile-open .rail-project { display: block; }
+    .rail.rail-mobile-open .rail-status { display: flex; }
+    .rail.rail-mobile-open .rail-label { display: inline; }
+    .rail.rail-mobile-open .rail-subs { display: flex; }
+    .rail.rail-mobile-open .rail-item {
+      justify-content: flex-start;
+      padding: var(--s-3) var(--s-4);
+    }
+    .rail.rail-mobile-open .rail-sub {
+      padding: var(--s-2) var(--s-4) var(--s-2) calc(var(--s-4) + 24px);
+    }
+    .rail.rail-mobile-open .rail-nav {
+      gap: var(--s-1);
+    }
+    .rail.rail-mobile-open .rail-bottom {
+      padding: var(--s-3) 0 0 0;
+    }
+    .page {
+      gap: var(--s-4);
+      padding-top: var(--s-4);
+    }
+    .body {
+      gap: var(--s-4);
+    }
   }
 </style>

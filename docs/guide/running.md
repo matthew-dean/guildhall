@@ -1,10 +1,10 @@
 ---
-title: Running the orchestrator
+title: Running the coordinator
 ---
 
-# Running the orchestrator
+# Running the coordinator
 
-The orchestrator is the process that advances tasks. It ticks through each domain, asks coordinators to evaluate their queues, dispatches workers, collects reviews, and runs gates.
+The coordinator is the process that advances tasks. It walks the live queue, assembles the right context for the current task, dispatches workers, collects reviews, and runs gates.
 
 ## From the CLI
 
@@ -37,11 +37,11 @@ guildhall serve ~/work/x  # open Guildhall with a preferred project bias
 ```
 
 The **Run** control inside a project starts and stops that project's
-orchestrator lane with the same semantics as the CLI.
+coordinator lane with the same semantics as the CLI.
 
 ## Fanout
 
-By default the orchestrator runs one task at a time per domain. Set [`concurrent_task_dispatch`](../levers/concurrent-task-dispatch) to `fanout_N` to run up to N tasks in parallel. Combined with [`worktree_isolation: per_task`](../levers/worktree-isolation), each parallel task runs in its own git worktree.
+By default the coordinator runs one task at a time per domain. Set [`concurrent_task_dispatch`](../levers/concurrent-task-dispatch) to `fanout_N` to run up to N tasks in parallel. Combined with [`worktree_isolation: per_task`](../levers/worktree-isolation), each parallel task runs in its own git worktree.
 
 ## Stop, pause, resume
 

@@ -6,6 +6,7 @@ import {
   appendExploringTranscript,
   resolveEscalation,
 } from '@guildhall/tools'
+import { normalizeImportedDraftTask, promoteImportDraftToExploring } from './import-drafts.js'
 
 // ---------------------------------------------------------------------------
 // FR-12: exploratory task intake.
@@ -31,10 +32,11 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
   // The bootstrap seeds TASKS.json as a bare `[]` for legacy reasons, so be
   // permissive on intake: if we see a bare array, promote it to a full queue.
   const parsed = JSON.parse(raw)
-  if (Array.isArray(parsed)) {
-    return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-  }
-  return TaskQueue.parse(parsed)
+  const queue = Array.isArray(parsed)
+    ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+    : TaskQueue.parse(parsed)
+  for (const task of queue.tasks) normalizeImportedDraftTask(task)
+  return queue
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
@@ -310,6 +312,17 @@ export interface RerunTaskStageResult {
   error?: string
 }
 
+export interface ShapeImportDraftInput {
+  memoryDir: string
+  taskId: string
+}
+
+export interface ShapeImportDraftResult {
+  success: boolean
+  newStatus?: TaskStatus
+  error?: string
+}
+
 /**
  * Resume an exploring-phase conversation: optionally resolve a pending
  * escalation, optionally append a new user message to the transcript, and
@@ -344,6 +357,12 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
       content: input.message,
       timestamp: new Date().toISOString(),
     })
+    await appendExploringTranscript({
+      memoryDir: input.memoryDir,
+      taskId: task.id,
+      role: 'user',
+      content: input.message,
+    })
   } else if (input.message) {
     await appendExploringTranscript({
       memoryDir: input.memoryDir,
@@ -365,6 +384,28 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
   }
 
   return { success: true }
+}
+
+export async function shapeImportDraft(
+  input: ShapeImportDraftInput,
+): Promise<ShapeImportDraftResult> {
+  const queue = await readQueue(input.memoryDir)
+  const task = queue.tasks.find((t) => t.id === input.taskId)
+  if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+  if (task.status === 'done' || task.status === 'shelved' || task.status === 'blocked') {
+    return { success: false, error: `Task ${input.taskId} is ${task.status}` }
+  }
+  if (task.status !== 'import_draft') {
+    return {
+      success: false,
+      error: `Task ${input.taskId} is in status '${task.status}', expected 'import_draft'`,
+    }
+  }
+
+  await promoteImportDraftToExploring(task, input.memoryDir)
+  queue.lastUpdated = task.updatedAt ?? new Date().toISOString()
+  await writeQueue(input.memoryDir, queue)
+  return { success: true, newStatus: 'exploring' }
 }
 
 export async function rerunTaskStage(

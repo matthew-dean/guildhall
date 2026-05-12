@@ -8,6 +8,7 @@ import {
   LeverSettingsCorruptError,
   defaultAgentSettingsPath,
   loadLeverSettings,
+  projectLeverInvariantError,
   projectLever,
   resolveDomainLevers,
   saveLeverSettings,
@@ -141,6 +142,25 @@ describe('loadLeverSettings', () => {
       LeverSettingsCorruptError,
     )
   })
+
+  it('throws when fanout dispatch is combined with no worktree isolation', async () => {
+    const settings = makeDefaultSettings()
+    settings.project.concurrent_task_dispatch = {
+      position: { kind: 'fanout', n: 4 },
+      rationale: 'parallelize worker dispatch',
+      setAt: '2026-05-11T00:00:00.000Z',
+      setBy: 'user-direct',
+    }
+    settings.project.worktree_isolation = {
+      position: 'none',
+      rationale: 'invalid test combo',
+      setAt: '2026-05-11T00:00:00.000Z',
+      setBy: 'user-direct',
+    }
+    await expect(saveLeverSettings({ path: settingsPath, settings })).rejects.toBeInstanceOf(
+      LeverSettingsCorruptError,
+    )
+  })
 })
 
 describe('resolveDomainLevers', () => {
@@ -191,6 +211,15 @@ describe('projectLever', () => {
     const entry = projectLever(settings, 'runtime_isolation')
     expect(entry.position).toBe('none')
     expect(entry.setBy).toBe('system-default')
+  })
+})
+
+describe('projectLeverInvariantError', () => {
+  it('returns a clear error when fanout is configured without worktree isolation', async () => {
+    const settings = await loadLeverSettings({ path: settingsPath })
+    settings.project.concurrent_task_dispatch.position = { kind: 'fanout', n: 3 }
+    settings.project.worktree_isolation.position = 'none'
+    expect(projectLeverInvariantError(settings.project)).toContain('fanout_N requires worktree_isolation')
   })
 })
 

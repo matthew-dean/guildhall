@@ -1,68 +1,61 @@
 ---
-title: Coordinator roles
+title: Internal routing
 help_topic: guide.coordinators
 help_summary: |
-  Coordinator roles are review lanes for future work. Guildhall uses them to route tasks, choose the right reviewer, and decide what an agent may handle without interrupting you.
+  Guildhall keeps one coordinating layer. It infers and stores internal routing
+  slices so tasks can get the right context and review lenses without making
+  the user manage a steward roster.
 ---
 
-# Coordinator roles
+# Internal routing
 
-A **coordinator role** is a review lane for a named slice of the project. Tasks belong to exactly one lane, and the coordinator for that lane decides whether work is clear enough to advance.
+Guildhall has **one coordinator on the user's system**. That coordinator uses
+an internal routing map to decide:
 
-In the UI, approving coordinator roles means approving the way Guildhall will split future work for this repo. For example, a VS Code extension might have review lanes for editor integration, type conversion, generated declaration files, tests, and documentation.
+- what kind of task this is
+- what code or repo slice it belongs to
+- what context to gather
+- which review lenses matter
 
-## Defining a coordinator role
+This routing map is an implementation detail, not the main thing the user is
+supposed to manage.
 
-Coordinators live under `coordinators:` in `guildhall.yaml`:
+## What the routing map is for
 
-```yaml
-coordinators:
-  - id: ui
-    name: UI Coordinator
-    domain: ui
-    path: packages/ui         # relative to projectPath
-    mandate: |
-      The UI package is a stack-agnostic component library. Components must be
-      generic, accessible (WCAG 2.1 AA), and documented with a contract README
-      and story.
-    concerns:
-      - id: accessibility
-        description: All components must meet WCAG 2.1 AA.
-        reviewQuestions:
-          - Is this component keyboard-navigable?
-          - Are appropriate ARIA roles and attributes present?
-      - id: api-genericity
-        description: Component APIs must be domain-neutral.
-        reviewQuestions:
-          - Does this API reference any app-specific concepts?
-    autonomousDecisions:
-      - Approve minor spec revisions that do not change scope
-      - Decide API naming for new primitives
-    escalationTriggers:
-      - Any change to the public token API surface
-      - Adding a new package to the monorepo
-```
+Guildhall still needs a stable way to tell:
 
-## What the coordinator role does
+- UI work from backend work
+- repo-root work from subproject work
+- release/setup work from product-task work
 
-At every tick, for every task in its domain, the coordinator agent:
+So the runtime stores internal slices under the existing `coordinators:` key in
+`guildhall.yaml`. That key is historical. The important product truth is:
 
-1. Evaluates proposals (promote to `exploring`, defer, or reject).
-2. Reviews drafted specs (promote to `ready` or request revisions).
-3. Selects reviewer personas (guilds) to fan out to.
-4. Adjudicates reviewer disagreements according to [`reviewer_fanout_policy`](../levers/reviewer-fanout-policy).
-5. Decides completion approval per [`completion_approval`](../levers/completion-approval).
+- users manage projects, tasks, and decisions
+- Guildhall manages routing and review structure underneath
 
-## Autonomous decisions vs escalation triggers
+## How the map gets created
 
-A coordinator will act alone within its listed `autonomousDecisions`. Anything that matches an `escalationTriggers` item raises an **escalation** in the inbox instead. This is the main way you define "don't do X without asking me."
+For a new project, Guildhall should infer the routing map from repo evidence
+first. It should only stop to ask the user when:
 
-## Meta-intake: generating coordinators
+1. confidence is low, and
+2. the consequence of being wrong is high enough to matter
 
-For a new project, run:
+That means the normal flow is:
 
-```bash
-guildhall meta-intake
-```
+1. inspect the repo
+2. infer the internal routing slices
+3. move on
+4. ask for confirmation only if a material ambiguity remains
 
-A meta-intake agent reads the codebase, asks for missing context, and drafts coordinator definitions. Run `guildhall approve-meta-intake` to merge the draft into `guildhall.yaml`.
+## What the user may still inspect
+
+Advanced users can still inspect the routing map in Settings/Facts to see:
+
+- which domain labels Guildhall is using
+- which paths those labels cover
+- what concerns and escalation triggers were inferred
+
+But that is there for transparency and debugging, not because Guildhall expects
+users to design its internal staffing model by hand.

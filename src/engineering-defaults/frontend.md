@@ -1,6 +1,11 @@
 # Frontend standards
 Design-system discipline. No one-off visual overrides.
 
+For Guildhall product surfaces, pair these baseline rules with
+`src/engineering-defaults/guildhall-ui.md`. That document covers the
+user-facing hierarchy for headings, chips, counts, card anatomy, and guided
+journey screens.
+
 ## Type scale
 - Define `--fs-0` through `--fs-5` on `:root`. Use these tokens everywhere.
 - No inline `style="font-size: ..."`. No hardcoded `px`/`rem` font sizes in components.

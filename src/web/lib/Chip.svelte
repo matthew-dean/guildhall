@@ -27,24 +27,24 @@
     line-height: var(--lh-tight);
   }
   .tone-neutral {
-    background: rgba(136, 136, 153, 0.12);
-    color: var(--text-muted);
+    background: var(--chip-neutral-bg);
+    color: var(--chip-neutral-fg);
   }
   .tone-ok,
   .tone-running {
-    background: rgba(78, 204, 163, 0.15);
-    color: var(--accent-2);
+    background: var(--chip-ok-bg);
+    color: var(--chip-ok-fg);
   }
   .tone-warn {
-    background: rgba(212, 162, 60, 0.15);
-    color: var(--warn);
+    background: var(--chip-warn-bg);
+    color: var(--chip-warn-fg);
   }
   .tone-danger {
-    background: rgba(224, 82, 82, 0.15);
-    color: var(--danger);
+    background: var(--chip-danger-bg);
+    color: var(--chip-danger-fg);
   }
   .tone-accent {
-    background: rgba(124, 109, 240, 0.15);
-    color: var(--accent);
+    background: var(--chip-accent-bg);
+    color: var(--chip-accent-fg);
   }
 </style>

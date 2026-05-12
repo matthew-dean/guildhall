@@ -161,6 +161,7 @@ describe('OrchestratorSupervisor', () => {
             blocked: 0,
             shelved: 0,
             waitingOnUser: 1,
+            draftReview: 0,
             awaitingApproval: 0,
             dependencyBlocked: 0,
             escalated: 0,

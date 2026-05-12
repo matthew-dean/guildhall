@@ -385,6 +385,11 @@ describe('resumeExploring', () => {
     queue = await readQueue()
     expect(queue.tasks[0]!.status).toBe('in_progress')
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('summarize the failing test')
+    const transcript = await fs.readFile(
+      path.join(memoryDir, 'exploring', 'task-001.md'),
+      'utf-8',
+    )
+    expect(transcript).toContain('summarize the failing test')
   })
 
   it('resolves a pending escalation and returns task to exploring', async () => {

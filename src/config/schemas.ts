@@ -69,8 +69,8 @@ export const WorkspaceYamlConfig = z.object({
   coordinators: z.array(z.object({
     // Unique id for this coordinator (e.g. "looma", "knit")
     id: z.string(),
-    // Display name shown in logs and dashboard
-    name: z.string(),
+    // Legacy display label; current UI derives labels from domain/id.
+    name: z.string().optional(),
     // Short domain label used for task routing (matches task.domain)
     domain: z.string(),
     // Absolute or relative path to the project this coordinator governs.
@@ -361,6 +361,9 @@ export const ResolvedConfig = z.object({
   // Project path (defaults to workspacePath)
   projectPath: z.string(),
 
+  // Optional explicit landing branch for accepted work in this checkout.
+  landingBranch: z.string().optional(),
+
   // Memory directory (always <workspacePath>/memory)
   memoryDir: z.string(),
 
@@ -370,7 +373,7 @@ export const ResolvedConfig = z.object({
   // Coordinator definitions (mirrors WorkspaceYamlConfig.coordinators)
   coordinators: z.array(z.object({
     id: z.string(),
-    name: z.string(),
+    name: z.string().optional(),
     domain: z.string(),
     path: z.string().optional(),
     mandate: z.string(),
