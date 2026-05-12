@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises'
-import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { execFile, execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import type { Checkpoint, Task } from '@guildhall/core'
@@ -50,6 +51,7 @@ const MAX_AGENT_NOTE_CHARS = 1200
 const MAX_AGENT_NOTES = 3
 const MAX_SPEC_OVERVIEW_CHARS = 3200
 const execFileP = promisify(execFile)
+const repoFileCache = new Map<string, string[]>()
 
 const ACTIONABLE_FILE_HINT_RE = /^\s*(?:[-*]\s*|\d+\.\s*)?(edit|update|modify|create|write|verify|check|test|open|remove|delete|rename|trim|clean)\b/i
 const SHELLISH_CANDIDATE_RE = /^(pnpm|npm|yarn|bun|cd|node)\b|--|&&|\|\|/
@@ -70,7 +72,9 @@ export function resolveLikelyTaskFiles(task: Task, checkpointFilesTouched: reado
   const seen = new Set<string>()
   const specText = `${task.title}
 ${task.description}
-${task.spec ?? ''}`
+${task.spec ?? ''}
+${task.productBrief?.userJob ?? ''}
+${task.productBrief?.successMetric ?? ''}`
   const commandCandidates: string[] = []
   for (const ac of task.acceptanceCriteria) {
     const command = String(ac.command ?? '')
@@ -104,11 +108,53 @@ ${task.spec ?? ''}`
         )
           .filter(isActionableFileCandidate)
           .filter((candidate) => !/\.(?:test|spec)\.ts$/i.test(candidate))
+  const bareMetricHints = Array.from(
+    specText.matchAll(/(?:^|[\s(])([A-Za-z0-9_./\-[\]]+\.(?:ts|tsx|js|jsx|vue|md|json|yaml|yml))(?=$|[\s),.:;])/gm),
+    (match) => (match[1] ?? '').trim(),
+  )
+    .filter(isActionableFileCandidate)
   const preferredRootPrefix =
     rootedHints
       .map((candidate) => candidate.split('/'))
       .find((segments) => segments.length >= 2 && ['app', 'src', 'tests', 'server'].includes(segments[1] ?? ''))
       ?.[0] ?? ''
+
+  const listRepoFiles = (repoRoot: string): string[] => {
+    const normalized = path.resolve(repoRoot)
+    const cached = repoFileCache.get(normalized)
+    if (cached) return cached
+    try {
+      const stdout = execFileSync(
+        'git',
+        ['ls-files', '--cached', '--others', '--exclude-standard'],
+        { cwd: normalized, encoding: 'utf-8', maxBuffer: 1024 * 1024 },
+      )
+      const files = stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+      repoFileCache.set(normalized, files)
+      return files
+    } catch {
+      repoFileCache.set(normalized, [])
+      return []
+    }
+  }
+
+  const resolveRepoSuffixMatch = (repoRoot: string, candidate: string): string | null => {
+    const normalizedCandidate = candidate.replace(/\\/g, '/').replace(/^\.\//, '')
+    if (!normalizedCandidate) return null
+    const matches = listRepoFiles(repoRoot).filter((file) => {
+      const normalizedFile = file.replace(/\\/g, '/')
+      return (
+        normalizedFile === normalizedCandidate ||
+        normalizedFile.endsWith(`/${normalizedCandidate}`)
+      )
+    })
+    if (matches.length === 0) return null
+    const preferred = matches.find((file) => /(?:^|\/)(src|app|tests|server)\//.test(file))
+    return path.resolve(repoRoot, preferred ?? matches[0]!)
+  }
 
   const normalizeCandidate = (trimmed: string): string => {
     if (trimmed.startsWith('/')) return path.resolve(trimmed)
@@ -118,7 +164,14 @@ ${task.spec ?? ''}`
       (trimmed.startsWith('tests/') || trimmed.startsWith('app/') || trimmed.startsWith('src/'))
         ? `${preferredRootPrefix}/${trimmed}`
         : trimmed
-    return root ? path.resolve(root, withPrefix) : withPrefix
+    if (!root) return withPrefix
+    const rootedPath = path.resolve(root, withPrefix)
+    if (existsSync(rootedPath)) return rootedPath
+    return (
+      resolveRepoSuffixMatch(root, withPrefix) ??
+      resolveRepoSuffixMatch(root, trimmed) ??
+      rootedPath
+    )
   }
 
   const push = (candidate: string) => {
@@ -134,6 +187,9 @@ ${task.spec ?? ''}`
     push(candidate)
   }
   for (const candidate of fallbackBacktickedHints) {
+    push(candidate)
+  }
+  for (const candidate of bareMetricHints) {
     push(candidate)
   }
   for (const candidate of checkpointFilesTouched) {

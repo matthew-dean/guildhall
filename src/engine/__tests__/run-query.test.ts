@@ -1902,6 +1902,282 @@ Uncertainties: none`,
     expect(observedMemoryDir).toBe('/workspace/project/memory')
   })
 
+  it('hydrates and normalizes log-decision tool input', async () => {
+    const registry = new ToolRegistry()
+    let observedDecisionsPath = ''
+    let observedEntry: Record<string, unknown> | null = null
+    registry.register(
+      defineTool({
+        name: 'log-decision',
+        description: '',
+        inputSchema: z.object({
+          decisionsPath: z.string(),
+          entry: z.object({
+            id: z.string(),
+            timestamp: z.string(),
+            agentId: z.string(),
+            domain: z.string(),
+            taskId: z.string().optional(),
+            title: z.string(),
+            context: z.string(),
+            decision: z.string(),
+            consequences: z.string(),
+            overridesSoftGate: z.string().optional(),
+          }),
+        }),
+        execute: async (input) => {
+          observedDecisionsPath = input.decisionsPath
+          observedEntry = input.entry as unknown as Record<string, unknown>
+          return { output: 'logged', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse('log-decision', {
+          entry: JSON.stringify({
+            decision: 'Approve mobile real-device testing task as-is',
+            consequences: 'Worker can continue with testing and fixes.',
+          }),
+        }),
+      },
+      { message: assistantText('ok') },
+    ])
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_agent_id: 'coordinator-knit',
+            current_task_id: 'task-123',
+            current_task_title: 'Mobile: test on real device (Safari iOS, Chrome Android)',
+            current_task_domain: 'knit',
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    expect(observedDecisionsPath).toBe('/workspace/project/memory/DECISIONS.md')
+    expect(observedEntry).not.toBeNull()
+    expect(observedEntry?.['decision']).toBe('Approve mobile real-device testing task as-is')
+    expect(observedEntry?.['consequences']).toBe('Worker can continue with testing and fixes.')
+    expect(observedEntry?.['agentId']).toBe('coordinator-knit')
+    expect(observedEntry?.['taskId']).toBe('task-123')
+    expect(observedEntry?.['domain']).toBe('knit')
+    expect(observedEntry?.['title']).toBe('Coordinator decision for Mobile: test on real device (Safari iOS, Chrome Android)')
+    expect(observedEntry?.['context']).toContain('Task: Mobile: test on real device (Safari iOS, Chrome Android)')
+    expect(typeof observedEntry?.['timestamp']).toBe('string')
+    expect(typeof observedEntry?.['id']).toBe('string')
+  })
+
+  it('hydrates and normalizes log-progress tool input', async () => {
+    const registry = new ToolRegistry()
+    let observedProgressPath = ''
+    let observedEntry: Record<string, unknown> | null = null
+    registry.register(
+      defineTool({
+        name: 'log-progress',
+        description: '',
+        inputSchema: z.object({
+          progressPath: z.string(),
+          entry: z.object({
+            timestamp: z.string(),
+            agentId: z.string(),
+            domain: z.string(),
+            taskId: z.string().optional(),
+            summary: z.string(),
+            type: z.enum(['heartbeat', 'milestone', 'blocked', 'escalation']),
+          }),
+        }),
+        execute: async (input) => {
+          observedProgressPath = input.progressPath
+          observedEntry = input.entry as unknown as Record<string, unknown>
+          return { output: 'logged', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse('log-progress', {
+          entry: JSON.stringify({
+            summary: 'Coordinator clarified the next Looma decision.',
+            type: 'milestone',
+          }),
+        }),
+      },
+      { message: assistantText('ok') },
+    ])
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_agent_id: 'coordinator-knit',
+            current_task_id: 'task-456',
+            current_task_domain: 'knit',
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    expect(observedProgressPath).toBe('/workspace/project/memory/PROGRESS.md')
+    expect(observedEntry).toMatchObject({
+      agentId: 'coordinator-knit',
+      taskId: 'task-456',
+      domain: 'knit',
+      summary: 'Coordinator clarified the next Looma decision.',
+      type: 'milestone',
+    })
+    expect(typeof observedEntry?.['timestamp']).toBe('string')
+  })
+
+  it('hydrates and normalizes raise-escalation tool input', async () => {
+    const registry = new ToolRegistry()
+    let observedInput: Record<string, unknown> | null = null
+    registry.register(
+      defineTool({
+        name: 'raise-escalation',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string(),
+          progressPath: z.string(),
+          taskId: z.string(),
+          agentId: z.string(),
+          reason: z.string(),
+          summary: z.string(),
+          details: z.string().optional(),
+        }),
+        execute: async (input) => {
+          observedInput = input as unknown as Record<string, unknown>
+          return { output: 'raised', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse('raise-escalation', {
+          reason: 'decision_required',
+          summary: 'Need a clear product call before continuing.',
+          details: {
+            options: ['ship only bugs', 'fix bugs and polish'],
+            source: 'live Looma run',
+          },
+        }),
+      },
+      { message: assistantText('ok') },
+    ])
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_agent_id: 'coordinator-knit',
+            current_task_id: 'task-789',
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    expect(observedInput).toMatchObject({
+      tasksPath: '/workspace/project/memory/TASKS.json',
+      progressPath: '/workspace/project/memory/PROGRESS.md',
+      taskId: 'task-789',
+      agentId: 'coordinator-knit',
+      reason: 'decision_required',
+      summary: 'Need a clear product call before continuing.',
+    })
+    expect(observedInput?.['details']).toContain('"source": "live Looma run"')
+  })
+
+  it('allows review handoff for verification-only tasks after durable verification evidence and self-critique', async () => {
+    const registry = new ToolRegistry()
+    let updateCalls = 0
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: 'persists task state',
+        inputSchema: z.object({
+          tasksPath: z.string().optional(),
+          taskId: z.string(),
+          status: z.string(),
+        }),
+        execute: async () => {
+          updateCalls += 1
+          return { output: 'task updated', is_error: false, metadata: { taskId: 'task-mobile' } }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse('update-task', {
+          taskId: 'task-mobile',
+          status: 'review',
+        }),
+      },
+      { message: assistantText('done') },
+    ])
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_task_id: 'task-mobile',
+            current_task_title: 'Mobile: test on real device (Safari iOS, Chrome Android)',
+            current_task_spec_excerpt: 'Manual testing only. Visual/functional correctness only.',
+            current_task_has_structured_self_critique: true,
+            review_handoff_evidence: {
+              taskId: 'task-mobile',
+              inspectedImplementationFile: false,
+              changedOrVerified: true,
+            },
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    expect(updateCalls).toBe(1)
+    expect(events.some((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.output === 'task updated',
+    )).toBe(true)
+  })
+
   it('nudges the agent after repeating the same failed tool call', async () => {
     const registry = new ToolRegistry()
     registry.register(
@@ -2892,6 +3168,66 @@ Uncertainties: none`,
         block.text.includes('run a focused verification command tied to the file you just changed') &&
         block.text.includes('exactly one tool call and no prose'),
       ),
+    )).toBe(true)
+  })
+
+  it('allows one scoped likely-target read pass after a stale handoff checkpoint before re-tightening', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: 'reads a file',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async (input) => ({
+          output: `read ${input.filePath}`,
+          is_error: false,
+        }),
+      }),
+    )
+    const likelyTarget = '/workspace/project/packages/converter/src/typescriptToJsdoc.ts'
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('read-file', { filePath: likelyTarget }, 'toolu_0') },
+      { message: assistantToolUse('read-file', { filePath: likelyTarget }, 'toolu_1') },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 5,
+          noProgressToolNames: ['update-task', 'write-checkpoint'],
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_checkpoint_next_action: 'Transition task to review after verifying the implementation state.',
+            current_task_likely_target_files: [likelyTarget],
+            current_task_checkpoint_files_touched: [
+              'packages/converter/test/ts-to-jsdoc.test.ts',
+              'packages/converter/test/jsdoc-to-ts.test.ts',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(events.some((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'read-file' &&
+      e.is_error === false &&
+      String(e.output).includes(likelyTarget),
     )).toBe(true)
   })
 

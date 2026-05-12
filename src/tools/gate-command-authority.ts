@@ -4,12 +4,36 @@ function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, ' ')
 }
 
+function classifyPackageManagerCommand(tokens: string[]): 'typecheck' | 'build' | 'test' | 'lint' | null {
+  if (tokens.length === 0) return null
+  const packageManagers = new Set(['pnpm', 'npm', 'yarn', 'bun'])
+  if (!packageManagers.has(tokens[0] ?? '')) return null
+
+  let index = 1
+  while (index < tokens.length && tokens[index]?.startsWith('-')) {
+    index += 1
+    if (index < tokens.length && !(tokens[index]?.startsWith('-'))) {
+      index += 1
+    }
+  }
+
+  if (tokens[index] === 'run' || tokens[index] === 'exec') index += 1
+  const subcommand = tokens[index] ?? ''
+  if (subcommand === 'test' || subcommand === 'vitest') return 'test'
+  if (subcommand === 'lint') return 'lint'
+  if (subcommand === 'build') return 'build'
+  if (subcommand === 'typecheck' || subcommand === 'tsgo') return 'typecheck'
+  return null
+}
+
 export function classifyGateCommand(command: string): 'typecheck' | 'build' | 'test' | 'lint' | 'other' {
   const normalized = normalizeCommand(command).toLowerCase()
-  if (/\b(typecheck|tsc(?:\s|$)|tsgo\b)/.test(normalized)) return 'typecheck'
-  if (/\bbuild\b/.test(normalized)) return 'build'
-  if (/\b(test|vitest|jest|playwright|pytest)\b/.test(normalized)) return 'test'
-  if (/\blint\b/.test(normalized)) return 'lint'
+  const packageManagerKind = classifyPackageManagerCommand(normalized.split(' '))
+  if (packageManagerKind) return packageManagerKind
+  if (/^tsc(?:\s|$)/.test(normalized)) return 'typecheck'
+  if (/^(?:turbo|vite|webpack|rollup|esbuild)(?:\s|$)/.test(normalized)) return 'build'
+  if (/^(?:vitest|jest|playwright|pytest)(?:\s|$)/.test(normalized)) return 'test'
+  if (/^(?:eslint|biome)(?:\s|$)/.test(normalized)) return 'lint'
   return 'other'
 }
 

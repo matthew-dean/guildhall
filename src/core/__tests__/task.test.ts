@@ -84,6 +84,27 @@ describe('Task', () => {
     })
     expect(result.blockReason).toBeUndefined()
   })
+
+  it('does not synthesize worker pre-rejection metadata for terminal shelves that omit policy fields', () => {
+    const result = Task.parse({
+      ...validTask,
+      status: 'shelved',
+      shelveReason: {
+        code: 'duplicate',
+        detail: 'Duplicate of task-006',
+        rejectedBy: 'system:import-draft-dedupe',
+        rejectedAt: new Date().toISOString(),
+      },
+    })
+    expect(result.shelveReason).toMatchObject({
+      code: 'duplicate',
+      detail: 'Duplicate of task-006',
+      rejectedBy: 'system:import-draft-dedupe',
+    })
+    expect(result.shelveReason?.source).toBeUndefined()
+    expect(result.shelveReason?.policyApplied).toBeUndefined()
+    expect(result.shelveReason?.requeueCount).toBeUndefined()
+  })
 })
 
 describe('AcceptanceCriteria', () => {

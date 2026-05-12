@@ -223,6 +223,8 @@ export interface BuildThreadOptions {
   projectPath: string
   /** Optional pre-built snapshot (lets callers share one snapshot per request). */
   snapshot?: ProjectSnapshot
+  /** Current coordinator run status; when stopped, stale task activity should not project as live work. */
+  runStatus?: string | undefined
   /** Recent supervisor events, used only for live "agent is currently busy" hints. */
   recentEvents?: Array<{
     at?: string | undefined
@@ -922,6 +924,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
   const activityCutoffs = currentActivityCutoffs(tasks)
   const liveAgents = liveAgentsByTask(opts.recentEvents, activityCutoffs)
   const liveActivity = activityByTask(opts.recentEvents, activityCutoffs)
+  const runIsActive = opts.runStatus == null || opts.runStatus === 'running' || opts.runStatus === 'stopping'
   const metaIntakeDraftReady = tasks.some((t) =>
     t.id === 'task-meta-intake' &&
     t.status === 'spec_review' &&
@@ -1190,7 +1193,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     ) {
       const status: TurnStatus = !activeAssigned ? 'active' : 'pending'
       if (status === 'active') activeAssigned = true
-      const livePersona = personaForAgent(liveAgent?.name)
+      const effectiveLiveAgent = runIsActive ? liveAgent : undefined
+      const livePersona = personaForAgent(effectiveLiveAgent?.name)
       const persona = livePersona ?? (taskStatus === 'exploring' || taskStatus === 'import_draft' ? 'spec' : 'worker')
       const queuedSpecRevision = isQueuedSpecRevision(t)
       const phase = taskStatus === 'ready'
@@ -1203,12 +1207,12 @@ export function buildThread(opts: BuildThreadOptions): Thread {
           ? 'intake'
           : 'inflight'
       const summary =
-        liveAgent
-          ? importedDraft && liveAgent.name === 'spec-agent'
+        effectiveLiveAgent
+          ? importedDraft && effectiveLiveAgent.name === 'spec-agent'
             ? 'Guildhall is shaping this imported draft now.'
             : taskId === META_INTAKE_TASK_ID
               ? 'Guildhall is inspecting the repo and drafting starter tasks now.'
-            : `${friendlyAgentName(liveAgent.name)} is working on this now.`
+            : `${friendlyAgentName(effectiveLiveAgent.name)} is working on this now.`
           : taskId === META_INTAKE_TASK_ID
             ? providerSetupPending
               ? 'Setup is waiting on provider configuration before Guildhall can inspect the repo.'
@@ -1246,7 +1250,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         taskStatus,
         summary,
         importedDraft,
-        liveAgent,
+        liveAgent: effectiveLiveAgent,
         activity: liveActivity.get(taskId),
         checklist:
           taskStatus === 'exploring' &&

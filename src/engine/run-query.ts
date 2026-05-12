@@ -98,21 +98,161 @@ const PROJECT_PROGRESS_TOOLS = new Set([
   'report-issue',
 ])
 
+const PROJECT_DECISION_TOOLS = new Set([
+  'log-decision',
+])
+
 const PROJECT_MEMORY_TOOLS = new Set([
   'write-checkpoint',
 ])
+
+function parseObjectString(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'string') return null
+  try {
+    const parsed = JSON.parse(value)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    // Leave malformed text alone so schema validation can report the real issue.
+  }
+  return null
+}
+
+function currentTaskDomain(
+  toolMetadata: Record<string, unknown> | undefined,
+): string {
+  return String(
+    toolMetadata?.['current_task_domain'] ??
+    toolMetadata?.['current_domain'] ??
+    '',
+  ).trim()
+}
+
+function normalizeLogDecisionInput(
+  rawInput: Record<string, unknown>,
+  toolMetadata: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const next = { ...rawInput }
+  const parsedEntry = parseObjectString(next['entry'])
+  if (parsedEntry) next['entry'] = parsedEntry
+  const hydratedEntry = next['entry']
+  if (hydratedEntry && typeof hydratedEntry === 'object' && !Array.isArray(hydratedEntry)) {
+    const record = { ...(hydratedEntry as Record<string, unknown>) }
+    if (typeof record['id'] !== 'string' || record['id'].trim().length === 0) {
+      const taskId = currentTaskId(toolMetadata)
+      const agentId = currentAgentId(toolMetadata) || 'coordinator'
+      const timestamp = new Date().toISOString()
+      record['id'] = taskId ? `${agentId}:${taskId}:${timestamp}` : `${agentId}:${timestamp}`
+    }
+    if (typeof record['timestamp'] !== 'string' || record['timestamp'].trim().length === 0) {
+      record['timestamp'] = new Date().toISOString()
+    }
+    if (typeof record['agentId'] !== 'string' || record['agentId'].trim().length === 0) {
+      const agentId = currentAgentId(toolMetadata)
+      if (agentId) record['agentId'] = agentId
+    }
+    if (typeof record['taskId'] !== 'string' || record['taskId'].trim().length === 0) {
+      const taskId = currentTaskId(toolMetadata)
+      if (taskId) record['taskId'] = taskId
+    }
+    if (typeof record['domain'] !== 'string' || record['domain'].trim().length === 0) {
+      const rawDomain = currentTaskDomain(toolMetadata)
+      if (rawDomain) record['domain'] = rawDomain
+    }
+    if (typeof record['title'] !== 'string' || record['title'].trim().length === 0) {
+      const taskTitle = String(toolMetadata?.['current_task_title'] ?? '').trim()
+      if (taskTitle) record['title'] = `Coordinator decision for ${taskTitle}`
+    }
+    if (typeof record['context'] !== 'string' || record['context'].trim().length === 0) {
+      const taskTitle = String(toolMetadata?.['current_task_title'] ?? '').trim()
+      const taskId = currentTaskId(toolMetadata)
+      const contextParts = [
+        taskTitle ? `Task: ${taskTitle}` : '',
+        taskId ? `Task id: ${taskId}` : '',
+      ].filter(Boolean)
+      if (contextParts.length > 0) record['context'] = contextParts.join(' | ')
+    }
+    next['entry'] = record
+  }
+  return next
+}
+
+function normalizeLogProgressInput(
+  rawInput: Record<string, unknown>,
+  toolMetadata: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const next = { ...rawInput }
+  const parsedEntry = parseObjectString(next['entry'])
+  if (parsedEntry) next['entry'] = parsedEntry
+  const hydratedEntry = next['entry']
+  if (hydratedEntry && typeof hydratedEntry === 'object' && !Array.isArray(hydratedEntry)) {
+    const record = { ...(hydratedEntry as Record<string, unknown>) }
+    if (typeof record['timestamp'] !== 'string' || record['timestamp'].trim().length === 0) {
+      record['timestamp'] = new Date().toISOString()
+    }
+    if (typeof record['agentId'] !== 'string' || record['agentId'].trim().length === 0) {
+      const agentId = currentAgentId(toolMetadata)
+      if (agentId) record['agentId'] = agentId
+    }
+    if (typeof record['taskId'] !== 'string' || record['taskId'].trim().length === 0) {
+      const taskId = currentTaskId(toolMetadata)
+      if (taskId) record['taskId'] = taskId
+    }
+    if (typeof record['domain'] !== 'string' || record['domain'].trim().length === 0) {
+      const domain = currentTaskDomain(toolMetadata)
+      if (domain) record['domain'] = domain
+    }
+    next['entry'] = record
+  }
+  return next
+}
+
+function normalizeRaiseEscalationInput(
+  rawInput: Record<string, unknown>,
+  toolMetadata: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const next = { ...rawInput }
+  if (typeof next['taskId'] !== 'string' || next['taskId'].trim().length === 0) {
+    const taskId = currentTaskId(toolMetadata)
+    if (taskId) next['taskId'] = taskId
+  }
+  if (typeof next['agentId'] !== 'string' || next['agentId'].trim().length === 0) {
+    const agentId = currentAgentId(toolMetadata)
+    if (agentId) next['agentId'] = agentId
+  }
+  if (next['details'] && typeof next['details'] !== 'string') {
+    try {
+      next['details'] = JSON.stringify(next['details'], null, 2)
+    } catch {
+      // Leave unstringifiable detail payloads alone for schema validation.
+    }
+  }
+  return next
+}
 
 function hydrateProjectToolInput(
   toolName: string,
   cwd: string,
   rawInput: Record<string, unknown>,
+  toolMetadata?: Record<string, unknown>,
 ): Record<string, unknown> {
-  const next = { ...rawInput }
+  let next = { ...rawInput }
   if (PROJECT_TASK_TOOLS.has(toolName)) {
     next.tasksPath = join(cwd, 'memory', 'TASKS.json')
   }
   if (PROJECT_PROGRESS_TOOLS.has(toolName)) {
     next.progressPath = join(cwd, 'memory', 'PROGRESS.md')
+    if (toolName === 'log-progress') {
+      next = normalizeLogProgressInput(next, toolMetadata)
+    }
+  }
+  if (PROJECT_DECISION_TOOLS.has(toolName)) {
+    next.decisionsPath = join(cwd, 'memory', 'DECISIONS.md')
+    next = normalizeLogDecisionInput(next, toolMetadata)
+  }
+  if (toolName === 'raise-escalation') {
+    next = normalizeRaiseEscalationInput(next, toolMetadata)
   }
   if (PROJECT_MEMORY_TOOLS.has(toolName)) {
     next.memoryDir = join(cwd, 'memory')
@@ -347,6 +487,22 @@ function isCheckpointScopedReadOnlyToolCall(
     candidateBases.map((base) => resolve(base, candidate)),
   )
   return normalizedTouched.includes(normalizedInputPath)
+}
+
+function isLikelyTargetScopedReadOnlyToolCall(
+  cwd: string,
+  toolCall: ToolUseBlock,
+  likelyTargetFiles: readonly string[],
+): boolean {
+  if (toolCall.name !== 'read-file') return false
+  const filePath = String((toolCall.input as Record<string, unknown>)?.filePath ?? '').trim()
+  if (filePath.length === 0) return false
+  const normalizedInputPath = resolve(cwd, filePath)
+  const normalizedTargets = likelyTargetFiles
+    .map((candidate) => candidate.trim())
+    .filter(Boolean)
+    .map((candidate) => resolve(cwd, candidate))
+  return normalizedTargets.includes(normalizedInputPath)
 }
 
 function noProgressStatusMessage(
@@ -857,6 +1013,18 @@ export async function* runQuery(
           checkpointTouched,
         ),
       )
+    const handoffScopedLikelyTargetReadOnlyAllowed =
+      checkpointActionIsHandoff &&
+      likelyTargetFiles.length > 0 &&
+      noProgressToolTurns <= 1 &&
+      toolCalls.length > 0 &&
+      toolCalls.every((tc) =>
+        isLikelyTargetScopedReadOnlyToolCall(
+          context.cwd,
+          tc,
+          likelyTargetFiles,
+        ),
+      )
     const shouldRefuseAfterMissingLikelyTarget =
       missingLikelyTarget.length > 0 &&
       toolCalls.length > 0 &&
@@ -865,6 +1033,7 @@ export async function* runQuery(
     const shouldRefuseAfterInspectingLikelyTarget =
       inspectedLikelyTarget.length > 0 &&
       noProgressTurnNudges > 0 &&
+      !handoffScopedLikelyTargetReadOnlyAllowed &&
       toolCalls.length > 0 &&
       toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input))
     const shouldRefuseAfterCheckpointNextAction =
@@ -873,7 +1042,8 @@ export async function* runQuery(
       noProgressToolTurns >= 1 &&
       toolCalls.length > 0 &&
       toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input)) &&
-      !checkpointScopedReadOnlyFollowThroughAllowed
+      !checkpointScopedReadOnlyFollowThroughAllowed &&
+      !handoffScopedLikelyTargetReadOnlyAllowed
 
     if (
       shouldRefuseFurtherReadOnlyResearch ||
@@ -1444,6 +1614,26 @@ interface ReviewHandoffEvidence {
   changedOrVerified: boolean
 }
 
+function currentTaskLooksLikeVerificationOnly(
+  toolMetadata: Record<string, unknown> | undefined,
+): boolean {
+  const haystack = [
+    String(toolMetadata?.['current_task_title'] ?? ''),
+    String(toolMetadata?.['current_task_spec_excerpt'] ?? ''),
+  ]
+    .join('\n')
+    .toLowerCase()
+
+  return (
+    /manual testing/.test(haystack) ||
+    /real mobile devices?/.test(haystack) ||
+    /real device/.test(haystack) ||
+    /hands-on qa/.test(haystack) ||
+    /visual\/functional correctness only/.test(haystack) ||
+    /manual test/.test(haystack)
+  )
+}
+
 function isReadToolName(name: string): boolean {
   return name === 'read_file' || name === 'Read' || name === 'ReadFile' || name === 'read-file'
 }
@@ -1539,9 +1729,10 @@ function hasReviewHandoffEvidence(
   taskId: string,
 ): boolean {
   const evidence = reviewHandoffEvidence(toolMetadata)
-  return evidence?.taskId === taskId &&
-    evidence.inspectedImplementationFile &&
-    evidence.changedOrVerified
+  if (evidence?.taskId !== taskId) return false
+  if (evidence.inspectedImplementationFile && evidence.changedOrVerified) return true
+  if (currentTaskLooksLikeVerificationOnly(toolMetadata) && evidence.changedOrVerified) return true
+  return false
 }
 
 function hasStructuredSelfCritiqueForReviewHandoff(
@@ -1579,8 +1770,9 @@ function reviewHandoffGuardResult(
   return {
     type: 'tool_result',
     tool_use_id: toolUseId,
-    content:
-      'Blocked transition to review: inspect the implementation source/test files and run or change something concrete before handoff. Do not self-critique or move to review from task metadata alone.',
+    content: currentTaskLooksLikeVerificationOnly(toolMetadata)
+      ? 'Blocked transition to review: produce a durable verification artifact or concrete verification step first, then hand off with a structured self-critique. Do not move to review from task metadata alone.'
+      : 'Blocked transition to review: inspect the implementation source/test files and run or change something concrete before handoff. Do not self-critique or move to review from task metadata alone.',
     is_error: true,
   }
 }
@@ -1620,7 +1812,7 @@ async function executeToolCall(
   toolCall: ToolUseBlock,
 ): Promise<ToolResultBlock> {
   const { name: toolName, id: toolUseId, input: rawToolInput } = toolCall
-  const toolInput = hydrateProjectToolInput(toolName, context.cwd, rawToolInput)
+  const toolInput = hydrateProjectToolInput(toolName, context.cwd, rawToolInput, context.toolMetadata)
   const guarded = reviewHandoffGuardResult(
     toolUseId,
     toolName,

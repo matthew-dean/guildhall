@@ -21,6 +21,26 @@ function makeTaskScopedDirs(): { projectPath: string; worktreePath: string } {
   return { projectPath, worktreePath }
 }
 
+function makeScriptPackage(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guildhall-shell-scripts-'))
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    JSON.stringify(
+      {
+        name: 'guildhall-shell-test-fixture',
+        private: true,
+        scripts: {
+          test: "node -e \"console.log('test-corrected')\"",
+          lint: "node -e \"console.log('lint-focused')\"",
+        },
+      },
+      null,
+      2,
+    ),
+  )
+  return root
+}
+
 describe('runShellSync — success cases', () => {
   it('returns success=true for a command that exits 0', () => {
     const result = runShellSync({ command: 'echo hello', cwd: '/tmp', timeoutMs: 5000 })
@@ -184,40 +204,42 @@ describe('shellTool — engine-tool interface', () => {
   })
 
   it('reconciles verification-shaped commands to authoritative task-scoped gates', async () => {
+    const cwd = makeScriptPackage()
     const result = await shellTool.execute(
-      { command: 'echo test-stale', cwd: '/tmp', timeoutMs: 5000 },
+      { command: 'pnpm test -- --runInBand', cwd, timeoutMs: 5000 },
       {
-        cwd: '/tmp',
+        cwd,
         metadata: {
-          current_task_success_gates: ['echo test-corrected'],
+          current_task_success_gates: ['npm test'],
         },
       },
     )
     expect(result.is_error).toBe(false)
     expect(result.output).toContain('test-corrected')
     expect(result.metadata).toMatchObject({
-      requestedCommand: 'echo test-stale',
-      executedCommand: 'echo test-corrected',
+      requestedCommand: 'pnpm test -- --runInBand',
+      executedCommand: 'npm test',
       usedAuthoritativeCommand: true,
     })
   })
 
   it('prefers worker verification commands over broader hard gates when both are present', async () => {
+    const cwd = makeScriptPackage()
     const result = await shellTool.execute(
-      { command: 'echo lint-stale', cwd: '/tmp', timeoutMs: 5000 },
+      { command: 'pnpm lint packages/converter', cwd, timeoutMs: 5000 },
       {
-        cwd: '/tmp',
+        cwd,
         metadata: {
-          current_task_success_gates: ['echo test-broad'],
-          current_task_verification_commands: ['echo lint-focused'],
+          current_task_success_gates: ['npm test'],
+          current_task_verification_commands: ['npm run lint'],
         },
       },
     )
     expect(result.is_error).toBe(false)
     expect(result.output).toContain('lint-focused')
     expect(result.metadata).toMatchObject({
-      requestedCommand: 'echo lint-stale',
-      executedCommand: 'echo lint-focused',
+      requestedCommand: 'pnpm lint packages/converter',
+      executedCommand: 'npm run lint',
       usedAuthoritativeCommand: true,
     })
   })
@@ -261,6 +283,27 @@ describe('shellTool — engine-tool interface', () => {
     expect(result.metadata).toMatchObject({
       requestedCommand: 'echo hello',
       executedCommand: 'echo hello',
+      usedAuthoritativeCommand: false,
+    })
+  })
+
+  it('does not mistake file-inspection commands with .test.ts paths for verification commands', async () => {
+    const result = await shellTool.execute(
+      {
+        command: 'cat packages/converter/test/ts-to-jsdoc.test.ts | head -5',
+        cwd: '/tmp',
+        timeoutMs: 5000,
+      },
+      {
+        cwd: '/tmp',
+        metadata: {
+          current_task_success_gates: ['vitest run'],
+        },
+      },
+    )
+    expect(result.metadata).toMatchObject({
+      requestedCommand: 'cat packages/converter/test/ts-to-jsdoc.test.ts | head -5',
+      executedCommand: 'cat packages/converter/test/ts-to-jsdoc.test.ts | head -5',
       usedAuthoritativeCommand: false,
     })
   })
@@ -311,6 +354,42 @@ describe('shellTool — engine-tool interface', () => {
     expect(result.output).toContain('verify')
     expect(result.metadata).toMatchObject({ success: true })
     expect((result.metadata as Record<string, unknown>).blockedDirectFileWrite).toBeUndefined()
+  })
+
+  it('injects CI=true for task-scoped shell commands unless the caller overrides it', async () => {
+    const { projectPath, worktreePath } = makeTaskScopedDirs()
+    const result = await shellTool.execute(
+      { command: "node -e \"process.stdout.write(process.env.CI || '')\"", timeoutMs: 5000 },
+      {
+        cwd: worktreePath,
+        metadata: {
+          current_task_project_path: projectPath,
+          current_task_worktree_path: worktreePath,
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toBe('true')
+  })
+
+  it('preserves explicit CI env overrides for task-scoped shell commands', async () => {
+    const { projectPath, worktreePath } = makeTaskScopedDirs()
+    const result = await shellTool.execute(
+      {
+        command: "node -e \"process.stdout.write(process.env.CI || '')\"",
+        timeoutMs: 5000,
+        env: { CI: 'false' },
+      },
+      {
+        cwd: worktreePath,
+        metadata: {
+          current_task_project_path: projectPath,
+          current_task_worktree_path: worktreePath,
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toBe('false')
   })
 
   it('is not declared read-only (shell can mutate state)', () => {
@@ -408,5 +487,16 @@ describe('runShell — async tool path', () => {
     expect(result.success).toBe(false)
     expect(result.timedOut).toBe(true)
     expect(result.output).toContain('timed out')
+  })
+
+  it('merges env overrides into the async execution path', async () => {
+    const result = await runShell({
+      command: "node -e \"process.stdout.write(process.env.GUILDHALL_SHELL_TEST || '')\"",
+      cwd: '/tmp',
+      timeoutMs: 5000,
+      env: { GUILDHALL_SHELL_TEST: 'set' },
+    })
+    expect(result.success).toBe(true)
+    expect(result.output).toBe('set')
   })
 })

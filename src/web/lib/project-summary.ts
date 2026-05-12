@@ -1,4 +1,6 @@
 import type { ProjectRun, ServiceDetail, ServiceProjectSummary } from './types.js'
+import { buildProjectCardTicker, type ProjectActivityLine } from './project-activity.js'
+import { humanizeProjectName } from './project-name.js'
 
 export interface ProjectCardSummary {
   id: string
@@ -18,6 +20,7 @@ export interface ProjectCardSummary {
     done: number
     shelved: number
   }
+  ticker: ProjectActivityLine
   actionLabel: string
   runActionLabel: string | null
   canOpen: boolean
@@ -96,7 +99,7 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
   const initializationNeeded = Boolean(project.initializationNeeded)
   return {
     id: project.id,
-    name: project.name,
+    name: humanizeProjectName(project.name),
     path: project.path,
     statusLabel: statusLabel(project, counts),
     tone:
@@ -115,6 +118,7 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
     blurb: project.summary ?? null,
     tags: project.tags ?? [],
     counts,
+    ticker: buildProjectCardTicker(project),
     actionLabel: initializationNeeded ? 'Open setup' : 'Open project',
     runActionLabel: initializationNeeded ? null : running ? 'Stop' : 'Start',
     canOpen: true,

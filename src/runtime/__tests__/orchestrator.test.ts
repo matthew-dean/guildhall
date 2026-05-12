@@ -2866,6 +2866,81 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(checkpoint.nextPlannedAction).toContain('hand off to review')
   })
 
+  it('treats dirty likely-target files in the main project checkout as durable worker progress', async () => {
+    const projectPath = path.join(tmpDir, 'worker-likely-target-progress')
+    const editedFile = path.join(projectPath, 'packages', 'converter', 'test', 'jsdoc-to-ts.test.ts')
+    await fs.mkdir(path.dirname(editedFile), { recursive: true })
+    await fs.writeFile(editedFile, 'it("round trips", () => {})\n', 'utf8')
+    execFileSync('git', ['init'], { cwd: projectPath, stdio: 'ignore' })
+
+    await writeQueue([
+      mkTask({
+        id: 'worker-likely-target-progress',
+        status: 'in_progress',
+        projectPath,
+        updatedAt: '2026-04-01T00:00:00Z',
+        spec: 'Likely target file: `packages/converter/test/jsdoc-to-ts.test.ts`',
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'Focused converter tests pass.',
+            verifiedBy: 'automated',
+            command: 'pnpm --dir packages/converter vitest run packages/converter/test/jsdoc-to-ts.test.ts',
+            met: false,
+          },
+        ],
+      }),
+    ])
+
+    const worker: StubAgent = {
+      name: 'worker-agent',
+      calls: [],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: 'Focused converter tests still fail; next step is to fix the JSDoc-to-TS round-trip.' }
+      },
+      getToolMetadata() {
+        return {
+          review_handoff_evidence: {
+            taskId: 'worker-likely-target-progress',
+            inspectedImplementationFile: true,
+            changedOrVerified: true,
+          },
+          recent_verified_work: [
+            'Ran bash command pnpm --dir packages/converter vitest run test/jsdoc-to-ts.test.ts [FAIL]',
+          ],
+        }
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver(),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(false)
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'worker-likely-target-progress')
+    expect(task?.updatedAt).not.toBe('2026-04-01T00:00:00Z')
+
+    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-likely-target-progress', 'checkpoint.json')
+    const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
+      intent: string
+      nextPlannedAction: string
+      filesTouched: string[]
+    }
+    expect(checkpoint.intent).toContain('dirty likely-target files in the main project checkout')
+    expect(checkpoint.filesTouched).toContain(path.join('packages', 'converter', 'test', 'jsdoc-to-ts.test.ts'))
+    expect(checkpoint.nextPlannedAction).toContain('hand off to review')
+  })
+
   it('writes a recovery checkpoint and bumps updatedAt when a worker pass leaves clean verified progress without a status transition', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'worker-clean-progress')
     await fs.mkdir(path.join(worktreePath, 'web', 'app', 'types'), { recursive: true })
@@ -4922,6 +4997,23 @@ describe('Orchestrator.tick — FR-22 pre-rejection policy', () => {
           source: 'proposal_policy',
           policyApplied: true,
           requeueCount: 0,
+        },
+      }),
+    ])
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
+    const out = await orch.tick()
+    expect(out.kind).toBe('idle')
+  })
+
+  it('ignores terminal duplicate shelves that have no pre-rejection policy metadata', async () => {
+    await writeLeverPair('requeue_lower_priority')
+    await writeQueue([
+      shelved({
+        shelveReason: {
+          code: 'duplicate',
+          detail: 'Duplicate of task-006',
+          rejectedBy: 'system:import-draft-dedupe',
+          rejectedAt: '2026-04-20T00:00:00Z',
         },
       }),
     ])

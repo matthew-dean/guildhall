@@ -180,6 +180,9 @@
   })
   let pollHandle: ReturnType<typeof setInterval> | null = null
   let clockHandle: ReturnType<typeof setInterval> | null = null
+  let loadTimer: ReturnType<typeof setTimeout> | null = null
+  let loadInFlight = false
+  let loadQueued = false
   let nowMs = $state(Date.now())
   let runBusy = $state(false)
   let runError = $state<string | null>(null)
@@ -256,6 +259,31 @@
     }
   }
 
+  async function runLoad(): Promise<void> {
+    if (loadInFlight) {
+      loadQueued = true
+      return
+    }
+    loadInFlight = true
+    try {
+      await load()
+    } finally {
+      loadInFlight = false
+      if (loadQueued) {
+        loadQueued = false
+        void runLoad()
+      }
+    }
+  }
+
+  function scheduleLoad(delayMs = 0): void {
+    if (loadTimer) return
+    loadTimer = setTimeout(() => {
+      loadTimer = null
+      void runLoad()
+    }, delayMs)
+  }
+
   onMount(() => {
     try {
       const raw = sessionStorage.getItem('guildhall:workspace-import-handoff')
@@ -271,11 +299,11 @@
     } catch {
       importHandoff = null
     }
-    void load()
-    pollHandle = setInterval(() => void load(), 4000)
+    scheduleLoad()
+    pollHandle = setInterval(() => scheduleLoad(100), 4000)
     clockHandle = setInterval(() => {
       nowMs = Date.now()
-    }, 1000)
+    }, 5000)
   })
   $effect(() => {
     const off = onEvent(ev => {
@@ -291,7 +319,7 @@
         type === 'line_complete' ||
         type === 'error'
       ) {
-        void load()
+        scheduleLoad(100)
       }
     })
     return off
@@ -299,6 +327,7 @@
   onDestroy(() => {
     if (pollHandle) clearInterval(pollHandle)
     if (clockHandle) clearInterval(clockHandle)
+    if (loadTimer) clearTimeout(loadTimer)
   })
 
   function personaLabel(p: TurnPersona): string {
@@ -510,7 +539,7 @@
     if (!firstSetup) return
     void tick().then(() => {
       const el = turnElements.get(firstSetup.id)
-      el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      el?.scrollIntoView({ block: 'center', behavior: 'auto' })
     })
   }
 
@@ -562,7 +591,7 @@
     void tick().then(() => {
       const el = turnElements.get(targetId)
       if (!el) return
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      el.scrollIntoView({ block: 'center', behavior: 'auto' })
       lastScrolledId = targetId
     })
   })

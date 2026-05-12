@@ -539,9 +539,9 @@ export const Task = z.object({
       rejectedAt: z.string(), // ISO timestamp
       source: z
         .enum(['worker_pre_rejection', 'proposal_policy'])
-        .default('worker_pre_rejection'),
-      policyApplied: z.boolean().default(false),
-      requeueCount: z.number().int().nonnegative().default(0),
+        .optional(),
+      policyApplied: z.boolean().optional(),
+      requeueCount: z.number().int().nonnegative().optional(),
     })
     .optional(),
 

@@ -901,6 +901,68 @@ coordinators:
     }
   })
 
+  it('does not project stale task activity as live work once the coordinator is stopped', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Shape imported draft',
+              status: 'exploring',
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+              notes: [{ role: 'shaping-request', content: 'shape this', timestamp: new Date().toISOString() }],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'core', name: 'Core' }],
+        },
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+      const lastEventAt = new Date(Date.now() - 60_000).toISOString()
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        runStatus: 'stopped',
+        recentEvents: [
+          {
+            at: lastEventAt,
+            event: {
+              type: 'tool_completed',
+              task_id: 'task-1',
+              agent_name: 'spec-agent',
+              tool_name: 'read-file',
+            },
+          },
+        ],
+      })
+
+      const turn = thread.turns.find(t => t.kind === 'inflight')
+      if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
+      expect(turn.liveAgent).toBeUndefined()
+      expect(turn.summary).toBe('The spec author is shaping this task.')
+      expect(turn.activity?.at(-1)?.label).toBe('Finished file read')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('labels failed live tools as failed instead of finished', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

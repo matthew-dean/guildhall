@@ -37,6 +37,12 @@ describe('summarizeProjects', () => {
         blurb: 'Guildhall runs autonomous engineering workflows over local projects.',
         tags: ['cli', 'orchestrator'],
         counts: { total: 10, active: 2, blocked: 1, done: 6, shelved: 1 },
+        ticker: {
+          tone: 'active',
+          pulse: true,
+          label: 'Live',
+          message: 'Restructure project service shell',
+        },
         actionLabel: 'Open project',
         runActionLabel: 'Stop',
         canOpen: true,
@@ -64,6 +70,12 @@ describe('summarizeProjects', () => {
       tone: 'idle',
       stageLabel: 'Ready',
       activityLabel: 'No task activity yet.',
+      ticker: {
+        tone: 'idle',
+        pulse: false,
+        label: 'Idle',
+        message: 'No recent activity',
+      },
       actionLabel: 'Open project',
       runActionLabel: 'Start',
       canStart: true,
@@ -84,10 +96,17 @@ describe('summarizeProjects', () => {
     }
 
     expect(summarizeProjects(service)[0]).toMatchObject({
+      name: 'Scratch pad',
       statusLabel: 'Needs setup',
       tone: 'warn',
       stageLabel: 'Needs setup',
       activityLabel: 'Needs first-time Guildhall setup.',
+      ticker: {
+        tone: 'warn',
+        pulse: false,
+        label: 'Setup',
+        message: 'First-time Guildhall setup',
+      },
       actionLabel: 'Open setup',
       runActionLabel: null,
       canStart: false,

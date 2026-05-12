@@ -2271,11 +2271,20 @@ export class Orchestrator {
         }
 
         const taskRepoRootAfter = resolveEffectiveTaskProjectPath(taskAfter, this.opts.config.projectPath)
+        const likelyWorkerTargets =
+          beforeStatus === 'in_progress' ? resolveLikelyTaskFiles(taskAfter) : []
         const hasDirtyWorktreeAfter =
           beforeStatus === 'in_progress' &&
           typeof taskAfter.worktreePath === 'string' &&
           taskAfter.worktreePath.trim().length > 0 &&
           !(await this.gitDriver.isClean(taskAfter.worktreePath))
+        const dirtyTaskFilesAfter =
+          beforeStatus === 'in_progress' ? await this.changedFilesForTask(taskAfter) : []
+        const hasDirtyLikelyTargetProgress =
+          beforeStatus === 'in_progress' &&
+          dirtyTaskFilesAfter.some((file) =>
+            this.fileMatchesLikelyTarget(file, likelyWorkerTargets, taskRepoRootAfter),
+          )
         const checkpointTouchedFiles = this.checkpointTouchedFilesFromMetadata(
           successfulAgentMetadata,
           taskRepoRootAfter,
@@ -2290,10 +2299,16 @@ export class Orchestrator {
           afterStatus === 'in_progress' &&
           !transitioned &&
           taskAfter.updatedAt === task.updatedAt &&
-          (hasDirtyWorktreeAfter || hasCheckpointScopedVerifiedProgress)
+          (
+            hasDirtyWorktreeAfter ||
+            hasDirtyLikelyTargetProgress ||
+            hasCheckpointScopedVerifiedProgress
+          )
         ) {
           const recoveryReason = hasDirtyWorktreeAfter
             ? 'worker pass ended with dirty worktree progress but no status transition'
+            : hasDirtyLikelyTargetProgress
+              ? 'worker pass ended with dirty likely-target files in the main project checkout but no status transition'
             : 'worker pass ended with clean verified progress but no status transition'
           const checkpointWritten = await this.writeWorkerRecoveryCheckpoint({
             task: taskAfter,
@@ -2307,8 +2322,6 @@ export class Orchestrator {
             await this.writeQueue(queueAfter)
           }
         }
-        const likelyWorkerTargets =
-          beforeStatus === 'in_progress' ? resolveLikelyTaskFiles(taskAfter) : []
         const repeatedWorkerNoProgress =
           agent.name === 'worker-agent' &&
           beforeStatus === 'in_progress' &&
@@ -2316,6 +2329,7 @@ export class Orchestrator {
           !transitioned &&
           taskAfter.updatedAt === task.updatedAt &&
           !hasDirtyWorktreeAfter &&
+          !hasDirtyLikelyTargetProgress &&
           !hasCheckpointScopedVerifiedProgress &&
           likelyWorkerTargets.length > 0
         if (repeatedWorkerNoProgress) {
@@ -5053,6 +5067,20 @@ export class Orchestrator {
     } catch {
       return []
     }
+  }
+
+  private fileMatchesLikelyTarget(
+    candidate: string,
+    likelyTargets: readonly string[],
+    repoRoot?: string,
+  ): boolean {
+    const trimmed = candidate.trim()
+    if (!trimmed) return false
+    const resolvedCandidate =
+      repoRoot && !path.isAbsolute(trimmed)
+        ? path.resolve(repoRoot, trimmed)
+        : path.resolve(trimmed)
+    return likelyTargets.some((target) => path.resolve(target) === resolvedCandidate)
   }
 
   private async persistExploringFallbackProgress(input: {

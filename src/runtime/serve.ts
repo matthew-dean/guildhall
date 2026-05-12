@@ -253,6 +253,20 @@ interface ServiceProjectSummary {
   }
 }
 
+function humanizeGeneratedProjectName(name: string): string {
+  const raw = name.trim()
+  if (!raw) return 'Project'
+  const withoutScope = raw.startsWith('@') && raw.includes('/')
+    ? raw.split('/').slice(1).join('/')
+    : raw
+  const collapsed = withoutScope
+    .replace(/[-_/]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!collapsed) return 'Project'
+  return collapsed.charAt(0).toUpperCase() + collapsed.slice(1)
+}
+
 function detectProjectPackageManagers(projectPath: string): string[] {
   const found = new Set<string>()
   const visited = new Set<string>()
@@ -592,7 +606,7 @@ function registrySummaryForProject(project: ResolvedProject): {
     return {
       id: project.id,
       path: project.path,
-      name: folderName,
+      name: humanizeGeneratedProjectName(folderName),
       tags: ['uninitialized'],
     }
   }
@@ -2868,6 +2882,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const thread = buildThread({
         projectPath: project.path,
+        runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         recentEvents: supervisor.recent(project.id, undefined, project.path),
       })
       return c.json(thread)
@@ -3101,6 +3116,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const thread = buildThread({
         projectPath: project.path,
         snapshot,
+        runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         recentEvents: supervisor.recent(project.id, undefined, project.path),
       })
       const threadTurns = thread.turns.filter(turn => {
@@ -3968,7 +3984,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/setup/defaults', c => {
     const basename = project.path.split('/').pop() ?? 'project'
-    const suggestedName = project.config?.name ?? basename
+    const suggestedName = project.config?.name ?? humanizeGeneratedProjectName(basename)
     const suggestedId = project.config?.id ?? slugify(suggestedName)
     const localModels = MODEL_CATALOG
       .filter(m => m.provider === 'lm-studio')

@@ -219,6 +219,45 @@ describe('buildContext — task summary', () => {
     ])
   })
 
+  it('resolves ambiguous spec paths against the real repo tree and includes success-metric test files', async () => {
+    await fs.mkdir(path.join(tmpDir, 'packages', 'converter', 'src', 'features'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'packages', 'converter', 'test'), { recursive: true })
+    await execFileP('git', ['init'], { cwd: tmpDir })
+    await fs.writeFile(path.join(tmpDir, 'packages', 'converter', 'src', 'typescriptToJsdoc.ts'), '', 'utf-8')
+    await fs.writeFile(path.join(tmpDir, 'packages', 'converter', 'src', 'jsdocToTypescript.ts'), '', 'utf-8')
+    await fs.writeFile(path.join(tmpDir, 'packages', 'converter', 'src', 'features', 'functionDeclaration.ts'), '', 'utf-8')
+    await fs.writeFile(path.join(tmpDir, 'packages', 'converter', 'src', 'features', 'variableDeclaration.ts'), '', 'utf-8')
+    await fs.writeFile(path.join(tmpDir, 'packages', 'converter', 'test', 'ts-to-jsdoc.test.ts'), '', 'utf-8')
+    await fs.writeFile(path.join(tmpDir, 'packages', 'converter', 'test', 'jsdoc-to-ts.test.ts'), '', 'utf-8')
+
+    const task: Task = {
+      ...baseTask,
+      projectPath: tmpDir,
+      spec: [
+        '## Summary',
+        'In `typescriptToJsdoc.ts` and `features/functionDeclaration.ts`, preserve non-type tags.',
+        'In `jsdocToTypescript.ts` and `features/variableDeclaration.ts`, keep descriptions intact.',
+      ].join('\n'),
+      productBrief: {
+        userJob: 'Complete the round-trip converter.',
+        successMetric:
+          'packages/converter/test/ts-to-jsdoc.test.ts and packages/converter/test/jsdoc-to-ts.test.ts all pass.',
+        antiPatterns: [],
+        authoredBy: 'spec-agent',
+        authoredAt: '2026-05-12T00:00:00Z',
+      },
+    }
+
+    expect(resolveLikelyTaskFiles(task)).toEqual([
+      path.join(tmpDir, 'packages', 'converter', 'src', 'typescriptToJsdoc.ts'),
+      path.join(tmpDir, 'packages', 'converter', 'src', 'features', 'functionDeclaration.ts'),
+      path.join(tmpDir, 'packages', 'converter', 'src', 'jsdocToTypescript.ts'),
+      path.join(tmpDir, 'packages', 'converter', 'src', 'features', 'variableDeclaration.ts'),
+      path.join(tmpDir, 'packages', 'converter', 'test', 'ts-to-jsdoc.test.ts'),
+      path.join(tmpDir, 'packages', 'converter', 'test', 'jsdoc-to-ts.test.ts'),
+    ])
+  })
+
   it('surfaces the active worktree and changed files for resumed worker tasks', async () => {
     const worktreePath = path.join(tmpDir, 'worktree')
     await fs.mkdir(path.join(worktreePath, 'web', 'tests', 'unit', 'composables'), { recursive: true })

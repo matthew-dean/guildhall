@@ -13,6 +13,7 @@
   import Chip from '../lib/Chip.svelte'
   import Icon, { type IconName } from '../lib/Icon.svelte'
   import NoticeBand from '../lib/NoticeBand.svelte'
+  import StatusDot from '../lib/StatusDot.svelte'
   import ProjectShell from '../lib/layout/ProjectShell.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
   import ThreadTab from './project/ThreadTab.svelte'
@@ -31,9 +32,11 @@
   import { path, nav } from '../lib/nav.svelte.js'
   import { currentProjectHref, projectFetch } from '../lib/project-routes.js'
   import { activeEscalations } from '../lib/escalation.js'
+  import { buildProjectTicker } from '../lib/project-activity.js'
   import { buildProviderIndicator } from '../lib/provider-indicator.js'
+  import { humanizeProjectName } from '../lib/project-name.js'
   import type { InboxItem } from '../lib/inbox-item-key.js'
-  import type { ProjectView, ProviderStatus } from '../lib/types.js'
+  import type { EventEnvelope, ProjectView, ProviderStatus } from '../lib/types.js'
 
   interface Props {
     initialView?: ProjectView
@@ -67,6 +70,9 @@
   let inboxItems = $state<InboxItem[]>([])
   let inboxLoaded = $state(false)
   let inboxError = $state<string | null>(null)
+  let latestTickerEvent = $state<EventEnvelope | null>(null)
+  let tickerNow = $state(Date.now())
+  const projectDisplayName = $derived(humanizeProjectName(project.detail?.name ?? project.detail?.id ?? 'Project'))
 
   async function loadInbox(): Promise<void> {
     try {
@@ -94,6 +100,21 @@
   $effect(() => {
     const off = onEvent(ev => {
       const t = ev.event?.type ?? ''
+      if (
+        t === 'agent_started' ||
+        t === 'agent_finished' ||
+        t === 'task_transition' ||
+        t === 'tool_started' ||
+        t === 'tool_completed' ||
+        t === 'assistant_complete' ||
+        t === 'line_complete' ||
+        t === 'error' ||
+        t === 'escalation_raised' ||
+        t === 'provider_health_changed' ||
+        t.startsWith('supervisor_')
+      ) {
+        latestTickerEvent = pickLatestEvent(latestTickerEvent, ev)
+      }
       // Refresh on anything that might change inbox state.
       if (
         t.startsWith('task_') ||
@@ -127,7 +148,7 @@
   })
 
   $effect(() => {
-    const media = window.matchMedia('(max-width: 1100px)')
+    const media = window.matchMedia('(max-width: 920px)')
     const sync = () => {
       railForcedCollapsed = media.matches
       if (!railForcedCollapsed) mobileRailOpen = false
@@ -324,7 +345,32 @@
     return lines.find(line => /\berror\b|failed|Cannot find module|command not found|spawn ENOENT/i.test(line)) ?? lines[0] ?? null
   }
 
+  function eventAtMillis(event: EventEnvelope | null | undefined): number {
+    const at = event?.at
+    if (!at) return -1
+    const value = Date.parse(at)
+    return Number.isFinite(value) ? value : -1
+  }
+
+  function pickLatestEvent(current: EventEnvelope | null, candidate: EventEnvelope | null): EventEnvelope | null {
+    if (!candidate) return current
+    if (!current) return candidate
+    return eventAtMillis(candidate) >= eventAtMillis(current) ? candidate : current
+  }
+
   const detail = $derived(project.detail)
+  $effect(() => {
+    latestTickerEvent = (detail?.recentEvents ?? []).reduce<EventEnvelope | null>(
+      (current, candidate) => pickLatestEvent(current, candidate),
+      null,
+    )
+  })
+  $effect(() => {
+    const handle = setInterval(() => {
+      tickerNow = Date.now()
+    }, 5000)
+    return () => clearInterval(handle)
+  })
   const runStatus = $derived(detail?.run?.status ?? 'stopped')
   const runMode = $derived(detail?.run?.mode === 'one_task' ? 'one_task' : 'continuous')
   const providerStatus = $derived(detail?.providerStatus ?? detail?.run?.providerStatus ?? null)
@@ -355,6 +401,7 @@
       ? `${providerHeaderLabel ?? 'Current provider'} has seen ${providerStatus.health.consecutiveFailures} consecutive pooled failures${providerStatus.health.lastError ? ` (${providerStatus.health.lastError})` : ''}.`
       : null,
   )
+  const projectTicker = $derived(buildProjectTicker(detail, latestTickerEvent, new Date(tickerNow)))
   const currentStopSummary = $derived.by(() => {
     if (runStatus === 'running' || runStatus === 'stopping') return null
     const tasks = detail?.tasks ?? []
@@ -622,7 +669,7 @@
     >
       <div class="rail-head" title={detail.path}>
         <div class="rail-head-top">
-          <div class="rail-project">{detail.path?.split('/').pop() ?? 'Project'}</div>
+          <div class="rail-project">{projectDisplayName}</div>
           <div class="rail-head-actions">
             <button
               type="button"
@@ -719,7 +766,7 @@
     >
       <div class="rail-head" title={detail.name}>
         <div class="rail-head-top">
-          <div class="rail-project">{detail.name}</div>
+          <div class="rail-project">{projectDisplayName}</div>
           <div class="rail-head-actions">
             <button
               type="button"
@@ -816,6 +863,9 @@
             <Icon name="chevron-left" size={16} />
             <span class="toolbar-btn-label">Projects</span>
           </Button>
+        </div>
+        <div class="topbar-center" title={projectDisplayName}>
+          {projectDisplayName}
         </div>
         <div class="topbar-leading">
           {#if activeCount > 0 || awaitingApprovalCount > 0 || stuckCount > 0}
@@ -1025,6 +1075,19 @@
         {/if}
         </div>
 
+    {#snippet footer()}
+      <div class="project-ticker ticker-{projectTicker.tone}" aria-label="Live project ticker">
+        <div class="project-ticker-main">
+          <StatusDot tone={projectTicker.tone} pulse={projectTicker.pulse} size="sm" />
+          <span class="project-ticker-actor">{projectTicker.actorLabel ?? projectTicker.label}</span>
+          <span class="project-ticker-message">{projectTicker.message}</span>
+        </div>
+        {#if projectTicker.timeLabel}
+          <span class="project-ticker-time">{projectTicker.timeLabel}</span>
+        {/if}
+      </div>
+    {/snippet}
+
   {#if intakeOpen}
     <IntakeModal onClose={() => (intakeOpen = false)} />
   {/if}
@@ -1166,7 +1229,7 @@
   }
   .topbar {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--s-2);
     padding: var(--s-3) var(--s-4);
@@ -1179,6 +1242,20 @@
     align-items: center;
     min-width: 0;
   }
+  .topbar-center {
+    min-width: 0;
+    justify-self: center;
+    align-self: center;
+    color: var(--text);
+    font-size: var(--fs-2);
+    font-weight: 600;
+    line-height: var(--lh-tight);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: min(48vw, 36ch);
+    text-align: center;
+  }
   .topbar-leading {
     display: flex;
     align-items: center;
@@ -1186,6 +1263,7 @@
     gap: var(--s-2);
     min-width: 0;
     overflow: hidden;
+    justify-self: start;
   }
   .topbar-actions {
     display: flex;
@@ -1278,8 +1356,8 @@
     font-size: var(--fs-2);
     font-weight: 700;
     color: var(--text);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    text-transform: none;
+    letter-spacing: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1424,6 +1502,9 @@
     .toolbar-btn--back .toolbar-btn-label {
       display: none;
     }
+    .topbar-center {
+      max-width: min(40vw, 28ch);
+    }
   }
 
   @media (max-width: 900px) {
@@ -1438,6 +1519,34 @@
       min-width: 40px;
       padding: 0;
       border-radius: 999px;
+    }
+    .topbar {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      grid-template-rows: auto auto;
+      row-gap: var(--s-2);
+    }
+    .topbar-start {
+      grid-column: 1;
+      grid-row: 1;
+    }
+    .topbar-center {
+      grid-column: 2;
+      grid-row: 1;
+      max-width: 100%;
+    }
+    .topbar-actions {
+      grid-column: 3;
+      grid-row: 1;
+    }
+    .topbar-leading {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      justify-self: stretch;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .topbar-leading::-webkit-scrollbar {
+      display: none;
     }
   }
 
@@ -1470,6 +1579,55 @@
     flex-direction: column;
     gap: var(--s-5);
   }
+  .project-ticker {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+    min-width: 0;
+    padding: var(--s-2) var(--s-5);
+    border-top: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg-raised) 94%, black 6%);
+  }
+  .project-ticker-main {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+  }
+  .project-ticker-actor {
+    flex: none;
+    color: var(--text);
+    font-size: var(--fs-0);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .project-ticker-message {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+  .project-ticker-time {
+    flex: none;
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    white-space: nowrap;
+  }
+  .ticker-active .project-ticker-actor,
+  .ticker-ok .project-ticker-actor {
+    color: var(--accent-2);
+  }
+  .ticker-warn .project-ticker-actor {
+    color: var(--warn);
+  }
+  .ticker-danger .project-ticker-actor {
+    color: var(--danger);
+  }
   .muted {
     color: var(--text-muted);
     font-size: var(--fs-2);
@@ -1482,7 +1640,7 @@
   .rail.rail-collapsed:not(.rail-preview-open) .rail-project { display: none; }
   .rail.rail-collapsed:not(.rail-preview-open) .rail-head { padding: var(--s-2); align-items: center; }
 
-  @media (max-width: 1100px) {
+  @media (max-width: 920px) {
     .rail-pin {
       display: none;
     }
@@ -1531,6 +1689,12 @@
     }
     .body {
       gap: var(--s-4);
+    }
+    .project-ticker {
+      padding: var(--s-2) var(--s-4);
+    }
+    .project-ticker-message {
+      white-space: normal;
     }
   }
 </style>

@@ -402,10 +402,90 @@ export async function shapeImportDraft(
     }
   }
 
+  const duplicateOf = findFinishedDuplicate(queue.tasks, task)
+  if (duplicateOf) {
+    const now = new Date().toISOString()
+    task.status = 'shelved'
+    task.assignedTo = null
+    task.updatedAt = now
+    task.shelveReason = {
+      code: 'duplicate',
+      rejectedBy: 'system:import-draft-dedupe',
+      rejectedAt: now,
+      detail: `Duplicate of ${duplicateOf.id} (${duplicateOf.title}).`,
+    }
+    task.notes.push({
+      agentId: 'system',
+      role: 'system',
+      content: `Duplicate of ${duplicateOf.id} (${duplicateOf.title}). Guildhall shelved this imported draft instead of reshaping it again.`,
+      timestamp: now,
+    })
+    queue.lastUpdated = now
+    await writeQueue(input.memoryDir, queue)
+    return { success: true, newStatus: 'shelved' }
+  }
+
   await promoteImportDraftToExploring(task, input.memoryDir)
   queue.lastUpdated = task.updatedAt ?? new Date().toISOString()
   await writeQueue(input.memoryDir, queue)
   return { success: true, newStatus: 'exploring' }
+}
+
+const DUPLICATE_TITLE_STOPWORDS = new Set([
+  'add',
+  'build',
+  'create',
+  'implement',
+  'write',
+  'draft',
+  'task',
+  'tests',
+  'test',
+  'view',
+  'deferred',
+  'the',
+  'a',
+  'an',
+  'to',
+  'for',
+  'of',
+  'and',
+])
+
+function normalizedTitleTokens(title: string | undefined): string[] {
+  return (title ?? '')
+    .toLowerCase()
+    .replace(/[→>\-–—/:()"'`.,[\]{}]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter(token => !DUPLICATE_TITLE_STOPWORDS.has(token))
+}
+
+function similarityScore(left: string[], right: string[]): number {
+  if (left.length === 0 || right.length === 0) return 0
+  const leftSet = new Set(left)
+  const rightSet = new Set(right)
+  let overlap = 0
+  for (const token of leftSet) {
+    if (rightSet.has(token)) overlap += 1
+  }
+  return overlap / Math.max(leftSet.size, rightSet.size)
+}
+
+function findFinishedDuplicate(tasks: TaskQueue['tasks'], task: Task): { id: string; title: string } | null {
+  const targetTokens = normalizedTitleTokens(task.title)
+  if (targetTokens.length < 4) return null
+  for (const candidate of tasks) {
+    if (candidate.id === task.id) continue
+    if (candidate.status !== 'done' && candidate.status !== 'shelved') continue
+    if (candidate.domain !== task.domain) continue
+    if (candidate.projectPath !== task.projectPath) continue
+    const score = similarityScore(targetTokens, normalizedTitleTokens(candidate.title))
+    if (score >= 0.75) {
+      return { id: candidate.id, title: candidate.title ?? candidate.id }
+    }
+  }
+  return null
 }
 
 export async function rerunTaskStage(

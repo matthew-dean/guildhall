@@ -55,6 +55,16 @@ screen.
 - [x] Move provider preference to the machine-global config by default instead of repeating it into every project's `.guildhall/config.yaml`. Runtime config resolution, provider setup writes, and the config/docs story now treat project-level `preferredProvider` as an override only.
 
 - [ ] Give Looma + Knit a humane recovery path for the dirty `knit` checkout. The stale `No actionable tasks remain` summary is gone and Thread now consistently surfaces the shaping draft plus the real agent failure, but the card still needs a clearer user-facing next move than a raw worktree-blocked error string.
+- [x] Make live project runs visibly real again across all three active test projects. On `2026-05-12`, Looma/Knit now accepts `Let Guildhall shape this`, shows a toast, flips into a real `Guildhall working / Drafting` state, and advances to a grounded coordinator question about whether generated Supabase typing work is duplicate or should expand. Fair Labor License now advances sequentially from the auth-scaffolding question into live coordinator/spec work and lands on a concrete database-migration question instead of circling. `t-minus-t` no longer treats `Start` as a dead button on hard-loaded slug pages: project-scoped mutations now inject `projectId`, the task resumes into a visible `Guildhall working` state, and shell/file activity shows up immediately in Thread.
+- [x] Clean up the pre-slug API brief contamination in Looma + Knit. The live Thread was faithfully rendering `/Users/matthew/git/oss/looma-knit/memory/project-brief.md`, but that file still contained Fair Labor License copy from the pre-project-scoped mutation era. The saved brief now correctly describes Looma as a general-purpose UI library and Knit as the product app migrating onto it.
+- [x] Make strict project-memory tools more forgiving of near-miss agent output. The runtime now auto-hydrates and normalizes project-scoped `log-decision`, `log-progress`, and `raise-escalation` inputs so missing path envelopes, stringified nested payloads, and omitted task/agent context stop surfacing as raw schema failures when the agent intent was otherwise clear.
+- [x] Stop the review handoff guard from treating verification-only tasks like code implementation tasks. Looma/Knit proved the bug live on `Mobile: test on real device (Safari iOS, Chrome Android)`: the worker produced a report and structured self-critique, then Guildhall blocked `status: review` because no implementation source file had been inspected. Verification/manual-QA tasks now accept durable verification evidence plus self-critique as sufficient review handoff proof.
+- [x] Make the project shell header more humane on narrower widths. The rail no longer force-collapses as early, the project title now lives in the top bar instead of disappearing in mobile mode, and generated fallback names are humanized from folder/package slugs into sentence case rather than shouting uppercase raw ids.
+- [x] Stop task-scoped shell/bootstrap runs from losing `CI=true` once they leave the sync code path. Async shell execution now preserves explicit env overrides, task-scoped shell calls default to `CI=true`, and Looma/Knit task worktrees no longer die in pnpm with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` just because the worker path used the async shell helper.
+- [x] Stop terminal duplicate imported drafts from getting resurrected as runnable work. Tasks that were shelved as duplicates without explicit FR-22 pre-rejection metadata now stay shelved, Looma/Knit duplicate cleanup was repaired in live task data, and the E2E imported draft no longer reappears as a bogus `ready` worker task.
+- [x] Stop verification-command authority from hijacking ordinary file reads just because a path contains `.test.ts` or `/test/`. `t-minus-t` proved the bug live: `cat`, `ls`, and `wc` commands were being rewritten into `vitest run`, which made the worker look directionless and forced another false turn-limit escalation. Command classification is now based on real leading command shapes instead of substring hits in filenames.
+- [x] Re-prove `t-minus-t` after the shell-classifier fix. Clearing the stale turn-limit escalation and replaying the run now gets the worker into real file reads, code writes, and an honest failing converter test run instead of checkpoint noise plus remapped `vitest` spam.
+- [x] Stop `t-minus-t` from re-blocking when the worker already has dirty likely-target files in the main project checkout. Focused failing converter verification plus overlapping dirty task files now counts as durable progress, so Guildhall writes a recovery checkpoint instead of escalating immediately.
 
 - [x] Stop Thread from lying about active work being `Paused` just because no live agent stream is attached yet. Active steps now distinguish `Now`, `Queued`, and `Paused`, and expanded phase sections have a stronger visual relationship to their contained items.
 
@@ -194,6 +204,9 @@ screen.
 - [x] Pull shell banners and step cards back into shared patterns. Run
   status, stale-server warnings, and import-step spacing now have to come
   from shared band/tone/layout primitives instead of one-off local styling.
+- [x] Soften coordinator question typography so answerable prompts read like
+  guidance instead of mini headlines. The Looma/Knit Thread question body now
+  uses slightly smaller, lighter text with more breathing room.
 - [x] Make import inspection use a real right-side slide-over instead of
   rendering a second in-page wall of text. Clicking review items during
   workspace import should open the same kind of edge overlay the rest of the
@@ -2334,3 +2347,37 @@ screen.
   task worktrees (`ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`). Looma/Knit
   now gets past the bogus install wrapper failure and reaches real spec/task
   decisions instead of dying in setup.
+- Project activity ticker pass on `2026-05-12`: project pages now get a slim,
+  always-on bottom ticker driven by real project events plus current run state,
+  and project cards get a compact matching activity strip. The goal is to make
+  "alive, waiting, blocked, or idle" legible at a glance without turning the
+  UI into a noisy console.
+- Thread stale-live cleanup on `2026-05-12`: a stopped project could still
+  project an old task-level event stream as `Guildhall working` even though
+  the coordinator was no longer running. Thread now suppresses task `liveAgent`
+  hints when the current run is stopped, while still showing the recent
+  activity history for context.
+- Imported-draft duplicate cleanup on `2026-05-12`: when a user explicitly
+  asks Guildhall to shape an imported draft and that draft is an obvious
+  duplicate of already-finished work in the same subproject/domain, the
+  `shape-draft` path now shelves it immediately as `duplicate` instead of
+  sending it back through another spec pass.
+- Project-shell/mobile cleanup on `2026-05-12`: the project rail should stay
+  expanded until a genuinely narrow viewport instead of collapsing into mobile
+  mode too early. The shell now keeps the side menu open down to a narrower
+  breakpoint, adds a centered top-bar project title so the current project
+  stays visible in compact layouts, drops the old all-caps treatment, and
+  humanizes generated names from folder/package slugs into sentence case.
+- Worker resume targeting hardening on `2026-05-12`: `t-minus-t` exposed that
+  likely-target inference was resolving ambiguous spec paths like
+  `typescriptToJsdoc.ts` against the repo root instead of the real tracked
+  files under `packages/converter/src/...`. Likely target inference now
+  resolves ambiguous suffixes against the actual repo tree and also picks up
+  success-metric file names from the product brief, so resumed workers point
+  at real source/test files and dirty-file progress can match those targets.
+- Handoff-checkpoint read latitude on `2026-05-12`: once a worker checkpoint
+  said "move to review", Guildhall was forbidding even one scoped source read
+  pass to verify that the checkpoint was still valid. The engine now allows a
+  single likely-target read-only follow-through pass on stale handoff
+  checkpoints before re-tightening, which gives the worker enough room to
+  sanity-check real implementation state without reopening broad exploration.

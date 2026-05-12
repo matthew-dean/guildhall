@@ -271,7 +271,7 @@ export function runShellSync(input: ShellInput): ShellResult {
 }
 
 export async function runShell(input: ShellInput): Promise<ShellResult> {
-  const { command, timeoutMs = 120_000 } = input
+  const { command, timeoutMs = 120_000, env } = input
   const cwd = resolveShellCwd(input.cwd, undefined)
 
   const blocked = preflightInteractive(command)
@@ -288,7 +288,7 @@ export async function runShell(input: ShellInput): Promise<ShellResult> {
     const child = spawn('sh', ['-c', command], {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
+      env: env ? { ...process.env, ...env } : process.env,
     })
 
     let stdout = ''
@@ -415,6 +415,12 @@ export const shellTool = defineTool({
       ...input,
       command: reconciled.command,
       cwd: effectiveCwd,
+      env: {
+        ...(input.env ?? {}),
+        ...(ctx.metadata?.['current_task_project_path'] || ctx.metadata?.['current_task_worktree_path']
+          ? { CI: input.env?.CI ?? 'true' }
+          : {}),
+      },
     }
     const result = await runShell(normalizedInput)
     return {

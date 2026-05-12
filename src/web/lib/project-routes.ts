@@ -14,7 +14,15 @@ export function parseProjectRoute(pathname: string): ParsedProjectRoute {
 }
 
 export function currentProjectId(): string | null {
-  return parseProjectRoute(path.value).projectId
+  const routePath = path.value?.trim()
+  if (routePath) {
+    const parsed = parseProjectRoute(routePath)
+    if (parsed.projectId) return parsed.projectId
+  }
+  if (typeof window !== 'undefined') {
+    return parseProjectRoute(window.location.pathname).projectId
+  }
+  return null
 }
 
 export function projectHref(projectId: string, suffix = '/thread'): string {
@@ -67,5 +75,50 @@ export function withCurrentProjectQuery(href: string): string {
 }
 
 export function projectFetch(input: string, init?: RequestInit): Promise<Response> {
-  return fetch(withCurrentProjectQuery(input), init)
+  const href = withCurrentProjectQuery(input)
+  const projectId = currentProjectId()
+  if (!projectId || typeof input !== 'string') return fetch(href, init)
+
+  let url: URL
+  try {
+    url = new URL(href, typeof window !== 'undefined' ? window.location.origin : 'http://localhost')
+  } catch {
+    return fetch(href, init)
+  }
+
+  const method = (init?.method ?? 'GET').toUpperCase()
+  const projectScoped =
+    url.pathname === '/api/project' ||
+    url.pathname.startsWith('/api/project/') ||
+    url.pathname === '/api/config' ||
+    url.pathname.startsWith('/api/config/')
+  const mutating = !['GET', 'HEAD'].includes(method)
+  if (!projectScoped || !mutating) return fetch(href, init)
+
+  const headers = new Headers(init?.headers)
+  const contentType = headers.get('content-type') ?? ''
+  if (!contentType.includes('application/json')) return fetch(href, init)
+
+  let bodyObject: Record<string, unknown> = {}
+  if (typeof init?.body === 'string' && init.body.trim().length > 0) {
+    try {
+      const parsed = JSON.parse(init.body)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        bodyObject = parsed as Record<string, unknown>
+      } else {
+        return fetch(href, init)
+      }
+    } catch {
+      return fetch(href, init)
+    }
+  }
+  if (typeof bodyObject.projectId !== 'string' || bodyObject.projectId.trim().length === 0) {
+    bodyObject = { ...bodyObject, projectId }
+  }
+
+  return fetch(href, {
+    ...init,
+    headers,
+    body: JSON.stringify(bodyObject),
+  })
 }
