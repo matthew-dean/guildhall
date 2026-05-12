@@ -25,6 +25,7 @@
   import { currentTaskHref, projectFetch } from '../lib/project-routes.js'
   import { project } from '../lib/project.svelte.js'
   import { onMount, onDestroy } from 'svelte'
+  import { toast } from 'svelte-sonner'
 
   interface Props {
     taskId: string
@@ -207,6 +208,8 @@
   async function handleShapeDraft() {
     if (!(await post('shape-draft'))) return
     await project.refresh()
+    await load()
+    toast.success('Draft handed to Guildhall. Starting now.')
     await runProject('start', taskId)
   }
 
@@ -323,6 +326,15 @@
         return
       }
       await project.refresh()
+      await load()
+      if (action === 'start') {
+        const stopMessage = project.detail?.run?.status === 'stopped'
+          ? project.detail?.run?.stopMessage
+          : null
+        if (typeof stopMessage === 'string' && stopMessage.trim()) {
+          toast.info(stopMessage)
+        }
+      }
       setTimeout(() => void project.refresh(), 500)
       setTimeout(() => void project.refresh(), 1800)
     } catch (err) {

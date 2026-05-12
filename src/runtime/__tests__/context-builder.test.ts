@@ -102,6 +102,17 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('pnpm build passes')
   })
 
+  it('includes the current blocker when the task is blocked', async () => {
+    const ctx = await buildContext({
+      ...baseTask,
+      status: 'blocked',
+      blockReason: 'worktree bootstrap failed on command `cd knit && pnpm install`',
+    }, tmpDir)
+
+    expect(ctx.taskSummary).toContain('**Current blocker:**')
+    expect(ctx.taskSummary).toContain('worktree bootstrap failed on command `cd knit && pnpm install`')
+  })
+
   it('includes out-of-scope list', async () => {
     const ctx = await buildContext(baseTask, tmpDir)
     expect(ctx.taskSummary).toContain('Knit-specific styling')

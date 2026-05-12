@@ -52,7 +52,13 @@ screen.
   - `t-minus-t`: Thread is visually calm, but `Start` is effectively a silent no-op from the user's seat. Backend truth is `run.status: error` after the run attempt, caused by a project payload/schema failure (`tasks[2].blockReason` is `null` where the loader expects a string). The UI did not surface that runtime failure honestly.
   - `fair-labor-license`: Thread still feels split-brained. The import-review question is understandable enough, but the same task title appears in multiple states and Work still mixes `in_progress` worker implementation with an `Awaiting approval` import task and a top-band summary that says `No actionable tasks remain right now: 0 active, 1 fresh...`. The run/task state is still not being summarized in a way a cold user could trust unattended.
 
+- [x] Move provider preference to the machine-global config by default instead of repeating it into every project's `.guildhall/config.yaml`. Runtime config resolution, provider setup writes, and the config/docs story now treat project-level `preferredProvider` as an override only.
+
 - [ ] Give Looma + Knit a humane recovery path for the dirty `knit` checkout. The stale `No actionable tasks remain` summary is gone and Thread now consistently surfaces the shaping draft plus the real agent failure, but the card still needs a clearer user-facing next move than a raw worktree-blocked error string.
+
+- [x] Stop Thread from lying about active work being `Paused` just because no live agent stream is attached yet. Active steps now distinguish `Now`, `Queued`, and `Paused`, and expanded phase sections have a stronger visual relationship to their contained items.
+
+- [x] Stop Looma/Knit from spamming the same setup failure every tick once a worker preflight fails. Dirty-repo guards, worktree-creation failures, and worktree bootstrap failures now block the task once with a durable note/block reason instead of rethrowing a transient agent error forever.
 
 - [x] Surface `t-minus-t` run failures directly in Thread/top-level status instead of letting `Start` look inert. The legacy `blockReason: null` schema crash is now normalized away, project-scoped start/refresh calls stay on the right slugged project, and the live Thread now advances into an explicit `Worker is stuck` blocker card instead of looking like a no-op.
 
@@ -2305,3 +2311,26 @@ screen.
   now returns a clear `invalid_lever_combo` error instead of drifting into a
   broken run, and Advanced Settings surfaces the mismatch inline if an older
   project file still carries the bad combination.
+- Looma/Knit imported-draft shaping no longer round-trips back to "needs
+  shaping" after the user explicitly hands a draft to Guildhall. The
+  `shape-draft` path now records a durable shaping-request marker on the task,
+  imported-draft normalization refuses to collapse those promoted drafts back
+  to `import_draft`, and the drawer start path now leaves a toast breadcrumb
+  if Guildhall starts and immediately stops with a concrete reason.
+- Looma/Knit subrepo bootstrap hardening on `2026-05-12`: task worktrees that
+  point at a subproject (for example `looma-knit/knit`) can no longer blindly
+  replay workspace-root bootstrap commands like `cd knit && pnpm install`.
+  Guildhall now rewrites workspace-scoped bootstrap/gate commands relative to
+  the task project root before the worker bootstraps the worktree, so the
+  coordinator can advance past the bogus `cd knit` failure and reach real task
+  work again.
+- Agent context hardening on `2026-05-12`: the coordinator/worker prompt now
+  carries the task's current blocker directly in the task summary instead of
+  relying on the model to rediscover it from buried notes. That keeps retries
+  task-scoped and gives each specialist more durable local context about what
+  just failed and what should change next.
+- Bootstrap runner CI hardening on `2026-05-12`: worktree bootstrap commands
+  now run with `CI=true`, which fixes pnpm's non-TTY install abort inside
+  task worktrees (`ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`). Looma/Knit
+  now gets past the bogus install wrapper failure and reaches real spec/task
+  decisions instead of dying in setup.

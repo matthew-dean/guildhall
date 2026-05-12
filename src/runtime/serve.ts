@@ -1207,16 +1207,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasks = await Promise.all(rawTasks.map((task) => enrichTaskForServe(project.path, task)))
       const run = supervisor.get(project.id)
       const resolvedConfig = resolveConfig({ workspacePath: project.path })
-      const preferredProvider = readProjectConfig(project.path).preferredProvider
+      const runtimeProvider = getRuntimeProviderConfig({
+        projectPath: project.path,
+        models: resolvedConfig.models,
+      })
+      const preferredProvider = runtimeProvider.preferredProvider
       const preferredActiveProvider = preferredProvider
         ? normalizePreferredProvider(preferredProvider)
         : undefined
       const recent = supervisor.recent(project.id, undefined, project.path)
       const bootstrapStatus = readBootstrapStatus(join(project.path, 'memory'))
-      const runtimeProvider = getRuntimeProviderConfig({
-        projectPath: project.path,
-        models: resolvedConfig.models,
-      })
       const preferredHealth = providerHealthForRun({
         credentials: runtimeProvider.credentials,
         activeProvider: preferredActiveProvider ?? null,
@@ -3955,10 +3955,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // -------------------------------------------------------------------------
   app.get('/api/setup/status', c => {
     const stored = readProjectConfig(currentProjectPath())
+    const global = readGlobalConfig()
     return c.json({
       path: project.path,
       initialized: !project.initializationNeeded,
-      providerConfigured: Boolean(stored.preferredProvider),
+      providerConfigured: Boolean(stored.preferredProvider ?? global.preferredProvider),
       name: project.config?.name ?? null,
       id: project.config?.id ?? null,
       coordinatorCount: project.config?.coordinators?.length ?? 0,
@@ -4037,7 +4038,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // Endpoints:
   //   GET  /api/setup/providers       detection + stored credentials
   //   POST /api/setup/providers/config set/update one provider's credential
-  //                                    or the project's preferredProvider
+  //                                    or the machine-default preferredProvider
   //   POST /api/providers/test        send-test-message roundtrip, marks verified
   //   POST /api/providers/disconnect  revoke a stored credential
   // -------------------------------------------------------------------------
@@ -4096,7 +4097,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const v = (kind: ProviderKind) => global.providers[kind]?.verifiedAt ?? null
 
       return c.json({
-        preferredProvider: stored.preferredProvider ?? null,
+        preferredProvider: stored.preferredProvider ?? readGlobalConfig().preferredProvider ?? null,
         providers: {
           'claude-oauth': {
             label: providerLabelForSetupKey('claude-oauth'),
@@ -4168,12 +4169,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         lmStudioUrl?: string
       }
       const allowed = SETUP_PROVIDER_ORDER
-      // preferredProvider lives in the project file (selection, not a secret).
+      // preferredProvider is machine-level by default. Projects may still
+      // override it locally when needed, but the setup flow writes the shared
+      // default rather than stamping every project.
       if (body.preferredProvider) {
         if (!(allowed as readonly string[]).includes(body.preferredProvider)) {
           return c.json({ error: `Unknown provider "${body.preferredProvider}"` }, 400)
         }
-        updateProjectConfig(currentProjectPath(), {
+        updateGlobalConfig({
+          ...readGlobalConfig(),
           preferredProvider: body.preferredProvider as (typeof allowed)[number],
         })
       }
@@ -4288,7 +4292,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const workspacePath = currentProjectPath()
       const workspace = readWorkspaceConfig(workspacePath)
       const projectCfg = readProjectConfig(workspacePath)
-      const preferredProvider = projectCfg.preferredProvider
+      const preferredProvider = projectCfg.preferredProvider ?? global.preferredProvider
       const resolved = resolveConfig({ workspacePath })
       const creds = resolveGlobalCredentials()
       const loadedModels = creds.llamaCppUrl
@@ -4347,7 +4351,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!body.scope) return c.json({ error: 'Missing "scope"' }, 400)
       const workspacePath = currentProjectPath()
       const projectCfg = readProjectConfig(workspacePath)
-      const preferredProvider = projectCfg.preferredProvider
+      const preferredProvider = projectCfg.preferredProvider ?? readGlobalConfig().preferredProvider
 
       const requestedModels = body.models && typeof body.models === 'object'
         ? Object.entries(body.models).filter((entry): entry is [keyof ModelAssignmentConfig, string] => {

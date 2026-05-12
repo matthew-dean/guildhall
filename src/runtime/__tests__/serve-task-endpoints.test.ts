@@ -14,6 +14,13 @@ import { buildServeApp, filterEventsForTask } from '../serve.js'
 
 let tmpDir: string
 let memoryDir: string
+let projectId: string
+
+function projectUrl(route: string): string {
+  const url = new URL(`http://localhost${route}`)
+  url.searchParams.set('projectId', projectId)
+  return url.toString()
+}
 
 async function seedTask(id: string, overrides: Record<string, any> = {}): Promise<void> {
   const tasksPath = path.join(memoryDir, 'TASKS.json')
@@ -43,7 +50,7 @@ async function seedTask(id: string, overrides: Record<string, any> = {}): Promis
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-tasks-'))
-  bootstrapWorkspace(tmpDir, { name: 'Task Endpoints Test' })
+  projectId = bootstrapWorkspace(tmpDir, { name: 'Task Endpoints Test' }).id
   memoryDir = path.join(tmpDir, 'memory')
 })
 
@@ -55,7 +62,7 @@ describe('GET /api/project/task/:id', () => {
   it('returns the task body + (empty) recent events for a seeded task', async () => {
     await seedTask('task-1')
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.task?.id).toBe('task-1')
@@ -67,7 +74,7 @@ describe('GET /api/project/task/:id', () => {
   it('heals stale worker ownership for in_progress tasks when reading task detail', async () => {
     await seedTask('task-1', { assignedTo: null })
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.task?.assignedTo).toBe('worker-agent')
@@ -108,7 +115,7 @@ describe('GET /api/project/task/:id', () => {
       'utf8',
     )
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.contextDebug?.map((record: Record<string, any>) => record.id)).toEqual([
@@ -149,7 +156,7 @@ describe('GET /api/project/task/:id', () => {
       ],
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.task?.notes).toHaveLength(2)
@@ -188,7 +195,7 @@ describe('GET /api/project/task/:id', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.task?.latestReviewerSummary).toContain('Aggregated revisions')
@@ -224,12 +231,12 @@ describe('GET /api/project/task/:id', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const detailRes = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    const detailRes = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(detailRes.status).toBe(200)
     const detailBody = (await detailRes.json()) as Record<string, any>
     expect(detailBody.task?.latestReviewerSummary).toBeUndefined()
 
-    const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
     expect(projectRes.status).toBe(200)
     const projectBody = (await projectRes.json()) as Record<string, any>
     const task = projectBody.tasks?.find((entry: Record<string, any>) => entry.id === 'task-1')
@@ -265,7 +272,7 @@ describe('GET /api/project/task/:id', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project'))
+    const res = await app.fetch(new Request(projectUrl('/api/project')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     const task = body.tasks?.find((entry: Record<string, any>) => entry.id === 'task-1')
@@ -289,12 +296,12 @@ describe('GET /api/project/task/:id', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const detailRes = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    const detailRes = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(detailRes.status).toBe(200)
     const detailBody = (await detailRes.json()) as Record<string, any>
     expect(detailBody.task?.terminalSummary?.headline).toBe('Merged locally into main.')
 
-    const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
     expect(projectRes.status).toBe(200)
     const projectBody = (await projectRes.json()) as Record<string, any>
     const task = projectBody.tasks?.find((entry: Record<string, any>) => entry.id === 'task-1')
@@ -315,7 +322,7 @@ describe('GET /api/project/task/:id', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.task?.terminalSummary?.headline).toBe(
@@ -340,7 +347,7 @@ describe('GET /api/project/task/:id', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.task?.latestSelfCritique).toContain('focused use-workspace verification passed')
@@ -360,7 +367,7 @@ describe('GET /api/project/task/:id', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.task?.latestSelfCritique).toContain('focused use-presence verification passed')
@@ -380,7 +387,7 @@ describe('GET /api/project/task/:id', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.task?.latestSelfCritique).toContain('focused restore handler verification passed')
@@ -409,7 +416,7 @@ describe('GET /api/project/task/:id', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/task/task-1'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.task?.latestCheckpoint?.nextPlannedAction).toBe(
@@ -420,7 +427,7 @@ describe('GET /api/project/task/:id', () => {
   it('returns 404 when task id is unknown', async () => {
     await seedTask('task-1')
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/task/missing'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/missing')))
     expect(res.status).toBe(404)
   })
 })
@@ -448,7 +455,7 @@ describe('POST /api/project/task/:id/pause|shelve', () => {
     await seedTask('task-1')
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/pause', { method: 'POST' }),
+      new Request(projectUrl('/api/project/task/task-1/pause'), { method: 'POST' }),
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
@@ -467,7 +474,7 @@ describe('POST /api/project/task/:id/pause|shelve', () => {
     await seedTask('task-1')
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/shelve', { method: 'POST' }),
+      new Request(projectUrl('/api/project/task/task-1/shelve'), { method: 'POST' }),
     )
     expect(res.status).toBe(200)
     const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
@@ -480,7 +487,7 @@ describe('POST /api/project/task/:id/pause|shelve', () => {
     await seedTask('task-1', { status: 'done' })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/pause', { method: 'POST' }),
+      new Request(projectUrl('/api/project/task/task-1/pause'), { method: 'POST' }),
     )
     expect(res.status).toBe(400)
   })
@@ -489,7 +496,7 @@ describe('POST /api/project/task/:id/pause|shelve', () => {
     await seedTask('task-1')
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/nuke', { method: 'POST' }),
+      new Request(projectUrl('/api/project/task/task-1/nuke'), { method: 'POST' }),
     )
     expect(res.status).toBe(400)
   })
@@ -500,7 +507,7 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     await seedTask('task-1', { status: 'spec_review', spec: 'drafted spec body' })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/approve-spec', {
+      new Request(projectUrl('/api/project/task/task-1/approve-spec'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ approvalNote: 'Looks great, ship it' }),
@@ -521,7 +528,7 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     await seedTask('task-1', { status: 'spec_review' })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/approve-spec', { method: 'POST' }),
+      new Request(projectUrl('/api/project/task/task-1/approve-spec'), { method: 'POST' }),
     )
     expect(res.status).toBe(400)
     const body = (await res.json()) as Record<string, any>
@@ -532,7 +539,7 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     await seedTask('task-1', { status: 'in_progress', spec: 'irrelevant' })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/approve-spec', { method: 'POST' }),
+      new Request(projectUrl('/api/project/task/task-1/approve-spec'), { method: 'POST' }),
     )
     expect(res.status).toBe(400)
     const body = (await res.json()) as Record<string, any>
@@ -547,7 +554,7 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-workspace-import/approve-spec', {
+      new Request(projectUrl('/api/project/task/task-workspace-import/approve-spec'), {
         method: 'POST',
       }),
     )
@@ -566,7 +573,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/rerun-stage', {
+      new Request(projectUrl('/api/project/task/task-1/rerun-stage'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ stage: 'spec' }),
@@ -592,7 +599,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/rerun-stage', {
+      new Request(projectUrl('/api/project/task/task-1/rerun-stage'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ stage: 'review' }),
@@ -613,7 +620,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/rerun-stage', {
+      new Request(projectUrl('/api/project/task/task-1/rerun-stage'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ stage: 'gate' }),
@@ -633,7 +640,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/rerun-stage', {
+      new Request(projectUrl('/api/project/task/task-1/rerun-stage'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ stage: 'gate' }),
@@ -652,7 +659,7 @@ describe('POST /api/project/task/:id/resume', () => {
     // the write, we just verify the end state.
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/resume', {
+      new Request(projectUrl('/api/project/task/task-1/resume'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ message: 'One more requirement: respect DOM ordering.' }),
@@ -672,7 +679,7 @@ describe('POST /api/project/task/:id/resume', () => {
     await seedTask('task-1', { status: 'in_progress', notes: [] })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/resume', {
+      new Request(projectUrl('/api/project/task/task-1/resume'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -709,7 +716,7 @@ describe('POST /api/project/task/:id/resume', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/shape-draft', {
+      new Request(projectUrl('/api/project/task/task-1/shape-draft'), {
         method: 'POST',
       }),
     )
@@ -720,18 +727,24 @@ describe('POST /api/project/task/:id/resume', () => {
       await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
     ) as { tasks: Array<Record<string, any>> }
     expect(queue.tasks[0]!.status).toBe('exploring')
+    expect(queue.tasks[0]!.notes?.at(-1)?.role).toBe('shaping-request')
     const transcript = await fs.readFile(
       path.join(memoryDir, 'exploring', 'task-1.md'),
       'utf8',
     )
     expect(transcript).toMatch(/Imported from project notes/)
+
+    const detailRes = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(detailRes.status).toBe(200)
+    const detailBody = (await detailRes.json()) as Record<string, any>
+    expect(detailBody.task?.status).toBe('exploring')
   })
 
   it('rejects resume with neither a message nor an escalation resolution', async () => {
     await seedTask('task-1', { status: 'exploring' })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/resume', {
+      new Request(projectUrl('/api/project/task/task-1/resume'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: '{}',
@@ -746,7 +759,7 @@ describe('POST /api/project/task/:id/resume', () => {
     await seedTask('task-1', { status: 'exploring' })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/missing/resume', {
+      new Request(projectUrl('/api/project/task/missing/resume'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ message: 'hi' }),
@@ -770,7 +783,7 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/approve-brief', { method: 'POST' }),
+      new Request(projectUrl('/api/project/task/task-1/approve-brief'), { method: 'POST' }),
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
@@ -802,7 +815,7 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/approve-brief', { method: 'POST' }),
+      new Request(projectUrl('/api/project/task/task-1/approve-brief'), { method: 'POST' }),
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
@@ -818,7 +831,7 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     await seedTask('task-1', { status: 'exploring' })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/approve-brief', { method: 'POST' }),
+      new Request(projectUrl('/api/project/task/task-1/approve-brief'), { method: 'POST' }),
     )
     expect(res.status).toBe(400)
     const body = (await res.json()) as Record<string, any>
@@ -837,7 +850,7 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/approve-brief', { method: 'POST' }),
+      new Request(projectUrl('/api/project/task/task-1/approve-brief'), { method: 'POST' }),
     )
     expect(res.status).toBe(400)
     const body = (await res.json()) as Record<string, any>
@@ -854,7 +867,7 @@ describe('POST /api/project/task/:id/add-acceptance', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/add-acceptance', {
+      new Request(projectUrl('/api/project/task/task-1/add-acceptance'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ description: 'Round-trip tests preserve comments and formatting.' }),
@@ -883,7 +896,7 @@ describe('POST /api/project/task/:id/add-acceptance', () => {
     await seedTask('task-1', { status: 'exploring', acceptanceCriteria: [] })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/add-acceptance', {
+      new Request(projectUrl('/api/project/task/task-1/add-acceptance'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ description: '   ' }),
@@ -913,7 +926,7 @@ describe('POST /api/project/task/:id/stage-answer', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/stage-answer', {
+      new Request(projectUrl('/api/project/task/task-1/stage-answer'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ questionId: 'q-1', answer: 'A' }),
@@ -945,7 +958,7 @@ describe('POST /api/project/task/:id/stage-answer', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/answer-questions', {
+      new Request(projectUrl('/api/project/task/task-1/answer-questions'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ answers: [{ questionId: 'q-1', answer: 'A' }] }),
@@ -976,7 +989,7 @@ describe('POST /api/project/task/:id/unshelve', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/unshelve', { method: 'POST' }),
+      new Request(projectUrl('/api/project/task/task-1/unshelve'), { method: 'POST' }),
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
@@ -994,7 +1007,7 @@ describe('POST /api/project/task/:id/unshelve', () => {
     await seedTask('task-1', { status: 'in_progress' })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/unshelve', { method: 'POST' }),
+      new Request(projectUrl('/api/project/task/task-1/unshelve'), { method: 'POST' }),
     )
     expect(res.status).toBe(400)
     const body = (await res.json()) as Record<string, any>
@@ -1021,7 +1034,7 @@ describe('POST /api/project/task/:id/resolve-escalation', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/resolve-escalation', {
+      new Request(projectUrl('/api/project/task/task-1/resolve-escalation'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -1049,7 +1062,7 @@ describe('POST /api/project/task/:id/resolve-escalation', () => {
     await seedTask('task-1', { status: 'blocked' })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const resNoId = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/resolve-escalation', {
+      new Request(projectUrl('/api/project/task/task-1/resolve-escalation'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ resolution: 'fine' }),
@@ -1058,7 +1071,7 @@ describe('POST /api/project/task/:id/resolve-escalation', () => {
     expect(resNoId.status).toBe(400)
 
     const resNoReason = await app.fetch(
-      new Request('http://localhost/api/project/task/task-1/resolve-escalation', {
+      new Request(projectUrl('/api/project/task/task-1/resolve-escalation'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ escalationId: 'esc-1' }),
@@ -1084,7 +1097,7 @@ describe('GET /api/project/activity', () => {
     await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/activity'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/activity')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.counts.in_progress).toBe(1)
@@ -1096,7 +1109,7 @@ describe('GET /api/project/activity', () => {
 
   it('returns empty summary when no tasks file exists yet', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/activity'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/activity')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.inFlight).toEqual([])

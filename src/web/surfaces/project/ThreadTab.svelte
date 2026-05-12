@@ -365,6 +365,12 @@
     return t.status === 'active' ? 'neutral' : 'neutral'
   }
 
+  function showStatusChip(t: Turn): boolean {
+    const owner = ownershipLabel(t)?.trim().toLowerCase()
+    const status = turnStatusChipLabel(t).trim().toLowerCase()
+    return !(owner && owner === status)
+  }
+
   function ownershipLabel(t: Turn): string | null {
     if (turnLiveAgent(t)) return 'Guildhall working'
     if (t.kind === 'setup_step') return t.status === 'done' ? null : 'Needs you'
@@ -958,7 +964,10 @@
     step: { status: 'done' | 'active' | 'pending' | 'skipped' },
   ): string {
     if (step.status === 'done') return 'Done'
-    if (step.status === 'active') return turn.liveAgent ? 'Now' : 'Paused'
+    if (step.status === 'active') {
+      if (turn.liveAgent) return 'Now'
+      return runStatus === 'running' ? 'Queued' : 'Paused'
+    }
     if (step.status === 'skipped') return 'Skipped'
     return 'Pending'
   }
@@ -1118,6 +1127,7 @@
           <button
             type="button"
             class="phase-head"
+            class:phase-head-open={expandedPhases[group.phase]}
             aria-expanded={expandedPhases[group.phase]}
             onclick={() => togglePhase(group.phase)}
           >
@@ -1125,7 +1135,7 @@
             <Chip label={String(group.turns.length)} tone={phaseCountTone(group)} />
           </button>
           {#if expandedPhases[group.phase]}
-            <Stack gap="3">
+            <Stack gap="3" class="phase-body">
               {#each group.turns as t (t.id)}
         <div
           class="turn turn-{t.status}"
@@ -1140,10 +1150,12 @@
                   {#if ownershipLabel(t)}
                     <Chip label={ownershipLabel(t) ?? ''} tone={ownershipTone(t)} />
                   {/if}
-                  <Chip
-                    label={turnStatusChipLabel(t)}
-                    tone={turnStatusChipTone(t)}
-                  />
+                  {#if showStatusChip(t)}
+                    <Chip
+                      label={turnStatusChipLabel(t)}
+                      tone={turnStatusChipTone(t)}
+                    />
+                  {/if}
                 </Row>
               {/snippet}
               {#snippet meta()}
@@ -1796,6 +1808,19 @@
   .phase-head:hover {
     background: var(--bg-raised-2);
   }
+  .phase-head-open {
+    background: var(--bg-raised-2);
+    border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+    border-bottom-left-radius: var(--r-0);
+    border-bottom-right-radius: var(--r-0);
+  }
+  .phase-body {
+    position: relative;
+    margin-left: var(--s-3);
+    padding-left: var(--s-3);
+    padding-top: var(--s-1);
+    border-left: 2px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  }
   .turn :global(.card) {
     padding: var(--s-3);
   }
@@ -1827,6 +1852,7 @@
     font-size: var(--fs-2);
     font-weight: 550;
     line-height: var(--lh-tight);
+    text-align: left;
   }
   .task-chip:hover {
     color: var(--text);
@@ -1838,6 +1864,7 @@
     min-width: 0;
     white-space: normal;
     overflow-wrap: anywhere;
+    text-align: left;
   }
   .prompt { margin: 0; font-size: var(--fs-3); font-weight: 550; line-height: var(--lh-tight); }
   .setup-title {

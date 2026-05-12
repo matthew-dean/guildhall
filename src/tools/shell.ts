@@ -30,6 +30,7 @@ const shellInputSchema = z.object({
   command: z.string().describe('The shell command to run'),
   cwd: z.string().optional().describe('Absolute path to the working directory. Defaults to the active project directory when omitted.'),
   timeoutMs: z.number().default(120_000).describe('Timeout in milliseconds'),
+  env: z.record(z.string()).optional().describe('Optional environment variable overrides for the shell command.'),
 })
 
 export type ShellInput = z.input<typeof shellInputSchema>
@@ -219,7 +220,7 @@ function normalizeExecErrorOutput(err: {
 }
 
 export function runShellSync(input: ShellInput): ShellResult {
-  const { command, timeoutMs = 120_000 } = input
+  const { command, timeoutMs = 120_000, env } = input
   const cwd = resolveShellCwd(input.cwd, undefined)
 
   const blocked = preflightInteractive(command)
@@ -238,6 +239,7 @@ export function runShellSync(input: ShellInput): ShellResult {
       timeout: timeoutMs,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: env ? { ...process.env, ...env } : process.env,
     })
     return { success: true, output: formatOutput(output), exitCode: 0 }
   } catch (err: unknown) {

@@ -202,6 +202,10 @@ export const GlobalConfig = z.object({
   // Default model assignments (merged with per-workspace models)
   models: ModelConfigInputSchema.optional(),
 
+  // Default preferred provider for this machine. Projects may override it
+  // in local .guildhall/config.yaml when truly necessary.
+  preferredProvider: z.enum(['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api']).optional(),
+
   // Default max revisions
   maxRevisions: z.number().int().positive().default(3),
 

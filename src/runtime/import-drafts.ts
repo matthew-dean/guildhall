@@ -9,6 +9,10 @@ function noteArray(task: Task): Array<{ agentId?: string; role?: string }> {
   return Array.isArray(task.notes) ? task.notes : []
 }
 
+function hasShapingRequest(task: Task): boolean {
+  return noteArray(task).some((note) => note?.role === 'shaping-request')
+}
+
 export function hasWorkspaceImportProvenance(task: Task): boolean {
   return noteArray(task).some((note) =>
     note?.role === 'importer' ||
@@ -42,6 +46,7 @@ function hasSpecDraft(task: Task): boolean {
 
 export function shouldUseImportDraftState(task: Task): boolean {
   if (!hasWorkspaceImportProvenance(task)) return false
+  if (hasShapingRequest(task)) return false
   if (task.status === 'import_draft') return true
   if (task.status !== 'exploring') return false
   return !hasSpecDraft(task) && !hasProductBriefShape(task) && !hasAnyAcceptanceCriteria(task) && !hasOpenQuestions(task)
@@ -60,6 +65,15 @@ export async function promoteImportDraftToExploring(task: Task, memoryDir: strin
   task.assignedTo = null
   const now = new Date().toISOString()
   task.updatedAt = now
+  task.notes = [
+    ...noteArray(task),
+    {
+      agentId: 'human',
+      role: 'shaping-request',
+      content: 'User asked Guildhall to shape this imported draft into a complete task.',
+      timestamp: now,
+    },
+  ]
   await appendExploringTranscript({
     memoryDir,
     taskId: task.id,

@@ -560,6 +560,9 @@ export async function buildContext(
     `**Domain:** ${task.domain}`,
     `**Status:** ${task.status}`,
     `**Priority:** ${task.priority}`,
+    task.blockReason
+      ? `**Current blocker:** ${task.blockReason}`
+      : '',
     specOverview ? `\n### Spec Overview\n${specOverview}` : '',
     task.productBrief
       ? `\n### Product Brief${task.productBrief.approvedAt ? ' (human-approved)' : ' (DRAFT — not yet approved)'}\n**User job:** ${task.productBrief.userJob}\n**Success metric:** ${task.productBrief.successMetric}${task.productBrief.antiPatterns.length > 0 ? `\n**Anti-patterns (must NOT do):**\n${task.productBrief.antiPatterns.map(a => `- ${a}`).join('\n')}` : ''}${task.productBrief.rolloutPlan ? `\n**Rollout plan:** ${task.productBrief.rolloutPlan}` : ''}`

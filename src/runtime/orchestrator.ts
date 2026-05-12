@@ -82,6 +82,7 @@ import {
   effectiveBootstrapGateCommands,
   renderTaskScopedGateInstructions,
   renderTaskScopedVerificationInstructions,
+  resolveEffectiveTaskBootstrapBlock,
   resolveEffectiveTaskProjectPath,
   resolveEffectiveTaskSuccessGates,
   resolveEffectiveTaskVerificationCommands,
@@ -1439,19 +1440,43 @@ export class Orchestrator {
         const repoClean = await this.gitDriver.isClean(effectiveTaskProjectPath)
         if (!repoClean) {
           const message = `base repo has uncommitted changes at ${effectiveTaskProjectPath}`
+          const queue = await this.readQueue()
+          const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
+          const now = this.now()
+          if (queuedTask) {
+            queuedTask.status = 'blocked'
+            queuedTask.assignedTo = null
+            queuedTask.blockReason =
+              `Guildhall could not start work because the target repo is dirty: ${message}. ` +
+              'Commit or stash those changes, then resume the task.'
+            queuedTask.notes.push({
+              agentId: 'coordinator',
+              role: 'bootstrap-failure',
+              content:
+                `Blocked before worktree creation. ${message}. ` +
+                'Guildhall stopped retrying until the repo is clean and the task is resumed.',
+              timestamp: now,
+            })
+            queuedTask.updatedAt = now
+            queue.lastUpdated = now
+            await this.writeQueue(queue)
+          }
           await this.logTickProgress({
             task,
             agent: agent.name,
             beforeStatus,
-            afterStatus: beforeStatus,
-            transitioned: false,
+            afterStatus: 'blocked',
+            transitioned: true,
             note: `error: worktree setup blocked — ${message}`,
           })
           return {
-            kind: 'agent-error',
+            kind: 'processed',
             taskId: task.id,
             agent: agent.name,
-            error: `worktree setup blocked: ${message}`,
+            beforeStatus,
+            afterStatus: 'blocked',
+            transitioned: true,
+            revisionCount: task.revisionCount,
           }
         }
       }
@@ -1492,19 +1517,43 @@ export class Orchestrator {
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
+        const queue = await this.readQueue()
+        const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
+        const now = this.now()
+        if (queuedTask) {
+          queuedTask.status = 'blocked'
+          queuedTask.assignedTo = null
+          queuedTask.blockReason =
+            `Guildhall could not create a task worktree: ${message}. ` +
+            'Fix the worktree setup issue, then resume the task.'
+          queuedTask.notes.push({
+            agentId: 'coordinator',
+            role: 'bootstrap-failure',
+            content:
+              `Blocked during worktree setup. ${message}. ` +
+              'Guildhall stopped retrying until a human fixes the worktree issue and resumes the task.',
+            timestamp: now,
+          })
+          queuedTask.updatedAt = now
+          queue.lastUpdated = now
+          await this.writeQueue(queue)
+        }
         await this.logTickProgress({
           task,
           agent: agent.name,
           beforeStatus,
-          afterStatus: beforeStatus,
-          transitioned: false,
+          afterStatus: 'blocked',
+          transitioned: true,
           note: `error: worktree setup failed — ${message}`,
         })
         return {
-          kind: 'agent-error',
+          kind: 'processed',
           taskId: task.id,
           agent: agent.name,
-          error: `worktree setup failed: ${message}`,
+          beforeStatus,
+          afterStatus: 'blocked',
+          transitioned: true,
+          revisionCount: task.revisionCount,
         }
       }
     }
@@ -1515,7 +1564,11 @@ export class Orchestrator {
     // so the project's shared memory isn't trampled and the cache disappears
     // naturally when the worktree is cleaned up. A failure here aborts the
     // dispatch — better to surface it than hand the worker a broken tree.
-    const wtBootstrap = this.opts.config.bootstrap
+    const wtBootstrap = resolveEffectiveTaskBootstrapBlock({
+      task,
+      workspaceProjectPath: this.opts.config.projectPath,
+      workspaceBootstrap: this.opts.config.bootstrap ?? undefined,
+    })
     if (
       wtBootstrap &&
       wtBootstrap.commands.length > 0 &&
@@ -1540,19 +1593,43 @@ export class Orchestrator {
         if (!res.success) {
           const failed = res.steps.find((s) => s.result === 'fail')
           const msg = `worktree bootstrap failed on ${failed?.kind ?? 'step'} \`${failed?.command ?? ''}\` (exit ${failed?.exitCode ?? '?'})`
+          const queue = await this.readQueue()
+          const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
+          const now = this.now()
+          if (queuedTask) {
+            queuedTask.status = 'blocked'
+            queuedTask.assignedTo = null
+            queuedTask.blockReason =
+              `Guildhall could not start work because task setup failed: ${msg}. ` +
+              'Fix the task bootstrap command or project install state, then resume the task.'
+            queuedTask.notes.push({
+              agentId: 'coordinator',
+              role: 'bootstrap-failure',
+              content:
+                `Blocked after repeated task setup failure. ${msg}. ` +
+                'Guildhall stopped retrying until a human fixes the environment and resumes the task.',
+              timestamp: now,
+            })
+            queuedTask.updatedAt = now
+            queue.lastUpdated = now
+            await this.writeQueue(queue)
+          }
           await this.logTickProgress({
             task,
             agent: agent.name,
             beforeStatus,
-            afterStatus: beforeStatus,
-            transitioned: false,
+            afterStatus: 'blocked',
+            transitioned: true,
             note: `error: ${msg}`,
           })
           return {
-            kind: 'agent-error',
+            kind: 'processed',
             taskId: task.id,
             agent: agent.name,
-            error: msg,
+            beforeStatus,
+            afterStatus: 'blocked',
+            transitioned: true,
+            revisionCount: task.revisionCount,
           }
         }
       }

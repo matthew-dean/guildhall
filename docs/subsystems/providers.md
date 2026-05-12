@@ -50,10 +50,11 @@ Override provider selection globally with `GUILDHALL_PROVIDER=claude-oauth|codex
 
 ## Fallback Policy
 
-`preferredProvider` is a project-local preference. If that provider is
-unavailable, Guildhall may fall back to another configured local provider.
-Fallback to another paid/cloud provider is disabled by default so a stale local
-preference cannot silently spend money.
+`preferredProvider` is machine-level by default and can be overridden per
+project when you genuinely need a one-off local preference. If the preferred
+provider is unavailable, Guildhall may fall back to another configured local
+provider. Fallback to another paid/cloud provider is disabled by default so a
+stale local preference cannot silently spend money.
 
 Enable paid fallback globally:
 
@@ -67,6 +68,20 @@ Or for one project only:
 ```yaml
 # <project>/.guildhall/config.yaml
 allowPaidProviderFallback: true
+```
+
+Set the machine-wide provider default in:
+
+```yaml
+# ~/.guildhall/config.yaml
+preferredProvider: openai-api
+```
+
+Override it for one project only in:
+
+```yaml
+# <project>/.guildhall/config.yaml
+preferredProvider: llama-cpp
 ```
 
 ## Errors

@@ -3623,7 +3623,7 @@ describe('Orchestrator.run — full loops', () => {
     delete process.env.GUILDHALL_CONFIG_DIR
   })
 
-  it('surfaces a clear agent-error when the target repo is dirty before worktree creation', async () => {
+  it('blocks the task once when the target repo is dirty before worktree creation', async () => {
     const subrepo = path.join(tmpDir, 'knit')
     await fs.mkdir(subrepo, { recursive: true })
 
@@ -3666,10 +3666,76 @@ describe('Orchestrator.run — full loops', () => {
     })
     const out = await orch.tick()
 
-    expect(out.kind).toBe('agent-error')
-    if (out.kind === 'agent-error') {
-      expect(out.error).toContain(`base repo has uncommitted changes at ${subrepo}`)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('blocked')
+      expect(out.transitioned).toBe(true)
     }
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('blocked')
+    expect(task?.assignedTo).toBeNull()
+    expect(task?.blockReason).toContain(`base repo has uncommitted changes at ${subrepo}`)
+  })
+
+  it('blocks the task instead of retry-looping forever when worktree bootstrap fails', async () => {
+    const subrepo = path.join(tmpDir, 'knit')
+    await fs.mkdir(subrepo, { recursive: true })
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        domain: 'knit',
+        projectPath: subrepo,
+        spec: 'approved spec',
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver()
+    const cfg = baseConfig({
+      projectPath: tmpDir,
+      bootstrap: {
+        commands: ['cd knit && pnpm install'],
+        successGates: [],
+        timeoutMs: 30_000,
+        verifiedAt: '2026-05-03T00:00:00Z',
+      },
+    })
+    const orch = new Orchestrator({
+      config: cfg,
+      agents: agentSet(),
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('blocked')
+      expect(out.transitioned).toBe(true)
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('blocked')
+    expect(task?.assignedTo).toBeNull()
+    expect(task?.blockReason).toMatch(/task setup failed/i)
+    expect(task?.notes.at(-1)?.role).toBe('bootstrap-failure')
   })
 
   it('does not touch git isolation for reserved intake tasks in a non-git workspace root', async () => {
@@ -3991,8 +4057,8 @@ describe('Orchestrator.run — full loops', () => {
   it('stops with explicit blocked accounting when unattended work runs into a human question', async () => {
     const settings: LeverSettings = makeDefaultSettings(new Date('2026-05-02T00:00:00Z'))
     settings.project.worktree_isolation = {
-      position: 'none',
-      rationale: 'This test exercises unattended queue accounting, not git isolation.',
+      position: 'per_task',
+      rationale: 'Fanout queue accounting should still use a valid isolated runtime configuration.',
       setAt: '2026-05-02T00:00:00Z',
       setBy: 'user-direct',
     }
@@ -4008,6 +4074,11 @@ describe('Orchestrator.run — full loops', () => {
     })
     updateProjectConfig(tmpDir, {
       workerLaneConcurrency: 2,
+    })
+    execFileSync('git', ['add', '-A'], { cwd: tmpDir, stdio: 'ignore' })
+    execFileSync('git', ['commit', '--no-verify', '-m', 'test config'], {
+      cwd: tmpDir,
+      stdio: 'ignore',
     })
     await writeQueue([
       mkTask({ id: 'done-ish', status: 'ready', spec: 'approved spec', domain: 'looma' }),
@@ -5731,8 +5802,11 @@ describe('Orchestrator — FR-24 slot allocation / runtime isolation', () => {
   } = {}): Promise<void> {
     const settings: LeverSettings = makeDefaultSettings(new Date('2026-04-20T00:00:00Z'))
     settings.project.worktree_isolation = {
-      position: 'none',
-      rationale: 'These tests cover runtime slot allocation, not per-task git worktrees.',
+      position: overrides.dispatch?.kind === 'fanout' ? 'per_task' : 'none',
+      rationale:
+        overrides.dispatch?.kind === 'fanout'
+          ? 'Fanout dispatch now requires worktree isolation; keep the test config valid.'
+          : 'These tests cover runtime slot allocation, not per-task git worktrees.',
       setAt: '2026-04-20T00:00:00Z',
       setBy: 'user-direct',
     }

@@ -196,10 +196,11 @@ describe('POST /api/setup/providers/config', () => {
       const firstRaw = await fs.readFile(path.join(tmpProject, '.guildhall', 'config.yaml'), 'utf8')
       const secondRaw = await fs.readFile(path.join(secondProject, '.guildhall', 'config.yaml'), 'utf8')
       expect(firstRaw).toMatch(/preferredProvider:\s*anthropic-api/)
-      expect(secondRaw).toMatch(/preferredProvider:\s*openai-api/)
+      expect(secondRaw).toMatch(/preferredProvider:\s*llama-cpp/)
+      expect(readGlobalConfig().preferredProvider).toBe('openai-api')
 
       const modelsRes = await app.fetch(
-        new Request('http://localhost/api/config/models', {
+        new Request('http://localhost/api/config/models?projectId=second-provider-test', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -211,7 +212,7 @@ describe('POST /api/setup/providers/config', () => {
       )
       expect(modelsRes.status).toBe(200)
       expect(
-        resolveModelsForProvider(readWorkspaceConfig(secondProject).models, 'openai-api').worker,
+        resolveModelsForProvider(readWorkspaceConfig(secondProject).models, 'llama-cpp').worker,
       ).toBe('qwen/qwen3.6-35b-a3b')
       expect(readWorkspaceConfig(tmpProject).models).toBeUndefined()
     } finally {
@@ -258,7 +259,7 @@ describe('POST /api/setup/providers/config', () => {
     }
   })
 
-  it('writes preferredProvider to the PROJECT config, not the global store', async () => {
+  it('writes preferredProvider to the GLOBAL config by default, not the project file', async () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-global' })
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
@@ -269,12 +270,15 @@ describe('POST /api/setup/providers/config', () => {
       }),
     )
     expect(res.status).toBe(200)
-    // Global store unchanged (no preferredProvider field on it at all).
+    const globalCfg = readGlobalConfig()
+    expect(globalCfg.preferredProvider).toBe('anthropic-api')
     const g = readGlobalProviders()
     expect(g.providers['anthropic-api']?.apiKey).toBe('sk-ant-global')
-    // Project config records the selection.
-    const raw = await fs.readFile(path.join(tmpProject, '.guildhall', 'config.yaml'), 'utf8')
-    expect(raw).toMatch(/preferredProvider:\s*anthropic-api/)
+    const projectCfgPath = path.join(tmpProject, '.guildhall', 'config.yaml')
+    if (existsSync(projectCfgPath)) {
+      const raw = await fs.readFile(projectCfgPath, 'utf8')
+      expect(raw).not.toMatch(/preferredProvider:\s*anthropic-api/)
+    }
   })
 
   it('writes an OpenAI-compatible base URL to the global store and preserves the key', async () => {
@@ -347,7 +351,7 @@ describe('POST /api/setup/providers/config', () => {
   it('sets global model defaults only through the explicit model config endpoint', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/config/models', {
+      new Request('http://localhost/api/config/models?projectId=provider-test', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -366,7 +370,7 @@ describe('POST /api/setup/providers/config', () => {
     updateProjectConfig(tmpProject, { preferredProvider: 'openai-api' })
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/config/models', {
+      new Request('http://localhost/api/config/models?projectId=provider-test', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -396,7 +400,7 @@ describe('POST /api/setup/providers/config', () => {
   it('can set a global split-model preset in one request', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/config/models', {
+      new Request('http://localhost/api/config/models?projectId=provider-test', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -447,7 +451,7 @@ describe('POST /api/setup/providers/config', () => {
   it('can add and remove a project model override', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
     const setRes = await app.fetch(
-      new Request('http://localhost/api/config/models', {
+      new Request('http://localhost/api/config/models?projectId=provider-test', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -461,7 +465,7 @@ describe('POST /api/setup/providers/config', () => {
     expect(resolveModelsForProvider(readWorkspaceConfig(tmpProject).models).reviewer).toBe('qwen/qwen2.5-coder-7b-instruct')
 
     const unsetRes = await app.fetch(
-      new Request('http://localhost/api/config/models', {
+      new Request('http://localhost/api/config/models?projectId=provider-test', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -549,7 +553,7 @@ describe('POST /api/project/start preflight', () => {
   it('returns 400 with code:no_provider when no credential is configured', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/start', { method: 'POST' }),
+      new Request('http://localhost/api/project/start?projectId=provider-test', { method: 'POST' }),
     )
     expect(res.status).toBe(400)
     const body = (await res.json()) as { error?: string; code?: string }
@@ -563,7 +567,7 @@ describe('POST /api/project/start preflight', () => {
     const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
     try {
       const res = await app.fetch(
-        new Request('http://localhost/api/project/start', { method: 'POST' }),
+        new Request('http://localhost/api/project/start?projectId=provider-test', { method: 'POST' }),
       )
       expect(res.status).toBe(200)
       const body = (await res.json()) as { status?: string; provider?: string }
@@ -580,7 +584,7 @@ describe('POST /api/project/start preflight', () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
 
     const res = await app.fetch(
-      new Request('http://localhost/api/project/start', { method: 'POST' }),
+      new Request('http://localhost/api/project/start?projectId=provider-test', { method: 'POST' }),
     )
     expect(res.status).toBe(400)
     const body = (await res.json()) as { code?: string; error?: string }
@@ -597,7 +601,7 @@ describe('POST /api/project/start preflight', () => {
     const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
     try {
       const res = await app.fetch(
-        new Request('http://localhost/api/project/start', { method: 'POST' }),
+        new Request('http://localhost/api/project/start?projectId=provider-test', { method: 'POST' }),
       )
       expect(res.status).toBe(200)
       const body = (await res.json()) as {
@@ -678,7 +682,7 @@ describe('POST /api/project/start preflight', () => {
     const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
     try {
       const res = await app.fetch(
-        new Request('http://localhost/api/project/start', { method: 'POST' }),
+        new Request('http://localhost/api/project/start?projectId=provider-test', { method: 'POST' }),
       )
       expect(res.status).toBe(200)
       const body = (await res.json()) as {
@@ -832,7 +836,7 @@ describe('POST /api/project/start preflight', () => {
     )
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/start', { method: 'POST' }),
+      new Request('http://localhost/api/project/start?projectId=provider-test', { method: 'POST' }),
     )
     expect(res.status).toBe(400)
     const body = (await res.json()) as { code?: string; error?: string; loadedModels?: string[]; missingModels?: string[] }
@@ -856,14 +860,14 @@ describe('POST /api/project/start preflight', () => {
     )
     const { app } = buildServeApp({ projectPath: tmpProject })
     await app.fetch(
-      new Request('http://localhost/api/config/models', {
+      new Request('http://localhost/api/config/models?projectId=provider-test', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ scope: 'global', role: 'worker', model: 'missing-global-model' }),
       }),
     )
     const res = await app.fetch(
-      new Request('http://localhost/api/project/start', { method: 'POST' }),
+      new Request('http://localhost/api/project/start?projectId=provider-test', { method: 'POST' }),
     )
     expect(res.status).toBe(400)
     const body = (await res.json()) as { code?: string; missingModels?: string[] }
@@ -876,7 +880,7 @@ describe('POST /api/project/stop', () => {
   it('returns ok:true for an idle workspace (no supervisor running)', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/stop', { method: 'POST' }),
+      new Request('http://localhost/api/project/stop?projectId=provider-test', { method: 'POST' }),
     )
     // Not running → supervisor.stop returns false → 504 today. Treat either
     // shape as acceptable: what matters is the UI gets a structured response
@@ -896,13 +900,13 @@ describe('POST /api/project/stop', () => {
     const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
     try {
       const startRes = await app.fetch(
-        new Request('http://localhost/api/project/start', { method: 'POST' }),
+        new Request('http://localhost/api/project/start?projectId=provider-test', { method: 'POST' }),
       )
       expect(startRes.status).toBe(200)
       // Give the orchestrator a tick to settle, then stop.
       await new Promise(r => setTimeout(r, 50))
       const stopRes = await app.fetch(
-        new Request('http://localhost/api/project/stop', { method: 'POST' }),
+        new Request('http://localhost/api/project/stop?projectId=provider-test', { method: 'POST' }),
       )
       expect(stopRes.status).toBe(200)
       const body = (await stopRes.json()) as { ok?: boolean }

@@ -9,8 +9,8 @@ import { guildhallHomeDir, ensureGuildhallHome } from './global-config.js'
 //
 // Providers are *machine-scoped*, not project-scoped. The same Anthropic API
 // key, OpenAI API key, and llama.cpp URL apply to every Guildhall project on
-// this machine. Projects pick which of the configured providers they prefer
-// (via `preferredProvider` in guildhall.yaml) but do NOT carry their own
+// this machine. Provider preference is separate config: machine-level by
+// default, with optional per-project override. Projects do NOT carry their own
 // copies of the credentials.
 //
 // OAuth-managed providers (Claude, Codex) live in their respective CLI dirs
