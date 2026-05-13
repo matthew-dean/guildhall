@@ -4007,6 +4007,105 @@ Uncertainties: none`,
     )).toBe(true)
   })
 
+  it('prefers the checkpoint safe mutation surface over raw touched-file order when nudging the next mutation', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async ({ filePath }) => ({
+          output: `contents of ${String(filePath)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'edit-file',
+        description: '',
+        inputSchema: z.object({
+          filePath: z.string(),
+          oldString: z.string(),
+          newString: z.string(),
+        }),
+        execute: async () => ({
+          output: 'edited',
+          is_error: false,
+        }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/test/ts-to-jsdoc.test.ts' },
+          'toolu_1',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 3,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_checkpoint_next_action:
+              'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_files_touched: [
+              '.gitignore',
+              'package.json',
+              'packages/converter/package.json',
+              'packages/converter/src/commentInserter.ts',
+              'packages/converter/src/features/functionDeclaration.ts',
+              'packages/converter/test/ts-to-jsdoc.test.ts',
+            ],
+            current_task_checkpoint_safe_mutation_surface: [
+              'packages/converter/test/ts-to-jsdoc.test.ts',
+              'packages/converter/src/commentInserter.ts',
+              'packages/converter/src/features/functionDeclaration.ts',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(events.some((e) =>
+      e.type === 'status' &&
+      e.message.includes('mutation checkpoint'),
+    )).toBe(true)
+    expect(messages.some((message) =>
+      message.content.some((block) =>
+        (
+          (block.type === 'text' && block.text.includes('Call edit-file on packages/converter/test/ts-to-jsdoc.test.ts now')) ||
+          (block.type === 'tool_result' && typeof block.content === 'string' && block.content.includes('Call edit-file on packages/converter/test/ts-to-jsdoc.test.ts now'))
+        ) &&
+        !(
+          (block.type === 'text' && block.text.includes('Call edit-file on .gitignore now')) ||
+          (block.type === 'tool_result' && typeof block.content === 'string' && block.content.includes('Call edit-file on .gitignore now'))
+        ),
+      ),
+    )).toBe(true)
+  })
+
   it('allows one checkpoint-scoped read after an authoritative verification command fails in the same turn', async () => {
     const registry = new ToolRegistry()
     registry.register(

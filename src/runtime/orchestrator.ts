@@ -1307,8 +1307,23 @@ function checkpointSafeNextMutationSurface(
   filesTouched: readonly string[],
   companionFiles: readonly string[],
 ): string[] {
-  const primary = filesTouched.length > 0 ? filesTouched : companionFiles
-  return uniqueNonEmptyStrings(primary).slice(0, 6)
+  const primary = uniqueNonEmptyStrings(filesTouched.length > 0 ? filesTouched : companionFiles)
+  const rank = (candidate: string): number => {
+    const normalized = candidate.replace(/\\/g, '/')
+    if (/\.(?:test|spec)\.[^.]+$/i.test(normalized)) return 0
+    if (/\.(?:ts|tsx|js|jsx|vue)$/i.test(normalized)) return 1
+    if (/\/src\/|\/test\/|\/tests\//i.test(normalized)) return 2
+    if (/package\.json$/i.test(normalized)) return 4
+    if (/\.gitignore$/i.test(normalized)) return 5
+    return 3
+  }
+
+  return [...primary]
+    .sort((left, right) => {
+      const delta = rank(left) - rank(right)
+      return delta !== 0 ? delta : left.localeCompare(right)
+    })
+    .slice(0, 6)
 }
 
 function checkpointWorkingHypothesis(input: {
@@ -1318,10 +1333,17 @@ function checkpointWorkingHypothesis(input: {
   safeNextMutationSurface: readonly string[]
 }): string | undefined {
   const existing = input.existing.trim()
-  if (existing) return existing
   const focusSurface = input.safeNextMutationSurface.slice(0, 3)
   const companions = input.companionFiles.slice(0, 2)
   const latestVerification = input.verification[input.verification.length - 1]
+  if (existing) {
+    const mentionsCurrentFocus =
+      focusSurface.length === 0 ||
+      focusSurface.some((file) => existing.includes(file) || existing.includes(path.basename(file)))
+    if (mentionsCurrentFocus) {
+      return existing
+    }
+  }
   if (latestVerification) {
     const focusText =
       focusSurface.length > 0

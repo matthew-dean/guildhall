@@ -1838,6 +1838,98 @@ describe('Orchestrator.tick — routing', () => {
     expect(checkpoint.resumeContext?.workingHypothesis).toContain('safest next mutation surface')
   })
 
+  it('prioritizes source and test files over repo metadata in the recovery checkpoint mutation surface', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'worker-task')
+    await writeQueue([
+      mkTask({
+        id: 'worker-task',
+        status: 'in_progress',
+        worktreePath,
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: '**Self-critique:**\n- [ac-1]: Met — focused tests cover the touched files.\n\n**Minimum-scope check:**\n- Files changed: packages/converter/src/typescriptToJsdoc.ts.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.',
+            timestamp: '2026-04-01T00:05:00Z',
+          },
+        ],
+      }),
+    ])
+    await fs.mkdir(path.join(worktreePath, 'packages', 'converter', 'src'), { recursive: true })
+    await fs.mkdir(path.join(worktreePath, 'packages', 'converter', 'test'), { recursive: true })
+    execFileSync('git', ['init'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.email', 'codex@example.com'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.name', 'Codex'], { cwd: worktreePath, stdio: 'ignore' })
+    await fs.writeFile(path.join(worktreePath, '.gitignore'), 'dist\n', 'utf8')
+    await fs.writeFile(path.join(worktreePath, 'package.json'), '{\"name\":\"demo\"}\n', 'utf8')
+    await fs.writeFile(
+      path.join(worktreePath, 'packages', 'converter', 'src', 'typescriptToJsdoc.ts'),
+      'export const baseline = true\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(worktreePath, 'packages', 'converter', 'test', 'ts-to-jsdoc.test.ts'),
+      'test(\"baseline\", () => {})\n',
+      'utf8',
+    )
+    execFileSync('git', ['add', '.'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'baseline', '--no-verify'], { cwd: worktreePath, stdio: 'ignore' })
+    await fs.writeFile(path.join(worktreePath, '.gitignore'), 'dist\ncoverage\n', 'utf8')
+    await fs.writeFile(path.join(worktreePath, 'package.json'), '{\"name\":\"demo\",\"private\":true}\n', 'utf8')
+    await fs.writeFile(
+      path.join(worktreePath, 'packages', 'converter', 'src', 'typescriptToJsdoc.ts'),
+      'export const changed = true\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(worktreePath, 'packages', 'converter', 'test', 'ts-to-jsdoc.test.ts'),
+      'test(\"works\", () => {})\n',
+      'utf8',
+    )
+
+    const worker: StubAgent = {
+      name: 'worker-agent',
+      calls: [],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        throw new Error('Model returned an empty assistant message. The turn was ignored to keep the session healthy.')
+      },
+      getToolMetadata() {
+        return {
+          review_handoff_evidence: {
+            taskId: 'worker-task',
+            inspectedImplementationFile: true,
+            changedOrVerified: true,
+          },
+        }
+      },
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    for (let i = 0; i < 6; i += 1) {
+      await orch.tick()
+    }
+
+    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-task', 'checkpoint.json')
+    const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
+      resumeContext?: {
+        safeNextMutationSurface?: string[]
+        workingHypothesis?: string
+      }
+    }
+
+    expect(checkpoint.resumeContext?.safeNextMutationSurface?.[0]).toBe('packages/converter/test/ts-to-jsdoc.test.ts')
+    expect(checkpoint.resumeContext?.safeNextMutationSurface?.[1]).toBe('packages/converter/src/typescriptToJsdoc.ts')
+    expect(checkpoint.resumeContext?.safeNextMutationSurface?.slice(0, 2)).not.toContain('.gitignore')
+    expect(checkpoint.resumeContext?.safeNextMutationSurface?.slice(0, 2)).not.toContain('package.json')
+    expect(checkpoint.resumeContext?.workingHypothesis).toContain('packages/converter/test/ts-to-jsdoc.test.ts')
+    expect(checkpoint.resumeContext?.workingHypothesis).not.toContain('.gitignore')
+  })
+
   it('writes a recovery checkpoint even when the worker already blocked the task before an empty assistant reply', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'worker-task')
     await writeQueue([

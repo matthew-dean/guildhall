@@ -2485,3 +2485,18 @@ screen.
   toward review handoff on resume, and the coordinator reopens that stale
   blocker family so `task-003` returns to `in_progress` instead of stopping the
   whole project as terminal.
+- Recovery checkpoint mutation-surface ranking on `2026-05-13`: resumed
+  `t-minus-t` work was still inheriting a misleading "safe next mutation
+  surface" because recovery checkpoints simply kept the first touched files,
+  which often put `.gitignore` and `package.json` ahead of the actual
+  converter source/tests. Recovery checkpoints now rank test and source files
+  ahead of repo metadata before storing the mutation surface, so resumed
+  workers get pointed back at the real implementation/test seam instead of the
+  repo scaffolding.
+- Mutation-checkpoint nudge alignment on `2026-05-13`: even after the recovery
+  checkpoint stored a better safe mutation surface, the runtime's strict
+  mutation-checkpoint nudge was still reading the older raw `filesTouched`
+  order, which could keep telling the worker to mutate repo metadata before
+  the actual code/tests. `run-query` now prefers the checkpoint's safe
+  mutation surface when it demands the next exact mutation, so the guard and
+  the checkpoint finally agree on the same converter files.

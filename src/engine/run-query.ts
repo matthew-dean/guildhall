@@ -421,6 +421,14 @@ function checkpointFilesTouched(
   return raw.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
 }
 
+function checkpointSafeMutationSurface(
+  toolMetadata: Record<string, unknown> | undefined,
+): string[] {
+  const raw = toolMetadata?.['current_task_checkpoint_safe_mutation_surface']
+  if (!Array.isArray(raw)) return []
+  return raw.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+}
+
 type VerificationHistoryEntry = {
   command: string
   passed: boolean
@@ -925,9 +933,14 @@ function strictCheckpointHandoffNudge(input: {
 function strictCheckpointMutationNudge(input: {
   checkpointNextAction: string
   checkpointTouched: readonly string[]
+  checkpointSafeMutationSurface?: readonly string[]
   authoritativeVerificationCommands?: readonly string[]
 }): string | null {
-  const targets = input.checkpointTouched.map((file) => file.trim()).filter(Boolean)
+  const preferredTargets = (input.checkpointSafeMutationSurface ?? [])
+    .map((file) => file.trim())
+    .filter(Boolean)
+  const fallbackTargets = input.checkpointTouched.map((file) => file.trim()).filter(Boolean)
+  const targets = preferredTargets.length > 0 ? preferredTargets : fallbackTargets
   if (targets.length === 0) return null
   const exactTarget = targets[0]!
   const alternateTargets = targets.slice(1)
@@ -1384,11 +1397,13 @@ export async function* runQuery(
       shouldRefuseAfterCheckpointNextAction
     ) {
       repeatedReadOnlyRefusals += 1
+      const checkpointSafeSurface = checkpointSafeMutationSurface(context.toolMetadata)
       const checkpointRefusalNudge =
         shouldRefuseAfterCheckpointNextAction && !checkpointActionIsHandoff
           ? strictCheckpointMutationNudge({
               checkpointNextAction,
               checkpointTouched,
+              checkpointSafeMutationSurface: checkpointSafeSurface,
               authoritativeVerificationCommands,
             })
           : null
@@ -1684,6 +1699,7 @@ export async function* runQuery(
       }
       const checkpointNextAction = latestCheckpointNextAction(context.toolMetadata)
       const checkpointTouched = checkpointFilesTouched(context.toolMetadata)
+      const checkpointSafeSurface = checkpointSafeMutationSurface(context.toolMetadata)
       const checkpointTaskId = currentTaskId(context.toolMetadata)
       const handoffCheckpointNudge =
         currentAgentId(context.toolMetadata) === 'worker-agent' &&
@@ -1702,6 +1718,7 @@ export async function* runQuery(
           ? strictCheckpointMutationNudge({
               checkpointNextAction,
               checkpointTouched,
+              checkpointSafeMutationSurface: checkpointSafeSurface,
               authoritativeVerificationCommands,
             })
           : null
