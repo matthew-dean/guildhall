@@ -43,6 +43,7 @@ import { HookEvent, type HookExecutor } from './hooks.js'
 import { PermissionChecker } from './permissions.js'
 import { recordToolCarryover } from './tool-carryover.js'
 import type { AnyTool, ToolExecutionContext, ToolRegistry } from './tools.js'
+import { parseAuthoritativeCommands } from '../tools/gate-command-authority.js'
 
 const REACTIVE_COMPACT_STATUS_MESSAGE =
   'Prompt too long; compacting conversation memory and retrying.'
@@ -690,14 +691,21 @@ function strictCheckpointHandoffNudge(input: {
 function strictCheckpointMutationNudge(input: {
   checkpointNextAction: string
   checkpointTouched: readonly string[]
+  authoritativeVerificationCommands?: readonly string[]
 }): string | null {
   const targets = input.checkpointTouched.map((file) => file.trim()).filter(Boolean)
   if (targets.length === 0) return null
   const exactTarget = targets[0]!
   const alternateTargets = targets.slice(1)
+  const authoritativeCommands = Array.from(
+    new Set((input.authoritativeVerificationCommands ?? []).map((command) => command.trim()).filter(Boolean)),
+  )
   return [
     `The latest checkpoint already told you what to do next: ${input.checkpointNextAction}.`,
     'Your very next response must be exactly one tool call and no prose.',
+    authoritativeCommands.length > 0
+      ? `If you are rerunning verification first, call shell with exactly one of these authoritative commands:\n${authoritativeCommands.map((command) => `- ${command}`).join('\n')}`
+      : '',
     `Call edit-file on ${exactTarget} now, or call write-file if rewriting the full file is simpler.`,
     alternateTargets.length > 0
       ? `If ${exactTarget} is no longer the right surface, mutate one of these checkpoint-touched files instead: ${alternateTargets.join(', ')}.`
@@ -1018,6 +1026,9 @@ export async function* runQuery(
     const checkpointActionIsExploratory = looksExploratoryCheckpointAction(checkpointNextAction)
     const checkpointActionIsHandoff = looksLikeHandoffCheckpointAction(checkpointNextAction)
     const checkpointTaskId = currentTaskId(context.toolMetadata)
+    const authoritativeVerificationCommands = context.toolMetadata
+      ? (parseAuthoritativeCommands(context.toolMetadata) ?? [])
+      : []
     const isWorkerCheckpointLane =
       currentAgentId(context.toolMetadata) === 'worker-agent' && checkpointNextAction.length > 0
     const shouldRefuseFurtherReadOnlyResearch =
@@ -1129,6 +1140,7 @@ export async function* runQuery(
               ? strictCheckpointMutationNudge({
                   checkpointNextAction,
                   checkpointTouched,
+                  authoritativeVerificationCommands,
                 })
             : null
       if (strictCheckpointNudge && repeatedReadOnlyRefusals < 2) {
@@ -1330,6 +1342,7 @@ export async function* runQuery(
           ? strictCheckpointMutationNudge({
               checkpointNextAction,
               checkpointTouched,
+              authoritativeVerificationCommands,
             })
           : null
       const checkpointSpecificNudge = handoffCheckpointNudge ?? mutationCheckpointNudge

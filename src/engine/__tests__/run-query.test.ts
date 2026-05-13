@@ -3246,6 +3246,10 @@ Uncertainties: none`,
               'packages/converter/src/jsdocHelpers.ts',
               'packages/converter/src/typescriptToJsdoc.ts',
             ],
+            current_task_verification_commands: [
+              'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+              'cd packages/converter && pnpm vitest --run test/jsdoc-to-ts.test.ts',
+            ],
           },
         },
         messages,
@@ -3260,6 +3264,14 @@ Uncertainties: none`,
       e.type === 'status' &&
       e.message.includes('self-critique persistence tool call'),
     )).toBe(false)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'text' &&
+        block.text.includes('call shell with exactly one of these authoritative commands') &&
+        block.text.includes('cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts'),
+      ),
+    )).toBe(true)
   })
 
   it('demands an exact file mutation tool call after mutation-checkpoint read drift', async () => {

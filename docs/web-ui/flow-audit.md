@@ -2433,3 +2433,9 @@ screen.
   `node_modules` symlinks instead of creating them, so bootstrap/install can
   create a task-local dependency graph and keep test/runtime resolution inside
   the isolated worktree.
+- Mutation-checkpoint guidance on `2026-05-13`: `t-minus-t` showed that a
+  worker with a resume checkpoint plus authoritative verification commands
+  could still get trapped in vague "rerun focused verification" nudges and
+  drift back into file reads. Mutation-checkpoint nudges now surface the exact
+  authoritative shell commands when they exist, so resumed workers get a
+  concrete next verification step instead of an abstract instruction.
