@@ -552,7 +552,7 @@
       "description": "After one end-to-end success, teach Guildhall to continue through multiple tasks, skip blocked work cleanly, and stop only when the queue is exhausted or globally blocked.",
       "domain": "runtime",
       "projectPath": ".",
-      "status": "in_progress",
+      "status": "done",
       "priority": "high",
       "dependsOn": [
         "guildhall-automation-005"
@@ -565,13 +565,13 @@
           "id": "ac-1",
           "description": "Guildhall can continue through multiple unblocked tasks without manual restarts between each one",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         },
         {
           "id": "ac-2",
           "description": "Blocked tasks are explicitly surfaced and skipped instead of stalling the whole queue on first contact",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         }
       ],
       "notes": [
@@ -1040,12 +1040,18 @@
           "role": "worker",
           "timestamp": "2026-05-13T20:20:00Z",
           "content": "Checkpoint resumeContext is now wired end to end: recovery checkpoints persist structured authoritative verification history, companion files, a working hypothesis, and a safe next mutation surface; resumed workers get that context back in both the prompt and tool metadata instead of falling back to bare next-action text."
+        },
+        {
+          "agentId": "reviewer-agent",
+          "role": "reviewer",
+          "timestamp": "2026-05-13T20:55:00Z",
+          "content": "Verified with focused engine/runtime coverage plus live FLL replay: durable checkpoint verification history now counts at review handoff, and resumed tasks keep the narrower mutation/verification context instead of re-deriving it from scratch."
         }
       ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-13T18:55:00Z",
-      "updatedAt": "2026-05-13T20:20:00Z"
+      "updatedAt": "2026-05-13T20:55:00Z"
     },
     {
       "id": "guildhall-automation-009",
@@ -1053,7 +1059,7 @@
       "description": "When worktree isolation is disabled or Guildhall has already dirtied a shared checkout, Guildhall should take responsibility for that state by packaging task-owned work into a resumable branch or commit checkpoint instead of treating the dirty repo as an external blocker forever.",
       "domain": "runtime",
       "projectPath": ".",
-      "status": "pending",
+      "status": "done",
       "priority": "medium",
       "dependsOn": [
         "guildhall-automation-006"
@@ -1066,20 +1072,33 @@
           "id": "ac-1",
           "description": "Guildhall can distinguish likely Guildhall-owned dirty state from unrelated user dirt and surface a resumable checkpoint path instead of a generic repo-dirty stop",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         },
         {
           "id": "ac-2",
           "description": "Shared-checkout task work can be packaged into a task-owned branch or commit checkpoint without sweeping unrelated project metadata",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         }
       ],
-      "notes": [],
+      "notes": [
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-13T20:38:00Z",
+          "content": "Shared-checkout tasks now checkpoint their own dirty work into a task branch when they reach done with worktree isolation disabled, instead of only recording 'merge skipped'. The git driver also resolves the true git toplevel for nested project paths so Guildhall state files at repo root are ignored during cleanliness checks and left out of checkpoint commits."
+        },
+        {
+          "agentId": "reviewer-agent",
+          "role": "reviewer",
+          "timestamp": "2026-05-13T20:55:00Z",
+          "content": "Verified with git-driver/orchestrator coverage and a live Fair Labor License replay: Guildhall now treats its own shared-checkout dirt as resumable task-owned state, and stale review-handoff blockers from that era reopen cleanly instead of leaving the queue terminal."
+        }
+      ],
       "gateResults": [],
       "revisionCount": 0,
       "createdAt": "2026-05-13T18:55:00Z",
-      "updatedAt": "2026-05-13T18:55:00Z"
+      "updatedAt": "2026-05-13T20:55:00Z"
     },
     {
       "id": "guildhall-architecture-001",

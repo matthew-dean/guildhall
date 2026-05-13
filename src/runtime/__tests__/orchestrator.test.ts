@@ -3669,6 +3669,60 @@ describe('Orchestrator.run — full loops', () => {
     })
   })
 
+  it('checkpoints shared-checkout work into a task branch when worktree isolation is disabled and the repo is dirty', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'ready',
+        domain: 'looma',
+        spec: 'approved spec',
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'Thing is done',
+            verifiedBy: 'automated',
+            command: 'pnpm test',
+            met: true,
+          },
+        ],
+      }),
+    ])
+
+    const advance = (next: TaskStatus) => async () => {
+      await mutateTask('a', { status: next })
+    }
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', advance('review')),
+      reviewer: stubAgent('reviewer-agent', advance('gate_check')),
+      gateChecker: stubAgent('gate-checker-agent', advance('done')),
+      coordinators: {},
+    }
+
+    const gitDriver = new InMemoryGitDriver({ clean: false })
+    const orch = new Orchestrator({ config: baseConfig(), agents, gitDriver })
+    await orch.run({ maxTicks: 20, tickDelayMs: 0 })
+
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('done')
+    expect(gitDriver.state.checkpoints).toHaveLength(1)
+    expect(gitDriver.state.checkpoints[0]?.branch).toBe('guildhall/task-a')
+    expect(q.tasks[0]!.branchName).toBe('guildhall/task-a')
+    expect(q.tasks[0]!.baseBranch).toBe('main')
+    expect(q.tasks[0]!.mergeRecord).toMatchObject({
+      result: 'skipped',
+      detail: 'worktree isolation disabled — shared-checkout work checkpointed to task branch',
+      fromBranch: 'guildhall/task-a',
+      toBranch: 'main',
+      commitSha: 'checkpoint-1',
+    })
+    expect(q.tasks[0]!.notes.some((note) =>
+      note.role === 'checkpoint' &&
+      note.content.includes('Checkpointed shared-checkout work into guildhall/task-a'),
+    )).toBe(true)
+  })
+
   it('uses the task project repo for worktree and merge operations in multi-repo workspaces', async () => {
     const subrepo = path.join(tmpDir, 'knit')
     const guildhallHome = path.join(tmpDir, '.guildhall-home')
@@ -4120,6 +4174,69 @@ describe('Orchestrator.run — full loops', () => {
             details:
               'The update-task tool kept rejecting status=review even though the self-critique note was already persisted.',
             raisedAt: '2026-05-13T15:42:05.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({
+        worker: stubAgent('worker-agent', async () => {
+          await mutateTask('a', { status: 'review' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('review handoff validator bug'),
+    )).toBe(true)
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('Superseded')
+  })
+
+  it('reopens a stale decision-required review-handoff blocker when the old validator wrongly claimed verification was not durable', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: 'approved spec',
+        blockReason:
+          'decision_required: Task blocked from transitioning to review despite passing all verification',
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: `**Self-critique:**\n\nAC-1 (Registration): Met — auth pages are wired and verified.\n\n**Minimum-scope check:**\n- Files changed: register.vue, login.vue.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`,
+            timestamp: '2026-05-13T19:41:49.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'decision_required',
+            summary: 'Task blocked from transitioning to review despite passing all verification',
+            details:
+              'Both authoritative verification commands passed, but update-task with status=review was blocked because Guildhall claimed it did not yet have durable proof that the task passed its required verification commands.',
+            raisedAt: '2026-05-13T19:42:09.000Z',
           },
         ],
       }),

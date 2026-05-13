@@ -2109,8 +2109,18 @@ function missingAuthoritativeVerificationCommands(
   const authoritative = parseAuthoritativeCommands(toolMetadata ?? {})
   if (authoritative == null || authoritative.length === 0) return []
   const evidence = reviewHandoffEvidence(toolMetadata)
-  if (evidence?.taskId !== taskId) return [...authoritative]
-  const seen = new Set(evidence.successfulVerificationCommands.map((entry) => entry.trim()))
+  const durableVerification = verificationHistory(toolMetadata)
+    .filter((entry) => entry.passed)
+    .map((entry) => entry.command.trim())
+    .filter(Boolean)
+  if (evidence?.taskId !== taskId) {
+    const seen = new Set(durableVerification)
+    return authoritative.filter((command) => !seen.has(command.trim()))
+  }
+  const seen = new Set([
+    ...evidence.successfulVerificationCommands.map((entry) => entry.trim()),
+    ...durableVerification,
+  ])
   return authoritative.filter((command) => !seen.has(command.trim()))
 }
 
@@ -2123,9 +2133,18 @@ function recordReviewHandoffEvidence(
   const taskId = activeReviewTaskId(toolMetadata)
   if (!toolMetadata || !taskId) return
   const current = reviewHandoffEvidence(toolMetadata)
+  const durableVerification = verificationHistory(toolMetadata)
+    .filter((entry) => entry.passed)
+    .map((entry) => entry.command.trim())
+    .filter(Boolean)
   const evidence: ReviewHandoffEvidence = current?.taskId === taskId
     ? current
-    : { taskId, inspectedImplementationFile: false, changedOrVerified: false, successfulVerificationCommands: [] }
+    : {
+        taskId,
+        inspectedImplementationFile: false,
+        changedOrVerified: false,
+        successfulVerificationCommands: durableVerification,
+      }
 
   if (isReadToolName(toolName) && filePath && !isMemoryTaskPath(filePath)) {
     evidence.inspectedImplementationFile = true

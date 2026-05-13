@@ -257,9 +257,19 @@ function isRecoverableReviewHandoffToolLoop(task: Task): boolean {
     const summary = escalation.summary ?? ''
     const details = escalation.details ?? ''
     return (
-      escalation.reason === 'gate_hard_failure' &&
-      /transition(?:ing)? .* to review|tool validation bug prevents transitioning .* to review/i.test(
-        `${summary}\n${details}`,
+      (
+        escalation.reason === 'gate_hard_failure' ||
+        escalation.reason === 'decision_required' ||
+        escalation.reason === 'human_judgment_required'
+      ) &&
+      (
+        /transition(?:ing)? .* to review|tool validation bug prevents transitioning .* to review/i.test(
+          `${summary}\n${details}`,
+        ) ||
+        (
+          /despite passing all verification/i.test(summary) &&
+          /durable proof that the task passed its required verification commands/i.test(details)
+        )
       )
     )
   })
@@ -268,6 +278,7 @@ function isRecoverableReviewHandoffToolLoop(task: Task): boolean {
       /Blocked transitioning task to review/i.test(blockReason) ||
       /Stuck in tool loop transitioning .* to review status/i.test(blockReason) ||
       /Tool validation bug prevents transitioning .* to review status/i.test(blockReason) ||
+      /Task blocked from transitioning to review despite passing all verification/i.test(blockReason) ||
       hasValidatorBugEscalation
     )
   ) {
@@ -291,8 +302,10 @@ function resolveRecoverableReviewHandoffEscalations(task: Task, resolvedAt: stri
         /Blocked transitioning task to review[^\n]*tool loop/i.test(summary) ||
         /Stuck in tool loop transitioning .* to review status/i.test(summary) ||
         /Tool validation bug prevents transitioning .* to review status/i.test(summary) ||
+        /Task blocked from transitioning to review despite passing all verification/i.test(summary) ||
         /persist a structured self-critique note via update-task first/i.test(details) ||
-        /update-task tool kept rejecting status=review/i.test(details)
+        /update-task tool kept rejecting status=review/i.test(details) ||
+        /durable proof that the task passed its required verification commands/i.test(details)
       )
     ) {
       escalation.resolvedAt = resolvedAt
@@ -2849,7 +2862,68 @@ export class Orchestrator {
       // cleanup / progress logging see the final state.
       if (afterStatus === 'done' && beforeStatus !== 'done') {
         const landingStrategy = await this.resolveLandingStrategySafe()
-        if (worktreeMode === 'none' || !taskAfter.branchName || !taskAfter.baseBranch) {
+        if (worktreeMode === 'none') {
+          const repoClean = await this.gitDriver.isClean(effectiveTaskProjectPath)
+          if (!repoClean) {
+            const recovered = await this.recoverDirtyRepoIntoTaskBranch({
+              task: taskAfter,
+              worktreeMode,
+              repoRoot: effectiveTaskProjectPath,
+              baseBranch: taskAfter.baseBranch ?? baseBranch,
+            })
+            if (recovered.recovered) {
+              taskAfter.branchName = recovered.branchName
+              taskAfter.baseBranch = taskAfter.baseBranch ?? baseBranch
+              taskAfter.notes.push({
+                agentId: 'coordinator',
+                role: 'checkpoint',
+                content:
+                  `Checkpointed shared-checkout work into ${recovered.branchName} ` +
+                  `before marking the task complete${recovered.commitSha ? ` (${recovered.commitSha})` : ''}.`,
+                timestamp: this.now(),
+              })
+              taskAfter.mergeRecord = {
+                fromBranch: recovered.branchName,
+                toBranch: taskAfter.baseBranch,
+                strategy: landingStrategy,
+                result: 'skipped',
+                ...(recovered.commitSha ? { commitSha: recovered.commitSha } : {}),
+                mergedAt: this.now(),
+                detail: 'worktree isolation disabled — shared-checkout work checkpointed to task branch',
+              }
+            } else {
+              taskAfter.status = 'blocked'
+              taskAfter.assignedTo = null
+              taskAfter.blockReason =
+                'Guildhall completed the task work but could not checkpoint shared-checkout edits into a task branch. Resolve the repo state and resume the task before treating it as done.'
+              taskAfter.notes.push({
+                agentId: 'coordinator',
+                role: 'checkpoint',
+                content:
+                  'Guildhall finished the task but failed to package shared-checkout edits into an isolated task branch, so it blocked the task instead of silently leaving dirty work behind.',
+                timestamp: this.now(),
+              })
+              taskAfter.mergeRecord = {
+                fromBranch: taskAfter.branchName ?? '<unknown>',
+                toBranch: taskAfter.baseBranch ?? '<unknown>',
+                strategy: landingStrategy,
+                result: 'skipped',
+                mergedAt: this.now(),
+                detail: 'worktree isolation disabled — attempted to checkpoint shared-checkout work but packaging failed',
+              }
+              afterStatus = 'blocked'
+            }
+          } else if (!taskAfter.mergeRecord) {
+            taskAfter.mergeRecord = {
+              fromBranch: taskAfter.branchName ?? '<unknown>',
+              toBranch: taskAfter.baseBranch ?? '<unknown>',
+              strategy: landingStrategy,
+              result: 'skipped',
+              mergedAt: this.now(),
+              detail: 'worktree isolation disabled — merge skipped',
+            }
+          }
+        } else if (!taskAfter.branchName || !taskAfter.baseBranch) {
           if (!taskAfter.mergeRecord) {
             taskAfter.mergeRecord = {
               fromBranch: taskAfter.branchName ?? '<unknown>',

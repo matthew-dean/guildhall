@@ -30,6 +30,13 @@ function isIgnorableGuildhallStatePath(file: string): boolean {
   )
 }
 
+async function resolveGitTopLevel(repoRoot: string): Promise<string> {
+  const { stdout } = await execFileP('git', ['rev-parse', '--show-toplevel'], {
+    cwd: repoRoot,
+  })
+  return stdout.trim() || repoRoot
+}
+
 export interface CreateWorktreeOptions {
   worktreePath: string
   branch: string
@@ -122,8 +129,9 @@ export class NodeGitDriver implements GitDriver {
   }
 
   async isClean(repoRoot: string): Promise<boolean> {
+    const gitRoot = await resolveGitTopLevel(repoRoot)
     const { stdout } = await execFileP('git', ['status', '--porcelain'], {
-      cwd: repoRoot,
+      cwd: gitRoot,
     })
     const lines = stdout
       .split('\n')
@@ -180,49 +188,50 @@ export class NodeGitDriver implements GitDriver {
     repoRoot: string,
     { branch, baseBranch, commitMessage }: CheckpointDirtyWorkOptions,
   ): Promise<CheckpointResult> {
+    const gitRoot = await resolveGitTopLevel(repoRoot)
     try {
       let branchExists = false
       try {
-        await execFileP('git', ['rev-parse', '--verify', branch], { cwd: repoRoot })
+        await execFileP('git', ['rev-parse', '--verify', branch], { cwd: gitRoot })
         branchExists = true
       } catch {
         branchExists = false
       }
 
       if (branchExists) {
-        await execFileP('git', ['checkout', branch], { cwd: repoRoot })
+        await execFileP('git', ['checkout', branch], { cwd: gitRoot })
       } else {
-        await execFileP('git', ['checkout', '-b', branch], { cwd: repoRoot })
+        await execFileP('git', ['checkout', '-b', branch], { cwd: gitRoot })
       }
 
-      await execFileP('git', ['add', '-A'], { cwd: repoRoot })
+      await execFileP('git', ['add', '-A'], { cwd: gitRoot })
       await execFileP(
         'git',
         ['reset', '--quiet', 'HEAD', '--', '.guildhall', 'memory', 'guildhall.yaml'],
-        { cwd: repoRoot },
+        { cwd: gitRoot },
       )
       let hasStagedChanges = true
       try {
-        await execFileP('git', ['diff', '--cached', '--quiet'], { cwd: repoRoot })
+        await execFileP('git', ['diff', '--cached', '--quiet'], { cwd: gitRoot })
         hasStagedChanges = false
       } catch {
         hasStagedChanges = true
       }
       if (!hasStagedChanges) {
-        await execFileP('git', ['checkout', baseBranch], { cwd: repoRoot })
+        await execFileP('git', ['checkout', baseBranch], { cwd: gitRoot })
         return { ok: true }
       }
       await execFileP('git', ['commit', '--no-verify', '-m', commitMessage], {
-        cwd: repoRoot,
+        cwd: gitRoot,
       })
       const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], {
-        cwd: repoRoot,
+        cwd: gitRoot,
       })
-      await execFileP('git', ['checkout', baseBranch], { cwd: repoRoot })
+      await execFileP('git', ['checkout', baseBranch], { cwd: gitRoot })
       return { ok: true, commitSha: stdout.trim() }
     } catch (err) {
       try {
-        await execFileP('git', ['checkout', baseBranch], { cwd: repoRoot })
+        await execFileP('git', ['checkout', baseBranch], { cwd: gitRoot })
       } catch {
         // Best-effort recovery only.
       }

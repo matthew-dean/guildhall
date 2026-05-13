@@ -2469,3 +2469,19 @@ screen.
   verification history, companion files, a working hypothesis, and the safe
   next mutation surface, and resumed workers get that context back in both the
   prompt and task-scoped metadata.
+- Shared-checkout ownership on `2026-05-13`: tasks that ran with
+  `worktree_isolation: none` were still ending with a passive "merge skipped"
+  record even when Guildhall itself had left dirty edits behind. Guildhall now
+  checkpoints those shared-checkout edits into a task branch before marking
+  the task complete, and the git driver resolves the true git toplevel for
+  nested project paths so repo-root Guildhall state files do not poison
+  cleanliness checks or get swept into the checkpoint commit.
+- Fair Labor License review-handoff recovery on `2026-05-13`: after durable
+  verification history started persisting in checkpoints, FLL still got stuck
+  because the review handoff guard only trusted same-run verification evidence
+  and the coordinator did not recognize the newer blocker wording
+  (`Task blocked from transitioning to review despite passing all
+  verification`). Guildhall now counts durable checkpoint verification history
+  toward review handoff on resume, and the coordinator reopens that stale
+  blocker family so `task-003` returns to `in_progress` instead of stopping the
+  whole project as terminal.

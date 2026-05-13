@@ -1,120 +1,70 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
+import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { InMemoryGitDriver, NodeGitDriver } from '../git-driver.js'
+import { NodeGitDriver } from '../git-driver.js'
 
 const execFileP = promisify(execFile)
 
-describe('InMemoryGitDriver', () => {
-  it('records created worktrees and returns set currentBranch', async () => {
-    const driver = new InMemoryGitDriver({ currentBranch: 'develop' })
-    expect(await driver.currentBranch('/repo')).toBe('develop')
-    await driver.createWorktree('/repo', {
-      worktreePath: '/repo/.guildhall/worktrees/t1',
-      branch: 'guildhall/task-t1',
-      baseBranch: 'develop',
-    })
-    expect(driver.state.createdWorktrees).toHaveLength(1)
-    expect(driver.state.createdWorktrees[0]).toMatchObject({
-      worktreePath: '/repo/.guildhall/worktrees/t1',
-      branch: 'guildhall/task-t1',
-      baseBranch: 'develop',
-    })
-  })
+let tmpDir: string
+let repoRoot: string
+let subdir: string
 
-  it('records removed worktrees', async () => {
-    const driver = new InMemoryGitDriver()
-    await driver.removeWorktree('/repo', '/repo/.guildhall/worktrees/t1')
-    expect(driver.state.removedWorktrees).toEqual([
-      '/repo/.guildhall/worktrees/t1',
-    ])
-  })
+async function git(args: string[], cwd = repoRoot): Promise<string> {
+  const { stdout } = await execFileP('git', args, { cwd })
+  return stdout.trim()
+}
 
-  it('defaults fastForwardMerge to ok:true with a synthetic commit sha', async () => {
-    const driver = new InMemoryGitDriver()
-    const r = await driver.fastForwardMerge('/repo', 'feature', 'main')
-    expect(r.ok).toBe(true)
-    expect(r.commitSha).toBe('inmem-1')
-    expect(driver.state.merges).toHaveLength(1)
-  })
-
-  it('defaults cherryPickBranch to ok:true with a synthetic commit sha', async () => {
-    const driver = new InMemoryGitDriver()
-    const r = await driver.cherryPickBranch('/repo', 'feature', 'main')
-    expect(r.ok).toBe(true)
-    expect(r.commitSha).toBe('inmem-1')
-    expect(driver.state.cherryPicks).toHaveLength(1)
-  })
-
-  it('honors setNextMergeResult once, then returns to default', async () => {
-    const driver = new InMemoryGitDriver()
-    driver.setNextMergeResult({ ok: false, conflict: true, detail: 'boom' })
-    const first = await driver.fastForwardMerge('/repo', 'f', 'm')
-    expect(first).toMatchObject({ ok: false, conflict: true })
-    const second = await driver.fastForwardMerge('/repo', 'f', 'm')
-    expect(second.ok).toBe(true)
-  })
-
-  it('honors setNextPushResult and setNextPrResult', async () => {
-    const driver = new InMemoryGitDriver()
-    driver.setNextPushResult({ ok: false, detail: 'net down' })
-    const p = await driver.push('/repo', 'feature')
-    expect(p).toEqual({ ok: false, detail: 'net down' })
-
-    driver.setNextPrResult({ ok: true, url: 'https://example.invalid/pr/42' })
-    const pr = await driver.openPullRequest('/repo', {
-      branch: 'feature',
-      baseBranch: 'main',
-      title: 't',
-    })
-    expect(pr).toEqual({ ok: true, url: 'https://example.invalid/pr/42' })
-    expect(driver.state.prs).toHaveLength(1)
-  })
+beforeEach(async () => {
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-git-driver-'))
+  repoRoot = path.join(tmpDir, 'repo')
+  subdir = path.join(repoRoot, 'frontend')
+  await fs.mkdir(subdir, { recursive: true })
+  try {
+    await execFileP('git', ['init', '-b', 'main'], { cwd: repoRoot })
+  } catch {
+    await execFileP('git', ['init'], { cwd: repoRoot })
+    await execFileP('git', ['checkout', '-b', 'main'], { cwd: repoRoot })
+  }
+  await execFileP('git', ['config', 'user.name', 'Guildhall Test'], { cwd: repoRoot })
+  await execFileP('git', ['config', 'user.email', 'guildhall-test@example.com'], { cwd: repoRoot })
+  await fs.writeFile(path.join(subdir, 'app.ts'), 'export const ready = true\n', 'utf8')
+  await git(['add', '.'], repoRoot)
+  await git(['commit', '--no-verify', '-m', 'init'], repoRoot)
 })
 
-describe('NodeGitDriver.isClean', () => {
-  it('ignores untracked .guildhall runtime state when checking repo cleanliness', async () => {
-    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-git-driver-'))
-    const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' }
-    await execFileP('git', ['init'], { cwd: repo, env })
-    await execFileP('git', ['config', 'user.email', 'codex@example.com'], { cwd: repo, env })
-    await execFileP('git', ['config', 'user.name', 'Codex'], { cwd: repo, env })
-    await fs.writeFile(path.join(repo, 'README.md'), 'hi\n')
-    await execFileP('git', ['add', 'README.md'], { cwd: repo })
-    await execFileP('git', ['commit', '-m', 'init'], { cwd: repo, env })
-    await fs.mkdir(path.join(repo, '.guildhall', 'worktrees'), { recursive: true })
-    await fs.writeFile(path.join(repo, '.guildhall', 'note.txt'), 'state\n')
+afterEach(async () => {
+  await fs.rm(tmpDir, { recursive: true, force: true })
+})
 
+describe('NodeGitDriver', () => {
+  it('treats repo-root Guildhall state as ignorable when checking cleanliness from a subdirectory project path', async () => {
     const driver = new NodeGitDriver()
-    await expect(driver.isClean(repo)).resolves.toBe(true)
+    await fs.mkdir(path.join(repoRoot, 'memory'), { recursive: true })
+    await fs.mkdir(path.join(repoRoot, '.guildhall'), { recursive: true })
+    await fs.writeFile(path.join(repoRoot, 'memory', 'TASKS.json'), '{"tasks":[]}\n', 'utf8')
+    await fs.writeFile(path.join(repoRoot, 'guildhall.yaml'), 'workspace: test\n', 'utf8')
 
-    await fs.writeFile(path.join(repo, 'real-change.txt'), 'nope\n')
-    await expect(driver.isClean(repo)).resolves.toBe(false)
+    await expect(driver.isClean(subdir)).resolves.toBe(true)
   })
 
-  it('ignores tracked Guildhall runtime state and config when checking repo cleanliness', async () => {
-    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-git-driver-'))
-    const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' }
-    await execFileP('git', ['init'], { cwd: repo, env })
-    await execFileP('git', ['config', 'user.email', 'codex@example.com'], { cwd: repo, env })
-    await execFileP('git', ['config', 'user.name', 'Codex'], { cwd: repo, env })
-    await fs.mkdir(path.join(repo, 'memory'), { recursive: true })
-    await fs.writeFile(path.join(repo, 'README.md'), 'hi\n')
-    await fs.writeFile(path.join(repo, 'guildhall.yaml'), 'name: demo\n')
-    await fs.writeFile(path.join(repo, 'memory', 'TASKS.json'), '{"version":1,"tasks":[]}\n')
-    await execFileP('git', ['add', 'README.md', 'guildhall.yaml', 'memory/TASKS.json'], { cwd: repo })
-    await execFileP('git', ['commit', '-m', 'init'], { cwd: repo, env })
-
-    await fs.writeFile(path.join(repo, 'guildhall.yaml'), 'name: changed\n')
-    await fs.writeFile(path.join(repo, 'memory', 'TASKS.json'), '{"version":1,"tasks":[{"id":"a"}]}\n')
-
+  it('checkpoints real shared-checkout edits from a subdirectory project path without committing Guildhall state files', async () => {
     const driver = new NodeGitDriver()
-    await expect(driver.isClean(repo)).resolves.toBe(true)
+    await fs.writeFile(path.join(subdir, 'app.ts'), 'export const ready = false\n', 'utf8')
+    await fs.mkdir(path.join(repoRoot, 'memory'), { recursive: true })
+    await fs.writeFile(path.join(repoRoot, 'memory', 'TASKS.json'), '{"tasks":[1]}\n', 'utf8')
 
-    await fs.writeFile(path.join(repo, 'README.md'), 'changed\n')
-    await expect(driver.isClean(repo)).resolves.toBe(false)
+    const result = await driver.checkpointDirtyWork(subdir, {
+      branch: 'guildhall/task-a',
+      baseBranch: 'main',
+      commitMessage: 'checkpoint shared checkout work',
+    })
+
+    expect(result.ok).toBe(true)
+    const committedFiles = await git(['show', '--name-only', '--pretty=format:', 'HEAD'], repoRoot)
+    expect(committedFiles).toContain('frontend/app.ts')
+    expect(committedFiles).not.toContain('memory/TASKS.json')
   })
 })

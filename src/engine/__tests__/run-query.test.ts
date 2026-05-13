@@ -1110,7 +1110,7 @@ describe('runQuery — unknown tool + invalid input', () => {
       }),
     )
     const client = new ScriptedApiClient([
-      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'review' }) },
+      { message: assistantToolUse('update-task', { tasksPath: '/workspace/project/memory/TASKS.json', taskId: 'task-1', status: 'review' }) },
       { message: assistantText('ok') },
     ])
     const messages: ConversationMessage[] = [
@@ -1127,13 +1127,14 @@ describe('runQuery — unknown tool + invalid input', () => {
           systemPrompt: '',
           maxTokens: 256,
           maxTurns: 4,
+          toolMetadata: { current_task_id: 'task-1' },
         },
         messages,
       ),
     )
     const completed = events.find((e) =>
       e.type === 'tool_execution_completed' &&
-      e.output.includes('durable proof'),
+      e.output.includes('Blocked transition to review'),
     )
     expect(called).toBe(false)
     expect(completed?.type === 'tool_execution_completed' ? completed.is_error : false).toBe(true)
@@ -1966,6 +1967,83 @@ Uncertainties: none`,
         [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
       ),
     )
+    const completed = events.filter((e) => e.type === 'tool_execution_completed')
+    expect(reviewCalls).toBe(1)
+    expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.is_error : true).toBe(false)
+    expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.output : '').toBe('updated')
+  })
+
+  it('allows review handoff for a resumed task when authoritative verification only exists in durable checkpoint history', async () => {
+    const registry = new ToolRegistry()
+    let reviewCalls = 0
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string().optional(),
+          taskId: z.string(),
+          status: z.string(),
+        }),
+        execute: async (input) => {
+          if (input.status === 'review') reviewCalls += 1
+          return {
+            output: 'updated',
+            is_error: false,
+            metadata: { success: true, taskId: input.taskId },
+          }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'review' }, 'review-1') },
+      { message: assistantText('ok') },
+    ])
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_task_id: 'task-1',
+            current_task_has_structured_self_critique: true,
+            review_handoff_evidence: {
+              taskId: 'task-1',
+              inspectedImplementationFile: false,
+              changedOrVerified: false,
+            },
+            current_task_checkpoint_files_touched: [
+              'frontend/app/pages/register.vue',
+              'frontend/app/pages/register/success.vue',
+            ],
+            current_task_verification_commands: [
+              'pnpm build',
+              'tsc --noEmit --project frontend/tsconfig.json',
+            ],
+            current_task_verification_history: [
+              {
+                command: 'pnpm build',
+                passed: true,
+                observedAt: '2026-05-13T19:41:01.000Z',
+              },
+              {
+                command: 'tsc --noEmit --project frontend/tsconfig.json',
+                passed: true,
+                observedAt: '2026-05-13T19:41:12.000Z',
+              },
+            ],
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
     const completed = events.filter((e) => e.type === 'tool_execution_completed')
     expect(reviewCalls).toBe(1)
     expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.is_error : true).toBe(false)
@@ -3875,7 +3953,7 @@ Uncertainties: none`,
     await drain(
       runQuery(
         {
-          apiClient: client,
+          apiClient: firstClient,
           toolRegistry: registry,
           permissionChecker: autoChecker(),
           cwd: '/workspace/project',
