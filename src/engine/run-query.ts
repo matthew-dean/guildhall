@@ -532,6 +532,17 @@ function isLikelyTargetScopedReadOnlyToolCall(
   return normalizedTargets.includes(normalizedInputPath)
 }
 
+function isVerificationEvidenceSupportReadOnlyToolCall(
+  cwd: string,
+  toolMetadata: Record<string, unknown> | undefined,
+  toolCall: ToolUseBlock,
+  likelyTargetFiles: readonly string[],
+  checkpointTouched: readonly string[],
+): boolean {
+  if (!isLikelyTargetScopedReadOnlyToolCall(cwd, toolCall, likelyTargetFiles)) return false
+  return !isCheckpointScopedReadOnlyToolCall(cwd, toolMetadata, toolCall, checkpointTouched)
+}
+
 function noProgressStatusMessage(
   toolMetadata: Record<string, unknown> | undefined,
 ): string {
@@ -773,6 +784,19 @@ function looksLikeFutureStepNarration(text: string): boolean {
   )
 }
 
+function looksLikeVerificationBackedCheckpointAction(text: string): boolean {
+  const normalized = text
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized) return false
+  if (normalized.includes('recorded verification evidence')) return true
+  return (
+    normalized.includes('focused verification command') ||
+    normalized.includes('focused verification commands')
+  ) && normalized.includes('fix whatever still fails')
+}
+
 function reviewHandoffToolNudge(
   assistantText: string,
   toolMetadata: Record<string, unknown> | undefined,
@@ -825,7 +849,17 @@ export async function* runQuery(
   let noProgressTurnNudges = 0
   let noProgressToolTurns = 0
   let repeatedReadOnlyRefusals = 0
-  let checkpointVerificationReadFollowThroughRemaining = 0
+  const initialCheckpointNextAction = latestCheckpointNextAction(context.toolMetadata)
+  const initialAuthoritativeVerificationCommands = context.toolMetadata
+    ? (parseAuthoritativeCommands(context.toolMetadata) ?? [])
+    : []
+  let checkpointVerificationReadFollowThroughRemaining =
+    initialCheckpointNextAction.length > 0 &&
+    initialAuthoritativeVerificationCommands.length > 0 &&
+    looksLikeVerificationBackedCheckpointAction(initialCheckpointNextAction)
+      ? 2
+      : 0
+  let checkpointVerificationReadFollowThroughArmed = false
   let sawToolCall = false
   const repeatedToolCallCounts = new Map<string, number>()
   const progressToolNames = new Set(context.noProgressToolNames ?? [])
@@ -1049,7 +1083,9 @@ export async function* runQuery(
       toolCalls.length > 0 &&
       toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input))
     const checkpointScopedReadOnlyFollowThroughAllowed =
-      (checkpointActionIsExploratory || checkpointVerificationReadFollowThroughRemaining > 0) &&
+      (checkpointActionIsExploratory ||
+        (checkpointVerificationReadFollowThroughArmed &&
+          checkpointVerificationReadFollowThroughRemaining > 0)) &&
       checkpointTouched.length > 0 &&
       toolCalls.length > 0 &&
       toolCalls.every((tc) =>
@@ -1072,6 +1108,21 @@ export async function* runQuery(
           likelyTargetFiles,
         ),
       )
+    const verificationEvidenceLikelyTargetReadOnlyAllowed =
+      looksLikeVerificationBackedCheckpointAction(checkpointNextAction) &&
+      checkpointVerificationReadFollowThroughRemaining > 0 &&
+      likelyTargetFiles.length > 0 &&
+      checkpointTouched.length > 0 &&
+      toolCalls.length > 0 &&
+      toolCalls.every((tc) =>
+        isVerificationEvidenceSupportReadOnlyToolCall(
+          context.cwd,
+          context.toolMetadata,
+          tc,
+          likelyTargetFiles,
+          checkpointTouched,
+        ),
+      )
     const shouldRefuseAfterMissingLikelyTarget =
       missingLikelyTarget.length > 0 &&
       toolCalls.length > 0 &&
@@ -1090,6 +1141,7 @@ export async function* runQuery(
       toolCalls.length > 0 &&
       toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input)) &&
       !checkpointScopedReadOnlyFollowThroughAllowed &&
+      !verificationEvidenceLikelyTargetReadOnlyAllowed &&
       !handoffScopedLikelyTargetReadOnlyAllowed
 
     if (
@@ -1206,15 +1258,33 @@ export async function* runQuery(
 
     repeatedReadOnlyRefusals = 0
     const usedCheckpointVerificationReadFollowThrough =
-      checkpointVerificationReadFollowThroughRemaining > 0 &&
-      toolCalls.length > 0 &&
-      toolCalls.every((tc) =>
-        isCheckpointScopedReadOnlyToolCall(
-          context.cwd,
-          context.toolMetadata,
-          tc,
-          checkpointTouched,
-        ),
+      checkpointVerificationReadFollowThroughRemaining > 0 && (
+        (
+          toolCalls.length > 0 &&
+          toolCalls.every((tc) =>
+            isCheckpointScopedReadOnlyToolCall(
+              context.cwd,
+              context.toolMetadata,
+              tc,
+              checkpointTouched,
+            ),
+          )
+        ) ||
+        (
+          looksLikeVerificationBackedCheckpointAction(checkpointNextAction) &&
+          likelyTargetFiles.length > 0 &&
+          checkpointTouched.length > 0 &&
+          toolCalls.length > 0 &&
+          toolCalls.every((tc) =>
+            isVerificationEvidenceSupportReadOnlyToolCall(
+              context.cwd,
+              context.toolMetadata,
+              tc,
+              likelyTargetFiles,
+              checkpointTouched,
+            ),
+          )
+        )
       )
 
     if (toolCalls.length === 1) {
@@ -1265,6 +1335,7 @@ export async function* runQuery(
         authoritativeVerificationCommands.length > 0 &&
         tc.name === 'shell'
       ) {
+        checkpointVerificationReadFollowThroughArmed = true
         checkpointVerificationReadFollowThroughRemaining = 2
       } else if (usedCheckpointVerificationReadFollowThrough) {
         checkpointVerificationReadFollowThroughRemaining = Math.max(

@@ -2447,3 +2447,10 @@ screen.
   read-only follow-through window so the worker can inspect the real failing
   implementation/test files before being forced into a mutation or
   escalation.
+- Resumed verification support-file latitude on `2026-05-13`: `t-minus-t`
+  also showed that resumed workers sometimes need to inspect adjacent helper
+  files before they can safely rerun verification, even when the last
+  checkpoint was already implementation-focused. The checkpoint guard now
+  distinguishes between broad drift and narrowly scoped support-file reads, so
+  resumed workers can inspect likely-target companion files without reopening
+  general exploration or tripping the mutation-checkpoint blocker again.
