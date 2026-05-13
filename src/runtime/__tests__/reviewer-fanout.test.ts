@@ -289,12 +289,35 @@ describe('aggregateFanout', () => {
       ),
     ])
     expect(agg.verdict).toBe('revise')
-    expect(agg.dissenting).toHaveLength(2)
+    expect(agg.dissenting).toHaveLength(1)
     expect(agg.combinedFeedback).toContain('Aggregated revisions from 1 persona')
     expect(agg.combinedFeedback).toContain('Reviewer availability notes')
     expect(agg.combinedFeedback).toContain('The Accessibility Specialist')
     expect(agg.combinedFeedback).toContain('timed out after 60000ms')
     expect(agg.combinedFeedback).toContain('Remove mt-4 from Button root')
+  })
+
+  it('approves when the only dissents are reviewer availability failures', () => {
+    const agg = aggregateFanout([
+      parsePersonaOutput(
+        componentDesigner,
+        '**Verdict:** revise\n**Reasoning:** The Component Designer failed to produce a verdict (Exceeded maximum turn limit (3)). Treating as revise per strict-all policy.',
+      ),
+      parsePersonaOutput(
+        a11y,
+        '**Verdict:** revise\n**Reasoning:** The Accessibility Specialist failed to produce a verdict (persona review timed out after 60000ms). Treating as revise per strict-all policy.',
+      ),
+      parsePersonaOutput(
+        componentDesigner,
+        '**Verdict:** approve\n**Reasoning:** Copy is clear and user-facing.',
+      ),
+    ])
+
+    expect(agg.verdict).toBe('approve')
+    expect(agg.dissenting).toHaveLength(0)
+    expect(agg.combinedFeedback).toContain('Reviewer availability issues')
+    expect(agg.combinedFeedback).toContain('The Component Designer')
+    expect(agg.combinedFeedback).toContain('The Accessibility Specialist')
   })
 })
 

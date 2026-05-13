@@ -499,4 +499,61 @@ describe('resolveEffectiveTaskVerificationCommands', () => {
       'pnpm lint',
     ])
   })
+
+  it('prefers focused test commands over broad automated acceptance test commands for narrow file work', async () => {
+    const converterDir = path.join(tmpDir, 'packages/converter')
+    await fs.mkdir(path.join(converterDir, 'test'), { recursive: true })
+    await fs.writeFile(
+      path.join(converterDir, 'package.json'),
+      JSON.stringify({
+        name: '@t-minus-t/converter',
+        scripts: {
+          test: 'vitest run --reporter=verbose --no-coverage',
+          build: 'tsc -p tsconfig.json',
+          lint: 'eslint .',
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(converterDir, 'test/ts-to-jsdoc.test.ts'),
+      '// test placeholder\n',
+      'utf8',
+    )
+
+    const result = resolveEffectiveTaskVerificationCommands({
+      task: {
+        projectPath: tmpDir,
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'All existing tests pass.',
+            verifiedBy: 'automated',
+            command: 'vitest run',
+          },
+        ],
+      } as any,
+      workspaceProjectPath: tmpDir,
+      workspaceBootstrap: {
+        commands: [],
+        successGates: ['pnpm run build', 'vitest run', 'pnpm run lint'],
+        timeoutMs: 300_000,
+        verifiedAt: '2026-05-03T00:00:00Z',
+        packageManager: 'pnpm',
+        install: { command: 'pnpm install', status: 'ok' },
+        gates: {
+          build: { command: 'pnpm run build', available: true },
+          test: { command: 'vitest run', available: true },
+          lint: { command: 'pnpm run lint', available: true },
+        },
+      } as any,
+      likelyTargetFiles: ['packages/converter/test/ts-to-jsdoc.test.ts'],
+    })
+
+    expect(result).toEqual([
+      'pnpm run build',
+      'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+      'pnpm run lint',
+    ])
+  })
 })

@@ -1340,6 +1340,24 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     }
   }
 
+  const activeReviewTurnWithoutLiveAgent = turns.find(
+    (turn) =>
+      turn.kind === 'inflight' &&
+      turn.status === 'active' &&
+      turn.taskStatus === 'review' &&
+      !turn.liveAgent,
+  )
+  const pendingWorkerTurn = turns.find(
+    (turn) =>
+      turn.kind === 'inflight' &&
+      turn.status === 'pending' &&
+      turn.taskStatus === 'in_progress',
+  )
+  if (activeReviewTurnWithoutLiveAgent && pendingWorkerTurn) {
+    activeReviewTurnWithoutLiveAgent.status = 'pending'
+    pendingWorkerTurn.status = 'active'
+  }
+
   const activeTurns = turns.filter(t => t.status === 'active')
   const activeTurnId = activeTurns.length > 0 ? activeTurns[activeTurns.length - 1]!.id : null
   const caughtUp = activeTurnId === null && turns.every(t => t.status === 'done')

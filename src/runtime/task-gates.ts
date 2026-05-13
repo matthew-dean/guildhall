@@ -588,12 +588,23 @@ function mergeVerificationCommands(
 
   for (const kind of ['typecheck', 'build', 'test', 'lint'] as const) {
     const acceptance = acceptanceBuckets.get(kind)
+    const focused = focusedBuckets.get(kind)
+
+    if (
+      kind === 'test' &&
+      narrowTaskHint &&
+      focused &&
+      focused.length > 0
+    ) {
+      pushAll(focused)
+      continue
+    }
+
     if (acceptance && acceptance.length > 0) {
       pushAll(acceptance)
       continue
     }
 
-    const focused = focusedBuckets.get(kind)
     if (focused && focused.length > 0) {
       pushAll(focused)
       continue

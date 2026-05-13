@@ -395,8 +395,9 @@ function looksLikeStructuredSelfCritiqueContent(content: string): boolean {
   }
   const hasAcceptanceCoverage =
     /for each acceptance criterion:/i.test(normalized) ||
-    /-\s*(?:\[[^\]]+\]|ac-\d+):\s*(met|not met)\b/i.test(normalized)
-  const hasMinimumScope = /(?:^|\n)\s*-?\s*minimum-scope check:/i.test(normalized)
+    /(?:^|\n)\s*(?:-\s*)?(?:\[[^\]]+\]|ac-\d+)(?:\s*\([^)\n]+\))?\s*:\s*(met|not met)\b/im.test(normalized)
+  const hasMinimumScope =
+    /(?:^|\n)\s*(?:\*\*)?-?\s*(?:minimum|minimal|mini)-scope check:\s*(?:\*\*)?/i.test(normalized)
   return hasAcceptanceCoverage && hasMinimumScope
 }
 
@@ -439,6 +440,20 @@ function isLaneExitStatus(agentId: string, status: string): boolean {
 function looksExploratoryCheckpointAction(text: string): boolean {
   const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim()
   if (!normalized) return false
+  if (
+    [
+      /\bself-critique\b/,
+      /\bhandoff\b/,
+      /\bset\b.*\bstatus\b.*\breview\b/,
+      /\bmove .* to review\b/,
+      /\btransition .* to review\b/,
+      /\bstatus .* review\b/,
+      /\bpersist\b.*\bnote\b/,
+      /\bwrite or refresh\b.*\bself-critique\b/,
+    ].some((pattern) => pattern.test(normalized))
+  ) {
+    return false
+  }
   return [
     /\bsearch\b/,
     /\binspect\b/,
@@ -457,6 +472,17 @@ function looksExploratoryCheckpointAction(text: string): boolean {
 function looksLikeHandoffCheckpointAction(text: string): boolean {
   const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim()
   if (!normalized) return false
+  if (
+    [
+      /\brerun the focused verification commands\b/,
+      /\brefresh focused verification\b/,
+      /\bfix whatever still fails\b/,
+      /\bkeep (?:the )?task in implementation\b/,
+      /\bfocused checks are green\b/,
+    ].some((pattern) => pattern.test(normalized))
+  ) {
+    return false
+  }
   return [
     /\bself-critique\b/,
     /\bhandoff\b/,
@@ -1732,6 +1758,9 @@ function hasReviewHandoffEvidence(
   if (evidence?.taskId !== taskId) return false
   if (evidence.inspectedImplementationFile && evidence.changedOrVerified) return true
   if (currentTaskLooksLikeVerificationOnly(toolMetadata) && evidence.changedOrVerified) return true
+  if (checkpointFilesTouched(toolMetadata).length > 0 && hasStructuredSelfCritiqueInMetadata(toolMetadata)) {
+    return true
+  }
   return false
 }
 

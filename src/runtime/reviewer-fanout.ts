@@ -340,14 +340,17 @@ export function aggregateFanout(
 ): FanoutAggregate {
   const policy = opts.policy ?? 'strict'
   const approving = verdicts.filter((v) => v.verdict === 'approve')
-  const dissenting = verdicts.filter((v) => v.verdict === 'revise')
+  const availabilityOnly = verdicts.filter((v) => isInfrastructureOnlyFanoutFailure(v))
+  const dissenting = verdicts.filter(
+    (v) => v.verdict === 'revise' && !isInfrastructureOnlyFanoutFailure(v),
+  )
 
   if (dissenting.length === 0) {
     return {
       verdict: 'approve',
       dissenting: [],
       approving,
-      combinedFeedback: '',
+      combinedFeedback: availabilityOnly.length > 0 ? renderCombinedFeedback(availabilityOnly) : '',
     }
   }
 
@@ -368,7 +371,7 @@ export function aggregateFanout(
   // ride along as notes even under advisory, so the worker sees everything).
   const combinedFeedback =
     taskVerdict === 'revise' || dissenting.length > 0
-      ? renderCombinedFeedback(dissenting)
+      ? renderCombinedFeedback([...dissenting, ...availabilityOnly])
       : ''
 
   const result: FanoutAggregate = {

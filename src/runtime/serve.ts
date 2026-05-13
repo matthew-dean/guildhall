@@ -800,11 +800,20 @@ function normalizedCheckpointNextPlannedAction(
 ): string | null {
   const nextAction = checkpoint?.nextPlannedAction?.trim() ?? ''
   if (!nextAction) return null
+  if (/^(?:none|null|n\/a|na|nothing)$/i.test(nextAction)) return null
+  const hasSelfCritique = taskHasWorkerSelfCritique(task)
   if (
-    taskHasWorkerSelfCritique(task) &&
+    hasSelfCritique &&
     /write or refresh self-critique note|write or refresh the self-critique note/i.test(nextAction)
   ) {
     return "Resume from the latest self-critique and recorded verification evidence, then hand off to review."
+  }
+  if (
+    !hasSelfCritique &&
+    /write or refresh self-critique note|write or refresh the self-critique note/i.test(nextAction) &&
+    /hand off to review|handoff to review|transition to review/i.test(nextAction)
+  ) {
+    return 'Resume from the active worktree diff, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.'
   }
   return nextAction
 }
@@ -911,9 +920,7 @@ async function enrichTaskForServe(
             step: checkpoint.step,
             agentId: checkpoint.agentId,
             intent: checkpoint.intent,
-            nextPlannedAction:
-              normalizedCheckpointNextPlannedAction(normalized, checkpoint) ??
-              checkpoint.nextPlannedAction,
+            nextPlannedAction: normalizedCheckpointNextPlannedAction(normalized, checkpoint),
             filesTouched: checkpoint.filesTouched,
             writtenAt: checkpoint.writtenAt,
           },

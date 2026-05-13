@@ -117,6 +117,39 @@ describe('QueryEngine.hasPendingContinuation', () => {
   })
 })
 
+describe('QueryEngine.loadToolMetadata', () => {
+  it('clears stale current_task_* metadata when a new task is loaded', () => {
+    const engine = new QueryEngine({
+      apiClient: new ScriptedApiClient([]),
+      toolRegistry: new ToolRegistry(),
+      permissionChecker: autoChecker(),
+      cwd: '/tmp',
+      model: 'test',
+      systemPrompt: '',
+    })
+
+    engine.loadToolMetadata({
+      current_task_id: 'task-a',
+      current_task_title: 'Task A',
+      current_task_checkpoint_next_action: 'Fix file A',
+      current_task_checkpoint_files_touched: ['src/a.ts'],
+      current_task_has_structured_self_critique: true,
+    })
+    engine.loadToolMetadata({
+      current_task_id: 'task-b',
+      current_task_title: 'Task B',
+    })
+
+    expect(engine.getToolMetadata()).toMatchObject({
+      current_task_id: 'task-b',
+      current_task_title: 'Task B',
+    })
+    expect(engine.getToolMetadata()).not.toHaveProperty('current_task_checkpoint_next_action')
+    expect(engine.getToolMetadata()).not.toHaveProperty('current_task_checkpoint_files_touched')
+    expect(engine.getToolMetadata()).not.toHaveProperty('current_task_has_structured_self_critique')
+  })
+})
+
 describe('QueryEngine — message persistence across tool loops', () => {
   it('keeps the assistant tool_use + tool_result in history when the next turn errors', async () => {
     // Repro for stuck-orchestrator bug: tick 1 emits an assistant tool_use,

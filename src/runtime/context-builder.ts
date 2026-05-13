@@ -108,6 +108,10 @@ ${task.productBrief?.successMetric ?? ''}`
         )
           .filter(isActionableFileCandidate)
           .filter((candidate) => !/\.(?:test|spec)\.ts$/i.test(candidate))
+  const referencedBacktickedTestHints = Array.from(
+    specText.matchAll(/`([^`]+\.(?:test|spec)\.ts)`/g),
+    (match) => (match[1] ?? '').trim(),
+  ).filter(isActionableFileCandidate)
   const bareMetricHints = Array.from(
     specText.matchAll(/(?:^|[\s(])([A-Za-z0-9_./\-[\]]+\.(?:ts|tsx|js|jsx|vue|md|json|yaml|yml))(?=$|[\s),.:;])/gm),
     (match) => (match[1] ?? '').trim(),
@@ -189,6 +193,9 @@ ${task.productBrief?.successMetric ?? ''}`
   for (const candidate of fallbackBacktickedHints) {
     push(candidate)
   }
+  for (const candidate of referencedBacktickedTestHints) {
+    push(candidate)
+  }
   for (const candidate of bareMetricHints) {
     push(candidate)
   }
@@ -219,11 +226,20 @@ function hasWorkerSelfCritiqueNote(task: Task): boolean {
 function normalizedCheckpointNextAction(task: Task, checkpoint: Checkpoint | null): string {
   const nextAction = checkpoint?.nextPlannedAction?.trim() ?? ''
   if (!nextAction) return ''
+  if (/^(?:none|null|n\/a|na|nothing)$/i.test(nextAction)) return ''
+  const hasSelfCritique = hasWorkerSelfCritiqueNote(task)
   if (
-    hasWorkerSelfCritiqueNote(task) &&
+    hasSelfCritique &&
     /write or refresh self-critique note|write or refresh the self-critique note/i.test(nextAction)
   ) {
     return 'Resume from the latest self-critique and recorded verification evidence, then hand off to review.'
+  }
+  if (
+    !hasSelfCritique &&
+    /write or refresh self-critique note|write or refresh the self-critique note/i.test(nextAction) &&
+    /hand off to review|handoff to review|transition to review/i.test(nextAction)
+  ) {
+    return 'Resume from the active worktree diff, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.'
   }
   return nextAction
 }
@@ -234,8 +250,8 @@ function renderLatestCheckpoint(task: Task, checkpoint: Checkpoint | null): stri
   const lines = [
     `**Step ${checkpoint.step}** by ${checkpoint.agentId} at ${checkpoint.writtenAt}`,
     `- Intent: ${checkpoint.intent}`,
-    `- Next planned action: ${nextAction}`,
   ]
+  if (nextAction) lines.push(`- Next planned action: ${nextAction}`)
   if (checkpoint.filesTouched.length > 0) {
     lines.push(`- Files touched: ${checkpoint.filesTouched.join(', ')}`)
   }

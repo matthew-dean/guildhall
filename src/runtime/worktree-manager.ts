@@ -139,6 +139,28 @@ export async function ensureWorktreeForDispatch(
     }
   }
 
+  if (task.branchName === expectedBranch) {
+    await input.gitDriver.attachWorktree(projectPath, {
+      worktreePath: expectedPath,
+      branch: expectedBranch,
+    })
+    await ensureProjectRuntimeLinks({
+      projectPath,
+      worktreePath: expectedPath,
+    })
+    await ensureWorkspaceSiblingLinks({
+      workspacePath,
+      projectPath,
+      worktreePath: expectedPath,
+    })
+    return {
+      worktreePath: expectedPath,
+      branchName: expectedBranch,
+      baseBranch: task.baseBranch ?? baseBranch,
+      created: true,
+    }
+  }
+
   await gitDriver.createWorktree(projectPath, {
     worktreePath: expectedPath,
     branch: expectedBranch,

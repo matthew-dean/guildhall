@@ -74,6 +74,21 @@
   let tickerNow = $state(Date.now())
   const projectDisplayName = $derived(humanizeProjectName(project.detail?.name ?? project.detail?.id ?? 'Project'))
 
+  $effect(() => {
+    window.dispatchEvent(
+      new CustomEvent('guildhall:set-project-title', {
+        detail: { title: projectDisplayName },
+      }),
+    )
+    return () => {
+      window.dispatchEvent(
+        new CustomEvent('guildhall:set-project-title', {
+          detail: { title: null },
+        }),
+      )
+    }
+  })
+
   async function loadInbox(): Promise<void> {
     try {
       const r = await projectFetch('/api/project/inbox', { cache: 'no-store' })
@@ -864,9 +879,6 @@
             <span class="toolbar-btn-label">Projects</span>
           </Button>
         </div>
-        <div class="topbar-center" title={projectDisplayName}>
-          {projectDisplayName}
-        </div>
         <div class="topbar-leading">
           {#if activeCount > 0 || awaitingApprovalCount > 0 || stuckCount > 0}
             <button
@@ -1229,7 +1241,7 @@
   }
   .topbar {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--s-2);
     padding: var(--s-3) var(--s-4);
@@ -1241,20 +1253,6 @@
     display: flex;
     align-items: center;
     min-width: 0;
-  }
-  .topbar-center {
-    min-width: 0;
-    justify-self: center;
-    align-self: center;
-    color: var(--text);
-    font-size: var(--fs-2);
-    font-weight: 600;
-    line-height: var(--lh-tight);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: min(48vw, 36ch);
-    text-align: center;
   }
   .topbar-leading {
     display: flex;
@@ -1502,9 +1500,6 @@
     .toolbar-btn--back .toolbar-btn-label {
       display: none;
     }
-    .topbar-center {
-      max-width: min(40vw, 28ch);
-    }
   }
 
   @media (max-width: 900px) {
@@ -1521,7 +1516,7 @@
       border-radius: 999px;
     }
     .topbar {
-      grid-template-columns: auto minmax(0, 1fr) auto;
+      grid-template-columns: auto auto;
       grid-template-rows: auto auto;
       row-gap: var(--s-2);
     }
@@ -1529,14 +1524,10 @@
       grid-column: 1;
       grid-row: 1;
     }
-    .topbar-center {
+    .topbar-actions {
       grid-column: 2;
       grid-row: 1;
-      max-width: 100%;
-    }
-    .topbar-actions {
-      grid-column: 3;
-      grid-row: 1;
+      justify-self: end;
     }
     .topbar-leading {
       grid-column: 1 / -1;

@@ -94,4 +94,27 @@ describe('NodeGitDriver.isClean', () => {
     await fs.writeFile(path.join(repo, 'real-change.txt'), 'nope\n')
     await expect(driver.isClean(repo)).resolves.toBe(false)
   })
+
+  it('ignores tracked Guildhall runtime state and config when checking repo cleanliness', async () => {
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-git-driver-'))
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' }
+    await execFileP('git', ['init'], { cwd: repo, env })
+    await execFileP('git', ['config', 'user.email', 'codex@example.com'], { cwd: repo, env })
+    await execFileP('git', ['config', 'user.name', 'Codex'], { cwd: repo, env })
+    await fs.mkdir(path.join(repo, 'memory'), { recursive: true })
+    await fs.writeFile(path.join(repo, 'README.md'), 'hi\n')
+    await fs.writeFile(path.join(repo, 'guildhall.yaml'), 'name: demo\n')
+    await fs.writeFile(path.join(repo, 'memory', 'TASKS.json'), '{"version":1,"tasks":[]}\n')
+    await execFileP('git', ['add', 'README.md', 'guildhall.yaml', 'memory/TASKS.json'], { cwd: repo })
+    await execFileP('git', ['commit', '-m', 'init'], { cwd: repo, env })
+
+    await fs.writeFile(path.join(repo, 'guildhall.yaml'), 'name: changed\n')
+    await fs.writeFile(path.join(repo, 'memory', 'TASKS.json'), '{"version":1,"tasks":[{"id":"a"}]}\n')
+
+    const driver = new NodeGitDriver()
+    await expect(driver.isClean(repo)).resolves.toBe(true)
+
+    await fs.writeFile(path.join(repo, 'README.md'), 'changed\n')
+    await expect(driver.isClean(repo)).resolves.toBe(false)
+  })
 })

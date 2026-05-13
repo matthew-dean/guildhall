@@ -235,6 +235,75 @@ describe('buildThread', () => {
     }
   })
 
+  it('prefers an in-progress worker turn over a stale review turn when neither has a live agent', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const earlier = new Date(Date.now() - 600_000).toISOString()
+      const later = new Date(Date.now() - 60_000).toISOString()
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-review',
+              title: 'Older review task',
+              status: 'review',
+              createdAt: earlier,
+              updatedAt: later,
+              notes: [
+                {
+                  agentId: 'reviewer-fanout',
+                  role: 'reviewer',
+                  content: 'Please revise the button markup.',
+                  timestamp: later,
+                },
+              ],
+            },
+            {
+              id: 'task-live',
+              title: 'Fresh worker task',
+              status: 'in_progress',
+              createdAt: earlier,
+              updatedAt: earlier,
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 2,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      expect(thread.activeTurnId).toBe('inflight:task-live')
+      const reviewTurn = thread.turns.find((turn) => turn.id === 'inflight:task-review')
+      if (!reviewTurn || reviewTurn.kind !== 'inflight') throw new Error('expected review inflight turn')
+      expect(reviewTurn.status).toBe('pending')
+      const workerTurn = thread.turns.find((turn) => turn.id === 'inflight:task-live')
+      if (!workerTurn || workerTurn.kind !== 'inflight') throw new Error('expected worker inflight turn')
+      expect(workerTurn.status).toBe('active')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('drafts project direction as editable brief copy instead of inference narration', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

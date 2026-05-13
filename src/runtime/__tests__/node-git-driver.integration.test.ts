@@ -120,6 +120,28 @@ describe('NodeGitDriver.createWorktree + removeWorktree', () => {
     const { stdout: list } = await git(repoRoot, ['worktree', 'list', '--porcelain'])
     expect(list).not.toContain(worktreePath)
   })
+
+  it('adopts an existing task branch instead of failing when the branch already exists', async () => {
+    const driver = new NodeGitDriver()
+    await git(repoRoot, ['checkout', '-q', '-b', 'guildhall/task-existing'])
+    await fs.writeFile(path.join(repoRoot, 'feature.txt'), 'hello\n', 'utf8')
+    await git(repoRoot, ['add', 'feature.txt'])
+    await git(repoRoot, ['commit', '-q', '-m', 'checkpoint'])
+    await git(repoRoot, ['checkout', '-q', 'main'])
+
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'existing')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-existing',
+      baseBranch: 'main',
+    })
+
+    const file = await fs.readFile(path.join(worktreePath, 'feature.txt'), 'utf8')
+    expect(file).toBe('hello\n')
+    const { stdout: list } = await git(repoRoot, ['worktree', 'list', '--porcelain'])
+    expect(list).toContain(worktreePath)
+    expect(list).toContain('branch refs/heads/guildhall/task-existing')
+  })
 })
 
 describe('NodeGitDriver.fastForwardMerge', () => {
@@ -177,5 +199,39 @@ describe('NodeGitDriver.push', () => {
     const result = await driver.push(repoRoot, 'main')
     expect(result.ok).toBe(false)
     expect(result.detail).toBeDefined()
+  })
+})
+
+describe('NodeGitDriver.checkpointDirtyWork', () => {
+  it('packages product work without sweeping Guildhall runtime state into the task branch', async () => {
+    const driver = new NodeGitDriver()
+    await fs.mkdir(path.join(repoRoot, 'memory'), { recursive: true })
+    await fs.writeFile(path.join(repoRoot, 'src.ts'), 'export const value = 1\n', 'utf8')
+    await fs.writeFile(path.join(repoRoot, 'guildhall.yaml'), 'name: demo\n', 'utf8')
+    await fs.writeFile(path.join(repoRoot, 'memory', 'TASKS.json'), '{"version":1,"tasks":[]}\n', 'utf8')
+
+    const result = await driver.checkpointDirtyWork(repoRoot, {
+      branch: 'guildhall/task-123',
+      baseBranch: 'main',
+      commitMessage: 'checkpoint',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(await driver.currentBranch(repoRoot)).toBe('main')
+
+    const { stdout: branchFiles } = await git(repoRoot, [
+      'show',
+      '--name-only',
+      '--format=',
+      'guildhall/task-123',
+    ])
+    expect(branchFiles).toContain('src.ts')
+    expect(branchFiles).not.toContain('memory/TASKS.json')
+    expect(branchFiles).not.toContain('guildhall.yaml')
+
+    const tasks = await fs.readFile(path.join(repoRoot, 'memory', 'TASKS.json'), 'utf8')
+    const config = await fs.readFile(path.join(repoRoot, 'guildhall.yaml'), 'utf8')
+    expect(tasks).toContain('"tasks":[]')
+    expect(config).toContain('name: demo')
   })
 })

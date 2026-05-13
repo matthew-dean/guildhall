@@ -52,12 +52,19 @@ screen.
   - `t-minus-t`: Thread is visually calm, but `Start` is effectively a silent no-op from the user's seat. Backend truth is `run.status: error` after the run attempt, caused by a project payload/schema failure (`tasks[2].blockReason` is `null` where the loader expects a string). The UI did not surface that runtime failure honestly.
   - `fair-labor-license`: Thread still feels split-brained. The import-review question is understandable enough, but the same task title appears in multiple states and Work still mixes `in_progress` worker implementation with an `Awaiting approval` import task and a top-band summary that says `No actionable tasks remain right now: 0 active, 1 fresh...`. The run/task state is still not being summarized in a way a cold user could trust unattended.
 
+- [x] Stop reviewer fan-out from consuming the entire shared model pool across projects. Live multi-project starts on `2026-05-13` showed `fair-labor-license` and `looma-knit` each grabbing reviewer concurrency `4`, which starved `t-minus-t` behind pooled provider slots and made it look like Guildhall could only really do one project at a time. Shared-pool reviewer fan-out is now clamped far below raw provider concurrency so worker/coordinator work can keep moving across projects.
+
+- [x] Reopen restartable blocked tasks instead of treating stale blockers as terminal forever. Explicit `Start` now reopens:
+  - checkpoint-backed worker timeout blocks (`t-minus-t`) so Guildhall resumes from the last durable recovery checkpoint instead of staying dead after a single inactivity timeout
+  - actionable `max_revisions_exceeded` blocks (`fair-labor-license`) so Guildhall can address the latest substantive review feedback instead of stopping forever at an old revision cap
+
 - [x] Move provider preference to the machine-global config by default instead of repeating it into every project's `.guildhall/config.yaml`. Runtime config resolution, provider setup writes, and the config/docs story now treat project-level `preferredProvider` as an override only.
 
 - [ ] Give Looma + Knit a humane recovery path for the dirty `knit` checkout. The stale `No actionable tasks remain` summary is gone and Thread now consistently surfaces the shaping draft plus the real agent failure, but the card still needs a clearer user-facing next move than a raw worktree-blocked error string.
 - [x] Make live project runs visibly real again across all three active test projects. On `2026-05-12`, Looma/Knit now accepts `Let Guildhall shape this`, shows a toast, flips into a real `Guildhall working / Drafting` state, and advances to a grounded coordinator question about whether generated Supabase typing work is duplicate or should expand. Fair Labor License now advances sequentially from the auth-scaffolding question into live coordinator/spec work and lands on a concrete database-migration question instead of circling. `t-minus-t` no longer treats `Start` as a dead button on hard-loaded slug pages: project-scoped mutations now inject `projectId`, the task resumes into a visible `Guildhall working` state, and shell/file activity shows up immediately in Thread.
 - [x] Clean up the pre-slug API brief contamination in Looma + Knit. The live Thread was faithfully rendering `/Users/matthew/git/oss/looma-knit/memory/project-brief.md`, but that file still contained Fair Labor License copy from the pre-project-scoped mutation era. The saved brief now correctly describes Looma as a general-purpose UI library and Knit as the product app migrating onto it.
 - [x] Make strict project-memory tools more forgiving of near-miss agent output. The runtime now auto-hydrates and normalizes project-scoped `log-decision`, `log-progress`, and `raise-escalation` inputs so missing path envelopes, stringified nested payloads, and omitted task/agent context stop surfacing as raw schema failures when the agent intent was otherwise clear.
+- [x] Let shared-checkout recovery actually carry Fair Labor License forward after the old no-worktree bug. Guildhall now checkpoints its own dirty base-checkout task work into the task branch without sweeping `memory/` or `guildhall.yaml`, reopens recoverable dirty-repo / existing-branch blockers on `Start`, reattaches existing task branches into isolated worktrees, filters `node_modules` checkpoint noise out of recovery hints, and accepts the real worker self-critique format (`AC-1 (Label): ...` plus bold `**Minimum-scope check:**`) when handing off to review.
 - [x] Stop the review handoff guard from treating verification-only tasks like code implementation tasks. Looma/Knit proved the bug live on `Mobile: test on real device (Safari iOS, Chrome Android)`: the worker produced a report and structured self-critique, then Guildhall blocked `status: review` because no implementation source file had been inspected. Verification/manual-QA tasks now accept durable verification evidence plus self-critique as sufficient review handoff proof.
 - [x] Make the project shell header more humane on narrower widths. The rail no longer force-collapses as early, the project title now lives in the top bar instead of disappearing in mobile mode, and generated fallback names are humanized from folder/package slugs into sentence case rather than shouting uppercase raw ids.
 - [x] Stop task-scoped shell/bootstrap runs from losing `CI=true` once they leave the sync code path. Async shell execution now preserves explicit env overrides, task-scoped shell calls default to `CI=true`, and Looma/Knit task worktrees no longer die in pnpm with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` just because the worker path used the async shell helper.
@@ -2381,3 +2388,39 @@ screen.
   single likely-target read-only follow-through pass on stale handoff
   checkpoints before re-tightening, which gives the worker enough room to
   sanity-check real implementation state without reopening broad exploration.
+- Review-handoff recovery hardening on `2026-05-13`: Fair Labor License
+  exposed a second flavor of the review validator bug. Even after the worker
+  persisted a valid self-critique, the task could stay blocked under a
+  `gate_hard_failure` summary that still claimed the review transition tool
+  was broken. Explicit project restart now treats that stale validator-failure
+  block the same way as the older review-handoff tool loop and reopens the
+  task cleanly.
+- Checkpoint-next-step realism on `2026-05-13`: `t-minus-t` showed that
+  Guildhall was writing over-eager worker recovery checkpoints that told the
+  worker to hand off for review just because some files had changed, even
+  though focused verification was still failing and no self-critique existed.
+  Recovery checkpoints now stay implementation-focused until a structured
+  self-critique actually exists, which should stop workers from falling into a
+  fake handoff loop while the task still needs real code/test repair.
+- Placeholder checkpoint cleanup on `2026-05-13`: Looma surfaced a nastier
+  variant where an old worker checkpoint literally persisted `nextPlannedAction:
+  "None"`. Guildhall was then treating that placeholder as a real mutation
+  checkpoint, blocking reads and rendering a bogus "latest step" hint. Runtime
+  checkpoint consumers now treat placeholder values like `None` / `null` /
+  `n/a` as empty guidance instead of enforcing or displaying them.
+- Cross-task checkpoint contamination on `2026-05-13`: Looma's
+  `task-import-kj0cyz` was being resumed with checkpoint intent and touched
+  files from the earlier `task-import-189j8he` version-diff task because
+  long-lived agents merged new `current_task_*` metadata on top of stale
+  task-scoped keys. `QueryEngine.loadToolMetadata()` now clears the previous
+  `current_task_*` snapshot whenever a new `current_task_id` is loaded so a
+  resumed task cannot inherit another task's checkpoint, touched files, or
+  self-critique flags.
+- Explicit referenced-test targeting on `2026-05-13`: after the metadata leak
+  was fixed, Looma still re-blocked because the coordinator could not find the
+  already-existing `web/tests/unit/composables/use-collections-auth.test.ts`
+  baseline file. Our likely-target inference was discarding backticked
+  `.test.ts` references unless they appeared on an "actionable" line, so the
+  existing auth test never showed up in task context. `resolveLikelyTaskFiles()`
+  now keeps explicit backticked test/spec file references, which should stop
+  this exact false `spec_ambiguous` escalation shape.

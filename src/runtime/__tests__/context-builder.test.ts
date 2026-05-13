@@ -160,7 +160,7 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('/projects/knit/.guildhall/worktrees/task-001/web/tests/unit/composables/use-presence.test.ts')
   })
 
-  it('ignores contextual test-file mentions, shell commands, and wildcard globs when deriving likely target files', () => {
+  it('keeps explicitly referenced test files while ignoring shell commands and wildcard globs when deriving likely target files', () => {
     const taskWithNoisyHints: Task = {
       ...baseTask,
       projectPath: '/projects/knit',
@@ -187,6 +187,7 @@ describe('buildContext — task summary', () => {
 
     expect(resolveLikelyTaskFiles(taskWithNoisyHints)).toEqual([
       '/projects/knit/.guildhall/worktrees/task-007/web/app/composables/use-collections.ts',
+      '/projects/knit/.guildhall/worktrees/task-007/web/tests/unit/composables/use-collections-auth.test.ts',
     ])
   })
 

@@ -188,6 +188,11 @@ export class QueryEngine {
    * sessions-package `PERSISTED_TOOL_METADATA_KEYS` before passing in.
    */
   loadToolMetadata(metadata: Record<string, unknown>): void {
+    if (Object.prototype.hasOwnProperty.call(metadata, 'current_task_id')) {
+      for (const key of Object.keys(this.toolMetadata)) {
+        if (key.startsWith('current_task_')) delete this.toolMetadata[key]
+      }
+    }
     for (const [key, value] of Object.entries(metadata)) {
       this.toolMetadata[key] = value
     }
