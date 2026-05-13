@@ -9,6 +9,8 @@ help_summary: |
 
 # The project shell keeps the real state in one place
 
+<UiReferenceNav />
+
 Once you open a project, Guildhall shifts from “service over projects” into “show me the state.” The shell is built around one promise: setup, active work, reviewer feedback, and the next human decision should not require a scavenger hunt.
 
 ![Guildhall project shell with work queue, live activity, and progress groups.](../assets/ui-audit/work.png)

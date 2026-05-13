@@ -115,15 +115,16 @@
     gap: var(--gh-space-5);
     min-inline-size: 0;
     padding: clamp(var(--gh-space-5), 3cqi, var(--gh-space-6));
-    border: var(--gh-layout-rule-default) solid color-mix(in srgb, var(--gh-color-border-accent) 44%, var(--gh-color-border-subtle));
+    border: var(--gh-layout-rule-default) solid color-mix(in srgb, var(--gh-color-border-accent) 28%, var(--gh-color-border-subtle));
     border-radius: var(--gh-radius-3);
     background:
-      radial-gradient(circle at top right, color-mix(in srgb, var(--gh-color-action-primary) 18%, transparent), transparent 36%),
-      linear-gradient(180deg, color-mix(in srgb, var(--gh-color-surface-raised-alt) 92%, black) 0, var(--gh-color-surface-sunken) 100%);
+      radial-gradient(circle at top right, color-mix(in srgb, var(--gh-color-action-primary) 16%, transparent), transparent 34%),
+      radial-gradient(circle at bottom left, color-mix(in srgb, var(--gh-color-action-secondary) 14%, transparent), transparent 32%),
+      linear-gradient(180deg, color-mix(in srgb, var(--gh-color-surface-raised-alt) 88%, #1c1620) 0, var(--gh-color-surface-sunken) 100%);
     color: var(--gh-color-text-primary);
     box-shadow:
-      inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
-      0 18px 42px color-mix(in srgb, black 35%, transparent);
+      inset 0 1px 0 color-mix(in srgb, white 7%, transparent),
+      0 20px 44px color-mix(in srgb, black 26%, transparent);
     container-type: inline-size;
     overflow: clip;
   }
@@ -145,10 +146,10 @@
   }
 
   .gh-hero-eyebrow {
-    color: var(--gh-color-text-secondary);
+    color: color-mix(in srgb, var(--gh-color-action-secondary) 72%, var(--gh-color-text-secondary));
     font-size: var(--gh-type-size-1);
     font-weight: var(--gh-type-weight-strong);
-    letter-spacing: 0.02em;
+    letter-spacing: 0.03em;
     text-transform: uppercase;
   }
 
@@ -160,15 +161,15 @@
   .gh-hero-title {
     margin: 0;
     max-inline-size: 12ch;
-    font-size: clamp(var(--gh-type-size-6), 4.5cqi, 2.75rem);
+    font-size: clamp(var(--gh-type-size-6), 4.5cqi, 2.95rem);
     font-weight: var(--gh-type-weight-strong);
-    line-height: 1.05;
+    line-height: 0.98;
     text-wrap: balance;
   }
 
   .gh-hero-description {
     max-inline-size: min(60ch, 100%);
-    color: var(--gh-color-text-secondary);
+    color: color-mix(in srgb, var(--gh-color-text-secondary) 92%, white);
     font-size: var(--gh-type-size-4);
     line-height: var(--gh-type-line-height-relaxed);
     text-wrap: pretty;
@@ -182,7 +183,7 @@
 
   .gh-hero-note {
     max-inline-size: min(56ch, 100%);
-    color: var(--gh-color-text-muted);
+    color: color-mix(in srgb, var(--gh-color-text-muted) 90%, white);
     font-size: var(--gh-type-size-2);
     line-height: var(--gh-type-line-height-body);
   }
@@ -201,10 +202,10 @@
   .gh-hero-media {
     min-block-size: min(24rem, 55cqi);
     padding: var(--gh-space-4);
-    border: var(--gh-layout-rule-default) solid color-mix(in srgb, var(--gh-color-border-subtle) 78%, white);
+    border: var(--gh-layout-rule-default) solid color-mix(in srgb, var(--gh-color-border-subtle) 62%, transparent);
     border-radius: calc(var(--gh-radius-3) - 2px);
     background:
-      linear-gradient(180deg, color-mix(in srgb, var(--gh-color-surface-raised-alt) 88%, black), var(--gh-color-surface-raised) 100%);
+      linear-gradient(180deg, color-mix(in srgb, var(--gh-color-surface-raised-alt) 84%, #201821), var(--gh-color-surface-raised) 100%);
   }
 
   .gh-hero-scene {
@@ -329,9 +330,9 @@
     display: grid;
     gap: var(--gh-space-1);
     padding: var(--gh-space-3);
-    border: var(--gh-layout-rule-default) solid color-mix(in srgb, var(--gh-color-border-subtle) 88%, white);
+    border: var(--gh-layout-rule-default) solid color-mix(in srgb, var(--gh-color-border-subtle) 58%, transparent);
     border-radius: var(--gh-radius-2);
-    background: color-mix(in srgb, var(--gh-color-surface-raised) 84%, black);
+    background: color-mix(in srgb, var(--gh-color-surface-raised) 88%, #18141c);
   }
 
   .gh-hero-stat dt {

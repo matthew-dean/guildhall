@@ -3,7 +3,7 @@ title: Web server routes
 help_topic: reference.http_api
 help_summary: |
   The Hono server at src/runtime/serve.ts exposes REST + SSE endpoints the
-  dashboard uses. Default port 7777. Project-scoped routes are anchored to
+  browser UI uses. Default port 7777. Project-scoped routes are anchored to
   the current project, and secrets are redacted in /api/config.
 ---
 
@@ -61,7 +61,7 @@ Served by `src/runtime/serve.ts` (Hono). Default port `7777`. All routes are loc
 | `GET /api/project/bootstrap/status` | Bootstrap verification status. |
 | `POST /api/project/bootstrap/run` | Run verified bootstrap synchronously. |
 
-## Workspace import and learning
+## Project import and learning
 
 | Route | Purpose |
 |---|---|

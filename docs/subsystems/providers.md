@@ -42,9 +42,9 @@ Claude credentials auto-refresh 60 seconds before expiry. Paths default to the C
 Most users configure providers through the Setup Wizard or the Providers page. Under the hood:
 
 - **Authenticated CLIs** — Claude Code CLI or Codex CLI.
-- **Anthropic-compatible API** — paste an API key (`ANTHROPIC_API_KEY`).
-- **OpenAI-compatible API** — paste an API key (`OPENAI_API_KEY`); optionally set a custom base URL.
-- **OpenAI-compatible local server** — set `LLAMA_CPP_URL` or `LM_STUDIO_BASE_URL` to a local server such as LM Studio or llama.cpp.
+- **Anthropic-compatible APIs** — paste an API key (`ANTHROPIC_API_KEY`), and point the provider at Anthropic or another Anthropic-shaped endpoint.
+- **OpenAI-compatible APIs** — paste an API key (`OPENAI_API_KEY`); optionally set a custom base URL for OpenAI itself or another OpenAI-shaped endpoint.
+- **Local OpenAI-compatible servers** — set `LLAMA_CPP_URL` or `LM_STUDIO_BASE_URL` to a local server such as LM Studio or llama.cpp. The important distinction is “OpenAI-compatible and local,” not “one magical local slot forever.”
 
 Override provider selection globally with `GUILDHALL_PROVIDER=claude-oauth|codex-oauth|anthropic-api|openai-api|llama-cpp`. `lm-studio` remains a compatibility alias for `llama-cpp`.
 

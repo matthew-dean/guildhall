@@ -45,17 +45,22 @@
     gap: var(--gh-space-4);
     min-inline-size: 0;
     padding: var(--gh-layout-frame-padding-default);
-    border: var(--gh-layout-rule-default) solid var(--gh-color-border-subtle);
+    border: var(--gh-layout-rule-default) solid color-mix(in srgb, var(--gh-color-border-subtle) 72%, transparent);
     border-radius: var(--gh-radius-3);
-    background: var(--gh-color-surface-elevated);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--gh-color-surface-raised-alt) 30%, var(--gh-color-surface-elevated)) 0,
+      var(--gh-color-surface-elevated) 100%
+    );
     color: var(--gh-color-text-primary);
     container-type: inline-size;
+    box-shadow: 0 16px 32px color-mix(in srgb, black 18%, transparent);
   }
 
   .gh-frame-card.mode-display {
     background: linear-gradient(
       180deg,
-      color-mix(in srgb, var(--gh-color-surface-raised) 88%, white) 0,
+      color-mix(in srgb, var(--gh-color-surface-accent-subtle) 65%, var(--gh-color-surface-raised)) 0,
       var(--gh-color-surface-elevated) 5.5rem
     );
   }
@@ -119,7 +124,7 @@
       var(--gh-color-surface-accent-subtle) 0,
       var(--gh-color-surface-elevated) 4.5rem
     );
-    border-color: var(--gh-color-border-accent);
+    border-color: color-mix(in srgb, var(--gh-color-border-accent) 70%, var(--gh-color-border-subtle));
   }
 
   .gh-frame-card.tone-ok {

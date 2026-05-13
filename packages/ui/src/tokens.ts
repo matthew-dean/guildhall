@@ -1,6 +1,10 @@
 import tokenDefinitions from './token-definitions.js'
 
 export type GuildhallTokenCategory = 'color' | 'spacing' | 'typography' | 'radius' | 'control' | 'layout'
+export interface GuildhallTokenThemeValues {
+  dark: string
+  light: string
+}
 
 export const guildhallSurfaceRoles = [
   'canvas',
@@ -36,7 +40,7 @@ export interface GuildhallToken {
   category: GuildhallTokenCategory
   name: string
   cssVariable: `--${string}`
-  value: string
+  value: string | GuildhallTokenThemeValues
   description: string
 }
 

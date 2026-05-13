@@ -9,6 +9,8 @@ help_summary: |
 
 # Projects home keeps the local service organized
 
+<UiReferenceNav />
+
 This page exists so Guildhall can behave like a local service over projects instead of a one-repo session. You attach a folder, scan what is moving, and open the shell that actually needs your eyes.
 
 ## What the dashboard should answer quickly
@@ -27,5 +29,3 @@ If the page cannot answer those three questions fast, it is being decorative whe
 - Enough signal to tell whether opening the shell is likely to be a quick check or a proper firefight
 
 ![Guildhall project shell showing thread, setup prompts, and current work items.](../assets/ui-audit/inbox.png)
-
-> Current shape: this service-level entry path matters, but the project shell still carries most of the product’s real power today. That is not a flaw in the docs. It is the product honestly telling you where the sharp tools are.

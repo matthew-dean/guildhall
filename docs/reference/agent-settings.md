@@ -4,7 +4,7 @@ help_topic: reference.agent_settings
 help_summary: |
   The lever-storage file at memory/agent-settings.yaml. Records every
   project and domain lever position with provenance. Seeded with system
-  defaults on workspace init.
+  defaults on project init.
 ---
 
 # `memory/agent-settings.yaml`
@@ -57,9 +57,9 @@ Project levers have no domain override — there's only `project.<lever>`.
 
 ## Editing safely
 
-- Edit by hand or through the dashboard; both are first-class.
+- Edit by hand or through the browser UI; both are first-class.
 - `setAt` and `setBy` must always be updated when `position` changes — the loader will refuse to persist a changed position with a stale setter.
-- `rationale` is required. The CLI and dashboard prompt for it; hand-edits must include it.
+- `rationale` is required. The CLI and browser UI prompt for it; hand-edits must include it.
 
 ## See also
 

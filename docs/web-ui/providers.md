@@ -9,6 +9,8 @@ help_summary: |
 
 # Providers page
 
+<UiReferenceNav />
+
 `src/web/surfaces/ProvidersPage.svelte`. Credential and model management.
 
 For each provider, the page shows:
@@ -17,15 +19,15 @@ For each provider, the page shows:
   reachable local-model endpoint.
 - **Verification**: a `verifiedAt` marker after a successful test.
 - **Credential action**: connect, paste an API key, test, or disconnect.
-- **Provider choice**: which configured provider GuildHall prefers by default, with room for a project override when needed.
+- **Provider choice**: which configured provider Guildhall prefers by default, with room for a project override when needed.
 
-## Provider slots the service exposes
+## Provider paths the service exposes today
 
 - **Claude** — OAuth (via Claude Code CLI) or API key.
-- **OpenAI** — API key.
 - **Codex (ChatGPT)** — Codex CLI tokens.
-- **OpenAI-compatible local server** — one `llama-cpp` slot, usually pointed
-  at llama.cpp or LM Studio.
+- **Anthropic-compatible APIs** — Anthropic itself and Anthropic-shaped hosted endpoints.
+- **OpenAI-compatible APIs** — OpenAI itself and OpenAI-shaped hosted endpoints.
+- **Local OpenAI-compatible servers** — usually llama.cpp or LM Studio, but conceptually just another OpenAI-compatible endpoint running on your machine.
 
 ## Where credentials live
 

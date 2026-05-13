@@ -14,11 +14,35 @@ const distTokenDefinitionsPath = resolve(distDir, 'token-definitions.js')
 const distComponentsDir = resolve(distDir, 'components')
 
 function renderStyles(tokens) {
-  const declarations = tokens.map((token) => `  ${token.cssVariable}: ${token.value};`)
+  const darkDeclarations = []
+  const lightDeclarations = []
+
+  for (const token of tokens) {
+    if (typeof token.value === 'string') {
+      darkDeclarations.push(`  ${token.cssVariable}: ${token.value};`)
+      continue
+    }
+
+    darkDeclarations.push(`  ${token.cssVariable}: ${token.value.dark};`)
+    lightDeclarations.push(`  ${token.cssVariable}: ${token.value.light};`)
+  }
+
   return [
     '/* Generated from src/token-definitions.js by scripts/generate-styles.mjs. */',
     ':root {',
-    ...declarations,
+    '  color-scheme: dark;',
+    ...darkDeclarations,
+    '}',
+    '',
+    ':root[data-gh-theme="light"],',
+    '.gh-theme-light {',
+    '  color-scheme: light;',
+    ...lightDeclarations,
+    '}',
+    '',
+    ':root[data-gh-theme="dark"],',
+    '.gh-theme-dark {',
+    '  color-scheme: dark;',
     '}',
     '',
   ].join('\n')
