@@ -3272,6 +3272,17 @@ Uncertainties: none`,
         block.text.includes('cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts'),
       ),
     )).toBe(true)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        typeof block.content === 'string' &&
+        block.content.includes('The latest checkpoint already told you what to do next') &&
+        block.content.includes('call shell with exactly one of these authoritative commands') &&
+        block.content.includes('cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts') &&
+        !block.content.includes('Call edit-file on packages/converter/src/jsdocHelpers.ts now'),
+      ),
+    )).toBe(true)
   })
 
   it('demands an exact file mutation tool call after mutation-checkpoint read drift', async () => {
@@ -3369,6 +3380,210 @@ Uncertainties: none`,
       e.type === 'tool_execution_completed' &&
       e.tool_name === 'edit-file' &&
       String(e.output).includes('edited'),
+    )).toBe(true)
+  })
+
+  it('allows one checkpoint-scoped read after an authoritative verification command fails in the same turn', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string(), timeoutMs: z.number().optional() }),
+        isReadOnly: () => false,
+        execute: async ({ command }) => ({
+          output: `FAIL ${String(command)}`,
+          is_error: true,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async ({ filePath }) => ({
+          output: `contents of ${String(filePath)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'shell',
+          {
+            command: 'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+            timeoutMs: 60_000,
+          },
+          'toolu_verify',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/src/jsdocHelpers.ts' },
+          'toolu_followthrough',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_id: 'task-012',
+            current_task_checkpoint_next_action:
+              'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_files_touched: [
+              'packages/converter/src/jsdocHelpers.ts',
+              'packages/converter/src/typescriptToJsdoc.ts',
+            ],
+            current_task_verification_commands: [
+              'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+              'cd packages/converter && pnpm vitest --run test/jsdoc-to-ts.test.ts',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        typeof block.content === 'string' &&
+        block.content.includes('contents of /workspace/project/packages/converter/src/jsdocHelpers.ts'),
+      ),
+    )).toBe(true)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        typeof block.content === 'string' &&
+        block.content.includes('The latest checkpoint already told you what to do next'),
+      ),
+    )).toBe(false)
+  })
+
+  it('allows a second checkpoint-scoped read-only follow-through turn after authoritative verification fails', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string(), timeoutMs: z.number().optional() }),
+        isReadOnly: () => false,
+        execute: async ({ command }) => ({
+          output: `FAIL ${String(command)}`,
+          is_error: true,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async ({ filePath }) => ({
+          output: `contents of ${String(filePath)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'shell',
+          {
+            command: 'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+            timeoutMs: 60_000,
+          },
+          'toolu_verify_round2',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/src/jsdocHelpers.ts' },
+          'toolu_src_round2',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/test/ts-to-jsdoc.test.ts' },
+          'toolu_test_round2',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 5,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_id: 'task-012',
+            current_task_checkpoint_next_action:
+              'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_files_touched: [
+              'packages/converter/src/jsdocHelpers.ts',
+              'packages/converter/src/typescriptToJsdoc.ts',
+              'packages/converter/test/ts-to-jsdoc.test.ts',
+            ],
+            current_task_verification_commands: [
+              'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+              'cd packages/converter && pnpm vitest --run test/jsdoc-to-ts.test.ts',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        typeof block.content === 'string' &&
+        block.content.includes('contents of /workspace/project/packages/converter/test/ts-to-jsdoc.test.ts'),
+      ),
     )).toBe(true)
   })
 

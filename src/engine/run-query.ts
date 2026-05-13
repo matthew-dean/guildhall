@@ -700,14 +700,23 @@ function strictCheckpointMutationNudge(input: {
   const authoritativeCommands = Array.from(
     new Set((input.authoritativeVerificationCommands ?? []).map((command) => command.trim()).filter(Boolean)),
   )
+  const verificationFirstDirective =
+    authoritativeCommands.length > 0
+      ? [
+          `If you are rerunning verification first, call shell with exactly one of these authoritative commands:\n${authoritativeCommands.map((command) => `- ${command}`).join('\n')}`,
+          targets.length > 0
+            ? `Only if one of those commands already ran in this turn and still failed should you mutate one of these checkpoint-touched files: ${targets.join(', ')}.`
+            : '',
+        ].filter(Boolean)
+      : []
   return [
     `The latest checkpoint already told you what to do next: ${input.checkpointNextAction}.`,
     'Your very next response must be exactly one tool call and no prose.',
-    authoritativeCommands.length > 0
-      ? `If you are rerunning verification first, call shell with exactly one of these authoritative commands:\n${authoritativeCommands.map((command) => `- ${command}`).join('\n')}`
+    ...verificationFirstDirective,
+    authoritativeCommands.length === 0
+      ? `Call edit-file on ${exactTarget} now, or call write-file if rewriting the full file is simpler.`
       : '',
-    `Call edit-file on ${exactTarget} now, or call write-file if rewriting the full file is simpler.`,
-    alternateTargets.length > 0
+    authoritativeCommands.length === 0 && alternateTargets.length > 0
       ? `If ${exactTarget} is no longer the right surface, mutate one of these checkpoint-touched files instead: ${alternateTargets.join(', ')}.`
       : '',
     'If none of those files are the right next step anymore, call raise-escalation and explain why the checkpoint is no longer valid.',
@@ -816,6 +825,7 @@ export async function* runQuery(
   let noProgressTurnNudges = 0
   let noProgressToolTurns = 0
   let repeatedReadOnlyRefusals = 0
+  let checkpointVerificationReadFollowThroughRemaining = 0
   let sawToolCall = false
   const repeatedToolCallCounts = new Map<string, number>()
   const progressToolNames = new Set(context.noProgressToolNames ?? [])
@@ -1039,7 +1049,7 @@ export async function* runQuery(
       toolCalls.length > 0 &&
       toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input))
     const checkpointScopedReadOnlyFollowThroughAllowed =
-      checkpointActionIsExploratory &&
+      (checkpointActionIsExploratory || checkpointVerificationReadFollowThroughRemaining > 0) &&
       checkpointTouched.length > 0 &&
       toolCalls.length > 0 &&
       toolCalls.every((tc) =>
@@ -1089,10 +1099,21 @@ export async function* runQuery(
       shouldRefuseAfterCheckpointNextAction
     ) {
       repeatedReadOnlyRefusals += 1
+      const checkpointRefusalNudge =
+        shouldRefuseAfterCheckpointNextAction && !checkpointActionIsHandoff
+          ? strictCheckpointMutationNudge({
+              checkpointNextAction,
+              checkpointTouched,
+              authoritativeVerificationCommands,
+            })
+          : null
       const refusalMessage = shouldRefuseAfterMissingLikelyTarget
         ? `The likely target file does not exist yet at ${missingLikelyTarget}. Do not do more read-only exploration now. Create that file at exactly this path with write-file, or use edit-file only if the file now exists.`
         : shouldRefuseAfterCheckpointNextAction
-          ? `The latest checkpoint already names your next step: ${checkpointNextAction}. Do not do more read-only exploration now. ${checkpointActionIsExploratory && checkpointTouched.length > 0 ? `If you must read first, only use read-file on the checkpoint-touched files (${checkpointTouched.join(', ')}) before taking the next focused verification or mutation step.` : `Run that focused verification or mutation step next${checkpointTouched.length > 0 ? ` using the checkpoint-touched files (${checkpointTouched.join(', ')}) as your authoritative scope` : ''}`}, or raise-escalation if the checkpoint is no longer valid.`
+          ? checkpointActionIsHandoff
+            ? `The latest checkpoint already names your next step: ${checkpointNextAction}. Do not do more read-only exploration now. Raise-escalation if the checkpoint is no longer valid or you still cannot proceed.`
+            : (checkpointRefusalNudge ??
+              `The latest checkpoint already names your next step: ${checkpointNextAction}. Do not do more read-only exploration now. ${checkpointActionIsExploratory && checkpointTouched.length > 0 ? `If you must read first, only use read-file on the checkpoint-touched files (${checkpointTouched.join(', ')}) before taking the next focused verification or mutation step.` : `Run that focused verification or mutation step next${checkpointTouched.length > 0 ? ` using the checkpoint-touched files (${checkpointTouched.join(', ')}) as your authoritative scope` : ''}`}, or raise-escalation if the checkpoint is no longer valid.`)
         : shouldRefuseAfterInspectingLikelyTarget
           ? `You have already inspected an authoritative likely target file at ${inspectedLikelyTarget}. Do not do more read-only exploration now. ${likelyTargetMutationDirective({ likelyTargetFiles, inspectedLikelyTarget })} Or raise-escalation if you still cannot proceed.`
           : 'Research budget exhausted for this intake turn. Do not call more read-only tools now. Use update-product-brief, post-user-question, update-task, or raise-escalation instead.'
@@ -1184,6 +1205,17 @@ export async function* runQuery(
     }
 
     repeatedReadOnlyRefusals = 0
+    const usedCheckpointVerificationReadFollowThrough =
+      checkpointVerificationReadFollowThroughRemaining > 0 &&
+      toolCalls.length > 0 &&
+      toolCalls.every((tc) =>
+        isCheckpointScopedReadOnlyToolCall(
+          context.cwd,
+          context.toolMetadata,
+          tc,
+          checkpointTouched,
+        ),
+      )
 
     if (toolCalls.length === 1) {
       const tc = toolCalls[0]!
@@ -1228,6 +1260,18 @@ export async function* runQuery(
         usage: null,
       }
       messages.push({ role: 'user', content: [result] })
+      if (
+        checkpointNextAction.length > 0 &&
+        authoritativeVerificationCommands.length > 0 &&
+        tc.name === 'shell'
+      ) {
+        checkpointVerificationReadFollowThroughRemaining = 2
+      } else if (usedCheckpointVerificationReadFollowThrough) {
+        checkpointVerificationReadFollowThroughRemaining = Math.max(
+          0,
+          checkpointVerificationReadFollowThroughRemaining - 1,
+        )
+      }
       const repeatedResultNudge = repeatedToolResultNudge(
         repeatedToolCallCounts,
         context.cwd,
@@ -1282,6 +1326,18 @@ export async function* runQuery(
         }
       }
       messages.push({ role: 'user', content: toolResults })
+      if (
+        checkpointNextAction.length > 0 &&
+        authoritativeVerificationCommands.length > 0 &&
+        toolCalls.some((tc) => tc.name === 'shell')
+      ) {
+        checkpointVerificationReadFollowThroughRemaining = 2
+      } else if (usedCheckpointVerificationReadFollowThrough) {
+        checkpointVerificationReadFollowThroughRemaining = Math.max(
+          0,
+          checkpointVerificationReadFollowThroughRemaining - 1,
+        )
+      }
       const repeatedResultNudges = toolCalls
         .map((tc, i) => repeatedToolResultNudge(
           repeatedToolCallCounts,

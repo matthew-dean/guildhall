@@ -2439,3 +2439,11 @@ screen.
   drift back into file reads. Mutation-checkpoint nudges now surface the exact
   authoritative shell commands when they exist, so resumed workers get a
   concrete next verification step instead of an abstract instruction.
+- Verification follow-through on `2026-05-13`: once `t-minus-t` actually ran
+  the authoritative checkpoint verification commands, Guildhall was still
+  cutting the worker off before it could inspect the concrete failing source
+  and test files in the same recovery lane. After an authoritative
+  checkpoint-scoped verification command runs, Guildhall now grants a bounded
+  read-only follow-through window so the worker can inspect the real failing
+  implementation/test files before being forced into a mutation or
+  escalation.
