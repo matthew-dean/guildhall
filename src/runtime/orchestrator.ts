@@ -311,6 +311,24 @@ function isRecoverableWorkerTimeoutBlocker(task: Task): boolean {
   return /Worker timed out after failing to mutate the likely target file/i.test(blockReason)
 }
 
+function isRecoverableEnvironmentSetupBlocker(task: Task): boolean {
+  const blockReason = task.blockReason ?? ''
+  if (/Test environment setup failed/i.test(blockReason)) return true
+  return (task.escalations ?? []).some((escalation) => {
+    if (escalation.resolvedAt) return false
+    const summary = escalation.summary ?? ''
+    const details = escalation.details ?? ''
+    return (
+      escalation.reason === 'gate_hard_failure' &&
+      (
+        /Test environment setup failed/i.test(summary) ||
+        /Test environment setup failed/i.test(details) ||
+        /Cannot find module .*@nuxt\/test-utils/i.test(details)
+      )
+    )
+  })
+}
+
 function resolveRecoverableTurnLimitEscalations(task: Task, resolvedAt: string): void {
   for (const escalation of task.escalations ?? []) {
     if (escalation.resolvedAt) continue
@@ -326,6 +344,26 @@ function resolveRecoverableTurnLimitEscalations(task: Task, resolvedAt: string):
       escalation.resolvedAt = resolvedAt
       escalation.resolvedBy = 'system'
       escalation.resolution = 'Superseded after the project was explicitly resumed.'
+    }
+  }
+}
+
+function resolveRecoverableEnvironmentSetupEscalations(task: Task, resolvedAt: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    const summary = escalation.summary ?? ''
+    const details = escalation.details ?? ''
+    if (
+      escalation.reason === 'gate_hard_failure' &&
+      (
+        /Test environment setup failed/i.test(summary) ||
+        /Test environment setup failed/i.test(details) ||
+        /Cannot find module .*@nuxt\/test-utils/i.test(details)
+      )
+    ) {
+      escalation.resolvedAt = resolvedAt
+      escalation.resolvedBy = 'system'
+      escalation.resolution = 'Superseded after the task worktree install layout was repaired and bootstrap passed.'
     }
   }
 }
@@ -4579,6 +4617,36 @@ export class Orchestrator {
         if (!res.success) continue
         recoveryNote =
           'User restarted the project after an earlier task bootstrap failure. The task worktree bootstrap now passes, so Guildhall reopened the task and resumed work.'
+      } else if (isRecoverableEnvironmentSetupBlocker(task)) {
+        const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
+        const activeWorktreePath = task.worktreePath?.trim() ?? ''
+        const wtBootstrap = resolveEffectiveTaskBootstrapBlock({
+          task,
+          workspaceProjectPath: this.opts.config.projectPath,
+          workspaceBootstrap: this.opts.config.bootstrap ?? undefined,
+        })
+        if (
+          !activeWorktreePath ||
+          !existsSync(activeWorktreePath) ||
+          !wtBootstrap ||
+          wtBootstrap.commands.length === 0 ||
+          path.resolve(activeWorktreePath) === path.resolve(effectiveTaskProjectPath)
+        ) {
+          continue
+        }
+        const wtMemoryDir = path.join(activeWorktreePath, '.guildhall')
+        const res = runBootstrap({
+          projectPath: activeWorktreePath,
+          memoryDir: wtMemoryDir,
+          commands: wtBootstrap.commands,
+          successGates: wtBootstrap.successGates,
+          timeoutMs: wtBootstrap.timeoutMs,
+        })
+        if (!res.success) continue
+        resolveRecoverableEnvironmentSetupEscalations(task, now)
+        if (activeEscalations(task).length > 0) continue
+        recoveryNote =
+          'User restarted the project after a task-local test environment failure. The repaired worktree install now passes, so Guildhall reopened the task and resumed worker verification inside the isolated worktree.'
       } else if (isRecoverableReviewHandoffToolLoop(task)) {
         resolveRecoverableReviewHandoffEscalations(task, now)
         if (activeEscalations(task).length > 0) continue

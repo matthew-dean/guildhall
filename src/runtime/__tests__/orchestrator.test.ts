@@ -4858,6 +4858,108 @@ describe('Orchestrator.run — full loops', () => {
     delete process.env.GUILDHALL_CONFIG_DIR
   })
 
+  it('reopens a stale test-environment blocker when the repaired task worktree bootstrap now passes', async () => {
+    const subrepo = path.join(tmpDir, 'knit')
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'env-fix')
+    const guildhallHome = path.join(tmpDir, '.guildhall-home-env-fix')
+    process.env.GUILDHALL_CONFIG_DIR = guildhallHome
+    await fs.mkdir(subrepo, { recursive: true })
+    await fs.mkdir(worktreePath, { recursive: true })
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    await fs.writeFile(
+      path.join(worktreePath, 'package.json'),
+      JSON.stringify({
+        name: '@knit-app',
+        scripts: {
+          preinstall: 'node -e "process.exit(0)"',
+          prepare: 'node -e "process.exit(0)"',
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(path.join(worktreePath, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'env-fix',
+        status: 'blocked',
+        assignedTo: null,
+        domain: 'knit',
+        projectPath: subrepo,
+        worktreePath,
+        branchName: 'guildhall/task-env-fix',
+        baseBranch: 'main',
+        spec: 'approved spec',
+        blockReason: 'Test environment setup failed due to unresolved @nuxt/test-utils module',
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'progress',
+            content: 'Hit unresolved @nuxt/test-utils while trying to run focused verification.',
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-env-fix',
+            taskId: 'env-fix',
+            agentId: 'worker-agent',
+            raisedAt: '2026-05-03T00:00:00.000Z',
+            reason: 'gate_hard_failure',
+            summary: 'Test environment setup failed',
+            details:
+              'Cannot find module /tmp/knit/node_modules/.pnpm/@nuxt+test-utils/node_modules/@nuxt/test-utils/dist/runtime/entry.mjs',
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig({
+        projectPath: tmpDir,
+        bootstrap: {
+          commands: ['cd knit && pnpm install'],
+          successGates: [],
+          timeoutMs: 30_000,
+          verifiedAt: '2026-05-03T00:00:00Z',
+        },
+      }),
+      agents: agentSet({
+        worker: stubAgent('worker-agent', async () => {
+          await mutateTask('env-fix', { status: 'in_progress' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'env-fix')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.escalations?.[0]?.resolvedAt).toBeTruthy()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('task-local test environment failure'),
+    )).toBe(true)
+    delete process.env.GUILDHALL_CONFIG_DIR
+  })
+
   it('does not touch git isolation for spec-intake shaping work', async () => {
     const subrepo = path.join(tmpDir, 'knit')
     await fs.mkdir(subrepo, { recursive: true })

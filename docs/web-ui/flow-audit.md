@@ -2424,3 +2424,12 @@ screen.
   existing auth test never showed up in task context. `resolveLikelyTaskFiles()`
   now keeps explicit backticked test/spec file references, which should stop
   this exact false `spec_ambiguous` escalation shape.
+- Worktree install isolation on `2026-05-13`: Looma exposed that Guildhall's
+  task worktrees were pre-symlinking both root and package-level
+  `node_modules` back into the base repo. That made `pnpm install` inside the
+  task worktree mutate the source checkout's package links, and Vitest then
+  resolved `@nuxt/test-utils` back outside the worktree and failed before any
+  real task work could continue. Task worktrees now prune stale
+  `node_modules` symlinks instead of creating them, so bootstrap/install can
+  create a task-local dependency graph and keep test/runtime resolution inside
+  the isolated worktree.
