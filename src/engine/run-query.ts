@@ -2447,8 +2447,9 @@ async function executeToolCall(
   if (context.toolMetadata && toolName === 'shell') {
     const authoritativeVerificationCommands = parseAuthoritativeCommands(context.toolMetadata) ?? []
     const shellCommand = String(toolInput['command'] ?? '').trim()
+    const executedCommand = String(resultMetadata?.['executedCommand'] ?? shellCommand).trim()
     rememberVerificationResult(context.toolMetadata, {
-      shellCommand,
+      shellCommand: executedCommand,
       shellOutput: String(resultMetadata?.['output'] ?? toolResult.content ?? ''),
       shellSucceeded: resultMetadata?.['success'] === true,
       authoritativeCommands: authoritativeVerificationCommands,
@@ -2456,7 +2457,7 @@ async function executeToolCall(
     })
     if (
       latestCheckpointNextAction(context.toolMetadata).length > 0 &&
-      authoritativeVerificationCommands.some((command) => command.trim() === shellCommand)
+      authoritativeVerificationCommands.some((command) => command.trim() === executedCommand)
     ) {
       advanceCheckpointAfterVerification(context.toolMetadata)
     }

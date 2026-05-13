@@ -2734,6 +2734,113 @@ Uncertainties: none`,
     )).toBe(true)
   })
 
+  it('treats an authority-mapped shell command as the canonical verification command for resumed handoff', async () => {
+    const registry = new ToolRegistry()
+    let updateCalls = 0
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async (input) => ({
+          output: `${input.command} ok`,
+          is_error: false,
+          metadata: {
+            success: true,
+            exitCode: 0,
+            executedCommand: 'tsc --noEmit --project frontend/tsconfig.json',
+            usedAuthoritativeCommand: true,
+          },
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string().optional(),
+          taskId: z.string(),
+          status: z.string(),
+          note: z.object({
+            agentId: z.string(),
+            role: z.string(),
+            content: z.string(),
+          }).optional(),
+        }),
+        execute: async (input) => {
+          if (input.status === 'review') updateCalls += 1
+          return { output: 'updated', is_error: false, metadata: { taskId: input.taskId } }
+        },
+      }),
+    )
+
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('shell', { command: 'tsc --noEmit' }, 'shell-1') },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-verify-alias',
+            status: 'review',
+            note: {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: `**Self-critique:**
+For each acceptance criterion:
+- [ac-1]: Met — Verification passed.
+
+Minimum-scope check:
+- Files changed: /workspace/project/frontend/app/pages/register.vue
+- Smallest useful change?: yes
+- Anything to revert before review?: none`,
+            },
+          },
+          'review-1',
+        ),
+      },
+      { message: assistantText('ok') },
+    ])
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 6,
+          toolMetadata: {
+            current_task_id: 'task-verify-alias',
+            current_task_has_structured_self_critique: true,
+            review_handoff_evidence: {
+              taskId: 'task-verify-alias',
+              inspectedImplementationFile: false,
+              changedOrVerified: false,
+            },
+            current_task_checkpoint_files_touched: [
+              'frontend/app/pages/register.vue',
+            ],
+            current_task_verification_commands: [
+              'tsc --noEmit --project frontend/tsconfig.json',
+            ],
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    expect(updateCalls).toBe(1)
+    expect(events.some((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.output === 'updated',
+    )).toBe(true)
+  })
+
   it('blocks review handoff when changed task files introduce a missing local import path', async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), 'guildhall-missing-import-'))
     try {

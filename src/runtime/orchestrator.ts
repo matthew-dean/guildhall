@@ -267,6 +267,10 @@ function isRecoverableReviewHandoffToolLoop(task: Task): boolean {
           `${summary}\n${details}`,
         ) ||
         (
+          /system validator rejects passing verification/i.test(summary) &&
+          /durable proof that the task passed its required verification commands/i.test(details)
+        ) ||
+        (
           /despite passing all verification/i.test(summary) &&
           /durable proof that the task passed its required verification commands/i.test(details)
         )
@@ -278,6 +282,7 @@ function isRecoverableReviewHandoffToolLoop(task: Task): boolean {
       /Blocked transitioning task to review/i.test(blockReason) ||
       /Stuck in tool loop transitioning .* to review status/i.test(blockReason) ||
       /Tool validation bug prevents transitioning .* to review status/i.test(blockReason) ||
+      /Cannot transition to review .* system validator rejects passing verification/i.test(blockReason) ||
       /Task blocked from transitioning to review despite passing all verification/i.test(blockReason) ||
       hasValidatorBugEscalation
     )
@@ -302,6 +307,7 @@ function resolveRecoverableReviewHandoffEscalations(task: Task, resolvedAt: stri
         /Blocked transitioning task to review[^\n]*tool loop/i.test(summary) ||
         /Stuck in tool loop transitioning .* to review status/i.test(summary) ||
         /Tool validation bug prevents transitioning .* to review status/i.test(summary) ||
+        /Cannot transition to review .* system validator rejects passing verification/i.test(summary) ||
         /Task blocked from transitioning to review despite passing all verification/i.test(summary) ||
         /persist a structured self-critique note via update-task first/i.test(details) ||
         /update-task tool kept rejecting status=review/i.test(details) ||
