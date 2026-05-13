@@ -293,6 +293,19 @@ describe('buildContext — task summary', () => {
         intent: 'Regenerated supabase types',
         filesTouched: ['web/app/types/supabase.ts', 'web/app/composables/use-workspace.ts'],
         nextPlannedAction: 'Run the focused typecheck next',
+        resumeContext: {
+          verification: [
+            {
+              command: 'pnpm -F web typecheck',
+              passed: false,
+              observedAt: '2026-05-07T18:24:00.000Z',
+              summary: 'Cannot find name WorkspaceSummary',
+            },
+          ],
+          companionFiles: ['web/tests/unit/composables/use-workspace.test.ts'],
+          workingHypothesis: 'The generated type wiring is correct, but one consumer still expects the old WorkspaceSummary shape.',
+          safeNextMutationSurface: ['web/app/types/supabase.ts', 'web/app/composables/use-workspace.ts'],
+        },
         writtenAt: '2026-05-07T18:23:25.747Z',
       }, null, 2),
       'utf-8',
@@ -306,6 +319,10 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('### Latest Checkpoint')
     expect(ctx.taskSummary).toContain('Regenerated supabase types')
     expect(ctx.taskSummary).toContain('Run the focused typecheck next')
+    expect(ctx.taskSummary).toContain('Latest authoritative verification: pnpm -F web typecheck (failed)')
+    expect(ctx.taskSummary).toContain('Cannot find name WorkspaceSummary')
+    expect(ctx.taskSummary).toContain('Companion files: web/tests/unit/composables/use-workspace.test.ts')
+    expect(ctx.taskSummary).toContain('Safe next mutation surface: web/app/types/supabase.ts, web/app/composables/use-workspace.ts')
     expect(ctx.taskSummary).toContain(path.join(worktreePath, 'web/app/types/supabase.ts'))
     expect(ctx.taskSummary).toContain(path.join(worktreePath, 'web/app/composables/use-workspace.ts'))
   })

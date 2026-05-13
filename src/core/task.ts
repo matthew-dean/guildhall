@@ -363,6 +363,21 @@ export const Checkpoint = z.object({
   // engine state (history, tool-use cache, compaction bookmarks). Optional
   // because the first checkpoint may precede the first session snapshot.
   engineSessionId: z.string().optional(),
+  // Durable resume context for long-running tasks. Captures the
+  // task-local evidence and narrowing decisions that should survive
+  // coordinator restarts so a resumed worker does not have to rediscover
+  // them from scratch.
+  resumeContext: z.object({
+    verification: z.array(z.object({
+      command: z.string(),
+      passed: z.boolean(),
+      observedAt: z.string(),
+      summary: z.string().optional(),
+    })).default([]),
+    companionFiles: z.array(z.string()).default([]),
+    workingHypothesis: z.string().optional(),
+    safeNextMutationSurface: z.array(z.string()).default([]),
+  }).optional(),
   writtenAt: z.string(), // ISO timestamp
 })
 export type Checkpoint = z.infer<typeof Checkpoint>

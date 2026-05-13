@@ -23,6 +23,7 @@ import {
   type ModelAssignmentConfig,
   type AdjudicationRecord,
   type AgentIssue,
+  type Checkpoint,
   type ReviewVerdict,
   type Task,
   type TaskStatus,
@@ -1209,9 +1210,122 @@ function agentInactivityTimeoutMessage(agentName: string, timeoutMs: number): st
   return `${agentName} timed out after ${timeoutMs}ms of inactivity`
 }
 
+type CheckpointResumeContext = NonNullable<Checkpoint['resumeContext']>
+
+function uniqueNonEmptyStrings(values: Iterable<string>): string[] {
+  const seen = new Set<string>()
+  const ordered: string[] = []
+  for (const value of values) {
+    const trimmed = value.trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    ordered.push(trimmed)
+  }
+  return ordered
+}
+
+function checkpointVerificationHistoryFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+): CheckpointResumeContext['verification'] {
+  const raw = metadata?.['current_task_verification_history']
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((entry): entry is CheckpointResumeContext['verification'][number] => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false
+      const rec = entry as Record<string, unknown>
+      return (
+        typeof rec['command'] === 'string' &&
+        typeof rec['passed'] === 'boolean' &&
+        typeof rec['observedAt'] === 'string'
+      )
+    })
+    .map((entry) => ({
+      command: entry.command.trim(),
+      passed: entry.passed,
+      observedAt: entry.observedAt,
+      ...(typeof entry.summary === 'string' && entry.summary.trim()
+        ? { summary: entry.summary.trim() }
+        : {}),
+    }))
+    .filter((entry) => entry.command.length > 0)
+    .slice(-6)
+}
+
+function checkpointCompanionFilesFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+  projectRoot: string,
+  filesTouched: readonly string[],
+): string[] {
+  const touched = new Set(
+    filesTouched.map((file) =>
+      path.resolve(path.isAbsolute(file) ? file : path.join(projectRoot, file)),
+    ),
+  )
+  const likelyTargets = Array.isArray(metadata?.['current_task_likely_target_files'])
+    ? (metadata?.['current_task_likely_target_files'] as unknown[])
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : []
+  const readFilePaths = Array.isArray(metadata?.['read_file_state'])
+    ? (metadata?.['read_file_state'] as unknown[])
+        .map((entry) => {
+          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return ''
+          return typeof (entry as Record<string, unknown>)['path'] === 'string'
+            ? String((entry as Record<string, unknown>)['path']).trim()
+            : ''
+        })
+        .filter(Boolean)
+    : []
+
+  return uniqueNonEmptyStrings([...readFilePaths, ...likelyTargets])
+    .filter((candidate) => {
+      const resolved = path.resolve(candidate)
+      return !touched.has(resolved)
+    })
+    .slice(0, 8)
+}
+
+function checkpointSafeNextMutationSurface(
+  filesTouched: readonly string[],
+  companionFiles: readonly string[],
+): string[] {
+  const primary = filesTouched.length > 0 ? filesTouched : companionFiles
+  return uniqueNonEmptyStrings(primary).slice(0, 6)
+}
+
+function checkpointWorkingHypothesis(input: {
+  existing: string
+  verification: CheckpointResumeContext['verification']
+  companionFiles: readonly string[]
+  safeNextMutationSurface: readonly string[]
+}): string | undefined {
+  const existing = input.existing.trim()
+  if (existing) return existing
+  const focusSurface = input.safeNextMutationSurface.slice(0, 3)
+  const companions = input.companionFiles.slice(0, 2)
+  const latestVerification = input.verification[input.verification.length - 1]
+  if (latestVerification) {
+    const focusText =
+      focusSurface.length > 0
+        ? `Focus the next change on ${focusSurface.join(', ')}`
+        : 'Keep the next change tightly scoped to the files already under active work'
+    const companionText =
+      companions.length > 0
+        ? ` while using ${companions.join(', ')} as the supporting context`
+        : ''
+    return latestVerification.passed
+      ? `${focusText}${companionText}. The last authoritative verification passed (${latestVerification.command}); move directly toward a durable handoff unless a new blocker appears.`
+      : `${focusText}${companionText}. The last authoritative verification failed (${latestVerification.command}); repair the remaining failure before broadening scope.`
+  }
+  if (focusSurface.length > 0) {
+    return `The safest next mutation surface is ${focusSurface.join(', ')}. Stay inside that surface until focused verification says the task is genuinely clear again.`
+  }
+  return undefined
+}
+
 function renderImmediateResumeInstructions(
   task: Task,
   agentName: string,
+  checkpoint: Checkpoint | null,
   checkpointNextAction = '',
 ): string {
   if (agentName !== 'worker-agent' || task.status !== 'in_progress') return ''
@@ -1228,13 +1342,24 @@ function renderImmediateResumeInstructions(
       'Only return to file reads or broader verification if the handoff truly cannot be completed and you have explained why.',
     ].join('\n')
   }
+  const resumeSurface = checkpoint?.resumeContext?.safeNextMutationSurface?.slice(0, 4) ?? []
   const likelyFiles = resolveLikelyTaskFiles(task).slice(0, 4)
-  if (likelyFiles.length === 0) return ''
+  const targetFiles = resumeSurface.length > 0 ? resumeSurface : likelyFiles
+  if (targetFiles.length === 0) return ''
+  const latestVerification = checkpoint?.resumeContext?.verification?.[checkpoint.resumeContext.verification.length - 1]
   return [
     '### Immediate Resume Instructions',
     'You are resuming an in-progress coding task.',
+    ...(checkpoint?.resumeContext?.workingHypothesis
+      ? [`Working hypothesis: ${checkpoint.resumeContext.workingHypothesis}`]
+      : []),
+    ...(latestVerification
+      ? [
+          `Latest authoritative verification: ${latestVerification.command} (${latestVerification.passed ? 'passed' : 'failed'})${latestVerification.summary ? ` — ${latestVerification.summary}` : ''}.`,
+        ]
+      : []),
     'Open or edit these exact files before any directory listing or broad globbing:',
-    ...likelyFiles.map((file) => `- ${file}`),
+    ...targetFiles.map((file) => `- ${file}`),
     'If one of these likely target files does not exist yet, create it at that exact path instead of searching for alternate directories.',
     'After you have the needed file contents, your next step should be a concrete mutation or a focused verification command tied to those files.',
     'Do not use list-files, glob, or generic repo-root shell inspection until you have attempted that mutation or focused verification.',
@@ -1927,6 +2052,7 @@ export class Orchestrator {
     const immediateResumeInstructions = renderImmediateResumeInstructions(
       task,
       agent.name,
+      checkpoint,
       checkpointNextAction,
     )
 
@@ -2011,6 +2137,21 @@ export class Orchestrator {
           : {}),
         ...(checkpoint?.filesTouched.length
           ? { current_task_checkpoint_files_touched: checkpoint.filesTouched }
+          : {}),
+        ...(checkpoint?.resumeContext?.verification?.length
+          ? {
+              current_task_checkpoint_verification: checkpoint.resumeContext.verification,
+              current_task_verification_history: checkpoint.resumeContext.verification,
+            }
+          : {}),
+        ...(checkpoint?.resumeContext?.companionFiles?.length
+          ? { current_task_checkpoint_companion_files: checkpoint.resumeContext.companionFiles }
+          : {}),
+        ...(checkpoint?.resumeContext?.workingHypothesis
+          ? { current_task_checkpoint_working_hypothesis: checkpoint.resumeContext.workingHypothesis }
+          : {}),
+        ...(checkpoint?.resumeContext?.safeNextMutationSurface?.length
+          ? { current_task_checkpoint_safe_mutation_surface: checkpoint.resumeContext.safeNextMutationSurface }
           : {}),
         ...(this.hasStructuredSelfCritique(task)
           ? { current_task_has_structured_self_critique: true }
@@ -5476,11 +5617,15 @@ export class Orchestrator {
   }): Promise<boolean> {
     if (input.task.status !== 'in_progress') return false
 
+    const effectiveProjectPath = resolveEffectiveTaskProjectPath(
+      input.task,
+      this.opts.config.projectPath,
+    )
     let filesTouched = await this.changedFilesForTask(input.task)
     if (filesTouched.length === 0) {
       filesTouched = this.checkpointTouchedFilesFromMetadata(
         input.metadata,
-        resolveEffectiveTaskProjectPath(input.task, this.opts.config.projectPath),
+        effectiveProjectPath,
       )
     }
     const recentVerifiedWork = Array.isArray(input.metadata?.['recent_verified_work'])
@@ -5495,6 +5640,22 @@ export class Orchestrator {
         return note.agentId === input.agentName || role === 'self-critique'
       })?.content
       .trim()
+    const verification = checkpointVerificationHistoryFromMetadata(input.metadata)
+    const companionFiles = checkpointCompanionFilesFromMetadata(
+      input.metadata,
+      effectiveProjectPath,
+      filesTouched,
+    )
+    const safeNextMutationSurface = checkpointSafeNextMutationSurface(
+      filesTouched,
+      companionFiles,
+    )
+    const workingHypothesis = checkpointWorkingHypothesis({
+      existing: String(input.metadata?.['current_task_checkpoint_working_hypothesis'] ?? ''),
+      verification,
+      companionFiles,
+      safeNextMutationSurface,
+    })
 
     const verificationSummary = recentVerifiedWork
       .filter((entry) => /^(Ran bash command|Edited file|Wrote file)\b/.test(entry.trim()))
@@ -5522,6 +5683,12 @@ export class Orchestrator {
       intent: intentParts.join(' '),
       nextPlannedAction: nextAction,
       filesTouched,
+      resumeContext: {
+        verification,
+        companionFiles,
+        ...(workingHypothesis ? { workingHypothesis } : {}),
+        safeNextMutationSurface,
+      },
     })
     return result.success
   }

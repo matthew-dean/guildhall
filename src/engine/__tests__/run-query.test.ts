@@ -3,6 +3,9 @@
  * Upstream reference: openharness tests for engine/query.py.
  */
 
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
@@ -1128,7 +1131,10 @@ describe('runQuery — unknown tool + invalid input', () => {
         messages,
       ),
     )
-    const completed = events.find((e) => e.type === 'tool_execution_completed')
+    const completed = events.find((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.output.includes('durable proof'),
+    )
     expect(called).toBe(false)
     expect(completed?.type === 'tool_execution_completed' ? completed.is_error : false).toBe(true)
     expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('Blocked transition to review')
@@ -1251,6 +1257,138 @@ Uncertainties: none`,
     expect(called).toBe(true)
     expect(updateCompleted?.type === 'tool_execution_completed' ? updateCompleted.is_error : true).toBe(false)
     expect(updateCompleted?.type === 'tool_execution_completed' ? updateCompleted.output : '').toBe('updated')
+  })
+
+  it('blocks review handoff when authoritative verification commands have not been durably proven', async () => {
+    const registry = new ToolRegistry()
+    let called = false
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'export const x = 1', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async (input) => ({
+          output: `${input.command} ok`,
+          is_error: false,
+          metadata: {
+            success: true,
+            exitCode: 0,
+            executedCommand: input.command,
+            usedAuthoritativeCommand: false,
+          },
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string(),
+          taskId: z.string(),
+          status: z.string(),
+        }),
+        execute: async () => {
+          called = true
+          return { output: 'updated', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'read-1',
+              name: 'read-file',
+              input: { filePath: '/workspace/project/knit/web/app/components/organisms/VersionHistoryDialog.vue' },
+            },
+          ],
+        },
+      },
+      {
+        message: assistantToolUse(
+          'shell',
+          {
+            command: 'git status --short',
+          },
+          'shell-non-authoritative',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-verify',
+            status: 'review',
+            note: {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: `**Self-critique:**
+For each acceptance criterion:
+- [ac-1]: Met — Added the missing diff action.
+- [ac-7]: Met — Typecheck passes.
+- [ac-8]: Met — Build succeeds.
+
+Minimum-scope check:
+- Files changed: /workspace/project/knit/web/app/components/organisms/VersionHistoryDialog.vue
+- Smallest useful change?: yes
+- Anything to revert before review?: none
+
+Out-of-scope changes introduced: none
+Uncertainties: none`,
+            },
+          },
+          'update-verify',
+        ),
+      },
+      { message: assistantText('ok') },
+    ])
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_task_id: 'task-verify',
+            current_task_verification_commands: [
+              'pnpm --filter @knit-app typecheck',
+              'pnpm --filter @knit-app build',
+            ],
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    const completed = events.find((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.output.includes('durable proof'),
+    )
+    expect(called).toBe(false)
+    expect(completed?.type === 'tool_execution_completed' ? completed.is_error : false).toBe(true)
+    expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('durable proof')
+    expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('pnpm --filter @knit-app typecheck')
+    expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('pnpm --filter @knit-app build')
   })
 
   it('allows review handoff when the self-critique uses plain AC lines and a bold minimum-scope heading', async () => {
@@ -2373,6 +2511,307 @@ Uncertainties: none`,
     )).toBe(true)
   })
 
+  it('allows review handoff only after the authoritative verification command set succeeds', async () => {
+    const registry = new ToolRegistry()
+    let updateCalls = 0
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'template contents', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async (input) => ({
+          output: `${input.command} ok`,
+          is_error: false,
+          metadata: {
+            success: true,
+            exitCode: 0,
+            executedCommand: input.command,
+            usedAuthoritativeCommand: true,
+          },
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string(),
+          taskId: z.string(),
+          status: z.string(),
+        }),
+        execute: async () => {
+          updateCalls += 1
+          return { output: 'updated', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'read-1',
+              name: 'read-file',
+              input: { filePath: '/workspace/project/knit/web/app/components/organisms/VersionHistoryDialog.vue' },
+            },
+          ],
+        },
+      },
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'shell-1',
+              name: 'shell',
+              input: { command: 'pnpm --filter @knit-app typecheck' },
+            },
+          ],
+        },
+      },
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'shell-2',
+              name: 'shell',
+              input: { command: 'pnpm --filter @knit-app build' },
+            },
+          ],
+        },
+      },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-verify',
+            status: 'review',
+            note: {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: `**Self-critique:**
+For each acceptance criterion:
+- [ac-1]: Met — Added the missing diff action.
+- [ac-7]: Met — Typecheck passes.
+- [ac-8]: Met — Build succeeds.
+
+Minimum-scope check:
+- Files changed: /workspace/project/knit/web/app/components/organisms/VersionHistoryDialog.vue
+- Smallest useful change?: yes
+- Anything to revert before review?: none
+
+Out-of-scope changes introduced: none
+Uncertainties: none`,
+            },
+          },
+          'update-verify',
+        ),
+      },
+      { message: assistantText('ok') },
+    ])
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 8,
+          toolMetadata: {
+            current_task_id: 'task-verify',
+            current_task_verification_commands: [
+              'pnpm --filter @knit-app typecheck',
+              'pnpm --filter @knit-app build',
+            ],
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    expect(updateCalls).toBe(1)
+    expect(events.some((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.output === 'updated',
+    )).toBe(true)
+  })
+
+  it('blocks review handoff when changed task files introduce a missing local import path', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'guildhall-missing-import-'))
+    try {
+      const taskRoot = join(tempRoot, 'knit')
+      const sourceFile = join(taskRoot, 'web', 'app', 'components', 'organisms', 'VersionHistoryDialog.vue')
+      mkdirSync(join(taskRoot, 'web', 'app', 'components', 'organisms'), { recursive: true })
+      writeFileSync(
+        sourceFile,
+        [
+          "<script setup lang=\"ts\">",
+          "import LoomaButton from '@/components/atoms/LoomaButton.vue'",
+          '</script>',
+          '',
+        ].join('\n'),
+      )
+
+      const registry = new ToolRegistry()
+      let updateCalls = 0
+      registry.register(
+        defineTool({
+          name: 'read-file',
+          description: '',
+          inputSchema: z.object({ filePath: z.string() }),
+          isReadOnly: () => true,
+          execute: async () => ({ output: 'source read', is_error: false }),
+        }),
+      )
+      registry.register(
+        defineTool({
+          name: 'shell',
+          description: '',
+          inputSchema: z.object({ command: z.string() }),
+          isReadOnly: () => true,
+          execute: async (input) => ({
+            output: `${input.command} ok`,
+            is_error: false,
+            metadata: {
+              success: true,
+              exitCode: 0,
+              executedCommand: input.command,
+              usedAuthoritativeCommand: true,
+            },
+          }),
+        }),
+      )
+      registry.register(
+        defineTool({
+          name: 'update-task',
+          description: '',
+          inputSchema: z.object({
+            tasksPath: z.string(),
+            taskId: z.string(),
+            status: z.string(),
+          }),
+          execute: async () => {
+            updateCalls += 1
+            return { output: 'updated', is_error: false }
+          },
+        }),
+      )
+      const client = new ScriptedApiClient([
+        {
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'read-1',
+                name: 'read-file',
+                input: { filePath: sourceFile },
+              },
+            ],
+          },
+        },
+        {
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'shell-1',
+                name: 'shell',
+                input: { command: 'pnpm --filter @knit-app typecheck' },
+              },
+            ],
+          },
+        },
+        {
+          message: assistantToolUse(
+            'update-task',
+            {
+              taskId: 'task-import-189j8he',
+              status: 'review',
+              note: {
+                agentId: 'worker-agent',
+                role: 'self-critique',
+                content: `**Self-critique:**
+For each acceptance criterion:
+- [ac-1]: Met — Added the version diff controls.
+- [ac-7]: Met — Typecheck passes.
+
+Minimum-scope check:
+- Files changed: ${sourceFile}
+- Smallest useful change?: yes
+- Anything to revert before review?: none
+
+Out-of-scope changes introduced: none
+Uncertainties: none`,
+              },
+            },
+            'update-missing-import',
+          ),
+        },
+        { message: assistantText('ok') },
+      ])
+
+      const events = await drain(
+        runQuery(
+          {
+            apiClient: client,
+            toolRegistry: registry,
+            permissionChecker: autoChecker(),
+            cwd: tempRoot,
+            model: 'test',
+            systemPrompt: '',
+            maxTokens: 256,
+            maxTurns: 8,
+            toolMetadata: {
+              current_task_id: 'task-import-189j8he',
+              current_task_worktree_path: taskRoot,
+              current_task_project_path: taskRoot,
+              current_task_checkpoint_files_touched: [
+                'web/app/components/organisms/VersionHistoryDialog.vue',
+              ],
+              current_task_verification_commands: [
+                'pnpm --filter @knit-app typecheck',
+              ],
+            },
+          },
+          [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+        ),
+      )
+
+      const blocked = events.find((e) =>
+        e.type === 'tool_execution_completed' &&
+        e.output.includes('Missing import: "@/components/atoms/LoomaButton.vue"'),
+      )
+      expect(updateCalls).toBe(0)
+      expect(blocked?.type === 'tool_execution_completed' ? blocked.is_error : false).toBe(true)
+      expect(blocked?.type === 'tool_execution_completed' ? blocked.output : '').toContain('VersionHistoryDialog.vue')
+      expect(blocked?.type === 'tool_execution_completed' ? blocked.output : '').toContain('LoomaButton.vue')
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true })
+    }
+  })
+
   it('nudges the agent after repeating the same failed tool call', async () => {
     const registry = new ToolRegistry()
     registry.register(
@@ -3409,7 +3848,7 @@ Uncertainties: none`,
         }),
       }),
     )
-    const client = new ScriptedApiClient([
+    const firstClient = new ScriptedApiClient([
       {
         message: assistantToolUse(
           'shell',
@@ -3585,6 +4024,89 @@ Uncertainties: none`,
         block.content.includes('contents of /workspace/project/packages/converter/test/ts-to-jsdoc.test.ts'),
       ),
     )).toBe(true)
+  })
+
+  it('advances a verification-backed checkpoint after a successful authoritative shell command', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string(), timeoutMs: z.number().optional() }),
+        isReadOnly: () => false,
+        execute: async ({ command }) => ({
+          output: `PASS ${String(command)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async ({ filePath }) => ({
+          output: `contents of ${String(filePath)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    const toolMetadata: Record<string, unknown> = {
+      current_agent_id: 'worker-agent',
+      current_task_id: 'task-012',
+      current_task_checkpoint_next_action:
+        'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+      current_task_checkpoint_files_touched: [
+        'packages/converter/src/jsdocHelpers.ts',
+        'packages/converter/test/ts-to-jsdoc.test.ts',
+      ],
+      current_task_verification_commands: [
+        'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+      ],
+    }
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'shell',
+          {
+            command: 'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+            timeoutMs: 60_000,
+          },
+          'toolu_verify_success',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 5,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata,
+        },
+        messages,
+      ),
+    )
+
+    expect(toolMetadata['current_task_checkpoint_next_action']).toBe(
+      'Inspect the checkpoint-touched files against the verification result, then fix whatever still fails before you write the structured self-critique.',
+    )
+
   })
 
   it('allows verification-backed likely-target reads on a resumed checkpoint before rerunning shell in the same turn', async () => {

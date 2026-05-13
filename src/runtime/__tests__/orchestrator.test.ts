@@ -1816,12 +1816,26 @@ describe('Orchestrator.tick — routing', () => {
       intent: string
       nextPlannedAction: string
       filesTouched: string[]
+      resumeContext?: {
+        verification?: Array<{
+          command: string
+          passed: boolean
+          observedAt: string
+          summary?: string
+        }>
+        companionFiles?: string[]
+        workingHypothesis?: string
+        safeNextMutationSurface?: string[]
+      }
     }
     expect(checkpoint.intent).toContain('empty assistant reply after verified progress')
     expect(checkpoint.intent).toContain('Ran bash command cd web && pnpm vitest')
     expect(checkpoint.nextPlannedAction).toContain('Resume from the latest self-critique and verification evidence')
     expect(checkpoint.nextPlannedAction).toContain('hand off to review')
     expect(checkpoint.filesTouched).toContain('web/tests/unit/composables/use-presence.test.ts')
+    expect(checkpoint.resumeContext?.verification).toEqual([])
+    expect(checkpoint.resumeContext?.safeNextMutationSurface).toContain('web/tests/unit/composables/use-presence.test.ts')
+    expect(checkpoint.resumeContext?.workingHypothesis).toContain('safest next mutation surface')
   })
 
   it('writes a recovery checkpoint even when the worker already blocked the task before an empty assistant reply', async () => {

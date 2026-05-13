@@ -64,6 +64,8 @@ screen.
 - [x] Make live project runs visibly real again across all three active test projects. On `2026-05-12`, Looma/Knit now accepts `Let Guildhall shape this`, shows a toast, flips into a real `Guildhall working / Drafting` state, and advances to a grounded coordinator question about whether generated Supabase typing work is duplicate or should expand. Fair Labor License now advances sequentially from the auth-scaffolding question into live coordinator/spec work and lands on a concrete database-migration question instead of circling. `t-minus-t` no longer treats `Start` as a dead button on hard-loaded slug pages: project-scoped mutations now inject `projectId`, the task resumes into a visible `Guildhall working` state, and shell/file activity shows up immediately in Thread.
 - [x] Clean up the pre-slug API brief contamination in Looma + Knit. The live Thread was faithfully rendering `/Users/matthew/git/oss/looma-knit/memory/project-brief.md`, but that file still contained Fair Labor License copy from the pre-project-scoped mutation era. The saved brief now correctly describes Looma as a general-purpose UI library and Knit as the product app migrating onto it.
 - [x] Make strict project-memory tools more forgiving of near-miss agent output. The runtime now auto-hydrates and normalizes project-scoped `log-decision`, `log-progress`, and `raise-escalation` inputs so missing path envelopes, stringified nested payloads, and omitted task/agent context stop surfacing as raw schema failures when the agent intent was otherwise clear.
+- [x] Stop trusting worker self-critique alone for verification-gated review handoffs. Guildhall now records which authoritative verification commands actually succeeded and blocks `status: review` until that exact durable evidence exists, so a worker can no longer claim `typecheck/build passed` without having run the task's real verification command set.
+- [x] Stop obviously invented local imports from crossing the review handoff. Guildhall now inspects task-owned changed files for missing local imports before allowing `status: review`, so a Looma/Knit-style guess like `@/components/atoms/LoomaButton.vue` is blocked with a grounded recovery message instead of looking like completed work.
 - [x] Let shared-checkout recovery actually carry Fair Labor License forward after the old no-worktree bug. Guildhall now checkpoints its own dirty base-checkout task work into the task branch without sweeping `memory/` or `guildhall.yaml`, reopens recoverable dirty-repo / existing-branch blockers on `Start`, reattaches existing task branches into isolated worktrees, filters `node_modules` checkpoint noise out of recovery hints, and accepts the real worker self-critique format (`AC-1 (Label): ...` plus bold `**Minimum-scope check:**`) when handing off to review.
 - [x] Stop the review handoff guard from treating verification-only tasks like code implementation tasks. Looma/Knit proved the bug live on `Mobile: test on real device (Safari iOS, Chrome Android)`: the worker produced a report and structured self-critique, then Guildhall blocked `status: review` because no implementation source file had been inspected. Verification/manual-QA tasks now accept durable verification evidence plus self-critique as sufficient review handoff proof.
 - [x] Make the project shell header more humane on narrower widths. The rail no longer force-collapses as early, the project title now lives in the top bar instead of disappearing in mobile mode, and generated fallback names are humanized from folder/package slugs into sentence case rather than shouting uppercase raw ids.
@@ -2454,3 +2456,16 @@ screen.
   distinguishes between broad drift and narrowly scoped support-file reads, so
   resumed workers can inspect likely-target companion files without reopening
   general exploration or tripping the mutation-checkpoint blocker again.
+- Projects-home mobile scroll on `2026-05-13`: the projects page was rendered
+  inside the fixed app shell without claiming its own scrollable body, so at
+  smaller/mobile widths the lower project cards were clipped and unreachable.
+  `ProjectsShell.svelte` now owns a real height-bounded body with `overflow-y:
+  auto`, which restores vertical scrolling for the projects list inside the
+  app frame.
+- Durable resume-context checkpoints on `2026-05-13`: long-running worker
+  tasks were still restarting with only `nextPlannedAction` and touched files,
+  so they lost the narrower picture they had already earned. Recovery
+  checkpoints now persist a structured `resumeContext` with authoritative
+  verification history, companion files, a working hypothesis, and the safe
+  next mutation surface, and resumed workers get that context back in both the
+  prompt and task-scoped metadata.

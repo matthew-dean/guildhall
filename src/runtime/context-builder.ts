@@ -255,6 +255,21 @@ function renderLatestCheckpoint(task: Task, checkpoint: Checkpoint | null): stri
   if (checkpoint.filesTouched.length > 0) {
     lines.push(`- Files touched: ${checkpoint.filesTouched.join(', ')}`)
   }
+  if (checkpoint.resumeContext?.verification?.length) {
+    const latestVerification = checkpoint.resumeContext.verification[checkpoint.resumeContext.verification.length - 1]
+    lines.push(
+      `- Latest authoritative verification: ${latestVerification.command} (${latestVerification.passed ? 'passed' : 'failed'})${latestVerification.summary ? ` — ${latestVerification.summary}` : ''}`,
+    )
+  }
+  if (checkpoint.resumeContext?.companionFiles?.length) {
+    lines.push(`- Companion files: ${checkpoint.resumeContext.companionFiles.join(', ')}`)
+  }
+  if (checkpoint.resumeContext?.workingHypothesis?.trim()) {
+    lines.push(`- Working hypothesis: ${checkpoint.resumeContext.workingHypothesis.trim()}`)
+  }
+  if (checkpoint.resumeContext?.safeNextMutationSurface?.length) {
+    lines.push(`- Safe next mutation surface: ${checkpoint.resumeContext.safeNextMutationSurface.join(', ')}`)
+  }
   return lines.join('\n')
 }
 

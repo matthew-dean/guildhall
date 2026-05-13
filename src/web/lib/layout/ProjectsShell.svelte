@@ -25,14 +25,25 @@
 
 <style>
   .projects-shell {
-    padding: var(--s-5);
     display: flex;
     flex-direction: column;
     gap: var(--s-5);
+    block-size: 100%;
+    min-block-size: 0;
+    overflow: hidden;
+    padding: var(--s-5);
+    box-sizing: border-box;
   }
   .projects-shell-hero,
   .projects-shell-notices,
   .projects-shell-body {
     min-width: 0;
+  }
+  .projects-shell-body {
+    flex: 1 1 auto;
+    min-block-size: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-bottom: var(--s-6);
   }
 </style>

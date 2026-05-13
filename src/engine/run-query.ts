@@ -28,6 +28,7 @@ import type {
   ToolUseBlock,
   UsageSnapshot,
 } from '@guildhall/protocol'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import {
   emptyUsage,
@@ -418,6 +419,189 @@ function checkpointFilesTouched(
   const raw = toolMetadata?.['current_task_checkpoint_files_touched']
   if (!Array.isArray(raw)) return []
   return raw.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+}
+
+type VerificationHistoryEntry = {
+  command: string
+  passed: boolean
+  observedAt: string
+  summary?: string
+}
+
+function verificationHistory(
+  toolMetadata: Record<string, unknown> | undefined | null,
+): VerificationHistoryEntry[] {
+  if (!toolMetadata) return []
+  const raw = toolMetadata['current_task_verification_history']
+  if (!Array.isArray(raw)) {
+    const replacement: VerificationHistoryEntry[] = []
+    toolMetadata['current_task_verification_history'] = replacement
+    return replacement
+  }
+  return raw.filter((entry): entry is VerificationHistoryEntry => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false
+    const rec = entry as Record<string, unknown>
+    return (
+      typeof rec['command'] === 'string' &&
+      typeof rec['passed'] === 'boolean' &&
+      typeof rec['observedAt'] === 'string'
+    )
+  })
+}
+
+function rememberVerificationResult(
+  toolMetadata: Record<string, unknown> | undefined,
+  params: {
+    shellCommand: string
+    shellOutput: string
+    shellSucceeded: boolean
+    authoritativeCommands: readonly string[]
+    usedAuthoritativeCommand: boolean
+  },
+): void {
+  if (!toolMetadata) return
+  const command = params.shellCommand.trim()
+  if (!command) return
+  const authoritative = Array.from(
+    new Set(params.authoritativeCommands.map((value) => value.trim()).filter(Boolean)),
+  )
+  const shouldTrack =
+    params.usedAuthoritativeCommand ||
+    authoritative.some((candidate) => candidate === command)
+  if (!shouldTrack) return
+
+  const outputFirstLine = params.shellOutput.trim().split('\n')[0]?.trim() ?? ''
+  const bucket = verificationHistory(toolMetadata)
+  const nextEntry: VerificationHistoryEntry = {
+    command,
+    passed: params.shellSucceeded,
+    observedAt: new Date().toISOString(),
+    ...(outputFirstLine ? { summary: outputFirstLine.slice(0, 240) } : {}),
+  }
+  const filtered = bucket.filter((entry) => entry.command !== command)
+  filtered.push(nextEntry)
+  if (filtered.length > 6) filtered.splice(0, filtered.length - 6)
+  toolMetadata['current_task_verification_history'] = filtered
+}
+
+function taskRootCandidates(
+  toolMetadata: Record<string, unknown> | undefined,
+): string[] {
+  const roots = [
+    String(toolMetadata?.['current_task_worktree_path'] ?? '').trim(),
+    String(toolMetadata?.['current_task_project_path'] ?? '').trim(),
+  ].filter((value): value is string => value.length > 0)
+  return [...new Set(roots.map((root) => resolve(root)))]
+}
+
+function isCodeLikeTaskFile(filePath: string): boolean {
+  return /\.(?:ts|tsx|js|jsx|vue)$/i.test(filePath)
+}
+
+function resolveTaskFilePath(
+  candidate: string,
+  roots: readonly string[],
+): string | null {
+  const trimmed = candidate.trim()
+  if (!trimmed) return null
+  if (trimmed.startsWith('/')) return existsSync(trimmed) ? resolve(trimmed) : resolve(trimmed)
+  for (const root of roots) {
+    const rooted = resolve(root, trimmed)
+    if (existsSync(rooted)) return rooted
+  }
+  return roots.length > 0 ? resolve(roots[0]!, trimmed) : resolve(trimmed)
+}
+
+function importCandidatesForPath(resolvedPath: string): string[] {
+  const out = new Set<string>()
+  out.add(resolvedPath)
+  if (!/\.[A-Za-z0-9]+$/.test(resolvedPath)) {
+    for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.vue']) {
+      out.add(`${resolvedPath}${ext}`)
+    }
+    for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.vue']) {
+      out.add(join(resolvedPath, `index${ext}`))
+    }
+  }
+  return [...out]
+}
+
+function appAliasBaseForSourceFile(
+  sourceFile: string,
+  roots: readonly string[],
+): string | null {
+  const normalized = sourceFile.replace(/\\/g, '/')
+  for (const root of roots) {
+    const normalizedRoot = resolve(root).replace(/\\/g, '/')
+    for (const suffix of ['/web/app/', '/app/']) {
+      const prefix = `${normalizedRoot}${suffix}`
+      if (normalized.startsWith(prefix)) return prefix.slice(0, -1)
+    }
+  }
+  const webAppIdx = normalized.lastIndexOf('/web/app/')
+  if (webAppIdx >= 0) return normalized.slice(0, webAppIdx + '/web/app'.length)
+  const appIdx = normalized.lastIndexOf('/app/')
+  if (appIdx >= 0) return normalized.slice(0, appIdx + '/app'.length)
+  return null
+}
+
+function resolveLocalImportPath(
+  sourceFile: string,
+  importPath: string,
+  roots: readonly string[],
+): string | null {
+  if (importPath.startsWith('./') || importPath.startsWith('../')) {
+    return resolve(dirname(sourceFile), importPath)
+  }
+  if (importPath.startsWith('@/') || importPath.startsWith('~/')) {
+    const aliasBase = appAliasBaseForSourceFile(sourceFile, roots)
+    if (!aliasBase) return null
+    return resolve(aliasBase, importPath.slice(2))
+  }
+  return null
+}
+
+interface MissingLocalImportEvidence {
+  sourceFile: string
+  importPath: string
+  expectedPath: string
+}
+
+function missingLocalImportEvidence(
+  toolMetadata: Record<string, unknown> | undefined,
+): MissingLocalImportEvidence | null {
+  const roots = taskRootCandidates(toolMetadata)
+  const candidateFiles = [
+    ...checkpointFilesTouched(toolMetadata),
+    ...likelyTargetFilesFromMetadata(toolMetadata),
+  ]
+    .map((candidate) => resolveTaskFilePath(candidate, roots))
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .filter((value) => isCodeLikeTaskFile(value))
+  const sourceFiles = [...new Set(candidateFiles)].filter((filePath) => existsSync(filePath))
+  const importRe = /(?:import|export)\s+(?:[^'"]+?\s+from\s+)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)/g
+  for (const sourceFile of sourceFiles) {
+    let content = ''
+    try {
+      content = readFileSync(sourceFile, 'utf8')
+    } catch {
+      continue
+    }
+    for (const match of content.matchAll(importRe)) {
+      const importPath = (match[1] ?? match[2] ?? '').trim()
+      if (!importPath) continue
+      const resolvedImport = resolveLocalImportPath(sourceFile, importPath, roots)
+      if (!resolvedImport) continue
+      const candidates = importCandidatesForPath(resolvedImport)
+      if (candidates.some((candidate) => existsSync(candidate))) continue
+      return {
+        sourceFile,
+        importPath,
+        expectedPath: candidates[0]!,
+      }
+    }
+  }
+  return null
 }
 
 function ownedTaskStatusForAgent(agentId: string): string | null {
@@ -834,6 +1018,16 @@ function looksLikeVerificationBackedCheckpointAction(text: string): boolean {
     normalized.includes('focused verification command') ||
     normalized.includes('focused verification commands')
   ) && normalized.includes('fix whatever still fails')
+}
+
+function advanceCheckpointAfterVerification(
+  toolMetadata: Record<string, unknown> | undefined,
+): void {
+  if (!toolMetadata) return
+  const checkpointNextAction = latestCheckpointNextAction(toolMetadata)
+  if (!looksLikeVerificationBackedCheckpointAction(checkpointNextAction)) return
+  toolMetadata['current_task_checkpoint_next_action'] =
+    'Inspect the checkpoint-touched files against the verification result, then fix whatever still fails before you write the structured self-critique.'
 }
 
 function reviewHandoffToolNudge(
@@ -1817,6 +2011,7 @@ interface ReviewHandoffEvidence {
   taskId: string
   inspectedImplementationFile: boolean
   changedOrVerified: boolean
+  successfulVerificationCommands: string[]
 }
 
 function currentTaskLooksLikeVerificationOnly(
@@ -1867,6 +2062,12 @@ function reviewHandoffEvidence(
     taskId,
     inspectedImplementationFile: rec['inspectedImplementationFile'] === true,
     changedOrVerified: rec['changedOrVerified'] === true,
+    successfulVerificationCommands: Array.isArray(rec['successfulVerificationCommands'])
+      ? rec['successfulVerificationCommands']
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0)
+      : [],
   }
 }
 
@@ -1897,26 +2098,50 @@ function resetReviewHandoffEvidence(
     taskId,
     inspectedImplementationFile: false,
     changedOrVerified: false,
+    successfulVerificationCommands: [],
   })
+}
+
+function missingAuthoritativeVerificationCommands(
+  toolMetadata: Record<string, unknown> | undefined,
+  taskId: string,
+): string[] {
+  const authoritative = parseAuthoritativeCommands(toolMetadata ?? {})
+  if (authoritative == null || authoritative.length === 0) return []
+  const evidence = reviewHandoffEvidence(toolMetadata)
+  if (evidence?.taskId !== taskId) return [...authoritative]
+  const seen = new Set(evidence.successfulVerificationCommands.map((entry) => entry.trim()))
+  return authoritative.filter((command) => !seen.has(command.trim()))
 }
 
 function recordReviewHandoffEvidence(
   toolMetadata: Record<string, unknown> | undefined,
   toolName: string,
   filePath: string | null,
+  resultMetadata?: Record<string, unknown> | null,
 ): void {
   const taskId = activeReviewTaskId(toolMetadata)
   if (!toolMetadata || !taskId) return
   const current = reviewHandoffEvidence(toolMetadata)
   const evidence: ReviewHandoffEvidence = current?.taskId === taskId
     ? current
-    : { taskId, inspectedImplementationFile: false, changedOrVerified: false }
+    : { taskId, inspectedImplementationFile: false, changedOrVerified: false, successfulVerificationCommands: [] }
 
   if (isReadToolName(toolName) && filePath && !isMemoryTaskPath(filePath)) {
     evidence.inspectedImplementationFile = true
   }
   if (isBashToolName(toolName) || isWriteToolName(toolName) || isEditToolName(toolName)) {
     evidence.changedOrVerified = true
+  }
+  if (isBashToolName(toolName) && resultMetadata) {
+    const success = resultMetadata['success'] === true
+    const usedAuthoritativeCommand = resultMetadata['usedAuthoritativeCommand'] === true
+    const executedCommand = String(resultMetadata['executedCommand'] ?? '').trim()
+    if (success && usedAuthoritativeCommand && executedCommand.length > 0) {
+      const normalized = new Set(evidence.successfulVerificationCommands.map((entry) => entry.trim()))
+      normalized.add(executedCommand)
+      evidence.successfulVerificationCommands = [...normalized]
+    }
   }
 
   setReviewHandoffEvidence(toolMetadata, evidence)
@@ -1933,6 +2158,9 @@ function hasReviewHandoffEvidence(
   toolMetadata: Record<string, unknown> | undefined,
   taskId: string,
 ): boolean {
+  if (missingAuthoritativeVerificationCommands(toolMetadata, taskId).length > 0) {
+    return false
+  }
   const evidence = reviewHandoffEvidence(toolMetadata)
   if (evidence?.taskId !== taskId) return false
   if (evidence.inspectedImplementationFile && evidence.changedOrVerified) return true
@@ -1958,8 +2186,36 @@ function reviewHandoffGuardResult(
 ): ToolResultBlock | null {
   if (toolName !== 'update-task' || input['status'] !== 'review') return null
   const taskId = taskIdForReviewHandoff(input, toolMetadata)
+  const missingImport = missingLocalImportEvidence(toolMetadata)
+  if (missingImport) {
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUseId,
+      content: [
+        'Blocked transition to review: Guildhall found a local import in the task-owned code that does not exist in the repo.',
+        `Source file: ${missingImport.sourceFile}.`,
+        `Missing import: "${missingImport.importPath}".`,
+        `Expected local path: ${missingImport.expectedPath}.`,
+        'Ground the implementation in the real repo surface before handoff: either use an existing local component/module path or add the missing file intentionally.',
+      ].join(' '),
+      is_error: true,
+    }
+  }
+  const missingVerification = taskId ? missingAuthoritativeVerificationCommands(toolMetadata, taskId) : []
   const hasImplementationEvidence = taskId && hasReviewHandoffEvidence(toolMetadata, taskId)
   const hasStructuredSelfCritique = hasStructuredSelfCritiqueForReviewHandoff(input, toolMetadata)
+  if (missingVerification.length > 0) {
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUseId,
+      content: [
+        'Blocked transition to review: Guildhall does not yet have durable proof that the task passed its required verification commands.',
+        `Still required before handoff: ${missingVerification.map((command) => `"${command}"`).join(', ')}.`,
+        'Run the authoritative verification command set successfully, then persist the structured self-critique and hand off to review.',
+      ].join(' '),
+      is_error: true,
+    }
+  }
   if (hasImplementationEvidence && hasStructuredSelfCritique) return null
   if (hasImplementationEvidence && !hasStructuredSelfCritique) {
     const taskLabel = taskId || 'the active task'
@@ -2169,6 +2425,23 @@ async function executeToolCall(
       }
     }
   }
+  if (context.toolMetadata && toolName === 'shell') {
+    const authoritativeVerificationCommands = parseAuthoritativeCommands(context.toolMetadata) ?? []
+    const shellCommand = String(toolInput['command'] ?? '').trim()
+    rememberVerificationResult(context.toolMetadata, {
+      shellCommand,
+      shellOutput: String(resultMetadata?.['output'] ?? toolResult.content ?? ''),
+      shellSucceeded: resultMetadata?.['success'] === true,
+      authoritativeCommands: authoritativeVerificationCommands,
+      usedAuthoritativeCommand: resultMetadata?.['usedAuthoritativeCommand'] === true,
+    })
+    if (
+      latestCheckpointNextAction(context.toolMetadata).length > 0 &&
+      authoritativeVerificationCommands.some((command) => command.trim() === shellCommand)
+    ) {
+      advanceCheckpointAfterVerification(context.toolMetadata)
+    }
+  }
   if (!toolResult.is_error && toolName === 'update-task' && toolInput['status'] === 'in_progress') {
     const taskId = String(resultMetadata?.['taskId'] ?? toolInput['taskId'] ?? '').trim()
     const currentTaskId = activeReviewTaskId(context.toolMetadata)
@@ -2183,7 +2456,7 @@ async function executeToolCall(
       )
     if (shouldReset) resetReviewHandoffEvidence(context.toolMetadata, taskId)
   } else if (!toolResult.is_error) {
-    recordReviewHandoffEvidence(context.toolMetadata, toolName, filePath)
+    recordReviewHandoffEvidence(context.toolMetadata, toolName, filePath, resultMetadata)
   }
 
   if (context.hookExecutor != null) {

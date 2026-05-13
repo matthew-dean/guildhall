@@ -58,6 +58,7 @@ const writeCheckpointInputSchema = z.object({
   filesTouched: z.array(z.string()).default([]),
   lastCommittedSha: z.string().optional(),
   engineSessionId: z.string().optional(),
+  resumeContext: Checkpoint.shape.resumeContext.optional(),
   // If omitted, the tool reads the existing checkpoint (if any) and
   // auto-increments. Explicit values are honored for e.g. resume flows.
   step: z.number().int().positive().optional(),
@@ -117,6 +118,9 @@ export async function writeCheckpoint(
       ...(parsed.engineSessionId !== undefined
         ? { engineSessionId: parsed.engineSessionId }
         : {}),
+      ...(parsed.resumeContext !== undefined
+        ? { resumeContext: parsed.resumeContext }
+        : {}),
     }
 
     const dir = checkpointDir(parsed.memoryDir, parsed.taskId)
@@ -149,6 +153,27 @@ export const writeCheckpointTool = defineTool({
       filesTouched: { type: 'array', items: { type: 'string' } },
       lastCommittedSha: { type: 'string' },
       engineSessionId: { type: 'string' },
+      resumeContext: {
+        type: 'object',
+        properties: {
+          verification: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                command: { type: 'string' },
+                passed: { type: 'boolean' },
+                observedAt: { type: 'string' },
+                summary: { type: 'string' },
+              },
+              required: ['command', 'passed', 'observedAt'],
+            },
+          },
+          companionFiles: { type: 'array', items: { type: 'string' } },
+          workingHypothesis: { type: 'string' },
+          safeNextMutationSurface: { type: 'array', items: { type: 'string' } },
+        },
+      },
       step: { type: 'number' },
     },
     required: ['taskId', 'agentId', 'intent', 'nextPlannedAction', 'filesTouched'],
