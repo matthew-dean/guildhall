@@ -28,7 +28,7 @@ import type {
   ToolUseBlock,
   UsageSnapshot,
 } from '@guildhall/protocol'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import {
   emptyUsage,
   isEffectivelyEmpty,
@@ -539,8 +539,47 @@ function isVerificationEvidenceSupportReadOnlyToolCall(
   likelyTargetFiles: readonly string[],
   checkpointTouched: readonly string[],
 ): boolean {
-  if (!isLikelyTargetScopedReadOnlyToolCall(cwd, toolCall, likelyTargetFiles)) return false
-  return !isCheckpointScopedReadOnlyToolCall(cwd, toolMetadata, toolCall, checkpointTouched)
+  if (toolCall.name !== 'read-file') return false
+  const filePath = String((toolCall.input as Record<string, unknown>)?.filePath ?? '').trim()
+  if (filePath.length === 0) return false
+  const normalizedInputPath = resolve(cwd, filePath)
+
+  if (isLikelyTargetScopedReadOnlyToolCall(cwd, toolCall, likelyTargetFiles)) {
+    return !isCheckpointScopedReadOnlyToolCall(cwd, toolMetadata, toolCall, checkpointTouched)
+  }
+
+  const companionRoots = verificationEvidenceCompanionRoots(cwd, likelyTargetFiles)
+  if (companionRoots.length === 0) return false
+  if (isCheckpointScopedReadOnlyToolCall(cwd, toolMetadata, toolCall, checkpointTouched)) return false
+  if (!/\.(?:[cm]?[jt]sx?|vue)$/i.test(normalizedInputPath)) return false
+
+  return companionRoots.some((root) =>
+    normalizedInputPath === root ||
+    normalizedInputPath.startsWith(root.endsWith(sep) ? root : `${root}${sep}`),
+  )
+}
+
+function verificationEvidenceCompanionRoots(
+  cwd: string,
+  likelyTargetFiles: readonly string[],
+): string[] {
+  const roots = new Set<string>()
+  for (const candidate of likelyTargetFiles) {
+    const trimmed = candidate.trim()
+    if (!trimmed) continue
+    const normalized = resolve(cwd, trimmed)
+    const parsed = normalized.split(sep).filter(Boolean)
+    const sourceBoundaryIndex = parsed.findIndex((segment) =>
+      segment === 'src' || segment === 'test' || segment === 'tests',
+    )
+    if (sourceBoundaryIndex >= 0) {
+      const prefix = `${normalized.startsWith(sep) ? sep : ''}${parsed.slice(0, sourceBoundaryIndex + 1).join(sep)}`
+      roots.add(prefix)
+      continue
+    }
+    roots.add(dirname(normalized))
+  }
+  return [...roots]
 }
 
 function noProgressStatusMessage(

@@ -3647,9 +3647,9 @@ Uncertainties: none`,
               'packages/converter/src/typescriptToJsdoc.ts',
             ],
             current_task_likely_target_files: [
-              'packages/converter/src/features/featureRegistry.ts',
-              'packages/converter/src/commentPreserver.ts',
-              'packages/converter/src/commentInserter.ts',
+              'packages/converter/src/typescriptToJsdoc.ts',
+              'packages/converter/src/features/functionDeclaration.ts',
+              'packages/converter/test/ts-to-jsdoc.test.ts',
             ],
             current_task_verification_commands: [
               'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
