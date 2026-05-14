@@ -202,6 +202,46 @@ describe('NodeGitDriver.push', () => {
   })
 })
 
+describe('NodeGitDriver.cherryPickBranch', () => {
+  it('lands product files while ignoring Guildhall runtime state from the task branch', async () => {
+    const driver = new NodeGitDriver()
+    const worktreePath = path.join(repoRoot, '.guildhall', 'worktrees', 'landing')
+    await driver.createWorktree(repoRoot, {
+      worktreePath,
+      branch: 'guildhall/task-landing',
+      baseBranch: 'main',
+    })
+
+    await fs.mkdir(path.join(worktreePath, 'memory'), { recursive: true })
+    await fs.writeFile(path.join(worktreePath, 'feature.txt'), 'accepted work\n', 'utf8')
+    await fs.writeFile(path.join(worktreePath, 'guildhall.yaml'), 'name: task copy\n', 'utf8')
+    await fs.writeFile(path.join(worktreePath, 'memory', 'TASKS.json'), '{"task":"branch"}\n', 'utf8')
+    await git(worktreePath, ['add', 'feature.txt', 'guildhall.yaml', 'memory/TASKS.json'])
+    await git(worktreePath, ['commit', '-q', '-m', 'task work'])
+
+    await fs.mkdir(path.join(repoRoot, 'memory'), { recursive: true })
+    await fs.writeFile(path.join(repoRoot, 'guildhall.yaml'), 'name: main runtime\n', 'utf8')
+    await fs.writeFile(path.join(repoRoot, 'memory', 'TASKS.json'), '{"task":"main"}\n', 'utf8')
+
+    const result = await driver.cherryPickBranch(repoRoot, 'guildhall/task-landing', 'main')
+
+    expect(result.ok).toBe(true)
+    await expect(fs.readFile(path.join(repoRoot, 'feature.txt'), 'utf8')).resolves.toBe('accepted work\n')
+    await expect(fs.readFile(path.join(repoRoot, 'guildhall.yaml'), 'utf8')).resolves.toBe('name: main runtime\n')
+    await expect(fs.readFile(path.join(repoRoot, 'memory', 'TASKS.json'), 'utf8')).resolves.toBe('{"task":"main"}\n')
+
+    const { stdout: committedFiles } = await git(repoRoot, [
+      'show',
+      '--name-only',
+      '--format=',
+      'HEAD',
+    ])
+    expect(committedFiles).toContain('feature.txt')
+    expect(committedFiles).not.toContain('guildhall.yaml')
+    expect(committedFiles).not.toContain('memory/TASKS.json')
+  })
+})
+
 describe('NodeGitDriver.checkpointDirtyWork', () => {
   it('packages product work without sweeping Guildhall runtime state into the task branch', async () => {
     const driver = new NodeGitDriver()

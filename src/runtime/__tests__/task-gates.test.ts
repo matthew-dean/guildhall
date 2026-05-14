@@ -395,6 +395,93 @@ describe('resolveEffectiveTaskSuccessGates', () => {
 })
 
 describe('resolveEffectiveTaskVerificationCommands', () => {
+  it('scopes nested package verification commands so they run from the isolated worktree root', async () => {
+    const frontendDir = path.join(tmpDir, 'frontend')
+    await fs.mkdir(frontendDir, { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        name: 'fair-labor-license',
+        private: true,
+        scripts: {
+          'deploy:preview': 'wrangler pages deploy',
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n', 'utf8')
+    await fs.writeFile(
+      path.join(frontendDir, 'package.json'),
+      JSON.stringify({
+        name: 'fair-labor-license-frontend',
+        private: true,
+        scripts: {
+          build: 'nuxt build',
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(path.join(frontendDir, 'tsconfig.json'), '{}\n', 'utf8')
+
+    const result = resolveEffectiveTaskVerificationCommands({
+      task: {
+        projectPath: frontendDir,
+        acceptanceCriteria: [],
+      } as any,
+      workspaceProjectPath: tmpDir,
+      workspaceBootstrap: {
+        commands: [],
+        successGates: [],
+        timeoutMs: 300_000,
+        verifiedAt: '2026-05-03T00:00:00Z',
+        packageManager: 'pnpm',
+        install: { command: 'pnpm install', status: 'ok' },
+      } as any,
+    })
+
+    expect(result).toEqual([
+      'pnpm --dir frontend exec tsc --noEmit',
+      'pnpm --dir frontend build',
+    ])
+  })
+
+  it('scopes explicit direct-binary acceptance commands through pnpm exec for nested projects', async () => {
+    const frontendDir = path.join(tmpDir, 'frontend')
+    await fs.mkdir(frontendDir, { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n', 'utf8')
+    await fs.writeFile(
+      path.join(frontendDir, 'package.json'),
+      JSON.stringify({
+        name: 'fair-labor-license-frontend',
+        private: true,
+        scripts: {
+          build: 'nuxt build',
+        },
+      }),
+      'utf8',
+    )
+
+    const result = resolveEffectiveTaskVerificationCommands({
+      task: {
+        projectPath: frontendDir,
+        acceptanceCriteria: [
+          {
+            id: 'ac-typecheck',
+            description: 'TypeScript check passes',
+            verifiedBy: 'automated',
+            command: 'pnpm tsc --noEmit',
+          },
+        ],
+      } as any,
+      workspaceProjectPath: tmpDir,
+    })
+
+    expect(result).toEqual([
+      'pnpm --dir frontend exec tsc --noEmit',
+      'pnpm --dir frontend build',
+    ])
+  })
+
   it('prefers a focused vitest target for single-file test work instead of the broad test gate', async () => {
     const webDir = path.join(tmpDir, 'web')
     await fs.mkdir(path.join(webDir, 'tests/unit/composables'), { recursive: true })

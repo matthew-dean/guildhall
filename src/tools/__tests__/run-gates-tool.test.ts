@@ -134,6 +134,51 @@ describe('runGatesTool scoped exceptions', () => {
     expect((result.metadata as Record<string, unknown>).effectiveAllPassed).toBe(true)
   })
 
+  it('runs gates in the matching isolated worktree path for nested task projects', async () => {
+    vi.mocked(runGates).mockResolvedValue({
+      allPassed: true,
+      results: [
+        {
+          gateId: 'build',
+          type: 'hard',
+          passed: true,
+          checkedAt: '2026-05-14T00:00:00.000Z',
+          output: 'built',
+        },
+      ],
+    } as any)
+
+    await runGatesTool.execute(
+      {
+        cwd: '/repo/fair-labor-license',
+        gates: [
+          { id: 'build', label: 'Build', command: 'pnpm build' },
+        ],
+      },
+      {
+        cwd: '/repo/fair-labor-license',
+        metadata: {
+          current_task_project_path: '/repo/fair-labor-license/frontend',
+          current_task_workspace_project_path: '/repo/fair-labor-license',
+          current_task_worktree_path: '/tmp/worktrees/fll/task-003',
+          current_task_worktree_project_path: '/tmp/worktrees/fll/task-003/frontend',
+          current_task_verification_commands: ['pnpm --dir frontend build'],
+        },
+      },
+    )
+
+    expect(runGates).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: '/tmp/worktrees/fll/task-003',
+        gates: [
+          expect.objectContaining({
+            command: 'pnpm --dir frontend build',
+          }),
+        ],
+      }),
+    )
+  })
+
   it('reports unrelated hard test failures as effective pass when they are outside the task target files', async () => {
     vi.mocked(runGates).mockResolvedValue({
       allPassed: false,

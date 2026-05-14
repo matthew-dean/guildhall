@@ -131,6 +131,7 @@ import {
 import {
   dispatchMerge,
   appendFixupTask,
+  shelveSupersededFixupTasks,
   resolveLandingStrategy,
   type LandingStrategy,
 } from './merge-dispatcher.js'
@@ -1312,10 +1313,14 @@ function checkpointCompanionFilesFromMetadata(
 function checkpointSafeNextMutationSurface(
   filesTouched: readonly string[],
   companionFiles: readonly string[],
+  verification: CheckpointResumeContext['verification'] = [],
 ): string[] {
   const primary = uniqueNonEmptyStrings(filesTouched.length > 0 ? filesTouched : companionFiles)
+  const hasFailedVerification = checkpointHasRecordedVerificationFailure(verification)
   const rank = (candidate: string): number => {
     const normalized = candidate.replace(/\\/g, '/')
+    if (hasFailedVerification && /\.(?:ts|tsx|js|jsx|vue)$/i.test(normalized) && !/\.(?:test|spec)\.[^.]+$/i.test(normalized)) return 0
+    if (hasFailedVerification && /\.(?:test|spec)\.[^.]+$/i.test(normalized)) return 1
     if (/\.(?:test|spec)\.[^.]+$/i.test(normalized)) return 0
     if (/\.(?:ts|tsx|js|jsx|vue)$/i.test(normalized)) return 1
     if (/\/src\/|\/test\/|\/tests\//i.test(normalized)) return 2
@@ -2062,6 +2067,20 @@ export class Orchestrator {
       }
     }
 
+    const relativeTaskProjectPath = path.relative(
+      path.resolve(this.opts.config.projectPath),
+      path.resolve(effectiveTaskProjectPath),
+    )
+    const activeTaskWorktreeProjectPath =
+      activeWorktreePath !== effectiveTaskProjectPath &&
+      relativeTaskProjectPath &&
+      relativeTaskProjectPath !== '.' &&
+      !relativeTaskProjectPath.startsWith(`..${path.sep}`) &&
+      relativeTaskProjectPath !== '..' &&
+      !path.isAbsolute(relativeTaskProjectPath)
+        ? path.resolve(activeWorktreePath, relativeTaskProjectPath)
+        : activeWorktreePath
+
     const ctx = await buildContext(task, this.opts.config.memoryDir)
     const tasksPath = this.tasksPath()
     const likelyTargetFiles = resolveLikelyTaskFiles(task)
@@ -2095,7 +2114,14 @@ export class Orchestrator {
       typeof agent.loadToolMetadata === 'function'
         ? await readCheckpoint(this.opts.config.memoryDir, task.id).catch(() => null)
         : null
-    const checkpointNextAction = normalizedWorkerCheckpointNextAction(task, checkpoint?.nextPlannedAction)
+    const checkpointNextAction = normalizedWorkerCheckpointNextAction(task, checkpoint)
+    const checkpointSafeSurface = checkpoint
+      ? checkpointSafeNextMutationSurface(
+          checkpoint.filesTouched,
+          checkpoint.resumeContext?.companionFiles ?? [],
+          checkpoint.resumeContext?.verification ?? [],
+        )
+      : []
     const immediateResumeInstructions = renderImmediateResumeInstructions(
       task,
       agent.name,
@@ -2114,15 +2140,18 @@ export class Orchestrator {
       ...(activeWorktreePath !== effectiveTaskProjectPath
         ? [`**Worktree (for code edits):** ${activeWorktreePath}`]
         : []),
+      ...(activeTaskWorktreeProjectPath !== activeWorktreePath
+        ? [`**Worktree task project path (for shell/gates):** ${activeTaskWorktreeProjectPath}`]
+        : []),
       ...(beforeStatus === 'gate_check'
         ? ['', renderTaskScopedGateInstructions({
-            projectPath: effectiveTaskProjectPath,
+            projectPath: activeWorktreePath,
             successGates: effectiveTaskSuccessGates,
           })]
         : []),
       ...(beforeStatus === 'in_progress'
         ? ['', renderTaskScopedVerificationInstructions({
-            projectPath: effectiveTaskProjectPath,
+            projectPath: activeWorktreePath,
             successGates: effectiveTaskVerificationCommands,
           })]
         : []),
@@ -2166,7 +2195,11 @@ export class Orchestrator {
         memory_dir: this.opts.config.memoryDir,
         tasks_path: tasksPath,
         current_task_project_path: effectiveTaskProjectPath,
+        current_task_workspace_project_path: this.opts.config.projectPath,
         ...(activeWorktreePath ? { current_task_worktree_path: activeWorktreePath } : {}),
+        ...(activeTaskWorktreeProjectPath !== activeWorktreePath
+          ? { current_task_worktree_project_path: activeTaskWorktreeProjectPath }
+          : {}),
         ...(likelyTargetFiles.length > 0
           ? { current_task_likely_target_files: likelyTargetFiles }
           : {}),
@@ -2197,8 +2230,8 @@ export class Orchestrator {
         ...(checkpoint?.resumeContext?.workingHypothesis
           ? { current_task_checkpoint_working_hypothesis: checkpoint.resumeContext.workingHypothesis }
           : {}),
-        ...(checkpoint?.resumeContext?.safeNextMutationSurface?.length
-          ? { current_task_checkpoint_safe_mutation_surface: checkpoint.resumeContext.safeNextMutationSurface }
+        ...(checkpointSafeSurface.length
+          ? { current_task_checkpoint_safe_mutation_surface: checkpointSafeSurface }
           : {}),
         ...(this.hasStructuredSelfCritique(task)
           ? { current_task_has_structured_self_critique: true }
@@ -2227,6 +2260,7 @@ export class Orchestrator {
     let generatedText = ''
     let generatedMetaIntakeDraft: string | null = null
     let successfulAgentMetadata: Record<string, unknown> | undefined
+    let checkpointNoProgressStatusSeen = false
     const retryKey = `${agent.name}:${task.id}`
     const priorMessageCount = Array.isArray(agent.messages) ? agent.messages.length : 0
     const agentGenerateTimeoutMs = resolveAgentGenerateTimeoutMs(
@@ -2259,6 +2293,19 @@ export class Orchestrator {
                   taskId: task.id,
                   agentName: agent.name,
                 })
+                if (
+                  backendEvent?.type === 'line_complete' &&
+                  (
+                    /kept returning no tool call after checkpoint-directed nudges/i.test(
+                      backendEvent.message ?? '',
+                    ) ||
+                    /ending the turn so the orchestrator can treat this as no progress/i.test(
+                      backendEvent.message ?? '',
+                    )
+                  )
+                ) {
+                  checkpointNoProgressStatusSeen = true
+                }
                 if (backendEvent) await this.emitBackendEvent(backendEvent)
               },
               { signal: controller.signal },
@@ -2789,6 +2836,7 @@ export class Orchestrator {
           afterStatus === 'in_progress' &&
           !transitioned &&
           taskAfter.updatedAt === task.updatedAt &&
+          !checkpointNoProgressStatusSeen &&
           (
             hasDirtyWorktreeAfter ||
             hasDirtyLikelyTargetProgress ||
@@ -2818,13 +2866,45 @@ export class Orchestrator {
           afterStatus === 'in_progress' &&
           !transitioned &&
           taskAfter.updatedAt === task.updatedAt &&
-          !hasDirtyWorktreeAfter &&
-          !hasDirtyLikelyTargetProgress &&
-          !hasCheckpointScopedVerifiedProgress &&
+          (
+            checkpointNoProgressStatusSeen ||
+            (
+              !hasDirtyWorktreeAfter &&
+              !hasDirtyLikelyTargetProgress &&
+              !hasCheckpointScopedVerifiedProgress
+            )
+          ) &&
           likelyWorkerTargets.length > 0
         if (repeatedWorkerNoProgress) {
           const attempts = this.bumpWorkerNoProgress(task.id)
           if (attempts >= WORKER_NO_PROGRESS_ESCALATION_AFTER) {
+            if (
+              checkpointNoProgressStatusSeen &&
+              (taskAfter.remediationAttempts ?? 0) < 1
+            ) {
+              const remediated = await this.recordAutonomousCheckpointNoProgressRemediation({
+                task: taskAfter,
+                queue: queueAfter,
+                agentName: agent.name,
+                checkpoint,
+                resetAgent: () => {
+                  if (typeof agent.resetConversation === 'function') agent.resetConversation()
+                },
+              })
+              if (remediated) {
+                this.clearWorkerNoProgress(task.id)
+                await this.maybeCleanupWorktree(taskAfter, worktreeMode)
+                return {
+                  kind: 'processed',
+                  taskId: task.id,
+                  agent: 'coordinator-remediation',
+                  beforeStatus,
+                  afterStatus: 'in_progress',
+                  transitioned: false,
+                  revisionCount: taskAfter.revisionCount,
+                }
+              }
+            }
             const escalation = await raiseEscalation({
               tasksPath: this.tasksPath(),
               progressPath: this.progressPath(),
@@ -2984,6 +3064,9 @@ export class Orchestrator {
           taskAfter.status = mergeOutcome.newStatus
           if (mergeOutcome.fixupTask) {
             appendFixupTask(queueAfter, mergeOutcome.fixupTask, this.now())
+          }
+          if (mergeOutcome.newStatus === 'done') {
+            shelveSupersededFixupTasks(queueAfter, taskAfter.id, this.now())
           }
           afterStatus = mergeOutcome.newStatus
         }
@@ -3499,6 +3582,95 @@ export class Orchestrator {
     task.updatedAt = this.now()
     queue.lastUpdated = this.now()
     await this.writeQueue(queue)
+  }
+
+  private async recordAutonomousCheckpointNoProgressRemediation(input: {
+    task: Task
+    queue: TaskQueue
+    agentName: string
+    checkpoint: Checkpoint | null
+    resetAgent: () => void
+  }): Promise<boolean> {
+    if (input.task.status !== 'in_progress') return false
+    const now = this.now()
+    const issue: AgentIssue = {
+      id: `iss-${input.task.id}-${input.task.agentIssues.length + 1}`,
+      taskId: input.task.id,
+      agentId: input.agentName,
+      code: 'stuck',
+      severity: 'warn',
+      detail:
+        'Worker repeatedly hit checkpoint-directed no-progress stops without a mutation, verification handoff, or explicit escalation.',
+      suggestedAction:
+        'Restart from the latest checkpoint with a fresh worker conversation before escalating to human judgment.',
+      raisedAt: now,
+      broadcast: true,
+      resolvedAt: now,
+      resolution:
+        'Coordinator autonomously reset the worker conversation and restarted from the latest checkpoint.',
+      resolvedBy: 'coordinator-remediation',
+    }
+    const settings = await this.readLeverSettings()
+    const domainLevers = resolveDomainLevers(settings, input.task.domain)
+    const trigger: RemediationTrigger = {
+      kind: 'issue',
+      taskId: input.task.id,
+      agentId: input.agentName,
+      issue,
+    }
+    const context = buildRemediationContext({
+      trigger,
+      task: input.task,
+      levers: {
+        remediationAutonomy: settings.project.remediation_autonomy.position,
+        crashRecoveryDefault: domainLevers.crash_recovery_default.position,
+        agentHealthStrictness: settings.project.agent_health_strictness.position,
+      },
+      checkpoint: input.checkpoint,
+      priorAttempts: input.task.remediationAttempts ?? 0,
+      now,
+    })
+    const action: RemediationAction = {
+      kind: 'restart_from_checkpoint',
+      rationale:
+        'The worker did not mutate or escalate after checkpoint-directed no-progress stops. Restarting from the durable checkpoint is non-destructive and gives the worker one clean recovery attempt before human escalation.',
+    }
+    const authorization = this.authorizeRemediation(action, context)
+    if (authorization.kind !== 'autonomous') return false
+
+    await recordRemediationDecision({
+      decisionsPath: this.decisionsPath(),
+      context,
+      action,
+      authorization,
+      decidedBy: 'coordinator-remediation',
+      domain: input.task.domain,
+    })
+
+    input.resetAgent()
+    input.task.agentIssues.push(issue)
+    input.task.remediationAttempts = (input.task.remediationAttempts ?? 0) + 1
+    input.task.status = 'in_progress'
+    ensureWorkerOwnership(input.task)
+    input.task.blockReason = null
+    input.task.notes.push({
+      agentId: 'coordinator-remediation',
+      role: 'checkpoint',
+      content:
+        'Autonomous remediation: reset the worker conversation and restarted from the latest checkpoint after repeated checkpoint no-progress stops.',
+      timestamp: now,
+    })
+    input.task.updatedAt = now
+    input.queue.lastUpdated = now
+    await this.writeQueue(input.queue)
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: input.task.id,
+      agent_name: 'coordinator-remediation',
+      message:
+        'Coordinator reset the worker conversation and restarted from the latest checkpoint after repeated checkpoint no-progress stops.',
+    })
+    return true
   }
 
   /**
@@ -5757,6 +5929,7 @@ export class Orchestrator {
     const safeNextMutationSurface = checkpointSafeNextMutationSurface(
       filesTouched,
       companionFiles,
+      verification,
     )
     const workingHypothesis = checkpointWorkingHypothesis({
       existing: String(input.metadata?.['current_task_checkpoint_working_hypothesis'] ?? ''),
@@ -5768,6 +5941,7 @@ export class Orchestrator {
     const verificationSummary = recentVerifiedWork
       .filter((entry) => /^(Ran bash command|Edited file|Wrote file)\b/.test(entry.trim()))
       .slice(-3)
+    const hasRecordedVerificationFailure = checkpointHasRecordedVerificationFailure(verification)
     const intentParts = [
       `Worker recovery checkpoint after ${input.reason}.`,
       verificationSummary.length > 0
@@ -5775,11 +5949,11 @@ export class Orchestrator {
         : 'Recent verified work existed in runtime metadata.',
     ]
     const nextAction =
-      latestSelfCritique && verificationSummary.length > 0
+      latestSelfCritique && (verificationSummary.length > 0 || hasRecordedVerificationFailure)
         ? 'Resume from the latest self-critique and verification evidence, then hand off to review if no new blocker appears.'
         : latestSelfCritique
           ? 'Resume from the latest self-critique, rerun any missing focused verification, then hand off to review.'
-          : verificationSummary.length > 0
+          : (verificationSummary.length > 0 || hasRecordedVerificationFailure)
             ? 'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.'
             : 'Resume from the active worktree diff, refresh focused verification, and keep the task in implementation until the focused checks are green.'
 
@@ -6534,12 +6708,24 @@ function isWorkerSelfCritiqueNote(
   return role === 'implementation' || role === 'implementer' || role === 'worker'
 }
 
-function normalizedWorkerCheckpointNextAction(task: Task, nextAction: string | null | undefined): string {
-  const trimmed = nextAction?.trim() ?? ''
+function normalizedWorkerCheckpointNextAction(task: Task, checkpoint: Checkpoint | null): string {
+  const trimmed = checkpoint?.nextPlannedAction?.trim() ?? ''
   if (!trimmed) return ''
   if (/^(?:none|null|n\/a|na|nothing)$/i.test(trimmed)) return ''
+  const checkpointWrittenAt = Date.parse(checkpoint?.writtenAt ?? '')
+  const hasNewerReviewerFeedback = Number.isFinite(checkpointWrittenAt) && task.notes.some((note) => {
+    const role = typeof note.role === 'string' ? note.role.trim().toLowerCase() : ''
+    const agentId = typeof note.agentId === 'string' ? note.agentId.trim().toLowerCase() : ''
+    if (role !== 'reviewer' && agentId !== 'reviewer-fanout' && agentId !== 'reviewer-agent') return false
+    const noteAt = Date.parse(note.timestamp)
+    return Number.isFinite(noteAt) && noteAt > checkpointWrittenAt
+  })
+  if (hasNewerReviewerFeedback) return ''
   const hasSelfCritique = [...task.notes].reverse().some((note) =>
     isWorkerSelfCritiqueNote(note),
+  )
+  const hasRecordedVerificationFailure = checkpointHasRecordedVerificationFailure(
+    checkpoint?.resumeContext?.verification,
   )
   if (
     hasSelfCritique &&
@@ -6554,7 +6740,20 @@ function normalizedWorkerCheckpointNextAction(task: Task, nextAction: string | n
   ) {
     return 'Resume from the active worktree diff, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.'
   }
+  if (
+    hasRecordedVerificationFailure &&
+    /resume from the active worktree diff/i.test(trimmed) &&
+    /refresh focused verification/i.test(trimmed)
+  ) {
+    return 'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.'
+  }
   return trimmed
+}
+
+function checkpointHasRecordedVerificationFailure(
+  verification: Array<{ passed: boolean }> | undefined,
+): boolean {
+  return Array.isArray(verification) && verification.some((entry) => entry?.passed === false)
 }
 
 function looksLikeReviewHandoffNextAction(nextAction: string): boolean {

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
 import type { ResolvedConfig } from '@guildhall/config'
-import { detectGateCommands, detectPackageManager } from './bootstrap.js'
+import { detectGateCommands, detectPackageManager, type PackageManager } from './bootstrap.js'
 import { detectBootstrapHypothesis } from './detect-bootstrap.js'
 
 type BootstrapBlock = NonNullable<ResolvedConfig['bootstrap']>
@@ -30,11 +30,17 @@ export function effectiveBootstrapGateCommands(bootstrap: BootstrapBlock): strin
     .map((gate) => gate.command)
 }
 
-function detectProjectGateCommands(projectPath: string): string[] {
+function detectProjectGateCommands(
+  projectPath: string,
+  fallbackPackageManager: PackageManager = 'none',
+): string[] {
   const hypothesis = detectBootstrapHypothesis(projectPath)
   if (hypothesis.successGates.length > 0) return [...hypothesis.successGates]
 
-  const packageManager = detectPackageManager(projectPath)
+  const detectedPackageManager = detectPackageManager(projectPath)
+  const packageManager = detectedPackageManager === 'none'
+    ? fallbackPackageManager
+    : detectedPackageManager
   const detected = detectGateCommands(projectPath, packageManager)
   const ordered = [detected.typecheck, detected.build, detected.test, detected.lint]
   return ordered
@@ -98,6 +104,94 @@ function rewriteWorkspaceScopedCommandForTask(
   }
 
   return normalized
+}
+
+function rewriteTaskProjectCommandForWorkspace(
+  command: string,
+  workspaceProjectPath: string,
+  taskProjectPath: string,
+): string {
+  const normalized = normalizeCommand(command)
+  if (!normalized || path.resolve(taskProjectPath) === path.resolve(workspaceProjectPath)) {
+    return normalized
+  }
+
+  const relativeTaskDir = normalizeCommand(path.relative(workspaceProjectPath, taskProjectPath))
+  if (!relativeTaskDir || relativeTaskDir === '.' || relativeTaskDir.startsWith('..')) {
+    return normalized
+  }
+
+  const cdMatch = /^cd\s+(\S+)\s*&&\s*(.+)$/i.exec(normalized)
+  if (cdMatch) {
+    const [, rawDir, rest] = cdMatch
+    const workspaceRelativeDir = normalizeCommand(path.join(relativeTaskDir, rawDir!))
+    return normalizeCommand(`cd ${workspaceRelativeDir} && ${rest}`)
+  }
+
+  const dirMatch = /^pnpm\s+--dir\s+(\S+)\s+(.+)$/i.exec(normalized)
+  if (dirMatch) {
+    const [, rawDir, rest] = dirMatch
+    const workspaceRelativeDir = normalizeCommand(path.join(relativeTaskDir, rawDir!))
+    const parsed = readPackageScripts(path.resolve(taskProjectPath, rawDir!))
+    const directCommand = rest!.trim().split(/\s+/)[0] ?? ''
+    const restWithExec =
+      directCommand &&
+      directCommand !== 'exec' &&
+      directCommand !== 'run' &&
+      directCommand !== 'install' &&
+      directCommand !== 'add' &&
+      !parsed?.scripts.has(directCommand)
+        ? `exec ${rest}`
+        : rest
+    return normalizeCommand(`pnpm --dir ${workspaceRelativeDir} ${restWithExec}`)
+  }
+
+  const rootPnpmMatch = /^pnpm\s+(.+)$/i.exec(normalized)
+  if (rootPnpmMatch) {
+    const rest = rootPnpmMatch[1]!
+    const parsed = readPackageScripts(taskProjectPath)
+    const directCommand = rest.trim().split(/\s+/)[0] ?? ''
+    const restWithExec =
+      directCommand &&
+      directCommand !== 'exec' &&
+      directCommand !== 'run' &&
+      directCommand !== 'install' &&
+      directCommand !== 'add' &&
+      !parsed?.scripts.has(directCommand)
+        ? `exec ${rest}`
+        : rest
+    return normalizeCommand(`pnpm --dir ${relativeTaskDir} ${restWithExec}`)
+  }
+
+  return normalized
+}
+
+function rewriteTaskProjectCommandsForWorkspace(
+  commands: readonly string[] | undefined,
+  workspaceProjectPath: string,
+  taskProjectPath: string,
+): readonly string[] | undefined {
+  if (!commands) return undefined
+  return commands.map((command) =>
+    rewriteTaskProjectCommandForWorkspace(command, workspaceProjectPath, taskProjectPath),
+  )
+}
+
+function rewriteTaskProjectBucketsForWorkspace(
+  buckets: Map<GateCommandKind, string[]>,
+  workspaceProjectPath: string,
+  taskProjectPath: string,
+): Map<GateCommandKind, string[]> {
+  const rewritten = new Map<GateCommandKind, string[]>()
+  for (const [kind, commands] of buckets) {
+    rewritten.set(
+      kind,
+      commands.map((command) =>
+        rewriteTaskProjectCommandForWorkspace(command, workspaceProjectPath, taskProjectPath),
+      ),
+    )
+  }
+  return rewritten
 }
 
 type WorkspacePackage = {
@@ -378,6 +472,9 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
       if (rewritten) return rewritten
       return normalizeCommand(`pnpm --dir ${relDir} ${script}${rest}`)
     }
+    if (script && /^(?:tsc|tsgo|vitest|jest|playwright|eslint|biome)$/i.test(script)) {
+      return normalizeCommand(`pnpm --dir ${relDir} exec ${script}${rest}`)
+    }
     return null
   }
 
@@ -404,6 +501,9 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
       if (rewritten) return rewritten
       const relDir = owner.relativeDir
       return normalizeCommand(`pnpm --dir ${relDir} ${script!}${rest}`)
+    }
+    if (script && /^(?:tsc|tsgo|vitest|jest|playwright|eslint|biome)$/i.test(script)) {
+      return normalizeCommand(`pnpm exec ${script}${rest}`)
     }
     return null
   }
@@ -433,6 +533,9 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
       if (rewritten) return rewritten
       const relDir = owner.relativeDir
       return normalizeCommand(`pnpm --dir ${relDir} ${script!}${rest}`)
+    }
+    if (script && /^(?:tsc|tsgo|vitest|jest|playwright|eslint|biome)$/i.test(script)) {
+      return normalizeCommand(`pnpm exec ${script}${rest}`)
     }
     return null
   }
@@ -668,8 +771,18 @@ export function resolveEffectiveTaskSuccessGates(input: {
   const acceptanceBuckets = deriveAutomatedAcceptanceCommands(input.task, taskProjectPath)
 
   if (taskProjectPath !== workspaceProjectPath) {
-    const taskScoped = detectProjectGateCommands(taskProjectPath)
-    const merged = mergeAcceptanceAndProjectGates(acceptanceBuckets, taskScoped)
+    const workspacePackageManager = detectPackageManager(workspaceProjectPath)
+    const taskScoped = rewriteTaskProjectCommandsForWorkspace(
+      detectProjectGateCommands(taskProjectPath, workspacePackageManager),
+      workspaceProjectPath,
+      taskProjectPath,
+    )
+    const taskAcceptanceBuckets = rewriteTaskProjectBucketsForWorkspace(
+      acceptanceBuckets,
+      workspaceProjectPath,
+      taskProjectPath,
+    )
+    const merged = mergeAcceptanceAndProjectGates(taskAcceptanceBuckets, taskScoped)
     if (merged && merged.length > 0) return merged
   }
 
@@ -702,10 +815,25 @@ export function resolveEffectiveTaskVerificationCommands(input: {
   const narrowTaskHint = (input.likelyTargetFiles ?? []).length > 0
 
   if (taskProjectPath !== workspaceProjectPath) {
-    const taskScoped = detectProjectGateCommands(taskProjectPath)
-    const merged = mergeVerificationCommands(
+    const workspacePackageManager = detectPackageManager(workspaceProjectPath)
+    const taskScoped = rewriteTaskProjectCommandsForWorkspace(
+      detectProjectGateCommands(taskProjectPath, workspacePackageManager),
+      workspaceProjectPath,
+      taskProjectPath,
+    )
+    const taskAcceptanceBuckets = rewriteTaskProjectBucketsForWorkspace(
       acceptanceBuckets,
+      workspaceProjectPath,
+      taskProjectPath,
+    )
+    const taskFocusedBuckets = rewriteTaskProjectBucketsForWorkspace(
       focusedBuckets,
+      workspaceProjectPath,
+      taskProjectPath,
+    )
+    const merged = mergeVerificationCommands(
+      taskAcceptanceBuckets,
+      taskFocusedBuckets,
       taskScoped,
       narrowTaskHint,
     )

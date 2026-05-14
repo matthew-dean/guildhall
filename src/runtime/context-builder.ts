@@ -70,11 +70,17 @@ export function resolveLikelyTaskFiles(task: Task, checkpointFilesTouched: reado
   const root = task.worktreePath?.trim() || task.projectPath?.trim() || ''
   const out: string[] = []
   const seen = new Set<string>()
+  const reviewerFeedbackText = task.notes
+    .filter((note) => note.role === 'reviewer' || note.agentId === 'reviewer-fanout' || note.agentId === 'reviewer-agent')
+    .slice(-3)
+    .map((note) => note.content)
+    .join('\n')
   const specText = `${task.title}
 ${task.description}
 ${task.spec ?? ''}
 ${task.productBrief?.userJob ?? ''}
-${task.productBrief?.successMetric ?? ''}`
+${task.productBrief?.successMetric ?? ''}
+${reviewerFeedbackText}`
   const commandCandidates: string[] = []
   for (const ac of task.acceptanceCriteria) {
     const command = String(ac.command ?? '')
@@ -228,6 +234,9 @@ function normalizedCheckpointNextAction(task: Task, checkpoint: Checkpoint | nul
   if (!nextAction) return ''
   if (/^(?:none|null|n\/a|na|nothing)$/i.test(nextAction)) return ''
   const hasSelfCritique = hasWorkerSelfCritiqueNote(task)
+  const hasRecordedVerificationFailure = checkpoint?.resumeContext?.verification?.some(
+    (entry) => entry.passed === false,
+  ) ?? false
   if (
     hasSelfCritique &&
     /write or refresh self-critique note|write or refresh the self-critique note/i.test(nextAction)
@@ -240,6 +249,13 @@ function normalizedCheckpointNextAction(task: Task, checkpoint: Checkpoint | nul
     /hand off to review|handoff to review|transition to review/i.test(nextAction)
   ) {
     return 'Resume from the active worktree diff, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.'
+  }
+  if (
+    hasRecordedVerificationFailure &&
+    /resume from the active worktree diff/i.test(nextAction) &&
+    /refresh focused verification/i.test(nextAction)
+  ) {
+    return 'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.'
   }
   return nextAction
 }

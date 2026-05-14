@@ -72,6 +72,36 @@ function reconcileShellCwdWithTaskScope(
   }
 
   const projectPath = String(metadata?.['current_task_project_path'] ?? '').trim()
+  const worktreeProjectPath = String(metadata?.['current_task_worktree_project_path'] ?? '').trim()
+  const workspaceProjectPath = String(metadata?.['current_task_workspace_project_path'] ?? '').trim()
+
+  if (projectPath && worktreeProjectPath) {
+    const normalizedProject = path.resolve(projectPath)
+    const normalizedWorktreeProject = path.resolve(worktreeProjectPath)
+    const relativeToProject = path.relative(normalizedProject, normalizedRequested)
+    if (
+      relativeToProject === '' ||
+      (!relativeToProject.startsWith(`..${path.sep}`) &&
+        relativeToProject !== '..' &&
+        !path.isAbsolute(relativeToProject))
+    ) {
+      return path.resolve(normalizedWorktreeProject, relativeToProject)
+    }
+  }
+
+  if (workspaceProjectPath) {
+    const normalizedWorkspace = path.resolve(workspaceProjectPath)
+    const relativeToWorkspace = path.relative(normalizedWorkspace, normalizedRequested)
+    if (
+      relativeToWorkspace === '' ||
+      (!relativeToWorkspace.startsWith(`..${path.sep}`) &&
+        relativeToWorkspace !== '..' &&
+        !path.isAbsolute(relativeToWorkspace))
+    ) {
+      return path.resolve(normalizedWorktree, relativeToWorkspace)
+    }
+  }
+
   if (!projectPath) return normalizedWorktree
 
   const normalizedProject = path.resolve(projectPath)

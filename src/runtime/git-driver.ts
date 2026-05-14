@@ -266,22 +266,58 @@ export class NodeGitDriver implements GitDriver {
     branch: string,
     baseBranch: string,
   ): Promise<MergeResult> {
+    const gitRoot = await resolveGitTopLevel(repoRoot)
     try {
-      await execFileP('git', ['checkout', baseBranch], { cwd: repoRoot })
+      await execFileP('git', ['checkout', baseBranch], { cwd: gitRoot })
       const { stdout } = await execFileP(
         'git',
         ['rev-list', '--reverse', `${baseBranch}..${branch}`],
-        { cwd: repoRoot },
+        { cwd: gitRoot },
       )
       const commits = stdout
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean)
-      if (commits.length > 0) {
-        await execFileP('git', ['cherry-pick', ...commits], { cwd: repoRoot })
+      if (commits.length === 0) {
+        const { stdout: head } = await execFileP('git', ['rev-parse', 'HEAD'], {
+          cwd: gitRoot,
+        })
+        return { ok: true, commitSha: head.trim() }
+      }
+
+      const { stdout: changedStdout } = await execFileP(
+        'git',
+        ['diff', '--name-only', '-z', `${baseBranch}..${branch}`],
+        { cwd: gitRoot, maxBuffer: 10 * 1024 * 1024 },
+      )
+      const meaningfulPaths = changedStdout
+        .split('\0')
+        .map((file) => file.trim())
+        .filter(Boolean)
+        .filter((file) => !isIgnorableGuildhallStatePath(file.replace(/\/$/, '')))
+
+      if (meaningfulPaths.length > 0) {
+        const diffArgs = ['diff', '--binary', `${baseBranch}..${branch}`, '--', ...meaningfulPaths]
+        const { stdout: patch } = await execFileP('git', diffArgs, {
+          cwd: gitRoot,
+          maxBuffer: 50 * 1024 * 1024,
+        })
+        const patchPath = path.join(gitRoot, '.git', 'guildhall-cherry-pick.patch')
+        await fs.writeFile(patchPath, patch, 'utf8')
+        try {
+          await execFileP('git', ['apply', '--check', patchPath], { cwd: gitRoot })
+          await execFileP('git', ['apply', '--index', patchPath], { cwd: gitRoot })
+        } finally {
+          await fs.rm(patchPath, { force: true })
+        }
+        await execFileP(
+          'git',
+          ['commit', '--no-verify', '-m', `Guildhall: land ${branch}`],
+          { cwd: gitRoot },
+        )
       }
       const { stdout: head } = await execFileP('git', ['rev-parse', 'HEAD'], {
-        cwd: repoRoot,
+        cwd: gitRoot,
       })
       return { ok: true, commitSha: head.trim() }
     } catch (err) {

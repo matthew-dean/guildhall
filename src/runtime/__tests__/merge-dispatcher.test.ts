@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
-import { dispatchMerge, appendFixupTask } from '../merge-dispatcher.js'
+import { dispatchMerge, appendFixupTask, shelveSupersededFixupTasks } from '../merge-dispatcher.js'
 import { InMemoryGitDriver } from '../git-driver.js'
 
 let memoryDir: string
@@ -179,5 +179,39 @@ describe('appendFixupTask', () => {
     const after = appendFixupTask(queue, fixup, 'new')
     expect(after.tasks).toHaveLength(1)
     expect(after.lastUpdated).toBe('new')
+  })
+})
+
+describe('shelveSupersededFixupTasks', () => {
+  it('shelves open fixup tasks after the parent task lands successfully', () => {
+    const queue = {
+      version: 1 as const,
+      lastUpdated: 'old',
+      tasks: [
+        task({ id: 'parent', status: 'done' }),
+        task({
+          id: 'parent-fixup-1',
+          title: 'Fixup merge conflict: parent',
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          dependsOn: ['parent'],
+        }),
+      ],
+    }
+
+    const count = shelveSupersededFixupTasks(queue, 'parent', 'new')
+
+    expect(count).toBe(1)
+    expect(queue.lastUpdated).toBe('new')
+    expect(queue.tasks[1]).toMatchObject({
+      status: 'shelved',
+      assignedTo: null,
+      blockReason: null,
+      shelveReason: {
+        code: 'duplicate',
+        rejectedBy: 'system:merge-dispatcher',
+        policyApplied: true,
+      },
+    })
   })
 })

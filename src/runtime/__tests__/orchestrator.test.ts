@@ -1845,14 +1845,6 @@ describe('Orchestrator.tick — routing', () => {
         id: 'worker-task',
         status: 'in_progress',
         worktreePath,
-        notes: [
-          {
-            agentId: 'worker-agent',
-            role: 'self-critique',
-            content: '**Self-critique:**\n- [ac-1]: Met — focused tests cover the touched files.\n\n**Minimum-scope check:**\n- Files changed: packages/converter/src/typescriptToJsdoc.ts.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.',
-            timestamp: '2026-04-01T00:05:00Z',
-          },
-        ],
       }),
     ])
     await fs.mkdir(path.join(worktreePath, 'packages', 'converter', 'src'), { recursive: true })
@@ -1901,6 +1893,14 @@ describe('Orchestrator.tick — routing', () => {
             inspectedImplementationFile: true,
             changedOrVerified: true,
           },
+          current_task_verification_history: [
+            {
+              command: 'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+              passed: false,
+              observedAt: '2026-05-14T13:50:51.803Z',
+              summary: '5 failures in non-type JSDoc tag preservation',
+            },
+          ],
         }
       },
     }
@@ -1916,17 +1916,20 @@ describe('Orchestrator.tick — routing', () => {
 
     const checkpointPath = path.join(memoryDir, 'tasks', 'worker-task', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
+      nextPlannedAction: string
       resumeContext?: {
         safeNextMutationSurface?: string[]
         workingHypothesis?: string
       }
     }
 
-    expect(checkpoint.resumeContext?.safeNextMutationSurface?.[0]).toBe('packages/converter/test/ts-to-jsdoc.test.ts')
-    expect(checkpoint.resumeContext?.safeNextMutationSurface?.[1]).toBe('packages/converter/src/typescriptToJsdoc.ts')
+    expect(checkpoint.nextPlannedAction).toContain('recorded verification evidence')
+    expect(checkpoint.nextPlannedAction).toContain('rerun the focused verification commands')
+    expect(checkpoint.resumeContext?.safeNextMutationSurface?.[0]).toBe('packages/converter/src/typescriptToJsdoc.ts')
+    expect(checkpoint.resumeContext?.safeNextMutationSurface?.[1]).toBe('packages/converter/test/ts-to-jsdoc.test.ts')
     expect(checkpoint.resumeContext?.safeNextMutationSurface?.slice(0, 2)).not.toContain('.gitignore')
     expect(checkpoint.resumeContext?.safeNextMutationSurface?.slice(0, 2)).not.toContain('package.json')
-    expect(checkpoint.resumeContext?.workingHypothesis).toContain('packages/converter/test/ts-to-jsdoc.test.ts')
+    expect(checkpoint.resumeContext?.workingHypothesis).toContain('packages/converter/src/typescriptToJsdoc.ts')
     expect(checkpoint.resumeContext?.workingHypothesis).not.toContain('.gitignore')
   })
 
@@ -7280,6 +7283,96 @@ describe('Orchestrator worker no-progress escalation', () => {
     const task = queue.tasks.find((candidate) => candidate.id === 'task-011')
     expect(task?.status).toBe('blocked')
     expect(task?.escalations.length).toBe(1)
+    expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress')
+  })
+
+  it('tries one autonomous checkpoint remediation before blocking repeated checkpoint no-progress stops', async () => {
+    const targetPath = path.join(tmpDir, 'packages', 'converter', 'src', 'commentInserter.ts')
+    await fs.mkdir(path.dirname(targetPath), { recursive: true })
+    await fs.writeFile(targetPath, 'export const value = 1;\n', 'utf-8')
+    execFileSync('git', ['add', 'packages/converter/src/commentInserter.ts'], {
+      cwd: tmpDir,
+      stdio: 'ignore',
+    })
+    execFileSync('git', ['commit', '--no-verify', '-m', 'add target'], {
+      cwd: tmpDir,
+      stdio: 'ignore',
+    })
+    await fs.writeFile(targetPath, 'export const value = 2;\n', 'utf-8')
+    await writeQueue([
+      mkTask({
+        id: 'task-blank',
+        title: 'Repair converter comments',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        spec: `Edit \`${targetPath}\` and verify the converter tests.`,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'converter test passes',
+          verifiedBy: 'automated',
+          command: 'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+          met: false,
+        } as any],
+      }),
+    ])
+
+    const worker = {
+      name: 'worker-agent',
+      calls: [] as { prompt: string }[],
+      resetCount: 0,
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: '' }
+      },
+      async generateWithEvents(prompt: string, onEvent: (event: any) => void | Promise<void>) {
+        this.calls.push({ prompt })
+        await onEvent({
+          type: 'status',
+          message:
+            'Assistant kept returning no tool call after checkpoint-directed nudges; ending this turn so the coordinator can treat it as no progress.',
+        })
+        return { text: '' }
+      },
+      resetConversation() {
+        this.resetCount += 1
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const first = await orch.tick({ dispatchLimit: 1 })
+    expect(first.kind).toBe('processed')
+
+    const second = await orch.tick({ dispatchLimit: 1 })
+    expect(second.kind).toBe('processed')
+    if (second.kind === 'processed') {
+      expect(second.agent).toBe('coordinator-remediation')
+      expect(second.afterStatus).toBe('in_progress')
+    }
+
+    let queue = await readQueue()
+    let task = queue.tasks.find((candidate) => candidate.id === 'task-blank')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.remediationAttempts).toBe(1)
+    expect(task?.agentIssues[0]?.resolvedBy).toBe('coordinator-remediation')
+    expect(worker.resetCount).toBe(1)
+
+    const decisions = await fs.readFile(path.join(memoryDir, 'DECISIONS.md'), 'utf-8')
+    expect(decisions).toMatch(/Remediation: restart_from_checkpoint/)
+
+    const third = await orch.tick({ dispatchLimit: 1 })
+    expect(third.kind).toBe('processed')
+
+    const fourth = await orch.tick({ dispatchLimit: 1 })
+    expect(fourth.kind).toBe('escalated')
+    if (fourth.kind === 'escalated') expect(fourth.reason).toContain('Worker made no visible progress')
+
+    queue = await readQueue()
+    task = queue.tasks.find((candidate) => candidate.id === 'task-blank')
+    expect(task?.status).toBe('blocked')
     expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress')
   })
 

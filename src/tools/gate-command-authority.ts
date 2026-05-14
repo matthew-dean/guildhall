@@ -4,6 +4,14 @@ function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, ' ')
 }
 
+function unwrapShellCommandForAuthority(command: string): string {
+  let normalized = normalizeCommand(command)
+  normalized = normalized.replace(/\s+(?:2>&1|1>\/dev\/null|2>\/dev\/null)\s*$/i, '')
+  const cdPrefix = /^(?:cd\s+(?:"[^"]+"|'[^']+'|[^&;]+?)\s*&&\s*)+/i
+  normalized = normalized.replace(cdPrefix, '')
+  return normalized.trim()
+}
+
 function classifyPackageManagerCommand(tokens: string[]): 'typecheck' | 'build' | 'test' | 'lint' | null {
   if (tokens.length === 0) return null
   const packageManagers = new Set(['pnpm', 'npm', 'yarn', 'bun'])
@@ -27,7 +35,7 @@ function classifyPackageManagerCommand(tokens: string[]): 'typecheck' | 'build' 
 }
 
 export function classifyGateCommand(command: string): 'typecheck' | 'build' | 'test' | 'lint' | 'other' {
-  const normalized = normalizeCommand(command).toLowerCase()
+  const normalized = unwrapShellCommandForAuthority(command).toLowerCase()
   const packageManagerKind = classifyPackageManagerCommand(normalized.split(' '))
   if (packageManagerKind) return packageManagerKind
   if (/^tsc(?:\s|$)/.test(normalized)) return 'typecheck'
@@ -129,23 +137,33 @@ export function reconcileShellCommandWithAuthority(
   authoritativeCommands: readonly string[] | null,
 ): { command: string; usedAuthority: boolean } {
   const normalizedRequested = normalizeCommand(requestedCommand)
+  const unwrappedRequested = unwrapShellCommandForAuthority(requestedCommand)
   if (authoritativeCommands == null || authoritativeCommands.length === 0) {
-    return { command: normalizedRequested, usedAuthority: false }
+    return { command: unwrappedRequested || normalizedRequested, usedAuthority: false }
   }
 
-  const exact = authoritativeCommands.find((command) => normalizeCommand(command) === normalizedRequested)
+  const exact = authoritativeCommands.find((command) => {
+    const normalized = normalizeCommand(command)
+    const unwrapped = unwrapShellCommandForAuthority(command)
+    return (
+      normalized === normalizedRequested ||
+      normalized === unwrappedRequested ||
+      unwrapped === normalizedRequested ||
+      unwrapped === unwrappedRequested
+    )
+  })
   if (exact) {
     return { command: normalizeCommand(exact), usedAuthority: true }
   }
 
-  const requestedKind = classifyGateCommand(normalizedRequested)
+  const requestedKind = classifyGateCommand(unwrappedRequested)
   if (requestedKind === 'other') {
-    return { command: normalizedRequested, usedAuthority: false }
+    return { command: unwrappedRequested || normalizedRequested, usedAuthority: false }
   }
   const sameKind = authoritativeCommands.filter((command) => classifyGateCommand(command) === requestedKind)
   if (sameKind.length === 1) {
     return { command: normalizeCommand(sameKind[0]!), usedAuthority: true }
   }
 
-  return { command: normalizedRequested, usedAuthority: false }
+  return { command: unwrappedRequested || normalizedRequested, usedAuthority: false }
 }

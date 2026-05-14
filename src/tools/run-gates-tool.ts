@@ -2,6 +2,7 @@ import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import { runGates } from './gate-runner.js'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import type { HardGate } from '@guildhall/core'
 import {
   parseAuthoritativeCommands,
@@ -15,6 +16,51 @@ function metadataStringArray(metadata: Record<string, unknown>, key: string): st
   return Array.isArray(metadata[key])
     ? (metadata[key] as unknown[]).filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
     : []
+}
+
+function isInsideOrSame(parent: string, child: string): boolean {
+  const relative = path.relative(path.resolve(parent), path.resolve(child))
+  return relative === '' || (
+    !relative.startsWith(`..${path.sep}`) &&
+    relative !== '..' &&
+    !path.isAbsolute(relative)
+  )
+}
+
+function reconcileGateCwdWithTaskScope(
+  requestedCwd: string,
+  metadata: Record<string, unknown>,
+): string {
+  const worktreePath = typeof metadata['current_task_worktree_path'] === 'string'
+    ? metadata['current_task_worktree_path'].trim()
+    : ''
+  if (!worktreePath) return requestedCwd
+  if (isInsideOrSame(worktreePath, requestedCwd)) return path.resolve(requestedCwd)
+
+  const projectPath = typeof metadata['current_task_project_path'] === 'string'
+    ? metadata['current_task_project_path'].trim()
+    : ''
+  const worktreeProjectPath = typeof metadata['current_task_worktree_project_path'] === 'string'
+    ? metadata['current_task_worktree_project_path'].trim()
+    : ''
+  if (projectPath && worktreeProjectPath && isInsideOrSame(projectPath, requestedCwd)) {
+    return path.resolve(
+      worktreeProjectPath,
+      path.relative(path.resolve(projectPath), path.resolve(requestedCwd)),
+    )
+  }
+
+  const workspaceProjectPath = typeof metadata['current_task_workspace_project_path'] === 'string'
+    ? metadata['current_task_workspace_project_path'].trim()
+    : ''
+  if (workspaceProjectPath && isInsideOrSame(workspaceProjectPath, requestedCwd)) {
+    return path.resolve(
+      worktreePath,
+      path.relative(path.resolve(workspaceProjectPath), path.resolve(requestedCwd)),
+    )
+  }
+
+  return requestedCwd
 }
 
 const hardGateSchema = z.object({
@@ -123,8 +169,9 @@ export const runGatesTool = defineTool({
       })),
       authoritativeCommands,
     )
+    const effectiveCwd = reconcileGateCwdWithTaskScope(input.cwd, ctx.metadata)
     const summary = await runGates({
-      cwd: input.cwd,
+      cwd: effectiveCwd,
       gates: effective.gates,
       failFast: input.failFast ?? false,
       ...(input.maxOutputBytes !== undefined ? { maxOutputBytes: input.maxOutputBytes } : {}),

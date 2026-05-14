@@ -40,6 +40,28 @@ screen.
 
 ## Current Follow-Ups
 
+## 0.5.0 Release Threshold
+
+- [ ] Prove one real project can complete a task unattended end to end:
+  implementation -> authoritative verification -> honest review handoff ->
+  done.
+- [ ] Keep the other two live projects truthful while that proof run is
+  happening:
+  no fake `running` states, no contradictory Thread summaries, and no stale
+  blocker narratives outranking current task truth.
+- [ ] Eliminate the remaining checkpoint-lane drift on `t-minus-t` so resumed
+  workers stay inside:
+  authoritative verification -> focused file read -> focused mutation,
+  without falling back into ad hoc shell detours or empty-turn loops.
+- [ ] Clear Looma + Knit's current blocked execution seam so its top runnable
+  task is a real candidate for unattended progress again, not just a stopped
+  backlog with draft-heavy noise.
+- [ ] Land the current runtime/test hardening batch cleanly
+  (`run-query`, gate-command authority, shell tests, flow audit) and retest on
+  the live `127.0.0.1:7777` service before we even discuss cutting `0.5.0`.
+- [x] Keep recovery checkpoints aligned with durable verification evidence. A `t-minus-t` recovery checkpoint on `2026-05-14` was persisting failed authoritative verification into `resumeContext` while regressing `nextPlannedAction` back to the looser `active worktree diff / refresh focused verification` wording. Checkpoint writing and checkpoint rendering now prefer the verification-backed wording whenever failed authoritative verification already exists, so resumed workers keep the sharper `rerun focused verification -> fix whatever still fails` frame.
+- [x] Tighten post-verification read latitude in `t-minus-t`'s mutation lane. After a failed authoritative rerun, Guildhall now allows only one focused read-only follow-through tool call before demanding a concrete edit or escalation, and it refuses multi-file reread batches in that exact post-verification checkpoint lane. This keeps the worker from burning a whole extra turn rereading half the converter surface after it already knows which seam is failing.
+
 - [x] Land the Task 4 quality-review hardening pass in the VitePress UI
   component set. `HeroBand`, `AnnotatedScreenshot`, and `GuildDiagram` now
   expose typed configurable heading tags; `AnnotatedScreenshot` reserves a
@@ -2500,3 +2522,82 @@ screen.
   the actual code/tests. `run-query` now prefers the checkpoint's safe
   mutation surface when it demands the next exact mutation, so the guard and
   the checkpoint finally agree on the same converter files.
+- Verification-backed reread allowance on `2026-05-14`: resumed `t-minus-t`
+  work could rerun the focused failing test, then immediately get rejected for
+  rereading the exact checkpointed source file it needed to patch next when
+  that read came back through the project-root path instead of the worktree
+  path. `run-query` now keeps the verification-backed follow-through window
+  active for checkpoint-scoped reads tied to that recovery action, so the
+  worker can inspect the focused mutation file once before making the next
+  edit instead of falling into an empty-turn/read-file refusal loop.
+- Repeated checkpoint blank-turn handling on `2026-05-14`: `t-minus-t`
+  showed the worker could receive the exact mutation/verification nudge, then
+  answer with more prose and no tool call until the model turn quietly stopped.
+  `run-query` now emits an explicit checkpoint no-progress status after the
+  checkpoint no-tool nudge limit is exhausted, so the coordinator can see that
+  the agent failed to act instead of treating the stop as an ordinary empty
+  response.
+- Cross-turn checkpoint no-progress handling on `2026-05-14`: live replay
+  then showed the coordinator could still restart a fresh worker pass after
+  each checkpoint blank turn because old dirty task files were counted as
+  progress every time. The orchestrator now treats the explicit checkpoint
+  no-progress stop statuses as no progress even when stale dirty files remain,
+  so repeated blank or read-only-refusal checkpoint passes escalate instead of
+  spinning forever.
+- Live `t-minus-t` replay on `2026-05-14`: after rebuilding and restarting
+  the service, `task-003` no longer spun forever in the checkpoint lane. The
+  first checkpoint no-progress pass returned as `in_progress -> in_progress`
+  with no recovery checkpoint rewrite, the second pass escalated
+  `esc-task-003-9` (`Worker made no visible progress after 2 passes.`), and
+  the project shut down truthfully with `2 done, 1 blocked`. This is not the
+  0.5 unattended-completion proof yet, but it closes the silent-spin failure
+  mode that was hiding the real blocker.
+- Autonomous checkpoint remediation on `2026-05-14`: a truthful block is still
+  too early for unattended operation when Guildhall has a durable checkpoint
+  and the recovery action is non-destructive. Repeated checkpoint
+  no-progress stops now get one coordinator-owned remediation attempt before
+  human escalation: Guildhall records a `restart_from_checkpoint` decision,
+  resolves a scoped `stuck` issue, resets the worker conversation, and resumes
+  the task from the latest checkpoint. If the worker repeats the same
+  no-progress pattern after that single reset, the task escalates normally.
+- Live autonomous remediation replay on `2026-05-14`: after resolving the
+  previous `t-minus-t` block for a clean replay, tick 2 used
+  `coordinator-remediation` instead of escalating immediately. It wrote
+  `memory/DECISIONS.md` with `Remediation: restart_from_checkpoint`, resolved
+  a scoped `stuck` issue on `task-003`, reset the worker conversation, and
+  resumed the task. The worker repeated the same read-only/no-tool drift after
+  that one recovery attempt, so tick 4 escalated `esc-task-003-10` and the
+  project shut down truthfully. This proves the remediation loop now exists,
+  but `t-minus-t` still does not satisfy the 0.5 unattended-completion proof.
+- Nested worktree verification command scoping on `2026-05-14`: FLL proved
+  that the verifier was still handing nested tasks commands that only worked
+  from the task subdirectory, while shell/gate execution defaulted to the
+  isolated worktree root. Task gates now rewrite nested package commands into
+  worktree-root-safe forms such as `pnpm --dir frontend build` and
+  `pnpm --dir frontend exec tsc --noEmit`, and shell/run-gates remap stale
+  main-checkout cwd values into the matching worktree paths.
+- Stale checkpoint vs fresh reviewer feedback on `2026-05-14`: after FLL
+  passed verification, the Security Engineer requested a new dashboard
+  middleware fix, but the worker was still constrained by an older checkpoint
+  about `useAuthSession.ts`. Newer reviewer feedback now invalidates the
+  checkpoint next-action, and likely-target detection includes recent reviewer
+  file references, so the worker can patch the new review target instead of
+  being forced back to an obsolete mutation surface.
+- Landing hygiene on `2026-05-14`: FLL reached `done` but the first
+  cherry-pick tried to land Guildhall runtime files (`guildhall.yaml`,
+  `memory/**`) from the task branch and collided with local runtime state.
+  The git driver now lands only meaningful product paths from a task branch,
+  ignores Guildhall runtime state during cherry-pick landing, and uses
+  `--no-verify` for the generated landing commit so unrelated repo hooks do
+  not block an accepted task.
+- Superseded merge-fixup cleanup on `2026-05-14`: after the corrected FLL
+  landing succeeded, the old merge-conflict fixup task from the failed
+  landing attempt remained runnable and was picked up. Successful parent
+  landing now shelves open `parent-fixup-*` tasks as duplicate/superseded, so
+  stale fixups do not keep a completed project artificially active.
+- Live FLL completion replay on `2026-05-14`: after the fixes above and one
+  state repair for the previously-created stale fixup, Fair Labor License
+  reached `3 done, 0 blocked, 1 shelved` and shut down with `all_terminal`.
+  This is the first real project-flow proof in this loop: work moved from
+  implementation through review, gate check, landing, and terminal shutdown
+  without a remaining active/blocking task.

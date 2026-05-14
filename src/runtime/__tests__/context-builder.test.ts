@@ -220,6 +220,28 @@ describe('buildContext — task summary', () => {
     ])
   })
 
+  it('uses recent reviewer feedback when deriving likely target files for revision work', () => {
+    const taskWithReviewerFeedback: Task = {
+      ...baseTask,
+      projectPath: '/projects/fll/frontend',
+      worktreePath: '/projects/fll/.guildhall/worktrees/task-003',
+      spec: '## Summary\nWire auth pages.',
+      notes: [
+        {
+          agentId: 'reviewer-fanout',
+          role: 'reviewer',
+          content:
+            "Add `definePageMeta({ middleware: 'auth' })` to `frontend/app/pages/dashboard.vue` to enforce authentication.",
+          timestamp: '2026-05-14T16:06:42.745Z',
+        },
+      ],
+    }
+
+    expect(resolveLikelyTaskFiles(taskWithReviewerFeedback)).toEqual([
+      '/projects/fll/.guildhall/worktrees/task-003/frontend/app/pages/dashboard.vue',
+    ])
+  })
+
   it('resolves ambiguous spec paths against the real repo tree and includes success-metric test files', async () => {
     await fs.mkdir(path.join(tmpDir, 'packages', 'converter', 'src', 'features'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'packages', 'converter', 'test'), { recursive: true })
@@ -292,7 +314,7 @@ describe('buildContext — task summary', () => {
         step: 1,
         intent: 'Regenerated supabase types',
         filesTouched: ['web/app/types/supabase.ts', 'web/app/composables/use-workspace.ts'],
-        nextPlannedAction: 'Run the focused typecheck next',
+        nextPlannedAction: 'Resume from the active worktree diff, refresh focused verification, and keep the task in implementation until the focused checks are green.',
         resumeContext: {
           verification: [
             {
@@ -318,7 +340,7 @@ describe('buildContext — task summary', () => {
 
     expect(ctx.taskSummary).toContain('### Latest Checkpoint')
     expect(ctx.taskSummary).toContain('Regenerated supabase types')
-    expect(ctx.taskSummary).toContain('Run the focused typecheck next')
+    expect(ctx.taskSummary).toContain('Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.')
     expect(ctx.taskSummary).toContain('Latest authoritative verification: pnpm -F web typecheck (failed)')
     expect(ctx.taskSummary).toContain('Cannot find name WorkspaceSummary')
     expect(ctx.taskSummary).toContain('Companion files: web/tests/unit/composables/use-workspace.test.ts')
