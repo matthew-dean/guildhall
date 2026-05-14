@@ -4428,6 +4428,69 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.escalations[0]?.resolution).toContain('Superseded')
   })
 
+  it('reopens a stale validator-bug-persists blocker after restart', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: 'approved spec',
+        blockReason:
+          'gate_hard_failure: Blocked from transitioning to review — system validator bug persists',
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: `**Self-critique:**\n\nAC-1 (Registration): Met — auth wiring is complete.\n\n**Minimum-scope check:**\n- Files changed: register.vue.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`,
+            timestamp: '2026-05-13T21:05:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'gate_hard_failure',
+            summary: 'Blocked from transitioning to review — system validator bug persists',
+            details:
+              'Implementation complete with all acceptance criteria are met and both verification commands passing. A human needs to resolve this validator issue to allow the review transition.',
+            raisedAt: '2026-05-13T21:06:16.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({
+        worker: stubAgent('worker-agent', async () => {
+          await mutateTask('a', { status: 'review' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('review handoff validator bug'),
+    )).toBe(true)
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('Superseded')
+  })
+
   it('auto-promotes a worker task to review when durable handoff evidence already exists but the worker leaves it in progress', async () => {
     await writeQueue([
       mkTask({
