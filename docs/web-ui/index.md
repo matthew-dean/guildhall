@@ -2,7 +2,7 @@
 title: Web UI overview
 help_topic: web.overview
 help_summary: |
-  The dashboard is the main Guildhall interface. It is served by
+  The browser UI is the main Guildhall interface. It is served by
   `guildhall serve`, reads and writes project state, and exposes the
   setup, task, run, review, and provider workflows through the main
   product surface.
@@ -15,6 +15,8 @@ the `/projects` service home for scanning registered projects, and the
 project shell where setup, tasks, live runs, reviewer calls, and release
 readiness actually play out.
 
+<UiReferenceNav />
+
 Use it for the everyday loop:
 
 1. Open the service home or jump straight into a project shell.
@@ -26,10 +28,8 @@ Use it for the everyday loop:
 
 The UI is still transparent: project state lands in `guildhall.yaml`,
 `.guildhall/config.yaml`, and `memory/*`, while machine-scoped state such as
-the project registry and provider credentials lives under `~/.guildhall/`.
-
-> Honest note: the project shell is ahead of some service-level pages. The core
-> loop is already strong; some of the calmer layout polish is still catching up.
+the project registry, provider credentials, and default provider choice live
+under `~/.guildhall/`.
 
 ## Pages
 

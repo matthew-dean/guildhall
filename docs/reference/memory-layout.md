@@ -10,7 +10,9 @@ help_summary: |
 
 # Memory layout
 
-Everything GuildHall persists sits under `memory/` at the workspace root. Commit it with the project — the queue, levers, and transcripts are part of the project's history.
+Everything Guildhall persists sits under `memory/` at the project root.
+Commit it with the project — the queue, levers, and transcripts are part of
+the project's history.
 
 ```
 memory/

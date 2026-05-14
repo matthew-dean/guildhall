@@ -12,20 +12,24 @@ The orchestrator is the process that advances tasks. It ticks through each domai
 guildhall serve
 ```
 
-Open the dashboard at `http://localhost:7777`, choose a project, and use the
-**Start** / **Stop** controls from the project shell. This is the main path:
-you can inspect Thread, Work, Needs you, task drawers, and release state
-without leaving the UI.
+`guildhall serve` is the friendly entrypoint: it makes sure the local service
+is running, opens the browser UI, and usually drops you into either the
+current project's shell or the service home.
+
+From there, use the **Start** / **Stop** controls in the project shell. This
+is the main operating path: you can inspect Thread, Work, Needs you, task
+drawers, and release state without leaving the UI.
 
 The dashboard uses the same runtime as the CLI. Progress is appended to `memory/PROGRESS.md`, events are streamed to `memory/events.ndjson`, and the full transcript per task lives under `memory/transcripts/`.
 
 ## From the CLI
 
-Use the CLI when you want a blocking terminal process, scripting, CI smoke runs, or a domain-scoped debugging session.
+Use the CLI when you want a blocking terminal process, scripting, CI smoke
+runs, or a domain-scoped debugging session.
 
 ```bash
-guildhall run                    # run the default workspace
-guildhall run my-app             # run a specific workspace by id
+guildhall run                    # run the current project
+guildhall run my-app             # run a specific registered project by id
 guildhall run --domain ui        # only the ui domain
 guildhall run --max-ticks 10     # stop after 10 ticks (for testing)
 guildhall run --one-task         # stop after one task reaches a handoff point

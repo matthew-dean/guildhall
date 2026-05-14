@@ -9,14 +9,16 @@ help_summary: |
 
 # Setup wizard
 
+<UiReferenceNav />
+
 Lives at `/setup` and is rendered by `src/web/surfaces/SetupWizard.svelte`.
 
 ## Steps
 
-1. **Identity** — project name and slug. The slug becomes the project id used by the dashboard and CLI.
-2. **Provider detection** — `GET /api/setup/providers` checks five provider keys: Claude OAuth, Codex OAuth, Anthropic API, OpenAI API, and one OpenAI-compatible local-server slot. Detected providers light up; undetected ones show an inline configuration prompt.
-3. **Credentials** — for hosted providers, either paste an API key or log in via the provider's CLI. API keys land in `~/.guildhall/providers.yaml`, while Claude and Codex OAuth stay in their own CLI auth stores. The project's own provider selection is stored locally in `.guildhall/config.yaml`.
-4. **Launch** — choose between "bootstrap via meta-intake" (recommended) or "skip to dashboard." Meta-intake drafts coordinators, verified bootstrap commands, and inferred lever positions for approval.
+1. **Identity** — project name and slug. The slug becomes the project id used by the browser UI and CLI.
+2. **Provider detection** — `GET /api/setup/providers` checks the built-in provider paths Guildhall knows about today: Claude OAuth, Codex OAuth, Anthropic-compatible API credentials, OpenAI-compatible API credentials, and the configured local OpenAI-compatible server path. Detected providers light up; undetected ones show an inline configuration prompt.
+3. **Credentials** — for hosted providers, either paste an API key or log in via the provider's CLI. API keys land in `~/.guildhall/providers.yaml`, while Claude and Codex OAuth stay in their own CLI auth stores. Guildhall's default provider choice is machine-wide in `~/.guildhall/config.yaml`, with an optional project-local override in `.guildhall/config.yaml` only when one project truly needs different behavior.
+4. **Launch** — choose between "bootstrap via meta-intake" (recommended) or "skip to the project shell." Meta-intake drafts coordinators, verified bootstrap commands, and inferred lever positions for approval.
 
 ## Re-running
 

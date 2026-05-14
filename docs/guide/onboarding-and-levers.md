@@ -4,19 +4,24 @@ title: Onboarding and levers
 
 # Onboarding and levers
 
-GuildHall does not ask you to fill out a wall of policy toggles before it can work. The dashboard starts with a small setup wizard, then the **meta-intake** agent learns enough about the project to propose both the workspace shape and the initial policy settings.
+Guildhall does not ask you to fill out a wall of policy toggles before it can
+work. The browser UI starts with a small setup wizard, then the
+**meta-intake** agent learns enough about the project to propose both the
+internal routing shape and the initial policy settings.
 
 Those policy settings are called **levers**. They decide things like how autonomous agents may be, how strict reviews are, when humans must approve completion, whether work can fan out into multiple worktrees, and how aggressively the runtime recovers from problems.
 
 ## The first-run flow
 
-1. **Setup wizard** creates the workspace shell: `guildhall.yaml`, local `.guildhall/` state, provider selection, and the initial dashboard route.
+1. **Setup wizard** creates the project shell: `guildhall.yaml`, local `.guildhall/` state, provider selection, and the initial route into the project shell.
 2. **Meta-intake** asks focused project questions: what the major domains are, what each domain owns, what must be escalated, and how the project tends to treat risk.
 3. **The Spec Agent drafts YAML** for coordinators and inferred levers. It should infer from natural answers, not force you to choose every knob by name.
-4. **You approve the draft** from the dashboard or CLI.
-5. **GuildHall writes the result**: coordinators and bootstrap commands go into `guildhall.yaml`; inferred levers go into `memory/agent-settings.yaml` with provenance.
+4. **You approve the draft** from the browser UI or CLI.
+5. **Guildhall writes the result**: routing/coordinator structure and bootstrap commands go into `guildhall.yaml`; inferred levers go into `memory/agent-settings.yaml` with provenance.
 
-After that, the dashboard Settings area shows the current lever positions. You can change them later, but the first pass should feel like onboarding into a project, not configuring a cockpit.
+After that, the Settings area shows the current lever positions. You can
+change them later, but the first pass should feel like onboarding into a
+project, not configuring a cockpit.
 
 ## What the agent infers
 
@@ -52,7 +57,8 @@ The important part is `setBy`. It tells you whether a lever came from:
 
 ## Project vs domain levers
 
-Project levers apply once to the whole workspace. Examples: merge policy, worktree isolation, runtime isolation, remediation autonomy.
+Project levers apply once to the whole project/workspace. Examples: merge
+policy, worktree isolation, runtime isolation, remediation autonomy.
 
 Domain levers apply per coordinator domain, with a `default` fallback. This lets UI work and infra work have different review or approval strictness in the same repo.
 
@@ -74,7 +80,8 @@ The result is not “the AI made a secret decision.” It is a visible proposal,
 
 ## Changing your mind
 
-Levers are not permanent. Use the dashboard Settings page for normal edits, or edit `memory/agent-settings.yaml` directly when you need a precise reviewable diff.
+Levers are not permanent. Use the Settings page for normal edits, or edit
+`memory/agent-settings.yaml` directly when you need a precise reviewable diff.
 
 When changing a lever by hand, update the `position`, `rationale`, `setAt`, and `setBy` together. The rationale matters because future you will want to know why the guild suddenly became more cautious, more autonomous, or more parallel.
 
@@ -83,4 +90,4 @@ When changing a lever by hand, update the `position`, `rationale`, `setAt`, and 
 - [Levers](../levers/) — every lever and position.
 - [Provenance](../levers/provenance) — what `setBy` values mean.
 - [`agent-settings.yaml`](../reference/agent-settings) — storage shape.
-- [Setup wizard](../web-ui/setup) — the dashboard onboarding surface.
+- [Setup wizard](../web-ui/setup) — the browser onboarding surface.

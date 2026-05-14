@@ -19,7 +19,7 @@ A workspace is a directory containing:
 ## Registering projects
 
 Guildhall keeps a global registry at `~/.guildhall/registry.yaml` so the CLI
-and dashboard can reference projects by id instead of by path.
+and browser UI can reference projects by id instead of by path.
 
 ```bash
 guildhall register ~/projects/my-app     # add to registry
@@ -49,8 +49,8 @@ the registry metadata even before the UI grows into a fuller fleet view.
 These layers can coexist, and they do different jobs:
 
 - **`guildhall.yaml` at the project root** — the committed project config.
-- **`.guildhall/config.yaml` inside the project** — local-only secrets and
-  machine-specific overrides for that one project.
+- **`.guildhall/config.yaml` inside the project** — local-only runtime
+  overrides for that one project.
 - **`~/.guildhall/config.yaml`** — user-global machine defaults across
   projects.
 - **`~/.guildhall/providers.yaml`** — machine-scoped provider credentials
@@ -69,5 +69,5 @@ it still holds local runtime selections such as `landingBranch`. See
 Lever settings live in `memory/agent-settings.yaml` and are scoped to the
 workspace, not the global registry. Each project gets its own lever
 configuration, seeded with system defaults on first run and edited either
-through the dashboard Settings page or by direct YAML edit. See
+through the Settings page or by direct YAML edit. See
 [Levers](../levers/).

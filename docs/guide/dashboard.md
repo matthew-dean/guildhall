@@ -5,7 +5,11 @@ pageClass: gh-first-visit-page
 
 # The dashboard is where the state becomes readable
 
-Guildhall is easiest to understand once you see the shell. The dashboard experience starts at the service home, then quickly narrows into the project shell where setup, task intake, live progress, reviewer calls, and release readiness actually play out. It tries very hard not to make you remember more than you should.
+Guildhall is easiest to understand once you see the shell. The browser
+experience starts at the service home, then narrows into the project shell
+where setup, task intake, live progress, reviewer calls, and release
+readiness actually play out. It tries very hard not to make you remember more
+than you should.
 
 ![Guildhall work view with active tasks, live progress, and reviewer signals.](../assets/ui-audit/work.png)
 
@@ -19,7 +23,5 @@ Guildhall is easiest to understand once you see the shell. The dashboard experie
 
 - **Attach and configure**: bring a project into the service, choose a provider path, and get the shell into a state where the guild can work without tripping over setup debris.
 - **Shape and launch tasks**: create work, review the draft, answer the awkward questions, then hit **Start** when the task is ready to move.
-- **Inspect the run**: read the queue, open the drawer, follow the transcript, and decide whether the guild is cooking or merely making smoke.
+- **Inspect the run**: read the queue, open the drawer, follow the transcript, and decide whether the guild is making progress or just generating noise.
 - **Judge release readiness**: keep reviewer verdicts and release checks visible so “probably fine” does not become your deployment methodology.
-
-> Honest note: the shell shape is ahead of the final polish. Some denser views still want stronger grouping and better typography rhythm. The good news is that the important thing is already true: the structure of the work is visible.

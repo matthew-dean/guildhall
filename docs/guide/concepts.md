@@ -6,9 +6,13 @@ title: Core concepts
 
 A quick tour of the vocabulary. Each term links to a deeper page.
 
-## Workspace
+## Project / workspace
 
-A directory containing a `guildhall.yaml` and a `memory/` folder. One workspace = one project the guild works on. See [Workspaces](./workspaces).
+In the product, you mostly think in **projects**. In the runtime and config
+layers, the same unit is still often called a **workspace**.
+
+Either way, it means one directory containing a `guildhall.yaml` and a
+`memory/` folder. See [Workspaces](./workspaces).
 
 ## Task
 
@@ -24,7 +28,11 @@ The persona that owns a domain. Defined in `guildhall.yaml` with a **mandate**, 
 
 ## Agent
 
-A stateful, tool-using conversation. Five built-in roles: **spec**, **coordinator**, **worker**, **reviewer**, **gateChecker**. Each role maps to a model (configurable per project). See [Agents & models](./agents-and-models) and the [agents subsystem](../subsystems/agents).
+A stateful, tool-using conversation. Five built-in roles: **spec**,
+**coordinator**, **worker**, **reviewer**, **gateChecker**. Each role maps to
+a model and provider choice, with machine-wide defaults and optional
+project-level overrides. See [Agents & models](./agents-and-models) and the
+[agents subsystem](../subsystems/agents).
 
 ## Guild
 

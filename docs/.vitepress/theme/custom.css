@@ -1,5 +1,4 @@
 :root {
-  color-scheme: dark;
   --vp-c-bg: var(--gh-color-surface-canvas);
   --vp-c-bg-soft: var(--gh-color-surface-sunken);
   --vp-c-bg-alt: var(--gh-color-surface-raised);
@@ -10,44 +9,244 @@
   --vp-c-text-2: var(--gh-color-text-secondary);
   --vp-c-text-3: var(--gh-color-text-muted);
   --vp-c-brand-1: var(--gh-color-action-primary);
-  --vp-c-brand-2: color-mix(in srgb, var(--gh-color-action-primary) 80%, white);
-  --vp-c-brand-3: color-mix(in srgb, var(--gh-color-action-primary) 56%, white);
-  --vp-c-brand-soft: color-mix(in srgb, var(--gh-color-action-primary) 18%, transparent);
+  --vp-c-brand-2: color-mix(in srgb, var(--gh-color-action-primary) 72%, white);
+  --vp-c-brand-3: color-mix(in srgb, var(--gh-color-action-primary) 42%, white);
+  --vp-c-brand-soft: color-mix(in srgb, var(--gh-color-action-primary) 14%, transparent);
   --vp-home-hero-name-color: var(--gh-color-text-primary);
-  --vp-home-hero-image-background-image: radial-gradient(circle at center, color-mix(in srgb, var(--gh-color-action-primary) 24%, transparent), color-mix(in srgb, var(--gh-color-action-secondary) 10%, transparent) 45%, transparent 70%);
+  --vp-home-hero-image-background-image: radial-gradient(circle at center, color-mix(in srgb, var(--gh-color-action-primary) 20%, transparent), color-mix(in srgb, var(--gh-color-action-secondary) 12%, transparent) 48%, transparent 70%);
   --vp-home-hero-image-filter: blur(56px);
+  --vp-font-family-base: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --vp-font-family-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-.dark {
-  --vp-c-bg: var(--gh-color-surface-canvas);
-  --vp-c-bg-soft: var(--gh-color-surface-sunken);
-  --vp-c-bg-alt: var(--gh-color-surface-raised);
-  --vp-c-bg-elv: var(--gh-color-surface-elevated);
+:root[data-gh-theme='light'] {
+  --vp-c-brand-2: color-mix(in srgb, var(--gh-color-action-primary) 82%, white);
+  --vp-c-brand-3: color-mix(in srgb, var(--gh-color-action-primary) 60%, white);
+  --vp-c-brand-soft: color-mix(in srgb, var(--gh-color-action-primary) 10%, white);
+  --vp-home-hero-image-background-image: radial-gradient(circle at center, color-mix(in srgb, var(--gh-color-action-primary) 16%, transparent), color-mix(in srgb, var(--gh-color-action-secondary) 12%, transparent) 48%, transparent 70%);
 }
 
 .VPNav {
-  background: color-mix(in srgb, var(--gh-color-surface-canvas) 88%, transparent);
-  border-bottom-color: color-mix(in srgb, var(--gh-color-border-subtle) 76%, transparent);
+  background: color-mix(in srgb, var(--gh-color-surface-canvas) 84%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--gh-color-border-subtle) 58%, transparent);
   backdrop-filter: blur(14px);
+}
+
+.gh-home-page .VPLocalNav {
+  display: none;
 }
 
 .VPContent.is-home,
 .gh-home-page .VPDoc {
   background:
-    radial-gradient(circle at top right, color-mix(in srgb, var(--gh-color-action-primary) 12%, transparent), transparent 24rem),
-    linear-gradient(180deg, color-mix(in srgb, var(--gh-color-surface-raised) 52%, black), var(--gh-color-surface-canvas));
+    radial-gradient(circle at top right, color-mix(in srgb, var(--gh-color-action-primary) 10%, transparent), transparent 24rem),
+    radial-gradient(circle at 12% 18%, color-mix(in srgb, var(--gh-color-action-secondary) 8%, transparent), transparent 20rem),
+    linear-gradient(180deg, color-mix(in srgb, var(--gh-color-surface-raised) 34%, #120f15), var(--gh-color-surface-canvas));
+}
+
+:root[data-gh-theme='light'] .VPContent.is-home,
+:root[data-gh-theme='light'] .gh-home-page .VPDoc {
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--gh-color-action-primary) 12%, transparent), transparent 26rem),
+    radial-gradient(circle at 12% 18%, color-mix(in srgb, var(--gh-color-action-secondary) 10%, transparent), transparent 22rem),
+    linear-gradient(180deg, color-mix(in srgb, var(--gh-color-surface-raised) 65%, white), var(--gh-color-surface-canvas));
 }
 
 .gh-home-page .VPDoc .container,
 .gh-home-page .VPDoc .content,
 .gh-home-page .VPDoc .content-container {
+  inline-size: 100%;
   max-width: 100%;
+}
+
+.gh-home-page .VPDoc.has-aside .content-container,
+.gh-home-page .VPDoc .content-container {
+  max-inline-size: none;
+}
+
+.gh-home-page .vp-doc {
+  padding-inline: 0;
+}
+
+.gh-ui-subnav {
+  display: grid;
+  gap: var(--gh-space-3);
+  padding: clamp(var(--gh-space-3), 1.8vw, var(--gh-space-4));
+  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 68%, transparent);
+  border-radius: var(--gh-radius-3);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--gh-color-surface-raised) 92%, transparent),
+      color-mix(in srgb, var(--gh-color-surface-sunken) 86%, transparent)
+    );
+}
+
+.gh-ui-subnav__eyebrow {
+  margin: 0;
+  color: var(--gh-color-text-muted);
+  font-size: var(--gh-type-size-label);
+  font-weight: var(--gh-type-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.gh-ui-subnav__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gh-space-2);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.gh-ui-subnav__link {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 2.5rem;
+  padding-inline: 0.95rem;
+  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 64%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gh-color-surface-raised) 58%, transparent);
+  color: var(--gh-color-text-secondary);
+  font-size: 0.95rem;
+  font-weight: var(--gh-type-weight-medium);
+  text-decoration: none;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.gh-ui-subnav__link:hover {
+  border-color: color-mix(in srgb, var(--gh-color-action-primary) 44%, var(--gh-color-border-subtle));
+  color: var(--gh-color-text-primary);
+  background: color-mix(in srgb, var(--gh-color-surface-elevated) 72%, transparent);
+}
+
+.gh-ui-subnav__link.is-active {
+  border-color: color-mix(in srgb, var(--gh-color-action-primary) 54%, var(--gh-color-border-subtle));
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--gh-color-action-primary) 16%, var(--gh-color-surface-elevated)),
+      color-mix(in srgb, var(--gh-color-surface-elevated) 92%, transparent)
+    );
+  color: var(--gh-color-text-primary);
+}
+
+:root[data-gh-theme='light'] .gh-ui-subnav {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--gh-color-surface-raised) 95%, white),
+      color-mix(in srgb, var(--gh-color-surface-sunken) 82%, white)
+    );
 }
 
 .vp-doc h1,
 .vp-doc h2,
 .vp-doc h3 {
   letter-spacing: 0;
+}
+
+.vp-doc p,
+.vp-doc li {
+  line-height: var(--gh-type-line-height-relaxed);
+}
+
+.vp-doc div[class*='language-'],
+.vp-block {
+  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 50%, transparent);
+  border-radius: var(--gh-radius-3);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--gh-color-surface-raised-alt) 90%, #241d2a),
+    color-mix(in srgb, var(--gh-color-surface-raised) 94%, #201924)
+  );
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 5%, transparent),
+    0 14px 28px color-mix(in srgb, black 16%, transparent);
+}
+
+.vp-doc div[class*='language-'] {
+  position: relative;
+  overflow: clip;
+}
+
+.vp-doc div[class*='language-']::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  block-size: 3px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--gh-color-action-secondary) 84%, white),
+    color-mix(in srgb, var(--gh-color-action-primary) 74%, white),
+    color-mix(in srgb, var(--gh-color-feedback-info) 76%, white)
+  );
+  opacity: 0.82;
+}
+
+.vp-doc div[class*='language-'] pre,
+.vp-doc div[class*='language-'] code,
+.vp-doc code {
+  font-family: var(--vp-font-family-mono);
+}
+
+.vp-doc div[class*='language-'] pre {
+  padding-block: 1rem 1.1rem;
+  line-height: 1.65;
+}
+
+.vp-doc div[class*='language-'] .line {
+  color: color-mix(in srgb, var(--gh-color-text-secondary) 94%, white) !important;
+}
+
+.vp-doc div[class*='language-'] .line span[style*='font-style:italic'],
+.vp-doc div[class*='language-'] .line span[style*='color:#6A737D'],
+.vp-doc div[class*='language-'] .line span[style*='color:#7f8490'] {
+  color: var(--gh-color-text-muted) !important;
+}
+
+.vp-doc div[class*='language-bash'] .line,
+.vp-doc div[class*='language-sh'] .line,
+.vp-doc div[class*='language-shell'] .line,
+.vp-doc div[class*='language-console'] .line,
+.vp-doc div[class*='language-text'] .line {
+  color: var(--gh-color-text-primary) !important;
+}
+
+.vp-doc div[class*='language-bash'] .line span,
+.vp-doc div[class*='language-sh'] .line span,
+.vp-doc div[class*='language-shell'] .line span,
+.vp-doc div[class*='language-console'] .line span,
+.vp-doc div[class*='language-text'] .line span {
+  color: inherit !important;
+}
+
+.vp-doc div[class*='language-'] .copy {
+  inset-block-start: 0.85rem;
+  inset-inline-end: 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 54%, transparent);
+  border-radius: var(--gh-radius-2);
+  background: color-mix(in srgb, var(--gh-color-surface-raised) 88%, #17131a);
+  color: var(--gh-color-text-secondary);
+  backdrop-filter: blur(10px);
+}
+
+.vp-doc div[class*='language-'] .copy:hover {
+  border-color: color-mix(in srgb, var(--gh-color-action-primary) 38%, var(--gh-color-border-subtle));
+  color: var(--gh-color-text-primary);
+}
+
+.vp-doc :not(pre) > code {
+  padding: 0.18rem 0.42rem;
+  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 40%, transparent);
+  border-radius: var(--gh-radius-1);
+  background: color-mix(in srgb, var(--gh-color-surface-raised) 92%, black);
+  color: color-mix(in srgb, var(--gh-color-action-primary) 72%, white);
+  font-size: 0.92em;
 }
 
 .gh-home-page .vp-doc img,
@@ -68,10 +267,32 @@
   border-radius: var(--gh-radius-2);
 }
 
+.gh-first-visit-page .vp-doc > div > h1,
+.gh-first-visit-page .vp-doc > div > h2,
+.gh-first-visit-page .vp-doc > div > h3,
+.gh-first-visit-page .vp-doc > div > p,
+.gh-first-visit-page .vp-doc > div > ul,
+.gh-first-visit-page .vp-doc > div > ol,
+.gh-first-visit-page .vp-doc > div > div[class*='language-'],
+.gh-first-visit-page .vp-doc > div > figure {
+  max-inline-size: 52rem;
+}
+
+.gh-first-visit-page .vp-doc > div > h2 {
+  margin-block-start: clamp(2.4rem, 5vw, 3.6rem);
+}
+
+.gh-first-visit-page .vp-doc > div > div[class*='language-'] {
+  margin-block: 1.15rem 1.6rem;
+}
+
 .gh-home {
   display: grid;
-  gap: clamp(40px, 5vw, 64px);
-  padding-block: var(--gh-space-6) clamp(48px, 7vw, 80px);
+  inline-size: min(100%, 84rem);
+  margin-inline: auto;
+  gap: clamp(44px, 5vw, 72px);
+  padding-inline: clamp(1rem, 2.75vw, 2rem);
+  padding-block: clamp(12px, 2vw, 20px) clamp(48px, 7vw, 80px);
 }
 
 .gh-home > section,
@@ -90,7 +311,7 @@
 .gh-home > section,
 .gh-doc-section {
   display: grid;
-  gap: var(--gh-space-5);
+  gap: clamp(var(--gh-space-4), 2.2vw, var(--gh-space-5));
   container-type: inline-size;
 }
 
@@ -117,14 +338,16 @@
   display: grid;
   gap: var(--gh-space-6);
   padding: clamp(var(--gh-space-5), 3cqi, var(--gh-space-7));
-  border: 1px solid color-mix(in srgb, var(--gh-color-border-accent) 44%, var(--gh-color-border-subtle));
+  border: 1px solid color-mix(in srgb, var(--gh-color-border-accent) 24%, var(--gh-color-border-subtle));
   border-radius: var(--gh-radius-3);
   background:
-    radial-gradient(circle at top right, color-mix(in srgb, var(--gh-color-action-primary) 20%, transparent), transparent 34%),
-    linear-gradient(180deg, color-mix(in srgb, var(--gh-color-surface-raised-alt) 94%, black), var(--gh-color-surface-sunken));
+    radial-gradient(circle at top right, color-mix(in srgb, var(--gh-color-action-primary) 15%, transparent), transparent 34%),
+    radial-gradient(circle at bottom left, color-mix(in srgb, var(--gh-color-action-secondary) 11%, transparent), transparent 30%),
+    linear-gradient(180deg, color-mix(in srgb, var(--gh-color-surface-raised-alt) 88%, #1a151d), var(--gh-color-surface-sunken));
   box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
-    0 20px 56px rgba(0, 0, 0, 0.32);
+    inset 0 1px 0 color-mix(in srgb, white 7%, transparent),
+    0 18px 42px rgba(0, 0, 0, 0.24);
+  align-items: start;
 }
 
 .gh-home-hero__copy,
@@ -143,25 +366,29 @@
   min-inline-size: 0;
 }
 
+.gh-section-heading {
+  max-inline-size: 52rem;
+}
+
 .gh-kicker {
-  color: var(--gh-color-text-secondary);
+  color: color-mix(in srgb, var(--gh-color-action-secondary) 70%, var(--gh-color-text-secondary));
   font-size: var(--gh-type-size-1);
   font-weight: var(--gh-type-weight-strong);
   line-height: var(--gh-type-line-height-tight);
   text-transform: uppercase;
-  letter-spacing: 0;
+  letter-spacing: 0.03em;
 }
 
 .gh-home-hero h1 {
   max-inline-size: 11ch;
-  font-size: 2.8rem;
-  line-height: 0.98;
+  font-size: clamp(3rem, 5.8vw, 4.9rem);
+  line-height: 0.94;
   text-wrap: balance;
 }
 
 .gh-home-subhead {
   color: var(--gh-color-text-primary);
-  font-size: 1.25rem;
+  font-size: clamp(1.2rem, 2.3vw, 1.5rem);
   font-weight: var(--gh-type-weight-strong);
   line-height: var(--gh-type-line-height-tight);
 }
@@ -173,7 +400,7 @@
 .gh-signal-card p,
 .gh-guild-copy p,
 .gh-doc-lede {
-  max-inline-size: 68ch;
+  max-inline-size: 62ch;
   color: var(--gh-color-text-secondary);
   font-size: var(--gh-type-size-3);
   line-height: var(--gh-type-line-height-relaxed);
@@ -195,12 +422,12 @@
   align-items: center;
   justify-content: center;
   min-block-size: 2.75rem;
-  padding-inline: 1rem;
+  padding-inline: 1.1rem;
   border: 1px solid transparent;
   border-radius: var(--gh-radius-2);
   font-weight: var(--gh-type-weight-strong);
   text-decoration: none;
-  transition: transform 140ms ease, border-color 140ms ease, background-color 140ms ease;
+  transition: transform 140ms ease, border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
 }
 
 .gh-cta:hover {
@@ -208,13 +435,14 @@
 }
 
 .gh-cta-primary {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--gh-color-action-primary) 88%, white), var(--gh-color-action-primary));
-  color: #17120b;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--gh-color-action-primary) 74%, white), color-mix(in srgb, var(--gh-color-action-primary) 92%, #2a183d));
+  color: #f9f5ff;
+  box-shadow: 0 10px 20px color-mix(in srgb, var(--gh-color-action-primary) 22%, transparent);
 }
 
 .gh-cta-secondary {
-  border-color: color-mix(in srgb, var(--gh-color-border-accent) 62%, var(--gh-color-border-subtle));
-  background: color-mix(in srgb, var(--gh-color-surface-raised) 86%, black);
+  border-color: color-mix(in srgb, var(--gh-color-border-subtle) 56%, transparent);
+  background: color-mix(in srgb, var(--gh-color-surface-raised) 92%, #17131a);
   color: var(--gh-color-text-primary);
 }
 
@@ -227,19 +455,21 @@
 
 .gh-home-hero__badges li {
   padding: 0.7rem 0.85rem;
-  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 82%, white);
+  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 48%, transparent);
   border-radius: var(--gh-radius-2);
-  background: color-mix(in srgb, var(--gh-color-surface-raised) 78%, black);
+  background: color-mix(in srgb, var(--gh-color-surface-raised) 86%, #17131a);
   color: var(--gh-color-text-secondary);
   font-size: var(--gh-type-size-1);
 }
 
 .gh-doc-shot {
   overflow: clip;
-  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 88%, white);
+  display: grid;
+  gap: 0;
+  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 44%, transparent);
   border-radius: var(--gh-radius-3);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--gh-color-surface-raised-alt) 82%, black), var(--gh-color-surface-sunken));
-  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.28);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--gh-color-surface-raised-alt) 76%, #1b1720), var(--gh-color-surface-sunken));
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.2);
 }
 
 .gh-doc-shot img {
@@ -259,9 +489,23 @@
 
 .gh-home-hero__proof {
   padding: var(--gh-space-4);
-  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 82%, white);
+  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 48%, transparent);
   border-radius: calc(var(--gh-radius-3) - 2px);
-  background: color-mix(in srgb, var(--gh-color-surface-raised) 78%, black);
+  background: color-mix(in srgb, var(--gh-color-surface-raised) 88%, #17131a);
+}
+
+.gh-home-hero__proof > * {
+  min-inline-size: 0;
+}
+
+.gh-home-hero__proof .gh-kicker {
+  margin-block-end: var(--gh-space-1);
+}
+
+.gh-home-hero__proof h2 {
+  max-inline-size: 14ch;
+  font-size: clamp(2rem, 5.8vw, 3.4rem);
+  overflow-wrap: anywhere;
 }
 
 .gh-home-hero__proof h2,
@@ -279,8 +523,31 @@
 .gh-step-list {
   display: grid;
   gap: var(--gh-space-2);
-  padding-inline-start: 1.1rem;
   color: var(--gh-color-text-secondary);
+}
+
+.gh-home-hero__proof ul,
+.gh-limit-card ul {
+  padding: 0;
+  list-style: none;
+}
+
+.gh-home-hero__proof li,
+.gh-limit-card li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  column-gap: 0.8rem;
+}
+
+.gh-home-hero__proof li::before,
+.gh-limit-card li::before {
+  content: "";
+  inline-size: 0.42rem;
+  block-size: 0.42rem;
+  margin-block-start: 0.62em;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gh-color-action-secondary) 72%, white);
 }
 
 .gh-home-hero__proof li,
@@ -297,6 +564,10 @@
   background: linear-gradient(180deg, var(--gh-color-surface-info-subtle), color-mix(in srgb, var(--gh-color-surface-raised) 86%, black));
 }
 
+.gh-origin-band p {
+  max-inline-size: none;
+}
+
 .gh-proof-grid,
 .gh-signal-grid,
 .gh-limit-grid {
@@ -309,9 +580,10 @@
 .gh-limit-card,
 .gh-guild-copy {
   padding: var(--gh-space-4);
-  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 86%, white);
+  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 42%, transparent);
   border-radius: var(--gh-radius-3);
-  background: color-mix(in srgb, var(--gh-color-surface-raised) 82%, black);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--gh-color-surface-raised) 92%, #18131b), var(--gh-color-surface-elevated));
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.14);
 }
 
 .gh-signal-card h3,
@@ -319,30 +591,57 @@
 .gh-guild-copy h3,
 .gh-doc-shot strong {
   color: var(--gh-color-text-primary);
-  font-size: var(--gh-type-size-3);
-  line-height: var(--gh-type-line-height-tight);
+  font-size: var(--gh-type-size-5);
+  font-weight: var(--gh-type-weight-strong);
+  line-height: 1.12;
+}
+
+.gh-limit-card li,
+.gh-signal-card li,
+.gh-guild-copy p {
+  font-size: var(--gh-type-size-4);
 }
 
 .gh-guild-layout {
   display: grid;
   gap: var(--gh-space-4);
+  align-items: start;
+}
+
+.gh-guild-showcase,
+.gh-guild-supporting {
+  display: grid;
+  gap: var(--gh-space-4);
 }
 
 .gh-guild-figure {
+  display: grid;
+  align-items: start;
+  padding: clamp(0.75rem, 1.5vw, 1.15rem);
   overflow: clip;
-  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 82%, white);
+  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 42%, transparent);
   border-radius: var(--gh-radius-3);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--gh-color-surface-raised-alt) 88%, black), var(--gh-color-surface-sunken));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--gh-color-surface-raised-alt) 80%, #1c1720), var(--gh-color-surface-sunken));
 }
 
 .gh-guild-figure img {
   display: block;
   inline-size: 100%;
+  aspect-ratio: 16 / 9;
   block-size: auto;
+  object-fit: contain;
+}
+
+.gh-guild-figure-primary img {
+  aspect-ratio: 16 / 9;
+}
+
+.gh-guild-figure-secondary img {
+  aspect-ratio: 16 / 8.4;
 }
 
 .gh-doc-section {
-  padding-block: var(--gh-space-4);
+  padding-block: 0;
 }
 
 .gh-doc-section h1 {
@@ -404,6 +703,15 @@
   .gh-limit-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .gh-doc-section > .gh-doc-shot {
+    max-inline-size: 72rem;
+  }
+
+  .gh-guild-supporting {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: stretch;
+  }
 }
 
 @container (min-width: 62rem) {
@@ -412,7 +720,7 @@
   }
 
   .gh-home-hero h1 {
-    font-size: 4.8rem;
+    font-size: 5.4rem;
   }
 
   .gh-home-subhead {
@@ -431,7 +739,7 @@
   }
 
   .gh-signal-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -450,5 +758,9 @@
   .gh-guild-copy,
   .gh-limit-card {
     padding: var(--gh-space-3);
+  }
+
+  .gh-home-hero__proof h2 {
+    font-size: clamp(1.8rem, 10vw, 2.65rem);
   }
 }

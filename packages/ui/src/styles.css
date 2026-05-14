@@ -1,30 +1,31 @@
 /* Generated from src/token-definitions.js by scripts/generate-styles.mjs. */
 :root {
-  --gh-color-surface-canvas: #0f0f11;
-  --gh-color-surface-sunken: #141418;
-  --gh-color-surface-raised: #1a1a1f;
-  --gh-color-surface-raised-alt: #24242c;
-  --gh-color-surface-elevated: #22222a;
-  --gh-color-surface-accent-subtle: rgba(124, 109, 240, 0.12);
-  --gh-color-surface-info-subtle: rgba(124, 109, 240, 0.1);
-  --gh-color-surface-ok-subtle: rgba(78, 204, 163, 0.11);
-  --gh-color-surface-warn-subtle: rgba(212, 162, 60, 0.12);
-  --gh-color-surface-danger-subtle: rgba(224, 82, 82, 0.12);
-  --gh-color-border-subtle: #2a2a33;
-  --gh-color-border-strong: #3a3a45;
-  --gh-color-border-accent: #5f53b8;
-  --gh-color-border-focus: #9f94ff;
-  --gh-color-action-primary: #7c6df0;
-  --gh-color-action-secondary: #4ecca3;
-  --gh-color-text-primary: #e8e8f0;
-  --gh-color-text-secondary: #c4c4d1;
-  --gh-color-text-muted: #888899;
-  --gh-color-feedback-danger: #e05252;
-  --gh-color-feedback-warn: #d4a23c;
-  --gh-color-feedback-ok: #4ecca3;
-  --gh-color-feedback-accent: #7c6df0;
-  --gh-color-feedback-neutral: #3a3a45;
-  --gh-color-feedback-info: #9f94ff;
+  color-scheme: dark;
+  --gh-color-surface-canvas: #151217;
+  --gh-color-surface-sunken: #1b1720;
+  --gh-color-surface-raised: #241f2b;
+  --gh-color-surface-raised-alt: #2f2737;
+  --gh-color-surface-elevated: #2b2433;
+  --gh-color-surface-accent-subtle: rgba(156, 111, 244, 0.13);
+  --gh-color-surface-info-subtle: rgba(97, 148, 230, 0.13);
+  --gh-color-surface-ok-subtle: rgba(96, 191, 162, 0.14);
+  --gh-color-surface-warn-subtle: rgba(214, 150, 73, 0.16);
+  --gh-color-surface-danger-subtle: rgba(205, 103, 108, 0.14);
+  --gh-color-border-subtle: #40364a;
+  --gh-color-border-strong: #5a4c66;
+  --gh-color-border-accent: #8d63db;
+  --gh-color-border-focus: #c7a6ff;
+  --gh-color-action-primary: #9c6ff4;
+  --gh-color-action-secondary: #e2a24b;
+  --gh-color-text-primary: #f3edf6;
+  --gh-color-text-secondary: #d4c8dd;
+  --gh-color-text-muted: #a395ae;
+  --gh-color-feedback-danger: #d66d74;
+  --gh-color-feedback-warn: #e2a24b;
+  --gh-color-feedback-ok: #60bfa2;
+  --gh-color-feedback-accent: #9c6ff4;
+  --gh-color-feedback-neutral: #5a4c66;
+  --gh-color-feedback-info: #7ca8eb;
   --gh-space-1: 4px;
   --gh-space-2: 8px;
   --gh-space-3: 12px;
@@ -34,14 +35,14 @@
   --gh-space-7: 40px;
   --gh-type-size-0: 11px;
   --gh-type-size-1: 12px;
-  --gh-type-size-2: 13px;
-  --gh-type-size-3: 14px;
-  --gh-type-size-4: 16px;
-  --gh-type-size-5: 20px;
-  --gh-type-size-6: 24px;
-  --gh-type-line-height-tight: 1.2;
-  --gh-type-line-height-body: 1.5;
-  --gh-type-line-height-relaxed: 1.65;
+  --gh-type-size-2: 13.5px;
+  --gh-type-size-3: 15px;
+  --gh-type-size-4: 17px;
+  --gh-type-size-5: 22px;
+  --gh-type-size-6: 28px;
+  --gh-type-line-height-tight: 1.15;
+  --gh-type-line-height-body: 1.55;
+  --gh-type-line-height-relaxed: 1.72;
   --gh-type-weight-medium: 500;
   --gh-type-weight-strong: 600;
   --gh-radius-1: 4px;
@@ -61,4 +62,39 @@
   --gh-layout-frame-padding-compact: 12px;
   --gh-layout-frame-padding-default: 16px;
   --gh-layout-frame-padding-roomy: 24px;
+}
+
+:root[data-gh-theme="light"],
+.gh-theme-light {
+  color-scheme: light;
+  --gh-color-surface-canvas: #fcf9fd;
+  --gh-color-surface-sunken: #f2ecf6;
+  --gh-color-surface-raised: #ffffff;
+  --gh-color-surface-raised-alt: #f7f2fb;
+  --gh-color-surface-elevated: #fbf8fd;
+  --gh-color-surface-accent-subtle: rgba(127, 76, 224, 0.10);
+  --gh-color-surface-info-subtle: rgba(59, 130, 246, 0.10);
+  --gh-color-surface-ok-subtle: rgba(31, 157, 119, 0.10);
+  --gh-color-surface-warn-subtle: rgba(184, 119, 23, 0.12);
+  --gh-color-surface-danger-subtle: rgba(192, 86, 110, 0.10);
+  --gh-color-border-subtle: #ddd1e6;
+  --gh-color-border-strong: #bcaac9;
+  --gh-color-border-accent: #8555d4;
+  --gh-color-border-focus: #6f42d8;
+  --gh-color-action-primary: #7f4ce0;
+  --gh-color-action-secondary: #b87417;
+  --gh-color-text-primary: #261d2d;
+  --gh-color-text-secondary: #53485e;
+  --gh-color-text-muted: #7a6f84;
+  --gh-color-feedback-danger: #c0566e;
+  --gh-color-feedback-warn: #b87417;
+  --gh-color-feedback-ok: #1f9d77;
+  --gh-color-feedback-accent: #7f4ce0;
+  --gh-color-feedback-neutral: #9f90ae;
+  --gh-color-feedback-info: #3b82f6;
+}
+
+:root[data-gh-theme="dark"],
+.gh-theme-dark {
+  color-scheme: dark;
 }

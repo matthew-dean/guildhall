@@ -11,18 +11,18 @@ help_summary: |
 
 **Entry point:** `src/runtime/cli.ts` (bundled to `dist/cli.js` → `guildhall` bin).
 
-The CLI talks to the same local service and project files as the dashboard. Use
+The CLI talks to the same local service and project files as the browser UI. Use
 it when the terminal is the faster control surface or when you want Guildhall
 inside another script.
 
 ## `guildhall init [path]`
 
-Interactive setup wizard. Creates `guildhall.yaml`, registers the project, and
-pops open the dashboard at `/setup`.
+Interactive setup flow. Creates `guildhall.yaml`, registers the project, and
+opens the browser UI at the setup wizard for that project.
 
 Flags:
 
-- `--port <n>` (default `7777`) — dashboard port.
+- `--port <n>` (default `7777`) — local service / browser UI port.
 - `--no-browser` — don't auto-open the browser.
 - `--cli-wizard` — use the text wizard instead of the web one.
 - `--no-serve` — with `--cli-wizard`, write `guildhall.yaml` and register the
@@ -55,12 +55,12 @@ Flags:
 
 ## `guildhall serve [path]`
 
-Start Guildhall in this terminal and open the browser.
+Ensure Guildhall is running locally, then open the browser UI.
 
 Flags:
 
 - `--no-open` — don't open a browser.
-- `[path]` — optional project path to open directly.
+- `[path]` — optional project path hint to open directly.
 
 ## `guildhall start`
 

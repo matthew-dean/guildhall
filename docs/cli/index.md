@@ -4,9 +4,9 @@ title: CLI
 
 # CLI
 
-The dashboard is the main way to use Guildhall. The CLI is the companion path
+The browser UI is the main way to use Guildhall. The CLI is the companion path
 for automation, scripting, CI smoke runs, and the kind of narrow debugging
-session that is easier in a terminal than in a browser.
+session that is easier in a terminal than in the project shell.
 
 Use the CLI when you want to:
 
@@ -19,7 +19,7 @@ Use the CLI when you want to:
 ## Common workflows
 
 ```bash
-# Open the dashboard for the current project
+# Open the browser UI for the current project
 guildhall serve
 
 # Add a task from a script or terminal
@@ -38,6 +38,6 @@ See the [CLI reference](./reference) for every command, flag, and example.
 
 ## Related docs
 
-- [Quick start](../guide/quick-start) — dashboard-first setup and first task.
-- [Running the orchestrator](../guide/running) — dashboard run controls first, CLI run commands second.
+- [Quick start](../guide/quick-start) — browser-first setup and first task.
+- [Running the orchestrator](../guide/running) — browser run controls first, CLI run commands second.
 - [Environment variables](../reference/env) — runtime configuration knobs.

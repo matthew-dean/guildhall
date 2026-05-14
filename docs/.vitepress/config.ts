@@ -1,11 +1,42 @@
 import { defineConfig } from 'vitepress'
 
+const guideGettingStartedItems = [
+  { text: 'Quick start', link: '/guide/quick-start' },
+  { text: 'Introduction', link: '/guide/introduction' },
+  { text: 'The dashboard', link: '/guide/dashboard' },
+  { text: 'Onboarding and levers', link: '/guide/onboarding-and-levers' },
+  { text: 'Setup wizard', link: '/web-ui/setup' },
+  { text: 'Project view', link: '/web-ui/project-view' },
+  { text: 'Task drawer', link: '/web-ui/task-drawer' },
+  { text: 'Core concepts', link: '/guide/concepts' },
+  { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
+]
+
+const guideWorkingItems = [
+  { text: 'Project files & workspace state', link: '/guide/workspaces' },
+  { text: 'Coordinators & domains', link: '/guide/coordinators' },
+  { text: 'Agents & models', link: '/guide/agents-and-models' },
+  { text: 'Running the orchestrator', link: '/guide/running' },
+]
+
+const guideSidebarSections = [
+  {
+    text: 'Getting started',
+    items: guideGettingStartedItems,
+  },
+  {
+    text: 'Working with Guildhall',
+    items: guideWorkingItems,
+  },
+]
+
 export default defineConfig({
   title: 'Guildhall',
   description: 'Local service for unattended software work with visible state, reviewer guardrails, and inspectable transcripts.',
   cleanUrls: true,
   lastUpdated: true,
   base: '/guildhall/',
+  appearance: 'dark',
   head: [
     ['link', { rel: 'icon', href: '/guildhall/favicon.svg' }],
     ['meta', { name: 'theme-color', content: '#141418' }],
@@ -13,13 +44,13 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: 'Start', link: '/guide/quick-start' },
-      { text: 'Dashboard', link: '/guide/dashboard' },
-      { text: 'Web UI', link: '/web-ui/' },
+      { text: 'Guide', link: '/guide/introduction' },
       { text: 'CLI', link: '/cli/' },
       { text: 'Reference', link: '/reference/' },
       {
         text: 'More',
         items: [
+          { text: 'UI reference', link: '/web-ui/' },
           { text: 'Guide', link: '/guide/introduction' },
           { text: 'Levers', link: '/levers/' },
           { text: 'Subsystems', link: '/subsystems/' },
@@ -30,31 +61,7 @@ export default defineConfig({
       },
     ],
     sidebar: {
-      '/guide/': [
-        {
-          text: 'Getting started',
-          items: [
-            { text: 'Quick start', link: '/guide/quick-start' },
-            { text: 'Introduction', link: '/guide/introduction' },
-            { text: 'The dashboard', link: '/guide/dashboard' },
-            { text: 'Onboarding and levers', link: '/guide/onboarding-and-levers' },
-            { text: 'Setup wizard', link: '/web-ui/setup' },
-            { text: 'Project view', link: '/web-ui/project-view' },
-            { text: 'Task drawer', link: '/web-ui/task-drawer' },
-            { text: 'Core concepts', link: '/guide/concepts' },
-            { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
-          ],
-        },
-        {
-          text: 'Working with Guildhall',
-          items: [
-            { text: 'Project files & workspace state', link: '/guide/workspaces' },
-            { text: 'Coordinators & domains', link: '/guide/coordinators' },
-            { text: 'Agents & models', link: '/guide/agents-and-models' },
-            { text: 'Running the orchestrator', link: '/guide/running' },
-          ],
-        },
-      ],
+      '/guide/': guideSidebarSections,
       '/subsystems/': [
         {
           text: 'Overview',
@@ -145,21 +152,7 @@ export default defineConfig({
           ],
         },
       ],
-      '/web-ui/': [
-        {
-          text: 'Dashboard UI',
-          items: [
-            { text: 'Overview', link: '/web-ui/' },
-            { text: 'Setup wizard', link: '/web-ui/setup' },
-            { text: 'Dashboard', link: '/web-ui/dashboard' },
-            { text: 'Project view', link: '/web-ui/project-view' },
-            { text: 'Task drawer', link: '/web-ui/task-drawer' },
-            { text: 'Providers page', link: '/web-ui/providers' },
-            { text: 'Design tokens', link: '/web-ui/design-tokens' },
-            { text: 'In-UI help system', link: '/web-ui/help-system' },
-          ],
-        },
-      ],
+      '/web-ui/': guideSidebarSections,
       '/reference/': [
         {
           text: 'Reference',
