@@ -202,6 +202,17 @@ export async function readCheckpoint(
   return readExistingCheckpoint(memoryDir, taskId)
 }
 
+export function checkpointIsFreshForTask(
+  task: Pick<Task, 'updatedAt'>,
+  checkpoint: Pick<Checkpoint, 'writtenAt'> | null,
+): boolean {
+  if (!checkpoint) return false
+  const taskUpdatedAt = Date.parse(task.updatedAt)
+  const checkpointWrittenAt = Date.parse(checkpoint.writtenAt)
+  if (!Number.isFinite(taskUpdatedAt) || !Number.isFinite(checkpointWrittenAt)) return true
+  return checkpointWrittenAt >= taskUpdatedAt
+}
+
 /**
  * Delete a checkpoint after the coordinator has chosen `restart_clean`.
  * Idempotent — missing files are silently tolerated. Does not remove the

@@ -9,7 +9,7 @@ import {
   selectApplicableReviewRubrics,
   renderRubricSelection,
 } from '@guildhall/core'
-import { readCheckpoint } from '@guildhall/tools'
+import { checkpointIsFreshForTask, readCheckpoint } from '@guildhall/tools'
 import { latestResolvedRetryEscalationAt } from '@guildhall/tools'
 import {
   selectApplicableGuilds,
@@ -171,13 +171,20 @@ ${reviewerFeedbackText}`
     const withPrefix =
       preferredRootPrefix &&
       !trimmed.startsWith(`${preferredRootPrefix}/`) &&
-      (trimmed.startsWith('tests/') || trimmed.startsWith('app/') || trimmed.startsWith('src/'))
+      (trimmed.startsWith('tests/') || trimmed.startsWith('app/') || trimmed.startsWith('src/') || trimmed.startsWith('server/'))
         ? `${preferredRootPrefix}/${trimmed}`
         : trimmed
     if (!root) return withPrefix
-    const rootedPath = path.resolve(root, withPrefix)
+    const nuxtWebPrefixed =
+      !withPrefix.startsWith('web/') &&
+      (withPrefix.startsWith('server/') || withPrefix.startsWith('app/') || withPrefix.startsWith('tests/')) &&
+      existsSync(path.join(root, 'web', withPrefix.split('/')[0]!))
+        ? `web/${withPrefix}`
+        : withPrefix
+    const rootedPath = path.resolve(root, nuxtWebPrefixed)
     if (existsSync(rootedPath)) return rootedPath
     return (
+      resolveRepoSuffixMatch(root, nuxtWebPrefixed) ??
       resolveRepoSuffixMatch(root, withPrefix) ??
       resolveRepoSuffixMatch(root, trimmed) ??
       rootedPath
@@ -287,6 +294,22 @@ function renderLatestCheckpoint(task: Task, checkpoint: Checkpoint | null): stri
     lines.push(`- Safe next mutation surface: ${checkpoint.resumeContext.safeNextMutationSurface.join(', ')}`)
   }
   return lines.join('\n')
+}
+
+function shouldUseCheckpointForTask(task: Task, checkpoint: Checkpoint | null): checkpoint is Checkpoint {
+  if (!checkpoint) return false
+  if (checkpointIsFreshForTask(task, checkpoint)) return true
+  return task.notes.some((note) => {
+    if (note.role !== 'recovery') return false
+    const noteAt = Date.parse(note.timestamp)
+    const checkpointAt = Date.parse(checkpoint.writtenAt)
+    return (
+      Number.isFinite(noteAt) &&
+      Number.isFinite(checkpointAt) &&
+      noteAt >= checkpointAt &&
+      /latest recovery checkpoint|latest durable checkpoint/i.test(note.content)
+    )
+  })
 }
 
 function renderResolvedEscalationGuidance(task: Task): string {
@@ -544,7 +567,9 @@ export async function buildContext(
     loadDesignSystem(memoryDir).catch(() => undefined),
     summarizeActiveWorktree(task),
     task.status === 'in_progress'
-      ? readCheckpoint(memoryDir, task.id).catch(() => null)
+      ? readCheckpoint(memoryDir, task.id)
+          .then((checkpoint) => shouldUseCheckpointForTask(task, checkpoint) ? checkpoint : null)
+          .catch(() => null)
       : Promise.resolve(null),
   ])
   const reviewPacket =

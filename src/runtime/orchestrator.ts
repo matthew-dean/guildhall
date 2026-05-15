@@ -47,6 +47,7 @@ import {
   findReclaimTasks,
   loadReclaimCandidates,
   readCheckpoint,
+  checkpointIsFreshForTask,
   writeCheckpoint,
   ensureExploringTranscriptEntry,
   activeEscalations,
@@ -1476,12 +1477,28 @@ function renderImmediateResumeInstructions(
           `Latest authoritative verification: ${latestVerification.command} (${latestVerification.passed ? 'passed' : 'failed'})${latestVerification.summary ? ` — ${latestVerification.summary}` : ''}.`,
         ]
       : []),
-    'Open or edit these exact files before any directory listing or broad globbing:',
+    'Open or edit these files before any directory listing or broad globbing:',
     ...targetFiles.map((file) => `- ${file}`),
-    'If one of these likely target files does not exist yet, create it at that exact path instead of searching for alternate directories.',
+    'If one of these likely target files does not exist yet, first verify that its parent directory matches the existing project structure. Create it only when the parent path is real and convention-compatible; otherwise inspect the nearest existing companion file or raise-escalation with the path mismatch.',
     'After you have the needed file contents, your next step should be a concrete mutation or a focused verification command tied to those files.',
     'Do not use list-files, glob, or generic repo-root shell inspection until you have attempted that mutation or focused verification.',
   ].join('\n')
+}
+
+function shouldUseCheckpointForTask(task: Task, checkpoint: Checkpoint | null): checkpoint is Checkpoint {
+  if (!checkpoint) return false
+  if (checkpointIsFreshForTask(task, checkpoint)) return true
+  return task.notes.some((note) => {
+    if (note.role !== 'recovery') return false
+    const noteAt = Date.parse(note.timestamp)
+    const checkpointAt = Date.parse(checkpoint.writtenAt)
+    return (
+      Number.isFinite(noteAt) &&
+      Number.isFinite(checkpointAt) &&
+      noteAt >= checkpointAt &&
+      /latest recovery checkpoint|latest durable checkpoint/i.test(note.content)
+    )
+  })
 }
 
 export class Orchestrator {
@@ -2092,6 +2109,47 @@ export class Orchestrator {
         if (!res.success) {
           const failed = res.steps.find((s) => s.result === 'fail')
           const msg = `worktree bootstrap failed on ${failed?.kind ?? 'step'} \`${failed?.command ?? ''}\` (exit ${failed?.exitCode ?? '?'})`
+          const dirtyTaskWorktree = !(await this.gitDriver.isClean(activeWorktreePath))
+          if (dirtyTaskWorktree) {
+            const now = this.now()
+            const output = String(failed?.output ?? '').trim()
+            const clippedOutput = output.length > 1800 ? `${output.slice(0, 1800)}\n...` : output
+            const content = [
+              `${msg}. The task worktree already has edits, so Guildhall is handing the failing verification back to the worker instead of blocking setup.`,
+              clippedOutput ? `\nVerification output:\n${clippedOutput}` : '',
+            ].filter(Boolean).join('\n')
+            const queue = await this.readQueue()
+            const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
+            if (queuedTask) {
+              const alreadyLogged = queuedTask.notes.slice(-3).some((note) =>
+                note.role === 'bootstrap-verification' &&
+                note.content.includes(msg),
+              )
+              if (!alreadyLogged) {
+                queuedTask.notes.push({
+                  agentId: 'coordinator',
+                  role: 'bootstrap-verification',
+                  content,
+                  timestamp: now,
+                })
+                queuedTask.updatedAt = now
+                queue.lastUpdated = now
+                await this.writeQueue(queue)
+              }
+            }
+            if (!task.notes.slice(-3).some((note) =>
+              note.role === 'bootstrap-verification' &&
+              note.content.includes(msg),
+            )) {
+              task.notes.push({
+                agentId: 'coordinator',
+                role: 'bootstrap-verification',
+                content,
+                timestamp: now,
+              })
+              task.updatedAt = now
+            }
+          } else {
           const queue = await this.readQueue()
           const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
           const now = this.now()
@@ -2129,6 +2187,7 @@ export class Orchestrator {
             afterStatus: 'blocked',
             transitioned: true,
             revisionCount: task.revisionCount,
+          }
           }
         }
       }
@@ -2193,10 +2252,11 @@ export class Orchestrator {
     // released after the agent returns (or throws).
     const slot = await this.allocateSlotForTask(task)
     const slotPromptRule = slot ? slotSystemPromptRule(slot) : null
-    const checkpoint =
+    const rawCheckpoint =
       typeof agent.loadToolMetadata === 'function'
         ? await readCheckpoint(this.opts.config.memoryDir, task.id).catch(() => null)
         : null
+    const checkpoint = shouldUseCheckpointForTask(task, rawCheckpoint) ? rawCheckpoint : null
     const checkpointNextAction = normalizedWorkerCheckpointNextAction(task, checkpoint)
     const checkpointSafeSurface = checkpoint
       ? checkpointSafeNextMutationSurface(

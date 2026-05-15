@@ -411,6 +411,35 @@ milestones:
     expect(progress).toContain('MILESTONE')
   })
 
+  it('normalizes imported evidence paths after narrowing a task to a subproject', async () => {
+    const knitPath = path.join(tmpDir, 'knit')
+    await fs.mkdir(knitPath, { recursive: true })
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: t-invite-flow
+    title: Proper invite flow
+    description: "knit/PROJECT_STATE.md: - [ ] Proper invite flow"
+    domain: knit
+    references:
+      - knit/PROJECT_STATE.md
+\`\`\`
+`)
+
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      coordinatorProjectPaths: { knit: knitPath },
+    })
+    expect(res.success).toBe(true)
+
+    const q = await readQueue()
+    const newTask = q.tasks.find((t) => t.id === 't-invite-flow')!
+    expect(newTask.projectPath).toBe(knitPath)
+    expect(newTask.description).toBe('PROJECT_STATE.md: - [ ] Proper invite flow')
+    expect(newTask.notes[0]!.content).toBe(`Imported from: ${path.join(knitPath, 'PROJECT_STATE.md')}`)
+  })
+
   it('maybeSeedWorkspaceImport respects lever=off', async () => {
     const res = await maybeSeedWorkspaceImport({
       memoryDir,

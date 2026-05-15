@@ -3255,7 +3255,7 @@ Uncertainties: none`,
     )).toBe(true)
   })
 
-  it('refuses more read-only exploration after the exact likely target file is confirmed missing', async () => {
+  it('requires parent-path validation after a likely target file is confirmed missing', async () => {
     const registry = new ToolRegistry()
     registry.register(
       defineTool({
@@ -3312,14 +3312,14 @@ Uncertainties: none`,
 
     expect(events.some(e =>
       e.type === 'status' &&
-      e.message.includes('confirmed the exact likely target file is missing'),
+      e.message.includes('requiring parent-path validation'),
     )).toBe(true)
     expect(messages.some(message =>
       message.role === 'user' &&
       message.content.some(block =>
         block.type === 'tool_result' &&
         block.is_error === true &&
-        String(block.content).includes(`The likely target file does not exist yet at ${targetPath}`),
+        String(block.content).includes('Create that file only if its parent directory exists and matches the project structure'),
       ),
     )).toBe(true)
   })

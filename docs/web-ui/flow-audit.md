@@ -71,6 +71,31 @@ screen.
 - [ ] Land the current runtime/test hardening batch cleanly
   (`run-query`, gate-command authority, shell tests, flow audit) and retest on
   the live `127.0.0.1:7777` service before we even discuss cutting `0.5.0`.
+- [ ] Prove Looma + Knit imported drafts can move through human shaping into
+  real runnable work. Live replay on `2026-05-15` found two blockers on the
+  first legitimate draft (`Proper invite flow (Supabase Auth invite by
+  email)`): approval narrowed the task to the `knit` subproject but left
+  imported references as `knit/PROJECT_STATE.md`, causing the spec agent to
+  look for `knit/knit/PROJECT_STATE.md`; after that was fixed, the spec agent
+  authored a meta brief about exploring the codebase instead of the invite-flow
+  outcome. The importer now normalizes evidence paths against the narrowed
+  project root, and the product-brief/spec-agent layer is being hardened so
+  imported-draft shaping produces a product/task outcome or a focused question,
+  not Guildhall-process copy.
+- [ ] Finish the Looma + Knit invite-flow worker recovery loop. The same live
+  replay proved that shaping can now produce a runnable spec, but worker
+  execution exposed three runtime issues: likely-target hints were being treated
+  as exact create paths (`server/api/...` instead of `web/server/api/...`),
+  bootstrap gates blocked dirty task worktrees before the worker could repair
+  its own typecheck failures, and the current DeepInfra/Qwen worker lane can
+  time out without a first tool call even after a concrete verification failure
+  is injected. Guildhall now normalizes Nuxt `server/` hints under `web/server`,
+  treats missing likely targets as paths to validate instead of blindly create,
+  hands dirty-worktree bootstrap failures back to the worker with clipped
+  verification output, and requires the worker's first response to be one tool
+  call. The live task is still `in_progress` with partial Knit edits and needs
+  one more replay or a provider/model adjustment before this item can be
+  marked release-safe.
 - [x] Require a durable review proof packet before worker review handoff. On
   `2026-05-15`, Guildhall's worker instructions, `update-task` review guard,
   coordinator handoff metadata, and stale-checkpoint auto-promotion path were

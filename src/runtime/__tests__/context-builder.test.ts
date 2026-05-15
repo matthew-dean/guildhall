@@ -160,6 +160,26 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('/projects/knit/.guildhall/worktrees/task-001/web/tests/unit/composables/use-presence.test.ts')
   })
 
+  it('resolves Nuxt server hints under web/server when the task root is the app project', async () => {
+    const worktree = path.join(tmpDir, '.guildhall', 'worktrees', 'task-invite')
+    await fs.mkdir(path.join(worktree, 'web', 'server', 'api', 'workspaces'), { recursive: true })
+    await fs.writeFile(
+      path.join(worktree, 'web', 'server', 'api', 'workspaces', 'members.get.ts'),
+      '// members route\n',
+      'utf8',
+    )
+    const taskWithTargets: Task = {
+      ...baseTask,
+      projectPath: path.join(tmpDir, 'knit'),
+      worktreePath: worktree,
+      spec: 'Create `server/api/workspaces/[id]/invite.post.ts` using the pattern in `web/server/api/workspaces/members.get.ts`.',
+    }
+
+    const ctx = await buildContext(taskWithTargets, tmpDir)
+    expect(ctx.taskSummary).toContain(path.join(worktree, 'web', 'server', 'api', 'workspaces', '[id]', 'invite.post.ts'))
+    expect(ctx.taskSummary).not.toContain(path.join(worktree, 'server', 'api', 'workspaces', '[id]', 'invite.post.ts'))
+  })
+
   it('keeps explicitly referenced test files while ignoring shell commands and wildcard globs when deriving likely target files', () => {
     const taskWithNoisyHints: Task = {
       ...baseTask,
@@ -347,6 +367,39 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('Safe next mutation surface: web/app/types/supabase.ts, web/app/composables/use-workspace.ts')
     expect(ctx.taskSummary).toContain(path.join(worktreePath, 'web/app/types/supabase.ts'))
     expect(ctx.taskSummary).toContain(path.join(worktreePath, 'web/app/composables/use-workspace.ts'))
+  })
+
+  it('ignores stale checkpoints written before the task was updated', async () => {
+    const worktreePath = path.join(tmpDir, 'worktree')
+    const memoryTasksDir = path.join(tmpDir, 'tasks', 'task-001')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await fs.mkdir(memoryTasksDir, { recursive: true })
+    await fs.writeFile(
+      path.join(memoryTasksDir, 'checkpoint.json'),
+      JSON.stringify({
+        taskId: 'task-001',
+        agentId: 'worker-agent',
+        step: 1,
+        intent: 'Old recovery lane',
+        filesTouched: ['PROJECT_STATE.md'],
+        nextPlannedAction: 'Only edit PROJECT_STATE.md.',
+        resumeContext: {
+          safeNextMutationSurface: ['PROJECT_STATE.md'],
+        },
+        writtenAt: '2026-05-07T18:23:25.747Z',
+      }, null, 2),
+      'utf-8',
+    )
+
+    const ctx = await buildContext({
+      ...baseTask,
+      worktreePath,
+      updatedAt: '2026-05-07T19:00:00.000Z',
+    }, tmpDir)
+
+    expect(ctx.taskSummary).not.toContain('### Latest Checkpoint')
+    expect(ctx.taskSummary).not.toContain('PROJECT_STATE.md')
+    expect(ctx.taskSummary).not.toContain('Only edit PROJECT_STATE.md')
   })
 
   it('treats remove-style spec instructions as actionable file hints for likely target inference', () => {

@@ -1539,7 +1539,7 @@ export async function* runQuery(
             })
           : null
       const refusalMessage = shouldRefuseAfterMissingLikelyTarget
-        ? `The likely target file does not exist yet at ${missingLikelyTarget}. Do not do more read-only exploration now. Create that file at exactly this path with write-file, or use edit-file only if the file now exists.`
+        ? `The likely target file does not exist yet at ${missingLikelyTarget}. Do not do more broad read-only exploration now. Create that file only if its parent directory exists and matches the project structure; otherwise inspect the nearest existing companion file or raise-escalation with the path mismatch.`
         : shouldRefusePostVerificationCheckpointBatch
           ? (checkpointRefusalNudge ??
             `The latest checkpoint already names your next step: ${checkpointNextAction}. Do not bundle multiple post-verification tool calls together here. Choose exactly one next step: rerun the last failing authoritative verification command, mutate one checkpoint-scoped file, or raise-escalation if the checkpoint is no longer valid.`)
@@ -1615,7 +1615,7 @@ export async function* runQuery(
           event: {
             type: 'status',
             message: shouldRefuseAfterMissingLikelyTarget
-              ? 'Assistant confirmed the exact likely target file is missing; refusing further read-only exploration for this turn.'
+              ? 'Assistant confirmed a likely target file is missing; requiring parent-path validation, a concrete mutation, or escalation.'
               : shouldRefusePostVerificationCheckpointBatch
                 ? 'Assistant tried to bundle multiple post-verification steps inside a mutation checkpoint; demanding exactly one next tool call.'
               : shouldRefuseAfterCheckpointNextAction
@@ -1634,7 +1634,7 @@ export async function* runQuery(
       }
       if (repeatedReadOnlyRefusals >= 2) {
         const endingMessage = shouldRefuseAfterMissingLikelyTarget
-          ? 'Assistant kept retrying read-only exploration after repeated exact-target refusals; ending the turn so the orchestrator can treat this as no progress.'
+          ? 'Assistant kept retrying read-only exploration after repeated missing-target refusals; ending the turn so the orchestrator can treat this as no progress.'
           : shouldRefusePostVerificationCheckpointBatch
             ? 'Assistant kept bundling multiple post-verification steps after repeated checkpoint-directed refusals; ending the turn so the orchestrator can treat this as no progress.'
           : shouldRefuseAfterCheckpointNextAction

@@ -33,8 +33,18 @@ You are a Worker Agent in the Guildhall multi-agent system. You implement tasks.
 4. On resumed in-progress tasks, start from the latest checkpoint, active worktree summary, changed files, latest notes, and failing outputs before doing broad repo research again.
 5. If the prompt includes a Latest Checkpoint block, treat it as the source of truth for your next step unless direct file or shell evidence contradicts it.
 6. If the prompt includes a Resume From Current Worktree block, your first filesystem reads should target those changed files or the exact failing verification target. Do not start with directory listing, broad globbing, rereading generic project docs, or rereading TASKS.json just to rediscover state already present in the prompt.
-7. If the prompt includes a Likely Target Files block, prefer opening those exact files before exploring sibling directories.
+7. If the prompt includes a Likely Target Files block, prefer opening those files before exploring sibling directories. If a likely target is missing, verify the parent directory against the repo's actual structure before creating it.
 8. Read the relevant source files before making any changes.
+
+## First action
+Your first assistant response in a worker pass must be exactly one tool call and no prose:
+- read-file on the most relevant changed or likely target file;
+- shell for an authoritative verification command;
+- edit-file/write-file if the necessary exact mutation is already obvious;
+- raise-escalation only if the prompt already proves the task is blocked.
+
+Do not spend the first response thinking aloud, summarizing the task, or describing
+a plan. The UI and coordinator need a concrete event immediately.
 
 ## Task tools vs implementation files
 - TASKS.json is state, not the implementation target. Read it only to confirm task state,
@@ -165,7 +175,7 @@ export function createWorkerAgent(
     ...(opts.cwd ? { cwd: opts.cwd } : {}),
     maxTurns: 24,
     noToolTurnNudge: WORKER_NO_TOOL_TURN_NUDGE,
-    noToolTurnNudgeLimit: 3,
+    noToolTurnNudgeLimit: 1,
     noProgressToolNames: [
       'shell',
       'write-file',

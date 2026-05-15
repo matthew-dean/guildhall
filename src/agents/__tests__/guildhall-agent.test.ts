@@ -374,6 +374,14 @@ describe('agent factories', () => {
     expect(a.name).toBe('spec-agent')
   })
 
+  it('createSpecAgent tells imported-draft shaping to draft from evidence instead of authoring research-process briefs', () => {
+    const a = createSpecAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('Imported draft shaping')
+    expect(prompt).toContain('Do NOT write a product brief about your own research plan')
+    expect(prompt).toContain('Treat imported source notes as evidence')
+  })
+
   it('createWorkerAgent registers shell + file tools', async () => {
     const a = createWorkerAgent(llm)
     expect(a.name).toBe('worker-agent')
@@ -388,6 +396,8 @@ describe('agent factories', () => {
   it('createWorkerAgent tells workers not to spend turns on plans only', async () => {
     const a = createWorkerAgent(llm)
     const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('## First action')
+    expect(prompt).toContain('Your first assistant response in a worker pass must be exactly one tool call and no prose')
     expect(prompt).toContain('## No plan-only turns')
     expect(prompt).toContain('Every assistant turn must make observable progress')
     expect(prompt).toContain('If you know the next step, take it with a tool call')

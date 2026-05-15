@@ -167,6 +167,88 @@ describe('updateTask', () => {
     expect(raw.tasks[0].spec).toContain('Build the thing')
   })
 
+  it('rejects spec_review promotion when the spec buries unanswered human questions in markdown', async () => {
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      spec: [
+        '## Summary',
+        'Build the invite flow.',
+        '',
+        '## Acceptance Criteria',
+        '1. Given an owner invites a teammate, then an invite email is sent.',
+        '',
+        '## Out of Scope',
+        '- Bulk invites',
+        '',
+        '## Open Questions',
+        '1. Who can invite?',
+        '2. What role should invitees get?',
+      ].join('\n'),
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/post-user-question/i)
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].status).toBe('exploring')
+    expect(raw.tasks[0].spec).toBeUndefined()
+  })
+
+  it('normalizes duplicated subproject path prefixes inside specs and derived verification commands', async () => {
+    const queue = {
+      ...seedQueue,
+      tasks: [
+        {
+          ...seedQueue.tasks[0],
+          projectPath: '/projects/looma-knit/knit',
+        },
+      ],
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(queue), 'utf-8')
+
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      spec: [
+        '## Summary',
+        'Wire the settings page.',
+        '',
+        '## Acceptance Criteria',
+        '1. Given `pnpm typecheck` runs in `knit/web`, then it passes.',
+        '2. Given `pnpm build` runs in `knit/web`, then it succeeds.',
+      ].join('\n'),
+      acceptanceCriteria: [
+        {
+          id: 'ac-1',
+          description: 'Given `pnpm typecheck` runs in `knit/web`, then it passes.',
+          verifiedBy: 'automated',
+          command: 'cd knit/web && pnpm typecheck',
+        },
+        {
+          id: 'ac-2',
+          description: 'Given `pnpm build` runs in `knit/web`, then it succeeds.',
+          verifiedBy: 'automated',
+          command: 'cd knit/web && pnpm build',
+        },
+      ],
+    })
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].spec).toContain('`web`')
+    expect(raw.tasks[0].spec).not.toContain('knit/web')
+    expect(raw.tasks[0].acceptanceCriteria).toMatchObject([
+      {
+        description: 'Given `pnpm typecheck` runs in `web`, then it passes.',
+        command: 'cd web && pnpm typecheck',
+      },
+      {
+        description: 'Given `pnpm build` runs in `web`, then it succeeds.',
+        command: 'cd web && pnpm build',
+      },
+    ])
+  })
+
   it('retitles imported deferred tasks from spec summary once a real spec exists', async () => {
     const importedQueue = {
       ...seedQueue,

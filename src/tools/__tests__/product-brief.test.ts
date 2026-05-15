@@ -158,7 +158,7 @@ describe('updateProductBrief', () => {
     const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
     expect(q.tasks[0]?.productBrief).toMatchObject({
       userJob: 'You want to make the setup flow easier for first-time users so they can reach useful work faster.',
-      successMetric: 'Thread shows a drafted brief and actionable next step for "Build the onboarding screen".',
+      successMetric: 'The remaining work for "Build the onboarding screen" is described clearly enough to approve or narrow with one focused question.',
       antiPatterns: ["Don't add marketing copy."],
       authoredBy: 'spec-agent',
     })
@@ -221,6 +221,123 @@ describe('updateProductBrief', () => {
         'Do not change the generation command or output path.',
       ],
     })
+  })
+
+  it('rejects product briefs that describe the agent research process instead of the task outcome', async () => {
+    const result = await updateProductBriefTool.execute(
+      {
+        userJob: 'Let me explore the Knit codebase to understand the current auth and member management setup before drafting the spec.',
+        successMetric: 'Thread shows a drafted brief and actionable next step for "Proper invite flow (Supabase Auth invite by email)".',
+      },
+      {
+        cwd: '/tmp',
+        metadata: {
+          tasks_path: tasksPath,
+          current_task_id: 'task-1',
+          current_agent_id: 'spec-agent',
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(true)
+    expect(result.output).toMatch(/product outcome/i)
+
+    const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    expect(q.tasks[0]?.productBrief).toBeUndefined()
+  })
+
+  it('rejects product briefs that only say the agent has enough context to draft', async () => {
+    const result = await updateProductBriefTool.execute(
+      {
+        userJob: 'I have enough context from the project state and prior task history to draft a best-guess brief and ask the right questions. Let me do that now.',
+        successMetric: 'The remaining work for "Proper invite flow (Supabase Auth invite by email)" is described clearly enough to approve or narrow with one focused question.',
+      },
+      {
+        cwd: '/tmp',
+        metadata: {
+          tasks_path: tasksPath,
+          current_task_id: 'task-1',
+          current_agent_id: 'spec-agent',
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(true)
+    expect(result.output).toMatch(/product outcome/i)
+
+    const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    expect(q.tasks[0]?.productBrief).toBeUndefined()
+  })
+
+  it('rejects product briefs that only recap answers and say the agent needs more decisions', async () => {
+    const result = await updateProductBriefTool.execute(
+      {
+        userJob: 'Good — the user confirmed auto-add to workspace. I still need two more decisions before I can write the spec. Let me post those now.',
+        successMetric: 'The remaining work for "Proper invite flow (Supabase Auth invite by email)" is described clearly enough to approve or narrow with one focused question.',
+      },
+      {
+        cwd: '/tmp',
+        metadata: {
+          tasks_path: tasksPath,
+          current_task_id: 'task-1',
+          current_agent_id: 'spec-agent',
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(true)
+    expect(result.output).toMatch(/product outcome/i)
+
+    const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    expect(q.tasks[0]?.productBrief).toBeUndefined()
+  })
+
+  it('rejects product briefs that say the agent has a clear picture and will write the spec', async () => {
+    const result = await updateProductBriefTool.execute(
+      {
+        userJob: 'Now I have a clear picture. Let me write the product brief and spec.',
+        successMetric: 'The remaining work for "Proper invite flow (Supabase Auth invite by email)" is described clearly enough to approve or narrow with one focused question.',
+      },
+      {
+        cwd: '/tmp',
+        metadata: {
+          tasks_path: tasksPath,
+          current_task_id: 'task-1',
+          current_agent_id: 'spec-agent',
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(true)
+    expect(result.output).toMatch(/product outcome/i)
+
+    const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    expect(q.tasks[0]?.productBrief).toBeUndefined()
+  })
+
+  it('does not infer a fallback brief that only proves Guildhall showed another brief card', async () => {
+    const result = await updateProductBriefTool.execute(
+      {},
+      {
+        cwd: '/tmp',
+        metadata: {
+          tasks_path: tasksPath,
+          current_task_id: 'task-1',
+          current_agent_id: 'spec-agent',
+          last_assistant_text: [
+            'Let me explore the Knit codebase to understand the current auth setup before drafting the spec.',
+            '',
+            'I will write the brief after I inspect more files.',
+          ].join('\n'),
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(true)
+    expect(result.output).toMatch(/product outcome/i)
+
+    const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    expect(q.tasks[0]?.productBrief).toBeUndefined()
   })
 
   it('skips evidence-preamble prose when inferring a fallback brief from assistant text', async () => {

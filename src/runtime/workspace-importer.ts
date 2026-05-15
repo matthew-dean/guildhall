@@ -495,6 +495,60 @@ function supportingText(title: string, value: string): string {
   return normalizeImportText(title) === normalizeImportText(value) ? '' : value
 }
 
+function normalizeImportedReferenceForTask(
+  ref: string,
+  workspaceProjectPath: string,
+  taskProjectPath: string,
+): string {
+  const trimmed = ref.trim()
+  if (!trimmed) return trimmed
+  const absolute = path.isAbsolute(trimmed)
+    ? path.resolve(trimmed)
+    : path.resolve(workspaceProjectPath, trimmed)
+  const relativeToTask = path.relative(path.resolve(taskProjectPath), absolute)
+  if (
+    relativeToTask &&
+    relativeToTask !== '..' &&
+    !relativeToTask.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativeToTask)
+  ) {
+    return relativeToTask || path.basename(absolute)
+  }
+  return path.isAbsolute(trimmed) ? absolute : trimmed
+}
+
+function absoluteImportedReference(
+  ref: string,
+  workspaceProjectPath: string,
+): string {
+  const trimmed = ref.trim()
+  if (!trimmed) return trimmed
+  return path.isAbsolute(trimmed)
+    ? path.resolve(trimmed)
+    : path.resolve(workspaceProjectPath, trimmed)
+}
+
+function normalizeImportedDescriptionForTask(
+  description: string,
+  references: readonly string[],
+  workspaceProjectPath: string,
+  taskProjectPath: string,
+): string {
+  let out = description
+  for (const ref of references) {
+    const trimmed = ref.trim()
+    if (!trimmed) continue
+    const taskRelative = normalizeImportedReferenceForTask(trimmed, workspaceProjectPath, taskProjectPath)
+    if (!taskRelative || taskRelative === trimmed) continue
+    for (const prefix of [trimmed, path.resolve(workspaceProjectPath, trimmed)]) {
+      if (out.startsWith(`${prefix}:`)) {
+        out = `${taskRelative}:${out.slice(prefix.length + 1)}`
+      }
+    }
+  }
+  return out
+}
+
 /**
  * Pulls the `goals:` / `tasks:` / `milestones:` fences out of the importer
  * task's spec. Each section is independent: the agent can emit just one if
@@ -691,17 +745,27 @@ export async function approveWorkspaceImport(
   for (const t of parsed.tasks) {
     const id = uniqueTaskId(existingIds, t.id)
     existingIds.add(id)
+    const taskProjectPath =
+      input.coordinatorProjectPaths?.[t.domain] ??
+      resolveTaskProjectPath({
+        workspaceProjectPath: input.projectPath,
+        domain: t.domain,
+      })
+    const normalizedDescription = normalizeImportedDescriptionForTask(
+      t.description,
+      t.references,
+      input.projectPath,
+      taskProjectPath,
+    )
+    const normalizedReferences = t.references.map((ref) =>
+      absoluteImportedReference(ref, input.projectPath),
+    )
     queue.tasks.push({
       id,
       title: t.title,
-      description: t.description,
+      description: normalizedDescription,
       domain: t.domain,
-      projectPath:
-        input.coordinatorProjectPaths?.[t.domain] ??
-        resolveTaskProjectPath({
-          workspaceProjectPath: input.projectPath,
-          domain: t.domain,
-        }),
+      projectPath: taskProjectPath,
       // Import approval means "yes, keep this as a candidate draft", not
       // "this already has a complete task brief/spec." Imported notes become
       // shaping drafts first; only after shaping do they enter normal intake.
@@ -715,7 +779,7 @@ export async function approveWorkspaceImport(
             {
               agentId: 'workspace-importer',
               role: 'importer',
-              content: `Imported from: ${t.references.join(', ')}`,
+              content: `Imported from: ${normalizedReferences.join(', ')}`,
               timestamp: now,
             },
           ]

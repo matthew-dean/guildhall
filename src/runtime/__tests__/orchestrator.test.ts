@@ -5485,10 +5485,10 @@ describe('Orchestrator.run — full loops', () => {
     expect(prompt).toContain('## Authoritative verification commands')
     expect(prompt).toContain('Use these commands as the authoritative verification commands for this task:')
     expect(prompt).toContain('cd web && pnpm vitest --run tests/unit/composables/use-presence.test.ts')
-    expect(prompt).toContain('Open or edit these exact files before any directory listing or broad globbing:')
+    expect(prompt).toContain('Open or edit these files before any directory listing or broad globbing:')
     expect(prompt).toContain(path.join(tmpDir, '.guildhall', 'worktrees', 'task-resume', 'web', 'app', 'composables', 'use-presence.ts'))
     expect(prompt).toContain(path.join(tmpDir, '.guildhall', 'worktrees', 'task-resume', 'web', 'tests', 'unit', 'composables', 'use-presence.test.ts'))
-    expect(prompt).toContain('If one of these likely target files does not exist yet, create it at that exact path')
+    expect(prompt).toContain('If one of these likely target files does not exist yet, first verify that its parent directory matches the existing project structure.')
     expect(prompt).toContain('Do not use list-files, glob, or generic repo-root shell inspection')
   })
 
