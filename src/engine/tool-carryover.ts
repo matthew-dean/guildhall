@@ -355,7 +355,7 @@ export interface RecordToolCarryoverParams {
 
 export function recordToolCarryover(params: RecordToolCarryoverParams): void {
   const { toolMetadata, toolName, toolInput, toolOutput, isError, resolvedFilePath } = params
-  if (isError) return
+  if (isError && !isBashTool(toolName)) return
 
   if (resolvedFilePath !== null) {
     rememberActiveArtifact(toolMetadata, resolvedFilePath)

@@ -466,7 +466,8 @@ function renderCombinedFeedback(
 function isInfrastructureOnlyFanoutFailure(verdict: PersonaVerdict): boolean {
   if (verdict.verdict !== 'revise') return false
   const text = `${verdict.reasoning}\n${verdict.rawOutput}`
-  if (!/failed to produce a verdict/i.test(text)) return false
+  if (/no \*\*Reasoning:\*\* block found/i.test(text)) return true
+  if (!/failed to produce a verdict|no \*\*Reasoning:\*\* block found/i.test(text)) return false
   return /HTTP 429|Too Many Requests|rate limit|provider timeout|connection refused|Exceeded maximum turn limit \(\d+\)|temporarily unavailable|service unavailable|timed out after \d+ms/i.test(text)
 }
 

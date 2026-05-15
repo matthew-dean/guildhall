@@ -7,6 +7,7 @@ import {
   resolveEffectiveTaskSuccessGates,
   resolveEffectiveTaskVerificationCommands,
   resolveEffectiveTaskProjectPath,
+  rewriteWorkspaceCommandsForIsolatedTaskWorktree,
 } from '../task-gates.js'
 
 let tmpDir: string
@@ -283,6 +284,58 @@ describe('resolveEffectiveTaskSuccessGates', () => {
     expect(result).toEqual(['pnpm typecheck', 'pnpm build'])
   })
 
+  it('drops the broad success test gate for narrow non-test file work', async () => {
+    const webDir = path.join(tmpDir, 'web')
+    await fs.mkdir(path.join(webDir, 'app/components'), { recursive: true })
+    await fs.writeFile(
+      path.join(webDir, 'package.json'),
+      JSON.stringify({
+        name: '@knit-app',
+        scripts: {
+          test: 'vitest',
+          typecheck: 'nuxt typecheck',
+          build: 'nuxt build',
+          lint: 'oxlint -c .oxlintrc.json --ignore-path .gitignore',
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(webDir, 'app/components/VersionHistoryDialog.vue'),
+      '<template></template>\n',
+      'utf8',
+    )
+
+    const result = resolveEffectiveTaskSuccessGates({
+      task: {
+        projectPath: tmpDir,
+        acceptanceCriteria: [],
+      } as any,
+      workspaceProjectPath: tmpDir,
+      workspaceBootstrap: {
+        commands: [],
+        successGates: ['pnpm typecheck', 'pnpm build', 'pnpm test', 'pnpm lint'],
+        timeoutMs: 300_000,
+        verifiedAt: '2026-05-03T00:00:00Z',
+        packageManager: 'pnpm',
+        install: { command: 'pnpm install', status: 'ok' },
+        gates: {
+          typecheck: { command: 'pnpm typecheck', available: true },
+          build: { command: 'pnpm build', available: true },
+          test: { command: 'pnpm test', available: true },
+          lint: { command: 'pnpm lint', available: true },
+        },
+      } as any,
+      likelyTargetFiles: ['web/app/components/VersionHistoryDialog.vue'],
+    })
+
+    expect(result).toEqual([
+      'pnpm typecheck',
+      'pnpm build',
+      'pnpm lint',
+    ])
+  })
+
   it('drops invalid automated pnpm commands and falls back to project defaults for that category', async () => {
     await fs.writeFile(
       path.join(tmpDir, 'package.json'),
@@ -395,6 +448,35 @@ describe('resolveEffectiveTaskSuccessGates', () => {
 })
 
 describe('resolveEffectiveTaskVerificationCommands', () => {
+  it('strips the nested project prefix when commands run inside an already-isolated task worktree', async () => {
+    const workspaceDir = tmpDir
+    const taskProjectPath = path.join(workspaceDir, 'knit')
+    const isolatedWorktreePath = path.join(os.tmpdir(), `guildhall-isolated-${Date.now()}`)
+    await fs.mkdir(taskProjectPath, { recursive: true })
+    await fs.mkdir(isolatedWorktreePath, { recursive: true })
+
+    const result = rewriteWorkspaceCommandsForIsolatedTaskWorktree({
+      commands: [
+        'cd knit && pnpm install',
+        'cd knit/web && pnpm typecheck',
+        'pnpm --dir knit/web build',
+        'pnpm --dir knit lint',
+      ],
+      workspaceProjectPath: workspaceDir,
+      taskProjectPath,
+      activeTaskWorktreeProjectPath: isolatedWorktreePath,
+    })
+
+    expect(result).toEqual([
+      'pnpm install',
+      'cd web && pnpm typecheck',
+      'pnpm --dir web build',
+      'pnpm lint',
+    ])
+
+    await fs.rm(isolatedWorktreePath, { recursive: true, force: true })
+  })
+
   it('scopes nested package verification commands so they run from the isolated worktree root', async () => {
     const frontendDir = path.join(tmpDir, 'frontend')
     await fs.mkdir(frontendDir, { recursive: true })
@@ -642,5 +724,46 @@ describe('resolveEffectiveTaskVerificationCommands', () => {
       'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
       'pnpm run lint',
     ])
+  })
+
+  it('rewrites multi-file filtered Vitest acceptance commands to direct --run targets', async () => {
+    const webDir = path.join(tmpDir, 'web')
+    await fs.mkdir(path.join(webDir, 'tests/unit/composables'), { recursive: true })
+    await fs.mkdir(path.join(webDir, 'tests/unit/shared'), { recursive: true })
+    await fs.writeFile(
+      path.join(webDir, 'package.json'),
+      JSON.stringify({
+        name: '@knit-app',
+        scripts: {
+          test: 'vitest',
+          typecheck: 'nuxt typecheck',
+          build: 'nuxt build',
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(path.join(webDir, 'tests/unit/composables/use-collections.test.ts'), '// test\n', 'utf8')
+    await fs.writeFile(path.join(webDir, 'tests/unit/composables/use-presence.test.ts'), '// test\n', 'utf8')
+    await fs.writeFile(path.join(webDir, 'tests/unit/shared/subdomain.test.ts'), '// test\n', 'utf8')
+
+    const result = resolveEffectiveTaskVerificationCommands({
+      task: {
+        projectPath: tmpDir,
+        acceptanceCriteria: [
+          {
+            id: 'ac-all',
+            description: 'All three focused files pass.',
+            verifiedBy: 'automated',
+            command:
+              'pnpm --filter @knit-app test -- tests/unit/composables/use-collections*.test.ts tests/unit/composables/use-presence.test.ts tests/unit/shared/subdomain.test.ts',
+          },
+        ],
+      } as any,
+      workspaceProjectPath: tmpDir,
+    })
+
+    expect(result).toContain(
+      'cd web && pnpm vitest --run tests/unit/composables/use-collections.test.ts tests/unit/composables/use-presence.test.ts tests/unit/shared/subdomain.test.ts',
+    )
   })
 })

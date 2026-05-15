@@ -87,6 +87,7 @@ import {
   resolveEffectiveTaskProjectPath,
   resolveEffectiveTaskSuccessGates,
   resolveEffectiveTaskVerificationCommands,
+  rewriteWorkspaceCommandsForIsolatedTaskWorktree,
 } from './task-gates.js'
 import { summarizeScopedHardGateDisposition } from '@guildhall/tools'
 import {
@@ -245,7 +246,7 @@ function isIgnorableCheckpointPath(file: string): boolean {
 function noteLooksLikeStructuredSelfCritique(task: Task): boolean {
   return (task.notes ?? []).some((note) =>
     note.agentId !== 'human' &&
-    note.role === 'self-critique' &&
+    isWorkerSelfCritiqueNote(note) &&
     /\bself-critique\b/i.test(note.content) &&
     /\bmin(?:imum|imal|i)-scope check\b/i.test(note.content),
   )
@@ -333,6 +334,18 @@ function isRecoverableTurnLimitBlocker(task: Task): boolean {
   return /Worker stopped after hitting its turn limit/i.test(blockReason)
 }
 
+function isRecoverableNoProgressBlocker(task: Task): boolean {
+  const blockReason = task.blockReason ?? ''
+  if (/Worker made no visible progress after \d+ passes/i.test(blockReason)) return true
+  return (task.escalations ?? []).some((escalation) => {
+    if (escalation.resolvedAt) return false
+    return (
+      escalation.reason === 'human_judgment_required' &&
+      /Worker made no visible progress after \d+ passes/i.test(escalation.summary ?? '')
+    )
+  })
+}
+
 function isRecoverableWorkerTimeoutBlocker(task: Task): boolean {
   const blockReason = task.blockReason ?? ''
   return /Worker timed out after failing to mutate the likely target file/i.test(blockReason)
@@ -371,6 +384,25 @@ function resolveRecoverableTurnLimitEscalations(task: Task, resolvedAt: string):
       escalation.resolvedAt = resolvedAt
       escalation.resolvedBy = 'system'
       escalation.resolution = 'Superseded after the project was explicitly resumed.'
+    }
+  }
+}
+
+function resolveRecoverableNoProgressEscalations(task: Task, resolvedAt: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    const summary = escalation.summary ?? ''
+    const details = escalation.details ?? ''
+    if (
+      escalation.reason === 'human_judgment_required' &&
+      (
+        /Worker made no visible progress after \d+ passes/i.test(summary) ||
+        /Task remained in progress with no worktree edits/i.test(details)
+      )
+    ) {
+      escalation.resolvedAt = resolvedAt
+      escalation.resolvedBy = 'system'
+      escalation.resolution = 'Superseded after the project was explicitly resumed from a recoverable no-progress stop.'
     }
   }
 }
@@ -1797,6 +1829,7 @@ export class Orchestrator {
     // through to the legacy single-reviewer dispatch when no fan-out runner
     // is configured or no reviewer personas apply.
     if (task.status === 'review' && this.opts.reviewerFanout) {
+      await this.maybeWriteReviewPacket(task)
       const fanoutOutcome = await this.runReviewerFanoutInline(task, queueBefore)
       if (fanoutOutcome) return fanoutOutcome
     }
@@ -2071,20 +2104,23 @@ export class Orchestrator {
       path.resolve(this.opts.config.projectPath),
       path.resolve(effectiveTaskProjectPath),
     )
-    const activeTaskWorktreeProjectPath =
-      activeWorktreePath !== effectiveTaskProjectPath &&
+    const nestedWorktreeProjectPath =
       relativeTaskProjectPath &&
       relativeTaskProjectPath !== '.' &&
       !relativeTaskProjectPath.startsWith(`..${path.sep}`) &&
       relativeTaskProjectPath !== '..' &&
       !path.isAbsolute(relativeTaskProjectPath)
         ? path.resolve(activeWorktreePath, relativeTaskProjectPath)
+        : null
+    const activeTaskWorktreeProjectPath =
+      nestedWorktreeProjectPath && existsSync(nestedWorktreeProjectPath)
+        ? nestedWorktreeProjectPath
         : activeWorktreePath
 
     const ctx = await buildContext(task, this.opts.config.memoryDir)
     const tasksPath = this.tasksPath()
     const likelyTargetFiles = resolveLikelyTaskFiles(task)
-    const effectiveTaskSuccessGates =
+    const effectiveTaskSuccessGatesRaw =
       beforeStatus === 'gate_check' || beforeStatus === 'in_progress'
         ? resolveEffectiveTaskSuccessGates({
             task,
@@ -2092,9 +2128,10 @@ export class Orchestrator {
             ...(this.opts.config.bootstrap
               ? { workspaceBootstrap: this.opts.config.bootstrap }
               : {}),
+            likelyTargetFiles,
           })
         : undefined
-    const effectiveTaskVerificationCommands =
+    const effectiveTaskVerificationCommandsRaw =
       beforeStatus === 'in_progress'
         ? resolveEffectiveTaskVerificationCommands({
             task,
@@ -2105,6 +2142,18 @@ export class Orchestrator {
             likelyTargetFiles,
           })
         : undefined
+    const effectiveTaskSuccessGates = rewriteWorkspaceCommandsForIsolatedTaskWorktree({
+      commands: effectiveTaskSuccessGatesRaw,
+      workspaceProjectPath: this.opts.config.projectPath,
+      taskProjectPath: effectiveTaskProjectPath,
+      activeTaskWorktreeProjectPath,
+    })
+    const effectiveTaskVerificationCommands = rewriteWorkspaceCommandsForIsolatedTaskWorktree({
+      commands: effectiveTaskVerificationCommandsRaw,
+      workspaceProjectPath: this.opts.config.projectPath,
+      taskProjectPath: effectiveTaskProjectPath,
+      activeTaskWorktreeProjectPath,
+    })
 
     // FR-24: slot allocation shapes the prompt + env for the worker. Slot is
     // released after the agent returns (or throws).
@@ -2572,8 +2621,6 @@ export class Orchestrator {
         const openQuestionCountBefore = task.openQuestions?.length ?? 0
         const reviewerNoteCountBefore = countReviewerNotes(task)
         const reviewVerdictCountBefore = task.reviewVerdicts.length
-        const gateResultCountBefore = task.gateResults.length
-        const gateResultSignatureBefore = gateResultSignature(task)
 
         if (
           task.id === META_INTAKE_TASK_ID &&
@@ -2675,19 +2722,16 @@ export class Orchestrator {
 
         if (
           beforeStatus === 'gate_check' &&
-          (afterStatus === 'gate_check' || afterStatus === 'in_progress') &&
-          (
-            taskAfter.gateResults.length > gateResultCountBefore ||
-            gateResultSignature(taskAfter) !== gateResultSignatureBefore
-          )
+          (afterStatus === 'gate_check' || afterStatus === 'in_progress')
         ) {
+          const latestHardGates = latestHardGateResults(taskAfter)
           const hardGateDisposition = summarizeScopedHardGateDisposition(
             {
               projectPath: taskAfter.projectPath,
               likelyTargetFiles: resolveLikelyTaskFiles(taskAfter),
               resolvedDecisionTexts: resolvedScopeDecisionTexts(taskAfter),
             },
-            latestHardGateResults(taskAfter),
+            latestHardGates,
           )
           if (hardGateDisposition) {
             if (hardGateDisposition.shouldPass) {
@@ -2717,6 +2761,13 @@ export class Orchestrator {
               afterStatus = 'in_progress'
               transitioned = true
             }
+          } else if (latestHardGates.length > 0 && latestHardGates.every((gate) => gate.passed)) {
+            taskAfter.status = 'done'
+            taskAfter.updatedAt = this.now()
+            queueAfter.lastUpdated = this.now()
+            await this.writeQueue(queueAfter)
+            afterStatus = 'done'
+            transitioned = true
           }
         }
 
@@ -2836,7 +2887,6 @@ export class Orchestrator {
           afterStatus === 'in_progress' &&
           !transitioned &&
           taskAfter.updatedAt === task.updatedAt &&
-          !checkpointNoProgressStatusSeen &&
           (
             hasDirtyWorktreeAfter ||
             hasDirtyLikelyTargetProgress ||
@@ -2866,14 +2916,9 @@ export class Orchestrator {
           afterStatus === 'in_progress' &&
           !transitioned &&
           taskAfter.updatedAt === task.updatedAt &&
-          (
-            checkpointNoProgressStatusSeen ||
-            (
-              !hasDirtyWorktreeAfter &&
-              !hasDirtyLikelyTargetProgress &&
-              !hasCheckpointScopedVerifiedProgress
-            )
-          ) &&
+          !hasDirtyWorktreeAfter &&
+          !hasDirtyLikelyTargetProgress &&
+          !hasCheckpointScopedVerifiedProgress &&
           likelyWorkerTargets.length > 0
         if (repeatedWorkerNoProgress) {
           const attempts = this.bumpWorkerNoProgress(task.id)
@@ -4475,6 +4520,9 @@ export class Orchestrator {
     const policy = await this.resolveReviewerFanoutPolicy(task.domain)
     const priorRounds = extractPriorVerdictRounds(task.reviewVerdicts)
     const aggregate = aggregateFanout(verdicts, { policy, priorRounds })
+    const proceduralOnlyDissent =
+      aggregate.verdict === 'revise' &&
+      isProceduralOnlyFanoutDissent(aggregate.dissenting)
     const beforeStatus = task.status
 
     return await this.withQueueWriteLock(async () => {
@@ -4494,7 +4542,7 @@ export class Orchestrator {
       // the worker. The worker will re-enter in_progress only after the
       // coordinator lands a binding AdjudicationRecord with scoped
       // instructions.
-      if (aggregate.needsAdjudication) {
+      if (aggregate.needsAdjudication && !proceduralOnlyDissent) {
         const adjudicationOutcome = await this.routeToCoordinatorAdjudication({
           queue,
           task: t,
@@ -4509,7 +4557,17 @@ export class Orchestrator {
         // default revise path so the system stays conservative.
       }
 
-      if (aggregate.verdict === 'approve') {
+      if (aggregate.verdict === 'approve' || proceduralOnlyDissent) {
+        if (proceduralOnlyDissent) {
+          t.notes.push({
+            agentId: 'reviewer-fanout',
+            role: 'reviewer',
+            content:
+              'Reviewer fan-out advisory note: remaining dissent was procedural-only after reviewers stated the task met acceptance criteria. Preserving the advice without blocking gate_check.\n\n' +
+              aggregate.combinedFeedback,
+            timestamp: now,
+          })
+        }
         t.status = 'gate_check'
         t.updatedAt = now
         queue.lastUpdated = now
@@ -5073,6 +5131,11 @@ export class Orchestrator {
         if (activeEscalations(task).length > 0) continue
         recoveryNote =
           'User restarted the project after Guildhall hit the now-fixed review handoff validator bug. Reopened the task so the worker can retry the handoff without a manual JSON edit.'
+      } else if (isRecoverableNoProgressBlocker(task)) {
+        resolveRecoverableNoProgressEscalations(task, now)
+        if (activeEscalations(task).length > 0) continue
+        recoveryNote =
+          'User restarted the project after the worker made no visible progress. Reopened the task so Guildhall can resume from the latest durable checkpoint instead of treating a recoverable no-progress stop as terminal.'
       } else if (isRecoverableTurnLimitBlocker(task)) {
         resolveRecoverableTurnLimitEscalations(task, now)
         if (activeEscalations(task).length > 0) continue
@@ -6521,6 +6584,7 @@ export async function runOrchestrator(
               task: resumableTask,
               workspaceProjectPath: config.projectPath,
               ...(config.bootstrap ? { workspaceBootstrap: config.bootstrap } : {}),
+              likelyTargetFiles: resolveLikelyTaskFiles(resumableTask),
             })
           : undefined
       if (
@@ -6779,15 +6843,34 @@ function latestHardGateResults(task: Task): Array<NonNullable<Task['gateResults'
   return [...latestById.values()]
 }
 
-function gateResultSignature(task: Task): string {
-  return JSON.stringify(
-    latestHardGateResults(task).map((gate) => ({
-      gateId: gate.gateId,
-      passed: gate.passed,
-      checkedAt: gate.checkedAt,
-      output: gate.output,
-    })),
-  )
+function isProceduralOnlyFanoutDissent(dissenting: readonly PersonaVerdict[]): boolean {
+  if (dissenting.length === 0) return false
+  return dissenting.every((verdict) => {
+    const text = [
+      verdict.reasoning,
+      verdict.rawOutput,
+      ...verdict.revisionItems,
+      ...(verdict.riskItems ?? []),
+    ].join('\n')
+    const saysAccepted =
+      /\bmeets all acceptance criteria\b/i.test(text) ||
+      /\bsatisfies all functional ACs\b/i.test(text) ||
+      /\bmeets all functional ACs\b/i.test(text) ||
+      /\bmeets functional ACs\b/i.test(text) ||
+      /\bimplementation meets functional ACs\b/i.test(text) ||
+      /\bmeets all acceptance criteria and scope\b/i.test(text) ||
+      /risk if accepted as-is:\s*-\s*\(none\)/i.test(text)
+    const asksOnlyForProcess =
+      /\bcheckpoint\b/i.test(text) ||
+      /\baudit trail\b/i.test(text) ||
+      /\bmeasurement plan\b/i.test(text) ||
+      /\bCore Web Vitals\b/i.test(text) ||
+      /\bLCP\b/i.test(text) ||
+      /\bINP\b/i.test(text) ||
+      /\bLighthouse\b/i.test(text) ||
+      /\bcrash[- ]recovery\b/i.test(text)
+    return saysAccepted && asksOnlyForProcess
+  })
 }
 
 function resolvedScopeDecisionTexts(task: Task): string[] {
@@ -6848,7 +6931,8 @@ function shouldAdvanceInfraFallbackToGateCheck(
 function isInfrastructureOnlyFanoutFailure(verdict: PersonaVerdict): boolean {
   if (verdict.verdict !== 'revise') return false
   const text = `${verdict.reasoning}\n${verdict.rawOutput}`
-  if (!/failed to produce a verdict/i.test(text)) return false
+  if (/no \*\*Reasoning:\*\* block found/i.test(text)) return true
+  if (!/failed to produce a verdict|no \*\*Reasoning:\*\* block found/i.test(text)) return false
   return isInfrastructureLikeReviewerError(text)
 }
 

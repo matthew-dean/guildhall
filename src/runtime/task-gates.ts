@@ -177,6 +177,59 @@ function rewriteTaskProjectCommandsForWorkspace(
   )
 }
 
+function stripWorkspaceTaskDirFromCommand(command: string, workspaceRelativeTaskDir: string): string {
+  const normalized = normalizeCommand(command)
+  if (!workspaceRelativeTaskDir || workspaceRelativeTaskDir === '.') return normalized
+
+  const cdMatch = /^cd\s+(\S+)\s*&&\s*(.+)$/i.exec(normalized)
+  if (cdMatch) {
+    const [, rawDir, rest] = cdMatch
+    const relativeFromTask = normalizeCommand(path.relative(workspaceRelativeTaskDir, rawDir!))
+    if (!relativeFromTask.startsWith('..')) {
+      return relativeFromTask === '' || relativeFromTask === '.'
+        ? normalizeCommand(rest!)
+        : normalizeCommand(`cd ${relativeFromTask} && ${rest}`)
+    }
+  }
+
+  const dirMatch = /^pnpm\s+--dir\s+(\S+)\s+(.+)$/i.exec(normalized)
+  if (dirMatch) {
+    const [, rawDir, rest] = dirMatch
+    const relativeFromTask = normalizeCommand(path.relative(workspaceRelativeTaskDir, rawDir!))
+    if (!relativeFromTask.startsWith('..')) {
+      return relativeFromTask === '' || relativeFromTask === '.'
+        ? normalizeCommand(`pnpm ${rest}`)
+        : normalizeCommand(`pnpm --dir ${relativeFromTask} ${rest}`)
+    }
+  }
+
+  return normalized
+}
+
+export function rewriteWorkspaceCommandsForIsolatedTaskWorktree(input: {
+  commands: readonly string[] | undefined
+  workspaceProjectPath: string
+  taskProjectPath: string
+  activeTaskWorktreeProjectPath: string
+}): readonly string[] | undefined {
+  if (!input.commands) return undefined
+  const workspaceProjectPath = path.resolve(input.workspaceProjectPath)
+  const taskProjectPath = path.resolve(input.taskProjectPath)
+  if (taskProjectPath === workspaceProjectPath) return input.commands
+
+  const workspaceRelativeTaskDir = normalizeCommand(path.relative(workspaceProjectPath, taskProjectPath))
+  if (!workspaceRelativeTaskDir || workspaceRelativeTaskDir === '.' || workspaceRelativeTaskDir.startsWith('..')) {
+    return input.commands
+  }
+
+  const nestedPathStillExists = fs.existsSync(path.resolve(input.activeTaskWorktreeProjectPath, workspaceRelativeTaskDir))
+  if (nestedPathStillExists) return input.commands
+
+  return input.commands.map((command) =>
+    stripWorkspaceTaskDirFromCommand(command, workspaceRelativeTaskDir),
+  )
+}
+
 function rewriteTaskProjectBucketsForWorkspace(
   buckets: Map<GateCommandKind, string[]>,
   workspaceProjectPath: string,
@@ -379,7 +432,11 @@ function maybeRewritePnpmVitestCommand(
   const passthroughTarget = /^(?:--\s+)?([^\s][^]*)$/.exec(normalizedRest)
   const target = (runWithTarget?.[1] ?? passthroughTarget?.[1] ?? '').trim()
   if (!target || target.startsWith('-')) return null
-  const resolvedTargets = findRelativeFiles(pkg.dir, target)
+  const targetTokens = target
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0 && !token.startsWith('-'))
+  const resolvedTargets = targetTokens.flatMap((token) => findRelativeFiles(pkg.dir, token))
   if (resolvedTargets.length === 0) return null
   const targetArgs = resolvedTargets.join(' ')
 
@@ -762,6 +819,7 @@ export function resolveEffectiveTaskSuccessGates(input: {
   task: Pick<Task, 'projectPath' | 'acceptanceCriteria'>
   workspaceProjectPath: string
   workspaceBootstrap?: BootstrapBlock
+  likelyTargetFiles?: readonly string[]
 }): readonly string[] | undefined {
   const taskProjectPath = resolveEffectiveTaskProjectPath(
     input.task,
@@ -769,6 +827,11 @@ export function resolveEffectiveTaskSuccessGates(input: {
   )
   const workspaceProjectPath = path.resolve(input.workspaceProjectPath)
   const acceptanceBuckets = deriveAutomatedAcceptanceCommands(input.task, taskProjectPath)
+  const focusedBuckets = deriveFocusedVerificationBuckets(
+    taskProjectPath,
+    input.likelyTargetFiles ?? [],
+  )
+  const narrowTaskHint = (input.likelyTargetFiles ?? []).length > 0
 
   if (taskProjectPath !== workspaceProjectPath) {
     const workspacePackageManager = detectPackageManager(workspaceProjectPath)
@@ -782,18 +845,30 @@ export function resolveEffectiveTaskSuccessGates(input: {
       workspaceProjectPath,
       taskProjectPath,
     )
-    const merged = mergeAcceptanceAndProjectGates(taskAcceptanceBuckets, taskScoped)
+    const taskFocusedBuckets = rewriteTaskProjectBucketsForWorkspace(
+      focusedBuckets,
+      workspaceProjectPath,
+      taskProjectPath,
+    )
+    const merged = mergeVerificationCommands(
+      taskAcceptanceBuckets,
+      taskFocusedBuckets,
+      taskScoped,
+      narrowTaskHint,
+    )
     if (merged && merged.length > 0) return merged
   }
 
   if (hasBootstrapSignal(input.workspaceBootstrap)) {
-    return mergeAcceptanceAndProjectGates(
+    return mergeVerificationCommands(
       acceptanceBuckets,
+      focusedBuckets,
       effectiveBootstrapGateCommands(input.workspaceBootstrap!),
+      narrowTaskHint,
     )
   }
 
-  return mergeAcceptanceAndProjectGates(acceptanceBuckets, undefined)
+  return mergeVerificationCommands(acceptanceBuckets, focusedBuckets, undefined, narrowTaskHint)
 }
 
 export function resolveEffectiveTaskVerificationCommands(input: {

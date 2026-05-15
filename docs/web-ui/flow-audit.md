@@ -42,9 +42,11 @@ screen.
 
 ## 0.5.0 Release Threshold
 
-- [ ] Prove one real project can complete a task unattended end to end:
+- [x] Prove one real project can complete a task unattended end to end:
   implementation -> authoritative verification -> honest review handoff ->
-  done.
+  done. Looma + Knit `task-import-189j8he` now reached `done` on the live
+  service after its typecheck/build gates passed and the over-broad full-suite
+  test fallback was removed from narrow source-file success gates.
 - [ ] Keep the other two live projects truthful while that proof run is
   happening:
   no fake `running` states, no contradictory Thread summaries, and no stale
@@ -52,13 +54,33 @@ screen.
 - [ ] Eliminate the remaining checkpoint-lane drift on `t-minus-t` so resumed
   workers stay inside:
   authoritative verification -> focused file read -> focused mutation,
-  without falling back into ad hoc shell detours or empty-turn loops.
-- [ ] Clear Looma + Knit's current blocked execution seam so its top runnable
+  without falling back into ad hoc shell detours or empty-turn loops. Current
+  state: failed focused shell verification is now preserved as checkpoint
+  progress instead of disappearing into a false no-progress escalation, but the
+  worker can still loop on the same failed verification without making the next
+  mutation.
+- [x] Clear Looma + Knit's current blocked execution seam so its top runnable
   task is a real candidate for unattended progress again, not just a stopped
-  backlog with draft-heavy noise.
+  backlog with draft-heavy noise. The version-diff task completed; the
+  remaining Looma + Knit items are imported drafts that need shaping/release
+  planning rather than execution.
 - [ ] Land the current runtime/test hardening batch cleanly
   (`run-query`, gate-command authority, shell tests, flow audit) and retest on
   the live `127.0.0.1:7777` service before we even discuss cutting `0.5.0`.
+- [x] Keep gate-check success gates scoped the same way worker verification is
+  scoped. Narrow source-file work now passes `likelyTargetFiles` into
+  `resolveEffectiveTaskSuccessGates`, so a task like Looma + Knit's version
+  diff view no longer bounces on an unrelated broad `pnpm -F web test` failure
+  after focused build/typecheck gates are green.
+- [x] Treat failed focused shell verification as durable worker progress.
+  `recordToolCarryover` now records errored shell output, and the orchestrator
+  lets checkpoint-backed failed verification outrank the "no tool after nudge"
+  sentinel. This keeps `t-minus-t` from erasing useful failing test evidence and
+  raising another false no-progress block.
+- [x] Reopen recoverable no-progress blocks on explicit project start. A
+  Guildhall-owned `Worker made no visible progress after N passes` block now
+  resolves on resume and returns the task to `in_progress`, matching the
+  existing restart behavior for turn-limit and timeout blocks.
 - [x] Keep recovery checkpoints aligned with durable verification evidence. A `t-minus-t` recovery checkpoint on `2026-05-14` was persisting failed authoritative verification into `resumeContext` while regressing `nextPlannedAction` back to the looser `active worktree diff / refresh focused verification` wording. Checkpoint writing and checkpoint rendering now prefer the verification-backed wording whenever failed authoritative verification already exists, so resumed workers keep the sharper `rerun focused verification -> fix whatever still fails` frame.
 - [x] Tighten post-verification read latitude in `t-minus-t`'s mutation lane. After a failed authoritative rerun, Guildhall now allows only one focused read-only follow-through tool call before demanding a concrete edit or escalation, and it refuses multi-file reread batches in that exact post-verification checkpoint lane. This keeps the worker from burning a whole extra turn rereading half the converter surface after it already knows which seam is failing.
 
