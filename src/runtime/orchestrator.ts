@@ -2319,6 +2319,9 @@ export class Orchestrator {
         ...(this.hasStructuredSelfCritique(task)
           ? { current_task_has_structured_self_critique: true }
           : {}),
+        ...(this.hasReviewProofPacket(task)
+          ? { current_task_has_review_proof_packet: true }
+          : {}),
       })
     }
 
@@ -2890,7 +2893,7 @@ export class Orchestrator {
           afterStatus === 'in_progress' &&
           !transitioned &&
           hasCheckpointScopedVerifiedProgress &&
-          noteLooksLikeStructuredSelfCritique(taskAfter) &&
+          this.hasReviewProofPacket(taskAfter) &&
           looksLikeReviewHandoffNextAction(checkpointNextAction)
         if (canAutoPromoteReviewFromCheckpointHandoff) {
           ensureReviewerOwnership(taskAfter)
@@ -3045,7 +3048,7 @@ export class Orchestrator {
           beforeStatus === 'in_progress' &&
           newest.reason === 'decision_required' &&
           /already in review|stale checkpoint/i.test(`${newest.summary}\n${newest.details ?? ''}`) &&
-          noteLooksLikeStructuredSelfCritique(taskAfter)
+          this.hasReviewProofPacket(taskAfter)
         if (staleReviewCheckpointEscalation) {
           const now = this.now()
           newest.resolvedAt = now
@@ -3901,7 +3904,7 @@ export class Orchestrator {
           kind: 'agent',
           agent: this.opts.agents.worker,
           promptSuffix:
-            "Implement this task per the spec. Write a self-critique note when done, then transition status to 'review'.",
+            "Implement this task per the spec. Before any review handoff, persist a self-critique note that includes: acceptance-criterion status, a minimum-scope check, a Review proof packet with changed files/diff scope, exact verification commands and pass/fail results, the current working hypothesis, and known gaps. Only after that proof packet is durable should you transition status to 'review'.",
         }
       case 'review':
         return {
@@ -5538,9 +5541,26 @@ export class Orchestrator {
     if (!content) return false
     const hasAcceptanceCoverage =
       /for each acceptance criterion:/i.test(content) ||
-      /-\s*(?:\[[^\]]+\]|ac-\d+):\s*(met|not met)\b/i.test(content)
-    const hasMinimumScope = /(?:^|\n)\s*-?\s*(?:minimum|minimal|mini)-scope check:/i.test(content)
+      /(?:^|\n)\s*-?\s*(?:\[[^\]]+\]|ac-\d+(?:\s*\([^)]+\))?)\s*:\s*(met|not met)\b/i.test(content)
+    const hasMinimumScope =
+      /(?:^|\n)\s*(?:\*\*)?-?\s*(?:minimum|minimal|mini)-scope check:\s*(?:\*\*)?/i.test(content)
     return hasAcceptanceCoverage && hasMinimumScope
+  }
+
+  private hasReviewProofPacket(task: Task): boolean {
+    const note = [...task.notes]
+      .reverse()
+      .find((candidate) => isWorkerSelfCritiqueNote(candidate))
+    const content = note?.content?.trim() ?? ''
+    if (!content || !this.hasStructuredSelfCritique(task)) return false
+    const hasProofPacket =
+      /(?:^|\n)\s*(?:#{2,3}\s*)?(?:\*\*)?\s*review proof packet\s*:?\s*(?:\*\*)?/i.test(content)
+    const hasVerificationProof =
+      /\bverification(?: command| commands| result| results)?\b/i.test(content) &&
+      /\b(pass|passed|green|succeed|succeeded)\b/i.test(content)
+    const hasDiffScope =
+      /\b(?:changed files|files changed|diff scope|scope of changes)\b/i.test(content)
+    return hasProofPacket && hasVerificationProof && hasDiffScope
   }
 
   private renderCheckpoint(
@@ -6858,11 +6878,18 @@ function isWorkerSelfCritiqueNote(
   return role === 'implementation' || role === 'implementer' || role === 'worker'
 }
 
-function normalizedWorkerCheckpointNextAction(task: Task, checkpoint: Checkpoint | null): string {
-  const trimmed = checkpoint?.nextPlannedAction?.trim() ?? ''
+function normalizedWorkerCheckpointNextAction(
+  task: Task,
+  checkpoint: Checkpoint | string | null,
+): string {
+  const trimmed =
+    typeof checkpoint === 'string'
+      ? checkpoint.trim()
+      : checkpoint?.nextPlannedAction?.trim() ?? ''
   if (!trimmed) return ''
   if (/^(?:none|null|n\/a|na|nothing)$/i.test(trimmed)) return ''
-  const checkpointWrittenAt = Date.parse(checkpoint?.writtenAt ?? '')
+  const checkpointWrittenAt =
+    typeof checkpoint === 'string' ? NaN : Date.parse(checkpoint?.writtenAt ?? '')
   const hasNewerReviewerFeedback = Number.isFinite(checkpointWrittenAt) && task.notes.some((note) => {
     const role = typeof note.role === 'string' ? note.role.trim().toLowerCase() : ''
     const agentId = typeof note.agentId === 'string' ? note.agentId.trim().toLowerCase() : ''

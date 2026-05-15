@@ -1432,6 +1432,9 @@ describe('Orchestrator.tick — routing', () => {
           typecheck: 'tsc --noEmit',
           test: 'vitest',
         },
+        devDependencies: {
+          vitest: '^3.0.0',
+        },
       }),
       'utf8',
     )
@@ -1475,7 +1478,6 @@ describe('Orchestrator.tick — routing', () => {
     expect(gc.calls).toHaveLength(1)
     expect(gc.calls[0]!.prompt).toContain(`Run hard gates against \`${knitDir}\``)
     expect(gc.calls[0]!.prompt).toContain('`pnpm typecheck`')
-    expect(gc.calls[0]!.prompt).toContain('`pnpm test`')
     expect(gc.calls[0]!.prompt).not.toContain('No verified shell gates are currently configured for this task path.')
   })
 
@@ -4505,7 +4507,7 @@ describe('Orchestrator.run — full loops', () => {
           {
             agentId: 'worker-agent',
             role: 'self-critique',
-            content: `**Self-critique:**\n\nAC-1 (Conversion): Met — focused tests cover the touched files.\n\n**Minimum-scope check:**\n- Files changed: packages/converter/src/features/variableDeclaration.ts.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`,
+            content: `**Self-critique:**\n\nAC-1 (Conversion): Met — focused tests cover the touched files.\n\n**Minimum-scope check:**\n- Files changed: packages/converter/src/features/variableDeclaration.ts.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.\n\n**Review proof packet:**\n- Changed files / diff scope: packages/converter/src/features/variableDeclaration.ts, packages/converter/test/ts-to-jsdoc.test.ts.\n- Verification commands passed: cd /tmp/project/packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts passed.\n- Working hypothesis at handoff: The converter change and focused tests are ready for reviewer evaluation.\n- Known gaps / follow-up: none.`,
             timestamp: '2026-05-13T15:00:00.000Z',
           },
         ],
@@ -7298,7 +7300,16 @@ describe('Orchestrator worker no-progress escalation', () => {
       cwd: tmpDir,
       stdio: 'ignore',
     })
-    await fs.writeFile(targetPath, 'export const value = 2;\n', 'utf-8')
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'task-blank',
+      agentId: 'worker-agent',
+      intent: 'Resume converter comment repair',
+      nextPlannedAction:
+        'Inspect the checkpoint-touched files against the verification result, then fix whatever still fails before you write the structured self-critique.',
+      filesTouched: ['packages/converter/src/commentInserter.ts'],
+    })
     await writeQueue([
       mkTask({
         id: 'task-blank',

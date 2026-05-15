@@ -71,6 +71,14 @@ screen.
 - [ ] Land the current runtime/test hardening batch cleanly
   (`run-query`, gate-command authority, shell tests, flow audit) and retest on
   the live `127.0.0.1:7777` service before we even discuss cutting `0.5.0`.
+- [x] Require a durable review proof packet before worker review handoff. On
+  `2026-05-15`, Guildhall's worker instructions, `update-task` review guard,
+  coordinator handoff metadata, and stale-checkpoint auto-promotion path were
+  tightened around the same proof shape: acceptance-criterion status,
+  minimum-scope check, changed files/diff scope, exact verification command
+  results, working hypothesis, and known gaps. This is an instruction/handoff
+  contract fix, not a generic memory fix: agents need the right bounded
+  decision packet at the moment they transition work.
 - [x] Prove `t-minus-t` can recover from stale review-checkpoint drift and
   finish. `task-003` initially blocked with
   `decision_required: Task is already in review status — checkpoint is stale`

@@ -105,6 +105,12 @@ Minimum-scope check:
 - Smallest useful change?: [yes/no — one sentence why]
 - Anything to revert before review?: [none, or exactly what should be removed because it goes beyond the task]
 
+Review proof packet:
+- Changed files / diff scope: [same file list, plus any generated/package files that changed]
+- Verification commands passed: [exact command(s) and pass/fail result; if a command failed, do not hand off]
+- Working hypothesis at handoff: [one sentence explaining why this is now ready]
+- Known gaps / follow-up: [none, or exact non-blocking follow-up]
+
 Out-of-scope changes introduced: [none, or list them]
 Uncertainties: [none, or what you're not sure about]
 

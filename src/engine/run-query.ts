@@ -387,7 +387,7 @@ function currentTaskLaneHandoffCompleted(
 function hasStructuredSelfCritiqueInMetadata(
   toolMetadata: Record<string, unknown> | undefined,
 ): boolean {
-  return toolMetadata?.['current_task_has_structured_self_critique'] === true
+  return toolMetadata?.['current_task_has_review_proof_packet'] === true
 }
 
 function looksLikeStructuredSelfCritiqueContent(content: string): boolean {
@@ -400,7 +400,14 @@ function looksLikeStructuredSelfCritiqueContent(content: string): boolean {
     /(?:^|\n)\s*(?:-\s*)?(?:\[[^\]]+\]|ac-\d+)(?:\s*\([^)\n]+\))?\s*:\s*(met|not met)\b/im.test(normalized)
   const hasMinimumScope =
     /(?:^|\n)\s*(?:\*\*)?-?\s*(?:minimum|minimal|mini)-scope check:\s*(?:\*\*)?/i.test(normalized)
-  return hasAcceptanceCoverage && hasMinimumScope
+  const hasProofPacket =
+    /(?:^|\n)\s*(?:#{2,3}\s*)?(?:\*\*)?\s*review proof packet\s*:?\s*(?:\*\*)?/i.test(normalized)
+  const hasVerificationProof =
+    /\bverification(?: command| commands| result| results)?\b/i.test(normalized) &&
+    /\b(pass|passed|green|succeed|succeeded)\b/i.test(normalized)
+  const hasDiffScope =
+    /\b(?:changed files|files changed|diff scope|scope of changes)\b/i.test(normalized)
+  return hasAcceptanceCoverage && hasMinimumScope && hasProofPacket && hasVerificationProof && hasDiffScope
 }
 
 function structuredSelfCritiqueFromUpdateTaskInput(
@@ -2406,8 +2413,8 @@ function reviewHandoffGuardResult(
       type: 'tool_result',
       tool_use_id: toolUseId,
       content: [
-        'Blocked transition to review: persist a structured self-critique note via update-task first.',
-        'It must cover each acceptance criterion and include the minimum-scope check before handoff.',
+        'Blocked transition to review: persist a structured self-critique note with a review proof packet via update-task first.',
+        'It must cover each acceptance criterion, include the minimum-scope check, list the changed files/diff scope, and name the verification command(s) that passed before handoff.',
         `Call update-task again for ${taskLabel} with status "in_progress" and note: { agentId: "worker-agent", role: "self-critique", content: "**Self-critique:** ..." }.`,
         'After that note is durable in task state, transition to review in a separate update-task call.',
       ].join(' '),
@@ -2593,6 +2600,7 @@ async function executeToolCall(
     structuredSelfCritiqueFromUpdateTaskInput(toolInput).length > 0
   ) {
     context.toolMetadata['current_task_has_structured_self_critique'] = true
+    context.toolMetadata['current_task_has_review_proof_packet'] = true
   }
 
   const resultMetadata = (result as { metadata?: Record<string, unknown> }).metadata ?? null

@@ -479,6 +479,12 @@ Minimum-scope check:
 - Smallest useful change?: yes — the change stayed in one file.
 - Anything to revert before review?: none
 
+Review proof packet:
+- Changed files / diff scope: /workspace/project/packages/converter/src/index.ts
+- Verification commands passed: pnpm test passed
+- Working hypothesis at handoff: The intended file change is complete and verified.
+- Known gaps / follow-up: none
+
 Out-of-scope changes introduced: none
 Uncertainties: none`),
       },
@@ -1093,7 +1099,7 @@ describe('runQuery — unknown tool + invalid input', () => {
 
   it('blocks worker-style review handoff without implementation evidence', async () => {
     const registry = new ToolRegistry()
-    let called = false
+    let reviewCalls = 0
     registry.register(
       defineTool({
         name: 'update-task',
@@ -1136,7 +1142,7 @@ describe('runQuery — unknown tool + invalid input', () => {
       e.type === 'tool_execution_completed' &&
       e.output.includes('Blocked transition to review'),
     )
-    expect(called).toBe(false)
+    expect(reviewCalls).toBe(0)
     expect(completed?.type === 'tool_execution_completed' ? completed.is_error : false).toBe(true)
     expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('Blocked transition to review')
   })
@@ -1223,6 +1229,12 @@ Minimum-scope check:
 - Smallest useful change?: yes — no extra files changed.
 - Anything to revert before review?: none
 
+Review proof packet:
+- Changed files / diff scope: /workspace/project/packages/converter/src/index.ts
+- Verification commands passed: pnpm test passed
+- Working hypothesis at handoff: The implementation file was inspected and verified.
+- Known gaps / follow-up: none
+
 Out-of-scope changes introduced: none
 Uncertainties: none`,
             },
@@ -1262,7 +1274,7 @@ Uncertainties: none`,
 
   it('blocks review handoff when authoritative verification commands have not been durably proven', async () => {
     const registry = new ToolRegistry()
-    let called = false
+    let reviewCalls = 0
     registry.register(
       defineTool({
         name: 'read-file',
@@ -1299,8 +1311,8 @@ Uncertainties: none`,
           taskId: z.string(),
           status: z.string(),
         }),
-        execute: async () => {
-          called = true
+        execute: async (input) => {
+          if (input.status === 'review') reviewCalls += 1
           return { output: 'updated', is_error: false }
         },
       }),
@@ -1348,6 +1360,12 @@ Minimum-scope check:
 - Smallest useful change?: yes
 - Anything to revert before review?: none
 
+Review proof packet:
+- Changed files / diff scope: /workspace/project/knit/web/app/components/organisms/VersionHistoryDialog.vue
+- Verification commands passed: pnpm --filter @knit-app typecheck passed; pnpm --filter @knit-app build passed
+- Working hypothesis at handoff: The diff action work is complete and both authoritative commands passed.
+- Known gaps / follow-up: none
+
 Out-of-scope changes introduced: none
 Uncertainties: none`,
             },
@@ -1385,7 +1403,7 @@ Uncertainties: none`,
       e.type === 'tool_execution_completed' &&
       e.output.includes('durable proof'),
     )
-    expect(called).toBe(false)
+    expect(reviewCalls).toBe(0)
     expect(completed?.type === 'tool_execution_completed' ? completed.is_error : false).toBe(true)
     expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('durable proof')
     expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('pnpm --filter @knit-app typecheck')
@@ -1474,6 +1492,12 @@ AC-2 (Email confirmation): Met - /auth/confirm reads token from query params, ca
 - Files changed: none - all implementation was already present in the worktree from the previous agent session.
 - Smallest useful change?: N/A - no changes needed.
 - Anything to revert before review?: none.
+
+**Review proof packet:**
+- Changed files / diff scope: none - existing worktree implementation verified.
+- Verification commands passed: pnpm build passed.
+- Working hypothesis at handoff: Auth source inspection and build verification support review.
+- Known gaps / follow-up: none.
 
 **Out-of-scope changes introduced:** none.
 
@@ -1586,6 +1610,109 @@ AC-2 (Email confirmation): Met - /auth/confirm reads token from query params, ca
     expect(updateCompleted?.type === 'tool_execution_completed' ? updateCompleted.output : '').toContain('structured self-critique')
   })
 
+  it('blocks review handoff when the self-critique omits the review proof packet', async () => {
+    const registry = new ToolRegistry()
+    let reviewCalls = 0
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'export const x = 1', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'tests passed', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string(),
+          taskId: z.string(),
+          status: z.string(),
+          note: z.object({
+            agentId: z.string(),
+            role: z.string(),
+            content: z.string(),
+          }).optional(),
+        }),
+        execute: async (input) => {
+          if (input.status === 'review') reviewCalls += 1
+          return { output: 'updated', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'in_progress' }, 'start-proof') },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/src/index.ts' },
+          'read-proof',
+        ),
+      },
+      { message: assistantToolUse('shell', { command: 'pnpm test' }, 'shell-proof') },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-1',
+            status: 'review',
+            note: {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: `**Self-critique:**
+For each acceptance criterion:
+- [ac-1]: Met — The implementation file was inspected and updated appropriately.
+
+Minimum-scope check:
+- Files changed: /workspace/project/packages/converter/src/index.ts
+- Smallest useful change?: yes — no extra files changed.
+- Anything to revert before review?: none
+
+Out-of-scope changes introduced: none
+Uncertainties: none`,
+            },
+          },
+          'update-proof',
+        ),
+      },
+      { message: assistantText('ok') },
+    ])
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 6,
+          toolMetadata: {},
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+    const completed = events.find((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.output.includes('review proof packet'),
+    )
+    expect(reviewCalls).toBe(0)
+    expect(completed?.type === 'tool_execution_completed' ? completed.is_error : false).toBe(true)
+    expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('review proof packet')
+  })
+
   it('does not allow stale handoff evidence from a previous task', async () => {
     const registry = new ToolRegistry()
     let reviewCalls = 0
@@ -1653,6 +1780,12 @@ Minimum-scope check:
 - Files changed: /workspace/project/packages/converter/src/index.ts
 - Smallest useful change?: yes — only the intended file was touched.
 - Anything to revert before review?: none
+
+Review proof packet:
+- Changed files / diff scope: /workspace/project/packages/converter/src/index.ts
+- Verification commands passed: pnpm test passed
+- Working hypothesis at handoff: The implementation change is verified for task-1.
+- Known gaps / follow-up: none
 
 Out-of-scope changes introduced: none
 Uncertainties: none`,
@@ -1762,6 +1895,12 @@ AC-1 (Converter behavior): Met — The file change is complete.
 - Smallest useful change?: yes — the diff stays local to the intended file.
 - Anything to revert before review?: none
 
+**Review proof packet:**
+- Changed files / diff scope: /workspace/project/packages/converter/src/index.ts
+- Verification commands passed: pnpm test passed
+- Working hypothesis at handoff: The converter change is complete and verified.
+- Known gaps / follow-up: none
+
 Out-of-scope changes introduced: none
 Uncertainties: none`,
             },
@@ -1831,7 +1970,7 @@ Uncertainties: none`,
             note: {
               agentId: 'worker-agent',
               role: 'self-critique',
-              content: `**Self-critique:**\n\nAC-1 (Registration): Met — /register works.\n\nMinimum-scope check:\nFiles changed: frontend/app/pages/register.vue\nSmallest useful change?: yes — checkpoint already captures the touched auth files.\nOut-of-scope changes introduced: none.\nUncertainties: none.`,
+              content: `**Self-critique:**\n\nAC-1 (Registration): Met — /register works.\n\nMinimum-scope check:\nFiles changed: frontend/app/pages/register.vue\nSmallest useful change?: yes — checkpoint already captures the touched auth files.\n\nReview proof packet:\n- Changed files / diff scope: frontend/app/pages/register.vue\n- Verification commands passed: pnpm build passed\n- Working hypothesis at handoff: The checkpointed auth file is verified and ready for review.\n- Known gaps / follow-up: none\n\nOut-of-scope changes introduced: none.\nUncertainties: none.`,
             },
           },
           'critique-checkpoint',
@@ -1941,6 +2080,12 @@ Minimum-scope check:
 - Smallest useful change?: yes — the change remains narrowly scoped.
 - Anything to revert before review?: none
 
+Review proof packet:
+- Changed files / diff scope: /workspace/project/packages/converter/src/index.ts
+- Verification commands passed: pnpm test passed
+- Working hypothesis at handoff: The implementation change is verified and ready for review.
+- Known gaps / follow-up: none
+
 Out-of-scope changes introduced: none
 Uncertainties: none`,
             },
@@ -2012,7 +2157,7 @@ Uncertainties: none`,
           maxTurns: 4,
           toolMetadata: {
             current_task_id: 'task-1',
-            current_task_has_structured_self_critique: true,
+            current_task_has_review_proof_packet: true,
             review_handoff_evidence: {
               taskId: 'task-1',
               inspectedImplementationFile: false,
@@ -2118,7 +2263,13 @@ Uncertainties: none`,
 - Minimum-scope check:
   - Files changed: /workspace/project/packages/converter/src/index.ts
   - Smallest useful change?: yes
-  - Anything to revert before review?: none`,
+  - Anything to revert before review?: none
+
+Review proof packet:
+- Changed files / diff scope: /workspace/project/packages/converter/src/index.ts
+- Verification commands passed: pnpm lint passed
+- Working hypothesis at handoff: The file change is complete and lint passed.
+- Known gaps / follow-up: none`,
             },
           },
           'critique-1',
@@ -2570,7 +2721,7 @@ Uncertainties: none`,
             current_task_id: 'task-mobile',
             current_task_title: 'Mobile: test on real device (Safari iOS, Chrome Android)',
             current_task_spec_excerpt: 'Manual testing only. Visual/functional correctness only.',
-            current_task_has_structured_self_critique: true,
+            current_task_has_review_proof_packet: true,
             review_handoff_evidence: {
               taskId: 'task-mobile',
               inspectedImplementationFile: false,
@@ -2694,6 +2845,12 @@ Minimum-scope check:
 - Smallest useful change?: yes
 - Anything to revert before review?: none
 
+Review proof packet:
+- Changed files / diff scope: /workspace/project/knit/web/app/components/organisms/VersionHistoryDialog.vue
+- Verification commands passed: pnpm --filter @knit-app typecheck passed; pnpm --filter @knit-app build passed
+- Working hypothesis at handoff: The diff action work is complete and both authoritative commands passed.
+- Known gaps / follow-up: none
+
 Out-of-scope changes introduced: none
 Uncertainties: none`,
             },
@@ -2794,7 +2951,13 @@ For each acceptance criterion:
 Minimum-scope check:
 - Files changed: /workspace/project/frontend/app/pages/register.vue
 - Smallest useful change?: yes
-- Anything to revert before review?: none`,
+- Anything to revert before review?: none
+
+Review proof packet:
+- Changed files / diff scope: /workspace/project/frontend/app/pages/register.vue
+- Verification commands passed: tsc --noEmit --project frontend/tsconfig.json passed
+- Working hypothesis at handoff: The authority-mapped verification command passed for the changed register page.
+- Known gaps / follow-up: none`,
             },
           },
           'review-1',
@@ -2816,7 +2979,7 @@ Minimum-scope check:
           maxTurns: 6,
           toolMetadata: {
             current_task_id: 'task-verify-alias',
-            current_task_has_structured_self_critique: true,
+            current_task_has_review_proof_packet: true,
             review_handoff_evidence: {
               taskId: 'task-verify-alias',
               inspectedImplementationFile: false,
