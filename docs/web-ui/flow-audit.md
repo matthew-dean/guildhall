@@ -2648,3 +2648,14 @@ screen.
   This is the first real project-flow proof in this loop: work moved from
   implementation through review, gate check, landing, and terminal shutdown
   without a remaining active/blocking task.
+- Looma/Knit import-draft triage on `2026-05-15`: the 75-draft wall was not a
+  valid review queue. The importer had flattened nested support bullets,
+  duplicated component-roadmap/audit lines, and treated `PROJECT_STATE.md`
+  `Current Focus` framing as backlog. The detector now keeps nested
+  explanatory bullets as context, preserves named missing primitive children
+  as task candidates, routes Current Focus to context, and dedupes
+  high-overlap `planning-docs` echoes across files. Current Looma/Knit state
+  was reviewed in place: 33 support/duplicate/context drafts were shelved with
+  explicit `import-draft-review` notes, leaving 42 gated `import_draft`
+  candidates for human shaping rather than auto-promoting anything into the
+  runnable queue.

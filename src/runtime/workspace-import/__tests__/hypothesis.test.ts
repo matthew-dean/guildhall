@@ -331,6 +331,66 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.tasks).toHaveLength(1)
   })
 
+  it('dedupes component roadmap wording across canonical ui tag and human component names', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Button: loading and icon-placement guidance',
+          evidence: 'looma/docs/component-roadmap.md: - `Button`: loading and icon-placement guidance',
+          references: ['/repo/looma/docs/component-roadmap.md'],
+          domainHint: 'looma',
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'ui-button: loading and icon-placement guidance',
+          evidence: 'looma/apps/docs/docs/component-library-audit.md: - `ui-button`: loading and icon-placement guidance',
+          references: ['/repo/looma/apps/docs/docs/component-library-audit.md'],
+          domainHint: 'looma',
+          confidence: 'medium',
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toHaveLength(1)
+    expect(new Set(draft.tasks[0]!.references)).toEqual(
+      new Set([
+        '/repo/looma/docs/component-roadmap.md',
+        '/repo/looma/apps/docs/docs/component-library-audit.md',
+      ]),
+    )
+  })
+
+  it('dedupes high-overlap planning tasks across related docs in the same domain', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Combobox after select/listbox baseline is stable',
+          evidence: 'looma/docs/component-roadmap.md: - `Combobox` after select/listbox baseline is stable',
+          references: ['/repo/looma/docs/component-roadmap.md'],
+          domainHint: 'looma',
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Combobox after the simpler select path is stable',
+          evidence: 'looma/apps/docs/docs/component-library-audit.md: - `Combobox` after the simpler select path is stable',
+          references: ['/repo/looma/apps/docs/docs/component-library-audit.md'],
+          domainHint: 'looma',
+          confidence: 'medium',
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toHaveLength(1)
+  })
+
   it('upgrades confidence when a later signal is stronger', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([

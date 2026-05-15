@@ -82,6 +82,7 @@ export interface WorkspaceImportDraft {
 function normalize(title: string): string {
   return title
     .toLowerCase()
+    .replace(/\bui-([a-z0-9][a-z0-9-]*)\b/g, '$1')
     .replace(/[`*_~]/g, '')
     .replace(/[^a-z0-9\s-]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -94,6 +95,10 @@ function tokenSet(text: string): Set<string> {
       .split(' ')
       .filter((token) => token.length >= 3),
   )
+}
+
+function firstToken(text: string): string | undefined {
+  return normalize(text).split(' ').find(Boolean)
 }
 
 function overlapRatio(a: Set<string>, b: Set<string>): number {
@@ -300,8 +305,14 @@ function addTask(
     for (const [existingKey, existing] of index.entries()) {
       if (existing.domain !== sigDomain) continue
       const existingRef = existing.references?.[0]
-      if (sigRef && existingRef && sigRef !== existingRef) continue
-      if (overlapRatio(sigTokens, tokenSet(existing.title)) >= 0.7) {
+      const overlap = overlapRatio(sigTokens, tokenSet(existing.title))
+      const sameReference = !sigRef || !existingRef || sigRef === existingRef
+      const planningDocEcho =
+        sig.source === 'planning-docs' &&
+        existing.source === 'planning-docs' &&
+        firstToken(sig.title) === firstToken(existing.title) &&
+        overlap >= 0.55
+      if ((sameReference && overlap >= 0.7) || planningDocEcho) {
         key = existingKey
         break
       }

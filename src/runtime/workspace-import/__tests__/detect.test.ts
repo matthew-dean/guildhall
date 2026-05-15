@@ -360,6 +360,119 @@ describe('planningDocsSource', () => {
 
     expect(sigs).toEqual([])
   })
+
+  it('keeps nested explanatory bullets under a task candidate out of open work', async () => {
+    mkdirSync(join(dir, 'looma', 'docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'looma', 'docs', 'editor-roadmap.md'),
+      `# Editor Roadmap
+
+## P0
+
+- **Block menu / block side menu**
+  - Strong recurrence in BlockNote and Plate
+  - Looma should ship a reusable gutter-side block affordance
+- Add missing high-frequency form primitives:
+  - \`Listbox\`
+  - \`Combobox\`
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['looma/docs/editor-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs.filter((s) => s.kind === 'open_work').map((s) => s.title)).toEqual([
+      'Block menu / block side menu',
+      'Listbox',
+      'Combobox',
+    ])
+    expect(sigs.filter((s) => s.kind === 'context').map((s) => s.title)).toEqual([
+      'Strong recurrence in BlockNote and Plate',
+      'Looma should ship a reusable gutter-side block affordance',
+    ])
+  })
+
+  it('treats PROJECT_STATE current focus bullets as context rather than backlog', async () => {
+    mkdirSync(join(dir, 'looma'), { recursive: true })
+    writeFileSync(
+      join(dir, 'looma', 'PROJECT_STATE.md'),
+      `# PROJECT_STATE
+
+## Current Focus
+
+- Keep planning docs aligned with actual shipped surface.
+- Continue the migration wave where primitives are viable.
+
+## Next Up
+
+1. Finish the primitive replacement wave.
+2. Close the open shared editor defects.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['looma/PROJECT_STATE.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs.filter((s) => s.kind === 'open_work').map((s) => s.title)).toEqual([
+      'Finish the primitive replacement wave.',
+      'Close the open shared editor defects.',
+    ])
+    expect(sigs.filter((s) => s.kind === 'context').map((s) => s.title)).toEqual([
+      'Keep planning docs aligned with actual shipped surface.',
+      'Continue the migration wave where primitives are viable.',
+    ])
+  })
+
+  it('keeps action-oriented grouping bullets as one task unless the children name missing primitives', async () => {
+    mkdirSync(join(dir, 'looma', 'docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'looma', 'docs', 'component-roadmap.md'),
+      `# Component Roadmap
+
+## P1
+
+- Document field strategy more explicitly:
+  - \`ui-input\` is the control primitive
+  - \`ui-form-field\` is the composed label/help/error wrapper
+- Add missing high-frequency form primitives:
+  - \`Listbox\`
+  - \`Combobox\`
+- Deepen existing high-frequency primitives:
+  - \`Button\`: loading and icon-placement guidance
+  - \`Input\`: clearable, size, and adornment strategy
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['looma/docs/component-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs.filter((s) => s.kind === 'open_work').map((s) => s.title)).toEqual([
+      'Document field strategy more explicitly',
+      'Listbox',
+      'Combobox',
+      'Button: loading and icon-placement guidance',
+      'Input: clearable, size, and adornment strategy',
+    ])
+    expect(sigs.filter((s) => s.kind === 'context').map((s) => s.title)).toEqual([
+      'ui-input is the control primitive',
+      'ui-form-field is the composed label/help/error wrapper',
+    ])
+  })
 })
 
 describe('todoCommentsSource', () => {
