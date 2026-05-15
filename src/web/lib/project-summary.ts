@@ -16,6 +16,7 @@ export interface ProjectCardSummary {
   counts: {
     total: number
     active: number
+    draftReview: number
     blocked: number
     done: number
     shelved: number
@@ -43,6 +44,7 @@ function stageLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['
   if (runStatus === 'stopping') return 'Stopping'
   if (runStatus === 'running') return 'Running'
   if (counts.blocked > 0) return 'Needs attention'
+  if (counts.draftReview > 0 && counts.active === 0) return 'Needs shaping'
   if (counts.active > 0) return 'Paused'
   if (counts.total === 0) return 'Ready'
   if (counts.done > 0 && counts.active === 0 && counts.blocked === 0) return 'Stable'
@@ -65,6 +67,11 @@ function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummar
     return counts.blocked === 1
       ? '1 blocked task needs attention.'
       : `${counts.blocked} blocked tasks need attention.`
+  }
+  if (counts.draftReview > 0 && counts.active === 0) {
+    return counts.draftReview === 1
+      ? '1 imported draft needs shaping.'
+      : `${counts.draftReview} imported drafts need shaping.`
   }
   if (counts.active > 0) {
     return counts.active === 1
@@ -91,6 +98,7 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
   const counts = {
     total: project.taskCounts?.total ?? 0,
     active: project.taskCounts?.active ?? 0,
+    draftReview: project.taskCounts?.draftReview ?? 0,
     blocked: project.taskCounts?.blocked ?? 0,
     done: project.taskCounts?.done ?? 0,
     shelved: project.taskCounts?.shelved ?? 0,
@@ -109,6 +117,8 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
           ? 'active'
           : counts.blocked > 0
             ? 'warn'
+            : counts.draftReview > 0 && counts.active === 0
+              ? 'warn'
             : counts.done > 0 && counts.active === 0 && counts.blocked === 0
               ? 'success'
               : statusFromRun(project.run),
@@ -122,7 +132,7 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
     actionLabel: initializationNeeded ? 'Open setup' : 'Open project',
     runActionLabel: initializationNeeded ? null : running ? 'Stop' : 'Start',
     canOpen: true,
-    canStart: !running && !initializationNeeded,
+    canStart: !running && !initializationNeeded && !(counts.draftReview > 0 && counts.active === 0),
     canStop: running,
   }
 }

@@ -234,6 +234,7 @@ interface ServiceProjectSummary {
   taskCounts?: {
     total: number
     active: number
+    draftReview: number
     blocked: number
     done: number
     shelved: number
@@ -640,6 +641,7 @@ function syncRegistryEntryForProject(project: ResolvedProject) {
 
 function summarizeTaskCounts(tasks: Array<Record<string, unknown>>): ServiceProjectSummary['taskCounts'] {
   let active = 0
+  let draftReview = 0
   let blocked = 0
   let done = 0
   let shelved = 0
@@ -648,11 +650,13 @@ function summarizeTaskCounts(tasks: Array<Record<string, unknown>>): ServiceProj
     if (status === 'done') done++
     else if (status === 'blocked') blocked++
     else if (status === 'shelved') shelved++
+    else if (status === 'import_draft') draftReview++
     else if (status) active++
   }
   return {
     total: tasks.length,
     active,
+    draftReview,
     blocked,
     done,
     shelved,
@@ -1071,6 +1075,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         let taskCounts: ServiceProjectSummary['taskCounts'] = {
           total: 0,
           active: 0,
+          draftReview: 0,
           blocked: 0,
           done: 0,
           shelved: 0,

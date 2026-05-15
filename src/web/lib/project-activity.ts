@@ -276,7 +276,7 @@ export function buildProjectTicker(
 }
 
 export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectActivityLine {
-  const counts = project.taskCounts ?? { total: 0, active: 0, blocked: 0, done: 0, shelved: 0 }
+  const counts = project.taskCounts ?? { total: 0, active: 0, draftReview: 0, blocked: 0, done: 0, shelved: 0 }
   if (project.initializationNeeded) {
     return { tone: 'warn', pulse: false, label: 'Setup', message: 'First-time Guildhall setup' }
   }
@@ -298,6 +298,14 @@ export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectA
       message:
         project.highlights?.blockedTaskTitle
           ?? `${counts.blocked} blocked ${pluralize(counts.blocked, 'task')}`,
+    }
+  }
+  if ((counts.draftReview ?? 0) > 0 && counts.active === 0) {
+    return {
+      tone: 'warn',
+      pulse: false,
+      label: 'Needs shaping',
+      message: `${counts.draftReview} imported ${pluralize(counts.draftReview, 'draft')} waiting`,
     }
   }
   if (counts.active > 0) {

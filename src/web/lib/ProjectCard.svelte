@@ -79,6 +79,13 @@
           <span>active</span>
         </span>
       {/if}
+      {#if summary.counts.draftReview > 0}
+        <span class="metric tone-warn">
+          <PauseCircle size={13} />
+          <strong>{summary.counts.draftReview}</strong>
+          <span>drafts</span>
+        </span>
+      {/if}
       {#if summary.counts.blocked > 0}
         <span class="metric tone-warn">
           <AlertTriangle size={13} />

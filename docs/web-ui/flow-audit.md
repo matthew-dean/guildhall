@@ -50,7 +50,10 @@ screen.
 - [ ] Keep the other two live projects truthful while that proof run is
   happening:
   no fake `running` states, no contradictory Thread summaries, and no stale
-  blocker narratives outranking current task truth.
+  blocker narratives outranking current task truth. Live Projects now treats
+  Looma + Knit's `75 import_draft` tasks as `Needs shaping` instead of
+  `Paused`, and disables the misleading Start affordance while there is no
+  executable active task behind those drafts.
 - [x] Eliminate the remaining checkpoint-lane drift on `t-minus-t` so resumed
   workers stay inside:
   authoritative verification -> focused file read -> focused mutation,
@@ -75,7 +78,12 @@ screen.
   was needed. The runtime now treats that escalation as recoverable when a
   structured self-critique exists, reopens the task at `review`, and the live
   service then completed `review -> gate_check -> done` with terminal summary
-  `3 done, 0 blocked, 0 shelved`.
+  `3 done, 0 blocked, 0 shelved`. A cold restart later exposed a target
+  project bootstrap bug (`ts-jsdoc-sync` advertised `dist/index` while the
+  converter build emitted `dist/src/index`, plus `oxlint` was not declared);
+  that was fixed and pushed in `t-minus-t`, after which Guildhall bootstrap
+  passed all four steps and again stopped terminally at `3 done, 0 blocked,
+  0 shelved`.
 - [x] Keep gate-check success gates scoped the same way worker verification is
   scoped. Narrow source-file work now passes `likelyTargetFiles` into
   `resolveEffectiveTaskSuccessGates`, so a task like Looma + Knit's version
