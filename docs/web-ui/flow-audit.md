@@ -51,14 +51,15 @@ screen.
   happening:
   no fake `running` states, no contradictory Thread summaries, and no stale
   blocker narratives outranking current task truth.
-- [ ] Eliminate the remaining checkpoint-lane drift on `t-minus-t` so resumed
+- [x] Eliminate the remaining checkpoint-lane drift on `t-minus-t` so resumed
   workers stay inside:
   authoritative verification -> focused file read -> focused mutation,
-  without falling back into ad hoc shell detours or empty-turn loops. Current
-  state: failed focused shell verification is now preserved as checkpoint
-  progress instead of disappearing into a false no-progress escalation, but the
-  worker can still loop on the same failed verification without making the next
-  mutation.
+  without falling back into ad hoc shell detours or empty-turn loops. Live
+  replay on `2026-05-15` pushed `task-003` through review, gate_check, and
+  `done` after the converter package passed build/test/lint. The last runtime
+  bug in this family was a stale worker checkpoint blocking an already
+  review-ready task; Guildhall now resolves that false blocker and preserves
+  the reviewer lane.
 - [x] Clear Looma + Knit's current blocked execution seam so its top runnable
   task is a real candidate for unattended progress again, not just a stopped
   backlog with draft-heavy noise. The version-diff task completed; the
@@ -67,6 +68,14 @@ screen.
 - [ ] Land the current runtime/test hardening batch cleanly
   (`run-query`, gate-command authority, shell tests, flow audit) and retest on
   the live `127.0.0.1:7777` service before we even discuss cutting `0.5.0`.
+- [x] Prove `t-minus-t` can recover from stale review-checkpoint drift and
+  finish. `task-003` initially blocked with
+  `decision_required: Task is already in review status — checkpoint is stale`
+  after the worker correctly recognized that no further implementation action
+  was needed. The runtime now treats that escalation as recoverable when a
+  structured self-critique exists, reopens the task at `review`, and the live
+  service then completed `review -> gate_check -> done` with terminal summary
+  `3 done, 0 blocked, 0 shelved`.
 - [x] Keep gate-check success gates scoped the same way worker verification is
   scoped. Narrow source-file work now passes `likelyTargetFiles` into
   `resolveEffectiveTaskSuccessGates`, so a task like Looma + Knit's version

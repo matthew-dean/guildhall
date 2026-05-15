@@ -329,6 +329,40 @@ function resolveRecoverableReviewHandoffEscalations(task: Task, resolvedAt: stri
   }
 }
 
+function isRecoverableStaleReviewCheckpointBlocker(task: Task): boolean {
+  const blockReason = task.blockReason ?? ''
+  if (!/already in review|checkpoint is stale/i.test(blockReason)) return false
+  return (
+    noteLooksLikeStructuredSelfCritique(task) &&
+    (task.escalations ?? []).some((escalation) => {
+      if (escalation.resolvedAt) return false
+      return (
+        escalation.reason === 'decision_required' &&
+        /already in review|checkpoint is stale/i.test(
+          `${escalation.summary ?? ''}\n${escalation.details ?? ''}`,
+        )
+      )
+    })
+  )
+}
+
+function resolveRecoverableStaleReviewCheckpointEscalations(task: Task, resolvedAt: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    if (
+      escalation.reason === 'decision_required' &&
+      /already in review|checkpoint is stale/i.test(
+        `${escalation.summary ?? ''}\n${escalation.details ?? ''}`,
+      )
+    ) {
+      escalation.resolvedAt = resolvedAt
+      escalation.resolvedBy = 'system'
+      escalation.resolution =
+        'Superseded after Guildhall recognized the stale checkpoint as an already-complete review handoff.'
+    }
+  }
+}
+
 function isRecoverableTurnLimitBlocker(task: Task): boolean {
   const blockReason = task.blockReason ?? ''
   return /Worker stopped after hitting its turn limit/i.test(blockReason)
@@ -3006,6 +3040,41 @@ export class Orchestrator {
       // FR-10: new escalation → halt.
       if (taskAfter.escalations.length > task.escalations.length) {
         const newest = taskAfter.escalations[taskAfter.escalations.length - 1]!
+        const staleReviewCheckpointEscalation =
+          agent.name === 'worker-agent' &&
+          beforeStatus === 'in_progress' &&
+          newest.reason === 'decision_required' &&
+          /already in review|stale checkpoint/i.test(`${newest.summary}\n${newest.details ?? ''}`) &&
+          noteLooksLikeStructuredSelfCritique(taskAfter)
+        if (staleReviewCheckpointEscalation) {
+          const now = this.now()
+          newest.resolvedAt = now
+          newest.resolution =
+            'Superseded because the worker correctly identified a stale review checkpoint after a durable review handoff. Guildhall preserved the review lane instead of blocking the task.'
+          newest.resolvedBy = 'orchestrator'
+          taskAfter.status = 'review'
+          ensureReviewerOwnership(taskAfter)
+          taskAfter.blockReason = null
+          taskAfter.updatedAt = now
+          queueAfter.lastUpdated = now
+          await this.writeQueue(queueAfter)
+          await this.emitBackendEvent({
+            type: 'line_complete',
+            task_id: task.id,
+            agent_name: agent.name,
+            message:
+              'Worker hit a stale review checkpoint after the task had already handed off. Guildhall kept the task in review instead of surfacing a fake human blocker.',
+          })
+          return {
+            kind: 'processed',
+            taskId: task.id,
+            agent: agent.name,
+            beforeStatus,
+            afterStatus: 'review',
+            transitioned: true,
+            revisionCount: taskAfter.revisionCount,
+          }
+        }
         return {
           kind: 'escalated',
           taskId: task.id,
@@ -5131,6 +5200,23 @@ export class Orchestrator {
         if (activeEscalations(task).length > 0) continue
         recoveryNote =
           'User restarted the project after Guildhall hit the now-fixed review handoff validator bug. Reopened the task so the worker can retry the handoff without a manual JSON edit.'
+      } else if (isRecoverableStaleReviewCheckpointBlocker(task)) {
+        resolveRecoverableStaleReviewCheckpointEscalations(task, now)
+        if (activeEscalations(task).length > 0) continue
+        task.status = 'review'
+        task.assignedTo = 'reviewer-agent'
+        task.blockReason = null
+        task.notes.push({
+          agentId: 'coordinator',
+          role: 'recovery',
+          content:
+            'User restarted the project after a stale worker checkpoint blocked an already review-ready task. Reopened the task at review so reviewers can continue instead of sending it back to the worker.',
+          timestamp: now,
+        })
+        task.updatedAt = now
+        queue.lastUpdated = now
+        changed = true
+        continue
       } else if (isRecoverableNoProgressBlocker(task)) {
         resolveRecoverableNoProgressEscalations(task, now)
         if (activeEscalations(task).length > 0) continue
