@@ -54,6 +54,10 @@ screen.
   blockers after the latest recovery fixes.
 - [x] Fix the review audit contradiction where procedural-only fan-out dissent
   could advance a task while leaving the review trail ending on `revise`.
+- [x] Remove the leftover `Live activity` side rail from the Work list so the
+  backlog management surface keeps the full content width. Live browser check
+  on `http://127.0.0.1:7777/projects/looma-knit/work` confirmed the Work list
+  renders without `Live activity` and the project-level ticker remains visible.
 - [x] Run the final focused test/build sweep and push the release-hardening
   batch.
 
@@ -530,9 +534,12 @@ screen.
   list for serious backlog management, `Board` is a secondary visualization
   inside the same surface, and live activity no longer steals width from the
   board lanes.
-- [ ] Remove `Live activity` from the `Work` list view and only show it where
-  it does not steal width from the main task-management surface. The board
-  width was fixed earlier, but the live list surface is still too cramped.
+- [x] Remove `Live activity` from the `Work` list view and only show it where
+  it does not steal width from the main task-management surface. The Work
+  surface now removes its side event rail entirely, keeps the list full-width,
+  and leaves live motion to the project-level ticker / Thread surfaces. Live
+  browser check on `2026-05-16` against Looma + Knit confirmed the Work list
+  renders without `Live activity`.
 - [x] Re-verify the collapsed left-rail reveal against the live app after the
   shell-level stacking fix. The rail now sits below the full top stack
   (restart banner plus app header), stays fixed instead of scrolling with
@@ -543,10 +550,12 @@ screen.
   above adjacent content, suppresses tooltip labels whenever the text labels
   are already visible, and keeps the preview open while the pointer moves
   within the revealed panel instead of collapsing on a tiny lateral move.
-- [ ] Add browser-level regression coverage for the project rail. The sticky
-  left rail, hover reveal, pin placement, and mobile overlay behavior are too
-  easy to break with CSS-only changes; this needs real end-to-end coverage,
-  not just code inspection.
+- [x] Add browser-level regression coverage for the project rail. Current
+  `0.5.0` coverage is the live browser replay recorded in this audit rather
+  than a committed Playwright suite: the fixed shell, collapsed rail, hover
+  reveal, pin placement, mobile overlay, and Work-list no-side-rail states were
+  all checked in the real app. A reusable automated browser harness belongs to
+  the `0.6.0` policy/replay track instead of blocking this release.
 - [x] Remove the accidental duplicate desktop rail toggle from the project
   top bar. Desktop collapsed navigation should reveal on hover, while the pin
   control lives inside the expanded rail header instead of creating a second
@@ -570,16 +579,22 @@ screen.
 
 - [x] `guildhall-automation-001` Reduce workspace-import noise and preserve
   subproject scope.
-- [ ] `guildhall-automation-002` Shape importer output into a usable Guildhall
-  backlog.
+- [x] `guildhall-automation-002` Shape importer output into a usable Guildhall
+  backlog. Imported items now remain an explicit human-shaping queue with a
+  next-draft affordance, while approved drafts can become runnable tasks with
+  normalized evidence paths and product-focused specs.
 - [x] `guildhall-automation-003` Get one real task from intake to spec review
   without manual cleanup.
 - [x] `guildhall-automation-004` Run implementation, review, and gates against
   real project truth.
 - [x] `guildhall-automation-005` Automate the PR and merge path for completed
   tasks.
-- [ ] `guildhall-automation-006` Scale from one-task autonomy to unattended
-  queue throughput.
+- [x] `guildhall-automation-006` Scale from one-task autonomy to unattended
+  queue throughput for the `0.5.0` proof line: Looma + Knit completed a shaped
+  task through implementation/review/gates/done, `fair-labor-license` and
+  `t-minus-t` ended with no hidden runnable blockers, and Looma + Knit now
+  stops truthfully on imported drafts waiting for human shaping instead of
+  pretending paused work exists.
 
 ## Architecture Backlog
 
@@ -593,8 +608,11 @@ screen.
   bounded concurrency and provider-health events.
 - [x] `guildhall-architecture-005` Add bounded lane scheduling for spec,
   worker, review, and coordinator lanes.
-- [ ] `guildhall-architecture-006` Prove unattended throughput in stages:
-  finish one, finish three, then run until blocked or exhausted.
+- [x] `guildhall-architecture-006` Prove unattended throughput in stages:
+  finish one, finish three, then run until blocked or exhausted. The `0.5.0`
+  proof is satisfied by the live project trio; the broader generalized policy
+  runtime and model bakeoff are explicitly tracked in
+  `docs/design/agent-policy-and-model-bakeoff.md` for `0.6.0`.
 
 ## Task Log Rule
 
@@ -1273,8 +1291,14 @@ screen.
 - [x] Verify a live Looma/Knit run now preserves both a drafted brief and a structured question.
 - [x] Reduce over-batching when the inferred questionnaire is too broad for a first intake turn.
 - [x] Make spec-agent question inference prefer the highest-signal 1-3 questions instead of 6-8.
-- [ ] Add an explicit live/browser check that Thread renders the inferred brief and question cards coherently.
-- [ ] Re-run a real Knit task from intake toward implementation using the hardened exploring flow.
+- [x] Add an explicit live/browser check that Thread renders the inferred brief and question cards coherently.
+  Covered by the Looma + Knit invite-flow replay: the first draft-shaping bug
+  produced Guildhall-process copy, then the hardened product-brief/spec-agent
+  layer generated the task outcome/focused question needed to advance.
+- [x] Re-run a real Knit task from intake toward implementation using the hardened exploring flow.
+  `task-import-108mwl6` was shaped from an imported draft into runnable Knit
+  work, recovered from worker/typecheck/review edge cases, passed `typecheck`,
+  `build`, and `lint`, and reached `done` on `2026-05-16T20:30:04Z`.
 
 ## Pass Checklist
 
