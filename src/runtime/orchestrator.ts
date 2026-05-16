@@ -1441,6 +1441,22 @@ function checkpointWorkingHypothesis(input: {
   return undefined
 }
 
+function taskRelativeCheckpointPath(candidate: string, repoRoot: string): string {
+  const trimmed = candidate.trim()
+  if (!trimmed) return ''
+  if (!path.isAbsolute(trimmed)) return trimmed
+  const relative = path.relative(path.resolve(repoRoot), path.resolve(trimmed))
+  if (
+    relative &&
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  ) {
+    return relative
+  }
+  return trimmed
+}
+
 function renderImmediateResumeInstructions(
   task: Task,
   agentName: string,
@@ -2149,6 +2165,14 @@ export class Orchestrator {
               })
               task.updatedAt = now
             }
+            await this.writeBootstrapVerificationCheckpoint({
+              task,
+              agentName: agent.name,
+              activeWorktreePath,
+              command: failed?.command ?? '',
+              output: clippedOutput,
+              observedAt: now,
+            })
           } else {
           const queue = await this.readQueue()
           const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
@@ -2947,6 +2971,12 @@ export class Orchestrator {
                   : null,
               )
             : ''
+        const hasFailedCheckpointVerification =
+          beforeStatus === 'in_progress' &&
+          checkpointHasRecordedVerificationFailure(checkpoint?.resumeContext?.verification ?? [])
+        const hasWorkerTurnEvidence =
+          beforeStatus === 'in_progress' &&
+          this.hasDurableWorkerHandoffEvidence(successfulAgentMetadata, task.id)
         const canAutoPromoteReviewFromCheckpointHandoff =
           agent.name === 'worker-agent' &&
           beforeStatus === 'in_progress' &&
@@ -2985,7 +3015,7 @@ export class Orchestrator {
           !transitioned &&
           taskAfter.updatedAt === task.updatedAt &&
           (
-            hasDirtyWorktreeAfter ||
+            (hasDirtyWorktreeAfter && (!hasFailedCheckpointVerification || hasWorkerTurnEvidence)) ||
             hasDirtyLikelyTargetProgress ||
             hasCheckpointScopedVerifiedProgress
           )
@@ -3013,7 +3043,7 @@ export class Orchestrator {
           afterStatus === 'in_progress' &&
           !transitioned &&
           taskAfter.updatedAt === task.updatedAt &&
-          !hasDirtyWorktreeAfter &&
+          (!hasDirtyWorktreeAfter || (hasFailedCheckpointVerification && !hasWorkerTurnEvidence)) &&
           !hasDirtyLikelyTargetProgress &&
           !hasCheckpointScopedVerifiedProgress &&
           likelyWorkerTargets.length > 0
@@ -3021,7 +3051,7 @@ export class Orchestrator {
           const attempts = this.bumpWorkerNoProgress(task.id)
           if (attempts >= WORKER_NO_PROGRESS_ESCALATION_AFTER) {
             if (
-              checkpointNoProgressStatusSeen &&
+              (checkpointNoProgressStatusSeen || hasFailedCheckpointVerification) &&
               (taskAfter.remediationAttempts ?? 0) < 1
             ) {
               const remediated = await this.recordAutonomousCheckpointNoProgressRemediation({
@@ -6118,6 +6148,73 @@ export class Orchestrator {
     return normalizedQueue
   }
 
+  private async writeBootstrapVerificationCheckpoint(input: {
+    task: Task
+    agentName: string
+    activeWorktreePath: string
+    command: string
+    output: string
+    observedAt: string
+  }): Promise<boolean> {
+    if (input.task.status !== 'in_progress') return false
+    const command = input.command.trim()
+    if (!command) return false
+
+    const worktreeRoot = path.resolve(input.activeWorktreePath)
+    let filesTouched = await this.changedFilesForTask(input.task)
+    if (filesTouched.length === 0) {
+      filesTouched = resolveLikelyTaskFiles(input.task)
+        .map((file) => taskRelativeCheckpointPath(file, worktreeRoot))
+        .filter((file) => file.length > 0 && !isIgnorableCheckpointPath(file))
+        .slice(0, 12)
+    }
+    filesTouched = uniqueNonEmptyStrings(filesTouched)
+
+    const likelyFiles = resolveLikelyTaskFiles(input.task, filesTouched)
+    const companionFiles = uniqueNonEmptyStrings(
+      likelyFiles
+        .map((file) => taskRelativeCheckpointPath(file, worktreeRoot))
+        .filter((file) => file.length > 0 && !filesTouched.includes(file)),
+    ).slice(0, 8)
+    const verification: CheckpointResumeContext['verification'] = [{
+      command,
+      passed: false,
+      observedAt: input.observedAt,
+      ...(input.output.trim() ? { summary: input.output.trim().slice(0, 1200) } : {}),
+    }]
+    const safeNextMutationSurface = checkpointSafeNextMutationSurface(
+      filesTouched,
+      companionFiles,
+      verification,
+    )
+    const workingHypothesis = checkpointWorkingHypothesis({
+      existing: '',
+      verification,
+      companionFiles,
+      safeNextMutationSurface,
+    })
+
+    const result = await writeCheckpoint({
+      tasksPath: this.tasksPath(),
+      memoryDir: this.opts.config.memoryDir,
+      taskId: input.task.id,
+      agentId: input.agentName,
+      intent:
+        'Worker recovery checkpoint after dirty task worktree bootstrap verification failed. ' +
+        `Failed command: ${command}`,
+      nextPlannedAction:
+        'Resume from the recorded bootstrap verification failure, rerun the focused verification command, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+      filesTouched,
+      resumeContext: {
+        verification,
+        companionFiles,
+        ...(workingHypothesis ? { workingHypothesis } : {}),
+        safeNextMutationSurface,
+      },
+    })
+    return result.success
+  }
+
   private async writeWorkerRecoveryCheckpoint(input: {
     task: Task
     agentName: string
@@ -6130,12 +6227,16 @@ export class Orchestrator {
       input.task,
       this.opts.config.projectPath,
     )
+    const existingCheckpoint = await readCheckpoint(this.opts.config.memoryDir, input.task.id).catch(() => null)
     let filesTouched = await this.changedFilesForTask(input.task)
     if (filesTouched.length === 0) {
       filesTouched = this.checkpointTouchedFilesFromMetadata(
         input.metadata,
         effectiveProjectPath,
       )
+    }
+    if (filesTouched.length === 0) {
+      filesTouched = existingCheckpoint?.filesTouched ?? []
     }
     const recentVerifiedWork = Array.isArray(input.metadata?.['recent_verified_work'])
       ? (input.metadata?.['recent_verified_work'] as unknown[])
@@ -6149,7 +6250,10 @@ export class Orchestrator {
         return note.agentId === input.agentName || role === 'self-critique'
       })?.content
       .trim()
-    const verification = checkpointVerificationHistoryFromMetadata(input.metadata)
+    let verification = checkpointVerificationHistoryFromMetadata(input.metadata)
+    if (verification.length === 0) {
+      verification = existingCheckpoint?.resumeContext?.verification ?? []
+    }
     const companionFiles = checkpointCompanionFilesFromMetadata(
       input.metadata,
       effectiveProjectPath,

@@ -93,9 +93,25 @@ screen.
   treats missing likely targets as paths to validate instead of blindly create,
   hands dirty-worktree bootstrap failures back to the worker with clipped
   verification output, and requires the worker's first response to be one tool
-  call. The live task is still `in_progress` with partial Knit edits and needs
-  one more replay or a provider/model adjustment before this item can be
-  marked release-safe.
+  call. The live task then exposed one more recovery-context gap: the clipped
+  bootstrap failure was visible in Thread, but `checkpoint.resumeContext`
+  did not preserve the failed command as structured verification evidence, so
+  the next reclaim prompt could lose the exact typecheck failure. Dirty
+  bootstrap failures now write the same failed gate into the task checkpoint
+  before redispatching the worker, and later worker-recovery checkpoints inherit
+  that verification evidence instead of overwriting it with an empty array.
+  Live replay on `2026-05-16` rewrote Looma/Knit `task-import-108mwl6` to
+  checkpoint step 3/5 with failed `cd web && pnpm typecheck`, the touched files,
+  and a focused working hypothesis in `resumeContext`.
+- [x] Stop worker no-change loops after checkpointed verification failures.
+  The same `2026-05-16` Looma/Knit replay proved the checkpoint evidence is now
+  durable, but the worker still returned two `in_progress -> in_progress`
+  no-change ticks against the same failed typecheck before the run was stopped.
+  Guildhall now treats a dirty worktree as old context, not new progress, when
+  the active checkpoint already contains failed verification and the worker
+  produces no fresh tool evidence. In that lane, repeated no-change passes go
+  through checkpoint remediation/escalation instead of being laundered into
+  another recovery checkpoint just because files were already dirty.
 - [x] Require a durable review proof packet before worker review handoff. On
   `2026-05-15`, Guildhall's worker instructions, `update-task` review guard,
   coordinator handoff metadata, and stale-checkpoint auto-promotion path were

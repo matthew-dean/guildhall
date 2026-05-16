@@ -5066,6 +5066,92 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.notes.at(-1)?.role).toBe('bootstrap-failure')
   })
 
+  it('checkpoints dirty worktree bootstrap verification failures before redispatching the worker', async () => {
+    const subrepo = path.join(tmpDir, 'knit')
+    const worktree = path.join(tmpDir, '.guildhall', 'worktrees', 'knit-task-a')
+    await fs.mkdir(path.join(subrepo, 'web'), { recursive: true })
+    await fs.mkdir(path.join(worktree, 'web', 'app', 'pages'), { recursive: true })
+    await fs.writeFile(path.join(worktree, 'web', 'app', 'pages', 'settings.vue'), '<template />\n', 'utf-8')
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        domain: 'knit',
+        projectPath: subrepo,
+        worktreePath: worktree,
+        spec: 'Implement the invite flow in `web/app/pages/settings.vue`.',
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig({
+        projectPath: tmpDir,
+        bootstrap: {
+          commands: ['node -e "process.exit(0)"'],
+          successGates: ['node -e "console.error(\'settings.vue type error\'); process.exit(1)"'],
+          timeoutMs: 30_000,
+          verifiedAt: '2026-05-03T00:00:00Z',
+        },
+      }),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(false)
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.at(-1)?.role).toBe('bootstrap-verification')
+
+    const checkpoint = JSON.parse(
+      await fs.readFile(path.join(memoryDir, 'tasks', 'a', 'checkpoint.json'), 'utf8'),
+    ) as {
+      nextPlannedAction: string
+      filesTouched: string[]
+      resumeContext?: {
+        verification?: Array<{ command: string; passed: boolean; summary?: string }>
+        safeNextMutationSurface?: string[]
+        workingHypothesis?: string
+      }
+    }
+    expect(checkpoint.nextPlannedAction).toContain('recorded verification evidence')
+    expect(checkpoint.filesTouched).toContain('web/app/pages/settings.vue')
+    expect(checkpoint.resumeContext?.verification).toEqual([
+      expect.objectContaining({
+        command: 'node -e "console.error(\'settings.vue type error\'); process.exit(1)"',
+        passed: false,
+        summary: expect.stringContaining('settings.vue type error'),
+      }),
+    ])
+    expect(checkpoint.resumeContext?.safeNextMutationSurface).toContain('web/app/pages/settings.vue')
+    expect(checkpoint.resumeContext?.workingHypothesis).toContain('last authoritative verification failed')
+    expect(worker.calls[0]?.prompt).toContain('Latest authoritative verification')
+    expect(worker.calls[0]?.prompt).toContain('settings.vue type error')
+  })
+
   it('does not touch git isolation for reserved intake tasks in a non-git workspace root', async () => {
     const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
     settings.project.worktree_isolation = {
@@ -7385,6 +7471,90 @@ describe('Orchestrator worker no-progress escalation', () => {
     task = queue.tasks.find((candidate) => candidate.id === 'task-blank')
     expect(task?.status).toBe('blocked')
     expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress')
+  })
+
+  it('treats dirty worktrees as no progress when a failed checkpointed verification gets no new worker evidence', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'invite-flow')
+    await fs.mkdir(path.join(worktreePath, 'web', 'app', 'pages'), { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'task-failed-checkpoint',
+        title: 'Repair invite flow',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        worktreePath,
+        spec: `Edit \`${path.join(worktreePath, 'web', 'app', 'pages', 'settings.vue')}\` and rerun typecheck.`,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'typecheck passes',
+          verifiedBy: 'automated',
+          command: 'cd web && pnpm typecheck',
+          met: false,
+        } as any],
+      }),
+    ])
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'task-failed-checkpoint',
+      agentId: 'worker-agent',
+      intent: 'Failed bootstrap verification',
+      nextPlannedAction:
+        'Resume from the recorded bootstrap verification failure, rerun the focused verification command, and fix whatever still fails.',
+      filesTouched: ['web/app/pages/settings.vue'],
+      resumeContext: {
+        verification: [{
+          command: 'cd web && pnpm typecheck',
+          passed: false,
+          observedAt: '2026-05-16T00:00:00.000Z',
+          summary: 'settings.vue type error',
+        }],
+        safeNextMutationSurface: ['web/app/pages/settings.vue'],
+      },
+    })
+
+    const worker = {
+      name: 'worker-agent',
+      calls: [] as { prompt: string }[],
+      resetCount: 0,
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: 'I looked at it but made no change.' }
+      },
+      loadToolMetadata() {
+        return {}
+      },
+      resetConversation() {
+        this.resetCount += 1
+      },
+    }
+    const gitDriver = new InMemoryGitDriver({ clean: false })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+    })
+
+    const first = await orch.tick({ dispatchLimit: 1 })
+    expect(first.kind).toBe('processed')
+    if (first.kind === 'processed') expect(first.agent).toBe('worker-agent')
+
+    const second = await orch.tick({ dispatchLimit: 1 })
+    expect(second.kind).toBe('processed')
+    if (second.kind === 'processed') {
+      expect(second.agent).toBe('coordinator-remediation')
+      expect(second.afterStatus).toBe('in_progress')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'task-failed-checkpoint')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.remediationAttempts).toBe(1)
+    expect(task?.agentIssues[0]?.resolvedBy).toBe('coordinator-remediation')
+    expect(worker.resetCount).toBe(1)
+    expect(worker.calls[0]?.prompt).toContain('Latest authoritative verification')
+    expect(worker.calls[0]?.prompt).toContain('cd web && pnpm typecheck')
   })
 
   it('escalates instead of surfacing agent-error when a resumed worker times out without mutating likely target files', async () => {
