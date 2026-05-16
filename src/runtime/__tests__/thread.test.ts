@@ -1229,6 +1229,61 @@ coordinators:
     }
   })
 
+  it('turns dirty repo setup blockers into an actionable recovery message', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Continue shaped draft',
+              status: 'blocked',
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+              escalations: [
+                {
+                  id: 'esc-task-1-1',
+                  reason: 'human_judgment_required',
+                  summary: 'Worktree setup blocked',
+                  details:
+                    'Guildhall could not start work because the target repo is dirty: base repo has uncommitted changes at /Users/matthew/git/oss/looma-knit/knit. Commit or stash those changes, then resume the task.',
+                  raisedAt: new Date().toISOString(),
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'core', name: 'Core' }],
+        },
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+
+      const turn = thread.turns.find(t => t.kind === 'escalation')
+      if (!turn || turn.kind !== 'escalation') throw new Error('expected escalation turn')
+      expect(turn.details).toBe(
+        'Guildhall is blocked because knit has uncommitted changes. Commit or stash that repo, then try again.',
+      )
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('shows a rolling excerpt while an agent is writing', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

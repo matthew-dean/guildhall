@@ -415,6 +415,14 @@ function compactEscalationDetails(value: string | undefined): string | undefined
   if (!value) return undefined
   const cleaned = stripMarkdown(value)
   if (!cleaned) return undefined
+  const dirtyRepoMatch = cleaned.match(
+    /(?:Guildhall could not start work because the target repo is dirty:\s*)?base repo has uncommitted changes at (.+?)(?:\.|$)/i,
+  )
+  if (dirtyRepoMatch) {
+    const repoPath = dirtyRepoMatch[1]?.trim() ?? ''
+    const repoName = repoPath ? basename(repoPath) : 'the repo'
+    return `Guildhall is blocked because ${repoName} has uncommitted changes. Commit or stash that repo, then try again.`
+  }
 
   const mustChangeMatch = cleaned.match(/What must change:\s*[-•]?\s*(.+?)(?=(?:[-•]\s+[A-Z]|\bReviewer availability notes\b|$))/i)
   const primaryAction = firstSentence(mustChangeMatch?.[1] ?? '')

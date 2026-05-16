@@ -40,6 +40,12 @@ screen.
 
 ## Current Follow-Ups
 
+- [x] Split the "agents need to be smarter" work into immediate `0.5.x`
+  decision-point unblockers versus `0.6.0` policy/runtime architecture.
+  See `docs/design/agent-policy-and-model-bakeoff.md`.
+- [x] Normalize dirty-repo setup blockers in Thread so the user sees the repo
+  name and the concrete commit/stash recovery action instead of raw setup
+  prose.
 - [x] Reconcile the current 0.5.0 todo list against live project state instead
   of stale chat context.
 - [x] Prove the Looma + Knit shaped draft can finish after worker recovery,
@@ -216,7 +222,7 @@ screen.
 
 - [x] Move provider preference to the machine-global config by default instead of repeating it into every project's `.guildhall/config.yaml`. Runtime config resolution, provider setup writes, and the config/docs story now treat project-level `preferredProvider` as an override only.
 
-- [ ] Give Looma + Knit a humane recovery path for the dirty `knit` checkout. The stale `No actionable tasks remain` summary is gone and Thread now consistently surfaces the shaping draft plus the real agent failure, but the card still needs a clearer user-facing next move than a raw worktree-blocked error string.
+- [x] Give Looma + Knit a humane recovery path for the dirty `knit` checkout. The stale `No actionable tasks remain` summary is gone and Thread now consistently surfaces the shaping draft plus the real agent failure, and dirty-repo setup blockers now render as `Guildhall is blocked because knit has uncommitted changes. Commit or stash that repo, then try again.` instead of raw worktree-blocked error strings.
 - [x] Make live project runs visibly real again across all three active test projects. On `2026-05-12`, Looma/Knit now accepts `Let Guildhall shape this`, shows a toast, flips into a real `Guildhall working / Drafting` state, and advances to a grounded coordinator question about whether generated Supabase typing work is duplicate or should expand. Fair Labor License now advances sequentially from the auth-scaffolding question into live coordinator/spec work and lands on a concrete database-migration question instead of circling. `t-minus-t` no longer treats `Start` as a dead button on hard-loaded slug pages: project-scoped mutations now inject `projectId`, the task resumes into a visible `Guildhall working` state, and shell/file activity shows up immediately in Thread.
 - [x] Clean up the pre-slug API brief contamination in Looma + Knit. The live Thread was faithfully rendering `/Users/matthew/git/oss/looma-knit/memory/project-brief.md`, but that file still contained Fair Labor License copy from the pre-project-scoped mutation era. The saved brief now correctly describes Looma as a general-purpose UI library and Knit as the product app migrating onto it.
 - [x] Make strict project-memory tools more forgiving of near-miss agent output. The runtime now auto-hydrates and normalizes project-scoped `log-decision`, `log-progress`, and `raise-escalation` inputs so missing path envelopes, stringified nested payloads, and omitted task/agent context stop surfacing as raw schema failures when the agent intent was otherwise clear.

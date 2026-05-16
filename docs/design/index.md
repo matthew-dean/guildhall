@@ -10,3 +10,4 @@ Working documents capturing open design questions. These are intentionally less 
 - [Symphony comparison](./symphony-comparison) — feature and UX matrix against OpenAI's Symphony orchestration spec.
 - [Beads and one-task pivot](./beads-and-one-task-pivot) — what Guildhall borrows from Beads/Ralph loops and the first one-task finisher slice.
 - [Provider abstraction and throughput](./provider-abstraction-and-throughput) — protocol-first provider taxonomy, shared client pooling, bounded lane scheduling, and the path from one-task autonomy to queue throughput.
+- [Agent policy and model bakeoff](./agent-policy-and-model-bakeoff) — the split between 0.5.x decision-point unblockers and 0.6.0 policy/model-evaluation work.
