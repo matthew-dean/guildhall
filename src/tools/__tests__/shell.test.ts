@@ -154,6 +154,8 @@ describe('shellTool — engine-tool interface', () => {
       ctx,
     )
     expect(result.is_error).toBe(false)
+    expect(result.output).toContain('Shell command succeeded (exit 0).')
+    expect(result.output).toContain('Treat this command as PASSED')
     expect(result.output).toContain('engine')
     expect(result.metadata).toMatchObject({ success: true, exitCode: 0 })
   })
@@ -164,6 +166,7 @@ describe('shellTool — engine-tool interface', () => {
       ctx,
     )
     expect(result.is_error).toBe(true)
+    expect(result.output).toContain('Shell command failed (exit 3).')
     expect(result.metadata).toMatchObject({ success: false, exitCode: 3 })
   })
 
@@ -455,7 +458,7 @@ describe('shellTool — engine-tool interface', () => {
       },
     )
     expect(result.is_error).toBe(false)
-    expect(result.output).toBe('true')
+    expect(result.output).toContain('true')
   })
 
   it('preserves explicit CI env overrides for task-scoped shell commands', async () => {
@@ -475,7 +478,7 @@ describe('shellTool — engine-tool interface', () => {
       },
     )
     expect(result.is_error).toBe(false)
-    expect(result.output).toBe('false')
+    expect(result.output).toContain('false')
   })
 
   it('is not declared read-only (shell can mutate state)', () => {

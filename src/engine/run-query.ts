@@ -841,6 +841,26 @@ function inspectedLikelyTargetFile(
   return ''
 }
 
+function uninspectedLikelyTargetReadAllowed(input: {
+  cwd: string
+  toolMetadata: Record<string, unknown> | undefined
+  toolCalls: readonly ToolUseBlock[]
+  likelyTargetFiles: readonly string[]
+}): boolean {
+  if (input.toolCalls.length !== 1) return false
+  const toolCall = input.toolCalls[0]!
+  if (!isLikelyTargetScopedReadOnlyToolCall(input.cwd, toolCall, input.likelyTargetFiles)) {
+    return false
+  }
+  const filePath = String((toolCall.input as Record<string, unknown>)?.filePath ?? '').trim()
+  if (!filePath) return false
+  const normalizedRequested = resolve(input.cwd, filePath)
+  const inspected = new Set(
+    recentReadFileHints(input.toolMetadata).map((hint) => resolve(input.cwd, hint.path)),
+  )
+  return !inspected.has(normalizedRequested)
+}
+
 function likelyTargetMutationDirective(input: {
   likelyTargetFiles: readonly string[]
   inspectedLikelyTarget: string
@@ -1088,6 +1108,20 @@ function advanceCheckpointAfterVerification(
   if (!toolMetadata) return
   const checkpointNextAction = latestCheckpointNextAction(toolMetadata)
   if (!looksLikeVerificationBackedCheckpointAction(checkpointNextAction)) return
+  const authoritative = parseAuthoritativeCommands(toolMetadata) ?? []
+  if (authoritative.length > 0) {
+    const passed = new Set(
+      verificationHistory(toolMetadata)
+        .filter((entry) => entry.passed)
+        .map((entry) => entry.command.trim())
+        .filter(Boolean),
+    )
+    if (authoritative.every((command) => passed.has(command.trim()))) {
+      toolMetadata['current_task_checkpoint_next_action'] =
+        'All authoritative verification commands have passed. Persist the structured self-critique note, then transition the task to review.'
+      return
+    }
+  }
   toolMetadata['current_task_checkpoint_next_action'] =
     'Inspect the checkpoint-touched files against the verification result, then fix whatever still fails before you write the structured self-critique.'
 }
@@ -1155,6 +1189,7 @@ export async function* runQuery(
       ? 2
       : 0
   let checkpointVerificationReadFollowThroughArmed = false
+  let checkpointEditOldStringMissTarget: string | null = null
   let sawToolCall = false
   const repeatedToolCallCounts = new Map<string, number>()
   const progressToolNames = new Set(context.noProgressToolNames ?? [])
@@ -1477,6 +1512,25 @@ export async function* runQuery(
           checkpointTouched,
         ),
       )
+    const uninspectedVerificationLikelyTargetReadOnlyAllowed =
+      looksLikeVerificationBackedCheckpointAction(checkpointNextAction) &&
+      likelyTargetFiles.length > 1 &&
+      uninspectedLikelyTargetReadAllowed({
+        cwd: context.cwd,
+        toolMetadata: context.toolMetadata,
+        toolCalls,
+        likelyTargetFiles,
+      })
+    const checkpointEditMissReadAllowed =
+      isWorkerCheckpointLane &&
+      checkpointEditOldStringMissTarget != null &&
+      toolCalls.length === 1 &&
+      toolCalls.every((tc) => {
+        if (tc.name !== 'read-file') return false
+        const filePath = String((tc.input as Record<string, unknown>)?.filePath ?? '').trim()
+        if (!filePath) return false
+        return resolve(context.cwd, filePath) === checkpointEditOldStringMissTarget
+      })
     const shouldRefusePostVerificationCheckpointBatch =
       isWorkerCheckpointLane &&
       looksLikeVerificationBackedCheckpointAction(checkpointNextAction) &&
@@ -1491,6 +1545,10 @@ export async function* runQuery(
     const shouldRefuseAfterInspectingLikelyTarget =
       inspectedLikelyTarget.length > 0 &&
       noProgressTurnNudges > 0 &&
+      !checkpointScopedReadOnlyFollowThroughAllowed &&
+      !verificationEvidenceLikelyTargetReadOnlyAllowed &&
+      !uninspectedVerificationLikelyTargetReadOnlyAllowed &&
+      !checkpointEditMissReadAllowed &&
       !handoffScopedLikelyTargetReadOnlyAllowed &&
       toolCalls.length > 0 &&
       toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input))
@@ -1502,6 +1560,8 @@ export async function* runQuery(
       toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input)) &&
       !checkpointScopedReadOnlyFollowThroughAllowed &&
       !verificationEvidenceLikelyTargetReadOnlyAllowed &&
+      !uninspectedVerificationLikelyTargetReadOnlyAllowed &&
+      !checkpointEditMissReadAllowed &&
       !handoffScopedLikelyTargetReadOnlyAllowed
     const shouldRefuseNonAuthoritativeCheckpointShell =
       isWorkerCheckpointLane &&
@@ -1730,6 +1790,17 @@ export async function* runQuery(
         usage: null,
       }
       messages.push({ role: 'user', content: [result] })
+      const oldStringMissTarget = editFileOldStringMissTarget(context.cwd, tc, result)
+      if (oldStringMissTarget) {
+        checkpointEditOldStringMissTarget = oldStringMissTarget
+      } else if (
+        checkpointEditOldStringMissTarget &&
+        tc.name === 'read-file' &&
+        resolve(context.cwd, String((tc.input as Record<string, unknown>)?.filePath ?? '').trim()) ===
+          checkpointEditOldStringMissTarget
+      ) {
+        checkpointEditOldStringMissTarget = null
+      }
       if (
         checkpointNextAction.length > 0 &&
         authoritativeVerificationCommands.length > 0 &&
@@ -2018,6 +2089,18 @@ function isMalformedEditFileToolResult(toolName: string, result: ToolResultBlock
   if (toolName !== 'edit-file' || !result.is_error) return false
   const message = result.content
   return message.includes('Invalid input for edit-file')
+}
+
+function editFileOldStringMissTarget(
+  cwd: string,
+  toolCall: ToolUseBlock,
+  result: ToolResultBlock,
+): string | null {
+  if (toolCall.name !== 'edit-file' || !result.is_error) return null
+  if (!/oldString was not found in the file/i.test(result.content)) return null
+  const filePath = String((toolCall.input as Record<string, unknown>)?.filePath ?? '').trim()
+  if (!filePath) return null
+  return resolve(cwd, filePath)
 }
 
 async function attemptFocusedWriteFileRepair(

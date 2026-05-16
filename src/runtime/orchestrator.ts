@@ -462,6 +462,91 @@ function resolveRecoverableEnvironmentSetupEscalations(task: Task, resolvedAt: s
   }
 }
 
+function basenameOfTaskPath(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/')
+  return normalized.split('/').filter(Boolean).at(-1) ?? normalized
+}
+
+function isRecoverableSelfAuthoredVerificationEscalation(input: {
+  agentName: string
+  beforeStatus: TaskStatus
+  task: Task
+  checkpoint: Checkpoint | null
+  escalation: NonNullable<Task['escalations']>[number]
+}): boolean {
+  if (input.agentName !== 'worker-agent') return false
+  if (input.beforeStatus !== 'in_progress') return false
+  if (!checkpointHasRecordedVerificationFailure(input.checkpoint?.resumeContext?.verification)) return false
+  if (
+    ![
+      'spec_ambiguous',
+      'decision_required',
+      'human_judgment_required',
+      'gate_hard_failure',
+    ].includes(input.escalation.reason)
+  ) {
+    return false
+  }
+
+  const text = [
+    input.task.blockReason ?? '',
+    input.escalation.summary ?? '',
+    input.escalation.details ?? '',
+  ].join('\n')
+  if (
+    !/(type errors?|cannot find name|cannot be found|cannot be resolved|missing imports?|missing names?|missing utilities|undefined|TS\d{4})/i.test(
+      text,
+    )
+  ) {
+    return false
+  }
+
+  const touchedFiles = input.checkpoint?.filesTouched ?? []
+  if (touchedFiles.length === 0) return false
+  return touchedFiles.some((filePath) => {
+    const normalized = filePath.replace(/\\/g, '/')
+    const basename = basenameOfTaskPath(normalized)
+    return text.includes(normalized) || (basename.length > 0 && text.includes(basename))
+  })
+}
+
+function isRecoverableSelfAuthoredVerificationBlocker(task: Task, checkpoint: Checkpoint | null): boolean {
+  return (task.escalations ?? []).some((escalation) => {
+    if (escalation.resolvedAt) return false
+    return isRecoverableSelfAuthoredVerificationEscalation({
+      agentName: escalation.agentId,
+      beforeStatus: 'in_progress',
+      task,
+      checkpoint,
+      escalation,
+    })
+  })
+}
+
+function resolveRecoverableSelfAuthoredVerificationEscalations(
+  task: Task,
+  checkpoint: Checkpoint | null,
+  resolvedAt: string,
+): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    if (
+      isRecoverableSelfAuthoredVerificationEscalation({
+        agentName: escalation.agentId,
+        beforeStatus: 'in_progress',
+        task,
+        checkpoint,
+        escalation,
+      })
+    ) {
+      escalation.resolvedAt = resolvedAt
+      escalation.resolvedBy = 'system'
+      escalation.resolution =
+        'Superseded because the blocker describes a self-authored verification failure in files the worker already touched. Guildhall kept the task in the worker repair lane.'
+    }
+  }
+}
+
 function resolveRecoverableWorkerTimeoutEscalations(task: Task, resolvedAt: string): void {
   for (const escalation of task.escalations ?? []) {
     if (escalation.resolvedAt) continue
@@ -2812,24 +2897,34 @@ export class Orchestrator {
         if (
           beforeStatus === 'review' &&
           afterStatus === 'review' &&
-          generatedText.trim().length > 0 &&
           countReviewerNotes(taskAfter) === reviewerNoteCountBefore &&
           taskAfter.reviewVerdicts.length === reviewVerdictCountBefore
         ) {
-          taskAfter.notes.push({
-            agentId: 'reviewer-agent',
-            role: 'reviewer',
-            content: generatedText.trim(),
-            timestamp: this.now(),
-          })
           const fallbackVerdict = deterministicReview(taskAfter, {
             projectPath: taskAfter.projectPath,
             likelyTargetFiles: resolveLikelyTaskFiles(taskAfter),
             resolvedDecisionTexts: resolvedScopeDecisionTexts(taskAfter),
           })
-          afterStatus =
-            fallbackVerdict.verdict === 'approve' ? 'gate_check' : 'in_progress'
-          taskAfter.status = afterStatus
+          if (generatedText.trim().length > 0) {
+            taskAfter.notes.push({
+              agentId: 'reviewer-agent',
+              role: 'reviewer',
+              content: generatedText.trim(),
+              timestamp: this.now(),
+            })
+            afterStatus =
+              fallbackVerdict.verdict === 'approve' ? 'gate_check' : 'in_progress'
+            taskAfter.status = afterStatus
+          } else {
+            const deterministicResult = applyDeterministicVerdict({
+              queue: queueAfter,
+              taskId: task.id,
+              verdict: fallbackVerdict,
+              now: this.now(),
+              llmError: 'Reviewer returned no durable verdict.',
+            })
+            afterStatus = deterministicResult.newStatus
+          }
           if (afterStatus === 'in_progress') {
             ensureWorkerOwnership(taskAfter)
           } else if (afterStatus === 'gate_check') {
@@ -3165,6 +3260,50 @@ export class Orchestrator {
             beforeStatus,
             afterStatus: 'review',
             transitioned: true,
+            revisionCount: taskAfter.revisionCount,
+          }
+        }
+        if (
+          isRecoverableSelfAuthoredVerificationEscalation({
+            agentName: agent.name,
+            beforeStatus,
+            task: taskAfter,
+            checkpoint,
+            escalation: newest,
+          })
+        ) {
+          const now = this.now()
+          newest.resolvedAt = now
+          newest.resolution =
+            'Superseded because the blocker describes a self-authored verification failure in files the worker already touched. Guildhall kept the task in the worker repair lane.'
+          newest.resolvedBy = 'orchestrator'
+          taskAfter.status = 'in_progress'
+          ensureWorkerOwnership(taskAfter)
+          taskAfter.blockReason = null
+          taskAfter.notes.push({
+            agentId: 'coordinator',
+            role: 'checkpoint',
+            content:
+              'Recovered a worker-raised blocker as repairable implementation work: rerun the focused verification command and repair the failed verification in the checkpoint-touched files before escalating.',
+            timestamp: now,
+          })
+          taskAfter.updatedAt = now
+          queueAfter.lastUpdated = now
+          await this.writeQueue(queueAfter)
+          await this.emitBackendEvent({
+            type: 'line_complete',
+            task_id: task.id,
+            agent_name: agent.name,
+            message:
+              'Worker raised a blocker for its own failed verification. Guildhall kept the task assigned to the worker for source repair instead of asking for human guidance.',
+          })
+          return {
+            kind: 'processed',
+            taskId: task.id,
+            agent: agent.name,
+            beforeStatus,
+            afterStatus: 'in_progress',
+            transitioned: false,
             revisionCount: taskAfter.revisionCount,
           }
         }
@@ -4729,6 +4868,17 @@ export class Orchestrator {
               aggregate.combinedFeedback,
             timestamp: now,
           })
+          const adjudicatedVerdict: ReviewVerdict = {
+            verdict: 'approve',
+            reviewerPath: 'deterministic',
+            reason:
+              'Reviewer fan-out advanced after procedural-only dissent was preserved as advisory.',
+            reasoning:
+              'Guildhall kept the persona dissent in the task notes, but the dissent stated the acceptance criteria were met and asked only for process or audit follow-up. The task can proceed to gate_check.',
+            failingSignals: [],
+            recordedAt: now,
+          }
+          t.reviewVerdicts.push(adjudicatedVerdict)
         }
         t.status = 'gate_check'
         t.updatedAt = now
@@ -5327,6 +5477,17 @@ export class Orchestrator {
         if (activeEscalations(task).length > 0) continue
         recoveryNote =
           'User restarted the project after the worker timed out mid-task. Reopened the task so Guildhall can continue from the latest recovery checkpoint instead of treating the timeout as terminal.'
+      } else if (
+        isRecoverableSelfAuthoredVerificationBlocker(
+          task,
+          await readCheckpoint(this.opts.config.memoryDir, task.id).catch(() => null),
+        )
+      ) {
+        const checkpoint = await readCheckpoint(this.opts.config.memoryDir, task.id).catch(() => null)
+        resolveRecoverableSelfAuthoredVerificationEscalations(task, checkpoint, now)
+        if (activeEscalations(task).length > 0) continue
+        recoveryNote =
+          'User restarted the project after the worker raised a blocker for its own failed verification. Reopened the task from the latest recovery checkpoint so Guildhall can rerun the focused verification and repair the failed verification in the touched source instead of treating it as a human ambiguity.'
       } else if (isRecoverableInfraOnlyMaxRevisionBlocker(task)) {
         resolveRecoverableMaxRevisionEscalations(
           task,

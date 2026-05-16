@@ -40,6 +40,17 @@ screen.
 
 ## Current Follow-Ups
 
+- [x] Reconcile the current 0.5.0 todo list against live project state instead
+  of stale chat context.
+- [x] Prove the Looma + Knit shaped draft can finish after worker recovery,
+  review, and hard gates.
+- [x] Confirm `fair-labor-license` and `t-minus-t` do not have hidden runnable
+  blockers after the latest recovery fixes.
+- [x] Fix the review audit contradiction where procedural-only fan-out dissent
+  could advance a task while leaving the review trail ending on `revise`.
+- [x] Run the final focused test/build sweep and push the release-hardening
+  batch.
+
 ## 0.5.0 Release Threshold
 
 - [x] Prove one real project can complete a task unattended end to end:
@@ -47,13 +58,15 @@ screen.
   done. Looma + Knit `task-import-189j8he` now reached `done` on the live
   service after its typecheck/build gates passed and the over-broad full-suite
   test fallback was removed from narrow source-file success gates.
-- [ ] Keep the other two live projects truthful while that proof run is
+- [x] Keep the other two live projects truthful while that proof run is
   happening:
   no fake `running` states, no contradictory Thread summaries, and no stale
   blocker narratives outranking current task truth. Live Projects now treats
   Looma + Knit's `75 import_draft` tasks as `Needs shaping` instead of
   `Paused`, and disables the misleading Start affordance while there is no
-  executable active task behind those drafts.
+  executable active task behind those drafts. A fresh state check on
+  `2026-05-16` found `fair-labor-license` at `3 done / 1 shelved` with no
+  open tasks, and `t-minus-t` at `3 done` with no open tasks.
 - [x] Eliminate the remaining checkpoint-lane drift on `t-minus-t` so resumed
   workers stay inside:
   authoritative verification -> focused file read -> focused mutation,
@@ -68,10 +81,14 @@ screen.
   backlog with draft-heavy noise. The version-diff task completed; the
   remaining Looma + Knit items are imported drafts that need shaping/release
   planning rather than execution.
-- [ ] Land the current runtime/test hardening batch cleanly
+- [x] Land the current runtime/test hardening batch cleanly
   (`run-query`, gate-command authority, shell tests, flow audit) and retest on
   the live `127.0.0.1:7777` service before we even discuss cutting `0.5.0`.
-- [ ] Prove Looma + Knit imported drafts can move through human shaping into
+  Focused verification on `2026-05-16` passed 419 tests across
+  `run-query`, shell, worker-agent, reviewer fan-out, and orchestrator, and
+  `npm run build` completed successfully with only existing dependency Svelte
+  warnings from `svelte-sonner` / `runed`.
+- [x] Prove Looma + Knit imported drafts can move through human shaping into
   real runnable work. Live replay on `2026-05-15` found two blockers on the
   first legitimate draft (`Proper invite flow (Supabase Auth invite by
   email)`): approval narrowed the task to the `knit` subproject but left
@@ -81,8 +98,10 @@ screen.
   outcome. The importer now normalizes evidence paths against the narrowed
   project root, and the product-brief/spec-agent layer is being hardened so
   imported-draft shaping produces a product/task outcome or a focused question,
-  not Guildhall-process copy.
-- [ ] Finish the Looma + Knit invite-flow worker recovery loop. The same live
+  not Guildhall-process copy. A later live replay shaped the draft into real
+  runnable work and advanced it through worker recovery, review, gate_check,
+  and `done`.
+- [x] Finish the Looma + Knit invite-flow worker recovery loop. The same live
   replay proved that shaping can now produce a runnable spec, but worker
   execution exposed three runtime issues: likely-target hints were being treated
   as exact create paths (`server/api/...` instead of `web/server/api/...`),
@@ -102,7 +121,34 @@ screen.
   that verification evidence instead of overwriting it with an empty array.
   Live replay on `2026-05-16` rewrote Looma/Knit `task-import-108mwl6` to
   checkpoint step 3/5 with failed `cd web && pnpm typecheck`, the touched files,
-  and a focused working hypothesis in `resumeContext`.
+  and a focused working hypothesis in `resumeContext`. A later replay exposed
+  one more escape hatch: after seeing the same failed typecheck, the worker
+  raised `spec_ambiguous` for missing names/imports in files it had just
+  authored. Guildhall now treats that as a self-authored verification repair
+  lane, resolves the false escalation, keeps the task assigned to the worker,
+  and adds an explicit checkpoint note telling the worker to rerun the focused
+  verification and repair the touched source before escalating. The next live
+  worker pass made real source edits and reran typecheck, but then got trapped
+  after `edit-file` missed a stale `oldString`: the checkpoint guard blocked
+  the necessary follow-up `read-file`. The engine now permits exactly that
+  checkpoint-scoped read after an `oldString was not found` edit failure so the
+  worker can refresh the current snippet and retry the mutation. The next live
+  pass proved the worker also needed one uninspected likely-target read after a
+  failed verification points at multiple touched files, so the engine now allows
+  that narrow read instead of treating it as wandering. The task then reached
+  successful `typecheck`, `build`, and `lint`, but the worker kept chasing
+  warning-only lint output even though the command exited zero. Shell results
+  now explicitly prefix exit status and tell workers that `exit 0` verification
+  is passed and should flow to handoff instead of warning-site edits. A later
+  live tick moved the task to `review`, then exposed a reviewer no-op loop:
+  empty reviewer turns could leave the task bouncing between `review` and
+  worker handoff with no durable verdict. Empty reviewer turns now run the
+  deterministic review fallback and record a real verdict so review can
+  advance. Final live proof: `task-import-108mwl6` reached `done` on
+  `2026-05-16T20:30:04Z` after hard gates `cd web && pnpm typecheck`,
+  `cd web && pnpm build`, and `pnpm lint` all passed. The service then stopped
+  honestly with `41 draft task(s) waiting for review`, not a hidden worker
+  failure.
 - [x] Stop worker no-change loops after checkpointed verification failures.
   The same `2026-05-16` Looma/Knit replay proved the checkpoint evidence is now
   durable, but the worker still returned two `in_progress -> in_progress`

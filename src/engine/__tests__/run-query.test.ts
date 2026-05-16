@@ -2307,6 +2307,76 @@ Review proof packet:
     expect(events.at(-1)?.type).toBe('assistant_turn_complete')
   })
 
+  it('turns a verification-backed mutation checkpoint into a handoff checkpoint after all commands pass', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => false,
+        execute: async (input) => ({
+          output: 'Shell command succeeded (exit 0). Treat this command as PASSED.',
+          is_error: false,
+          metadata: {
+            success: true,
+            output: 'lint passed with warnings',
+            executedCommand: input.command,
+            usedAuthoritativeCommand: true,
+          },
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'source', is_error: false }),
+      }),
+    )
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+    const toolMetadata: Record<string, unknown> = {
+      current_agent_id: 'worker-agent',
+      current_task_id: 'task-1',
+      current_task_checkpoint_next_action:
+        'Rerun the focused verification command and fix whatever still fails before you write the structured self-critique.',
+      current_task_checkpoint_files_touched: ['src/index.ts'],
+      current_task_verification_commands: ['pnpm lint'],
+    }
+
+    await drain(
+      runQuery(
+        {
+          apiClient: new ScriptedApiClient([
+            { message: assistantToolUse('shell', { command: 'pnpm lint' }, 'shell-1') },
+            { message: assistantToolUse('read-file', { filePath: '/workspace/project/src/index.ts' }, 'read-1') },
+            { message: assistantText('done') },
+          ]),
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          noProgressToolNames: ['update-task'],
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata,
+        },
+        messages,
+      ),
+    )
+
+    expect(toolMetadata.current_task_checkpoint_next_action).toBe(
+      'All authoritative verification commands have passed. Persist the structured self-critique note, then transition the task to review.',
+    )
+  })
+
   it('replaces relative project paths for task-state tools', async () => {
     const registry = new ToolRegistry()
     let observedTasksPath = ''
@@ -4463,6 +4533,137 @@ Uncertainties: none`,
     )).toBe(true)
   })
 
+  it('allows a checkpoint-scoped read after edit-file misses a stale oldString', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string(), cwd: z.string().optional() }),
+        execute: async () => ({
+          output: 'settings.vue(118,15): error TS2551: Property sendInvite does not exist',
+          is_error: true,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'edit-file',
+        description: '',
+        inputSchema: z.object({
+          filePath: z.string(),
+          oldString: z.string(),
+          newString: z.string(),
+        }),
+        execute: async () => ({
+          output:
+            'Error editing /workspace/project/web/app/pages/settings.vue: oldString was not found in the file. Re-read the file and use an exact substring from the current contents.',
+          is_error: true,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({
+          output: 'fresh settings.vue contents with the current slugPrefix line',
+          is_error: false,
+        }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'shell',
+          { command: 'cd web && pnpm typecheck', cwd: '/workspace/project' },
+          'toolu_verify',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: 'web/app/pages/settings.vue' },
+          'toolu_initial_read',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'edit-file',
+          {
+            filePath: 'web/app/pages/settings.vue',
+            oldString: '  const slugPrefix = computed(() => slug.value ?? \'\')',
+            newString: '  const slugPrefix = computed(() => slug.value ?? \'\')\n\n  async function sendInvite() {}',
+          },
+          'toolu_edit',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: 'web/app/pages/settings.vue' },
+          'toolu_read_after_stale_edit',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 5,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_checkpoint_next_action:
+              'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_files_touched: [
+              'web/app/pages/settings.vue',
+              'web/server/api/workspaces/[id]/invite.post.ts',
+            ],
+            current_task_checkpoint_safe_mutation_surface: [
+              'web/app/pages/settings.vue',
+              'web/server/api/workspaces/[id]/invite.post.ts',
+            ],
+            current_task_verification_commands: ['cd web && pnpm typecheck'],
+            current_task_verification_history: [{
+              command: 'cd web && pnpm typecheck',
+              passed: false,
+              observedAt: '2026-05-16T00:00:00.000Z',
+            }],
+          },
+        },
+        messages,
+      ),
+    )
+
+    const readCompletions = events.filter((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'read-file'
+    )
+    expect(readCompletions.some((e) => String(e.output).includes('fresh settings.vue contents'))).toBe(true)
+    expect(events.some((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'read-file' &&
+      String(e.output).includes('Call edit-file on web/app/pages/settings.vue now'),
+    )).toBe(false)
+  })
+
   it('uses the strict checkpoint mutation nudge when a worker diagnoses the bug but emits no tool call', async () => {
     const client = new ScriptedApiClient([
       {
@@ -5149,6 +5350,85 @@ Uncertainties: none`,
         String(block.content).includes(`You have already inspected an authoritative likely target file at ${targetPath}`),
       ),
     )).toBe(true)
+  })
+
+  it('allows reading another uninspected likely target when verification still names multiple files', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async (input) => ({
+          output: `fresh contents of ${input.filePath}`,
+          is_error: false,
+        }),
+      }),
+    )
+    const firstTarget = '/workspace/project/web/server/api/workspaces/[id]/invite.post.ts'
+    const secondTarget = '/workspace/project/web/app/pages/settings.vue'
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('read-file', { filePath: secondTarget }, 'toolu_0') },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 3,
+          noProgressToolNames: ['update-task'],
+          noProgressTurnNudge: 'Stop researching and mutate the file now.',
+          noProgressTurnNudgeLimit: 1,
+          noProgressTurnThreshold: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_checkpoint_next_action:
+              'Rerun the focused verification command and fix whatever still fails in the checkpoint-touched files.',
+            current_task_likely_target_files: [firstTarget, secondTarget],
+            current_task_checkpoint_files_touched: [
+              'web/server/api/workspaces/[id]/invite.post.ts',
+              'web/app/pages/settings.vue',
+            ],
+            current_task_verification_commands: ['cd web && pnpm typecheck'],
+            read_file_state: [
+              {
+                path: firstTarget,
+                span: 'lines 1-120',
+                preview: 'invite endpoint contents',
+                timestamp: Date.now() / 1000,
+              },
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(events.some(e =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'read-file' &&
+      e.is_error === false &&
+      String(e.output).includes(secondTarget),
+    )).toBe(true)
+    expect(messages.some(message =>
+      message.role === 'user' &&
+      message.content.some(block =>
+        block.type === 'tool_result' &&
+        block.is_error === true &&
+        String(block.content).includes('already inspected an authoritative likely target file'),
+      ),
+    )).toBe(false)
   })
 
   it('ends the turn after repeated exact-target read-only refusals in the same worker pass', async () => {

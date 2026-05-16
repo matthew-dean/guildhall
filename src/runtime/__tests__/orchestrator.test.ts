@@ -4831,6 +4831,95 @@ describe('Orchestrator.run — full loops', () => {
     expect(seenPrompt).not.toContain('write or refresh the self-critique note, then hand off to review')
   })
 
+  it('reopens a self-authored verification blocker when the user explicitly restarts the project', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Proper invite flow',
+        status: 'blocked',
+        assignedTo: null,
+        blockReason:
+          'spec_ambiguous: Unable to resolve type errors in settings.vue and invite.post.ts due to missing imports and utilities.',
+        spec: [
+          'Implement the Supabase invite flow in Knit settings.',
+          '- web/app/pages/settings.vue should expose the invite form and send handler.',
+          '- web/server/api/workspaces/[id]/invite.post.ts should validate roles and send the invite.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'typecheck passes',
+          verifiedBy: 'automated',
+          command: 'cd web && pnpm typecheck',
+          met: false,
+        } as any],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'spec_ambiguous',
+            summary:
+              'Unable to resolve type errors in settings.vue and invite.post.ts due to missing imports and utilities.',
+            details:
+              "The files web/app/pages/settings.vue and web/server/api/workspaces/[id]/invite.post.ts contain references to 'sendInvite', 'sendToast' and 'Role' that cannot be resolved after the worker implementation.",
+            raisedAt: '2026-04-01T00:00:01Z',
+          },
+        ],
+      }),
+    ])
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'a',
+      agentId: 'worker-agent',
+      intent: 'Repair failed verification',
+      nextPlannedAction:
+        'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails.',
+      filesTouched: [
+        'web/app/pages/settings.vue',
+        'web/server/api/workspaces/[id]/invite.post.ts',
+      ],
+      resumeContext: {
+        verification: [{
+          command: 'cd web && pnpm typecheck',
+          passed: false,
+          observedAt: '2026-05-16T00:00:00.000Z',
+          summary:
+            'settings.vue cannot find sendInvite; invite.post.ts cannot find sendToast or Role',
+        }],
+      },
+    })
+
+    let seenPrompt = ''
+    const worker = {
+      ...stubAgent('worker-agent', async (prompt) => {
+        seenPrompt = prompt
+        await mutateTask('a', { status: 'in_progress' })
+      }),
+      loadToolMetadata() {
+        return {}
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('self-authored verification failure')
+    expect(task?.notes.at(-1)?.content).toContain('repair the failed verification')
+    expect(seenPrompt).toContain('Latest authoritative verification')
+  })
+
   it('reopens an infra-only max-revisions blocker at review when the user explicitly restarts the project', async () => {
     await writeQueue([
       mkTask({
@@ -5778,6 +5867,105 @@ describe('Orchestrator.tick — FR-10 escalations', () => {
       expect(outcome.reason).toBe('decision_required')
       expect(outcome.escalationId).toBe('esc-task-001-1')
     }
+  })
+
+  it('keeps self-authored verification repair escalations in the worker lane', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'invite-flow')
+    await fs.mkdir(path.join(worktreePath, 'web', 'app', 'pages'), { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'task-invite',
+        title: 'Proper invite flow',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        worktreePath,
+        spec: [
+          'Implement the Supabase invite flow in Knit settings.',
+          '- web/app/pages/settings.vue should expose the invite form and send handler.',
+          '- web/server/api/workspaces/[id]/invite.post.ts should validate roles and send the invite.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'typecheck passes',
+          verifiedBy: 'automated',
+          command: 'cd web && pnpm typecheck',
+          met: false,
+        } as any],
+      }),
+    ])
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'task-invite',
+      agentId: 'worker-agent',
+      intent: 'Repair failed verification',
+      nextPlannedAction:
+        'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails.',
+      filesTouched: [
+        'web/app/pages/settings.vue',
+        'web/server/api/workspaces/[id]/invite.post.ts',
+      ],
+      resumeContext: {
+        verification: [{
+          command: 'cd web && pnpm typecheck',
+          passed: false,
+          observedAt: '2026-05-16T00:00:00.000Z',
+          summary:
+            'settings.vue cannot find sendInvite; invite.post.ts cannot find sendToast or Role',
+        }],
+        safeNextMutationSurface: [
+          'web/app/pages/settings.vue',
+          'web/server/api/workspaces/[id]/invite.post.ts',
+        ],
+      },
+    })
+    const worker = {
+      ...stubAgent('worker-agent', async () => {
+        await mutateTask('task-invite', {
+          status: 'blocked',
+          assignedTo: null,
+          blockReason:
+            'spec_ambiguous: Unable to resolve type errors in settings.vue and invite.post.ts due to missing imports and utilities.',
+          escalations: [
+            {
+              id: 'esc-task-invite-1',
+              taskId: 'task-invite',
+              agentId: 'worker-agent',
+              reason: 'spec_ambiguous',
+              summary:
+                'Unable to resolve type errors in settings.vue and invite.post.ts due to missing imports and utilities.',
+              details:
+                "The files web/app/pages/settings.vue and web/server/api/workspaces/[id]/invite.post.ts contain references to 'sendInvite', 'sendToast' and 'Role' that cannot be resolved after the worker implementation.",
+              raisedAt: '2026-04-01T00:00:01Z',
+            },
+          ],
+        })
+      }),
+      loadToolMetadata() {
+        return {}
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const outcome = await orch.tick()
+    expect(outcome.kind).toBe('processed')
+    if (outcome.kind === 'processed') {
+      expect(outcome.afterStatus).toBe('in_progress')
+      expect(outcome.agent).toBe('worker-agent')
+    }
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'task-invite')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason).toBeNull()
+    expect(task?.escalations[0]?.resolvedBy).toBe('orchestrator')
+    expect(task?.escalations[0]?.resolution).toContain('self-authored verification failure')
+    expect(task?.notes.at(-1)?.content).toContain('repair the failed verification')
   })
 
   it('skips tasks with open escalations even if status is not blocked', async () => {

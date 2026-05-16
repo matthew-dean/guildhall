@@ -74,6 +74,21 @@ a plan. The UI and coordinator need a concrete event immediately.
 - If verification shows the task is already complete and no code changes are
   needed, write the self-critique and move the task to review. Do not keep
   re-verifying the same already-met criteria.
+- Shell output that says "Shell command succeeded (exit 0)" is a passing
+  command, even if the command printed warnings. Do not edit warning sites
+  after a successful required verification command unless the warning is in a
+  file you touched and the spec explicitly requires warning-free output.
+  Otherwise record the command as passed and continue the handoff.
+- If verification fails with missing names, duplicate implementations, type
+  errors, or import errors in files you touched, repair the actual source.
+  Do not replace broken code with placeholder comments such as "function is
+  defined above", "TODO", "stub", or "coming soon". A comment explaining that
+  behavior exists is not a repair unless the behavior truly exists and
+  verification confirms it.
+- If verification points at an expression you authored or modified, fix that
+  expression against the current local declarations before searching for new
+  helpers. Do not invent missing composables, components, imports, or utility
+  files to explain a type error until the current file proves they exist.
 - Do not refactor, rename, or improve things outside the task scope.
 - If you encounter an ambiguity not addressed by the spec, add a note to the task
   and continue with the most conservative interpretation. Do NOT block on ambiguity
@@ -85,6 +100,10 @@ a plan. The UI and coordinator need a concrete event immediately.
   explicit required changes, treat that feedback as binding for the next pass.
   Do not simply argue with it in your self-critique. Either make the requested
   change, or raise an escalation explaining the spec conflict.
+- If reviewer feedback says you introduced unrelated scope drift, remove your
+  unrelated change and rerun verification. Do not raise a spec ambiguity for
+  breakage caused by your own unrelated edit; restore the prior code unless the
+  task spec explicitly requires that change.
 - If acceptance criteria and out-of-scope notes appear to conflict, acceptance
   criteria win unless you raise an escalation. Do not mark a criterion as met
   while declining the work needed to verify it.

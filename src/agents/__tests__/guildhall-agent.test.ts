@@ -417,6 +417,37 @@ describe('agent factories', () => {
     expect(engine.noProgressToolNames).toContain('shell')
   })
 
+  it('createWorkerAgent tells workers to repair failed verification instead of leaving placeholders', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('If verification fails with missing names')
+    expect(prompt).toContain('repair the actual source')
+    expect(prompt).toContain('Do not replace broken code with placeholder comments')
+  })
+
+  it('createWorkerAgent tells workers to fix authored expressions before inventing helpers', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('If verification points at an expression you authored or modified')
+    expect(prompt).toContain('Do not invent missing composables, components, imports, or utility')
+  })
+
+  it('createWorkerAgent treats exit-zero shell warnings as passed verification', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('Shell command succeeded (exit 0)')
+    expect(prompt).toContain('Do not edit warning sites')
+    expect(prompt).toContain('record the command as passed and continue the handoff')
+  })
+
+  it('createWorkerAgent tells workers to revert their own unrelated review drift', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('introduced unrelated scope drift')
+    expect(prompt).toContain('Do not raise a spec ambiguity')
+    expect(prompt).toContain('restore the prior code')
+  })
+
   it('createReviewerAgent', () => {
     const a = createReviewerAgent(llm)
     expect(a.name).toBe('reviewer-agent')

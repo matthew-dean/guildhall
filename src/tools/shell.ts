@@ -453,8 +453,15 @@ export const shellTool = defineTool({
       },
     }
     const result = await runShell(normalizedInput)
+    const statusLine = result.success
+      ? `Shell command succeeded (exit ${result.exitCode}). Treat this command as PASSED; if it was required verification, record it and continue the handoff. Do not edit warning-only output unless the task explicitly requires warning-free output.`
+      : result.timedOut
+        ? `Shell command timed out (exit ${result.exitCode}).`
+        : `Shell command failed (exit ${result.exitCode}).`
     return {
-      output: result.output,
+      output: result.output.trim().length > 0
+        ? `${statusLine}\n${result.output}`
+        : statusLine,
       is_error: !result.success,
       metadata: {
         ...result,
