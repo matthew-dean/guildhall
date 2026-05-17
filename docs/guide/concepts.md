@@ -6,9 +6,13 @@ title: Core concepts
 
 A quick tour of the vocabulary. Each term links to a deeper page.
 
-## Workspace
+## Project / workspace
 
-A directory containing a `guildhall.yaml` and a `memory/` folder. One workspace = one project the guild works on. See [Workspaces](./workspaces).
+In the product, you mostly think in **projects**. In the runtime and config
+layers, the same unit is still often called a **workspace**.
+
+Either way, it means one directory containing a `guildhall.yaml` and a
+`memory/` folder. See [Workspaces](./workspaces).
 
 ## Task
 
@@ -20,11 +24,15 @@ A named slice of the project (e.g. `ui`, `backend`, `infra`) owned by one coordi
 
 ## Coordinator
 
-Guildhall keeps one coordinating layer per project. It uses the repo's inferred internal routing plus the task's current shape to decide what context, review lenses, and next-step policy to apply; see [Coordinators & domains](./coordinators).
+The persona that owns a domain. Defined in `guildhall.yaml` with a **mandate**, **concerns**, and lists of **autonomous decisions** and **escalation triggers**. The coordinator decides whether tasks in its domain advance; see [Coordinators & domains](./coordinators).
 
 ## Agent
 
-A stateful, tool-using conversation. Five built-in roles: **spec**, **coordinator**, **worker**, **reviewer**, **gateChecker**. Each role maps to a model (configurable per project). See [Agents & models](./agents-and-models) and the [agents subsystem](../subsystems/agents).
+A stateful, tool-using conversation. Five built-in roles: **spec**,
+**coordinator**, **worker**, **reviewer**, **gateChecker**. Each role maps to
+a model and provider choice, with machine-wide defaults and optional
+project-level overrides. See [Agents & models](./agents-and-models) and the
+[agents subsystem](../subsystems/agents).
 
 ## Guild
 
@@ -32,7 +40,7 @@ A persona with principles, a review rubric, and deterministic checks that sits a
 
 ## Lever
 
-A named decision point — e.g. `landing_strategy`, `reviewer_mode`, `worktree_isolation` — with enumerated positions and full provenance (*who set it, when, why*). Every behavioral variation is a lever, not a hardcoded default. See [Levers](../levers/).
+A named decision point — e.g. `merge_policy`, `reviewer_mode`, `worktree_isolation` — with enumerated positions and full provenance (*who set it, when, why*). Every behavioral variation is a lever, not a hardcoded default. Onboarding can infer initial lever positions from the meta-intake conversation, but approved values still land in plain YAML with rationale. See [Levers](../levers/) and [Onboarding and levers](./onboarding-and-levers).
 
 ## Hard gate / soft gate
 

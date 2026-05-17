@@ -1,33 +1,44 @@
 ---
 title: Project view
+pageClass: gh-first-visit-page
 help_topic: web.project_view
 help_summary: |
-  The main per-workspace page. Tabs for Work (inbox + active), Planner,
-  Timeline, Settings, Release, Workspace Import. Clicking
-  any task card opens the task drawer.
+  The main per-project shell. Thread is the command surface, Work holds
+  the queue, and the drawer keeps the evidence close.
 ---
 
-# Project view
+# The project shell keeps the real state in one place
 
-`src/web/surfaces/ProjectView.svelte`. The main per-workspace page.
+<UiReferenceNav />
 
-## Tabs
+Once you open a project, Guildhall shifts from “service over projects” into “show me the state.” The shell is built around one promise: setup, active work, reviewer feedback, and the next human decision should not require a scavenger hunt.
 
-| Tab | Component | Purpose |
-|---|---|---|
-| **Work** | `project/WorkTab.svelte` | The human inbox plus currently active tasks. Primary surface. |
-| **Inbox** | `project/InboxTab.svelte` | Escalations awaiting human response. |
-| **Planner** | `project/PlannerTab.svelte` | Proposed + exploring tasks being shaped. |
-| **Timeline** | `project/TimelineTab.svelte` | Chronological view of task transitions and agent events. |
-| **Settings → Routing** | `project/CoordinatorsTab.svelte` | Internal routing inspection: inferred slices, scope hints, and what work is landing where. |
-| **Settings** | `project/SettingsTab.svelte` | Every lever surfaced with a `?` icon linking to its docs page. |
-| **Release** | `project/ReleaseTab.svelte` | Done-but-unmerged tasks, merge policy status, push state. |
-| **Workspace Import** | `project/WorkspaceImportTab.svelte` | Detected importable state (see [`workspace_import_autonomy`](../levers/workspace-import-autonomy)). |
+![Guildhall project shell with work queue, live activity, and progress groups.](../assets/ui-audit/work.png)
 
-## Run controls
+## The views that matter most
 
-The Work tab has a Run/Stop toggle that starts and stops the orchestrator. While running, a live event feed (SSE from `GET /api/project/events`) streams task transitions and transcript additions.
+- **Thread**: the command surface. Setup prompts, spec approvals, live worker trouble, and “you need to answer this now” all gather here.
+- **Work**: the queue and movement surface. This is where you judge whether the guild is making progress or just manufacturing elegant confusion.
+- **Release**: the verdict lane. If something is about to ship, this surface should tell you why it deserves the privilege.
+- **Settings**: the policy and setup layer. Providers, facts, advanced settings, and the knobs that determine how much rope the guild gets.
 
-## Intake
+## What the shell is optimizing for
 
-The Intake modal (`src/web/surfaces/IntakeModal.svelte`) creates a new task in `exploring`. Equivalent to `guildhall intake "..."` on the CLI.
+- Make the next real action obvious
+- Keep human questions and machine progress in the same narrative lane
+- Surface release and reviewer state before it becomes an unpleasant surprise
+- Let you drill into transcripts and provenance without leaving the shell
+
+![Guildhall task drawer showing transcript, spec, history, and provenance.](../assets/ui-audit/task-drawer.png)
+
+![Guildhall release view showing readiness checks and remaining blockers.](../assets/ui-audit/release.png)
+
+![Guildhall settings view showing readiness checks, provider setup, and project facts.](../assets/ui-audit/settings.png)
+
+## Current strengths
+
+- Left-rail shell structure
+- Task drawer inspection model
+- Release and reviewer visibility
+
+> Still tightening: some denser views need stronger grouping, better type rhythm, and calmer summary bands. The shell already tells the truth; now it needs to tell it with more grace.

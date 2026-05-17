@@ -2,14 +2,14 @@
 title: guildhall.yaml
 help_topic: reference.workspace_config
 help_summary: |
-  The workspace config file. Defines name, id, projectPath, model assignments
-  per agent role, internal routing slices for the local coordinator, and
-  coordinator/runtime knobs like maxRevisions.
+  The project config file. Defines name, id, projectPath, model assignments
+  per agent role, coordinator/routing structure, and orchestrator knobs like
+  maxRevisions.
 ---
 
 # `guildhall.yaml` reference
 
-The workspace config file. Lives at the workspace root (or `.guildhall/config.yaml` inside a repo).
+The main project config file. It normally lives at the project root.
 
 ## Top-level shape
 
@@ -30,7 +30,7 @@ tags?: string[]
 
 ## Identity
 
-- `name` — human-readable label shown in the dashboard.
+- `name` — human-readable label shown in the browser UI.
 - `id` — slug used by `guildhall run <id>` and in `~/.guildhall/registry.yaml`. Must be lowercase, dash-separated.
 - `projectPath` — absolute path to the project root. Defaults to the directory containing this file.
 
@@ -49,14 +49,10 @@ Each of the five roles must resolve against the model catalog in `src/core/model
 
 ## `coordinators`
 
-This is an internal routing map for Guildhall's single local coordinator. It is
-not a user-facing org chart. In normal use, Guildhall infers this structure and
-only asks for confirmation when confidence is low and the consequence of being
-wrong is high.
-
 ```yaml
 coordinators:
   - id: ui
+    name: UI Coordinator
     domain: ui                   # matches task.domain in TASKS.json
     path: packages/ui            # relative to projectPath
     mandate: |
@@ -72,7 +68,7 @@ coordinators:
       - "..."
 ```
 
-See [Internal routing](../guide/coordinators) for semantics.
+See [Coordinators & domains](../guide/coordinators) for semantics.
 
 ## `bootstrap`
 
@@ -132,7 +128,7 @@ ignore:
 
 ## `tags`
 
-Free-form groups shown in the multi-workspace dashboard.
+Free-form groups shown on the Projects page.
 
 ```yaml
 tags:

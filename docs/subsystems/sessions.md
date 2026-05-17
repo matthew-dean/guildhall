@@ -2,7 +2,7 @@
 title: Sessions
 help_topic: subsystem.sessions
 help_summary: |
-  Every agent conversation is snapshotted to ~/.cache/guildhall/sessions/
+  Every agent conversation is snapshotted to ~/.guildhall/data/sessions/
   after each turn. Resume warm with loadSessionById. Tool metadata is
   filtered through a persist-allowlist to avoid leaking secrets.
 ---
@@ -29,7 +29,7 @@ interface SessionSnapshot {
 
 ## Where they live
 
-Session files are keyed by `SHA1(cwd)` so each project has its own subtree under `~/.cache/guildhall/sessions/<project-hash>/<session-id>.json`. Override the cache root with `GUILDHALL_DATA_DIR`.
+Session files are keyed by `SHA1(cwd)` so each project has its own subtree under `~/.guildhall/data/sessions/<project-hash>/<session-id>.json` by default. Override the data root with `GUILDHALL_DATA_DIR`.
 
 ## Public API
 

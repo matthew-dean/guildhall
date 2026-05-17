@@ -1,0 +1,36 @@
+{
+  "name": "@guildhall/ui",
+  "version": "0.0.0",
+  "description": "Shared Guildhall UI tokens and base styles for docs and operator surfaces.",
+  "license": "LicenseRef-FLL-1.2",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "svelte": "./dist/index.js",
+  "sideEffects": [
+    "./dist/styles.css"
+  ],
+  "exports": {
+    ".": {
+      "svelte": "./dist/index.js",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./tokens": {
+      "types": "./dist/tokens.d.ts",
+      "default": "./dist/tokens.js"
+    },
+    "./styles.css": "./dist/styles.css"
+  },
+  "scripts": {
+    "build": "node ./scripts/generate-styles.mjs && tsc -p tsconfig.json",
+    "typecheck": "node ./scripts/generate-styles.mjs --check && tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "svelte": "^5.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

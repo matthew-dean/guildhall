@@ -2,20 +2,40 @@
 title: Web UI overview
 help_topic: web.overview
 help_summary: |
-  The dashboard is a Svelte SPA served by `guildhall serve` at
-  http://localhost:7842. It reads and writes memory/* and exposes
-  everything the CLI can do through a GUI.
+  The browser UI is the main Guildhall interface. It is served by
+  `guildhall serve`, reads and writes project state, and exposes the
+  setup, task, run, review, and provider workflows through the main
+  product surface.
 ---
 
 # Web UI
 
-The web UI is a Svelte 5 single-page app at `src/web/`, served by the Hono-based backend under `src/runtime/serve.ts`. It's a window into `memory/` — every state change ends up in a file you can grep.
+The web UI is the main way to operate Guildhall. It has two useful scales:
+the `/projects` service home for scanning registered projects, and the
+project shell where setup, tasks, live runs, reviewer calls, and release
+readiness actually play out.
+
+<UiReferenceNav />
+
+Use it for the everyday loop:
+
+1. Open the service home or jump straight into a project shell.
+2. Pick or configure a provider.
+3. Add tasks.
+4. Start and stop the orchestrator.
+5. Inspect transcripts, reviews, gates, and provenance.
+6. Resolve escalations and tune settings.
+
+The UI is still transparent: project state lands in `guildhall.yaml`,
+`.guildhall/config.yaml`, and `memory/*`, while machine-scoped state such as
+the project registry, provider credentials, and default provider choice live
+under `~/.guildhall/`.
 
 ## Pages
 
 - [Setup wizard](./setup) — first-run onboarding.
-- [Dashboard](./dashboard) — multi-workspace overview.
-- [Project view](./project-view) — main per-workspace page with tabs.
+- [Dashboard](./dashboard) — service home and project launcher.
+- [Project view](./project-view) — main per-project shell.
 - [Task drawer](./task-drawer) — task detail pane.
 - [Providers page](./providers) — credential management.
 
@@ -27,9 +47,5 @@ Tokens, components, and conventions: [Design tokens](./design-tokens).
 
 How the `?` icons stay in sync with these docs: [Help system](./help-system).
 
-## Stack
-
-- **Svelte 5** (runes mode).
-- **Lucide** for icons (wrapped by `src/web/lib/Icon.svelte`).
-- **CSS custom properties** (`src/web/tokens.css`) — no runtime CSS-in-JS.
-- **Hono** on the server side; SSE for live events; OHJSON (`OHJSON:` line prefix) for event framing.
+If the UI does something weird, the receipts are usually sitting in plain files
+and a readable Svelte shell instead of hiding behind a theatrical spinner.

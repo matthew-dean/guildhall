@@ -9,6 +9,8 @@ help_summary: |
 
 # Task drawer
 
+<UiReferenceNav />
+
 `src/web/surfaces/TaskDrawer.svelte`. Opens when you click any task card.
 
 ## Tabs

@@ -1,22 +1,10 @@
 ---
-title: Running the coordinator
+title: Running the orchestrator
 ---
 
-# Running the coordinator
+# Running the orchestrator
 
-The coordinator is the process that advances tasks. It walks the live queue, assembles the right context for the current task, dispatches workers, collects reviews, and runs gates.
-
-## From the CLI
-
-```bash
-guildhall run                    # run the default workspace
-guildhall run my-app             # run a specific workspace by id
-guildhall run --domain ui        # only the ui domain
-guildhall run --max-ticks 10     # stop after 10 ticks (for testing)
-guildhall run --one-task         # finish one task, then stop
-```
-
-`guildhall run` blocks until Ctrl-C or until there are no ticks left. Progress is appended to `memory/PROGRESS.md`, events are streamed to `memory/events.ndjson`, and the full transcript per task lives under `memory/transcripts/`.
+The orchestrator is the process that advances tasks. It ticks through each domain, asks coordinators to evaluate their queues, dispatches workers, collects reviews, and runs gates.
 
 ## From the dashboard
 
@@ -24,30 +12,51 @@ guildhall run --one-task         # finish one task, then stop
 guildhall serve
 ```
 
-`guildhall serve` is the friendly path: it starts the local Guildhall service
-if needed, then opens the web UI at `http://localhost:7777`.
+`guildhall serve` is the friendly entrypoint: it makes sure the local service
+is running, opens the browser UI, and usually drops you into either the
+current project's shell or the service home.
 
-If you want a little more control:
+From there, use the **Start** / **Stop** controls in the project shell. This
+is the main operating path: you can inspect Thread, Work, Needs you, task
+drawers, and release state without leaving the UI.
+
+The dashboard uses the same runtime as the CLI. Progress is appended to `memory/PROGRESS.md`, events are streamed to `memory/events.ndjson`, and the full transcript per task lives under `memory/transcripts/`.
+
+## From the CLI
+
+Use the CLI when you want a blocking terminal process, scripting, CI smoke
+runs, or a domain-scoped debugging session.
 
 ```bash
-guildhall start           # start the local service only
-guildhall open            # open the UI (starts the service if needed)
-guildhall stop            # stop the local service
-guildhall serve ~/work/x  # open Guildhall with a preferred project bias
+guildhall run                    # run the current project
+guildhall run my-app             # run a specific registered project by id
+guildhall run --domain ui        # only the ui domain
+guildhall run --max-ticks 10     # stop after 10 ticks (for testing)
+guildhall run --one-task         # stop after one task reaches a handoff point
 ```
 
-The **Run** control inside a project starts and stops that project's
-coordinator lane with the same semantics as the CLI.
+`guildhall run` blocks until Ctrl-C or until there are no ticks left.
+
+For service-style usage without a foreground terminal:
+
+```bash
+guildhall start
+guildhall open
+guildhall stop
+```
 
 ## Fanout
 
-By default the coordinator runs one task at a time per domain. Set [`concurrent_task_dispatch`](../levers/concurrent-task-dispatch) to `fanout_N` to run up to N tasks in parallel. Combined with [`worktree_isolation: per_task`](../levers/worktree-isolation), each parallel task runs in its own git worktree.
+By default the orchestrator runs one task at a time per domain. Set [`concurrent_task_dispatch`](../levers/concurrent-task-dispatch) to `fanout_N` to run up to N tasks in parallel. Combined with [`worktree_isolation: per_task`](../levers/worktree-isolation), each parallel task runs in its own git worktree.
 
-## Stop, pause, resume
+## Stop, pause, and stage transitions
 
-- **Stop**: Ctrl-C the `run` process (or Stop in the dashboard). The current agent turn finishes gracefully; state is snapshotted.
-- **Pause a task**: `guildhall pause <task-id>` moves it to `blocked` with a pause reason. Resume with `guildhall resume`.
-- **Shelve a task**: `guildhall shelve <task-id>` terminally parks it.
+- **Stop**: Ctrl-C the `run` process, use `guildhall stop`, or press **Stop**
+  in the project shell. The current agent turn finishes gracefully; state is
+  snapshotted.
+- **Pause or shelve a task**: use the task drawer or project actions in the UI.
+- **Resume spec shaping**: `guildhall resume <task-id>` appends a follow-up to
+  an `exploring` task.
 
 ## What a "tick" does
 

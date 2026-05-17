@@ -4,12 +4,14 @@ help_topic: reference.agent_settings
 help_summary: |
   The lever-storage file at memory/agent-settings.yaml. Records every
   project and domain lever position with provenance. Seeded with system
-  defaults on workspace init.
+  defaults on project init.
 ---
 
 # `memory/agent-settings.yaml`
 
-The lever-storage file. Seeded by `makeDefaultSettings()` on workspace init and edited from then on by the Setup wizard, the Settings tab, the Spec Agent during `exploring`, or by hand.
+The lever-storage file. Seeded by `makeDefaultSettings()` on first read and edited from then on by the Settings tab, the Spec Agent during meta-intake/exploring, or by hand.
+
+During onboarding, meta-intake may infer initial positions from your project-guidance answers. Approved inferences are written here with `setBy: spec-agent-intake`; defaults that were not inferred remain `setBy: system-default`.
 
 ## Shape
 
@@ -55,9 +57,9 @@ Project levers have no domain override — there's only `project.<lever>`.
 
 ## Editing safely
 
-- Edit by hand or through the dashboard; both are first-class.
+- Edit by hand or through the browser UI; both are first-class.
 - `setAt` and `setBy` must always be updated when `position` changes — the loader will refuse to persist a changed position with a stale setter.
-- `rationale` is required. The CLI and dashboard prompt for it; hand-edits must include it.
+- `rationale` is required. The CLI and browser UI prompt for it; hand-edits must include it.
 
 ## See also
 
