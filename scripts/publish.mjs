@@ -65,11 +65,9 @@ const flags = {
 }
 const originalManifestText = readFileSync(MANIFEST, 'utf-8')
 let restoreManifestOnExit = false
-if (flags.dryRun) {
-  process.on('exit', () => {
-    if (restoreManifestOnExit) writeFileSync(MANIFEST, originalManifestText)
-  })
-}
+process.on('exit', () => {
+  if (restoreManifestOnExit) writeFileSync(MANIFEST, originalManifestText)
+})
 const versionArg = args.find((a) => !a.startsWith('--'))
 if (!versionArg) die('Missing version argument. Pass a semver or `patch`/`minor`/`major`.')
 
@@ -96,7 +94,7 @@ const manifest = readJson(MANIFEST)
 if (manifest.version !== nextVersion) {
   manifest.version = nextVersion
   writeJson(MANIFEST, manifest)
-  restoreManifestOnExit = flags.dryRun
+  restoreManifestOnExit = true
   log(`Bumped package.json to ${nextVersion}.`)
 } else {
   log(`package.json already at ${nextVersion}; continuing without a manifest bump.`)
@@ -146,6 +144,9 @@ if (flags.dryRun) publishArgs.push('--dry-run')
 
 log(`Publishing guildhall@${nextVersion} (tag: ${flags.tag})${flags.dryRun ? ' [dry-run]' : ''}...`)
 run('npm', publishArgs)
+if (!flags.dryRun) {
+  restoreManifestOnExit = false
+}
 
 // ---------------------------------------------------------------------------
 // 9. Commit + tag
