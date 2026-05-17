@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, basename, isAbsolute, relative } from 'node:path'
 import type { TaskSource, WorkspaceSignal, TaskSourceContext } from '../types.js'
 
@@ -17,6 +17,30 @@ const OPEN_HEADING_RE =
 
 function likelyRelevantFile(rel: string): boolean {
   return MARKDOWN_FILE_RE.test(rel) && !IGNORE_PATH_RE.test(rel)
+}
+
+function listMarkdownFiles(projectPath: string): string[] {
+  const out: string[] = []
+  const walk = (relDir: string) => {
+    const absDir = join(projectPath, relDir)
+    let entries
+    try {
+      entries = readdirSync(absDir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const rel = relDir ? `${relDir}/${entry.name}` : entry.name
+      if (IGNORE_PATH_RE.test(rel)) continue
+      if (entry.isDirectory()) {
+        walk(rel)
+      } else if (entry.isFile() && likelyRelevantFile(rel)) {
+        out.push(rel)
+      }
+    }
+  }
+  walk('')
+  return out.sort((a, b) => a.localeCompare(b))
 }
 
 function inferDomainHint(rel: string, enabledRoots: ReadonlySet<string>): string | undefined {
@@ -105,14 +129,14 @@ export const planningDocsSource: TaskSource = {
       cwd: projectPath,
       timeoutMs: 15_000,
     }).catch(() => ({ stdout: '', stderr: '', code: 127 }))
-    if (listed.code !== 0 && listed.code !== 1) return []
-
-    const relPaths = listed.stdout
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((entry) => (isAbsolute(entry) ? relative(projectPath, entry) : entry))
-      .filter((rel) => likelyRelevantFile(rel))
+    const relPaths = listed.code === 0 || listed.code === 1
+      ? listed.stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((entry) => (isAbsolute(entry) ? relative(projectPath, entry) : entry))
+          .filter((rel) => likelyRelevantFile(rel))
+      : listMarkdownFiles(projectPath)
     const multiProjectRoots = detectMultiProjectRoots(relPaths)
 
     const signals: WorkspaceSignal[] = []

@@ -473,6 +473,30 @@ describe('planningDocsSource', () => {
       'ui-form-field is the composed label/help/error wrapper',
     ])
   })
+
+  it('falls back to filesystem walking when rg is unavailable', async () => {
+    mkdirSync(join(dir, 'looma', 'docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'looma', 'docs', 'component-roadmap.md'),
+      `# Component Roadmap
+
+## P1
+
+- [ ] Listbox
+- [ ] Combobox
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({ stdout: '', stderr: 'rg: command not found', code: 127 })),
+    })
+
+    expect(sigs.filter((s) => s.kind === 'open_work').map((s) => s.title)).toEqual([
+      'Listbox',
+      'Combobox',
+    ])
+  })
 })
 
 describe('todoCommentsSource', () => {

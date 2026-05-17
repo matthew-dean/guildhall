@@ -2788,3 +2788,9 @@ screen.
   `guildhall-macos.tar.gz` and `guildhall-macos.tar.gz.sha256` to the GitHub
   Release, verifies the checksum in the installer before unpacking, and the
   quick-start docs explain both latest and pinned installs.
+- Release detector fallback on `2026-05-17`: the workspace-import learning
+  endpoint tests could fail in release environments where `rg` was unavailable
+  or returned no file list, because nested planning-doc detection silently
+  returned no `sourceGroups`. `planning-docs` now falls back to a deterministic
+  Node filesystem walk for Markdown files, preserving Looma/Knit nested
+  roadmap detection without making release tests depend on ripgrep.
