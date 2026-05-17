@@ -2794,3 +2794,9 @@ screen.
   returned no `sourceGroups`. `planning-docs` now falls back to a deterministic
   Node filesystem walk for Markdown files, preserving Looma/Knit nested
   roadmap detection without making release tests depend on ripgrep.
+- Release package deploy compatibility on `2026-05-17`: the first real
+  `pnpm release 0.5.0` attempt reached macOS packaging and failed because the
+  active pnpm rejected `deploy --legacy`. The packaging script now starts with
+  the portable `pnpm deploy --prod` form and only retries with `--legacy` when
+  pnpm explicitly reports the v10 non-injected workspace requirement, clearing
+  the partial deploy target before retrying.
