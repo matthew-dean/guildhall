@@ -134,9 +134,18 @@ export function resolveReviewerFanoutPolicy(input: {
       clamped: false,
     }
   }
+  // Reviewer fan-out is supplemental critique work. On small shared provider
+  // pools (e.g. recommendedConcurrency=4), letting one workspace spend all
+  // slots on persona review starves worker/coordinator progress elsewhere.
+  // Keep fan-out narrower than the raw provider ceiling so multiple projects
+  // can stay live at once.
+  const sharedPoolFanoutCeiling = Math.max(
+    1,
+    Math.floor(recommendedConcurrency / 4),
+  )
   const effectiveConcurrency = Math.max(
     1,
-    Math.min(requestedConcurrency, recommendedConcurrency),
+    Math.min(requestedConcurrency, recommendedConcurrency, sharedPoolFanoutCeiling),
   )
   return {
     requestedConcurrency,

@@ -11,6 +11,7 @@
   import Button from './Button.svelte'
   import Card from './Card.svelte'
   import Chip from './Chip.svelte'
+  import StatusDot from './StatusDot.svelte'
   import type { ProjectCardSummary } from './project-summary.js'
 
   interface Props {
@@ -78,6 +79,13 @@
           <span>active</span>
         </span>
       {/if}
+      {#if summary.counts.draftReview > 0}
+        <span class="metric tone-warn">
+          <PauseCircle size={13} />
+          <strong>{summary.counts.draftReview}</strong>
+          <span>drafts</span>
+        </span>
+      {/if}
       {#if summary.counts.blocked > 0}
         <span class="metric tone-warn">
           <AlertTriangle size={13} />
@@ -99,6 +107,12 @@
           <span>total</span>
         </span>
       {/if}
+    </div>
+
+    <div class="ticker-strip ticker-{summary.ticker.tone}" aria-label="Project activity">
+      <StatusDot tone={summary.ticker.tone} pulse={summary.ticker.pulse} size="xs" />
+      <span class="ticker-label">{summary.ticker.label}</span>
+      <span class="ticker-message">{summary.ticker.message}</span>
     </div>
 
     </div>
@@ -241,6 +255,39 @@
   .tone-neutral {
     background: rgba(136, 136, 153, 0.12);
     color: var(--text-muted);
+  }
+  .ticker-strip {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    min-width: 0;
+    font-size: var(--fs-0);
+    line-height: var(--lh-body);
+    color: var(--text-muted);
+  }
+  .ticker-label {
+    flex: none;
+    font-size: 0.72rem;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .ticker-message {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ticker-active .ticker-label,
+  .ticker-ok .ticker-label {
+    color: var(--accent-2);
+  }
+  .ticker-warn .ticker-label {
+    color: var(--warn);
+  }
+  .ticker-danger .ticker-label {
+    color: var(--danger);
   }
   .actions {
     display: flex;

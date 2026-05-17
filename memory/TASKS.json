@@ -552,7 +552,7 @@
       "description": "After one end-to-end success, teach Guildhall to continue through multiple tasks, skip blocked work cleanly, and stop only when the queue is exhausted or globally blocked.",
       "domain": "runtime",
       "projectPath": ".",
-      "status": "in_progress",
+      "status": "done",
       "priority": "high",
       "dependsOn": [
         "guildhall-automation-005"
@@ -565,13 +565,13 @@
           "id": "ac-1",
           "description": "Guildhall can continue through multiple unblocked tasks without manual restarts between each one",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         },
         {
           "id": "ac-2",
           "description": "Blocked tasks are explicitly surfaced and skipped instead of stalling the whole queue on first contact",
           "verifiedBy": "review",
-          "met": false
+          "met": true
         }
       ],
       "notes": [
@@ -964,6 +964,141 @@
       "revisionCount": 0,
       "createdAt": "2026-05-02T16:01:41Z",
       "updatedAt": "2026-05-08T00:05:00.000Z"
+    },
+    {
+      "id": "guildhall-automation-007",
+      "title": "Ground worker mutations in real repo surfaces before code edits",
+      "description": "Before a worker writes or edits code, Guildhall should force the task through a repo-grounding pass that proves the imported files, component paths, and local UI/API patterns actually exist. Guessed imports like a nonexistent LoomaButton.vue should be blocked or rewritten from grounded repo evidence before the task can claim completion.",
+      "domain": "runtime",
+      "projectPath": ".",
+      "status": "in_progress",
+      "priority": "high",
+      "dependsOn": [
+        "guildhall-automation-006"
+      ],
+      "outOfScope": [
+        "Broad semantic linting of every possible implementation choice"
+      ],
+      "acceptanceCriteria": [
+        {
+          "id": "ac-1",
+          "description": "When a worker proposes a new local import or component path, Guildhall either has durable evidence that the path exists or blocks the move with a grounded recovery prompt before review handoff",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-2",
+          "description": "Live Looma or Knit task replays stop inventing nonexistent local components when an equivalent grounded repo pattern already exists",
+          "verifiedBy": "review",
+          "met": false
+        }
+      ],
+      "notes": [
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-13T19:10:00Z",
+          "content": "First slice is in: the review handoff guard now inspects task-owned changed files for missing local imports before allowing status=review. This catches guessed repo paths like @/components/atoms/LoomaButton.vue when no such local component exists, even if the worker claims verification passed in self-critique."
+        }
+      ],
+      "gateResults": [],
+      "revisionCount": 0,
+      "createdAt": "2026-05-13T18:55:00Z",
+      "updatedAt": "2026-05-13T19:10:00Z"
+    },
+    {
+      "id": "guildhall-automation-008",
+      "title": "Persist richer durable resume context for long-running worker tasks",
+      "description": "Recovery checkpoints should capture enough task-local context that a restarted worker resumes with the same narrowed picture it had before: authoritative verification command results, companion files, current working hypothesis, and the safe next mutation surface.",
+      "domain": "runtime",
+      "projectPath": ".",
+      "status": "in_progress",
+      "priority": "high",
+      "dependsOn": [
+        "guildhall-automation-006"
+      ],
+      "outOfScope": [
+        "Full transcript replay as the default recovery mechanism"
+      ],
+      "acceptanceCriteria": [
+        {
+          "id": "ac-1",
+          "description": "Recovery checkpoints persist authoritative verification outcomes plus narrowed task-local context beyond touched files and next action",
+          "verifiedBy": "review",
+          "met": false
+        },
+        {
+          "id": "ac-2",
+          "description": "After restart, resumed workers receive that durable context and continue from the narrowed mutation surface instead of broad rediscovery",
+          "verifiedBy": "review",
+          "met": false
+        }
+      ],
+      "notes": [
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-13T20:20:00Z",
+          "content": "Checkpoint resumeContext is now wired end to end: recovery checkpoints persist structured authoritative verification history, companion files, a working hypothesis, and a safe next mutation surface; resumed workers get that context back in both the prompt and tool metadata instead of falling back to bare next-action text."
+        },
+        {
+          "agentId": "reviewer-agent",
+          "role": "reviewer",
+          "timestamp": "2026-05-13T20:55:00Z",
+          "content": "Verified with focused engine/runtime coverage plus live FLL replay: durable checkpoint verification history now counts at review handoff, and resumed tasks keep the narrower mutation/verification context instead of re-deriving it from scratch."
+        }
+      ],
+      "gateResults": [],
+      "revisionCount": 0,
+      "createdAt": "2026-05-13T18:55:00Z",
+      "updatedAt": "2026-05-13T20:55:00Z"
+    },
+    {
+      "id": "guildhall-automation-009",
+      "title": "Package Guildhall-owned dirty checkout work into resumable task checkpoints",
+      "description": "When worktree isolation is disabled or Guildhall has already dirtied a shared checkout, Guildhall should take responsibility for that state by packaging task-owned work into a resumable branch or commit checkpoint instead of treating the dirty repo as an external blocker forever.",
+      "domain": "runtime",
+      "projectPath": ".",
+      "status": "done",
+      "priority": "medium",
+      "dependsOn": [
+        "guildhall-automation-006"
+      ],
+      "outOfScope": [
+        "Auto-merging shared-checkout work straight to main with no review"
+      ],
+      "acceptanceCriteria": [
+        {
+          "id": "ac-1",
+          "description": "Guildhall can distinguish likely Guildhall-owned dirty state from unrelated user dirt and surface a resumable checkpoint path instead of a generic repo-dirty stop",
+          "verifiedBy": "review",
+          "met": true
+        },
+        {
+          "id": "ac-2",
+          "description": "Shared-checkout task work can be packaged into a task-owned branch or commit checkpoint without sweeping unrelated project metadata",
+          "verifiedBy": "review",
+          "met": true
+        }
+      ],
+      "notes": [
+        {
+          "agentId": "worker-agent",
+          "role": "worker",
+          "timestamp": "2026-05-13T20:38:00Z",
+          "content": "Shared-checkout tasks now checkpoint their own dirty work into a task branch when they reach done with worktree isolation disabled, instead of only recording 'merge skipped'. The git driver also resolves the true git toplevel for nested project paths so Guildhall state files at repo root are ignored during cleanliness checks and left out of checkpoint commits."
+        },
+        {
+          "agentId": "reviewer-agent",
+          "role": "reviewer",
+          "timestamp": "2026-05-13T20:55:00Z",
+          "content": "Verified with git-driver/orchestrator coverage and a live Fair Labor License replay: Guildhall now treats its own shared-checkout dirt as resumable task-owned state, and stale review-handoff blockers from that era reopen cleanly instead of leaving the queue terminal."
+        }
+      ],
+      "gateResults": [],
+      "revisionCount": 0,
+      "createdAt": "2026-05-13T18:55:00Z",
+      "updatedAt": "2026-05-13T20:55:00Z"
     },
     {
       "id": "guildhall-architecture-001",

@@ -128,14 +128,24 @@ describe('ensureWorktreeForDispatch', () => {
     expect(driver.state.createdWorktrees).toHaveLength(0)
   })
 
-  it('backfills runtime links when reusing an existing worktree', async () => {
+  it('removes stale runtime node_modules symlinks when reusing an existing worktree', async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-runtime-reuse-'))
     const projectPath = path.join(tmp, 'knit')
     const worktreePath = path.join(TEST_GUILDHALL_HOME, 'worktrees', 'demo-project', 'abc')
     await fs.mkdir(path.join(projectPath, 'node_modules'), { recursive: true })
     await fs.mkdir(path.join(projectPath, 'web', 'node_modules'), { recursive: true })
     await fs.writeFile(path.join(projectPath, 'web', 'package.json'), '{}')
-    await fs.mkdir(worktreePath, { recursive: true })
+    await fs.mkdir(path.join(worktreePath, 'web'), { recursive: true })
+    await fs.symlink(
+      path.relative(worktreePath, path.join(projectPath, 'node_modules')),
+      path.join(worktreePath, 'node_modules'),
+      'dir',
+    )
+    await fs.symlink(
+      path.relative(path.join(worktreePath, 'web'), path.join(projectPath, 'web', 'node_modules')),
+      path.join(worktreePath, 'web', 'node_modules'),
+      'dir',
+    )
 
     const driver = new InMemoryGitDriver()
     const seeded = task({
@@ -154,12 +164,8 @@ describe('ensureWorktreeForDispatch', () => {
       gitDriver: driver,
     })
     expect(result.created).toBe(false)
-    expect(await fs.readlink(path.join(worktreePath, 'node_modules'))).toBe(
-      path.relative(path.join(worktreePath), path.join(projectPath, 'node_modules')),
-    )
-    expect(await fs.readlink(path.join(worktreePath, 'web', 'node_modules'))).toBe(
-      path.relative(path.join(worktreePath, 'web'), path.join(projectPath, 'web', 'node_modules')),
-    )
+    await expect(fs.lstat(path.join(worktreePath, 'node_modules'))).rejects.toThrow()
+    await expect(fs.lstat(path.join(worktreePath, 'web', 'node_modules'))).rejects.toThrow()
   })
 
   it('creates a new per_attempt worktree when revision bumps', async () => {
@@ -208,7 +214,7 @@ describe('ensureWorktreeForDispatch', () => {
     expect(await fs.readlink(linkPath)).toBe(path.relative(path.dirname(linkPath), loomaPath))
   })
 
-  it('mirrors project node_modules into the task worktree for runnable package commands', async () => {
+  it('leaves task worktrees free to create their own node_modules installs', async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-runtime-links-'))
     const projectPath = path.join(tmp, 'knit')
     const webPath = path.join(projectPath, 'web')
@@ -226,10 +232,8 @@ describe('ensureWorktreeForDispatch', () => {
       gitDriver: driver,
     })
 
-    const rootLink = path.join(result.worktreePath, 'node_modules')
-    const webLink = path.join(result.worktreePath, 'web', 'node_modules')
-    expect(await fs.readlink(rootLink)).toBe(path.relative(path.dirname(rootLink), path.join(projectPath, 'node_modules')))
-    expect(await fs.readlink(webLink)).toBe(path.relative(path.dirname(webLink), path.join(webPath, 'node_modules')))
+    await expect(fs.lstat(path.join(result.worktreePath, 'node_modules'))).rejects.toThrow()
+    await expect(fs.lstat(path.join(result.worktreePath, 'web', 'node_modules'))).rejects.toThrow()
   })
 })
 

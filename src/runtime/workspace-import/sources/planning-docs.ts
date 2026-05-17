@@ -62,6 +62,21 @@ function fileLooksLikeTaskList(fileBase: string, rel: string): boolean {
   return /(roadmap|plan|milestone|inventory|bugs|todo)/i.test(fileBase)
 }
 
+function isProjectStateCurrentFocus(fileBase: string, sectionHeading: string | null): boolean {
+  return /^PROJECT_STATE\.md$/i.test(fileBase) && /^current focus$/i.test(sectionHeading ?? '')
+}
+
+function groupingChildrenAreTaskCandidates(title: string): boolean {
+  const normalized = title.toLowerCase().replace(/:$/, '').trim()
+  return (
+    /^add missing\b/.test(normalized) ||
+    /^missing\b/.test(normalized) ||
+    /\bmissing high-frequency\b/.test(normalized) ||
+    /^deepen\b.*\bhigh-frequency\b/.test(normalized) ||
+    /^close\b.*\beditor parity gaps\b/.test(normalized)
+  )
+}
+
 function headingSignalKind(
   fileBase: string,
   rel: string,
@@ -109,6 +124,7 @@ export const planningDocsSource: TaskSource = {
       const fileBase = basename(rel)
       const domainHint = inferDomainHint(rel, multiProjectRoots)
       let currentSection: string | null = null
+      const bulletStack: Array<{ indent: number; title: string; grouping: boolean }> = []
 
       // Treat spec files as framing even if they have no checklists.
       if (/\/specs\/[^/]+\.md$/i.test(rel)) {
@@ -132,6 +148,7 @@ export const planningDocsSource: TaskSource = {
         const heading = /^(#{2,4})\s+(.+?)\s*$/.exec(line)
         if (heading) {
           currentSection = cleanHeading(heading[2]!)
+          bulletStack.length = 0
           const kind = headingSignalKind(fileBase, rel, currentSection, currentSection)
           if (kind && !DONE_HEADING_RE.test(currentSection) && !OPEN_HEADING_RE.test(currentSection)) {
             signals.push({
@@ -152,6 +169,7 @@ export const planningDocsSource: TaskSource = {
           checked &&
           (fileLooksLikeTaskList(fileBase, rel) || (currentSection && DONE_HEADING_RE.test(currentSection)))
         ) {
+          bulletStack.length = 0
           signals.push({
             source: 'planning-docs',
             kind: 'milestone',
@@ -169,6 +187,7 @@ export const planningDocsSource: TaskSource = {
           unchecked &&
           (fileLooksLikeTaskList(fileBase, rel) || (currentSection && OPEN_HEADING_RE.test(currentSection)))
         ) {
+          bulletStack.length = 0
           signals.push({
             source: 'planning-docs',
             kind: 'open_work',
@@ -181,24 +200,54 @@ export const planningDocsSource: TaskSource = {
           continue
         }
 
-        const bullet = /^\s*[-*]\s+(.+?)\s*$/.exec(line)
+        const bullet = /^(\s*)[-*]\s+(.+?)\s*$/.exec(line)
         if (bullet && currentSection && OPEN_HEADING_RE.test(currentSection)) {
-          signals.push({
-            source: 'planning-docs',
-            kind: 'open_work',
-            title: cleanHeading(bullet[1]!).slice(0, 120),
-            evidence: `${rel}: ${line.trim()}`.slice(0, 240),
-            references: [abs],
-            ...(domainHint ? { domainHint } : {}),
-            confidence: 'medium',
-          })
+          const indent = bullet[1]!.replace(/\t/g, '  ').length
+          const title = cleanHeading(bullet[2]!).slice(0, 120)
+          while (bulletStack.length > 0 && bulletStack[bulletStack.length - 1]!.indent >= indent) {
+            bulletStack.pop()
+          }
+          const parent = bulletStack[bulletStack.length - 1]
+          const grouping = title.endsWith(':')
+          const groupingChildrenAreTasks = grouping && groupingChildrenAreTaskCandidates(title)
+          if (grouping && !groupingChildrenAreTasks) {
+            signals.push({
+              source: 'planning-docs',
+              kind: isProjectStateCurrentFocus(fileBase, currentSection) ? 'context' : 'open_work',
+              title: title.replace(/:$/, ''),
+              evidence: `${rel}: ${line.trim()}`.slice(0, 240),
+              references: [abs],
+              ...(domainHint ? { domainHint } : {}),
+              confidence: 'medium',
+            })
+          } else if (!grouping) {
+            const kind: WorkspaceSignal['kind'] =
+              isProjectStateCurrentFocus(fileBase, currentSection) ||
+              (parent && indent > parent.indent && !parent.grouping)
+                ? 'context'
+                : 'open_work'
+            signals.push({
+              source: 'planning-docs',
+              kind,
+              title,
+              evidence: `${rel}: ${line.trim()}`.slice(0, 240),
+              references: [abs],
+              ...(domainHint ? { domainHint } : {}),
+              confidence: 'medium',
+            })
+          }
+          bulletStack.push({ indent, title, grouping: groupingChildrenAreTasks })
+          continue
         }
 
         const numbered = /^\s*\d+\.\s+(.+?)\s*$/.exec(line)
         if (numbered && currentSection && OPEN_HEADING_RE.test(currentSection)) {
+          const kind: WorkspaceSignal['kind'] = isProjectStateCurrentFocus(fileBase, currentSection)
+            ? 'context'
+            : 'open_work'
           signals.push({
             source: 'planning-docs',
-            kind: 'open_work',
+            kind,
             title: cleanHeading(numbered[1]!).slice(0, 120),
             evidence: `${rel}: ${line.trim()}`.slice(0, 240),
             references: [abs],

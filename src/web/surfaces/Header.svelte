@@ -10,9 +10,11 @@
   import { onStatus, type SseStatus } from '../lib/events.js'
   import StatusDot from '../lib/StatusDot.svelte'
   import { parseProjectRoute } from '../lib/project-routes.js'
+  import { humanizeProjectName } from '../lib/project-name.js'
 
   let sseStatus = $state<SseStatus>('connecting')
   let version = $state<string | null>(null)
+  let projectTitle = $state<string | null>(null)
 
   $effect(() => {
     const off = onStatus(s => (sseStatus = s))
@@ -34,7 +36,25 @@
   const sseLabel = $derived(
     sseStatus === 'live' ? 'live' : sseStatus === 'error' ? 'reconnecting...' : 'connecting...',
   )
-  const showProjectMenu = $derived(path.value.startsWith('/project') || parseProjectRoute(path.value).projectScoped)
+  const parsedRoute = $derived(parseProjectRoute(path.value))
+  const showProjectMenu = $derived(path.value.startsWith('/project') || parsedRoute.projectScoped)
+
+  $effect(() => {
+    projectTitle = parsedRoute.projectScoped
+      ? humanizeProjectName(parsedRoute.projectId)
+      : null
+  })
+
+  $effect(() => {
+    const handle = (event: Event) => {
+      const custom = event as CustomEvent<{ title?: string | null }>
+      projectTitle = typeof custom.detail?.title === 'string' && custom.detail.title.trim().length > 0
+        ? custom.detail.title.trim()
+        : (parsedRoute.projectScoped ? humanizeProjectName(parsedRoute.projectId) : null)
+    }
+    window.addEventListener('guildhall:set-project-title', handle as EventListener)
+    return () => window.removeEventListener('guildhall:set-project-title', handle as EventListener)
+  })
 
   function goHome() {
     nav('/')
@@ -46,27 +66,36 @@
 </script>
 
 <header class="app-header">
-  {#if showProjectMenu}
-    <button type="button" class="project-menu" onclick={toggleProjectNav} aria-label="Open project navigation">
-      <Icon name="menu" size={18} />
+  <div class="header-left">
+    {#if showProjectMenu}
+      <button type="button" class="project-menu" onclick={toggleProjectNav} aria-label="Open project navigation">
+        <Icon name="menu" size={18} />
+      </button>
+    {/if}
+    <button type="button" class="brand" onclick={goHome} aria-label="Projects home">
+      Guildhall
     </button>
-  {/if}
-  <button type="button" class="brand" onclick={goHome} aria-label="Projects home">
-    Guildhall
-  </button>
-  {#if version}
-    <span class="version" title="Guildhall runtime version">v{version}</span>
-  {/if}
-  <span class="grow"></span>
-  <span class="sse-status">
-    <StatusDot tone={sseTone} pulse={sseStatus === 'live'} />
-    {sseLabel}
-  </span>
+    {#if version}
+      <span class="version" title="Guildhall runtime version">v{version}</span>
+    {/if}
+  </div>
+  <div class="header-center" title={projectTitle ?? undefined}>
+    {#if projectTitle}
+      <span class="project-title">{projectTitle}</span>
+    {/if}
+  </div>
+  <div class="header-right">
+    <span class="sse-status">
+      <StatusDot tone={sseTone} pulse={sseStatus === 'live'} />
+      {sseLabel}
+    </span>
+  </div>
 </header>
 
 <style>
   .app-header {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--s-3);
     padding: var(--s-2) var(--s-4);
@@ -74,6 +103,34 @@
     border-bottom: 1px solid var(--border);
     background: var(--bg-raised);
     z-index: var(--z-app-header);
+  }
+  .header-left,
+  .header-right {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-3);
+    min-width: 0;
+  }
+  .header-right {
+    justify-self: end;
+  }
+  .header-center {
+    min-width: 0;
+    justify-self: center;
+    padding-inline: var(--s-3);
+  }
+  .project-title {
+    display: inline-block;
+    max-width: min(52vw, 40ch);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+    font-size: var(--fs-2);
+    font-weight: 600;
+    line-height: var(--lh-tight);
+    text-transform: none;
+    letter-spacing: 0;
   }
   .brand {
     font-size: var(--fs-3);
@@ -113,9 +170,6 @@
     letter-spacing: 0.02em;
     margin-left: -2px;
   }
-  .grow {
-    flex: 1;
-  }
   .sse-status {
     display: inline-flex;
     align-items: center;
@@ -129,6 +183,20 @@
   @media (max-width: 1100px) {
     .project-menu {
       display: inline-flex;
+    }
+  }
+  @media (max-width: 900px) {
+    .app-header {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: var(--s-2);
+    }
+    .header-left,
+    .header-right {
+      gap: var(--s-2);
+    }
+    .project-title {
+      max-width: min(42vw, 24ch);
+      font-size: var(--fs-1);
     }
   }
 </style>

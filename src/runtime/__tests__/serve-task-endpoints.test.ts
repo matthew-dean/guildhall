@@ -419,10 +419,31 @@ describe('GET /api/project/task/:id', () => {
     const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
-    expect(body.task?.latestCheckpoint?.nextPlannedAction).toBe(
-      'Resume from the latest self-critique and recorded verification evidence, then hand off to review.',
-    )
+  expect(body.task?.latestCheckpoint?.nextPlannedAction).toBe(
+    'Resume from the latest self-critique and recorded verification evidence, then hand off to review.',
+  )
+})
+
+it('hides placeholder checkpoint next-action values in task detail responses', async () => {
+  await seedTask('task-1', {
+    status: 'in_progress',
   })
+  await writeCheckpoint({
+    tasksPath: path.join(memoryDir, 'TASKS.json'),
+    memoryDir,
+    taskId: 'task-1',
+    agentId: 'worker-agent',
+    intent: 'Resume implementation',
+    nextPlannedAction: 'None',
+    filesTouched: ['web/server/api/pages/[id]/restore.post.ts'],
+  })
+
+  const { app } = buildServeApp({ projectPath: tmpDir })
+  const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+  expect(res.status).toBe(200)
+  const body = (await res.json()) as Record<string, any>
+  expect(body.task?.latestCheckpoint?.nextPlannedAction).toBeNull()
+})
 
   it('returns 404 when task id is unknown', async () => {
     await seedTask('task-1')
@@ -738,6 +759,76 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(detailRes.status).toBe(200)
     const detailBody = (await detailRes.json()) as Record<string, any>
     expect(detailBody.task?.status).toBe('exploring')
+  })
+
+  it('shelves an imported draft immediately when it is an obvious duplicate of finished work', async () => {
+    const now = new Date().toISOString()
+    await fs.writeFile(
+      path.join(memoryDir, 'TASKS.json'),
+      JSON.stringify({
+        version: 1,
+        lastUpdated: now,
+        tasks: [
+          {
+            id: 'task-done',
+            title: 'Add E2E login -> create page -> edit -> search flow',
+            description: 'Finished version',
+            domain: 'knit',
+            projectPath: '/tmp/knit',
+            status: 'done',
+            priority: 'normal',
+            revisionCount: 0,
+            remediationAttempts: 0,
+            origination: 'human',
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: 'task-1',
+            title: 'E2E tests: login → create page → edit → search flow',
+            description: 'Imported raw draft',
+            domain: 'knit',
+            projectPath: '/tmp/knit',
+            status: 'import_draft',
+            priority: 'normal',
+            revisionCount: 0,
+            remediationAttempts: 0,
+            origination: 'human',
+            createdAt: now,
+            updatedAt: now,
+            acceptanceCriteria: [],
+            notes: [
+              {
+                agentId: 'workspace-importer',
+                role: 'importer',
+                content: 'Imported from: knit/docs/feature-roadmap.md',
+                timestamp: now,
+              },
+            ],
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/shape-draft'), {
+        method: 'POST',
+      }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.status).toBe('shelved')
+
+    const queue = JSON.parse(
+      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+    ) as { tasks: Array<Record<string, any>> }
+    const task = queue.tasks.find(task => task.id === 'task-1')
+    expect(task?.status).toBe('shelved')
+    expect(task?.shelveReason?.code).toBe('duplicate')
+    expect(task?.shelveReason?.detail).toMatch(/task-done/)
+    expect(task?.notes?.at(-1)?.content).toMatch(/Duplicate of task-done/i)
   })
 
   it('rejects resume with neither a message nor an escalation resolution', async () => {

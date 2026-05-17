@@ -13,6 +13,7 @@
     rail?: Snippet
     topbar?: Snippet
     band?: Snippet
+    footer?: Snippet
     children?: Snippet
   }
 
@@ -28,6 +29,7 @@
     rail,
     topbar,
     band,
+    footer,
     children,
   }: Props = $props()
 
@@ -49,6 +51,11 @@
     <div class={`app-shell-page ${pageClass}`.trim()}>
       {@render children?.()}
     </div>
+    {#if footer}
+      <div class="app-shell-footer">
+        {@render footer?.()}
+      </div>
+    {/if}
   </div>
 </div>
 
@@ -81,8 +88,8 @@
   }
   .app-shell-main {
     min-width: 0;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
     min-block-size: 0;
     block-size: 100%;
     align-self: stretch;
@@ -105,11 +112,15 @@
   .app-shell-page {
     min-width: 0;
     min-height: 0;
-    flex: 1 1 auto;
     overflow-y: auto;
     overflow-x: hidden;
     padding: 0 var(--s-5) var(--s-6);
     box-sizing: border-box;
+  }
+  .app-shell-footer {
+    min-width: 0;
+    min-height: 0;
+    z-index: var(--z-sticky-local);
   }
   @media (max-width: 1100px) {
     .app-shell {

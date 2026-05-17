@@ -160,7 +160,27 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('/projects/knit/.guildhall/worktrees/task-001/web/tests/unit/composables/use-presence.test.ts')
   })
 
-  it('ignores contextual test-file mentions, shell commands, and wildcard globs when deriving likely target files', () => {
+  it('resolves Nuxt server hints under web/server when the task root is the app project', async () => {
+    const worktree = path.join(tmpDir, '.guildhall', 'worktrees', 'task-invite')
+    await fs.mkdir(path.join(worktree, 'web', 'server', 'api', 'workspaces'), { recursive: true })
+    await fs.writeFile(
+      path.join(worktree, 'web', 'server', 'api', 'workspaces', 'members.get.ts'),
+      '// members route\n',
+      'utf8',
+    )
+    const taskWithTargets: Task = {
+      ...baseTask,
+      projectPath: path.join(tmpDir, 'knit'),
+      worktreePath: worktree,
+      spec: 'Create `server/api/workspaces/[id]/invite.post.ts` using the pattern in `web/server/api/workspaces/members.get.ts`.',
+    }
+
+    const ctx = await buildContext(taskWithTargets, tmpDir)
+    expect(ctx.taskSummary).toContain(path.join(worktree, 'web', 'server', 'api', 'workspaces', '[id]', 'invite.post.ts'))
+    expect(ctx.taskSummary).not.toContain(path.join(worktree, 'server', 'api', 'workspaces', '[id]', 'invite.post.ts'))
+  })
+
+  it('keeps explicitly referenced test files while ignoring shell commands and wildcard globs when deriving likely target files', () => {
     const taskWithNoisyHints: Task = {
       ...baseTask,
       projectPath: '/projects/knit',
@@ -187,6 +207,7 @@ describe('buildContext — task summary', () => {
 
     expect(resolveLikelyTaskFiles(taskWithNoisyHints)).toEqual([
       '/projects/knit/.guildhall/worktrees/task-007/web/app/composables/use-collections.ts',
+      '/projects/knit/.guildhall/worktrees/task-007/web/tests/unit/composables/use-collections-auth.test.ts',
     ])
   })
 
@@ -216,6 +237,67 @@ describe('buildContext — task summary', () => {
     expect(resolveLikelyTaskFiles(taskWithBacktickedSpec)).toEqual([
       '/projects/knit/.guildhall/worktrees/task-012/web/app/types/supabase.ts',
       '/projects/knit/.guildhall/worktrees/task-012/web/app/composables/use-workspace.ts',
+    ])
+  })
+
+  it('uses recent reviewer feedback when deriving likely target files for revision work', () => {
+    const taskWithReviewerFeedback: Task = {
+      ...baseTask,
+      projectPath: '/projects/fll/frontend',
+      worktreePath: '/projects/fll/.guildhall/worktrees/task-003',
+      spec: '## Summary\nWire auth pages.',
+      notes: [
+        {
+          agentId: 'reviewer-fanout',
+          role: 'reviewer',
+          content:
+            "Add `definePageMeta({ middleware: 'auth' })` to `frontend/app/pages/dashboard.vue` to enforce authentication.",
+          timestamp: '2026-05-14T16:06:42.745Z',
+        },
+      ],
+    }
+
+    expect(resolveLikelyTaskFiles(taskWithReviewerFeedback)).toEqual([
+      '/projects/fll/.guildhall/worktrees/task-003/frontend/app/pages/dashboard.vue',
+    ])
+  })
+
+  it('resolves ambiguous spec paths against the real repo tree and includes success-metric test files', async () => {
+    await fs.mkdir(path.join(tmpDir, 'packages', 'converter', 'src', 'features'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'packages', 'converter', 'test'), { recursive: true })
+    await execFileP('git', ['init'], { cwd: tmpDir })
+    await fs.writeFile(path.join(tmpDir, 'packages', 'converter', 'src', 'typescriptToJsdoc.ts'), '', 'utf-8')
+    await fs.writeFile(path.join(tmpDir, 'packages', 'converter', 'src', 'jsdocToTypescript.ts'), '', 'utf-8')
+    await fs.writeFile(path.join(tmpDir, 'packages', 'converter', 'src', 'features', 'functionDeclaration.ts'), '', 'utf-8')
+    await fs.writeFile(path.join(tmpDir, 'packages', 'converter', 'src', 'features', 'variableDeclaration.ts'), '', 'utf-8')
+    await fs.writeFile(path.join(tmpDir, 'packages', 'converter', 'test', 'ts-to-jsdoc.test.ts'), '', 'utf-8')
+    await fs.writeFile(path.join(tmpDir, 'packages', 'converter', 'test', 'jsdoc-to-ts.test.ts'), '', 'utf-8')
+
+    const task: Task = {
+      ...baseTask,
+      projectPath: tmpDir,
+      spec: [
+        '## Summary',
+        'In `typescriptToJsdoc.ts` and `features/functionDeclaration.ts`, preserve non-type tags.',
+        'In `jsdocToTypescript.ts` and `features/variableDeclaration.ts`, keep descriptions intact.',
+      ].join('\n'),
+      productBrief: {
+        userJob: 'Complete the round-trip converter.',
+        successMetric:
+          'packages/converter/test/ts-to-jsdoc.test.ts and packages/converter/test/jsdoc-to-ts.test.ts all pass.',
+        antiPatterns: [],
+        authoredBy: 'spec-agent',
+        authoredAt: '2026-05-12T00:00:00Z',
+      },
+    }
+
+    expect(resolveLikelyTaskFiles(task)).toEqual([
+      path.join(tmpDir, 'packages', 'converter', 'src', 'typescriptToJsdoc.ts'),
+      path.join(tmpDir, 'packages', 'converter', 'src', 'features', 'functionDeclaration.ts'),
+      path.join(tmpDir, 'packages', 'converter', 'src', 'jsdocToTypescript.ts'),
+      path.join(tmpDir, 'packages', 'converter', 'src', 'features', 'variableDeclaration.ts'),
+      path.join(tmpDir, 'packages', 'converter', 'test', 'ts-to-jsdoc.test.ts'),
+      path.join(tmpDir, 'packages', 'converter', 'test', 'jsdoc-to-ts.test.ts'),
     ])
   })
 
@@ -252,7 +334,20 @@ describe('buildContext — task summary', () => {
         step: 1,
         intent: 'Regenerated supabase types',
         filesTouched: ['web/app/types/supabase.ts', 'web/app/composables/use-workspace.ts'],
-        nextPlannedAction: 'Run the focused typecheck next',
+        nextPlannedAction: 'Resume from the active worktree diff, refresh focused verification, and keep the task in implementation until the focused checks are green.',
+        resumeContext: {
+          verification: [
+            {
+              command: 'pnpm -F web typecheck',
+              passed: false,
+              observedAt: '2026-05-07T18:24:00.000Z',
+              summary: 'Cannot find name WorkspaceSummary',
+            },
+          ],
+          companionFiles: ['web/tests/unit/composables/use-workspace.test.ts'],
+          workingHypothesis: 'The generated type wiring is correct, but one consumer still expects the old WorkspaceSummary shape.',
+          safeNextMutationSurface: ['web/app/types/supabase.ts', 'web/app/composables/use-workspace.ts'],
+        },
         writtenAt: '2026-05-07T18:23:25.747Z',
       }, null, 2),
       'utf-8',
@@ -265,9 +360,46 @@ describe('buildContext — task summary', () => {
 
     expect(ctx.taskSummary).toContain('### Latest Checkpoint')
     expect(ctx.taskSummary).toContain('Regenerated supabase types')
-    expect(ctx.taskSummary).toContain('Run the focused typecheck next')
+    expect(ctx.taskSummary).toContain('Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.')
+    expect(ctx.taskSummary).toContain('Latest authoritative verification: pnpm -F web typecheck (failed)')
+    expect(ctx.taskSummary).toContain('Cannot find name WorkspaceSummary')
+    expect(ctx.taskSummary).toContain('Companion files: web/tests/unit/composables/use-workspace.test.ts')
+    expect(ctx.taskSummary).toContain('Safe next mutation surface: web/app/types/supabase.ts, web/app/composables/use-workspace.ts')
     expect(ctx.taskSummary).toContain(path.join(worktreePath, 'web/app/types/supabase.ts'))
     expect(ctx.taskSummary).toContain(path.join(worktreePath, 'web/app/composables/use-workspace.ts'))
+  })
+
+  it('ignores stale checkpoints written before the task was updated', async () => {
+    const worktreePath = path.join(tmpDir, 'worktree')
+    const memoryTasksDir = path.join(tmpDir, 'tasks', 'task-001')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await fs.mkdir(memoryTasksDir, { recursive: true })
+    await fs.writeFile(
+      path.join(memoryTasksDir, 'checkpoint.json'),
+      JSON.stringify({
+        taskId: 'task-001',
+        agentId: 'worker-agent',
+        step: 1,
+        intent: 'Old recovery lane',
+        filesTouched: ['PROJECT_STATE.md'],
+        nextPlannedAction: 'Only edit PROJECT_STATE.md.',
+        resumeContext: {
+          safeNextMutationSurface: ['PROJECT_STATE.md'],
+        },
+        writtenAt: '2026-05-07T18:23:25.747Z',
+      }, null, 2),
+      'utf-8',
+    )
+
+    const ctx = await buildContext({
+      ...baseTask,
+      worktreePath,
+      updatedAt: '2026-05-07T19:00:00.000Z',
+    }, tmpDir)
+
+    expect(ctx.taskSummary).not.toContain('### Latest Checkpoint')
+    expect(ctx.taskSummary).not.toContain('PROJECT_STATE.md')
+    expect(ctx.taskSummary).not.toContain('Only edit PROJECT_STATE.md')
   })
 
   it('treats remove-style spec instructions as actionable file hints for likely target inference', () => {

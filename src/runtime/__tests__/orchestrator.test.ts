@@ -9,6 +9,7 @@ import {
   shouldResumeAgentSession,
   isSessionSnapshotFreshForTask,
   type OrchestratorAgentSet,
+  type ReviewerFanoutRunner,
 } from '../orchestrator.js'
 import { LivenessTracker } from '../liveness.js'
 import { updateProjectConfig, type ResolvedConfig } from '@guildhall/config'
@@ -21,6 +22,7 @@ import {
   type LeverSettings,
 } from '@guildhall/levers'
 import { InMemoryGitDriver } from '../git-driver.js'
+import { writeCheckpoint } from '@guildhall/tools'
 
 // ---------------------------------------------------------------------------
 // Orchestrator feedback-loop tests
@@ -1430,6 +1432,9 @@ describe('Orchestrator.tick — routing', () => {
           typecheck: 'tsc --noEmit',
           test: 'vitest',
         },
+        devDependencies: {
+          vitest: '^3.0.0',
+        },
       }),
       'utf8',
     )
@@ -1473,7 +1478,6 @@ describe('Orchestrator.tick — routing', () => {
     expect(gc.calls).toHaveLength(1)
     expect(gc.calls[0]!.prompt).toContain(`Run hard gates against \`${knitDir}\``)
     expect(gc.calls[0]!.prompt).toContain('`pnpm typecheck`')
-    expect(gc.calls[0]!.prompt).toContain('`pnpm test`')
     expect(gc.calls[0]!.prompt).not.toContain('No verified shell gates are currently configured for this task path.')
   })
 
@@ -1732,6 +1736,12 @@ describe('Orchestrator.tick — routing', () => {
         worktreePath: path.join(tmpDir, '.guildhall', 'worktrees', 'worker-task'),
         notes: [
           {
+            agentId: 'task-claimer',
+            role: 'orchestrator',
+            content: 'Claimed ready task for worker-agent.',
+            timestamp: '2026-05-13T15:30:00.000Z',
+          },
+          {
             agentId: 'worker-agent',
             role: 'self-critique',
             content: '**Self-critique:**\n- [ac-1]: Met — focused test passes.',
@@ -1808,11 +1818,121 @@ describe('Orchestrator.tick — routing', () => {
       intent: string
       nextPlannedAction: string
       filesTouched: string[]
+      resumeContext?: {
+        verification?: Array<{
+          command: string
+          passed: boolean
+          observedAt: string
+          summary?: string
+        }>
+        companionFiles?: string[]
+        workingHypothesis?: string
+        safeNextMutationSurface?: string[]
+      }
     }
     expect(checkpoint.intent).toContain('empty assistant reply after verified progress')
     expect(checkpoint.intent).toContain('Ran bash command cd web && pnpm vitest')
+    expect(checkpoint.nextPlannedAction).toContain('Resume from the latest self-critique and verification evidence')
     expect(checkpoint.nextPlannedAction).toContain('hand off to review')
     expect(checkpoint.filesTouched).toContain('web/tests/unit/composables/use-presence.test.ts')
+    expect(checkpoint.resumeContext?.verification).toEqual([])
+    expect(checkpoint.resumeContext?.safeNextMutationSurface).toContain('web/tests/unit/composables/use-presence.test.ts')
+    expect(checkpoint.resumeContext?.workingHypothesis).toContain('safest next mutation surface')
+  })
+
+  it('prioritizes source and test files over repo metadata in the recovery checkpoint mutation surface', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'worker-task')
+    await writeQueue([
+      mkTask({
+        id: 'worker-task',
+        status: 'in_progress',
+        worktreePath,
+      }),
+    ])
+    await fs.mkdir(path.join(worktreePath, 'packages', 'converter', 'src'), { recursive: true })
+    await fs.mkdir(path.join(worktreePath, 'packages', 'converter', 'test'), { recursive: true })
+    execFileSync('git', ['init'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.email', 'codex@example.com'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.name', 'Codex'], { cwd: worktreePath, stdio: 'ignore' })
+    await fs.writeFile(path.join(worktreePath, '.gitignore'), 'dist\n', 'utf8')
+    await fs.writeFile(path.join(worktreePath, 'package.json'), '{\"name\":\"demo\"}\n', 'utf8')
+    await fs.writeFile(
+      path.join(worktreePath, 'packages', 'converter', 'src', 'typescriptToJsdoc.ts'),
+      'export const baseline = true\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(worktreePath, 'packages', 'converter', 'test', 'ts-to-jsdoc.test.ts'),
+      'test(\"baseline\", () => {})\n',
+      'utf8',
+    )
+    execFileSync('git', ['add', '.'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'baseline', '--no-verify'], { cwd: worktreePath, stdio: 'ignore' })
+    await fs.writeFile(path.join(worktreePath, '.gitignore'), 'dist\ncoverage\n', 'utf8')
+    await fs.writeFile(path.join(worktreePath, 'package.json'), '{\"name\":\"demo\",\"private\":true}\n', 'utf8')
+    await fs.writeFile(
+      path.join(worktreePath, 'packages', 'converter', 'src', 'typescriptToJsdoc.ts'),
+      'export const changed = true\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(worktreePath, 'packages', 'converter', 'test', 'ts-to-jsdoc.test.ts'),
+      'test(\"works\", () => {})\n',
+      'utf8',
+    )
+
+    const worker: StubAgent = {
+      name: 'worker-agent',
+      calls: [],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        throw new Error('Model returned an empty assistant message. The turn was ignored to keep the session healthy.')
+      },
+      getToolMetadata() {
+        return {
+          review_handoff_evidence: {
+            taskId: 'worker-task',
+            inspectedImplementationFile: true,
+            changedOrVerified: true,
+          },
+          current_task_verification_history: [
+            {
+              command: 'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+              passed: false,
+              observedAt: '2026-05-14T13:50:51.803Z',
+              summary: '5 failures in non-type JSDoc tag preservation',
+            },
+          ],
+        }
+      },
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    for (let i = 0; i < 6; i += 1) {
+      await orch.tick()
+    }
+
+    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-task', 'checkpoint.json')
+    const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
+      nextPlannedAction: string
+      resumeContext?: {
+        safeNextMutationSurface?: string[]
+        workingHypothesis?: string
+      }
+    }
+
+    expect(checkpoint.nextPlannedAction).toContain('recorded verification evidence')
+    expect(checkpoint.nextPlannedAction).toContain('rerun the focused verification commands')
+    expect(checkpoint.resumeContext?.safeNextMutationSurface?.[0]).toBe('packages/converter/src/typescriptToJsdoc.ts')
+    expect(checkpoint.resumeContext?.safeNextMutationSurface?.[1]).toBe('packages/converter/test/ts-to-jsdoc.test.ts')
+    expect(checkpoint.resumeContext?.safeNextMutationSurface?.slice(0, 2)).not.toContain('.gitignore')
+    expect(checkpoint.resumeContext?.safeNextMutationSurface?.slice(0, 2)).not.toContain('package.json')
+    expect(checkpoint.resumeContext?.workingHypothesis).toContain('packages/converter/src/typescriptToJsdoc.ts')
+    expect(checkpoint.resumeContext?.workingHypothesis).not.toContain('.gitignore')
   })
 
   it('writes a recovery checkpoint even when the worker already blocked the task before an empty assistant reply', async () => {
@@ -1889,7 +2009,8 @@ describe('Orchestrator.tick — routing', () => {
       nextPlannedAction: string
     }
     expect(checkpoint.intent).toContain('empty assistant reply after verified progress')
-    expect(checkpoint.nextPlannedAction).toContain('review')
+    expect(checkpoint.nextPlannedAction).toContain('focused verification')
+    expect(checkpoint.nextPlannedAction).not.toContain('hand off to review')
   })
 
   it('writes a recovery checkpoint after an empty assistant reply even when the worktree is clean if checkpoint-scoped verified files are present', async () => {
@@ -1953,7 +2074,8 @@ describe('Orchestrator.tick — routing', () => {
     expect(checkpoint.intent).toContain('empty assistant reply after verified progress')
     expect(checkpoint.intent).toContain('pnpm db:types:remote')
     expect(checkpoint.filesTouched).toContain('web/app/types/supabase.ts')
-    expect(checkpoint.nextPlannedAction).toContain('hand off to review')
+    expect(checkpoint.nextPlannedAction).toContain('rerun the focused verification commands')
+    expect(checkpoint.nextPlannedAction).not.toContain('hand off to review')
   })
 
   it('keeps a task in review and normalizes reviewer ownership after repeated empty replies post-handoff', async () => {
@@ -2863,7 +2985,84 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(checkpoint.intent).toContain('worker pass ended with dirty worktree progress but no status transition')
     expect(checkpoint.intent).toContain('Ran bash command cd web && pnpm vitest')
     expect(checkpoint.filesTouched).toContain('web/tests/unit/composables/use-collections.test.ts')
-    expect(checkpoint.nextPlannedAction).toContain('hand off to review')
+    expect(checkpoint.nextPlannedAction).toContain('rerun the focused verification commands')
+    expect(checkpoint.nextPlannedAction).not.toContain('hand off to review')
+  })
+
+  it('treats dirty likely-target files in the main project checkout as durable worker progress', async () => {
+    const projectPath = path.join(tmpDir, 'worker-likely-target-progress')
+    const editedFile = path.join(projectPath, 'packages', 'converter', 'test', 'jsdoc-to-ts.test.ts')
+    await fs.mkdir(path.dirname(editedFile), { recursive: true })
+    await fs.writeFile(editedFile, 'it("round trips", () => {})\n', 'utf8')
+    execFileSync('git', ['init'], { cwd: projectPath, stdio: 'ignore' })
+
+    await writeQueue([
+      mkTask({
+        id: 'worker-likely-target-progress',
+        status: 'in_progress',
+        projectPath,
+        updatedAt: '2026-04-01T00:00:00Z',
+        spec: 'Likely target file: `packages/converter/test/jsdoc-to-ts.test.ts`',
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'Focused converter tests pass.',
+            verifiedBy: 'automated',
+            command: 'pnpm --dir packages/converter vitest run packages/converter/test/jsdoc-to-ts.test.ts',
+            met: false,
+          },
+        ],
+      }),
+    ])
+
+    const worker: StubAgent = {
+      name: 'worker-agent',
+      calls: [],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: 'Focused converter tests still fail; next step is to fix the JSDoc-to-TS round-trip.' }
+      },
+      getToolMetadata() {
+        return {
+          review_handoff_evidence: {
+            taskId: 'worker-likely-target-progress',
+            inspectedImplementationFile: true,
+            changedOrVerified: true,
+          },
+          recent_verified_work: [
+            'Ran bash command pnpm --dir packages/converter vitest run test/jsdoc-to-ts.test.ts [FAIL]',
+          ],
+        }
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver(),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(false)
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'worker-likely-target-progress')
+    expect(task?.updatedAt).not.toBe('2026-04-01T00:00:00Z')
+
+    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-likely-target-progress', 'checkpoint.json')
+    const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
+      intent: string
+      nextPlannedAction: string
+      filesTouched: string[]
+    }
+    expect(checkpoint.intent).toContain('dirty likely-target files in the main project checkout')
+    expect(checkpoint.filesTouched).toContain(path.join('packages', 'converter', 'test', 'jsdoc-to-ts.test.ts'))
+    expect(checkpoint.nextPlannedAction).toContain('rerun the focused verification commands')
+    expect(checkpoint.nextPlannedAction).not.toContain('hand off to review')
   })
 
   it('writes a recovery checkpoint and bumps updatedAt when a worker pass leaves clean verified progress without a status transition', async () => {
@@ -2936,7 +3135,8 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(checkpoint.intent).toContain('worker pass ended with clean verified progress but no status transition')
     expect(checkpoint.intent).toContain('pnpm db:types:remote')
     expect(checkpoint.filesTouched).toContain('web/app/types/supabase.ts')
-    expect(checkpoint.nextPlannedAction).toContain('hand off to review')
+    expect(checkpoint.nextPlannedAction).toContain('rerun the focused verification commands')
+    expect(checkpoint.nextPlannedAction).not.toContain('hand off to review')
   })
 
   it('preserves worker progress in the main project checkout when worktree isolation is off', async () => {
@@ -3007,7 +3207,8 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     }
     expect(checkpoint.intent).toContain('progress but no status transition')
     expect(checkpoint.filesTouched).toContain(path.join('frontend', 'app', 'pages', 'register.vue'))
-    expect(checkpoint.nextPlannedAction).toContain('hand off to review')
+    expect(checkpoint.nextPlannedAction).toContain('rerun the focused verification commands')
+    expect(checkpoint.nextPlannedAction).not.toContain('hand off to review')
   })
 
   it('reuses worker persona-role self-critique notes when building a recovery checkpoint next action', async () => {
@@ -3072,8 +3273,102 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       nextPlannedAction: string
     }
-    expect(checkpoint.nextPlannedAction).toContain('Resume from the latest self-critique and verification evidence')
-    expect(checkpoint.nextPlannedAction).not.toContain('write or refresh the self-critique note')
+  expect(checkpoint.nextPlannedAction).toContain('Resume from the latest self-critique and verification evidence')
+  expect(checkpoint.nextPlannedAction).not.toContain('write or refresh the self-critique note')
+})
+
+it('ignores placeholder checkpoint next-action values when resuming worker tasks', async () => {
+  const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'worker-placeholder-checkpoint')
+  await fs.mkdir(path.join(worktreePath, 'web', 'app', 'components'), { recursive: true })
+  execFileSync('git', ['init'], { cwd: worktreePath, stdio: 'ignore' })
+
+  await writeQueue([
+    mkTask({
+      id: 'worker-placeholder-checkpoint',
+      status: 'in_progress',
+      worktreePath,
+    }),
+  ])
+
+  const worker: StubAgent = {
+    name: 'worker-agent',
+    calls: [],
+    async generate(prompt: string) {
+      this.calls.push({ prompt })
+      throw new Error('Model returned an empty assistant message. The turn was ignored to keep the session healthy.')
+    },
+  }
+
+  await writeCheckpoint({
+    tasksPath,
+    memoryDir,
+    taskId: 'worker-placeholder-checkpoint',
+    agentId: 'worker-agent',
+    intent: 'Resume implementation',
+    nextPlannedAction: 'None',
+    filesTouched: ['web/app/components/VersionHistoryDialog.vue'],
+  })
+
+  const orch = new Orchestrator({
+    config: baseConfig(),
+    agents: agentSet({ worker }),
+    gitDriver: new InMemoryGitDriver(),
+  })
+
+  const out = await orch.tick()
+  expect(out.kind).toBe('processed')
+  const prompt = worker.calls.at(-1)?.prompt ?? ''
+  expect(prompt).not.toContain('The latest checkpoint already told you what to do next: None')
+})
+
+it('filters node_modules noise out of recovery checkpoints and falls back to metadata-touched source files', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'worker-node-modules-noise')
+    await fs.mkdir(path.join(worktreePath, 'node_modules'), { recursive: true })
+    await fs.writeFile(path.join(worktreePath, 'node_modules', '.keep'), '', 'utf8')
+    execFileSync('git', ['init'], { cwd: worktreePath, stdio: 'ignore' })
+
+    await writeQueue([
+      mkTask({
+        id: 'worker-node-modules-noise',
+        status: 'in_progress',
+        worktreePath,
+      }),
+    ])
+
+    const worker: StubAgent = {
+      name: 'worker-agent',
+      calls: [],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        throw new Error('Model returned an empty assistant message. The turn was ignored to keep the session healthy.')
+      },
+      getToolMetadata() {
+        return {
+          recent_verified_work: [
+            'Edited file /workspace/frontend/app/pages/register.vue',
+          ],
+          current_task_checkpoint_files_touched: ['frontend/app/pages/register.vue'],
+        }
+      },
+    }
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(false)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+    })
+
+    expect((await orch.tick()).kind).toBe('processed')
+    expect((await orch.tick()).kind).toBe('processed')
+    expect((await orch.tick()).kind).toBe('processed')
+
+    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-node-modules-noise', 'checkpoint.json')
+    const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
+      filesTouched: string[]
+    }
+    expect(checkpoint.filesTouched).not.toContain('node_modules')
+    expect(checkpoint.filesTouched).toContain('frontend/app/pages/register.vue')
   })
 
   it('stays silent across many no-op ticks (no PROGRESS.md churn)', async () => {
@@ -3471,6 +3766,60 @@ describe('Orchestrator.run — full loops', () => {
     })
   })
 
+  it('checkpoints shared-checkout work into a task branch when worktree isolation is disabled and the repo is dirty', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'ready',
+        domain: 'looma',
+        spec: 'approved spec',
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'Thing is done',
+            verifiedBy: 'automated',
+            command: 'pnpm test',
+            met: true,
+          },
+        ],
+      }),
+    ])
+
+    const advance = (next: TaskStatus) => async () => {
+      await mutateTask('a', { status: next })
+    }
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', advance('review')),
+      reviewer: stubAgent('reviewer-agent', advance('gate_check')),
+      gateChecker: stubAgent('gate-checker-agent', advance('done')),
+      coordinators: {},
+    }
+
+    const gitDriver = new InMemoryGitDriver({ clean: false })
+    const orch = new Orchestrator({ config: baseConfig(), agents, gitDriver })
+    await orch.run({ maxTicks: 20, tickDelayMs: 0 })
+
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('done')
+    expect(gitDriver.state.checkpoints).toHaveLength(1)
+    expect(gitDriver.state.checkpoints[0]?.branch).toBe('guildhall/task-a')
+    expect(q.tasks[0]!.branchName).toBe('guildhall/task-a')
+    expect(q.tasks[0]!.baseBranch).toBe('main')
+    expect(q.tasks[0]!.mergeRecord).toMatchObject({
+      result: 'skipped',
+      detail: 'worktree isolation disabled — shared-checkout work checkpointed to task branch',
+      fromBranch: 'guildhall/task-a',
+      toBranch: 'main',
+      commitSha: 'checkpoint-1',
+    })
+    expect(q.tasks[0]!.notes.some((note) =>
+      note.role === 'checkpoint' &&
+      note.content.includes('Checkpointed shared-checkout work into guildhall/task-a'),
+    )).toBe(true)
+  })
+
   it('uses the task project repo for worktree and merge operations in multi-repo workspaces', async () => {
     const subrepo = path.join(tmpDir, 'knit')
     const guildhallHome = path.join(tmpDir, '.guildhall-home')
@@ -3679,6 +4028,1074 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.blockReason).toContain(`base repo has uncommitted changes at ${subrepo}`)
   })
 
+  it('packages Guildhall-owned shared-checkout edits into a task branch before creating a worktree', async () => {
+    const subrepo = path.join(tmpDir, 'frontend')
+    const guildhallHome = path.join(tmpDir, '.guildhall-home')
+    process.env.GUILDHALL_CONFIG_DIR = guildhallHome
+    await fs.mkdir(subrepo, { recursive: true })
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        domain: 'frontend',
+        projectPath: subrepo,
+        spec: 'approved spec',
+        blockReason:
+          `Guildhall could not start work because the target repo is dirty: ` +
+          `base repo has uncommitted changes at ${subrepo}. ` +
+          'Commit or stash those changes, then resume the task.',
+        notes: [
+          {
+            agentId: 'task-claimer',
+            role: 'orchestrator',
+            content: 'Claimed ready task for worker-agent.',
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: false })
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', async () => {
+        await mutateTask('a', { status: 'review' })
+      }),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig({ projectPath: tmpDir }),
+      agents,
+      gitDriver,
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    expect(gitDriver.state.checkpoints).toHaveLength(1)
+    expect(gitDriver.state.checkpoints[0]?.branch).toBe('guildhall/task-a')
+    expect(gitDriver.state.attachedWorktrees[0]?.branch).toBe('guildhall/task-a')
+    expect(gitDriver.state.attachedWorktrees[0]?.worktreePath).toBe(
+      path.join(guildhallHome, 'worktrees', 'test-ws', 'a'),
+    )
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.branchName).toBe('guildhall/task-a')
+    expect(task?.baseBranch).toBe('main')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) => note.role === 'recovery')).toBe(true)
+    expect(task?.notes.some((note) => note.role === 'checkpoint')).toBe(true)
+    delete process.env.GUILDHALL_CONFIG_DIR
+  })
+
+  it('reopens a stale review-handoff tool-loop blocker after the validator bug is fixed', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: 'approved spec',
+        blockReason: 'human_judgment_required: Blocked transitioning task to review — tool loop',
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: `**Self-critique:**\n\nAC-1 (Registration): Met — /register works.\n\n**Minimum-scope check:**\n- Files changed: none.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`,
+            timestamp: '2026-05-03T00:10:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'human_judgment_required',
+            summary: 'Blocked transitioning task to review — tool loop',
+            details: 'The transition was blocked with: persist a structured self-critique note via update-task first.',
+            raisedAt: '2026-05-03T00:11:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', async () => {
+        await mutateTask('a', { status: 'review' })
+      }),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('review handoff validator bug'),
+    )).toBe(true)
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('Superseded')
+  })
+
+  it('reopens a stale review-handoff tool-loop blocker that uses the newer decision-required wording', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: 'approved spec',
+        blockReason: 'decision_required: Stuck in tool loop transitioning a to review status',
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: `**Self-critique:**\n\nAC-1 (Registration): Met — /register works.\n\n**Minimal-scope check:**\n- Files changed: dashboard.vue.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`,
+            timestamp: '2026-05-03T00:10:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'decision_required',
+            summary: 'Stuck in tool loop transitioning a to review status',
+            details: 'The transition was blocked with: persist a structured self-critique note via update-task first.',
+            raisedAt: '2026-05-03T00:11:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', async () => {
+        await mutateTask('a', { status: 'review' })
+      }),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('review handoff validator bug'),
+    )).toBe(true)
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('Superseded')
+  })
+
+  it('reopens a stale gate_hard_failure review-handoff blocker after the validator bug is fixed', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: 'approved spec',
+        blockReason:
+          'gate_hard_failure: Tool validation bug prevents transitioning a to review status despite all work being complete.',
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: `**Self-critique:**\n\nAC-1 (Registration): Met — /register works.\n\n**Mini-scope check:**\n- Files changed: login.vue, register.vue.\n- Smallest useful change?: yes.\n- Out-of-scope changes: none.`,
+            timestamp: '2026-05-13T15:42:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'gate_hard_failure',
+            summary:
+              'Tool validation bug prevents transitioning a to review status despite all work being complete.',
+            details:
+              'The update-task tool kept rejecting status=review even though the self-critique note was already persisted.',
+            raisedAt: '2026-05-13T15:42:05.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({
+        worker: stubAgent('worker-agent', async () => {
+          await mutateTask('a', { status: 'review' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('review handoff validator bug'),
+    )).toBe(true)
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('Superseded')
+  })
+
+  it('reopens a stale decision-required review-handoff blocker when the old validator wrongly claimed verification was not durable', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: 'approved spec',
+        blockReason:
+          'decision_required: Task blocked from transitioning to review despite passing all verification',
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: `**Self-critique:**\n\nAC-1 (Registration): Met — auth pages are wired and verified.\n\n**Minimum-scope check:**\n- Files changed: register.vue, login.vue.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`,
+            timestamp: '2026-05-13T19:41:49.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'decision_required',
+            summary: 'Task blocked from transitioning to review despite passing all verification',
+            details:
+              'Both authoritative verification commands passed, but update-task with status=review was blocked because Guildhall claimed it did not yet have durable proof that the task passed its required verification commands.',
+            raisedAt: '2026-05-13T19:42:09.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({
+        worker: stubAgent('worker-agent', async () => {
+          await mutateTask('a', { status: 'review' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('review handoff validator bug'),
+    )).toBe(true)
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('Superseded')
+  })
+
+  it('reopens a stale validator-rejects-passing-verification blocker after restart', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: 'approved spec',
+        blockReason:
+          'decision_required: Cannot transition to review — system validator rejects passing verification',
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: `**Self-critique:**\n\nAC-1 (Registration): Met — auth wiring is complete.\n\n**Minimum-scope check:**\n- Files changed: register.vue.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`,
+            timestamp: '2026-05-13T19:56:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'decision_required',
+            summary: 'Cannot transition to review — system validator rejects passing verification',
+            details:
+              "update-task with status='review' failed because Guildhall claimed it did not yet have durable proof that the task passed its required verification commands.",
+            raisedAt: '2026-05-13T19:56:39.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({
+        worker: stubAgent('worker-agent', async () => {
+          await mutateTask('a', { status: 'review' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('review handoff validator bug'),
+    )).toBe(true)
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('Superseded')
+  })
+
+  it('reopens a stale validator-bug-persists blocker after restart', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: 'approved spec',
+        blockReason:
+          'gate_hard_failure: Blocked from transitioning to review — system validator bug persists',
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: `**Self-critique:**\n\nAC-1 (Registration): Met — auth wiring is complete.\n\n**Minimum-scope check:**\n- Files changed: register.vue.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`,
+            timestamp: '2026-05-13T21:05:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'gate_hard_failure',
+            summary: 'Blocked from transitioning to review — system validator bug persists',
+            details:
+              'Implementation complete with all acceptance criteria are met and both verification commands passing. A human needs to resolve this validator issue to allow the review transition.',
+            raisedAt: '2026-05-13T21:06:16.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({
+        worker: stubAgent('worker-agent', async () => {
+          await mutateTask('a', { status: 'review' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('review handoff validator bug'),
+    )).toBe(true)
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('Superseded')
+  })
+
+  it('auto-promotes a worker task to review when durable handoff evidence already exists but the worker leaves it in progress', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        spec: 'approved spec',
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: `**Self-critique:**\n\nAC-1 (Conversion): Met — focused tests cover the touched files.\n\n**Minimum-scope check:**\n- Files changed: packages/converter/src/features/variableDeclaration.ts.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.\n\n**Review proof packet:**\n- Changed files / diff scope: packages/converter/src/features/variableDeclaration.ts, packages/converter/test/ts-to-jsdoc.test.ts.\n- Verification commands passed: cd /tmp/project/packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts passed.\n- Working hypothesis at handoff: The converter change and focused tests are ready for reviewer evaluation.\n- Known gaps / follow-up: none.`,
+            timestamp: '2026-05-13T15:00:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const worker: OrchestratorAgent = {
+      name: 'worker-agent',
+      async generate() {
+        return { text: 'ok' }
+      },
+      getToolMetadata() {
+        return {
+          current_task_checkpoint_next_action:
+            'Resume from the latest self-critique and recorded verification evidence, then hand off to review.',
+          current_task_checkpoint_files_touched: [
+            'packages/converter/src/features/variableDeclaration.ts',
+            'packages/converter/test/ts-to-jsdoc.test.ts',
+          ],
+          review_handoff_evidence: {
+            taskId: 'a',
+            changedOrVerified: true,
+          },
+          recent_verified_work: [
+            'Edited file /tmp/project/packages/converter/src/features/variableDeclaration.ts',
+            'Ran bash command cd /tmp/project/packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+          ],
+        }
+      },
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+      expect(out.transitioned).toBe(true)
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+  })
+
+  it('uses handoff-specific immediate resume instructions instead of file-open instructions when a review handoff checkpoint exists', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        title: 'Resume handoff',
+        spec: 'approved spec',
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: `**Self-critique:**\n\nAC-1: Met.\n\n**Minimum-scope check:**\n- Files changed: src/a.ts.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`,
+            timestamp: '2026-05-13T15:00:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const checkpointDir = path.join(tmpDir, 'memory', 'tasks', 'a')
+    await fs.mkdir(checkpointDir, { recursive: true })
+    await fs.writeFile(
+      path.join(checkpointDir, 'checkpoint.json'),
+      JSON.stringify({
+        taskId: 'a',
+        agentId: 'worker-agent',
+        step: 3,
+        intent: 'resume handoff',
+        filesTouched: ['src/a.ts'],
+        nextPlannedAction:
+          'Resume from the latest self-critique and recorded verification evidence, then hand off to review.',
+        writtenAt: '2026-05-13T15:00:00.000Z',
+      }),
+    )
+
+    let seenPrompt = ''
+    const worker: OrchestratorAgent = {
+      name: 'worker-agent',
+      async generate(prompt: string) {
+        seenPrompt = prompt
+        return { text: 'ok' }
+      },
+      loadToolMetadata() {},
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+    await orch.tick()
+
+    expect(seenPrompt).toContain('already at the review handoff stage')
+    expect(seenPrompt).toContain('Your first action should be the exact handoff')
+    expect(seenPrompt).not.toContain('Open or edit these exact files before any directory listing')
+  })
+
+  it('reopens an already-existing task-branch blocker so Guildhall can attach the branch and continue', async () => {
+    const subrepo = path.join(tmpDir, 'frontend')
+    const guildhallHome = path.join(tmpDir, '.guildhall-home')
+    process.env.GUILDHALL_CONFIG_DIR = guildhallHome
+    await fs.mkdir(subrepo, { recursive: true })
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        domain: 'frontend',
+        projectPath: subrepo,
+        spec: 'approved spec',
+        blockReason:
+          'Guildhall could not create a task worktree: ' +
+          'fatal: a branch named \'guildhall/task-a\' already exists. ' +
+          'Fix the worktree setup issue, then resume the task.',
+        notes: [
+          {
+            agentId: 'task-claimer',
+            role: 'orchestrator',
+            content: 'Claimed ready task for worker-agent.',
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', async () => {
+        await mutateTask('a', { status: 'review' })
+      }),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig({ projectPath: tmpDir }),
+      agents,
+      gitDriver,
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.notes.some((note) => note.role === 'recovery')).toBe(true)
+    expect(gitDriver.state.createdWorktrees).toHaveLength(1)
+    expect(gitDriver.state.createdWorktrees[0]?.branch).toBe('guildhall/task-a')
+    delete process.env.GUILDHALL_CONFIG_DIR
+  })
+
+  it('reopens a stale turn-limit blocker when the user explicitly restarts the project', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: 'approved spec',
+        blockReason: 'human_judgment_required: Worker stopped after hitting its turn limit.',
+        notes: [
+          {
+            agentId: 'task-claimer',
+            role: 'orchestrator',
+            content: 'Claimed ready task for worker-agent.',
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'human_judgment_required',
+            summary: 'Worker stopped after hitting its turn limit.',
+            details: 'Exceeded maximum turn limit (24)',
+            raisedAt: '2026-05-03T00:11:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    let seenPrompt = ''
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({
+        worker: stubAgent('worker-agent', async (prompt) => {
+          seenPrompt = prompt
+          await mutateTask('a', { status: 'in_progress' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('in_progress')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('worker exhausted its turn budget'),
+    )).toBe(true)
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('explicitly resumed')
+  })
+
+  it('reopens a checkpoint-backed worker timeout blocker when the user explicitly restarts the project', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: 'approved spec',
+        blockReason: 'human_judgment_required: Worker timed out after failing to mutate the likely target file.',
+        notes: [
+          {
+            agentId: 'task-claimer',
+            role: 'orchestrator',
+            content: 'Claimed ready task for worker-agent.',
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'human_judgment_required',
+            summary: 'Worker timed out after failing to mutate the likely target file.',
+            details: 'worker-agent timed out after 120000ms of inactivity',
+            raisedAt: '2026-05-03T00:11:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const taskDir = path.join(memoryDir, 'tasks', 'a')
+    await fs.mkdir(taskDir, { recursive: true })
+    await fs.writeFile(path.join(taskDir, 'checkpoint.json'), JSON.stringify({
+      taskId: 'a',
+      agentId: 'worker-agent',
+      step: 11,
+      intent: 'Recovery checkpoint',
+      filesTouched: ['packages/converter/src/features/variableDeclaration.ts'],
+      nextPlannedAction: 'Resume from the recorded verification evidence, write or refresh the self-critique note, then hand off to review.',
+      writtenAt: '2026-05-03T00:10:00.000Z',
+    }, null, 2))
+
+    let seenPrompt = ''
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({
+        worker: stubAgent('worker-agent', async (prompt) => {
+          seenPrompt = prompt
+          await mutateTask('a', { status: 'in_progress' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('in_progress')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('latest recovery checkpoint'),
+    )).toBe(true)
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('latest recovery checkpoint')
+    expect(seenPrompt).toContain('rerun the focused verification commands')
+    expect(seenPrompt).not.toContain('write or refresh the self-critique note, then hand off to review')
+  })
+
+  it('reopens a self-authored verification blocker when the user explicitly restarts the project', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Proper invite flow',
+        status: 'blocked',
+        assignedTo: null,
+        blockReason:
+          'spec_ambiguous: Unable to resolve type errors in settings.vue and invite.post.ts due to missing imports and utilities.',
+        spec: [
+          'Implement the Supabase invite flow in Knit settings.',
+          '- web/app/pages/settings.vue should expose the invite form and send handler.',
+          '- web/server/api/workspaces/[id]/invite.post.ts should validate roles and send the invite.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'typecheck passes',
+          verifiedBy: 'automated',
+          command: 'cd web && pnpm typecheck',
+          met: false,
+        } as any],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'spec_ambiguous',
+            summary:
+              'Unable to resolve type errors in settings.vue and invite.post.ts due to missing imports and utilities.',
+            details:
+              "The files web/app/pages/settings.vue and web/server/api/workspaces/[id]/invite.post.ts contain references to 'sendInvite', 'sendToast' and 'Role' that cannot be resolved after the worker implementation.",
+            raisedAt: '2026-04-01T00:00:01Z',
+          },
+        ],
+      }),
+    ])
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'a',
+      agentId: 'worker-agent',
+      intent: 'Repair failed verification',
+      nextPlannedAction:
+        'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails.',
+      filesTouched: [
+        'web/app/pages/settings.vue',
+        'web/server/api/workspaces/[id]/invite.post.ts',
+      ],
+      resumeContext: {
+        verification: [{
+          command: 'cd web && pnpm typecheck',
+          passed: false,
+          observedAt: '2026-05-16T00:00:00.000Z',
+          summary:
+            'settings.vue cannot find sendInvite; invite.post.ts cannot find sendToast or Role',
+        }],
+      },
+    })
+
+    let seenPrompt = ''
+    const worker = {
+      ...stubAgent('worker-agent', async (prompt) => {
+        seenPrompt = prompt
+        await mutateTask('a', { status: 'in_progress' })
+      }),
+      loadToolMetadata() {
+        return {}
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('self-authored verification failure')
+    expect(task?.notes.at(-1)?.content).toContain('repair the failed verification')
+    expect(seenPrompt).toContain('Latest authoritative verification')
+  })
+
+  it('reopens an infra-only max-revisions blocker at review when the user explicitly restarts the project', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: 'approved spec',
+        acceptanceCriteria: [
+          { id: 'ac-1', description: 'done', met: true, verifiedBy: 'review' },
+        ],
+        blockReason: 'max_revisions_exceeded: Exceeded maxRevisions (3). Reviewer fan-out keeps rejecting.',
+        reviewVerdicts: [
+          {
+            verdict: 'revise',
+            reviewerPath: 'llm',
+            reason: 'The Copywriter requested revision',
+            reasoning: 'Real earlier revision item that has already been handled.',
+            recordedAt: '2026-05-03T00:09:00.000Z',
+            failingSignals: ['copywriter'],
+          },
+          {
+            verdict: 'revise',
+            reviewerPath: 'llm',
+            reason: 'The Component Designer requested revision',
+            reasoning: 'The Component Designer failed to produce a verdict (Exceeded maximum turn limit (3)). Treating as revise per strict-all policy.',
+            recordedAt: '2026-05-03T00:10:00.000Z',
+            failingSignals: ['component-designer'],
+          },
+          {
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            reason: 'The Copywriter approved',
+            reasoning: 'Looks good.',
+            recordedAt: '2026-05-03T00:10:00.000Z',
+            failingSignals: [],
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'reviewer-fanout',
+            reason: 'max_revisions_exceeded',
+            summary: 'Exceeded maxRevisions (3). Reviewer fan-out keeps rejecting.',
+            details: 'The Component Designer failed to produce a verdict (Exceeded maximum turn limit (3)). Treating as revise per strict-all policy.',
+            raisedAt: '2026-05-03T00:11:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const runner: ReviewerFanoutRunner = async () => [
+      {
+        guildSlug: 'component-designer',
+        guildName: 'The Component Designer',
+        verdict: 'revise',
+        reasoning: 'The Component Designer failed to produce a verdict (Exceeded maximum turn limit (3)). Treating as revise per strict-all policy.',
+        revisionItems: [],
+        rawOutput: '**Verdict:** revise',
+      },
+      {
+        guildSlug: 'copywriter',
+        guildName: 'The Copywriter',
+        verdict: 'approve',
+        reasoning: 'Looks good.',
+        revisionItems: [],
+        rawOutput: '**Verdict:** approve',
+      },
+    ]
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      reviewerFanout: runner,
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('gate_check')
+    expect(task?.assignedTo).toBe('gate-checker-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('availability failures incorrectly counted as hard rejection'),
+    )).toBe(true)
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('availability failures stopped counting')
+  })
+
+  it('reopens a substantive max-revisions blocker for another worker pass when the user explicitly restarts the project', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: 'approved spec',
+        acceptanceCriteria: [
+          { id: 'ac-1', description: 'done', met: true, verifiedBy: 'review' },
+        ],
+        revisionCount: 9,
+        blockReason: 'max_revisions_exceeded: Exceeded maxRevisions (3). Reviewer fan-out keeps rejecting.',
+        reviewVerdicts: [
+          {
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            reason: 'The Copywriter approved',
+            reasoning: 'Looks good.',
+            recordedAt: '2026-05-03T00:10:00.000Z',
+            failingSignals: [],
+          },
+          {
+            verdict: 'revise',
+            reviewerPath: 'llm',
+            reason: 'The Security Engineer requested revision',
+            reasoning: 'Validate redirect targets before navigating.',
+            recordedAt: '2026-05-03T00:10:00.000Z',
+            failingSignals: ['security-engineer'],
+          },
+          {
+            verdict: 'revise',
+            reviewerPath: 'llm',
+            reason: 'The Frontend Engineer requested revision',
+            reasoning: 'The Frontend Engineer failed to produce a verdict (Exceeded maximum turn limit (3)). Treating as revise per strict-all policy.',
+            recordedAt: '2026-05-03T00:10:00.000Z',
+            failingSignals: ['frontend-engineer'],
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'reviewer-fanout',
+            reason: 'max_revisions_exceeded',
+            summary: 'Exceeded maxRevisions (3). Reviewer fan-out keeps rejecting.',
+            details: 'Security Engineer requested redirect validation changes.',
+            raisedAt: '2026-05-03T00:11:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({
+        worker: stubAgent('worker-agent', async () => {
+          await mutateTask('a', { status: 'in_progress' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('in_progress')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('latest substantive review feedback'),
+    )).toBe(true)
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('explicitly resumed for another revision cycle')
+  })
+
   it('blocks the task instead of retry-looping forever when worktree bootstrap fails', async () => {
     const subrepo = path.join(tmpDir, 'knit')
     await fs.mkdir(subrepo, { recursive: true })
@@ -3738,6 +5155,92 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.notes.at(-1)?.role).toBe('bootstrap-failure')
   })
 
+  it('checkpoints dirty worktree bootstrap verification failures before redispatching the worker', async () => {
+    const subrepo = path.join(tmpDir, 'knit')
+    const worktree = path.join(tmpDir, '.guildhall', 'worktrees', 'knit-task-a')
+    await fs.mkdir(path.join(subrepo, 'web'), { recursive: true })
+    await fs.mkdir(path.join(worktree, 'web', 'app', 'pages'), { recursive: true })
+    await fs.writeFile(path.join(worktree, 'web', 'app', 'pages', 'settings.vue'), '<template />\n', 'utf-8')
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        domain: 'knit',
+        projectPath: subrepo,
+        worktreePath: worktree,
+        spec: 'Implement the invite flow in `web/app/pages/settings.vue`.',
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig({
+        projectPath: tmpDir,
+        bootstrap: {
+          commands: ['node -e "process.exit(0)"'],
+          successGates: ['node -e "console.error(\'settings.vue type error\'); process.exit(1)"'],
+          timeoutMs: 30_000,
+          verifiedAt: '2026-05-03T00:00:00Z',
+        },
+      }),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(false)
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.at(-1)?.role).toBe('bootstrap-verification')
+
+    const checkpoint = JSON.parse(
+      await fs.readFile(path.join(memoryDir, 'tasks', 'a', 'checkpoint.json'), 'utf8'),
+    ) as {
+      nextPlannedAction: string
+      filesTouched: string[]
+      resumeContext?: {
+        verification?: Array<{ command: string; passed: boolean; summary?: string }>
+        safeNextMutationSurface?: string[]
+        workingHypothesis?: string
+      }
+    }
+    expect(checkpoint.nextPlannedAction).toContain('recorded verification evidence')
+    expect(checkpoint.filesTouched).toContain('web/app/pages/settings.vue')
+    expect(checkpoint.resumeContext?.verification).toEqual([
+      expect.objectContaining({
+        command: 'node -e "console.error(\'settings.vue type error\'); process.exit(1)"',
+        passed: false,
+        summary: expect.stringContaining('settings.vue type error'),
+      }),
+    ])
+    expect(checkpoint.resumeContext?.safeNextMutationSurface).toContain('web/app/pages/settings.vue')
+    expect(checkpoint.resumeContext?.workingHypothesis).toContain('last authoritative verification failed')
+    expect(worker.calls[0]?.prompt).toContain('Latest authoritative verification')
+    expect(worker.calls[0]?.prompt).toContain('settings.vue type error')
+  })
+
   it('does not touch git isolation for reserved intake tasks in a non-git workspace root', async () => {
     const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
     settings.project.worktree_isolation = {
@@ -3785,6 +5288,205 @@ describe('Orchestrator.run — full loops', () => {
 
     expect(out.kind).toBe('processed')
     expect(spec.calls).toHaveLength(1)
+  })
+
+  it('reopens a stale task-bootstrap failure when the existing task worktree bootstrap now passes', async () => {
+    const subrepo = path.join(tmpDir, 'knit')
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'a')
+    const guildhallHome = path.join(tmpDir, '.guildhall-home')
+    process.env.GUILDHALL_CONFIG_DIR = guildhallHome
+    await fs.mkdir(subrepo, { recursive: true })
+    await fs.mkdir(worktreePath, { recursive: true })
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    await fs.writeFile(
+      path.join(worktreePath, 'package.json'),
+      JSON.stringify({
+        name: '@knit-app',
+        scripts: {
+          preinstall: 'node -e "process.exit(0)"',
+          prepare: 'node -e "process.exit(0)"',
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(path.join(worktreePath, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        domain: 'knit',
+        projectPath: subrepo,
+        worktreePath,
+        branchName: 'guildhall/task-a',
+        baseBranch: 'main',
+        spec: 'approved spec',
+        blockReason:
+          'Guildhall could not start work because task setup failed: ' +
+          'worktree bootstrap failed on command `pnpm install` (exit 1). ' +
+          'Fix the task bootstrap command or project install state, then resume the task.',
+        notes: [
+          {
+            agentId: 'coordinator',
+            role: 'bootstrap-failure',
+            content: 'Blocked after repeated task setup failure.',
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig({
+        projectPath: tmpDir,
+        bootstrap: {
+          commands: ['cd knit && pnpm install'],
+          successGates: [],
+          timeoutMs: 30_000,
+          verifiedAt: '2026-05-03T00:00:00Z',
+        },
+      }),
+      agents: agentSet({
+        worker: stubAgent('worker-agent', async () => {
+          await mutateTask('a', { status: 'in_progress' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('in_progress')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('task worktree bootstrap now passes'),
+    )).toBe(true)
+    delete process.env.GUILDHALL_CONFIG_DIR
+  })
+
+  it('reopens a stale test-environment blocker when the repaired task worktree bootstrap now passes', async () => {
+    const subrepo = path.join(tmpDir, 'knit')
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'env-fix')
+    const guildhallHome = path.join(tmpDir, '.guildhall-home-env-fix')
+    process.env.GUILDHALL_CONFIG_DIR = guildhallHome
+    await fs.mkdir(subrepo, { recursive: true })
+    await fs.mkdir(worktreePath, { recursive: true })
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    await fs.writeFile(
+      path.join(worktreePath, 'package.json'),
+      JSON.stringify({
+        name: '@knit-app',
+        scripts: {
+          preinstall: 'node -e "process.exit(0)"',
+          prepare: 'node -e "process.exit(0)"',
+        },
+      }),
+      'utf8',
+    )
+    await fs.writeFile(path.join(worktreePath, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n', 'utf8')
+
+    await writeQueue([
+      mkTask({
+        id: 'env-fix',
+        status: 'blocked',
+        assignedTo: null,
+        domain: 'knit',
+        projectPath: subrepo,
+        worktreePath,
+        branchName: 'guildhall/task-env-fix',
+        baseBranch: 'main',
+        spec: 'approved spec',
+        blockReason: 'Test environment setup failed due to unresolved @nuxt/test-utils module',
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'progress',
+            content: 'Hit unresolved @nuxt/test-utils while trying to run focused verification.',
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-env-fix',
+            taskId: 'env-fix',
+            agentId: 'worker-agent',
+            raisedAt: '2026-05-03T00:00:00.000Z',
+            reason: 'gate_hard_failure',
+            summary: 'Test environment setup failed',
+            details:
+              'Cannot find module /tmp/knit/node_modules/.pnpm/@nuxt+test-utils/node_modules/@nuxt/test-utils/dist/runtime/entry.mjs',
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig({
+        projectPath: tmpDir,
+        bootstrap: {
+          commands: ['cd knit && pnpm install'],
+          successGates: [],
+          timeoutMs: 30_000,
+          verifiedAt: '2026-05-03T00:00:00Z',
+        },
+      }),
+      agents: agentSet({
+        worker: stubAgent('worker-agent', async () => {
+          await mutateTask('env-fix', { status: 'in_progress' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'env-fix')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.escalations?.[0]?.resolvedAt).toBeTruthy()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('task-local test environment failure'),
+    )).toBe(true)
+    delete process.env.GUILDHALL_CONFIG_DIR
   })
 
   it('does not touch git isolation for spec-intake shaping work', async () => {
@@ -3958,10 +5660,10 @@ describe('Orchestrator.run — full loops', () => {
     expect(prompt).toContain('## Authoritative verification commands')
     expect(prompt).toContain('Use these commands as the authoritative verification commands for this task:')
     expect(prompt).toContain('cd web && pnpm vitest --run tests/unit/composables/use-presence.test.ts')
-    expect(prompt).toContain('Open or edit these exact files before any directory listing or broad globbing:')
+    expect(prompt).toContain('Open or edit these files before any directory listing or broad globbing:')
     expect(prompt).toContain(path.join(tmpDir, '.guildhall', 'worktrees', 'task-resume', 'web', 'app', 'composables', 'use-presence.ts'))
     expect(prompt).toContain(path.join(tmpDir, '.guildhall', 'worktrees', 'task-resume', 'web', 'tests', 'unit', 'composables', 'use-presence.test.ts'))
-    expect(prompt).toContain('If one of these likely target files does not exist yet, create it at that exact path')
+    expect(prompt).toContain('If one of these likely target files does not exist yet, first verify that its parent directory matches the existing project structure.')
     expect(prompt).toContain('Do not use list-files, glob, or generic repo-root shell inspection')
   })
 
@@ -4165,6 +5867,105 @@ describe('Orchestrator.tick — FR-10 escalations', () => {
       expect(outcome.reason).toBe('decision_required')
       expect(outcome.escalationId).toBe('esc-task-001-1')
     }
+  })
+
+  it('keeps self-authored verification repair escalations in the worker lane', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'invite-flow')
+    await fs.mkdir(path.join(worktreePath, 'web', 'app', 'pages'), { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'task-invite',
+        title: 'Proper invite flow',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        worktreePath,
+        spec: [
+          'Implement the Supabase invite flow in Knit settings.',
+          '- web/app/pages/settings.vue should expose the invite form and send handler.',
+          '- web/server/api/workspaces/[id]/invite.post.ts should validate roles and send the invite.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'typecheck passes',
+          verifiedBy: 'automated',
+          command: 'cd web && pnpm typecheck',
+          met: false,
+        } as any],
+      }),
+    ])
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'task-invite',
+      agentId: 'worker-agent',
+      intent: 'Repair failed verification',
+      nextPlannedAction:
+        'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails.',
+      filesTouched: [
+        'web/app/pages/settings.vue',
+        'web/server/api/workspaces/[id]/invite.post.ts',
+      ],
+      resumeContext: {
+        verification: [{
+          command: 'cd web && pnpm typecheck',
+          passed: false,
+          observedAt: '2026-05-16T00:00:00.000Z',
+          summary:
+            'settings.vue cannot find sendInvite; invite.post.ts cannot find sendToast or Role',
+        }],
+        safeNextMutationSurface: [
+          'web/app/pages/settings.vue',
+          'web/server/api/workspaces/[id]/invite.post.ts',
+        ],
+      },
+    })
+    const worker = {
+      ...stubAgent('worker-agent', async () => {
+        await mutateTask('task-invite', {
+          status: 'blocked',
+          assignedTo: null,
+          blockReason:
+            'spec_ambiguous: Unable to resolve type errors in settings.vue and invite.post.ts due to missing imports and utilities.',
+          escalations: [
+            {
+              id: 'esc-task-invite-1',
+              taskId: 'task-invite',
+              agentId: 'worker-agent',
+              reason: 'spec_ambiguous',
+              summary:
+                'Unable to resolve type errors in settings.vue and invite.post.ts due to missing imports and utilities.',
+              details:
+                "The files web/app/pages/settings.vue and web/server/api/workspaces/[id]/invite.post.ts contain references to 'sendInvite', 'sendToast' and 'Role' that cannot be resolved after the worker implementation.",
+              raisedAt: '2026-04-01T00:00:01Z',
+            },
+          ],
+        })
+      }),
+      loadToolMetadata() {
+        return {}
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const outcome = await orch.tick()
+    expect(outcome.kind).toBe('processed')
+    if (outcome.kind === 'processed') {
+      expect(outcome.afterStatus).toBe('in_progress')
+      expect(outcome.agent).toBe('worker-agent')
+    }
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'task-invite')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason).toBeNull()
+    expect(task?.escalations[0]?.resolvedBy).toBe('orchestrator')
+    expect(task?.escalations[0]?.resolution).toContain('self-authored verification failure')
+    expect(task?.notes.at(-1)?.content).toContain('repair the failed verification')
   })
 
   it('skips tasks with open escalations even if status is not blocked', async () => {
@@ -4922,6 +6723,23 @@ describe('Orchestrator.tick — FR-22 pre-rejection policy', () => {
           source: 'proposal_policy',
           policyApplied: true,
           requeueCount: 0,
+        },
+      }),
+    ])
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
+    const out = await orch.tick()
+    expect(out.kind).toBe('idle')
+  })
+
+  it('ignores terminal duplicate shelves that have no pre-rejection policy metadata', async () => {
+    await writeLeverPair('requeue_lower_priority')
+    await writeQueue([
+      shelved({
+        shelveReason: {
+          code: 'duplicate',
+          detail: 'Duplicate of task-006',
+          rejectedBy: 'system:import-draft-dedupe',
+          rejectedAt: '2026-04-20T00:00:00Z',
         },
       }),
     ])
@@ -5742,6 +7560,189 @@ describe('Orchestrator worker no-progress escalation', () => {
     expect(task?.status).toBe('blocked')
     expect(task?.escalations.length).toBe(1)
     expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress')
+  })
+
+  it('tries one autonomous checkpoint remediation before blocking repeated checkpoint no-progress stops', async () => {
+    const targetPath = path.join(tmpDir, 'packages', 'converter', 'src', 'commentInserter.ts')
+    await fs.mkdir(path.dirname(targetPath), { recursive: true })
+    await fs.writeFile(targetPath, 'export const value = 1;\n', 'utf-8')
+    execFileSync('git', ['add', 'packages/converter/src/commentInserter.ts'], {
+      cwd: tmpDir,
+      stdio: 'ignore',
+    })
+    execFileSync('git', ['commit', '--no-verify', '-m', 'add target'], {
+      cwd: tmpDir,
+      stdio: 'ignore',
+    })
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'task-blank',
+      agentId: 'worker-agent',
+      intent: 'Resume converter comment repair',
+      nextPlannedAction:
+        'Inspect the checkpoint-touched files against the verification result, then fix whatever still fails before you write the structured self-critique.',
+      filesTouched: ['packages/converter/src/commentInserter.ts'],
+    })
+    await writeQueue([
+      mkTask({
+        id: 'task-blank',
+        title: 'Repair converter comments',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        spec: `Edit \`${targetPath}\` and verify the converter tests.`,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'converter test passes',
+          verifiedBy: 'automated',
+          command: 'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+          met: false,
+        } as any],
+      }),
+    ])
+
+    const worker = {
+      name: 'worker-agent',
+      calls: [] as { prompt: string }[],
+      resetCount: 0,
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: '' }
+      },
+      async generateWithEvents(prompt: string, onEvent: (event: any) => void | Promise<void>) {
+        this.calls.push({ prompt })
+        await onEvent({
+          type: 'status',
+          message:
+            'Assistant kept returning no tool call after checkpoint-directed nudges; ending this turn so the coordinator can treat it as no progress.',
+        })
+        return { text: '' }
+      },
+      resetConversation() {
+        this.resetCount += 1
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const first = await orch.tick({ dispatchLimit: 1 })
+    expect(first.kind).toBe('processed')
+
+    const second = await orch.tick({ dispatchLimit: 1 })
+    expect(second.kind).toBe('processed')
+    if (second.kind === 'processed') {
+      expect(second.agent).toBe('coordinator-remediation')
+      expect(second.afterStatus).toBe('in_progress')
+    }
+
+    let queue = await readQueue()
+    let task = queue.tasks.find((candidate) => candidate.id === 'task-blank')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.remediationAttempts).toBe(1)
+    expect(task?.agentIssues[0]?.resolvedBy).toBe('coordinator-remediation')
+    expect(worker.resetCount).toBe(1)
+
+    const decisions = await fs.readFile(path.join(memoryDir, 'DECISIONS.md'), 'utf-8')
+    expect(decisions).toMatch(/Remediation: restart_from_checkpoint/)
+
+    const third = await orch.tick({ dispatchLimit: 1 })
+    expect(third.kind).toBe('processed')
+
+    const fourth = await orch.tick({ dispatchLimit: 1 })
+    expect(fourth.kind).toBe('escalated')
+    if (fourth.kind === 'escalated') expect(fourth.reason).toContain('Worker made no visible progress')
+
+    queue = await readQueue()
+    task = queue.tasks.find((candidate) => candidate.id === 'task-blank')
+    expect(task?.status).toBe('blocked')
+    expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress')
+  })
+
+  it('treats dirty worktrees as no progress when a failed checkpointed verification gets no new worker evidence', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'invite-flow')
+    await fs.mkdir(path.join(worktreePath, 'web', 'app', 'pages'), { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'task-failed-checkpoint',
+        title: 'Repair invite flow',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        worktreePath,
+        spec: `Edit \`${path.join(worktreePath, 'web', 'app', 'pages', 'settings.vue')}\` and rerun typecheck.`,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'typecheck passes',
+          verifiedBy: 'automated',
+          command: 'cd web && pnpm typecheck',
+          met: false,
+        } as any],
+      }),
+    ])
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'task-failed-checkpoint',
+      agentId: 'worker-agent',
+      intent: 'Failed bootstrap verification',
+      nextPlannedAction:
+        'Resume from the recorded bootstrap verification failure, rerun the focused verification command, and fix whatever still fails.',
+      filesTouched: ['web/app/pages/settings.vue'],
+      resumeContext: {
+        verification: [{
+          command: 'cd web && pnpm typecheck',
+          passed: false,
+          observedAt: '2026-05-16T00:00:00.000Z',
+          summary: 'settings.vue type error',
+        }],
+        safeNextMutationSurface: ['web/app/pages/settings.vue'],
+      },
+    })
+
+    const worker = {
+      name: 'worker-agent',
+      calls: [] as { prompt: string }[],
+      resetCount: 0,
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: 'I looked at it but made no change.' }
+      },
+      loadToolMetadata() {
+        return {}
+      },
+      resetConversation() {
+        this.resetCount += 1
+      },
+    }
+    const gitDriver = new InMemoryGitDriver({ clean: false })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+    })
+
+    const first = await orch.tick({ dispatchLimit: 1 })
+    expect(first.kind).toBe('processed')
+    if (first.kind === 'processed') expect(first.agent).toBe('worker-agent')
+
+    const second = await orch.tick({ dispatchLimit: 1 })
+    expect(second.kind).toBe('processed')
+    if (second.kind === 'processed') {
+      expect(second.agent).toBe('coordinator-remediation')
+      expect(second.afterStatus).toBe('in_progress')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'task-failed-checkpoint')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.remediationAttempts).toBe(1)
+    expect(task?.agentIssues[0]?.resolvedBy).toBe('coordinator-remediation')
+    expect(worker.resetCount).toBe(1)
+    expect(worker.calls[0]?.prompt).toContain('Latest authoritative verification')
+    expect(worker.calls[0]?.prompt).toContain('cd web && pnpm typecheck')
   })
 
   it('escalates instead of surfacing agent-error when a resumed worker times out without mutating likely target files', async () => {

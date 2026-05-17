@@ -4,12 +4,44 @@ function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, ' ')
 }
 
+function unwrapShellCommandForAuthority(command: string): string {
+  let normalized = normalizeCommand(command)
+  normalized = normalized.replace(/\s+(?:2>&1|1>\/dev\/null|2>\/dev\/null)\s*$/i, '')
+  const cdPrefix = /^(?:cd\s+(?:"[^"]+"|'[^']+'|[^&;]+?)\s*&&\s*)+/i
+  normalized = normalized.replace(cdPrefix, '')
+  return normalized.trim()
+}
+
+function classifyPackageManagerCommand(tokens: string[]): 'typecheck' | 'build' | 'test' | 'lint' | null {
+  if (tokens.length === 0) return null
+  const packageManagers = new Set(['pnpm', 'npm', 'yarn', 'bun'])
+  if (!packageManagers.has(tokens[0] ?? '')) return null
+
+  let index = 1
+  while (index < tokens.length && tokens[index]?.startsWith('-')) {
+    index += 1
+    if (index < tokens.length && !(tokens[index]?.startsWith('-'))) {
+      index += 1
+    }
+  }
+
+  if (tokens[index] === 'run' || tokens[index] === 'exec') index += 1
+  const subcommand = tokens[index] ?? ''
+  if (subcommand === 'test' || subcommand === 'vitest') return 'test'
+  if (subcommand === 'lint') return 'lint'
+  if (subcommand === 'build') return 'build'
+  if (subcommand === 'typecheck' || subcommand === 'tsgo') return 'typecheck'
+  return null
+}
+
 export function classifyGateCommand(command: string): 'typecheck' | 'build' | 'test' | 'lint' | 'other' {
-  const normalized = normalizeCommand(command).toLowerCase()
-  if (/\b(typecheck|tsc(?:\s|$)|tsgo\b)/.test(normalized)) return 'typecheck'
-  if (/\bbuild\b/.test(normalized)) return 'build'
-  if (/\b(test|vitest|jest|playwright|pytest)\b/.test(normalized)) return 'test'
-  if (/\blint\b/.test(normalized)) return 'lint'
+  const normalized = unwrapShellCommandForAuthority(command).toLowerCase()
+  const packageManagerKind = classifyPackageManagerCommand(normalized.split(' '))
+  if (packageManagerKind) return packageManagerKind
+  if (/^tsc(?:\s|$)/.test(normalized)) return 'typecheck'
+  if (/^(?:turbo|vite|webpack|rollup|esbuild)(?:\s|$)/.test(normalized)) return 'build'
+  if (/^(?:vitest|jest|playwright|pytest)(?:\s|$)/.test(normalized)) return 'test'
+  if (/^(?:eslint|biome)(?:\s|$)/.test(normalized)) return 'lint'
   return 'other'
 }
 
@@ -105,23 +137,33 @@ export function reconcileShellCommandWithAuthority(
   authoritativeCommands: readonly string[] | null,
 ): { command: string; usedAuthority: boolean } {
   const normalizedRequested = normalizeCommand(requestedCommand)
+  const unwrappedRequested = unwrapShellCommandForAuthority(requestedCommand)
   if (authoritativeCommands == null || authoritativeCommands.length === 0) {
-    return { command: normalizedRequested, usedAuthority: false }
+    return { command: unwrappedRequested || normalizedRequested, usedAuthority: false }
   }
 
-  const exact = authoritativeCommands.find((command) => normalizeCommand(command) === normalizedRequested)
+  const exact = authoritativeCommands.find((command) => {
+    const normalized = normalizeCommand(command)
+    const unwrapped = unwrapShellCommandForAuthority(command)
+    return (
+      normalized === normalizedRequested ||
+      normalized === unwrappedRequested ||
+      unwrapped === normalizedRequested ||
+      unwrapped === unwrappedRequested
+    )
+  })
   if (exact) {
     return { command: normalizeCommand(exact), usedAuthority: true }
   }
 
-  const requestedKind = classifyGateCommand(normalizedRequested)
+  const requestedKind = classifyGateCommand(unwrappedRequested)
   if (requestedKind === 'other') {
-    return { command: normalizedRequested, usedAuthority: false }
+    return { command: unwrappedRequested || normalizedRequested, usedAuthority: false }
   }
   const sameKind = authoritativeCommands.filter((command) => classifyGateCommand(command) === requestedKind)
   if (sameKind.length === 1) {
     return { command: normalizeCommand(sameKind[0]!), usedAuthority: true }
   }
 
-  return { command: normalizedRequested, usedAuthority: false }
+  return { command: unwrappedRequested || normalizedRequested, usedAuthority: false }
 }

@@ -72,6 +72,36 @@ function reconcileShellCwdWithTaskScope(
   }
 
   const projectPath = String(metadata?.['current_task_project_path'] ?? '').trim()
+  const worktreeProjectPath = String(metadata?.['current_task_worktree_project_path'] ?? '').trim()
+  const workspaceProjectPath = String(metadata?.['current_task_workspace_project_path'] ?? '').trim()
+
+  if (projectPath && worktreeProjectPath) {
+    const normalizedProject = path.resolve(projectPath)
+    const normalizedWorktreeProject = path.resolve(worktreeProjectPath)
+    const relativeToProject = path.relative(normalizedProject, normalizedRequested)
+    if (
+      relativeToProject === '' ||
+      (!relativeToProject.startsWith(`..${path.sep}`) &&
+        relativeToProject !== '..' &&
+        !path.isAbsolute(relativeToProject))
+    ) {
+      return path.resolve(normalizedWorktreeProject, relativeToProject)
+    }
+  }
+
+  if (workspaceProjectPath) {
+    const normalizedWorkspace = path.resolve(workspaceProjectPath)
+    const relativeToWorkspace = path.relative(normalizedWorkspace, normalizedRequested)
+    if (
+      relativeToWorkspace === '' ||
+      (!relativeToWorkspace.startsWith(`..${path.sep}`) &&
+        relativeToWorkspace !== '..' &&
+        !path.isAbsolute(relativeToWorkspace))
+    ) {
+      return path.resolve(normalizedWorktree, relativeToWorkspace)
+    }
+  }
+
   if (!projectPath) return normalizedWorktree
 
   const normalizedProject = path.resolve(projectPath)
@@ -271,7 +301,7 @@ export function runShellSync(input: ShellInput): ShellResult {
 }
 
 export async function runShell(input: ShellInput): Promise<ShellResult> {
-  const { command, timeoutMs = 120_000 } = input
+  const { command, timeoutMs = 120_000, env } = input
   const cwd = resolveShellCwd(input.cwd, undefined)
 
   const blocked = preflightInteractive(command)
@@ -288,7 +318,7 @@ export async function runShell(input: ShellInput): Promise<ShellResult> {
     const child = spawn('sh', ['-c', command], {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
+      env: env ? { ...process.env, ...env } : process.env,
     })
 
     let stdout = ''
@@ -415,10 +445,23 @@ export const shellTool = defineTool({
       ...input,
       command: reconciled.command,
       cwd: effectiveCwd,
+      env: {
+        ...(input.env ?? {}),
+        ...(ctx.metadata?.['current_task_project_path'] || ctx.metadata?.['current_task_worktree_path']
+          ? { CI: input.env?.CI ?? 'true' }
+          : {}),
+      },
     }
     const result = await runShell(normalizedInput)
+    const statusLine = result.success
+      ? `Shell command succeeded (exit ${result.exitCode}). Treat this command as PASSED; if it was required verification, record it and continue the handoff. Do not edit warning-only output unless the task explicitly requires warning-free output.`
+      : result.timedOut
+        ? `Shell command timed out (exit ${result.exitCode}).`
+        : `Shell command failed (exit ${result.exitCode}).`
     return {
-      output: result.output,
+      output: result.output.trim().length > 0
+        ? `${statusLine}\n${result.output}`
+        : statusLine,
       is_error: !result.success,
       metadata: {
         ...result,

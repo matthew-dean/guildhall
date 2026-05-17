@@ -189,6 +189,46 @@ describe('writeCheckpoint', () => {
     expect(cp!.engineSessionId).toBe('sess-42')
   })
 
+  it('persists durable resume context when provided', async () => {
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'task-001',
+      agentId: 'worker-1',
+      intent: 'resume with stronger context',
+      nextPlannedAction: 'Fix the focused failure and rerun typecheck',
+      filesTouched: ['src/a.ts'],
+      resumeContext: {
+        verification: [
+          {
+            command: 'pnpm typecheck',
+            passed: false,
+            observedAt: '2026-05-13T18:00:00.000Z',
+            summary: 'Cannot find module ./foo',
+          },
+        ],
+        companionFiles: ['src/foo.ts'],
+        workingHypothesis: 'The generated import path is stale after the refactor.',
+        safeNextMutationSurface: ['src/a.ts', 'src/foo.ts'],
+      },
+    })
+
+    const cp = await readCheckpoint(memoryDir, 'task-001')
+    expect(cp?.resumeContext?.verification).toEqual([
+      {
+        command: 'pnpm typecheck',
+        passed: false,
+        observedAt: '2026-05-13T18:00:00.000Z',
+        summary: 'Cannot find module ./foo',
+      },
+    ])
+    expect(cp?.resumeContext?.companionFiles).toEqual(['src/foo.ts'])
+    expect(cp?.resumeContext?.workingHypothesis).toBe(
+      'The generated import path is stale after the refactor.',
+    )
+    expect(cp?.resumeContext?.safeNextMutationSurface).toEqual(['src/a.ts', 'src/foo.ts'])
+  })
+
   it('fails with a structured error if the task id does not exist', async () => {
     const result = await writeCheckpoint({
       tasksPath,

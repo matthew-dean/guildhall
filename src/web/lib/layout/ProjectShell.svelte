@@ -9,6 +9,7 @@
     rail?: Snippet
     topbar?: Snippet
     band?: Snippet
+    footer?: Snippet
     children?: Snippet
   }
 
@@ -19,6 +20,7 @@
     rail: railContent,
     topbar: topbarContent,
     band: bandContent,
+    footer: footerContent,
     children,
   }: Props = $props()
 </script>
@@ -41,6 +43,9 @@
   {/snippet}
   {#snippet band()}
     {@render bandContent?.()}
+  {/snippet}
+  {#snippet footer()}
+    {@render footerContent?.()}
   {/snippet}
   {@render children?.()}
 </AppShell>

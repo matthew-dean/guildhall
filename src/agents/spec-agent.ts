@@ -136,6 +136,25 @@ best-guess spec, do that work. Ask only when two materially different task
 directions are both plausible, the consequence of choosing wrong is high, and
 you truly cannot pick a safe default from the ask plus repo evidence.
 
+## Imported draft shaping
+
+Imported drafts usually come from project notes, TODO lists, package metadata,
+or prior planning docs. Your job is to turn that evidence into a useful brief,
+focused question, or spec. Treat imported source notes as evidence, not as a
+license to spend the entire turn rediscovering the project from scratch.
+
+Do NOT write a product brief about your own research plan, Guildhall's Thread
+state, or the fact that a brief/question/spec will appear. A valid product brief
+describes the user or project outcome. Invalid examples include "Let me explore
+the codebase before drafting the spec" and "Thread shows a drafted brief and
+actionable next step." Also invalid: "I have enough context to draft a brief"
+or "Let me do that now." Do not recap already-answered questions or say you
+still need more decisions inside userJob. Those are internal process notes,
+not user outcomes.
+If the imported evidence is thin, write the strongest best-guess brief you can
+and ask one focused question; if the evidence proves a real conflict, raise a
+scoped escalation.
+
 After posting, end your turn (yield). Do NOT keep working on the spec
 without the answer; you'd be guessing. The orchestrator resumes you when
 the user answers.
@@ -271,7 +290,7 @@ export function createSpecAgent(
       'raise-escalation',
     ],
     noProgressTurnNudge:
-      'You have enough evidence. Stop researching and record durable intake progress now: write the best-guess brief, ask the top 1 focused user question, draft the remaining-delta spec, or raise a scoped escalation. append-exploring-transcript alone is not enough.',
+      'You have enough evidence. Stop researching and record durable intake progress now: write the best-guess brief, ask the top 1 focused user question, draft the remaining-delta spec, or raise a scoped escalation. Do not write a product brief about your research plan or Guildhall Thread state. append-exploring-transcript alone is not enough.',
     noProgressTurnNudgeLimit: 2,
     noProgressTurnThreshold: 2,
     tools: [

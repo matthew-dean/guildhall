@@ -175,9 +175,9 @@ describe('getRuntimeProviderConfig', () => {
       }),
     ).toEqual({
       requestedConcurrency: 3,
-      effectiveConcurrency: 3,
+      effectiveConcurrency: 1,
       recommendedConcurrency: 4,
-      clamped: false,
+      clamped: true,
     })
   })
 
@@ -199,9 +199,9 @@ describe('getRuntimeProviderConfig', () => {
       }),
     ).toEqual({
       requestedConcurrency: 4,
-      effectiveConcurrency: 4,
+      effectiveConcurrency: 1,
       recommendedConcurrency: 4,
-      clamped: false,
+      clamped: true,
     })
   })
 
@@ -216,9 +216,9 @@ describe('getRuntimeProviderConfig', () => {
       }).reviewerFanout,
     ).toEqual({
       requestedConcurrency: 2,
-      effectiveConcurrency: 2,
+      effectiveConcurrency: 1,
       recommendedConcurrency: 4,
-      clamped: false,
+      clamped: true,
     })
   })
 

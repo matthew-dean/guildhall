@@ -14,19 +14,57 @@
   let error = $state<string | null>(null)
   let busyId = $state<string | null>(null)
   let refreshHandle: ReturnType<typeof setInterval> | null = null
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null
+  let refreshInFlight = false
+  let refreshQueued = false
+  let lastRefreshAt = 0
 
-  async function refresh(): Promise<void> {
-    loading = true
+  const SERVICE_REFRESH_MIN_INTERVAL_MS = 1500
+  const SERVICE_REFRESH_POLL_MS = 15000
+
+  function isMeaningfulProjectListEvent(type: string): boolean {
+    return (
+      type === 'task_transition' ||
+      type === 'escalation_raised' ||
+      type === 'agent_issue' ||
+      type === 'error' ||
+      type === 'provider_health_changed' ||
+      type.startsWith('supervisor_')
+    )
+  }
+
+  async function refresh(background = false): Promise<void> {
+    if (refreshInFlight) {
+      refreshQueued = true
+      return
+    }
+    refreshInFlight = true
+    if (!background || service == null) loading = true
     try {
       const response = await fetch('/api/service', { cache: 'no-store' })
       const payload = (await response.json()) as ServiceDetail
       service = payload
       error = null
+      lastRefreshAt = Date.now()
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
     } finally {
+      refreshInFlight = false
       loading = false
+      if (refreshQueued) {
+        refreshQueued = false
+        void refresh(true)
+      }
     }
+  }
+
+  function scheduleRefresh(): void {
+    if (refreshTimer) return
+    const delay = Math.max(0, SERVICE_REFRESH_MIN_INTERVAL_MS - (Date.now() - lastRefreshAt))
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null
+      void refresh(true)
+    }, delay)
   }
 
   async function openProject(projectId: string): Promise<void> {
@@ -99,15 +137,23 @@
   $effect(() => {
     if (refreshHandle) clearInterval(refreshHandle)
     refreshHandle = setInterval(() => {
-      void refresh()
-    }, 5000)
+      void refresh(true)
+    }, SERVICE_REFRESH_POLL_MS)
     return () => {
       if (refreshHandle) clearInterval(refreshHandle)
+      if (refreshTimer) {
+        clearTimeout(refreshTimer)
+        refreshTimer = null
+      }
     }
   })
 
   $effect(() => {
-    const off = onEvent(() => { void refresh() })
+    const off = onEvent((ev) => {
+      const type = ev.event?.type ?? ev.type ?? ''
+      if (!isMeaningfulProjectListEvent(type)) return
+      scheduleRefresh()
+    })
     return off
   })
 

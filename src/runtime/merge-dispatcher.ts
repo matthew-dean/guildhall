@@ -275,3 +275,31 @@ export function appendFixupTask(queue: TaskQueue, fixup: Task, now: string): Tas
   queue.lastUpdated = now
   return queue
 }
+
+export function shelveSupersededFixupTasks(
+  queue: TaskQueue,
+  parentTaskId: string,
+  now: string,
+): number {
+  let shelved = 0
+  for (const task of queue.tasks) {
+    if (!task.id.startsWith(`${parentTaskId}-fixup-`)) continue
+    if (task.status === 'done' || task.status === 'shelved') continue
+    task.status = 'shelved'
+    task.assignedTo = null
+    task.blockReason = null
+    task.shelveReason = {
+      code: 'duplicate',
+      detail:
+        `Superseded because parent task ${parentTaskId} landed successfully after the fixup was created.`,
+      rejectedBy: 'system:merge-dispatcher',
+      rejectedAt: now,
+      source: 'proposal_policy',
+      policyApplied: true,
+    }
+    task.updatedAt = now
+    shelved += 1
+  }
+  if (shelved > 0) queue.lastUpdated = now
+  return shelved
+}

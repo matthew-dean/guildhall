@@ -234,6 +234,7 @@ interface ServiceProjectSummary {
   taskCounts?: {
     total: number
     active: number
+    draftReview: number
     blocked: number
     done: number
     shelved: number
@@ -251,6 +252,20 @@ interface ServiceProjectSummary {
     stopSummary?: unknown
     providerStatus?: unknown
   }
+}
+
+function humanizeGeneratedProjectName(name: string): string {
+  const raw = name.trim()
+  if (!raw) return 'Project'
+  const withoutScope = raw.startsWith('@') && raw.includes('/')
+    ? raw.split('/').slice(1).join('/')
+    : raw
+  const collapsed = withoutScope
+    .replace(/[-_/]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!collapsed) return 'Project'
+  return collapsed.charAt(0).toUpperCase() + collapsed.slice(1)
 }
 
 function detectProjectPackageManagers(projectPath: string): string[] {
@@ -592,7 +607,7 @@ function registrySummaryForProject(project: ResolvedProject): {
     return {
       id: project.id,
       path: project.path,
-      name: folderName,
+      name: humanizeGeneratedProjectName(folderName),
       tags: ['uninitialized'],
     }
   }
@@ -626,6 +641,7 @@ function syncRegistryEntryForProject(project: ResolvedProject) {
 
 function summarizeTaskCounts(tasks: Array<Record<string, unknown>>): ServiceProjectSummary['taskCounts'] {
   let active = 0
+  let draftReview = 0
   let blocked = 0
   let done = 0
   let shelved = 0
@@ -634,11 +650,13 @@ function summarizeTaskCounts(tasks: Array<Record<string, unknown>>): ServiceProj
     if (status === 'done') done++
     else if (status === 'blocked') blocked++
     else if (status === 'shelved') shelved++
+    else if (status === 'import_draft') draftReview++
     else if (status) active++
   }
   return {
     total: tasks.length,
     active,
+    draftReview,
     blocked,
     done,
     shelved,
@@ -786,11 +804,20 @@ function normalizedCheckpointNextPlannedAction(
 ): string | null {
   const nextAction = checkpoint?.nextPlannedAction?.trim() ?? ''
   if (!nextAction) return null
+  if (/^(?:none|null|n\/a|na|nothing)$/i.test(nextAction)) return null
+  const hasSelfCritique = taskHasWorkerSelfCritique(task)
   if (
-    taskHasWorkerSelfCritique(task) &&
+    hasSelfCritique &&
     /write or refresh self-critique note|write or refresh the self-critique note/i.test(nextAction)
   ) {
     return "Resume from the latest self-critique and recorded verification evidence, then hand off to review."
+  }
+  if (
+    !hasSelfCritique &&
+    /write or refresh self-critique note|write or refresh the self-critique note/i.test(nextAction) &&
+    /hand off to review|handoff to review|transition to review/i.test(nextAction)
+  ) {
+    return 'Resume from the active worktree diff, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.'
   }
   return nextAction
 }
@@ -897,9 +924,7 @@ async function enrichTaskForServe(
             step: checkpoint.step,
             agentId: checkpoint.agentId,
             intent: checkpoint.intent,
-            nextPlannedAction:
-              normalizedCheckpointNextPlannedAction(normalized, checkpoint) ??
-              checkpoint.nextPlannedAction,
+            nextPlannedAction: normalizedCheckpointNextPlannedAction(normalized, checkpoint),
             filesTouched: checkpoint.filesTouched,
             writtenAt: checkpoint.writtenAt,
           },
@@ -1050,6 +1075,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         let taskCounts: ServiceProjectSummary['taskCounts'] = {
           total: 0,
           active: 0,
+          draftReview: 0,
           blocked: 0,
           done: 0,
           shelved: 0,
@@ -2868,6 +2894,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const thread = buildThread({
         projectPath: project.path,
+        runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         recentEvents: supervisor.recent(project.id, undefined, project.path),
       })
       return c.json(thread)
@@ -3101,6 +3128,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const thread = buildThread({
         projectPath: project.path,
         snapshot,
+        runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         recentEvents: supervisor.recent(project.id, undefined, project.path),
       })
       const threadTurns = thread.turns.filter(turn => {
@@ -3968,7 +3996,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/setup/defaults', c => {
     const basename = project.path.split('/').pop() ?? 'project'
-    const suggestedName = project.config?.name ?? basename
+    const suggestedName = project.config?.name ?? humanizeGeneratedProjectName(basename)
     const suggestedId = project.config?.id ?? slugify(suggestedName)
     const localModels = MODEL_CATALOG
       .filter(m => m.provider === 'lm-studio')

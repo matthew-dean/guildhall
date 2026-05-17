@@ -340,14 +340,17 @@ export function aggregateFanout(
 ): FanoutAggregate {
   const policy = opts.policy ?? 'strict'
   const approving = verdicts.filter((v) => v.verdict === 'approve')
-  const dissenting = verdicts.filter((v) => v.verdict === 'revise')
+  const availabilityOnly = verdicts.filter((v) => isInfrastructureOnlyFanoutFailure(v))
+  const dissenting = verdicts.filter(
+    (v) => v.verdict === 'revise' && !isInfrastructureOnlyFanoutFailure(v),
+  )
 
   if (dissenting.length === 0) {
     return {
       verdict: 'approve',
       dissenting: [],
       approving,
-      combinedFeedback: '',
+      combinedFeedback: availabilityOnly.length > 0 ? renderCombinedFeedback(availabilityOnly) : '',
     }
   }
 
@@ -368,7 +371,7 @@ export function aggregateFanout(
   // ride along as notes even under advisory, so the worker sees everything).
   const combinedFeedback =
     taskVerdict === 'revise' || dissenting.length > 0
-      ? renderCombinedFeedback(dissenting)
+      ? renderCombinedFeedback([...dissenting, ...availabilityOnly])
       : ''
 
   const result: FanoutAggregate = {
@@ -463,7 +466,8 @@ function renderCombinedFeedback(
 function isInfrastructureOnlyFanoutFailure(verdict: PersonaVerdict): boolean {
   if (verdict.verdict !== 'revise') return false
   const text = `${verdict.reasoning}\n${verdict.rawOutput}`
-  if (!/failed to produce a verdict/i.test(text)) return false
+  if (/no \*\*Reasoning:\*\* block found/i.test(text)) return true
+  if (!/failed to produce a verdict|no \*\*Reasoning:\*\* block found/i.test(text)) return false
   return /HTTP 429|Too Many Requests|rate limit|provider timeout|connection refused|Exceeded maximum turn limit \(\d+\)|temporarily unavailable|service unavailable|timed out after \d+ms/i.test(text)
 }
 

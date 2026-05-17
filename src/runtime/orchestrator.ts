@@ -23,6 +23,7 @@ import {
   type ModelAssignmentConfig,
   type AdjudicationRecord,
   type AgentIssue,
+  type Checkpoint,
   type ReviewVerdict,
   type Task,
   type TaskStatus,
@@ -46,6 +47,7 @@ import {
   findReclaimTasks,
   loadReclaimCandidates,
   readCheckpoint,
+  checkpointIsFreshForTask,
   writeCheckpoint,
   ensureExploringTranscriptEntry,
   activeEscalations,
@@ -86,6 +88,7 @@ import {
   resolveEffectiveTaskProjectPath,
   resolveEffectiveTaskSuccessGates,
   resolveEffectiveTaskVerificationCommands,
+  rewriteWorkspaceCommandsForIsolatedTaskWorktree,
 } from './task-gates.js'
 import { summarizeScopedHardGateDisposition } from '@guildhall/tools'
 import {
@@ -123,12 +126,14 @@ import {
 import {
   ensureWorktreeForDispatch,
   cleanupWorktreeForTerminal,
+  computeBranchName,
   resolveWorktreeMode,
   type WorktreeMode,
 } from './worktree-manager.js'
 import {
   dispatchMerge,
   appendFixupTask,
+  shelveSupersededFixupTasks,
   resolveLandingStrategy,
   type LandingStrategy,
 } from './merge-dispatcher.js'
@@ -170,7 +175,7 @@ import {
   type ReviewerFanoutPolicy,
 } from './reviewer-fanout.js'
 import fs from 'node:fs/promises'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -219,6 +224,387 @@ function friendlyRuntimeAgentName(agentName: string): string {
     case 'reviewer-agent': return 'Reviewer'
     case 'gate-checker-agent': return 'Gate checker'
     default: return agentName
+  }
+}
+
+function isIgnorableCheckpointPath(file: string): boolean {
+  const normalized = file.replace(/\\/g, '/').replace(/^\.\//, '')
+  return (
+    normalized === 'guildhall.yaml' ||
+    normalized === 'memory' ||
+    normalized.startsWith('memory/') ||
+    normalized === '.guildhall' ||
+    normalized.startsWith('.guildhall/') ||
+    normalized === 'node_modules' ||
+    normalized.startsWith('node_modules/') ||
+    normalized.includes('/node_modules/') ||
+    normalized === '.git' ||
+    normalized.startsWith('.git/') ||
+    normalized.includes('/.git/')
+  )
+}
+
+function noteLooksLikeStructuredSelfCritique(task: Task): boolean {
+  return (task.notes ?? []).some((note) =>
+    note.agentId !== 'human' &&
+    isWorkerSelfCritiqueNote(note) &&
+    /\bself-critique\b/i.test(note.content) &&
+    /\bmin(?:imum|imal|i)-scope check\b/i.test(note.content),
+  )
+}
+
+function isRecoverableReviewHandoffToolLoop(task: Task): boolean {
+  const blockReason = task.blockReason ?? ''
+  const hasValidatorBugEscalation = (task.escalations ?? []).some((escalation) => {
+    if (escalation.resolvedAt) return false
+    const summary = escalation.summary ?? ''
+    const details = escalation.details ?? ''
+    return (
+      (
+        escalation.reason === 'gate_hard_failure' ||
+        escalation.reason === 'decision_required' ||
+        escalation.reason === 'human_judgment_required'
+      ) &&
+      (
+        /transition(?:ing)? .* to review|tool validation bug prevents transitioning .* to review/i.test(
+          `${summary}\n${details}`,
+        ) ||
+        (
+          /system validator rejects passing verification/i.test(summary) &&
+          /durable proof that the task passed its required verification commands/i.test(details)
+        ) ||
+        (
+          /system validator bug persists/i.test(summary) &&
+          /all verification passing|all acceptance criteria are met|validator issue to allow the review transition/i.test(details)
+        ) ||
+        (
+          /despite passing all verification/i.test(summary) &&
+          /durable proof that the task passed its required verification commands/i.test(details)
+        )
+      )
+    )
+  })
+  if (
+    !(
+      /Blocked transitioning task to review/i.test(blockReason) ||
+      /Stuck in tool loop transitioning .* to review status/i.test(blockReason) ||
+      /Tool validation bug prevents transitioning .* to review status/i.test(blockReason) ||
+      /Cannot transition to review .* system validator rejects passing verification/i.test(blockReason) ||
+      /Blocked from transitioning to review .* system validator bug persists/i.test(blockReason) ||
+      /Task blocked from transitioning to review despite passing all verification/i.test(blockReason) ||
+      hasValidatorBugEscalation
+    )
+  ) {
+    return false
+  }
+  return noteLooksLikeStructuredSelfCritique(task)
+}
+
+function resolveRecoverableReviewHandoffEscalations(task: Task, resolvedAt: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    const summary = escalation.summary ?? ''
+    const details = escalation.details ?? ''
+    if (
+      (
+        escalation.reason === 'human_judgment_required' ||
+        escalation.reason === 'decision_required' ||
+        escalation.reason === 'gate_hard_failure'
+      ) &&
+      (
+        /Blocked transitioning task to review[^\n]*tool loop/i.test(summary) ||
+        /Stuck in tool loop transitioning .* to review status/i.test(summary) ||
+        /Tool validation bug prevents transitioning .* to review status/i.test(summary) ||
+        /Cannot transition to review .* system validator rejects passing verification/i.test(summary) ||
+        /Blocked from transitioning to review .* system validator bug persists/i.test(summary) ||
+        /Task blocked from transitioning to review despite passing all verification/i.test(summary) ||
+        /persist a structured self-critique note via update-task first/i.test(details) ||
+        /update-task tool kept rejecting status=review/i.test(details) ||
+        /durable proof that the task passed its required verification commands/i.test(details)
+      )
+    ) {
+      escalation.resolvedAt = resolvedAt
+      escalation.resolvedBy = 'system'
+      escalation.resolution = 'Superseded after the review-handoff validator fix was applied.'
+    }
+  }
+}
+
+function isRecoverableStaleReviewCheckpointBlocker(task: Task): boolean {
+  const blockReason = task.blockReason ?? ''
+  if (!/already in review|checkpoint is stale/i.test(blockReason)) return false
+  return (
+    noteLooksLikeStructuredSelfCritique(task) &&
+    (task.escalations ?? []).some((escalation) => {
+      if (escalation.resolvedAt) return false
+      return (
+        escalation.reason === 'decision_required' &&
+        /already in review|checkpoint is stale/i.test(
+          `${escalation.summary ?? ''}\n${escalation.details ?? ''}`,
+        )
+      )
+    })
+  )
+}
+
+function resolveRecoverableStaleReviewCheckpointEscalations(task: Task, resolvedAt: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    if (
+      escalation.reason === 'decision_required' &&
+      /already in review|checkpoint is stale/i.test(
+        `${escalation.summary ?? ''}\n${escalation.details ?? ''}`,
+      )
+    ) {
+      escalation.resolvedAt = resolvedAt
+      escalation.resolvedBy = 'system'
+      escalation.resolution =
+        'Superseded after Guildhall recognized the stale checkpoint as an already-complete review handoff.'
+    }
+  }
+}
+
+function isRecoverableTurnLimitBlocker(task: Task): boolean {
+  const blockReason = task.blockReason ?? ''
+  return /Worker stopped after hitting its turn limit/i.test(blockReason)
+}
+
+function isRecoverableNoProgressBlocker(task: Task): boolean {
+  const blockReason = task.blockReason ?? ''
+  if (/Worker made no visible progress after \d+ passes/i.test(blockReason)) return true
+  return (task.escalations ?? []).some((escalation) => {
+    if (escalation.resolvedAt) return false
+    return (
+      escalation.reason === 'human_judgment_required' &&
+      /Worker made no visible progress after \d+ passes/i.test(escalation.summary ?? '')
+    )
+  })
+}
+
+function isRecoverableWorkerTimeoutBlocker(task: Task): boolean {
+  const blockReason = task.blockReason ?? ''
+  return /Worker timed out after failing to mutate the likely target file/i.test(blockReason)
+}
+
+function isRecoverableEnvironmentSetupBlocker(task: Task): boolean {
+  const blockReason = task.blockReason ?? ''
+  if (/Test environment setup failed/i.test(blockReason)) return true
+  return (task.escalations ?? []).some((escalation) => {
+    if (escalation.resolvedAt) return false
+    const summary = escalation.summary ?? ''
+    const details = escalation.details ?? ''
+    return (
+      escalation.reason === 'gate_hard_failure' &&
+      (
+        /Test environment setup failed/i.test(summary) ||
+        /Test environment setup failed/i.test(details) ||
+        /Cannot find module .*@nuxt\/test-utils/i.test(details)
+      )
+    )
+  })
+}
+
+function resolveRecoverableTurnLimitEscalations(task: Task, resolvedAt: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    const summary = escalation.summary ?? ''
+    const details = escalation.details ?? ''
+    if (
+      escalation.reason === 'human_judgment_required' &&
+      (
+        /Worker stopped after hitting its turn limit/i.test(summary) ||
+        /Exceeded maximum turn limit/i.test(details)
+      )
+    ) {
+      escalation.resolvedAt = resolvedAt
+      escalation.resolvedBy = 'system'
+      escalation.resolution = 'Superseded after the project was explicitly resumed.'
+    }
+  }
+}
+
+function resolveRecoverableNoProgressEscalations(task: Task, resolvedAt: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    const summary = escalation.summary ?? ''
+    const details = escalation.details ?? ''
+    if (
+      escalation.reason === 'human_judgment_required' &&
+      (
+        /Worker made no visible progress after \d+ passes/i.test(summary) ||
+        /Task remained in progress with no worktree edits/i.test(details)
+      )
+    ) {
+      escalation.resolvedAt = resolvedAt
+      escalation.resolvedBy = 'system'
+      escalation.resolution = 'Superseded after the project was explicitly resumed from a recoverable no-progress stop.'
+    }
+  }
+}
+
+function resolveRecoverableEnvironmentSetupEscalations(task: Task, resolvedAt: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    const summary = escalation.summary ?? ''
+    const details = escalation.details ?? ''
+    if (
+      escalation.reason === 'gate_hard_failure' &&
+      (
+        /Test environment setup failed/i.test(summary) ||
+        /Test environment setup failed/i.test(details) ||
+        /Cannot find module .*@nuxt\/test-utils/i.test(details)
+      )
+    ) {
+      escalation.resolvedAt = resolvedAt
+      escalation.resolvedBy = 'system'
+      escalation.resolution = 'Superseded after the task worktree install layout was repaired and bootstrap passed.'
+    }
+  }
+}
+
+function basenameOfTaskPath(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/')
+  return normalized.split('/').filter(Boolean).at(-1) ?? normalized
+}
+
+function isRecoverableSelfAuthoredVerificationEscalation(input: {
+  agentName: string
+  beforeStatus: TaskStatus
+  task: Task
+  checkpoint: Checkpoint | null
+  escalation: NonNullable<Task['escalations']>[number]
+}): boolean {
+  if (input.agentName !== 'worker-agent') return false
+  if (input.beforeStatus !== 'in_progress') return false
+  if (!checkpointHasRecordedVerificationFailure(input.checkpoint?.resumeContext?.verification)) return false
+  if (
+    ![
+      'spec_ambiguous',
+      'decision_required',
+      'human_judgment_required',
+      'gate_hard_failure',
+    ].includes(input.escalation.reason)
+  ) {
+    return false
+  }
+
+  const text = [
+    input.task.blockReason ?? '',
+    input.escalation.summary ?? '',
+    input.escalation.details ?? '',
+  ].join('\n')
+  if (
+    !/(type errors?|cannot find name|cannot be found|cannot be resolved|missing imports?|missing names?|missing utilities|undefined|TS\d{4})/i.test(
+      text,
+    )
+  ) {
+    return false
+  }
+
+  const touchedFiles = input.checkpoint?.filesTouched ?? []
+  if (touchedFiles.length === 0) return false
+  return touchedFiles.some((filePath) => {
+    const normalized = filePath.replace(/\\/g, '/')
+    const basename = basenameOfTaskPath(normalized)
+    return text.includes(normalized) || (basename.length > 0 && text.includes(basename))
+  })
+}
+
+function isRecoverableSelfAuthoredVerificationBlocker(task: Task, checkpoint: Checkpoint | null): boolean {
+  return (task.escalations ?? []).some((escalation) => {
+    if (escalation.resolvedAt) return false
+    return isRecoverableSelfAuthoredVerificationEscalation({
+      agentName: escalation.agentId,
+      beforeStatus: 'in_progress',
+      task,
+      checkpoint,
+      escalation,
+    })
+  })
+}
+
+function resolveRecoverableSelfAuthoredVerificationEscalations(
+  task: Task,
+  checkpoint: Checkpoint | null,
+  resolvedAt: string,
+): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    if (
+      isRecoverableSelfAuthoredVerificationEscalation({
+        agentName: escalation.agentId,
+        beforeStatus: 'in_progress',
+        task,
+        checkpoint,
+        escalation,
+      })
+    ) {
+      escalation.resolvedAt = resolvedAt
+      escalation.resolvedBy = 'system'
+      escalation.resolution =
+        'Superseded because the blocker describes a self-authored verification failure in files the worker already touched. Guildhall kept the task in the worker repair lane.'
+    }
+  }
+}
+
+function resolveRecoverableWorkerTimeoutEscalations(task: Task, resolvedAt: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    const summary = escalation.summary ?? ''
+    const details = escalation.details ?? ''
+    if (
+      escalation.reason === 'human_judgment_required' &&
+      (
+        /Worker timed out after failing to mutate the likely target file/i.test(summary) ||
+        /timed out after \d+ms of inactivity/i.test(details)
+      )
+    ) {
+      escalation.resolvedAt = resolvedAt
+      escalation.resolvedBy = 'system'
+      escalation.resolution = 'Superseded after the project was explicitly resumed from the latest recovery checkpoint.'
+    }
+  }
+}
+
+function reviewVerdictLooksInfrastructureOnly(verdict: Pick<ReviewVerdict, 'verdict' | 'reasoning'>): boolean {
+  if (verdict.verdict !== 'revise') return false
+  const text = verdict.reasoning ?? ''
+  if (!/failed to produce a verdict|no \*\*Reasoning:\*\* block found/i.test(text)) return false
+  return /HTTP 429|Too Many Requests|rate limit|provider timeout|connection refused|Exceeded maximum turn limit \(\d+\)|temporarily unavailable|service unavailable|timed out after \d+ms|raw output retained/i.test(text)
+}
+
+function latestReviewVerdictRound(task: Task): ReviewVerdict[] {
+  const verdicts = task.reviewVerdicts ?? []
+  if (verdicts.length === 0) return []
+  const latestRecordedAt = verdicts.reduce<string>(
+    (latest, verdict) => (verdict.recordedAt > latest ? verdict.recordedAt : latest),
+    verdicts[0]!.recordedAt,
+  )
+  return verdicts.filter((verdict) => verdict.recordedAt === latestRecordedAt)
+}
+
+function isRecoverableInfraOnlyMaxRevisionBlocker(task: Task): boolean {
+  const blockReason = task.blockReason ?? ''
+  if (!/max_revisions_exceeded:/i.test(blockReason)) return false
+  const revises = latestReviewVerdictRound(task).filter((verdict) => verdict.verdict === 'revise')
+  return revises.length > 0 && revises.every((verdict) => reviewVerdictLooksInfrastructureOnly(verdict))
+}
+
+function isRecoverableActionableMaxRevisionBlocker(task: Task): boolean {
+  const blockReason = task.blockReason ?? ''
+  if (!/max_revisions_exceeded:/i.test(blockReason)) return false
+  const revises = latestReviewVerdictRound(task).filter((verdict) => verdict.verdict === 'revise')
+  if (revises.length === 0) return false
+  return revises.some((verdict) => !reviewVerdictLooksInfrastructureOnly(verdict))
+}
+
+function resolveRecoverableMaxRevisionEscalations(task: Task, resolvedAt: string, resolution: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    if (escalation.reason !== 'max_revisions_exceeded') continue
+    escalation.resolvedAt = resolvedAt
+    escalation.resolvedBy = 'system'
+    escalation.resolution = resolution
   }
 }
 
@@ -1002,19 +1388,218 @@ function agentInactivityTimeoutMessage(agentName: string, timeoutMs: number): st
   return `${agentName} timed out after ${timeoutMs}ms of inactivity`
 }
 
-function renderImmediateResumeInstructions(task: Task, agentName: string): string {
+type CheckpointResumeContext = NonNullable<Checkpoint['resumeContext']>
+
+function uniqueNonEmptyStrings(values: Iterable<string>): string[] {
+  const seen = new Set<string>()
+  const ordered: string[] = []
+  for (const value of values) {
+    const trimmed = value.trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    ordered.push(trimmed)
+  }
+  return ordered
+}
+
+function checkpointVerificationHistoryFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+): CheckpointResumeContext['verification'] {
+  const raw = metadata?.['current_task_verification_history']
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((entry): entry is CheckpointResumeContext['verification'][number] => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false
+      const rec = entry as Record<string, unknown>
+      return (
+        typeof rec['command'] === 'string' &&
+        typeof rec['passed'] === 'boolean' &&
+        typeof rec['observedAt'] === 'string'
+      )
+    })
+    .map((entry) => ({
+      command: entry.command.trim(),
+      passed: entry.passed,
+      observedAt: entry.observedAt,
+      ...(typeof entry.summary === 'string' && entry.summary.trim()
+        ? { summary: entry.summary.trim() }
+        : {}),
+    }))
+    .filter((entry) => entry.command.length > 0)
+    .slice(-6)
+}
+
+function checkpointCompanionFilesFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+  projectRoot: string,
+  filesTouched: readonly string[],
+): string[] {
+  const touched = new Set(
+    filesTouched.map((file) =>
+      path.resolve(path.isAbsolute(file) ? file : path.join(projectRoot, file)),
+    ),
+  )
+  const likelyTargets = Array.isArray(metadata?.['current_task_likely_target_files'])
+    ? (metadata?.['current_task_likely_target_files'] as unknown[])
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : []
+  const readFilePaths = Array.isArray(metadata?.['read_file_state'])
+    ? (metadata?.['read_file_state'] as unknown[])
+        .map((entry) => {
+          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return ''
+          return typeof (entry as Record<string, unknown>)['path'] === 'string'
+            ? String((entry as Record<string, unknown>)['path']).trim()
+            : ''
+        })
+        .filter(Boolean)
+    : []
+
+  return uniqueNonEmptyStrings([...readFilePaths, ...likelyTargets])
+    .filter((candidate) => {
+      const resolved = path.resolve(candidate)
+      return !touched.has(resolved)
+    })
+    .slice(0, 8)
+}
+
+function checkpointSafeNextMutationSurface(
+  filesTouched: readonly string[],
+  companionFiles: readonly string[],
+  verification: CheckpointResumeContext['verification'] = [],
+): string[] {
+  const primary = uniqueNonEmptyStrings(filesTouched.length > 0 ? filesTouched : companionFiles)
+  const hasFailedVerification = checkpointHasRecordedVerificationFailure(verification)
+  const rank = (candidate: string): number => {
+    const normalized = candidate.replace(/\\/g, '/')
+    if (hasFailedVerification && /\.(?:ts|tsx|js|jsx|vue)$/i.test(normalized) && !/\.(?:test|spec)\.[^.]+$/i.test(normalized)) return 0
+    if (hasFailedVerification && /\.(?:test|spec)\.[^.]+$/i.test(normalized)) return 1
+    if (/\.(?:test|spec)\.[^.]+$/i.test(normalized)) return 0
+    if (/\.(?:ts|tsx|js|jsx|vue)$/i.test(normalized)) return 1
+    if (/\/src\/|\/test\/|\/tests\//i.test(normalized)) return 2
+    if (/package\.json$/i.test(normalized)) return 4
+    if (/\.gitignore$/i.test(normalized)) return 5
+    return 3
+  }
+
+  return [...primary]
+    .sort((left, right) => {
+      const delta = rank(left) - rank(right)
+      return delta !== 0 ? delta : left.localeCompare(right)
+    })
+    .slice(0, 6)
+}
+
+function checkpointWorkingHypothesis(input: {
+  existing: string
+  verification: CheckpointResumeContext['verification']
+  companionFiles: readonly string[]
+  safeNextMutationSurface: readonly string[]
+}): string | undefined {
+  const existing = input.existing.trim()
+  const focusSurface = input.safeNextMutationSurface.slice(0, 3)
+  const companions = input.companionFiles.slice(0, 2)
+  const latestVerification = input.verification[input.verification.length - 1]
+  if (existing) {
+    const mentionsCurrentFocus =
+      focusSurface.length === 0 ||
+      focusSurface.some((file) => existing.includes(file) || existing.includes(path.basename(file)))
+    if (mentionsCurrentFocus) {
+      return existing
+    }
+  }
+  if (latestVerification) {
+    const focusText =
+      focusSurface.length > 0
+        ? `Focus the next change on ${focusSurface.join(', ')}`
+        : 'Keep the next change tightly scoped to the files already under active work'
+    const companionText =
+      companions.length > 0
+        ? ` while using ${companions.join(', ')} as the supporting context`
+        : ''
+    return latestVerification.passed
+      ? `${focusText}${companionText}. The last authoritative verification passed (${latestVerification.command}); move directly toward a durable handoff unless a new blocker appears.`
+      : `${focusText}${companionText}. The last authoritative verification failed (${latestVerification.command}); repair the remaining failure before broadening scope.`
+  }
+  if (focusSurface.length > 0) {
+    return `The safest next mutation surface is ${focusSurface.join(', ')}. Stay inside that surface until focused verification says the task is genuinely clear again.`
+  }
+  return undefined
+}
+
+function taskRelativeCheckpointPath(candidate: string, repoRoot: string): string {
+  const trimmed = candidate.trim()
+  if (!trimmed) return ''
+  if (!path.isAbsolute(trimmed)) return trimmed
+  const relative = path.relative(path.resolve(repoRoot), path.resolve(trimmed))
+  if (
+    relative &&
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  ) {
+    return relative
+  }
+  return trimmed
+}
+
+function renderImmediateResumeInstructions(
+  task: Task,
+  agentName: string,
+  checkpoint: Checkpoint | null,
+  checkpointNextAction = '',
+): string {
   if (agentName !== 'worker-agent' || task.status !== 'in_progress') return ''
+  const normalizedCheckpoint = checkpointNextAction.trim()
+  if (looksLikeReviewHandoffNextAction(normalizedCheckpoint)) {
+    const hasSelfCritique = noteLooksLikeStructuredSelfCritique(task)
+    return [
+      '### Immediate Resume Instructions',
+      'You are resuming an in-progress task that is already at the review handoff stage.',
+      `The latest checkpoint says: ${normalizedCheckpoint}`,
+      hasSelfCritique
+        ? 'Do not reopen files first. Your first action should be the exact handoff: transition the task to review, or raise-escalation if that handoff is no longer valid.'
+        : 'Do not reopen files first. Your first action should be to persist the structured self-critique note with update-task, then hand off to review, or raise-escalation if the checkpoint is no longer valid.',
+      'Only return to file reads or broader verification if the handoff truly cannot be completed and you have explained why.',
+    ].join('\n')
+  }
+  const resumeSurface = checkpoint?.resumeContext?.safeNextMutationSurface?.slice(0, 4) ?? []
   const likelyFiles = resolveLikelyTaskFiles(task).slice(0, 4)
-  if (likelyFiles.length === 0) return ''
+  const targetFiles = resumeSurface.length > 0 ? resumeSurface : likelyFiles
+  if (targetFiles.length === 0) return ''
+  const latestVerification = checkpoint?.resumeContext?.verification?.[checkpoint.resumeContext.verification.length - 1]
   return [
     '### Immediate Resume Instructions',
     'You are resuming an in-progress coding task.',
-    'Open or edit these exact files before any directory listing or broad globbing:',
-    ...likelyFiles.map((file) => `- ${file}`),
-    'If one of these likely target files does not exist yet, create it at that exact path instead of searching for alternate directories.',
+    ...(checkpoint?.resumeContext?.workingHypothesis
+      ? [`Working hypothesis: ${checkpoint.resumeContext.workingHypothesis}`]
+      : []),
+    ...(latestVerification
+      ? [
+          `Latest authoritative verification: ${latestVerification.command} (${latestVerification.passed ? 'passed' : 'failed'})${latestVerification.summary ? ` — ${latestVerification.summary}` : ''}.`,
+        ]
+      : []),
+    'Open or edit these files before any directory listing or broad globbing:',
+    ...targetFiles.map((file) => `- ${file}`),
+    'If one of these likely target files does not exist yet, first verify that its parent directory matches the existing project structure. Create it only when the parent path is real and convention-compatible; otherwise inspect the nearest existing companion file or raise-escalation with the path mismatch.',
     'After you have the needed file contents, your next step should be a concrete mutation or a focused verification command tied to those files.',
     'Do not use list-files, glob, or generic repo-root shell inspection until you have attempted that mutation or focused verification.',
   ].join('\n')
+}
+
+function shouldUseCheckpointForTask(task: Task, checkpoint: Checkpoint | null): checkpoint is Checkpoint {
+  if (!checkpoint) return false
+  if (checkpointIsFreshForTask(task, checkpoint)) return true
+  return task.notes.some((note) => {
+    if (note.role !== 'recovery') return false
+    const noteAt = Date.parse(note.timestamp)
+    const checkpointAt = Date.parse(checkpoint.writtenAt)
+    return (
+      Number.isFinite(noteAt) &&
+      Number.isFinite(checkpointAt) &&
+      noteAt >= checkpointAt &&
+      /latest recovery checkpoint|latest durable checkpoint/i.test(note.content)
+    )
+  })
 }
 
 export class Orchestrator {
@@ -1234,6 +1819,7 @@ export class Orchestrator {
   async tick(opts: OrchestratorTickOptions = {}): Promise<TickOutcome> {
     let queueBefore = await this.readQueue()
     queueBefore = await this.normalizeQueuedReviewOwnership(queueBefore)
+    queueBefore = await this.reopenRecoverableDirtyRepoTasks(queueBefore)
     const resolvedCapacity = await this.resolveCapacity()
     const capacity =
       opts.dispatchLimit === undefined
@@ -1395,6 +1981,7 @@ export class Orchestrator {
     // through to the legacy single-reviewer dispatch when no fan-out runner
     // is configured or no reviewer personas apply.
     if (task.status === 'review' && this.opts.reviewerFanout) {
+      await this.maybeWriteReviewPacket(task)
       const fanoutOutcome = await this.runReviewerFanoutInline(task, queueBefore)
       if (fanoutOutcome) return fanoutOutcome
     }
@@ -1435,52 +2022,82 @@ export class Orchestrator {
       this.opts.config.projectPath,
     )
     let activeWorktreePath = effectiveTaskProjectPath
+    const baseBranch = await this.resolveBaseBranch(effectiveTaskProjectPath)
     if (worktreeMode !== 'none' && !shouldSkipGitIsolation(task, agent.name)) {
       if (!task.worktreePath) {
         const repoClean = await this.gitDriver.isClean(effectiveTaskProjectPath)
         if (!repoClean) {
-          const message = `base repo has uncommitted changes at ${effectiveTaskProjectPath}`
-          const queue = await this.readQueue()
-          const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
-          const now = this.now()
-          if (queuedTask) {
-            queuedTask.status = 'blocked'
-            queuedTask.assignedTo = null
-            queuedTask.blockReason =
-              `Guildhall could not start work because the target repo is dirty: ${message}. ` +
-              'Commit or stash those changes, then resume the task.'
-            queuedTask.notes.push({
-              agentId: 'coordinator',
-              role: 'bootstrap-failure',
-              content:
-                `Blocked before worktree creation. ${message}. ` +
-                'Guildhall stopped retrying until the repo is clean and the task is resumed.',
-              timestamp: now,
-            })
-            queuedTask.updatedAt = now
-            queue.lastUpdated = now
-            await this.writeQueue(queue)
-          }
-          await this.logTickProgress({
+          const recovered = await this.recoverDirtyRepoIntoTaskBranch({
             task,
-            agent: agent.name,
-            beforeStatus,
-            afterStatus: 'blocked',
-            transitioned: true,
-            note: `error: worktree setup blocked — ${message}`,
+            worktreeMode,
+            repoRoot: effectiveTaskProjectPath,
+            baseBranch,
           })
-          return {
-            kind: 'processed',
-            taskId: task.id,
-            agent: agent.name,
-            beforeStatus,
-            afterStatus: 'blocked',
-            transitioned: true,
-            revisionCount: task.revisionCount,
+          if (recovered.recovered) {
+            const queue = await this.readQueue()
+            const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
+            const now = this.now()
+            if (queuedTask) {
+              queuedTask.branchName = recovered.branchName
+              queuedTask.baseBranch = baseBranch
+              queuedTask.blockReason = null
+              queuedTask.notes.push({
+                agentId: 'coordinator',
+                role: 'checkpoint',
+                content:
+                  `Recovered shared-checkout edits into ${recovered.branchName} ` +
+                  `at ${recovered.commitSha ?? '<unknown commit>'}. Guildhall will continue from an isolated task branch.`,
+                timestamp: now,
+              })
+              queuedTask.updatedAt = now
+              queue.lastUpdated = now
+              await this.writeQueue(queue)
+            }
+            task.branchName = recovered.branchName
+            task.baseBranch = baseBranch
+          } else {
+            const message = `base repo has uncommitted changes at ${effectiveTaskProjectPath}`
+            const queue = await this.readQueue()
+            const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
+            const now = this.now()
+            if (queuedTask) {
+              queuedTask.status = 'blocked'
+              queuedTask.assignedTo = null
+              queuedTask.blockReason =
+                `Guildhall could not start work because the target repo is dirty: ${message}. ` +
+                'Commit or stash those changes, then resume the task.'
+              queuedTask.notes.push({
+                agentId: 'coordinator',
+                role: 'bootstrap-failure',
+                content:
+                  `Blocked before worktree creation. ${message}. ` +
+                  'Guildhall stopped retrying until the repo is clean and the task is resumed.',
+                timestamp: now,
+              })
+              queuedTask.updatedAt = now
+              queue.lastUpdated = now
+              await this.writeQueue(queue)
+            }
+            await this.logTickProgress({
+              task,
+              agent: agent.name,
+              beforeStatus,
+              afterStatus: 'blocked',
+              transitioned: true,
+              note: `error: worktree setup blocked — ${message}`,
+            })
+            return {
+              kind: 'processed',
+              taskId: task.id,
+              agent: agent.name,
+              beforeStatus,
+              afterStatus: 'blocked',
+              transitioned: true,
+              revisionCount: task.revisionCount,
+            }
           }
         }
       }
-      const baseBranch = await this.resolveBaseBranch(effectiveTaskProjectPath)
       try {
         const ensured = await ensureWorktreeForDispatch({
           task,
@@ -1593,6 +2210,55 @@ export class Orchestrator {
         if (!res.success) {
           const failed = res.steps.find((s) => s.result === 'fail')
           const msg = `worktree bootstrap failed on ${failed?.kind ?? 'step'} \`${failed?.command ?? ''}\` (exit ${failed?.exitCode ?? '?'})`
+          const dirtyTaskWorktree = !(await this.gitDriver.isClean(activeWorktreePath))
+          if (dirtyTaskWorktree) {
+            const now = this.now()
+            const output = String(failed?.output ?? '').trim()
+            const clippedOutput = output.length > 1800 ? `${output.slice(0, 1800)}\n...` : output
+            const content = [
+              `${msg}. The task worktree already has edits, so Guildhall is handing the failing verification back to the worker instead of blocking setup.`,
+              clippedOutput ? `\nVerification output:\n${clippedOutput}` : '',
+            ].filter(Boolean).join('\n')
+            const queue = await this.readQueue()
+            const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
+            if (queuedTask) {
+              const alreadyLogged = queuedTask.notes.slice(-3).some((note) =>
+                note.role === 'bootstrap-verification' &&
+                note.content.includes(msg),
+              )
+              if (!alreadyLogged) {
+                queuedTask.notes.push({
+                  agentId: 'coordinator',
+                  role: 'bootstrap-verification',
+                  content,
+                  timestamp: now,
+                })
+                queuedTask.updatedAt = now
+                queue.lastUpdated = now
+                await this.writeQueue(queue)
+              }
+            }
+            if (!task.notes.slice(-3).some((note) =>
+              note.role === 'bootstrap-verification' &&
+              note.content.includes(msg),
+            )) {
+              task.notes.push({
+                agentId: 'coordinator',
+                role: 'bootstrap-verification',
+                content,
+                timestamp: now,
+              })
+              task.updatedAt = now
+            }
+            await this.writeBootstrapVerificationCheckpoint({
+              task,
+              agentName: agent.name,
+              activeWorktreePath,
+              command: failed?.command ?? '',
+              output: clippedOutput,
+              observedAt: now,
+            })
+          } else {
           const queue = await this.readQueue()
           const queuedTask = queue.tasks.find((candidate) => candidate.id === task.id)
           const now = this.now()
@@ -1631,14 +2297,32 @@ export class Orchestrator {
             transitioned: true,
             revisionCount: task.revisionCount,
           }
+          }
         }
       }
     }
 
+    const relativeTaskProjectPath = path.relative(
+      path.resolve(this.opts.config.projectPath),
+      path.resolve(effectiveTaskProjectPath),
+    )
+    const nestedWorktreeProjectPath =
+      relativeTaskProjectPath &&
+      relativeTaskProjectPath !== '.' &&
+      !relativeTaskProjectPath.startsWith(`..${path.sep}`) &&
+      relativeTaskProjectPath !== '..' &&
+      !path.isAbsolute(relativeTaskProjectPath)
+        ? path.resolve(activeWorktreePath, relativeTaskProjectPath)
+        : null
+    const activeTaskWorktreeProjectPath =
+      nestedWorktreeProjectPath && existsSync(nestedWorktreeProjectPath)
+        ? nestedWorktreeProjectPath
+        : activeWorktreePath
+
     const ctx = await buildContext(task, this.opts.config.memoryDir)
     const tasksPath = this.tasksPath()
     const likelyTargetFiles = resolveLikelyTaskFiles(task)
-    const effectiveTaskSuccessGates =
+    const effectiveTaskSuccessGatesRaw =
       beforeStatus === 'gate_check' || beforeStatus === 'in_progress'
         ? resolveEffectiveTaskSuccessGates({
             task,
@@ -1646,9 +2330,10 @@ export class Orchestrator {
             ...(this.opts.config.bootstrap
               ? { workspaceBootstrap: this.opts.config.bootstrap }
               : {}),
+            likelyTargetFiles,
           })
         : undefined
-    const effectiveTaskVerificationCommands =
+    const effectiveTaskVerificationCommandsRaw =
       beforeStatus === 'in_progress'
         ? resolveEffectiveTaskVerificationCommands({
             task,
@@ -1659,12 +2344,42 @@ export class Orchestrator {
             likelyTargetFiles,
           })
         : undefined
+    const effectiveTaskSuccessGates = rewriteWorkspaceCommandsForIsolatedTaskWorktree({
+      commands: effectiveTaskSuccessGatesRaw,
+      workspaceProjectPath: this.opts.config.projectPath,
+      taskProjectPath: effectiveTaskProjectPath,
+      activeTaskWorktreeProjectPath,
+    })
+    const effectiveTaskVerificationCommands = rewriteWorkspaceCommandsForIsolatedTaskWorktree({
+      commands: effectiveTaskVerificationCommandsRaw,
+      workspaceProjectPath: this.opts.config.projectPath,
+      taskProjectPath: effectiveTaskProjectPath,
+      activeTaskWorktreeProjectPath,
+    })
 
     // FR-24: slot allocation shapes the prompt + env for the worker. Slot is
     // released after the agent returns (or throws).
     const slot = await this.allocateSlotForTask(task)
     const slotPromptRule = slot ? slotSystemPromptRule(slot) : null
-    const immediateResumeInstructions = renderImmediateResumeInstructions(task, agent.name)
+    const rawCheckpoint =
+      typeof agent.loadToolMetadata === 'function'
+        ? await readCheckpoint(this.opts.config.memoryDir, task.id).catch(() => null)
+        : null
+    const checkpoint = shouldUseCheckpointForTask(task, rawCheckpoint) ? rawCheckpoint : null
+    const checkpointNextAction = normalizedWorkerCheckpointNextAction(task, checkpoint)
+    const checkpointSafeSurface = checkpoint
+      ? checkpointSafeNextMutationSurface(
+          checkpoint.filesTouched,
+          checkpoint.resumeContext?.companionFiles ?? [],
+          checkpoint.resumeContext?.verification ?? [],
+        )
+      : []
+    const immediateResumeInstructions = renderImmediateResumeInstructions(
+      task,
+      agent.name,
+      checkpoint,
+      checkpointNextAction,
+    )
 
     const prompt = [
       ctx.formatted,
@@ -1677,15 +2392,18 @@ export class Orchestrator {
       ...(activeWorktreePath !== effectiveTaskProjectPath
         ? [`**Worktree (for code edits):** ${activeWorktreePath}`]
         : []),
+      ...(activeTaskWorktreeProjectPath !== activeWorktreePath
+        ? [`**Worktree task project path (for shell/gates):** ${activeTaskWorktreeProjectPath}`]
+        : []),
       ...(beforeStatus === 'gate_check'
         ? ['', renderTaskScopedGateInstructions({
-            projectPath: effectiveTaskProjectPath,
+            projectPath: activeWorktreePath,
             successGates: effectiveTaskSuccessGates,
           })]
         : []),
       ...(beforeStatus === 'in_progress'
         ? ['', renderTaskScopedVerificationInstructions({
-            projectPath: effectiveTaskProjectPath,
+            projectPath: activeWorktreePath,
             successGates: effectiveTaskVerificationCommands,
           })]
         : []),
@@ -1721,8 +2439,6 @@ export class Orchestrator {
     if (typeof agent.loadToolMetadata === 'function') {
       const likelyTargetFiles = resolveLikelyTaskFiles(task)
       const scopeDecisionTexts = resolvedScopeDecisionTexts(task)
-      const checkpoint = await readCheckpoint(this.opts.config.memoryDir, task.id).catch(() => null)
-      const checkpointNextAction = normalizedWorkerCheckpointNextAction(task, checkpoint?.nextPlannedAction)
       agent.loadToolMetadata({
         current_task_id: task.id,
         current_task_title: task.title,
@@ -1731,7 +2447,11 @@ export class Orchestrator {
         memory_dir: this.opts.config.memoryDir,
         tasks_path: tasksPath,
         current_task_project_path: effectiveTaskProjectPath,
+        current_task_workspace_project_path: this.opts.config.projectPath,
         ...(activeWorktreePath ? { current_task_worktree_path: activeWorktreePath } : {}),
+        ...(activeTaskWorktreeProjectPath !== activeWorktreePath
+          ? { current_task_worktree_project_path: activeTaskWorktreeProjectPath }
+          : {}),
         ...(likelyTargetFiles.length > 0
           ? { current_task_likely_target_files: likelyTargetFiles }
           : {}),
@@ -1750,8 +2470,26 @@ export class Orchestrator {
         ...(checkpoint?.filesTouched.length
           ? { current_task_checkpoint_files_touched: checkpoint.filesTouched }
           : {}),
+        ...(checkpoint?.resumeContext?.verification?.length
+          ? {
+              current_task_checkpoint_verification: checkpoint.resumeContext.verification,
+              current_task_verification_history: checkpoint.resumeContext.verification,
+            }
+          : {}),
+        ...(checkpoint?.resumeContext?.companionFiles?.length
+          ? { current_task_checkpoint_companion_files: checkpoint.resumeContext.companionFiles }
+          : {}),
+        ...(checkpoint?.resumeContext?.workingHypothesis
+          ? { current_task_checkpoint_working_hypothesis: checkpoint.resumeContext.workingHypothesis }
+          : {}),
+        ...(checkpointSafeSurface.length
+          ? { current_task_checkpoint_safe_mutation_surface: checkpointSafeSurface }
+          : {}),
         ...(this.hasStructuredSelfCritique(task)
           ? { current_task_has_structured_self_critique: true }
+          : {}),
+        ...(this.hasReviewProofPacket(task)
+          ? { current_task_has_review_proof_packet: true }
           : {}),
       })
     }
@@ -1777,6 +2515,7 @@ export class Orchestrator {
     let generatedText = ''
     let generatedMetaIntakeDraft: string | null = null
     let successfulAgentMetadata: Record<string, unknown> | undefined
+    let checkpointNoProgressStatusSeen = false
     const retryKey = `${agent.name}:${task.id}`
     const priorMessageCount = Array.isArray(agent.messages) ? agent.messages.length : 0
     const agentGenerateTimeoutMs = resolveAgentGenerateTimeoutMs(
@@ -1809,6 +2548,19 @@ export class Orchestrator {
                   taskId: task.id,
                   agentName: agent.name,
                 })
+                if (
+                  backendEvent?.type === 'line_complete' &&
+                  (
+                    /kept returning no tool call after checkpoint-directed nudges/i.test(
+                      backendEvent.message ?? '',
+                    ) ||
+                    /ending the turn so the orchestrator can treat this as no progress/i.test(
+                      backendEvent.message ?? '',
+                    )
+                  )
+                ) {
+                  checkpointNoProgressStatusSeen = true
+                }
                 if (backendEvent) await this.emitBackendEvent(backendEvent)
               },
               { signal: controller.signal },
@@ -2075,8 +2827,6 @@ export class Orchestrator {
         const openQuestionCountBefore = task.openQuestions?.length ?? 0
         const reviewerNoteCountBefore = countReviewerNotes(task)
         const reviewVerdictCountBefore = task.reviewVerdicts.length
-        const gateResultCountBefore = task.gateResults.length
-        const gateResultSignatureBefore = gateResultSignature(task)
 
         if (
           task.id === META_INTAKE_TASK_ID &&
@@ -2147,24 +2897,34 @@ export class Orchestrator {
         if (
           beforeStatus === 'review' &&
           afterStatus === 'review' &&
-          generatedText.trim().length > 0 &&
           countReviewerNotes(taskAfter) === reviewerNoteCountBefore &&
           taskAfter.reviewVerdicts.length === reviewVerdictCountBefore
         ) {
-          taskAfter.notes.push({
-            agentId: 'reviewer-agent',
-            role: 'reviewer',
-            content: generatedText.trim(),
-            timestamp: this.now(),
-          })
           const fallbackVerdict = deterministicReview(taskAfter, {
             projectPath: taskAfter.projectPath,
             likelyTargetFiles: resolveLikelyTaskFiles(taskAfter),
             resolvedDecisionTexts: resolvedScopeDecisionTexts(taskAfter),
           })
-          afterStatus =
-            fallbackVerdict.verdict === 'approve' ? 'gate_check' : 'in_progress'
-          taskAfter.status = afterStatus
+          if (generatedText.trim().length > 0) {
+            taskAfter.notes.push({
+              agentId: 'reviewer-agent',
+              role: 'reviewer',
+              content: generatedText.trim(),
+              timestamp: this.now(),
+            })
+            afterStatus =
+              fallbackVerdict.verdict === 'approve' ? 'gate_check' : 'in_progress'
+            taskAfter.status = afterStatus
+          } else {
+            const deterministicResult = applyDeterministicVerdict({
+              queue: queueAfter,
+              taskId: task.id,
+              verdict: fallbackVerdict,
+              now: this.now(),
+              llmError: 'Reviewer returned no durable verdict.',
+            })
+            afterStatus = deterministicResult.newStatus
+          }
           if (afterStatus === 'in_progress') {
             ensureWorkerOwnership(taskAfter)
           } else if (afterStatus === 'gate_check') {
@@ -2178,19 +2938,16 @@ export class Orchestrator {
 
         if (
           beforeStatus === 'gate_check' &&
-          (afterStatus === 'gate_check' || afterStatus === 'in_progress') &&
-          (
-            taskAfter.gateResults.length > gateResultCountBefore ||
-            gateResultSignature(taskAfter) !== gateResultSignatureBefore
-          )
+          (afterStatus === 'gate_check' || afterStatus === 'in_progress')
         ) {
+          const latestHardGates = latestHardGateResults(taskAfter)
           const hardGateDisposition = summarizeScopedHardGateDisposition(
             {
               projectPath: taskAfter.projectPath,
               likelyTargetFiles: resolveLikelyTaskFiles(taskAfter),
               resolvedDecisionTexts: resolvedScopeDecisionTexts(taskAfter),
             },
-            latestHardGateResults(taskAfter),
+            latestHardGates,
           )
           if (hardGateDisposition) {
             if (hardGateDisposition.shouldPass) {
@@ -2220,6 +2977,13 @@ export class Orchestrator {
               afterStatus = 'in_progress'
               transitioned = true
             }
+          } else if (latestHardGates.length > 0 && latestHardGates.every((gate) => gate.passed)) {
+            taskAfter.status = 'done'
+            taskAfter.updatedAt = this.now()
+            queueAfter.lastUpdated = this.now()
+            await this.writeQueue(queueAfter)
+            afterStatus = 'done'
+            transitioned = true
           }
         }
 
@@ -2271,11 +3035,20 @@ export class Orchestrator {
         }
 
         const taskRepoRootAfter = resolveEffectiveTaskProjectPath(taskAfter, this.opts.config.projectPath)
+        const likelyWorkerTargets =
+          beforeStatus === 'in_progress' ? resolveLikelyTaskFiles(taskAfter) : []
         const hasDirtyWorktreeAfter =
           beforeStatus === 'in_progress' &&
           typeof taskAfter.worktreePath === 'string' &&
           taskAfter.worktreePath.trim().length > 0 &&
           !(await this.gitDriver.isClean(taskAfter.worktreePath))
+        const dirtyTaskFilesAfter =
+          beforeStatus === 'in_progress' ? await this.changedFilesForTask(taskAfter) : []
+        const hasDirtyLikelyTargetProgress =
+          beforeStatus === 'in_progress' &&
+          dirtyTaskFilesAfter.some((file) =>
+            this.fileMatchesLikelyTarget(file, likelyWorkerTargets, taskRepoRootAfter),
+          )
         const checkpointTouchedFiles = this.checkpointTouchedFilesFromMetadata(
           successfulAgentMetadata,
           taskRepoRootAfter,
@@ -2284,16 +3057,68 @@ export class Orchestrator {
           beforeStatus === 'in_progress' &&
           this.hasDurableWorkerHandoffEvidence(successfulAgentMetadata, task.id) &&
           checkpointTouchedFiles.length > 0
+        const checkpointNextAction =
+          beforeStatus === 'in_progress'
+            ? normalizedWorkerCheckpointNextAction(
+                taskAfter,
+                typeof successfulAgentMetadata?.['current_task_checkpoint_next_action'] === 'string'
+                  ? successfulAgentMetadata['current_task_checkpoint_next_action']
+                  : null,
+              )
+            : ''
+        const hasFailedCheckpointVerification =
+          beforeStatus === 'in_progress' &&
+          checkpointHasRecordedVerificationFailure(checkpoint?.resumeContext?.verification ?? [])
+        const hasWorkerTurnEvidence =
+          beforeStatus === 'in_progress' &&
+          this.hasDurableWorkerHandoffEvidence(successfulAgentMetadata, task.id)
+        const canAutoPromoteReviewFromCheckpointHandoff =
+          agent.name === 'worker-agent' &&
+          beforeStatus === 'in_progress' &&
+          afterStatus === 'in_progress' &&
+          !transitioned &&
+          hasCheckpointScopedVerifiedProgress &&
+          this.hasReviewProofPacket(taskAfter) &&
+          looksLikeReviewHandoffNextAction(checkpointNextAction)
+        if (canAutoPromoteReviewFromCheckpointHandoff) {
+          ensureReviewerOwnership(taskAfter)
+          taskAfter.status = 'review'
+          taskAfter.updatedAt = this.now()
+          queueAfter.lastUpdated = taskAfter.updatedAt
+          await this.writeQueue(queueAfter)
+          await this.emitBackendEvent({
+            type: 'line_complete',
+            task_id: task.id,
+            agent_name: agent.name,
+            message:
+              'The worker had already produced durable verification evidence and a structured self-critique. Guildhall promoted the task to review instead of leaving it stuck in a handoff loop.',
+          })
+          return {
+            kind: 'processed',
+            taskId: task.id,
+            agent: agent.name,
+            beforeStatus,
+            afterStatus: 'review',
+            transitioned: true,
+            revisionCount: taskAfter.revisionCount,
+          }
+        }
         if (
           agent.name === 'worker-agent' &&
           beforeStatus === 'in_progress' &&
           afterStatus === 'in_progress' &&
           !transitioned &&
           taskAfter.updatedAt === task.updatedAt &&
-          (hasDirtyWorktreeAfter || hasCheckpointScopedVerifiedProgress)
+          (
+            (hasDirtyWorktreeAfter && (!hasFailedCheckpointVerification || hasWorkerTurnEvidence)) ||
+            hasDirtyLikelyTargetProgress ||
+            hasCheckpointScopedVerifiedProgress
+          )
         ) {
           const recoveryReason = hasDirtyWorktreeAfter
             ? 'worker pass ended with dirty worktree progress but no status transition'
+            : hasDirtyLikelyTargetProgress
+              ? 'worker pass ended with dirty likely-target files in the main project checkout but no status transition'
             : 'worker pass ended with clean verified progress but no status transition'
           const checkpointWritten = await this.writeWorkerRecoveryCheckpoint({
             task: taskAfter,
@@ -2307,20 +3132,46 @@ export class Orchestrator {
             await this.writeQueue(queueAfter)
           }
         }
-        const likelyWorkerTargets =
-          beforeStatus === 'in_progress' ? resolveLikelyTaskFiles(taskAfter) : []
         const repeatedWorkerNoProgress =
           agent.name === 'worker-agent' &&
           beforeStatus === 'in_progress' &&
           afterStatus === 'in_progress' &&
           !transitioned &&
           taskAfter.updatedAt === task.updatedAt &&
-          !hasDirtyWorktreeAfter &&
+          (!hasDirtyWorktreeAfter || (hasFailedCheckpointVerification && !hasWorkerTurnEvidence)) &&
+          !hasDirtyLikelyTargetProgress &&
           !hasCheckpointScopedVerifiedProgress &&
           likelyWorkerTargets.length > 0
         if (repeatedWorkerNoProgress) {
           const attempts = this.bumpWorkerNoProgress(task.id)
           if (attempts >= WORKER_NO_PROGRESS_ESCALATION_AFTER) {
+            if (
+              (checkpointNoProgressStatusSeen || hasFailedCheckpointVerification) &&
+              (taskAfter.remediationAttempts ?? 0) < 1
+            ) {
+              const remediated = await this.recordAutonomousCheckpointNoProgressRemediation({
+                task: taskAfter,
+                queue: queueAfter,
+                agentName: agent.name,
+                checkpoint,
+                resetAgent: () => {
+                  if (typeof agent.resetConversation === 'function') agent.resetConversation()
+                },
+              })
+              if (remediated) {
+                this.clearWorkerNoProgress(task.id)
+                await this.maybeCleanupWorktree(taskAfter, worktreeMode)
+                return {
+                  kind: 'processed',
+                  taskId: task.id,
+                  agent: 'coordinator-remediation',
+                  beforeStatus,
+                  afterStatus: 'in_progress',
+                  transitioned: false,
+                  revisionCount: taskAfter.revisionCount,
+                }
+              }
+            }
             const escalation = await raiseEscalation({
               tasksPath: this.tasksPath(),
               progressPath: this.progressPath(),
@@ -2377,6 +3228,85 @@ export class Orchestrator {
       // FR-10: new escalation → halt.
       if (taskAfter.escalations.length > task.escalations.length) {
         const newest = taskAfter.escalations[taskAfter.escalations.length - 1]!
+        const staleReviewCheckpointEscalation =
+          agent.name === 'worker-agent' &&
+          beforeStatus === 'in_progress' &&
+          newest.reason === 'decision_required' &&
+          /already in review|stale checkpoint/i.test(`${newest.summary}\n${newest.details ?? ''}`) &&
+          this.hasReviewProofPacket(taskAfter)
+        if (staleReviewCheckpointEscalation) {
+          const now = this.now()
+          newest.resolvedAt = now
+          newest.resolution =
+            'Superseded because the worker correctly identified a stale review checkpoint after a durable review handoff. Guildhall preserved the review lane instead of blocking the task.'
+          newest.resolvedBy = 'orchestrator'
+          taskAfter.status = 'review'
+          ensureReviewerOwnership(taskAfter)
+          taskAfter.blockReason = null
+          taskAfter.updatedAt = now
+          queueAfter.lastUpdated = now
+          await this.writeQueue(queueAfter)
+          await this.emitBackendEvent({
+            type: 'line_complete',
+            task_id: task.id,
+            agent_name: agent.name,
+            message:
+              'Worker hit a stale review checkpoint after the task had already handed off. Guildhall kept the task in review instead of surfacing a fake human blocker.',
+          })
+          return {
+            kind: 'processed',
+            taskId: task.id,
+            agent: agent.name,
+            beforeStatus,
+            afterStatus: 'review',
+            transitioned: true,
+            revisionCount: taskAfter.revisionCount,
+          }
+        }
+        if (
+          isRecoverableSelfAuthoredVerificationEscalation({
+            agentName: agent.name,
+            beforeStatus,
+            task: taskAfter,
+            checkpoint,
+            escalation: newest,
+          })
+        ) {
+          const now = this.now()
+          newest.resolvedAt = now
+          newest.resolution =
+            'Superseded because the blocker describes a self-authored verification failure in files the worker already touched. Guildhall kept the task in the worker repair lane.'
+          newest.resolvedBy = 'orchestrator'
+          taskAfter.status = 'in_progress'
+          ensureWorkerOwnership(taskAfter)
+          taskAfter.blockReason = null
+          taskAfter.notes.push({
+            agentId: 'coordinator',
+            role: 'checkpoint',
+            content:
+              'Recovered a worker-raised blocker as repairable implementation work: rerun the focused verification command and repair the failed verification in the checkpoint-touched files before escalating.',
+            timestamp: now,
+          })
+          taskAfter.updatedAt = now
+          queueAfter.lastUpdated = now
+          await this.writeQueue(queueAfter)
+          await this.emitBackendEvent({
+            type: 'line_complete',
+            task_id: task.id,
+            agent_name: agent.name,
+            message:
+              'Worker raised a blocker for its own failed verification. Guildhall kept the task assigned to the worker for source repair instead of asking for human guidance.',
+          })
+          return {
+            kind: 'processed',
+            taskId: task.id,
+            agent: agent.name,
+            beforeStatus,
+            afterStatus: 'in_progress',
+            transitioned: false,
+            revisionCount: taskAfter.revisionCount,
+          }
+        }
         return {
           kind: 'escalated',
           taskId: task.id,
@@ -2392,7 +3322,68 @@ export class Orchestrator {
       // cleanup / progress logging see the final state.
       if (afterStatus === 'done' && beforeStatus !== 'done') {
         const landingStrategy = await this.resolveLandingStrategySafe()
-        if (worktreeMode === 'none' || !taskAfter.branchName || !taskAfter.baseBranch) {
+        if (worktreeMode === 'none') {
+          const repoClean = await this.gitDriver.isClean(effectiveTaskProjectPath)
+          if (!repoClean) {
+            const recovered = await this.recoverDirtyRepoIntoTaskBranch({
+              task: taskAfter,
+              worktreeMode,
+              repoRoot: effectiveTaskProjectPath,
+              baseBranch: taskAfter.baseBranch ?? baseBranch,
+            })
+            if (recovered.recovered) {
+              taskAfter.branchName = recovered.branchName
+              taskAfter.baseBranch = taskAfter.baseBranch ?? baseBranch
+              taskAfter.notes.push({
+                agentId: 'coordinator',
+                role: 'checkpoint',
+                content:
+                  `Checkpointed shared-checkout work into ${recovered.branchName} ` +
+                  `before marking the task complete${recovered.commitSha ? ` (${recovered.commitSha})` : ''}.`,
+                timestamp: this.now(),
+              })
+              taskAfter.mergeRecord = {
+                fromBranch: recovered.branchName,
+                toBranch: taskAfter.baseBranch,
+                strategy: landingStrategy,
+                result: 'skipped',
+                ...(recovered.commitSha ? { commitSha: recovered.commitSha } : {}),
+                mergedAt: this.now(),
+                detail: 'worktree isolation disabled — shared-checkout work checkpointed to task branch',
+              }
+            } else {
+              taskAfter.status = 'blocked'
+              taskAfter.assignedTo = null
+              taskAfter.blockReason =
+                'Guildhall completed the task work but could not checkpoint shared-checkout edits into a task branch. Resolve the repo state and resume the task before treating it as done.'
+              taskAfter.notes.push({
+                agentId: 'coordinator',
+                role: 'checkpoint',
+                content:
+                  'Guildhall finished the task but failed to package shared-checkout edits into an isolated task branch, so it blocked the task instead of silently leaving dirty work behind.',
+                timestamp: this.now(),
+              })
+              taskAfter.mergeRecord = {
+                fromBranch: taskAfter.branchName ?? '<unknown>',
+                toBranch: taskAfter.baseBranch ?? '<unknown>',
+                strategy: landingStrategy,
+                result: 'skipped',
+                mergedAt: this.now(),
+                detail: 'worktree isolation disabled — attempted to checkpoint shared-checkout work but packaging failed',
+              }
+              afterStatus = 'blocked'
+            }
+          } else if (!taskAfter.mergeRecord) {
+            taskAfter.mergeRecord = {
+              fromBranch: taskAfter.branchName ?? '<unknown>',
+              toBranch: taskAfter.baseBranch ?? '<unknown>',
+              strategy: landingStrategy,
+              result: 'skipped',
+              mergedAt: this.now(),
+              detail: 'worktree isolation disabled — merge skipped',
+            }
+          }
+        } else if (!taskAfter.branchName || !taskAfter.baseBranch) {
           if (!taskAfter.mergeRecord) {
             taskAfter.mergeRecord = {
               fromBranch: taskAfter.branchName ?? '<unknown>',
@@ -2419,6 +3410,9 @@ export class Orchestrator {
           taskAfter.status = mergeOutcome.newStatus
           if (mergeOutcome.fixupTask) {
             appendFixupTask(queueAfter, mergeOutcome.fixupTask, this.now())
+          }
+          if (mergeOutcome.newStatus === 'done') {
+            shelveSupersededFixupTasks(queueAfter, taskAfter.id, this.now())
           }
           afterStatus = mergeOutcome.newStatus
         }
@@ -2936,6 +3930,95 @@ export class Orchestrator {
     await this.writeQueue(queue)
   }
 
+  private async recordAutonomousCheckpointNoProgressRemediation(input: {
+    task: Task
+    queue: TaskQueue
+    agentName: string
+    checkpoint: Checkpoint | null
+    resetAgent: () => void
+  }): Promise<boolean> {
+    if (input.task.status !== 'in_progress') return false
+    const now = this.now()
+    const issue: AgentIssue = {
+      id: `iss-${input.task.id}-${input.task.agentIssues.length + 1}`,
+      taskId: input.task.id,
+      agentId: input.agentName,
+      code: 'stuck',
+      severity: 'warn',
+      detail:
+        'Worker repeatedly hit checkpoint-directed no-progress stops without a mutation, verification handoff, or explicit escalation.',
+      suggestedAction:
+        'Restart from the latest checkpoint with a fresh worker conversation before escalating to human judgment.',
+      raisedAt: now,
+      broadcast: true,
+      resolvedAt: now,
+      resolution:
+        'Coordinator autonomously reset the worker conversation and restarted from the latest checkpoint.',
+      resolvedBy: 'coordinator-remediation',
+    }
+    const settings = await this.readLeverSettings()
+    const domainLevers = resolveDomainLevers(settings, input.task.domain)
+    const trigger: RemediationTrigger = {
+      kind: 'issue',
+      taskId: input.task.id,
+      agentId: input.agentName,
+      issue,
+    }
+    const context = buildRemediationContext({
+      trigger,
+      task: input.task,
+      levers: {
+        remediationAutonomy: settings.project.remediation_autonomy.position,
+        crashRecoveryDefault: domainLevers.crash_recovery_default.position,
+        agentHealthStrictness: settings.project.agent_health_strictness.position,
+      },
+      checkpoint: input.checkpoint,
+      priorAttempts: input.task.remediationAttempts ?? 0,
+      now,
+    })
+    const action: RemediationAction = {
+      kind: 'restart_from_checkpoint',
+      rationale:
+        'The worker did not mutate or escalate after checkpoint-directed no-progress stops. Restarting from the durable checkpoint is non-destructive and gives the worker one clean recovery attempt before human escalation.',
+    }
+    const authorization = this.authorizeRemediation(action, context)
+    if (authorization.kind !== 'autonomous') return false
+
+    await recordRemediationDecision({
+      decisionsPath: this.decisionsPath(),
+      context,
+      action,
+      authorization,
+      decidedBy: 'coordinator-remediation',
+      domain: input.task.domain,
+    })
+
+    input.resetAgent()
+    input.task.agentIssues.push(issue)
+    input.task.remediationAttempts = (input.task.remediationAttempts ?? 0) + 1
+    input.task.status = 'in_progress'
+    ensureWorkerOwnership(input.task)
+    input.task.blockReason = null
+    input.task.notes.push({
+      agentId: 'coordinator-remediation',
+      role: 'checkpoint',
+      content:
+        'Autonomous remediation: reset the worker conversation and restarted from the latest checkpoint after repeated checkpoint no-progress stops.',
+      timestamp: now,
+    })
+    input.task.updatedAt = now
+    input.queue.lastUpdated = now
+    await this.writeQueue(input.queue)
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: input.task.id,
+      agent_name: 'coordinator-remediation',
+      message:
+        'Coordinator reset the worker conversation and restarted from the latest checkpoint after repeated checkpoint no-progress stops.',
+    })
+    return true
+  }
+
   /**
    * FR-33: scan the queue for reclaim candidates — tasks in
    * `in_progress`/`review`/`gate_check` whose assigned agent is not in the
@@ -3050,7 +4133,7 @@ export class Orchestrator {
           kind: 'agent',
           agent: this.opts.agents.worker,
           promptSuffix:
-            "Implement this task per the spec. Write a self-critique note when done, then transition status to 'review'.",
+            "Implement this task per the spec. Before any review handoff, persist a self-critique note that includes: acceptance-criterion status, a minimum-scope check, a Review proof packet with changed files/diff scope, exact verification commands and pass/fail results, the current working hypothesis, and known gaps. Only after that proof packet is durable should you transition status to 'review'.",
         }
       case 'review':
         return {
@@ -3738,6 +4821,9 @@ export class Orchestrator {
     const policy = await this.resolveReviewerFanoutPolicy(task.domain)
     const priorRounds = extractPriorVerdictRounds(task.reviewVerdicts)
     const aggregate = aggregateFanout(verdicts, { policy, priorRounds })
+    const proceduralOnlyDissent =
+      aggregate.verdict === 'revise' &&
+      isProceduralOnlyFanoutDissent(aggregate.dissenting)
     const beforeStatus = task.status
 
     return await this.withQueueWriteLock(async () => {
@@ -3757,7 +4843,7 @@ export class Orchestrator {
       // the worker. The worker will re-enter in_progress only after the
       // coordinator lands a binding AdjudicationRecord with scoped
       // instructions.
-      if (aggregate.needsAdjudication) {
+      if (aggregate.needsAdjudication && !proceduralOnlyDissent) {
         const adjudicationOutcome = await this.routeToCoordinatorAdjudication({
           queue,
           task: t,
@@ -3772,7 +4858,28 @@ export class Orchestrator {
         // default revise path so the system stays conservative.
       }
 
-      if (aggregate.verdict === 'approve') {
+      if (aggregate.verdict === 'approve' || proceduralOnlyDissent) {
+        if (proceduralOnlyDissent) {
+          t.notes.push({
+            agentId: 'reviewer-fanout',
+            role: 'reviewer',
+            content:
+              'Reviewer fan-out advisory note: remaining dissent was procedural-only after reviewers stated the task met acceptance criteria. Preserving the advice without blocking gate_check.\n\n' +
+              aggregate.combinedFeedback,
+            timestamp: now,
+          })
+          const adjudicatedVerdict: ReviewVerdict = {
+            verdict: 'approve',
+            reviewerPath: 'deterministic',
+            reason:
+              'Reviewer fan-out advanced after procedural-only dissent was preserved as advisory.',
+            reasoning:
+              'Guildhall kept the persona dissent in the task notes, but the dissent stated the acceptance criteria were met and asked only for process or audit follow-up. The task can proceed to gate_check.',
+            failingSignals: [],
+            recordedAt: now,
+          }
+          t.reviewVerdicts.push(adjudicatedVerdict)
+        }
         t.status = 'gate_check'
         t.updatedAt = now
         queue.lastUpdated = now
@@ -4250,6 +5357,216 @@ export class Orchestrator {
     }
   }
 
+  private hasGuildhallOwnershipTrail(task: Task): boolean {
+    if ((task.notes ?? []).some((note) => note.agentId !== 'human')) return true
+    if ((task.progress ?? []).some((entry) => entry.agentId !== 'human')) return true
+    if ((task.reviewVerdicts ?? []).length > 0) return true
+    if ((task.gateResults ?? []).length > 0) return true
+    if ((task.escalations ?? []).length > 0) return true
+    return false
+  }
+
+  private async reopenRecoverableDirtyRepoTasks(queue: TaskQueue): Promise<TaskQueue> {
+    let changed = false
+    const now = this.now()
+    for (const task of queue.tasks) {
+      if (task.status !== 'blocked') continue
+      if (!this.hasGuildhallOwnershipTrail(task)) continue
+      const blockReason = task.blockReason ?? ''
+      let recoveryNote: string | null = null
+      if (blockReason.includes('Guildhall could not start work because the target repo is dirty:')) {
+        const repoRoot = resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
+        const repoClean = await this.gitDriver.isClean(repoRoot)
+        if (repoClean) continue
+        recoveryNote =
+          'User restarted the project while Guildhall-owned shared-checkout edits were still present. Reopened the task so Guildhall can checkpoint those edits into an isolated task branch.'
+      } else if (blockReason.includes('Guildhall could not start work because task setup failed:')) {
+        const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
+        const activeWorktreePath = task.worktreePath?.trim() ?? ''
+        const wtBootstrap = resolveEffectiveTaskBootstrapBlock({
+          task,
+          workspaceProjectPath: this.opts.config.projectPath,
+          workspaceBootstrap: this.opts.config.bootstrap ?? undefined,
+        })
+        if (
+          !activeWorktreePath ||
+          !existsSync(activeWorktreePath) ||
+          !wtBootstrap ||
+          wtBootstrap.commands.length === 0 ||
+          path.resolve(activeWorktreePath) === path.resolve(effectiveTaskProjectPath)
+        ) {
+          continue
+        }
+        const wtMemoryDir = path.join(activeWorktreePath, '.guildhall')
+        const res = runBootstrap({
+          projectPath: activeWorktreePath,
+          memoryDir: wtMemoryDir,
+          commands: wtBootstrap.commands,
+          successGates: wtBootstrap.successGates,
+          timeoutMs: wtBootstrap.timeoutMs,
+        })
+        if (!res.success) continue
+        recoveryNote =
+          'User restarted the project after an earlier task bootstrap failure. The task worktree bootstrap now passes, so Guildhall reopened the task and resumed work.'
+      } else if (isRecoverableEnvironmentSetupBlocker(task)) {
+        const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
+        const activeWorktreePath = task.worktreePath?.trim() ?? ''
+        const wtBootstrap = resolveEffectiveTaskBootstrapBlock({
+          task,
+          workspaceProjectPath: this.opts.config.projectPath,
+          workspaceBootstrap: this.opts.config.bootstrap ?? undefined,
+        })
+        if (
+          !activeWorktreePath ||
+          !existsSync(activeWorktreePath) ||
+          !wtBootstrap ||
+          wtBootstrap.commands.length === 0 ||
+          path.resolve(activeWorktreePath) === path.resolve(effectiveTaskProjectPath)
+        ) {
+          continue
+        }
+        const wtMemoryDir = path.join(activeWorktreePath, '.guildhall')
+        const res = runBootstrap({
+          projectPath: activeWorktreePath,
+          memoryDir: wtMemoryDir,
+          commands: wtBootstrap.commands,
+          successGates: wtBootstrap.successGates,
+          timeoutMs: wtBootstrap.timeoutMs,
+        })
+        if (!res.success) continue
+        resolveRecoverableEnvironmentSetupEscalations(task, now)
+        if (activeEscalations(task).length > 0) continue
+        recoveryNote =
+          'User restarted the project after a task-local test environment failure. The repaired worktree install now passes, so Guildhall reopened the task and resumed worker verification inside the isolated worktree.'
+      } else if (isRecoverableReviewHandoffToolLoop(task)) {
+        resolveRecoverableReviewHandoffEscalations(task, now)
+        if (activeEscalations(task).length > 0) continue
+        recoveryNote =
+          'User restarted the project after Guildhall hit the now-fixed review handoff validator bug. Reopened the task so the worker can retry the handoff without a manual JSON edit.'
+      } else if (isRecoverableStaleReviewCheckpointBlocker(task)) {
+        resolveRecoverableStaleReviewCheckpointEscalations(task, now)
+        if (activeEscalations(task).length > 0) continue
+        task.status = 'review'
+        task.assignedTo = 'reviewer-agent'
+        task.blockReason = null
+        task.notes.push({
+          agentId: 'coordinator',
+          role: 'recovery',
+          content:
+            'User restarted the project after a stale worker checkpoint blocked an already review-ready task. Reopened the task at review so reviewers can continue instead of sending it back to the worker.',
+          timestamp: now,
+        })
+        task.updatedAt = now
+        queue.lastUpdated = now
+        changed = true
+        continue
+      } else if (isRecoverableNoProgressBlocker(task)) {
+        resolveRecoverableNoProgressEscalations(task, now)
+        if (activeEscalations(task).length > 0) continue
+        recoveryNote =
+          'User restarted the project after the worker made no visible progress. Reopened the task so Guildhall can resume from the latest durable checkpoint instead of treating a recoverable no-progress stop as terminal.'
+      } else if (isRecoverableTurnLimitBlocker(task)) {
+        resolveRecoverableTurnLimitEscalations(task, now)
+        if (activeEscalations(task).length > 0) continue
+        recoveryNote =
+          'User restarted the project after the worker exhausted its turn budget. Reopened the task so Guildhall can continue from the current task state instead of treating the turn limit as terminal.'
+      } else if (isRecoverableWorkerTimeoutBlocker(task)) {
+        const checkpoint = await readCheckpoint(this.opts.config.memoryDir, task.id).catch(() => null)
+        if (!checkpoint?.nextPlannedAction) continue
+        resolveRecoverableWorkerTimeoutEscalations(task, now)
+        if (activeEscalations(task).length > 0) continue
+        recoveryNote =
+          'User restarted the project after the worker timed out mid-task. Reopened the task so Guildhall can continue from the latest recovery checkpoint instead of treating the timeout as terminal.'
+      } else if (
+        isRecoverableSelfAuthoredVerificationBlocker(
+          task,
+          await readCheckpoint(this.opts.config.memoryDir, task.id).catch(() => null),
+        )
+      ) {
+        const checkpoint = await readCheckpoint(this.opts.config.memoryDir, task.id).catch(() => null)
+        resolveRecoverableSelfAuthoredVerificationEscalations(task, checkpoint, now)
+        if (activeEscalations(task).length > 0) continue
+        recoveryNote =
+          'User restarted the project after the worker raised a blocker for its own failed verification. Reopened the task from the latest recovery checkpoint so Guildhall can rerun the focused verification and repair the failed verification in the touched source instead of treating it as a human ambiguity.'
+      } else if (isRecoverableInfraOnlyMaxRevisionBlocker(task)) {
+        resolveRecoverableMaxRevisionEscalations(
+          task,
+          now,
+          'Superseded after reviewer availability failures stopped counting as substantive rejection.',
+        )
+        if (activeEscalations(task).length > 0) continue
+        task.status = 'review'
+        task.assignedTo = 'reviewer-agent'
+        task.blockReason = null
+        task.notes.push({
+          agentId: 'coordinator',
+          role: 'recovery',
+          content:
+            'User restarted the project after reviewer availability failures incorrectly counted as hard rejection. Reopened the task at review so Guildhall can re-run fan-out with the corrected aggregation rules.',
+          timestamp: now,
+        })
+        task.updatedAt = now
+        queue.lastUpdated = now
+        changed = true
+        continue
+      } else if (isRecoverableActionableMaxRevisionBlocker(task)) {
+        resolveRecoverableMaxRevisionEscalations(
+          task,
+          now,
+          'Superseded after the project was explicitly resumed for another revision cycle.',
+        )
+        if (activeEscalations(task).length > 0) continue
+        recoveryNote =
+          'User restarted the project after Guildhall hit the review revision cap. Reopened the task so the worker can address the latest substantive review feedback instead of treating that cap as terminal.'
+      } else if (
+        blockReason.includes('Guildhall could not create a task worktree:') &&
+        /already exists/i.test(blockReason)
+      ) {
+        recoveryNote =
+          'User restarted the project after Guildhall had already created the task branch. Reopened the task so Guildhall can attach that existing branch to a task worktree and continue.'
+      } else {
+        continue
+      }
+      task.status = 'in_progress'
+      task.assignedTo = 'worker-agent'
+      task.blockReason = null
+      task.notes.push({
+        agentId: 'coordinator',
+        role: 'recovery',
+        content: recoveryNote,
+        timestamp: now,
+      })
+      task.updatedAt = now
+      changed = true
+    }
+    if (!changed) return queue
+    queue.lastUpdated = now
+    await this.writeQueue(queue)
+    return queue
+  }
+
+  private async recoverDirtyRepoIntoTaskBranch(input: {
+    task: Task
+    worktreeMode: WorktreeMode
+    repoRoot: string
+    baseBranch: string
+  }): Promise<{ recovered: false } | { recovered: true; branchName: string; commitSha?: string }> {
+    const { task, worktreeMode, repoRoot, baseBranch } = input
+    if (!this.hasGuildhallOwnershipTrail(task)) return { recovered: false }
+    const branchName = task.branchName ?? computeBranchName(task, worktreeMode)
+    const checkpoint = await this.gitDriver.checkpointDirtyWork(repoRoot, {
+      branch: branchName,
+      baseBranch,
+      commitMessage: `chore(guildhall): checkpoint shared-checkout work for ${task.id}`,
+    })
+    if (!checkpoint.ok) return { recovered: false }
+    return {
+      recovered: true,
+      branchName,
+      ...(checkpoint.commitSha ? { commitSha: checkpoint.commitSha } : {}),
+    }
+  }
+
   /**
    * FR-24: teardown helper. Called on terminal transitions (incl. merge
    * conflict → blocked, max-revisions block). Preserves the worktree for
@@ -4475,9 +5792,26 @@ export class Orchestrator {
     if (!content) return false
     const hasAcceptanceCoverage =
       /for each acceptance criterion:/i.test(content) ||
-      /-\s*(?:\[[^\]]+\]|ac-\d+):\s*(met|not met)\b/i.test(content)
-    const hasMinimumScope = /(?:^|\n)\s*-?\s*minimum-scope check:/i.test(content)
+      /(?:^|\n)\s*-?\s*(?:\[[^\]]+\]|ac-\d+(?:\s*\([^)]+\))?)\s*:\s*(met|not met)\b/i.test(content)
+    const hasMinimumScope =
+      /(?:^|\n)\s*(?:\*\*)?-?\s*(?:minimum|minimal|mini)-scope check:\s*(?:\*\*)?/i.test(content)
     return hasAcceptanceCoverage && hasMinimumScope
+  }
+
+  private hasReviewProofPacket(task: Task): boolean {
+    const note = [...task.notes]
+      .reverse()
+      .find((candidate) => isWorkerSelfCritiqueNote(candidate))
+    const content = note?.content?.trim() ?? ''
+    if (!content || !this.hasStructuredSelfCritique(task)) return false
+    const hasProofPacket =
+      /(?:^|\n)\s*(?:#{2,3}\s*)?(?:\*\*)?\s*review proof packet\s*:?\s*(?:\*\*)?/i.test(content)
+    const hasVerificationProof =
+      /\bverification(?: command| commands| result| results)?\b/i.test(content) &&
+      /\b(pass|passed|green|succeed|succeeded)\b/i.test(content)
+    const hasDiffScope =
+      /\b(?:changed files|files changed|diff scope|scope of changes)\b/i.test(content)
+    return hasProofPacket && hasVerificationProof && hasDiffScope
   }
 
   private renderCheckpoint(
@@ -4975,6 +6309,73 @@ export class Orchestrator {
     return normalizedQueue
   }
 
+  private async writeBootstrapVerificationCheckpoint(input: {
+    task: Task
+    agentName: string
+    activeWorktreePath: string
+    command: string
+    output: string
+    observedAt: string
+  }): Promise<boolean> {
+    if (input.task.status !== 'in_progress') return false
+    const command = input.command.trim()
+    if (!command) return false
+
+    const worktreeRoot = path.resolve(input.activeWorktreePath)
+    let filesTouched = await this.changedFilesForTask(input.task)
+    if (filesTouched.length === 0) {
+      filesTouched = resolveLikelyTaskFiles(input.task)
+        .map((file) => taskRelativeCheckpointPath(file, worktreeRoot))
+        .filter((file) => file.length > 0 && !isIgnorableCheckpointPath(file))
+        .slice(0, 12)
+    }
+    filesTouched = uniqueNonEmptyStrings(filesTouched)
+
+    const likelyFiles = resolveLikelyTaskFiles(input.task, filesTouched)
+    const companionFiles = uniqueNonEmptyStrings(
+      likelyFiles
+        .map((file) => taskRelativeCheckpointPath(file, worktreeRoot))
+        .filter((file) => file.length > 0 && !filesTouched.includes(file)),
+    ).slice(0, 8)
+    const verification: CheckpointResumeContext['verification'] = [{
+      command,
+      passed: false,
+      observedAt: input.observedAt,
+      ...(input.output.trim() ? { summary: input.output.trim().slice(0, 1200) } : {}),
+    }]
+    const safeNextMutationSurface = checkpointSafeNextMutationSurface(
+      filesTouched,
+      companionFiles,
+      verification,
+    )
+    const workingHypothesis = checkpointWorkingHypothesis({
+      existing: '',
+      verification,
+      companionFiles,
+      safeNextMutationSurface,
+    })
+
+    const result = await writeCheckpoint({
+      tasksPath: this.tasksPath(),
+      memoryDir: this.opts.config.memoryDir,
+      taskId: input.task.id,
+      agentId: input.agentName,
+      intent:
+        'Worker recovery checkpoint after dirty task worktree bootstrap verification failed. ' +
+        `Failed command: ${command}`,
+      nextPlannedAction:
+        'Resume from the recorded bootstrap verification failure, rerun the focused verification command, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+      filesTouched,
+      resumeContext: {
+        verification,
+        companionFiles,
+        ...(workingHypothesis ? { workingHypothesis } : {}),
+        safeNextMutationSurface,
+      },
+    })
+    return result.success
+  }
+
   private async writeWorkerRecoveryCheckpoint(input: {
     task: Task
     agentName: string
@@ -4983,12 +6384,20 @@ export class Orchestrator {
   }): Promise<boolean> {
     if (input.task.status !== 'in_progress') return false
 
+    const effectiveProjectPath = resolveEffectiveTaskProjectPath(
+      input.task,
+      this.opts.config.projectPath,
+    )
+    const existingCheckpoint = await readCheckpoint(this.opts.config.memoryDir, input.task.id).catch(() => null)
     let filesTouched = await this.changedFilesForTask(input.task)
     if (filesTouched.length === 0) {
       filesTouched = this.checkpointTouchedFilesFromMetadata(
         input.metadata,
-        resolveEffectiveTaskProjectPath(input.task, this.opts.config.projectPath),
+        effectiveProjectPath,
       )
+    }
+    if (filesTouched.length === 0) {
+      filesTouched = existingCheckpoint?.filesTouched ?? []
     }
     const recentVerifiedWork = Array.isArray(input.metadata?.['recent_verified_work'])
       ? (input.metadata?.['recent_verified_work'] as unknown[])
@@ -5002,10 +6411,31 @@ export class Orchestrator {
         return note.agentId === input.agentName || role === 'self-critique'
       })?.content
       .trim()
+    let verification = checkpointVerificationHistoryFromMetadata(input.metadata)
+    if (verification.length === 0) {
+      verification = existingCheckpoint?.resumeContext?.verification ?? []
+    }
+    const companionFiles = checkpointCompanionFilesFromMetadata(
+      input.metadata,
+      effectiveProjectPath,
+      filesTouched,
+    )
+    const safeNextMutationSurface = checkpointSafeNextMutationSurface(
+      filesTouched,
+      companionFiles,
+      verification,
+    )
+    const workingHypothesis = checkpointWorkingHypothesis({
+      existing: String(input.metadata?.['current_task_checkpoint_working_hypothesis'] ?? ''),
+      verification,
+      companionFiles,
+      safeNextMutationSurface,
+    })
 
     const verificationSummary = recentVerifiedWork
       .filter((entry) => /^(Ran bash command|Edited file|Wrote file)\b/.test(entry.trim()))
       .slice(-3)
+    const hasRecordedVerificationFailure = checkpointHasRecordedVerificationFailure(verification)
     const intentParts = [
       `Worker recovery checkpoint after ${input.reason}.`,
       verificationSummary.length > 0
@@ -5013,13 +6443,13 @@ export class Orchestrator {
         : 'Recent verified work existed in runtime metadata.',
     ]
     const nextAction =
-      latestSelfCritique && verificationSummary.length > 0
+      latestSelfCritique && (verificationSummary.length > 0 || hasRecordedVerificationFailure)
         ? 'Resume from the latest self-critique and verification evidence, then hand off to review if no new blocker appears.'
         : latestSelfCritique
           ? 'Resume from the latest self-critique, rerun any missing focused verification, then hand off to review.'
-          : verificationSummary.length > 0
-            ? 'Resume from the recorded verification evidence, write or refresh the self-critique note, then hand off to review.'
-            : 'Resume from the active worktree diff, refresh focused verification, and write a durable handoff note before review.'
+          : (verificationSummary.length > 0 || hasRecordedVerificationFailure)
+            ? 'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.'
+            : 'Resume from the active worktree diff, refresh focused verification, and keep the task in implementation until the focused checks are green.'
 
     const result = await writeCheckpoint({
       tasksPath: this.tasksPath(),
@@ -5029,6 +6459,12 @@ export class Orchestrator {
       intent: intentParts.join(' '),
       nextPlannedAction: nextAction,
       filesTouched,
+      resumeContext: {
+        verification,
+        companionFiles,
+        ...(workingHypothesis ? { workingHypothesis } : {}),
+        safeNextMutationSurface,
+      },
     })
     return result.success
   }
@@ -5048,11 +6484,25 @@ export class Orchestrator {
         .map((line) => line.trimEnd())
         .filter(Boolean)
         .map((line) => line.slice(3).trim())
-        .filter((file) => file.length > 0 && !file.includes('/.guildhall/'))
+        .filter((file) => file.length > 0 && !isIgnorableCheckpointPath(file))
         .slice(0, 12)
     } catch {
       return []
     }
+  }
+
+  private fileMatchesLikelyTarget(
+    candidate: string,
+    likelyTargets: readonly string[],
+    repoRoot?: string,
+  ): boolean {
+    const trimmed = candidate.trim()
+    if (!trimmed) return false
+    const resolvedCandidate =
+      repoRoot && !path.isAbsolute(trimmed)
+        ? path.resolve(repoRoot, trimmed)
+        : path.resolve(trimmed)
+    return likelyTargets.some((target) => path.resolve(target) === resolvedCandidate)
   }
 
   private async persistExploringFallbackProgress(input: {
@@ -5565,6 +7015,7 @@ export async function runOrchestrator(
               task: resumableTask,
               workspaceProjectPath: config.projectPath,
               ...(config.bootstrap ? { workspaceBootstrap: config.bootstrap } : {}),
+              likelyTargetFiles: resolveLikelyTaskFiles(resumableTask),
             })
           : undefined
       if (
@@ -5752,16 +7203,73 @@ function isWorkerSelfCritiqueNote(
   return role === 'implementation' || role === 'implementer' || role === 'worker'
 }
 
-function normalizedWorkerCheckpointNextAction(task: Task, nextAction: string | null | undefined): string {
-  const trimmed = nextAction?.trim() ?? ''
+function normalizedWorkerCheckpointNextAction(
+  task: Task,
+  checkpoint: Checkpoint | string | null,
+): string {
+  const trimmed =
+    typeof checkpoint === 'string'
+      ? checkpoint.trim()
+      : checkpoint?.nextPlannedAction?.trim() ?? ''
   if (!trimmed) return ''
+  if (/^(?:none|null|n\/a|na|nothing)$/i.test(trimmed)) return ''
+  const checkpointWrittenAt =
+    typeof checkpoint === 'string' ? NaN : Date.parse(checkpoint?.writtenAt ?? '')
+  const hasNewerReviewerFeedback = Number.isFinite(checkpointWrittenAt) && task.notes.some((note) => {
+    const role = typeof note.role === 'string' ? note.role.trim().toLowerCase() : ''
+    const agentId = typeof note.agentId === 'string' ? note.agentId.trim().toLowerCase() : ''
+    if (role !== 'reviewer' && agentId !== 'reviewer-fanout' && agentId !== 'reviewer-agent') return false
+    const noteAt = Date.parse(note.timestamp)
+    return Number.isFinite(noteAt) && noteAt > checkpointWrittenAt
+  })
+  if (hasNewerReviewerFeedback) return ''
+  const hasSelfCritique = [...task.notes].reverse().some((note) =>
+    isWorkerSelfCritiqueNote(note),
+  )
+  const hasRecordedVerificationFailure = checkpointHasRecordedVerificationFailure(
+    checkpoint?.resumeContext?.verification,
+  )
   if (
-    [...task.notes].reverse().some((note) => isWorkerSelfCritiqueNote(note)) &&
+    hasSelfCritique &&
     /write or refresh self-critique note|write or refresh the self-critique note/i.test(trimmed)
   ) {
     return 'Resume from the latest self-critique and recorded verification evidence, then hand off to review.'
   }
+  if (
+    !hasSelfCritique &&
+    /write or refresh self-critique note|write or refresh the self-critique note/i.test(trimmed) &&
+    /hand off to review|handoff to review|transition to review/i.test(trimmed)
+  ) {
+    return 'Resume from the active worktree diff, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.'
+  }
+  if (
+    hasRecordedVerificationFailure &&
+    /resume from the active worktree diff/i.test(trimmed) &&
+    /refresh focused verification/i.test(trimmed)
+  ) {
+    return 'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.'
+  }
   return trimmed
+}
+
+function checkpointHasRecordedVerificationFailure(
+  verification: Array<{ passed: boolean }> | undefined,
+): boolean {
+  return Array.isArray(verification) && verification.some((entry) => entry?.passed === false)
+}
+
+function looksLikeReviewHandoffNextAction(nextAction: string): boolean {
+  const normalized = nextAction.trim().toLowerCase()
+  if (!normalized) return false
+  return (
+    normalized.includes('hand off to review') ||
+    normalized.includes('hand off for review') ||
+    normalized.includes('handoff to review') ||
+    normalized.includes('handoff for review') ||
+    normalized.includes('transition to review') ||
+    normalized.includes('move to review') ||
+    normalized.includes('reviewers evaluate')
+  )
 }
 
 function latestHardGateResults(task: Task): Array<NonNullable<Task['gateResults']>[number]> {
@@ -5773,15 +7281,34 @@ function latestHardGateResults(task: Task): Array<NonNullable<Task['gateResults'
   return [...latestById.values()]
 }
 
-function gateResultSignature(task: Task): string {
-  return JSON.stringify(
-    latestHardGateResults(task).map((gate) => ({
-      gateId: gate.gateId,
-      passed: gate.passed,
-      checkedAt: gate.checkedAt,
-      output: gate.output,
-    })),
-  )
+function isProceduralOnlyFanoutDissent(dissenting: readonly PersonaVerdict[]): boolean {
+  if (dissenting.length === 0) return false
+  return dissenting.every((verdict) => {
+    const text = [
+      verdict.reasoning,
+      verdict.rawOutput,
+      ...verdict.revisionItems,
+      ...(verdict.riskItems ?? []),
+    ].join('\n')
+    const saysAccepted =
+      /\bmeets all acceptance criteria\b/i.test(text) ||
+      /\bsatisfies all functional ACs\b/i.test(text) ||
+      /\bmeets all functional ACs\b/i.test(text) ||
+      /\bmeets functional ACs\b/i.test(text) ||
+      /\bimplementation meets functional ACs\b/i.test(text) ||
+      /\bmeets all acceptance criteria and scope\b/i.test(text) ||
+      /risk if accepted as-is:\s*-\s*\(none\)/i.test(text)
+    const asksOnlyForProcess =
+      /\bcheckpoint\b/i.test(text) ||
+      /\baudit trail\b/i.test(text) ||
+      /\bmeasurement plan\b/i.test(text) ||
+      /\bCore Web Vitals\b/i.test(text) ||
+      /\bLCP\b/i.test(text) ||
+      /\bINP\b/i.test(text) ||
+      /\bLighthouse\b/i.test(text) ||
+      /\bcrash[- ]recovery\b/i.test(text)
+    return saysAccepted && asksOnlyForProcess
+  })
 }
 
 function resolvedScopeDecisionTexts(task: Task): string[] {
@@ -5842,7 +7369,8 @@ function shouldAdvanceInfraFallbackToGateCheck(
 function isInfrastructureOnlyFanoutFailure(verdict: PersonaVerdict): boolean {
   if (verdict.verdict !== 'revise') return false
   const text = `${verdict.reasoning}\n${verdict.rawOutput}`
-  if (!/failed to produce a verdict/i.test(text)) return false
+  if (/no \*\*Reasoning:\*\* block found/i.test(text)) return true
+  if (!/failed to produce a verdict|no \*\*Reasoning:\*\* block found/i.test(text)) return false
   return isInfrastructureLikeReviewerError(text)
 }
 

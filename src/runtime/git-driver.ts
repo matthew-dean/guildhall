@@ -20,10 +20,38 @@ import fs from 'node:fs/promises'
 
 const execFileP = promisify(execFile)
 
+function isIgnorableGuildhallStatePath(file: string): boolean {
+  return (
+    file === 'guildhall.yaml' ||
+    file === 'memory' ||
+    file.startsWith('memory/') ||
+    file === '.guildhall' ||
+    file.startsWith('.guildhall/')
+  )
+}
+
+async function resolveGitTopLevel(repoRoot: string): Promise<string> {
+  const { stdout } = await execFileP('git', ['rev-parse', '--show-toplevel'], {
+    cwd: repoRoot,
+  })
+  return stdout.trim() || repoRoot
+}
+
 export interface CreateWorktreeOptions {
   worktreePath: string
   branch: string
   baseBranch: string
+}
+
+export interface AttachWorktreeOptions {
+  worktreePath: string
+  branch: string
+}
+
+export interface CheckpointDirtyWorkOptions {
+  branch: string
+  baseBranch: string
+  commitMessage: string
 }
 
 export interface MergeResult {
@@ -45,6 +73,12 @@ export interface PullRequestResult {
   detail?: string
 }
 
+export interface CheckpointResult {
+  ok: boolean
+  commitSha?: string
+  detail?: string
+}
+
 export interface GitDriver {
   /** Current branch name in the repo root (e.g. `main`, `master`). */
   currentBranch(repoRoot: string): Promise<string>
@@ -52,8 +86,15 @@ export interface GitDriver {
   isClean(repoRoot: string): Promise<boolean>
   /** Create a new worktree at `worktreePath` with a fresh branch off `baseBranch`. */
   createWorktree(repoRoot: string, opts: CreateWorktreeOptions): Promise<void>
+  /** Attach an existing branch to a worktree path. */
+  attachWorktree(repoRoot: string, opts: AttachWorktreeOptions): Promise<void>
   /** Remove a worktree (and its branch ref). Safe to call on missing paths. */
   removeWorktree(repoRoot: string, worktreePath: string): Promise<void>
+  /** Package dirty shared-checkout changes into a task branch commit. */
+  checkpointDirtyWork(
+    repoRoot: string,
+    opts: CheckpointDirtyWorkOptions,
+  ): Promise<CheckpointResult>
   /** Fast-forward merge `branch` into `baseBranch`. Non-ff → returned as `ok:false`. */
   fastForwardMerge(
     repoRoot: string,
@@ -88,17 +129,17 @@ export class NodeGitDriver implements GitDriver {
   }
 
   async isClean(repoRoot: string): Promise<boolean> {
+    const gitRoot = await resolveGitTopLevel(repoRoot)
     const { stdout } = await execFileP('git', ['status', '--porcelain'], {
-      cwd: repoRoot,
+      cwd: gitRoot,
     })
     const lines = stdout
       .split('\n')
       .map((line) => line.trimEnd())
       .filter((line) => line.trim().length > 0)
     const meaningful = lines.filter((line) => {
-      if (!line.startsWith('?? ')) return true
       const file = line.slice(3).trim()
-      return !(file === '.guildhall/' || file.startsWith('.guildhall/'))
+      return !isIgnorableGuildhallStatePath(file.replace(/\/$/, ''))
     })
     return meaningful.length === 0
   }
@@ -108,11 +149,29 @@ export class NodeGitDriver implements GitDriver {
     { worktreePath, branch, baseBranch }: CreateWorktreeOptions,
   ): Promise<void> {
     await fs.mkdir(path.dirname(worktreePath), { recursive: true })
-    await execFileP(
-      'git',
-      ['worktree', 'add', '-b', branch, worktreePath, baseBranch],
-      { cwd: repoRoot },
-    )
+    try {
+      await execFileP(
+        'git',
+        ['worktree', 'add', '-b', branch, worktreePath, baseBranch],
+        { cwd: repoRoot },
+      )
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (!/already exists/i.test(message)) throw err
+      await execFileP('git', ['worktree', 'add', worktreePath, branch], {
+        cwd: repoRoot,
+      })
+    }
+  }
+
+  async attachWorktree(
+    repoRoot: string,
+    { worktreePath, branch }: AttachWorktreeOptions,
+  ): Promise<void> {
+    await fs.mkdir(path.dirname(worktreePath), { recursive: true })
+    await execFileP('git', ['worktree', 'add', worktreePath, branch], {
+      cwd: repoRoot,
+    })
   }
 
   async removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {
@@ -122,6 +181,64 @@ export class NodeGitDriver implements GitDriver {
       })
     } catch {
       // Already gone, or never created — either way, nothing to clean up.
+    }
+  }
+
+  async checkpointDirtyWork(
+    repoRoot: string,
+    { branch, baseBranch, commitMessage }: CheckpointDirtyWorkOptions,
+  ): Promise<CheckpointResult> {
+    const gitRoot = await resolveGitTopLevel(repoRoot)
+    try {
+      let branchExists = false
+      try {
+        await execFileP('git', ['rev-parse', '--verify', branch], { cwd: gitRoot })
+        branchExists = true
+      } catch {
+        branchExists = false
+      }
+
+      if (branchExists) {
+        await execFileP('git', ['checkout', branch], { cwd: gitRoot })
+      } else {
+        await execFileP('git', ['checkout', '-b', branch], { cwd: gitRoot })
+      }
+
+      await execFileP('git', ['add', '-A'], { cwd: gitRoot })
+      await execFileP(
+        'git',
+        ['reset', '--quiet', 'HEAD', '--', '.guildhall', 'memory', 'guildhall.yaml'],
+        { cwd: gitRoot },
+      )
+      let hasStagedChanges = true
+      try {
+        await execFileP('git', ['diff', '--cached', '--quiet'], { cwd: gitRoot })
+        hasStagedChanges = false
+      } catch {
+        hasStagedChanges = true
+      }
+      if (!hasStagedChanges) {
+        await execFileP('git', ['checkout', baseBranch], { cwd: gitRoot })
+        return { ok: true }
+      }
+      await execFileP('git', ['commit', '--no-verify', '-m', commitMessage], {
+        cwd: gitRoot,
+      })
+      const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], {
+        cwd: gitRoot,
+      })
+      await execFileP('git', ['checkout', baseBranch], { cwd: gitRoot })
+      return { ok: true, commitSha: stdout.trim() }
+    } catch (err) {
+      try {
+        await execFileP('git', ['checkout', baseBranch], { cwd: gitRoot })
+      } catch {
+        // Best-effort recovery only.
+      }
+      return {
+        ok: false,
+        detail: err instanceof Error ? err.message : String(err),
+      }
     }
   }
 
@@ -149,22 +266,58 @@ export class NodeGitDriver implements GitDriver {
     branch: string,
     baseBranch: string,
   ): Promise<MergeResult> {
+    const gitRoot = await resolveGitTopLevel(repoRoot)
     try {
-      await execFileP('git', ['checkout', baseBranch], { cwd: repoRoot })
+      await execFileP('git', ['checkout', baseBranch], { cwd: gitRoot })
       const { stdout } = await execFileP(
         'git',
         ['rev-list', '--reverse', `${baseBranch}..${branch}`],
-        { cwd: repoRoot },
+        { cwd: gitRoot },
       )
       const commits = stdout
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean)
-      if (commits.length > 0) {
-        await execFileP('git', ['cherry-pick', ...commits], { cwd: repoRoot })
+      if (commits.length === 0) {
+        const { stdout: head } = await execFileP('git', ['rev-parse', 'HEAD'], {
+          cwd: gitRoot,
+        })
+        return { ok: true, commitSha: head.trim() }
+      }
+
+      const { stdout: changedStdout } = await execFileP(
+        'git',
+        ['diff', '--name-only', '-z', `${baseBranch}..${branch}`],
+        { cwd: gitRoot, maxBuffer: 10 * 1024 * 1024 },
+      )
+      const meaningfulPaths = changedStdout
+        .split('\0')
+        .map((file) => file.trim())
+        .filter(Boolean)
+        .filter((file) => !isIgnorableGuildhallStatePath(file.replace(/\/$/, '')))
+
+      if (meaningfulPaths.length > 0) {
+        const diffArgs = ['diff', '--binary', `${baseBranch}..${branch}`, '--', ...meaningfulPaths]
+        const { stdout: patch } = await execFileP('git', diffArgs, {
+          cwd: gitRoot,
+          maxBuffer: 50 * 1024 * 1024,
+        })
+        const patchPath = path.join(gitRoot, '.git', 'guildhall-cherry-pick.patch')
+        await fs.writeFile(patchPath, patch, 'utf8')
+        try {
+          await execFileP('git', ['apply', '--check', patchPath], { cwd: gitRoot })
+          await execFileP('git', ['apply', '--index', patchPath], { cwd: gitRoot })
+        } finally {
+          await fs.rm(patchPath, { force: true })
+        }
+        await execFileP(
+          'git',
+          ['commit', '--no-verify', '-m', `Guildhall: land ${branch}`],
+          { cwd: gitRoot },
+        )
       }
       const { stdout: head } = await execFileP('git', ['rev-parse', 'HEAD'], {
-        cwd: repoRoot,
+        cwd: gitRoot,
       })
       return { ok: true, commitSha: head.trim() }
     } catch (err) {
@@ -223,6 +376,8 @@ export class NodeGitDriver implements GitDriver {
 export interface InMemoryGitDriverState {
   currentBranch: string
   createdWorktrees: CreateWorktreeOptions[]
+  attachedWorktrees: AttachWorktreeOptions[]
+  checkpoints: Array<CheckpointDirtyWorkOptions & { result: CheckpointResult }>
   removedWorktrees: string[]
   merges: { branch: string; baseBranch: string; result: MergeResult }[]
   cherryPicks: { branch: string; baseBranch: string; result: MergeResult }[]
@@ -252,6 +407,8 @@ export class InMemoryGitDriver implements GitDriver {
     this.state = {
       currentBranch: opts.currentBranch ?? 'main',
       createdWorktrees: [],
+      attachedWorktrees: [],
+      checkpoints: [],
       removedWorktrees: [],
       merges: [],
       cherryPicks: [],
@@ -293,8 +450,29 @@ export class InMemoryGitDriver implements GitDriver {
     this.state.createdWorktrees.push({ ...opts })
   }
 
+  async attachWorktree(
+    _repoRoot: string,
+    opts: AttachWorktreeOptions,
+  ): Promise<void> {
+    this.state.attachedWorktrees.push({ ...opts })
+  }
+
   async removeWorktree(_repoRoot: string, worktreePath: string): Promise<void> {
     this.state.removedWorktrees.push(worktreePath)
+  }
+
+  async checkpointDirtyWork(
+    _repoRoot: string,
+    opts: CheckpointDirtyWorkOptions,
+  ): Promise<CheckpointResult> {
+    const result: CheckpointResult = {
+      ok: true,
+      commitSha: `checkpoint-${this.state.checkpoints.length + 1}`,
+    }
+    this.state.checkpoints.push({ ...opts, result })
+    this.clean = true
+    this.state.currentBranch = opts.baseBranch
+    return result
   }
 
   async fastForwardMerge(

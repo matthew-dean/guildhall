@@ -356,6 +356,23 @@ describe('recordToolCarryover (top-level dispatcher)', () => {
     expect((meta['recent_verified_work'] as string[])[0]).toContain('no output')
   })
 
+  it('Bash records failed verification output as worker progress', () => {
+    const meta: Record<string, unknown> = {}
+    recordToolCarryover({
+      toolMetadata: meta,
+      toolName: 'shell',
+      toolInput: { command: 'pnpm vitest --run test/ts-to-jsdoc.test.ts' },
+      toolOutput: 'FAIL test/ts-to-jsdoc.test.ts > strings do not match',
+      isError: true,
+      resolvedFilePath: null,
+    })
+    const verified = meta['recent_verified_work'] as string[]
+    const worklog = meta['recent_work_log'] as string[]
+    expect(verified[0]).toContain('pnpm vitest --run test/ts-to-jsdoc.test.ts')
+    expect(verified[0]).toContain('FAIL test/ts-to-jsdoc.test.ts')
+    expect(worklog[0]).toContain('pnpm vitest --run test/ts-to-jsdoc.test.ts')
+  })
+
   it('Grep: records pattern in both verified_work and work_log', () => {
     const meta: Record<string, unknown> = {}
     recordToolCarryover({

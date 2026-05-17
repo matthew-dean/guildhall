@@ -18,7 +18,7 @@ describe('summarizeProjects', () => {
             activeTaskTitle: 'Restructure project service shell',
             recentCompletedTaskTitle: 'Publish 0.4.0',
           },
-          taskCounts: { total: 10, active: 2, blocked: 1, done: 6, shelved: 1 },
+          taskCounts: { total: 10, active: 2, draftReview: 0, blocked: 1, done: 6, shelved: 1 },
           run: { status: 'running' },
         },
       ],
@@ -36,7 +36,13 @@ describe('summarizeProjects', () => {
         recentLabel: 'Working on: Restructure project service shell',
         blurb: 'Guildhall runs autonomous engineering workflows over local projects.',
         tags: ['cli', 'orchestrator'],
-        counts: { total: 10, active: 2, blocked: 1, done: 6, shelved: 1 },
+        counts: { total: 10, active: 2, draftReview: 0, blocked: 1, done: 6, shelved: 1 },
+        ticker: {
+          tone: 'active',
+          pulse: true,
+          label: 'Live',
+          message: 'Restructure project service shell',
+        },
         actionLabel: 'Open project',
         runActionLabel: 'Stop',
         canOpen: true,
@@ -53,7 +59,7 @@ describe('summarizeProjects', () => {
           id: 'looma',
           name: 'Looma',
           path: '/work/looma',
-          taskCounts: { total: 0, active: 0, blocked: 0, done: 0, shelved: 0 },
+          taskCounts: { total: 0, active: 0, draftReview: 0, blocked: 0, done: 0, shelved: 0 },
           run: { status: 'stopped' },
         },
       ],
@@ -64,6 +70,12 @@ describe('summarizeProjects', () => {
       tone: 'idle',
       stageLabel: 'Ready',
       activityLabel: 'No task activity yet.',
+      ticker: {
+        tone: 'idle',
+        pulse: false,
+        label: 'Idle',
+        message: 'No recent activity',
+      },
       actionLabel: 'Open project',
       runActionLabel: 'Start',
       canStart: true,
@@ -84,10 +96,17 @@ describe('summarizeProjects', () => {
     }
 
     expect(summarizeProjects(service)[0]).toMatchObject({
+      name: 'Scratch pad',
       statusLabel: 'Needs setup',
       tone: 'warn',
       stageLabel: 'Needs setup',
       activityLabel: 'Needs first-time Guildhall setup.',
+      ticker: {
+        tone: 'warn',
+        pulse: false,
+        label: 'Setup',
+        message: 'First-time Guildhall setup',
+      },
       actionLabel: 'Open setup',
       runActionLabel: null,
       canStart: false,
@@ -102,7 +121,7 @@ describe('summarizeProjects', () => {
           id: 'knit',
           name: 'Knit',
           path: '/work/knit',
-          taskCounts: { total: 8, active: 0, blocked: 1, done: 6, shelved: 1 },
+          taskCounts: { total: 8, active: 0, draftReview: 0, blocked: 1, done: 6, shelved: 1 },
           highlights: { blockedTaskTitle: 'Repair staging auth flow' },
           run: { status: 'stopped' },
         },
@@ -110,7 +129,7 @@ describe('summarizeProjects', () => {
           id: 'looma',
           name: 'Looma',
           path: '/work/looma',
-          taskCounts: { total: 4, active: 0, blocked: 0, done: 4, shelved: 0 },
+          taskCounts: { total: 4, active: 0, draftReview: 0, blocked: 0, done: 4, shelved: 0 },
           highlights: { recentCompletedTaskTitle: 'Audit primitive integration' },
           run: { status: 'stopped' },
         },
@@ -140,7 +159,7 @@ describe('summarizeProjects', () => {
           id: 't-minus-t',
           name: 't-minus-t',
           path: '/work/t-minus-t',
-          taskCounts: { total: 3, active: 1, blocked: 0, done: 2, shelved: 0 },
+          taskCounts: { total: 3, active: 1, draftReview: 0, blocked: 0, done: 2, shelved: 0 },
           highlights: { activeTaskTitle: 'Build TypeScript-JSDoc round-trip conversion' },
           run: { status: 'stopped' },
         },
@@ -153,6 +172,41 @@ describe('summarizeProjects', () => {
       activityLabel: '1 task is paused.',
       recentLabel: 'Working on: Build TypeScript-JSDoc round-trip conversion',
       runActionLabel: 'Start',
+    })
+  })
+
+  it('treats imported drafts as shaping work instead of paused execution', () => {
+    const service: ServiceDetail = {
+      projects: [
+        {
+          id: 'looma-knit',
+          name: 'Looma + Knit',
+          path: '/work/looma-knit',
+          taskCounts: { total: 89, active: 0, draftReview: 75, blocked: 0, done: 14, shelved: 0 },
+          run: {
+            status: 'stopped',
+            stopSummary: {
+              stopReason: 'awaiting_human',
+              stopMessage: 'No runnable tasks remain right now: 75 draft task(s) waiting for review.',
+            },
+          },
+        },
+      ],
+    }
+
+    expect(summarizeProjects(service)[0]).toMatchObject({
+      statusLabel: 'Needs shaping',
+      stageLabel: 'Needs shaping',
+      activityLabel: '75 imported drafts need shaping.',
+      counts: { total: 89, active: 0, draftReview: 75, blocked: 0, done: 14, shelved: 0 },
+      ticker: {
+        tone: 'warn',
+        pulse: false,
+        label: 'Needs shaping',
+        message: '75 imported drafts waiting',
+      },
+      canStart: false,
+      canStop: false,
     })
   })
 })

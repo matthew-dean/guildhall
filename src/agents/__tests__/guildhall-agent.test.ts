@@ -374,6 +374,14 @@ describe('agent factories', () => {
     expect(a.name).toBe('spec-agent')
   })
 
+  it('createSpecAgent tells imported-draft shaping to draft from evidence instead of authoring research-process briefs', () => {
+    const a = createSpecAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('Imported draft shaping')
+    expect(prompt).toContain('Do NOT write a product brief about your own research plan')
+    expect(prompt).toContain('Treat imported source notes as evidence')
+  })
+
   it('createWorkerAgent registers shell + file tools', async () => {
     const a = createWorkerAgent(llm)
     expect(a.name).toBe('worker-agent')
@@ -388,6 +396,8 @@ describe('agent factories', () => {
   it('createWorkerAgent tells workers not to spend turns on plans only', async () => {
     const a = createWorkerAgent(llm)
     const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('## First action')
+    expect(prompt).toContain('Your first assistant response in a worker pass must be exactly one tool call and no prose')
     expect(prompt).toContain('## No plan-only turns')
     expect(prompt).toContain('Every assistant turn must make observable progress')
     expect(prompt).toContain('If you know the next step, take it with a tool call')
@@ -405,6 +415,37 @@ describe('agent factories', () => {
     const a = createWorkerAgent(llm)
     const engine = (a as unknown as { engine: { noProgressToolNames?: readonly string[] } }).engine
     expect(engine.noProgressToolNames).toContain('shell')
+  })
+
+  it('createWorkerAgent tells workers to repair failed verification instead of leaving placeholders', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('If verification fails with missing names')
+    expect(prompt).toContain('repair the actual source')
+    expect(prompt).toContain('Do not replace broken code with placeholder comments')
+  })
+
+  it('createWorkerAgent tells workers to fix authored expressions before inventing helpers', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('If verification points at an expression you authored or modified')
+    expect(prompt).toContain('Do not invent missing composables, components, imports, or utility')
+  })
+
+  it('createWorkerAgent treats exit-zero shell warnings as passed verification', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('Shell command succeeded (exit 0)')
+    expect(prompt).toContain('Do not edit warning sites')
+    expect(prompt).toContain('record the command as passed and continue the handoff')
+  })
+
+  it('createWorkerAgent tells workers to revert their own unrelated review drift', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('introduced unrelated scope drift')
+    expect(prompt).toContain('Do not raise a spec ambiguity')
+    expect(prompt).toContain('restore the prior code')
   })
 
   it('createReviewerAgent', () => {

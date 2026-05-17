@@ -1,6 +1,7 @@
 <!--
   Work surface. List is the primary management view; Board is a secondary
-  spatial view. Live activity stays with the dense list, not the board.
+  spatial view. Live activity belongs in Thread/project chrome so this stays
+  a usable backlog management surface.
 -->
 <script lang="ts">
   import Button from '../../lib/Button.svelte'
@@ -8,12 +9,11 @@
   import Chip from '../../lib/Chip.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import TaskCard from '../../lib/TaskCard.svelte'
-  import { onEvent, summarizeEvent, eventTaskId, eventCssClass } from '../../lib/events.js'
   import { friendlyDomain, friendlyPriority, friendlyStatus } from '../../lib/display.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
-  import { buildWorkSurface, sortEventsChronologically } from '../../lib/project-data.js'
-  import type { ProjectDetail, EventEnvelope, Task } from '../../lib/types.js'
+  import { buildWorkSurface } from '../../lib/project-data.js'
+  import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
 
   interface Props {
@@ -53,10 +53,8 @@
   const importDraftCount = $derived(viewModel.importDraftCount)
   const nextImportDraft = $derived(viewModel.nextImportDraft)
   const needsMeta = $derived(viewModel.needsMeta)
-  const running = $derived(viewModel.running)
 
   let progress = $state('Loading...')
-  let events = $state<EventEnvelope[]>([])
   let sortKey = $state<SortKey>('updated')
   let sortDir = $state<SortDir>('desc')
 
@@ -186,18 +184,6 @@
     return task.id
   }
 
-  function scrollFeedToBottom(): void {
-    queueMicrotask(() => {
-      const feed = document.getElementById('work-feed')
-      if (feed) feed.scrollTop = feed.scrollHeight
-    })
-  }
-
-  $effect(() => {
-    events = viewModel.events
-    scrollFeedToBottom()
-  })
-
   $effect(() => {
     projectFetch('/api/project/progress')
       .then(r => r.json())
@@ -208,21 +194,6 @@
         progress = '(failed to load)'
       })
   })
-
-  $effect(() => {
-    const off = onEvent(ev => {
-      const text = summarizeEvent(ev)
-      if (!text) return
-      events = sortEventsChronologically([...events, ev])
-      scrollFeedToBottom()
-    })
-    return off
-  })
-
-  function onEventClick(ev: EventEnvelope) {
-    const id = eventTaskId(ev)
-    if (id) nav(currentTaskHref(id), { backgroundPath: path.value })
-  }
 
   function setMode(next: 'list' | 'board') {
     if (next === mode) return
@@ -263,157 +234,119 @@
     </div>
   </details>
 {:else}
-  <div class="work-layout">
-    <div class="col col-primary">
-      <Card title={`Work list (${taskCounts.total})`} titleTag="h2">
-        {#snippet actions()}
-          <div class="view-switch" role="tablist" aria-label="Work view mode">
-            <Button
-              variant={mode === 'list' ? 'primary' : 'secondary'}
-              size="sm"
-              onclick={() => setMode('list')}
-              ariaLabel="List view"
-            >
-              List
-            </Button>
-            <Button
-              variant={mode === 'board' ? 'primary' : 'secondary'}
-              size="sm"
-              onclick={() => setMode('board')}
-              ariaLabel="Board view"
-            >
-              Board
-            </Button>
-          </div>
-        {/snippet}
-
-        <div class="work-summary">
-          <Chip label={`${taskCounts.total} tasks`} tone="neutral" />
-          <Chip label={`${taskCounts.active} active`} tone="accent" />
-          <Chip label={`${taskCounts.awaitingApproval} awaiting approval`} tone="warn" />
-          <Chip label={`${taskCounts.done} done`} tone="ok" />
-          {#if importDraftCount > 0}
-            <Chip label={`${importDraftCount} imported drafts`} tone="neutral" />
-          {/if}
+  <div class="work-list-view">
+    <Card title={`Work list (${taskCounts.total})`} titleTag="h2">
+      {#snippet actions()}
+        <div class="view-switch" role="tablist" aria-label="Work view mode">
+          <Button
+            variant={mode === 'list' ? 'primary' : 'secondary'}
+            size="sm"
+            onclick={() => setMode('list')}
+            ariaLabel="List view"
+          >
+            List
+          </Button>
+          <Button
+            variant={mode === 'board' ? 'primary' : 'secondary'}
+            size="sm"
+            onclick={() => setMode('board')}
+            ariaLabel="Board view"
+          >
+            Board
+          </Button>
         </div>
+      {/snippet}
 
-        {#if importDraftCount > 0 && nextImportDraft}
-          <div class="draft-queue-card">
-            <div class="draft-queue-copy">
-              <p class="draft-queue-label">Imported draft queue</p>
-              <div class="draft-queue-title">{nextImportDraft.title ?? 'Imported draft'}</div>
-              <p class="draft-queue-detail">
-                {#if importDraftCount === 1}
-                  Review this imported draft and decide whether to shape it now.
-                {:else}
-                  Start with "{nextImportDraft.title ?? 'Imported draft'}". {importDraftCount - 1} more drafts are queued behind it.
-                {/if}
-              </p>
-            </div>
-            <Button variant="secondary" size="sm" onclick={() => openTask(nextImportDraft)}>
-              Review next draft
-            </Button>
-          </div>
+      <div class="work-summary">
+        <Chip label={`${taskCounts.total} tasks`} tone="neutral" />
+        <Chip label={`${taskCounts.active} active`} tone="accent" />
+        <Chip label={`${taskCounts.awaitingApproval} awaiting approval`} tone="warn" />
+        <Chip label={`${taskCounts.done} done`} tone="ok" />
+        {#if importDraftCount > 0}
+          <Chip label={`${importDraftCount} imported drafts`} tone="neutral" />
         {/if}
+      </div>
 
-        {#if tasks.length === 0}
-          {#if needsMeta}
-            <p class="muted">No tasks yet — <strong>Bootstrap project</strong> first.</p>
-          {:else}
-            <p class="muted">No tasks yet — <strong>New task</strong> to begin.</p>
-          {/if}
-        {:else}
-          <div class="task-table-wrap">
-            <table class="task-table">
-              <thead>
-                <tr>
-                  <th><button type="button" class="sort-btn" onclick={() => toggleSort('title')}>Task{sortLabel('title')}</button></th>
-                  <th><button type="button" class="sort-btn" onclick={() => toggleSort('status')}>Stage{sortLabel('status')}</button></th>
-                  <th><button type="button" class="sort-btn" onclick={() => toggleSort('area')}>Part{sortLabel('area')}</button></th>
-                  <th><button type="button" class="sort-btn" onclick={() => toggleSort('priority')}>Priority{sortLabel('priority')}</button></th>
-                  <th class="col-revisions"><button type="button" class="sort-btn" onclick={() => toggleSort('revisions')}>Revisions{sortLabel('revisions')}</button></th>
-                  <th><button type="button" class="sort-btn align-end" onclick={() => toggleSort('updated')}>Updated{sortLabel('updated')}</button></th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each sortedTasks as task (task.id)}
-                  <tr
-                    class="task-row"
-                    tabindex="0"
-                    role="button"
-                    aria-label={`Open task ${task.title ?? task.id}`}
-                    onclick={() => openTask(task)}
-                    onkeydown={(event) => onTaskKey(event, task)}
-                  >
-                    <td class="cell-task">
-                      <div class="task-title">{task.title ?? '(untitled)'}</div>
-                      <div class="task-subcopy">{taskSecondaryText(task)}</div>
-                    </td>
-                    <td class="cell-status">
-                      <Chip label={friendlyStatus(task.status)} tone={statusTone(task.status)} />
-                    </td>
-                    <td class="cell-steward">{friendlyDomain(task.domain) || 'Project'}</td>
-                    <td class="cell-priority">
-                      <Chip label={friendlyPriority(task.priority)} tone={priorityTone(task.priority)} />
-                    </td>
-                    <td class="cell-revisions">{task.revisionCount ?? 0}</td>
-                    <td class="cell-updated">{formatUpdatedAt(task.updatedAt)}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        {/if}
-      </Card>
-    </div>
-
-    <div class="col col-rail">
-      <Card title="Live activity">
-        <div class="feed" id="work-feed">
-          {#if events.length === 0 && !running}
-            <p class="muted">Idle — press Start to let Guildhall continue.</p>
-          {:else if events.length === 0}
-            <p class="muted">Connecting...</p>
-          {:else}
-            {#each events as ev, i (i)}
-              {@const text = summarizeEvent(ev)}
-              {#if text}
-                {@const tid = eventTaskId(ev)}
-                {@const cls = eventCssClass(ev)}
-                <div class="ev ev-{cls}">
-                  <span class="ts">{(ev.at ?? '').slice(11, 19)}</span>
-                  {#if tid}
-                    <button type="button" class="ev-link" onclick={() => onEventClick(ev)}>
-                      {text}
-                    </button>
-                  {:else}
-                    <span>{text}</span>
-                  {/if}
-                </div>
+      {#if importDraftCount > 0 && nextImportDraft}
+        <div class="draft-queue-card">
+          <div class="draft-queue-copy">
+            <p class="draft-queue-label">Imported draft queue</p>
+            <div class="draft-queue-title">{nextImportDraft.title ?? 'Imported draft'}</div>
+            <p class="draft-queue-detail">
+              {#if importDraftCount === 1}
+                Review this imported draft and decide whether to shape it now.
+              {:else}
+                Start with "{nextImportDraft.title ?? 'Imported draft'}". {importDraftCount - 1} more drafts are queued behind it.
               {/if}
-            {/each}
-          {/if}
+            </p>
+          </div>
+          <Button variant="secondary" size="sm" onclick={() => openTask(nextImportDraft)}>
+            Review next draft
+          </Button>
         </div>
-      </Card>
+      {/if}
 
-      <details class="progress-more">
-        <summary>Recent progress</summary>
-        <div class="progress">
-          <Markdown source={progress} />
+      {#if tasks.length === 0}
+        {#if needsMeta}
+          <p class="muted">No tasks yet — <strong>Bootstrap project</strong> first.</p>
+        {:else}
+          <p class="muted">No tasks yet — <strong>New task</strong> to begin.</p>
+        {/if}
+      {:else}
+        <div class="task-table-wrap">
+          <table class="task-table">
+            <thead>
+              <tr>
+                <th><button type="button" class="sort-btn" onclick={() => toggleSort('title')}>Task{sortLabel('title')}</button></th>
+                <th><button type="button" class="sort-btn" onclick={() => toggleSort('status')}>Stage{sortLabel('status')}</button></th>
+                <th><button type="button" class="sort-btn" onclick={() => toggleSort('area')}>Part{sortLabel('area')}</button></th>
+                <th><button type="button" class="sort-btn" onclick={() => toggleSort('priority')}>Priority{sortLabel('priority')}</button></th>
+                <th class="col-revisions"><button type="button" class="sort-btn" onclick={() => toggleSort('revisions')}>Revisions{sortLabel('revisions')}</button></th>
+                <th><button type="button" class="sort-btn align-end" onclick={() => toggleSort('updated')}>Updated{sortLabel('updated')}</button></th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each sortedTasks as task (task.id)}
+                <tr
+                  class="task-row"
+                  tabindex="0"
+                  role="button"
+                  aria-label={`Open task ${task.title ?? task.id}`}
+                  onclick={() => openTask(task)}
+                  onkeydown={(event) => onTaskKey(event, task)}
+                >
+                  <td class="cell-task">
+                    <div class="task-title">{task.title ?? '(untitled)'}</div>
+                    <div class="task-subcopy">{taskSecondaryText(task)}</div>
+                  </td>
+                  <td class="cell-status">
+                    <Chip label={friendlyStatus(task.status)} tone={statusTone(task.status)} />
+                  </td>
+                  <td class="cell-steward">{friendlyDomain(task.domain) || 'Project'}</td>
+                  <td class="cell-priority">
+                    <Chip label={friendlyPriority(task.priority)} tone={priorityTone(task.priority)} />
+                  </td>
+                  <td class="cell-revisions">{task.revisionCount ?? 0}</td>
+                  <td class="cell-updated">{formatUpdatedAt(task.updatedAt)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         </div>
-      </details>
-    </div>
+      {/if}
+    </Card>
+
+    <details class="progress-more progress-more--full">
+      <summary>Recent progress</summary>
+      <div class="progress">
+        <Markdown source={progress} />
+      </div>
+    </details>
   </div>
 {/if}
 
 <style>
-  .work-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 320px;
-    gap: var(--s-4);
-    align-items: start;
-  }
-  .col {
+  .work-list-view {
     display: flex;
     flex-direction: column;
     gap: var(--s-4);
@@ -564,41 +497,6 @@
   .cell-revisions {
     text-align: center;
   }
-  .feed {
-    max-height: 44vh;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-1);
-    font-family: 'SF Mono', monospace;
-    font-size: var(--fs-1);
-  }
-  .ev {
-    display: flex;
-    gap: var(--s-2);
-    line-height: var(--lh-body);
-    color: var(--text);
-  }
-  .ev .ts {
-    color: var(--text-muted);
-  }
-  .ev-link {
-    background: transparent;
-    border: none;
-    padding: 0;
-    font: inherit;
-    color: var(--accent);
-    cursor: pointer;
-    text-align: left;
-  }
-  .ev-link:hover {
-    text-decoration: underline;
-  }
-  .ev-transition { color: var(--accent-2); }
-  .ev-escalation { color: var(--warn); }
-  .ev-error { color: var(--danger); }
-  .ev-issue { color: var(--warn); }
-  .ev-supervisor { color: var(--text-muted); }
   .progress-more {
     align-self: stretch;
   }
@@ -629,15 +527,6 @@
   .muted {
     color: var(--text-muted);
     font-size: var(--fs-2);
-  }
-
-  @media (max-width: 1180px) {
-    .work-layout {
-      grid-template-columns: 1fr;
-    }
-    .col-rail {
-      order: 2;
-    }
   }
 
   @media (max-width: 720px) {

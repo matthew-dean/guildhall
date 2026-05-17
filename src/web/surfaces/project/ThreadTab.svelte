@@ -31,6 +31,7 @@
   import Markdown from '../../lib/Markdown.svelte'
   import AgentQuestion from '../../lib/AgentQuestion.svelte'
   import StatusLight from '../../lib/StatusLight.svelte'
+  import StatusDot from '../../lib/StatusDot.svelte'
   import StatusLine from '../../lib/StatusLine.svelte'
   import StateSummary from '../../lib/StateSummary.svelte'
   import Help from '../../lib/Help.svelte'
@@ -180,6 +181,9 @@
   })
   let pollHandle: ReturnType<typeof setInterval> | null = null
   let clockHandle: ReturnType<typeof setInterval> | null = null
+  let loadTimer: ReturnType<typeof setTimeout> | null = null
+  let loadInFlight = false
+  let loadQueued = false
   let nowMs = $state(Date.now())
   let runBusy = $state(false)
   let runError = $state<string | null>(null)
@@ -256,6 +260,31 @@
     }
   }
 
+  async function runLoad(): Promise<void> {
+    if (loadInFlight) {
+      loadQueued = true
+      return
+    }
+    loadInFlight = true
+    try {
+      await load()
+    } finally {
+      loadInFlight = false
+      if (loadQueued) {
+        loadQueued = false
+        void runLoad()
+      }
+    }
+  }
+
+  function scheduleLoad(delayMs = 0): void {
+    if (loadTimer) return
+    loadTimer = setTimeout(() => {
+      loadTimer = null
+      void runLoad()
+    }, delayMs)
+  }
+
   onMount(() => {
     try {
       const raw = sessionStorage.getItem('guildhall:workspace-import-handoff')
@@ -271,11 +300,11 @@
     } catch {
       importHandoff = null
     }
-    void load()
-    pollHandle = setInterval(() => void load(), 4000)
+    scheduleLoad()
+    pollHandle = setInterval(() => scheduleLoad(100), 4000)
     clockHandle = setInterval(() => {
       nowMs = Date.now()
-    }, 1000)
+    }, 5000)
   })
   $effect(() => {
     const off = onEvent(ev => {
@@ -291,7 +320,7 @@
         type === 'line_complete' ||
         type === 'error'
       ) {
-        void load()
+        scheduleLoad(100)
       }
     })
     return off
@@ -299,6 +328,7 @@
   onDestroy(() => {
     if (pollHandle) clearInterval(pollHandle)
     if (clockHandle) clearInterval(clockHandle)
+    if (loadTimer) clearTimeout(loadTimer)
   })
 
   function personaLabel(p: TurnPersona): string {
@@ -412,6 +442,20 @@
     return 'neutral'
   }
 
+  function phaseIndicator(group: { phase: TurnPhase; turns: Turn[] }): { tone: 'active' | 'warn' | 'idle'; pulse: boolean; label: string } | null {
+    if (group.turns.some(t => isWorkingTurn(t))) {
+      return { tone: 'active', pulse: true, label: 'Guildhall working' }
+    }
+    if (group.turns.some(t => t.status === 'active')) {
+      const needsYou = group.turns.some(t => ownershipLabel(t) === 'Needs you')
+      return { tone: needsYou ? 'warn' : 'active', pulse: true, label: needsYou ? 'Needs your input' : 'Active' }
+    }
+    if (group.turns.some(t => t.status === 'pending')) {
+      return { tone: 'idle', pulse: false, label: 'Queued work' }
+    }
+    return null
+  }
+
   function turnLiveAgent(t: Turn): LiveAgent | undefined {
     return 'liveAgent' in t ? t.liveAgent : undefined
   }
@@ -510,7 +554,7 @@
     if (!firstSetup) return
     void tick().then(() => {
       const el = turnElements.get(firstSetup.id)
-      el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      el?.scrollIntoView({ block: 'center', behavior: 'auto' })
     })
   }
 
@@ -562,7 +606,7 @@
     void tick().then(() => {
       const el = turnElements.get(targetId)
       if (!el) return
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      el.scrollIntoView({ block: 'center', behavior: 'auto' })
       lastScrolledId = targetId
     })
   })
@@ -1128,10 +1172,22 @@
             type="button"
             class="phase-head"
             class:phase-head-open={expandedPhases[group.phase]}
+            class:phase-head-live={Boolean(phaseIndicator(group))}
+            class:phase-head-live-pulse={phaseIndicator(group)?.pulse}
             aria-expanded={expandedPhases[group.phase]}
             onclick={() => togglePhase(group.phase)}
           >
-            <span>{group.label}</span>
+            <span class="phase-head-label">
+              {#if phaseIndicator(group)}
+                <StatusDot
+                  tone={phaseIndicator(group)?.tone === 'warn' ? 'warn' : phaseIndicator(group)?.tone === 'active' ? 'active' : 'idle'}
+                  pulse={phaseIndicator(group)?.pulse ?? false}
+                  size="sm"
+                  ariaLabel={phaseIndicator(group)?.label}
+                />
+              {/if}
+              <span>{group.label}</span>
+            </span>
             <Chip label={String(group.turns.length)} tone={phaseCountTone(group)} />
           </button>
           {#if expandedPhases[group.phase]}
@@ -1805,14 +1861,36 @@
     z-index: var(--z-sticky-local);
     box-shadow: 0 4px 12px color-mix(in srgb, var(--bg-base) 80%, transparent);
   }
+  .phase-head-label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-2);
+    min-width: 0;
+  }
   .phase-head:hover {
     background: var(--bg-raised-2);
+  }
+  .phase-head-live {
+    border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
+  }
+  .phase-head-live-pulse {
+    animation: phase-head-live-pulse 1.8s ease-in-out infinite;
   }
   .phase-head-open {
     background: var(--bg-raised-2);
     border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
     border-bottom-left-radius: var(--r-0);
     border-bottom-right-radius: var(--r-0);
+  }
+  @keyframes phase-head-live-pulse {
+    0%, 100% {
+      box-shadow: 0 4px 12px color-mix(in srgb, var(--bg-base) 80%, transparent);
+      border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
+    }
+    50% {
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent), 0 8px 20px color-mix(in srgb, var(--accent) 16%, transparent);
+      border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+    }
   }
   .phase-body {
     position: relative;

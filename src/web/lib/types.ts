@@ -516,6 +516,7 @@ export interface ServiceProjectSummary {
   taskCounts?: {
     total: number
     active: number
+    draftReview?: number
     blocked: number
     done: number
     shelved: number

@@ -322,9 +322,9 @@
   }
   .prompt {
     margin: 0;
-    font-size: var(--fs-3);
-    font-weight: 550;
-    line-height: 1.12;
+    font-size: var(--fs-2);
+    font-weight: 500;
+    line-height: 1.28;
     color: var(--text);
   }
   .choices {

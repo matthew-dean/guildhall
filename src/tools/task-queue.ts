@@ -1,6 +1,7 @@
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { AcceptanceCriteria, GateResult, Task, TaskQueue, TaskStatus, parseAcceptanceCriteriaFromSpec } from '@guildhall/core'
 import { atomicWriteText } from '@guildhall/sessions'
 
@@ -109,8 +110,33 @@ export async function updateTask(
       }
     }
 
+    const nextStatus = input.status ? TaskStatus.parse(input.status) : undefined
+    const wouldPromoteSpecReview =
+      nextStatus === 'spec_review' ||
+      (
+        nextStatus === undefined &&
+        input.spec !== undefined &&
+        input.spec.trim() !== '' &&
+        task.status === 'exploring'
+      )
+    if (wouldPromoteSpecReview && input.spec && hasUnansweredMarkdownOpenQuestions(input.spec)) {
+      return {
+        success: false,
+        taskId,
+        error:
+          'Spec contains unanswered human questions in markdown. Use post-user-question to persist structured questions before moving the task to spec_review.',
+      }
+    }
+
+    const normalizedSpec = input.spec !== undefined
+      ? normalizeSpecForTaskProjectPath(input.spec, task.projectPath)
+      : undefined
+    const normalizedAcceptanceCriteria = input.acceptanceCriteria !== undefined
+      ? input.acceptanceCriteria.map((criterion) => normalizeAcceptanceCriterionForTaskProjectPath(criterion, task.projectPath))
+      : undefined
+
     if (input.title !== undefined) task.title = input.title
-    const explicitStatus = input.status ? TaskStatus.parse(input.status) : undefined
+    const explicitStatus = nextStatus
     if (explicitStatus) task.status = explicitStatus
     if (input.assignedTo !== undefined) {
       if ((input.assignedTo ?? '').trim() === '') delete task.assignedTo
@@ -118,14 +144,14 @@ export async function updateTask(
     }
     if (input.blockReason !== undefined && input.blockReason.trim() !== '') task.blockReason = input.blockReason
     if (input.humanJudgment !== undefined && input.humanJudgment.trim() !== '') task.humanJudgment = input.humanJudgment
-    if (input.spec !== undefined && input.spec.trim() !== '') {
-      task.spec = input.spec
+    if (normalizedSpec !== undefined && normalizedSpec.trim() !== '') {
+      task.spec = normalizedSpec
       if (input.title === undefined) {
         const derivedTitle = deriveImportedTaskTitle(task)
         if (derivedTitle) task.title = derivedTitle
       }
       if (task.acceptanceCriteria.length === 0) {
-        const derivedCriteria = parseAcceptanceCriteriaFromSpec(input.spec)
+        const derivedCriteria = parseAcceptanceCriteriaFromSpec(normalizedSpec)
         if (derivedCriteria.length > 0) task.acceptanceCriteria = derivedCriteria
       }
     }
@@ -141,8 +167,8 @@ export async function updateTask(
       explicitAssignedTo: input.assignedTo !== undefined,
       explicitStatus,
     })
-    if (input.acceptanceCriteria !== undefined && input.acceptanceCriteria.length > 0) {
-      task.acceptanceCriteria = z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
+    if (normalizedAcceptanceCriteria !== undefined && normalizedAcceptanceCriteria.length > 0) {
+      task.acceptanceCriteria = z.array(AcceptanceCriteria).parse(normalizedAcceptanceCriteria)
     }
     if (input.gateResults !== undefined && input.gateResults.length > 0) {
       task.gateResults = z.array(GateResult).parse(input.gateResults)
@@ -208,6 +234,61 @@ function inferSingleActiveTaskId(queue: z.infer<typeof TaskQueue>): string | nul
     ['in_progress', 'review', 'gate_check', 'spec_review'].includes(t.status),
   )
   return candidates.length === 1 ? candidates[0]!.id : null
+}
+
+function hasUnansweredMarkdownOpenQuestions(spec: string): boolean {
+  const section = extractMarkdownSection(spec, 'Open Questions')
+  if (!section) return false
+  const lines = section
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^[-*]\s*/, '').replace(/^\d+[.)]\s*/, '').trim())
+    .filter(Boolean)
+  if (lines.length === 0) return false
+  const meaningful = lines.filter((line) => !/^(none|n\/a|no open questions|no questions)\.?$/i.test(line))
+  if (meaningful.length === 0) return false
+  return meaningful.some((line) => /\?/.test(line) || /^(who|what|when|where|why|how|should|can|do|does|is|are)\b/i.test(line))
+}
+
+function extractMarkdownSection(markdown: string, heading: string): string | null {
+  const lines = markdown.split('\n')
+  const headingPattern = new RegExp(`^#{2,6}\\s+${heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i')
+  const start = lines.findIndex((line) => headingPattern.test(line.trim()))
+  if (start < 0) return null
+  const rest = lines.slice(start + 1)
+  const end = rest.findIndex((line) => /^#{2,6}\s+/.test(line.trim()))
+  const sectionLines = end < 0 ? rest : rest.slice(0, end)
+  return sectionLines.join('\n').trim() || null
+}
+
+function normalizeSpecForTaskProjectPath(spec: string, taskProjectPath: string): string {
+  const prefix = duplicatedProjectPathPrefix(taskProjectPath)
+  if (!prefix) return spec
+  return stripDuplicatedPathPrefix(spec, prefix)
+}
+
+function normalizeAcceptanceCriterionForTaskProjectPath(
+  criterion: z.input<typeof AcceptanceCriteria>,
+  taskProjectPath: string,
+): z.input<typeof AcceptanceCriteria> {
+  const prefix = duplicatedProjectPathPrefix(taskProjectPath)
+  if (!prefix) return criterion
+  return {
+    ...criterion,
+    description: stripDuplicatedPathPrefix(criterion.description, prefix),
+    ...(criterion.command ? { command: stripDuplicatedPathPrefix(criterion.command, prefix) } : {}),
+  }
+}
+
+function duplicatedProjectPathPrefix(taskProjectPath: string): string | null {
+  const base = path.basename(path.resolve(taskProjectPath || '.')).trim()
+  return base && base !== '.' && base !== '/' ? base : null
+}
+
+function stripDuplicatedPathPrefix(value: string, prefix: string): string {
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return value.replace(new RegExp(`\\b${escaped}/`, 'g'), '')
 }
 
 function deriveImportedTaskTitle(task: z.infer<typeof Task>): string | null {

@@ -140,6 +140,51 @@ async function setFanoutPolicy(
 }
 
 describe('Orchestrator — coordinator adjudication on recurrent dissent', () => {
+  it('records an approving adjudication verdict when procedural-only dissent advances to gates', async () => {
+    await writeTask(mkTask())
+
+    const runner: ReviewerFanoutRunner = async ({ personas }) => {
+      return personas.map(
+        (persona, i): PersonaVerdict =>
+          i === 0
+            ? {
+                guildSlug: persona.slug,
+                guildName: persona.name,
+                verdict: 'revise',
+                reasoning:
+                  'The implementation meets all acceptance criteria. Please add a checkpoint/audit trail follow-up before a future release.',
+                revisionItems: ['Add a checkpoint/audit trail follow-up.'],
+                rawOutput: '',
+              }
+            : {
+                guildSlug: persona.slug,
+                guildName: persona.name,
+                verdict: 'approve',
+                reasoning: `${persona.name} approved.`,
+                revisionItems: [],
+                rawOutput: '',
+              },
+      )
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      reviewerFanout: runner,
+    })
+    await orch.tick()
+
+    const after = (await readQueue()).tasks[0]!
+    expect(after.status).toBe('gate_check')
+    expect(after.notes.some((n) => n.agentId === 'reviewer-fanout')).toBe(true)
+    expect(after.reviewVerdicts.at(-1)).toMatchObject({
+      verdict: 'approve',
+      reviewerPath: 'deterministic',
+      failingSignals: [],
+    })
+    expect(after.reviewVerdicts.at(-1)?.reason).toContain('procedural-only dissent')
+  })
+
   it('bounces normally on first round of dissent even under the adjudication policy', async () => {
     await setFanoutPolicy('coordinator_adjudicates_on_conflict')
     await writeTask(mkTask())

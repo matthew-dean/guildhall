@@ -235,6 +235,75 @@ describe('buildThread', () => {
     }
   })
 
+  it('prefers an in-progress worker turn over a stale review turn when neither has a live agent', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const earlier = new Date(Date.now() - 600_000).toISOString()
+      const later = new Date(Date.now() - 60_000).toISOString()
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-review',
+              title: 'Older review task',
+              status: 'review',
+              createdAt: earlier,
+              updatedAt: later,
+              notes: [
+                {
+                  agentId: 'reviewer-fanout',
+                  role: 'reviewer',
+                  content: 'Please revise the button markup.',
+                  timestamp: later,
+                },
+              ],
+            },
+            {
+              id: 'task-live',
+              title: 'Fresh worker task',
+              status: 'in_progress',
+              createdAt: earlier,
+              updatedAt: earlier,
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 2,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      expect(thread.activeTurnId).toBe('inflight:task-live')
+      const reviewTurn = thread.turns.find((turn) => turn.id === 'inflight:task-review')
+      if (!reviewTurn || reviewTurn.kind !== 'inflight') throw new Error('expected review inflight turn')
+      expect(reviewTurn.status).toBe('pending')
+      const workerTurn = thread.turns.find((turn) => turn.id === 'inflight:task-live')
+      if (!workerTurn || workerTurn.kind !== 'inflight') throw new Error('expected worker inflight turn')
+      expect(workerTurn.status).toBe('active')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('drafts project direction as editable brief copy instead of inference narration', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
@@ -901,6 +970,68 @@ coordinators:
     }
   })
 
+  it('does not project stale task activity as live work once the coordinator is stopped', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Shape imported draft',
+              status: 'exploring',
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+              notes: [{ role: 'shaping-request', content: 'shape this', timestamp: new Date().toISOString() }],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'core', name: 'Core' }],
+        },
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+      const lastEventAt = new Date(Date.now() - 60_000).toISOString()
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        runStatus: 'stopped',
+        recentEvents: [
+          {
+            at: lastEventAt,
+            event: {
+              type: 'tool_completed',
+              task_id: 'task-1',
+              agent_name: 'spec-agent',
+              tool_name: 'read-file',
+            },
+          },
+        ],
+      })
+
+      const turn = thread.turns.find(t => t.kind === 'inflight')
+      if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
+      expect(turn.liveAgent).toBeUndefined()
+      expect(turn.summary).toBe('The spec author is shaping this task.')
+      expect(turn.activity?.at(-1)?.label).toBe('Finished file read')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('labels failed live tools as failed instead of finished', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
@@ -1092,6 +1223,61 @@ coordinators:
       if (!turn || turn.kind !== 'escalation') throw new Error('expected escalation turn')
       expect(turn.details).toBe(
         'Add schema validation for the slug value before it is used in the Supabase query. 2 reviewers timed out.',
+      )
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('turns dirty repo setup blockers into an actionable recovery message', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Continue shaped draft',
+              status: 'blocked',
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+              escalations: [
+                {
+                  id: 'esc-task-1-1',
+                  reason: 'human_judgment_required',
+                  summary: 'Worktree setup blocked',
+                  details:
+                    'Guildhall could not start work because the target repo is dirty: base repo has uncommitted changes at /Users/matthew/git/oss/looma-knit/knit. Commit or stash those changes, then resume the task.',
+                  raisedAt: new Date().toISOString(),
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'core', name: 'Core' }],
+        },
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+
+      const turn = thread.turns.find(t => t.kind === 'escalation')
+      if (!turn || turn.kind !== 'escalation') throw new Error('expected escalation turn')
+      expect(turn.details).toBe(
+        'Guildhall is blocked because knit has uncommitted changes. Commit or stash that repo, then try again.',
       )
     } finally {
       await rm(projectPath, { recursive: true, force: true })

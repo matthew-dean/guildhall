@@ -149,9 +149,46 @@ function inferBriefContentFromAssistantText(
 
   return {
     userJob: fallbackUserJob,
-    successMetric: `Thread shows a drafted brief and actionable next step for "${taskTitle}".`,
+    successMetric: `The remaining work for "${taskTitle}" is described clearly enough to approve or narrow with one focused question.`,
     antiPatterns,
   }
+}
+
+function validateBriefContent(content: ResolvedBriefContent): string | null {
+  const normalizedUserJob = content.userJob.toLowerCase()
+  const normalizedSuccessMetric = content.successMetric.toLowerCase()
+  const agentProcessPatterns = [
+    /\blet me\b/,
+    /\bi (need|will|should|can) (explore|inspect|read|look at|check|investigate)\b/,
+    /\bi have (enough context|a clear picture)\b/,
+    /\bnow i have\b/,
+    /\bwrite the (product )?brief\b/,
+    /\bwrite the spec\b/,
+    /\bgood\b.*\buser confirmed\b/,
+    /\bi still need\b.*\b(decision|decisions|answer|answers)\b/,
+    /\blet me post\b/,
+    /\bbefore i can write the spec\b/,
+    /\bproject state and prior task history\b/,
+    /\bask the right questions\b/,
+    /\blet me do that now\b/,
+    /\bunderstand the current .+ before drafting\b/,
+    /\bbefore (drafting|writing) the spec\b/,
+    /\bafter i (explore|inspect|read|look at|check|investigate)\b/,
+  ]
+  const guildhallStatePatterns = [
+    /\bthread shows\b/,
+    /\bdrafted brief\b/,
+    /\bbrief card\b/,
+    /\bactionable next step\b/,
+    /\bproduct brief is visible\b/,
+  ]
+  if (agentProcessPatterns.some((pattern) => pattern.test(normalizedUserJob))) {
+    return 'Product brief must describe the user/product outcome, not the agent research process. Ask a focused question or draft from existing evidence instead.'
+  }
+  if (guildhallStatePatterns.some((pattern) => pattern.test(normalizedSuccessMetric))) {
+    return 'Product brief successMetric must describe the product outcome, not Guildhall UI state.'
+  }
+  return null
 }
 
 function parseBriefLikePayload(raw: unknown): BriefLikePayload | null {
@@ -196,12 +233,14 @@ function resolveBriefContent(
   const rolloutPlan = input.rolloutPlan?.trim() || nested?.rolloutPlan?.trim()
 
   if (userJob && successMetric) {
-    return {
+    const content = {
       userJob,
       successMetric,
       antiPatterns,
       ...(rolloutPlan ? { rolloutPlan } : {}),
     }
+    const validationError = validateBriefContent(content)
+    return validationError ? { error: validationError } : content
   }
 
   const inferred = inferBriefContentFromAssistantText(
@@ -211,11 +250,13 @@ function resolveBriefContent(
   if (!inferred) {
     return { error: 'Missing userJob/successMetric and could not infer a brief from metadata.last_assistant_text' }
   }
-  return {
+  const content = {
     ...inferred,
     antiPatterns: antiPatterns.length ? antiPatterns : inferred.antiPatterns,
     ...(rolloutPlan ? { rolloutPlan } : {}),
   }
+  const validationError = validateBriefContent(content)
+  return validationError ? { error: validationError } : content
 }
 
 export async function updateProductBrief(
@@ -226,6 +267,13 @@ export async function updateProductBrief(
   if (!input.userJob?.trim()) return { success: false, error: 'Missing userJob' }
   if (!input.successMetric?.trim()) return { success: false, error: 'Missing successMetric' }
   if (!input.authoredBy?.trim()) return { success: false, error: 'Missing authoredBy' }
+  const validationError = validateBriefContent({
+    userJob: input.userJob.trim(),
+    successMetric: input.successMetric.trim(),
+    antiPatterns: normalizeAntiPatternsValue(input.antiPatterns) ?? [],
+    ...(input.rolloutPlan?.trim() ? { rolloutPlan: input.rolloutPlan.trim() } : {}),
+  })
+  if (validationError) return { success: false, error: validationError }
   try {
     const raw = await fs.readFile(input.tasksPath, 'utf-8')
     const queue = TaskQueue.parse(JSON.parse(raw))

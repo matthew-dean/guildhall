@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises'
-import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { execFile, execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import type { Checkpoint, Task } from '@guildhall/core'
@@ -8,7 +9,7 @@ import {
   selectApplicableReviewRubrics,
   renderRubricSelection,
 } from '@guildhall/core'
-import { readCheckpoint } from '@guildhall/tools'
+import { checkpointIsFreshForTask, readCheckpoint } from '@guildhall/tools'
 import { latestResolvedRetryEscalationAt } from '@guildhall/tools'
 import {
   selectApplicableGuilds,
@@ -50,6 +51,7 @@ const MAX_AGENT_NOTE_CHARS = 1200
 const MAX_AGENT_NOTES = 3
 const MAX_SPEC_OVERVIEW_CHARS = 3200
 const execFileP = promisify(execFile)
+const repoFileCache = new Map<string, string[]>()
 
 const ACTIONABLE_FILE_HINT_RE = /^\s*(?:[-*]\s*|\d+\.\s*)?(edit|update|modify|create|write|verify|check|test|open|remove|delete|rename|trim|clean)\b/i
 const SHELLISH_CANDIDATE_RE = /^(pnpm|npm|yarn|bun|cd|node)\b|--|&&|\|\|/
@@ -68,9 +70,17 @@ export function resolveLikelyTaskFiles(task: Task, checkpointFilesTouched: reado
   const root = task.worktreePath?.trim() || task.projectPath?.trim() || ''
   const out: string[] = []
   const seen = new Set<string>()
+  const reviewerFeedbackText = task.notes
+    .filter((note) => note.role === 'reviewer' || note.agentId === 'reviewer-fanout' || note.agentId === 'reviewer-agent')
+    .slice(-3)
+    .map((note) => note.content)
+    .join('\n')
   const specText = `${task.title}
 ${task.description}
-${task.spec ?? ''}`
+${task.spec ?? ''}
+${task.productBrief?.userJob ?? ''}
+${task.productBrief?.successMetric ?? ''}
+${reviewerFeedbackText}`
   const commandCandidates: string[] = []
   for (const ac of task.acceptanceCriteria) {
     const command = String(ac.command ?? '')
@@ -104,21 +114,81 @@ ${task.spec ?? ''}`
         )
           .filter(isActionableFileCandidate)
           .filter((candidate) => !/\.(?:test|spec)\.ts$/i.test(candidate))
+  const referencedBacktickedTestHints = Array.from(
+    specText.matchAll(/`([^`]+\.(?:test|spec)\.ts)`/g),
+    (match) => (match[1] ?? '').trim(),
+  ).filter(isActionableFileCandidate)
+  const bareMetricHints = Array.from(
+    specText.matchAll(/(?:^|[\s(])([A-Za-z0-9_./\-[\]]+\.(?:ts|tsx|js|jsx|vue|md|json|yaml|yml))(?=$|[\s),.:;])/gm),
+    (match) => (match[1] ?? '').trim(),
+  )
+    .filter(isActionableFileCandidate)
   const preferredRootPrefix =
     rootedHints
       .map((candidate) => candidate.split('/'))
       .find((segments) => segments.length >= 2 && ['app', 'src', 'tests', 'server'].includes(segments[1] ?? ''))
       ?.[0] ?? ''
 
+  const listRepoFiles = (repoRoot: string): string[] => {
+    const normalized = path.resolve(repoRoot)
+    const cached = repoFileCache.get(normalized)
+    if (cached) return cached
+    try {
+      const stdout = execFileSync(
+        'git',
+        ['ls-files', '--cached', '--others', '--exclude-standard'],
+        { cwd: normalized, encoding: 'utf-8', maxBuffer: 1024 * 1024 },
+      )
+      const files = stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+      repoFileCache.set(normalized, files)
+      return files
+    } catch {
+      repoFileCache.set(normalized, [])
+      return []
+    }
+  }
+
+  const resolveRepoSuffixMatch = (repoRoot: string, candidate: string): string | null => {
+    const normalizedCandidate = candidate.replace(/\\/g, '/').replace(/^\.\//, '')
+    if (!normalizedCandidate) return null
+    const matches = listRepoFiles(repoRoot).filter((file) => {
+      const normalizedFile = file.replace(/\\/g, '/')
+      return (
+        normalizedFile === normalizedCandidate ||
+        normalizedFile.endsWith(`/${normalizedCandidate}`)
+      )
+    })
+    if (matches.length === 0) return null
+    const preferred = matches.find((file) => /(?:^|\/)(src|app|tests|server)\//.test(file))
+    return path.resolve(repoRoot, preferred ?? matches[0]!)
+  }
+
   const normalizeCandidate = (trimmed: string): string => {
     if (trimmed.startsWith('/')) return path.resolve(trimmed)
     const withPrefix =
       preferredRootPrefix &&
       !trimmed.startsWith(`${preferredRootPrefix}/`) &&
-      (trimmed.startsWith('tests/') || trimmed.startsWith('app/') || trimmed.startsWith('src/'))
+      (trimmed.startsWith('tests/') || trimmed.startsWith('app/') || trimmed.startsWith('src/') || trimmed.startsWith('server/'))
         ? `${preferredRootPrefix}/${trimmed}`
         : trimmed
-    return root ? path.resolve(root, withPrefix) : withPrefix
+    if (!root) return withPrefix
+    const nuxtWebPrefixed =
+      !withPrefix.startsWith('web/') &&
+      (withPrefix.startsWith('server/') || withPrefix.startsWith('app/') || withPrefix.startsWith('tests/')) &&
+      existsSync(path.join(root, 'web', withPrefix.split('/')[0]!))
+        ? `web/${withPrefix}`
+        : withPrefix
+    const rootedPath = path.resolve(root, nuxtWebPrefixed)
+    if (existsSync(rootedPath)) return rootedPath
+    return (
+      resolveRepoSuffixMatch(root, nuxtWebPrefixed) ??
+      resolveRepoSuffixMatch(root, withPrefix) ??
+      resolveRepoSuffixMatch(root, trimmed) ??
+      rootedPath
+    )
   }
 
   const push = (candidate: string) => {
@@ -134,6 +204,12 @@ ${task.spec ?? ''}`
     push(candidate)
   }
   for (const candidate of fallbackBacktickedHints) {
+    push(candidate)
+  }
+  for (const candidate of referencedBacktickedTestHints) {
+    push(candidate)
+  }
+  for (const candidate of bareMetricHints) {
     push(candidate)
   }
   for (const candidate of checkpointFilesTouched) {
@@ -163,11 +239,30 @@ function hasWorkerSelfCritiqueNote(task: Task): boolean {
 function normalizedCheckpointNextAction(task: Task, checkpoint: Checkpoint | null): string {
   const nextAction = checkpoint?.nextPlannedAction?.trim() ?? ''
   if (!nextAction) return ''
+  if (/^(?:none|null|n\/a|na|nothing)$/i.test(nextAction)) return ''
+  const hasSelfCritique = hasWorkerSelfCritiqueNote(task)
+  const hasRecordedVerificationFailure = checkpoint?.resumeContext?.verification?.some(
+    (entry) => entry.passed === false,
+  ) ?? false
   if (
-    hasWorkerSelfCritiqueNote(task) &&
+    hasSelfCritique &&
     /write or refresh self-critique note|write or refresh the self-critique note/i.test(nextAction)
   ) {
     return 'Resume from the latest self-critique and recorded verification evidence, then hand off to review.'
+  }
+  if (
+    !hasSelfCritique &&
+    /write or refresh self-critique note|write or refresh the self-critique note/i.test(nextAction) &&
+    /hand off to review|handoff to review|transition to review/i.test(nextAction)
+  ) {
+    return 'Resume from the active worktree diff, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.'
+  }
+  if (
+    hasRecordedVerificationFailure &&
+    /resume from the active worktree diff/i.test(nextAction) &&
+    /refresh focused verification/i.test(nextAction)
+  ) {
+    return 'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.'
   }
   return nextAction
 }
@@ -178,12 +273,43 @@ function renderLatestCheckpoint(task: Task, checkpoint: Checkpoint | null): stri
   const lines = [
     `**Step ${checkpoint.step}** by ${checkpoint.agentId} at ${checkpoint.writtenAt}`,
     `- Intent: ${checkpoint.intent}`,
-    `- Next planned action: ${nextAction}`,
   ]
+  if (nextAction) lines.push(`- Next planned action: ${nextAction}`)
   if (checkpoint.filesTouched.length > 0) {
     lines.push(`- Files touched: ${checkpoint.filesTouched.join(', ')}`)
   }
+  if (checkpoint.resumeContext?.verification?.length) {
+    const latestVerification = checkpoint.resumeContext.verification[checkpoint.resumeContext.verification.length - 1]
+    lines.push(
+      `- Latest authoritative verification: ${latestVerification.command} (${latestVerification.passed ? 'passed' : 'failed'})${latestVerification.summary ? ` — ${latestVerification.summary}` : ''}`,
+    )
+  }
+  if (checkpoint.resumeContext?.companionFiles?.length) {
+    lines.push(`- Companion files: ${checkpoint.resumeContext.companionFiles.join(', ')}`)
+  }
+  if (checkpoint.resumeContext?.workingHypothesis?.trim()) {
+    lines.push(`- Working hypothesis: ${checkpoint.resumeContext.workingHypothesis.trim()}`)
+  }
+  if (checkpoint.resumeContext?.safeNextMutationSurface?.length) {
+    lines.push(`- Safe next mutation surface: ${checkpoint.resumeContext.safeNextMutationSurface.join(', ')}`)
+  }
   return lines.join('\n')
+}
+
+function shouldUseCheckpointForTask(task: Task, checkpoint: Checkpoint | null): checkpoint is Checkpoint {
+  if (!checkpoint) return false
+  if (checkpointIsFreshForTask(task, checkpoint)) return true
+  return task.notes.some((note) => {
+    if (note.role !== 'recovery') return false
+    const noteAt = Date.parse(note.timestamp)
+    const checkpointAt = Date.parse(checkpoint.writtenAt)
+    return (
+      Number.isFinite(noteAt) &&
+      Number.isFinite(checkpointAt) &&
+      noteAt >= checkpointAt &&
+      /latest recovery checkpoint|latest durable checkpoint/i.test(note.content)
+    )
+  })
 }
 
 function renderResolvedEscalationGuidance(task: Task): string {
@@ -441,7 +567,9 @@ export async function buildContext(
     loadDesignSystem(memoryDir).catch(() => undefined),
     summarizeActiveWorktree(task),
     task.status === 'in_progress'
-      ? readCheckpoint(memoryDir, task.id).catch(() => null)
+      ? readCheckpoint(memoryDir, task.id)
+          .then((checkpoint) => shouldUseCheckpointForTask(task, checkpoint) ? checkpoint : null)
+          .catch(() => null)
       : Promise.resolve(null),
   ])
   const reviewPacket =

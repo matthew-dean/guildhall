@@ -3,6 +3,9 @@
  * Upstream reference: openharness tests for engine/query.py.
  */
 
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 
@@ -475,6 +478,12 @@ Minimum-scope check:
 - Files changed: /workspace/project/packages/converter/src/index.ts
 - Smallest useful change?: yes — the change stayed in one file.
 - Anything to revert before review?: none
+
+Review proof packet:
+- Changed files / diff scope: /workspace/project/packages/converter/src/index.ts
+- Verification commands passed: pnpm test passed
+- Working hypothesis at handoff: The intended file change is complete and verified.
+- Known gaps / follow-up: none
 
 Out-of-scope changes introduced: none
 Uncertainties: none`),
@@ -1090,7 +1099,7 @@ describe('runQuery — unknown tool + invalid input', () => {
 
   it('blocks worker-style review handoff without implementation evidence', async () => {
     const registry = new ToolRegistry()
-    let called = false
+    let reviewCalls = 0
     registry.register(
       defineTool({
         name: 'update-task',
@@ -1107,7 +1116,7 @@ describe('runQuery — unknown tool + invalid input', () => {
       }),
     )
     const client = new ScriptedApiClient([
-      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'review' }) },
+      { message: assistantToolUse('update-task', { tasksPath: '/workspace/project/memory/TASKS.json', taskId: 'task-1', status: 'review' }) },
       { message: assistantText('ok') },
     ])
     const messages: ConversationMessage[] = [
@@ -1124,12 +1133,16 @@ describe('runQuery — unknown tool + invalid input', () => {
           systemPrompt: '',
           maxTokens: 256,
           maxTurns: 4,
+          toolMetadata: { current_task_id: 'task-1' },
         },
         messages,
       ),
     )
-    const completed = events.find((e) => e.type === 'tool_execution_completed')
-    expect(called).toBe(false)
+    const completed = events.find((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.output.includes('Blocked transition to review'),
+    )
+    expect(reviewCalls).toBe(0)
     expect(completed?.type === 'tool_execution_completed' ? completed.is_error : false).toBe(true)
     expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('Blocked transition to review')
   })
@@ -1216,6 +1229,12 @@ Minimum-scope check:
 - Smallest useful change?: yes — no extra files changed.
 - Anything to revert before review?: none
 
+Review proof packet:
+- Changed files / diff scope: /workspace/project/packages/converter/src/index.ts
+- Verification commands passed: pnpm test passed
+- Working hypothesis at handoff: The implementation file was inspected and verified.
+- Known gaps / follow-up: none
+
 Out-of-scope changes introduced: none
 Uncertainties: none`,
             },
@@ -1245,6 +1264,271 @@ Uncertainties: none`,
         messages,
       ),
     )
+    const updateCompleted = events
+      .filter((e) => e.type === 'tool_execution_completed')
+      .at(-1)
+    expect(called).toBe(true)
+    expect(updateCompleted?.type === 'tool_execution_completed' ? updateCompleted.is_error : true).toBe(false)
+    expect(updateCompleted?.type === 'tool_execution_completed' ? updateCompleted.output : '').toBe('updated')
+  })
+
+  it('blocks review handoff when authoritative verification commands have not been durably proven', async () => {
+    const registry = new ToolRegistry()
+    let reviewCalls = 0
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'export const x = 1', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async (input) => ({
+          output: `${input.command} ok`,
+          is_error: false,
+          metadata: {
+            success: true,
+            exitCode: 0,
+            executedCommand: input.command,
+            usedAuthoritativeCommand: false,
+          },
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string(),
+          taskId: z.string(),
+          status: z.string(),
+        }),
+        execute: async (input) => {
+          if (input.status === 'review') reviewCalls += 1
+          return { output: 'updated', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'read-1',
+              name: 'read-file',
+              input: { filePath: '/workspace/project/knit/web/app/components/organisms/VersionHistoryDialog.vue' },
+            },
+          ],
+        },
+      },
+      {
+        message: assistantToolUse(
+          'shell',
+          {
+            command: 'git status --short',
+          },
+          'shell-non-authoritative',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-verify',
+            status: 'review',
+            note: {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: `**Self-critique:**
+For each acceptance criterion:
+- [ac-1]: Met — Added the missing diff action.
+- [ac-7]: Met — Typecheck passes.
+- [ac-8]: Met — Build succeeds.
+
+Minimum-scope check:
+- Files changed: /workspace/project/knit/web/app/components/organisms/VersionHistoryDialog.vue
+- Smallest useful change?: yes
+- Anything to revert before review?: none
+
+Review proof packet:
+- Changed files / diff scope: /workspace/project/knit/web/app/components/organisms/VersionHistoryDialog.vue
+- Verification commands passed: pnpm --filter @knit-app typecheck passed; pnpm --filter @knit-app build passed
+- Working hypothesis at handoff: The diff action work is complete and both authoritative commands passed.
+- Known gaps / follow-up: none
+
+Out-of-scope changes introduced: none
+Uncertainties: none`,
+            },
+          },
+          'update-verify',
+        ),
+      },
+      { message: assistantText('ok') },
+    ])
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_task_id: 'task-verify',
+            current_task_verification_commands: [
+              'pnpm --filter @knit-app typecheck',
+              'pnpm --filter @knit-app build',
+            ],
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    const completed = events.find((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.output.includes('durable proof'),
+    )
+    expect(reviewCalls).toBe(0)
+    expect(completed?.type === 'tool_execution_completed' ? completed.is_error : false).toBe(true)
+    expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('durable proof')
+    expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('pnpm --filter @knit-app typecheck')
+    expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('pnpm --filter @knit-app build')
+  })
+
+  it('allows review handoff when the self-critique uses plain AC lines and a bold minimum-scope heading', async () => {
+    const registry = new ToolRegistry()
+    let called = false
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'export const x = 1', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'tests passed', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string(),
+          taskId: z.string(),
+          status: z.string(),
+        }),
+        execute: async () => {
+          called = true
+          return { output: 'updated', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'in_progress' }, 'start-plain-ac') },
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'read-plain-ac',
+              name: 'read-file',
+              input: { filePath: '/workspace/project/frontend/app/pages/login.vue' },
+            },
+          ],
+        },
+      },
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'shell-plain-ac',
+              name: 'shell',
+              input: { command: 'pnpm build' },
+            },
+          ],
+        },
+      },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-1',
+            status: 'review',
+            note: {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: `**Self-critique:**
+
+AC-1 (Registration): Met - /register calls supabase.auth.signUp(), redirects to /register/success on success.
+AC-2 (Email confirmation): Met - /auth/confirm reads token from query params, calls verifyOtp() with type email, shows success, redirects to /login after 1.5s.
+
+**Minimum-scope check:**
+- Files changed: none - all implementation was already present in the worktree from the previous agent session.
+- Smallest useful change?: N/A - no changes needed.
+- Anything to revert before review?: none.
+
+**Review proof packet:**
+- Changed files / diff scope: none - existing worktree implementation verified.
+- Verification commands passed: pnpm build passed.
+- Working hypothesis at handoff: Auth source inspection and build verification support review.
+- Known gaps / follow-up: none.
+
+**Out-of-scope changes introduced:** none.
+
+**Uncertainties:** none - build passes, all criteria verified against source.`,
+            },
+          },
+          'update-plain-ac',
+        ),
+      },
+      { message: assistantText('ok') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 6,
+          toolMetadata: {},
+        },
+        messages,
+      ),
+    )
+
     const updateCompleted = events
       .filter((e) => e.type === 'tool_execution_completed')
       .at(-1)
@@ -1326,6 +1610,109 @@ Uncertainties: none`,
     expect(updateCompleted?.type === 'tool_execution_completed' ? updateCompleted.output : '').toContain('structured self-critique')
   })
 
+  it('blocks review handoff when the self-critique omits the review proof packet', async () => {
+    const registry = new ToolRegistry()
+    let reviewCalls = 0
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'export const x = 1', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'tests passed', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string(),
+          taskId: z.string(),
+          status: z.string(),
+          note: z.object({
+            agentId: z.string(),
+            role: z.string(),
+            content: z.string(),
+          }).optional(),
+        }),
+        execute: async (input) => {
+          if (input.status === 'review') reviewCalls += 1
+          return { output: 'updated', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'in_progress' }, 'start-proof') },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/src/index.ts' },
+          'read-proof',
+        ),
+      },
+      { message: assistantToolUse('shell', { command: 'pnpm test' }, 'shell-proof') },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-1',
+            status: 'review',
+            note: {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: `**Self-critique:**
+For each acceptance criterion:
+- [ac-1]: Met — The implementation file was inspected and updated appropriately.
+
+Minimum-scope check:
+- Files changed: /workspace/project/packages/converter/src/index.ts
+- Smallest useful change?: yes — no extra files changed.
+- Anything to revert before review?: none
+
+Out-of-scope changes introduced: none
+Uncertainties: none`,
+            },
+          },
+          'update-proof',
+        ),
+      },
+      { message: assistantText('ok') },
+    ])
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 6,
+          toolMetadata: {},
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+    const completed = events.find((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.output.includes('review proof packet'),
+    )
+    expect(reviewCalls).toBe(0)
+    expect(completed?.type === 'tool_execution_completed' ? completed.is_error : false).toBe(true)
+    expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('review proof packet')
+  })
+
   it('does not allow stale handoff evidence from a previous task', async () => {
     const registry = new ToolRegistry()
     let reviewCalls = 0
@@ -1393,6 +1780,12 @@ Minimum-scope check:
 - Files changed: /workspace/project/packages/converter/src/index.ts
 - Smallest useful change?: yes — only the intended file was touched.
 - Anything to revert before review?: none
+
+Review proof packet:
+- Changed files / diff scope: /workspace/project/packages/converter/src/index.ts
+- Verification commands passed: pnpm test passed
+- Working hypothesis at handoff: The implementation change is verified for task-1.
+- Known gaps / follow-up: none
 
 Out-of-scope changes introduced: none
 Uncertainties: none`,
@@ -1495,13 +1888,18 @@ Uncertainties: none`,
               agentId: 'worker-agent',
               role: 'worker',
               content: `**Self-critique:**
-For each acceptance criterion:
-- [ac-1]: Met — The file change is complete.
+AC-1 (Converter behavior): Met — The file change is complete.
 
-Minimum-scope check:
+**Minimal-scope check:**
 - Files changed: /workspace/project/packages/converter/src/index.ts
 - Smallest useful change?: yes — the diff stays local to the intended file.
 - Anything to revert before review?: none
+
+**Review proof packet:**
+- Changed files / diff scope: /workspace/project/packages/converter/src/index.ts
+- Verification commands passed: pnpm test passed
+- Working hypothesis at handoff: The converter change is complete and verified.
+- Known gaps / follow-up: none
 
 Out-of-scope changes introduced: none
 Uncertainties: none`,
@@ -1525,6 +1923,81 @@ Uncertainties: none`,
           maxTokens: 256,
           maxTurns: 8,
           toolMetadata: {},
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+    const completed = events.filter((e) => e.type === 'tool_execution_completed')
+    expect(reviewCalls).toBe(1)
+    expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.is_error : true).toBe(false)
+    expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.output : '').toBe('updated')
+  })
+
+  it('allows review handoff from checkpoint-scoped implementation evidence after a self-critique note is persisted', async () => {
+    const registry = new ToolRegistry()
+    let reviewCalls = 0
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string(),
+          taskId: z.string(),
+          status: z.string(),
+          note: z.object({
+            agentId: z.string(),
+            role: z.string(),
+            content: z.string(),
+          }).optional(),
+        }),
+        execute: async (input) => {
+          if (input.status === 'review') reviewCalls += 1
+          return {
+            output: 'updated',
+            is_error: false,
+            metadata: { success: true, taskId: input.taskId },
+          }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-1',
+            status: 'in_progress',
+            note: {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: `**Self-critique:**\n\nAC-1 (Registration): Met — /register works.\n\nMinimum-scope check:\nFiles changed: frontend/app/pages/register.vue\nSmallest useful change?: yes — checkpoint already captures the touched auth files.\n\nReview proof packet:\n- Changed files / diff scope: frontend/app/pages/register.vue\n- Verification commands passed: pnpm build passed\n- Working hypothesis at handoff: The checkpointed auth file is verified and ready for review.\n- Known gaps / follow-up: none\n\nOut-of-scope changes introduced: none.\nUncertainties: none.`,
+            },
+          },
+          'critique-checkpoint',
+        ),
+      },
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'review' }, 'review-checkpoint') },
+      { message: assistantText('ok') },
+    ])
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 6,
+          toolMetadata: {
+            current_task_id: 'task-1',
+            current_agent_id: 'worker-agent',
+            current_task_checkpoint_files_touched: [
+              'frontend/app/composables/useSupabase.ts',
+              'frontend/app/pages/register.vue',
+            ],
+          },
         },
         [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
       ),
@@ -1607,6 +2080,12 @@ Minimum-scope check:
 - Smallest useful change?: yes — the change remains narrowly scoped.
 - Anything to revert before review?: none
 
+Review proof packet:
+- Changed files / diff scope: /workspace/project/packages/converter/src/index.ts
+- Verification commands passed: pnpm test passed
+- Working hypothesis at handoff: The implementation change is verified and ready for review.
+- Known gaps / follow-up: none
+
 Out-of-scope changes introduced: none
 Uncertainties: none`,
             },
@@ -1633,6 +2112,83 @@ Uncertainties: none`,
         [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
       ),
     )
+    const completed = events.filter((e) => e.type === 'tool_execution_completed')
+    expect(reviewCalls).toBe(1)
+    expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.is_error : true).toBe(false)
+    expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.output : '').toBe('updated')
+  })
+
+  it('allows review handoff for a resumed task when authoritative verification only exists in durable checkpoint history', async () => {
+    const registry = new ToolRegistry()
+    let reviewCalls = 0
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string().optional(),
+          taskId: z.string(),
+          status: z.string(),
+        }),
+        execute: async (input) => {
+          if (input.status === 'review') reviewCalls += 1
+          return {
+            output: 'updated',
+            is_error: false,
+            metadata: { success: true, taskId: input.taskId },
+          }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'review' }, 'review-1') },
+      { message: assistantText('ok') },
+    ])
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_task_id: 'task-1',
+            current_task_has_review_proof_packet: true,
+            review_handoff_evidence: {
+              taskId: 'task-1',
+              inspectedImplementationFile: false,
+              changedOrVerified: false,
+            },
+            current_task_checkpoint_files_touched: [
+              'frontend/app/pages/register.vue',
+              'frontend/app/pages/register/success.vue',
+            ],
+            current_task_verification_commands: [
+              'pnpm build',
+              'tsc --noEmit --project frontend/tsconfig.json',
+            ],
+            current_task_verification_history: [
+              {
+                command: 'pnpm build',
+                passed: true,
+                observedAt: '2026-05-13T19:41:01.000Z',
+              },
+              {
+                command: 'tsc --noEmit --project frontend/tsconfig.json',
+                passed: true,
+                observedAt: '2026-05-13T19:41:12.000Z',
+              },
+            ],
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
     const completed = events.filter((e) => e.type === 'tool_execution_completed')
     expect(reviewCalls).toBe(1)
     expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.is_error : true).toBe(false)
@@ -1707,7 +2263,13 @@ Uncertainties: none`,
 - Minimum-scope check:
   - Files changed: /workspace/project/packages/converter/src/index.ts
   - Smallest useful change?: yes
-  - Anything to revert before review?: none`,
+  - Anything to revert before review?: none
+
+Review proof packet:
+- Changed files / diff scope: /workspace/project/packages/converter/src/index.ts
+- Verification commands passed: pnpm lint passed
+- Working hypothesis at handoff: The file change is complete and lint passed.
+- Known gaps / follow-up: none`,
             },
           },
           'critique-1',
@@ -1743,6 +2305,76 @@ Uncertainties: none`,
       e.message.includes('demanding one mutation-or-escalation tool call next'),
     )).toBe(false)
     expect(events.at(-1)?.type).toBe('assistant_turn_complete')
+  })
+
+  it('turns a verification-backed mutation checkpoint into a handoff checkpoint after all commands pass', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => false,
+        execute: async (input) => ({
+          output: 'Shell command succeeded (exit 0). Treat this command as PASSED.',
+          is_error: false,
+          metadata: {
+            success: true,
+            output: 'lint passed with warnings',
+            executedCommand: input.command,
+            usedAuthoritativeCommand: true,
+          },
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'source', is_error: false }),
+      }),
+    )
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+    const toolMetadata: Record<string, unknown> = {
+      current_agent_id: 'worker-agent',
+      current_task_id: 'task-1',
+      current_task_checkpoint_next_action:
+        'Rerun the focused verification command and fix whatever still fails before you write the structured self-critique.',
+      current_task_checkpoint_files_touched: ['src/index.ts'],
+      current_task_verification_commands: ['pnpm lint'],
+    }
+
+    await drain(
+      runQuery(
+        {
+          apiClient: new ScriptedApiClient([
+            { message: assistantToolUse('shell', { command: 'pnpm lint' }, 'shell-1') },
+            { message: assistantToolUse('read-file', { filePath: '/workspace/project/src/index.ts' }, 'read-1') },
+            { message: assistantText('done') },
+          ]),
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          noProgressToolNames: ['update-task'],
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata,
+        },
+        messages,
+      ),
+    )
+
+    expect(toolMetadata.current_task_checkpoint_next_action).toBe(
+      'All authoritative verification commands have passed. Persist the structured self-critique note, then transition the task to review.',
+    )
   })
 
   it('replaces relative project paths for task-state tools', async () => {
@@ -1902,6 +2534,702 @@ Uncertainties: none`,
     expect(observedMemoryDir).toBe('/workspace/project/memory')
   })
 
+  it('hydrates and normalizes log-decision tool input', async () => {
+    const registry = new ToolRegistry()
+    let observedDecisionsPath = ''
+    let observedEntry: Record<string, unknown> | null = null
+    registry.register(
+      defineTool({
+        name: 'log-decision',
+        description: '',
+        inputSchema: z.object({
+          decisionsPath: z.string(),
+          entry: z.object({
+            id: z.string(),
+            timestamp: z.string(),
+            agentId: z.string(),
+            domain: z.string(),
+            taskId: z.string().optional(),
+            title: z.string(),
+            context: z.string(),
+            decision: z.string(),
+            consequences: z.string(),
+            overridesSoftGate: z.string().optional(),
+          }),
+        }),
+        execute: async (input) => {
+          observedDecisionsPath = input.decisionsPath
+          observedEntry = input.entry as unknown as Record<string, unknown>
+          return { output: 'logged', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse('log-decision', {
+          entry: JSON.stringify({
+            decision: 'Approve mobile real-device testing task as-is',
+            consequences: 'Worker can continue with testing and fixes.',
+          }),
+        }),
+      },
+      { message: assistantText('ok') },
+    ])
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_agent_id: 'coordinator-knit',
+            current_task_id: 'task-123',
+            current_task_title: 'Mobile: test on real device (Safari iOS, Chrome Android)',
+            current_task_domain: 'knit',
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    expect(observedDecisionsPath).toBe('/workspace/project/memory/DECISIONS.md')
+    expect(observedEntry).not.toBeNull()
+    expect(observedEntry?.['decision']).toBe('Approve mobile real-device testing task as-is')
+    expect(observedEntry?.['consequences']).toBe('Worker can continue with testing and fixes.')
+    expect(observedEntry?.['agentId']).toBe('coordinator-knit')
+    expect(observedEntry?.['taskId']).toBe('task-123')
+    expect(observedEntry?.['domain']).toBe('knit')
+    expect(observedEntry?.['title']).toBe('Coordinator decision for Mobile: test on real device (Safari iOS, Chrome Android)')
+    expect(observedEntry?.['context']).toContain('Task: Mobile: test on real device (Safari iOS, Chrome Android)')
+    expect(typeof observedEntry?.['timestamp']).toBe('string')
+    expect(typeof observedEntry?.['id']).toBe('string')
+  })
+
+  it('hydrates and normalizes log-progress tool input', async () => {
+    const registry = new ToolRegistry()
+    let observedProgressPath = ''
+    let observedEntry: Record<string, unknown> | null = null
+    registry.register(
+      defineTool({
+        name: 'log-progress',
+        description: '',
+        inputSchema: z.object({
+          progressPath: z.string(),
+          entry: z.object({
+            timestamp: z.string(),
+            agentId: z.string(),
+            domain: z.string(),
+            taskId: z.string().optional(),
+            summary: z.string(),
+            type: z.enum(['heartbeat', 'milestone', 'blocked', 'escalation']),
+          }),
+        }),
+        execute: async (input) => {
+          observedProgressPath = input.progressPath
+          observedEntry = input.entry as unknown as Record<string, unknown>
+          return { output: 'logged', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse('log-progress', {
+          entry: JSON.stringify({
+            summary: 'Coordinator clarified the next Looma decision.',
+            type: 'milestone',
+          }),
+        }),
+      },
+      { message: assistantText('ok') },
+    ])
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_agent_id: 'coordinator-knit',
+            current_task_id: 'task-456',
+            current_task_domain: 'knit',
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    expect(observedProgressPath).toBe('/workspace/project/memory/PROGRESS.md')
+    expect(observedEntry).toMatchObject({
+      agentId: 'coordinator-knit',
+      taskId: 'task-456',
+      domain: 'knit',
+      summary: 'Coordinator clarified the next Looma decision.',
+      type: 'milestone',
+    })
+    expect(typeof observedEntry?.['timestamp']).toBe('string')
+  })
+
+  it('hydrates and normalizes raise-escalation tool input', async () => {
+    const registry = new ToolRegistry()
+    let observedInput: Record<string, unknown> | null = null
+    registry.register(
+      defineTool({
+        name: 'raise-escalation',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string(),
+          progressPath: z.string(),
+          taskId: z.string(),
+          agentId: z.string(),
+          reason: z.string(),
+          summary: z.string(),
+          details: z.string().optional(),
+        }),
+        execute: async (input) => {
+          observedInput = input as unknown as Record<string, unknown>
+          return { output: 'raised', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse('raise-escalation', {
+          reason: 'decision_required',
+          summary: 'Need a clear product call before continuing.',
+          details: {
+            options: ['ship only bugs', 'fix bugs and polish'],
+            source: 'live Looma run',
+          },
+        }),
+      },
+      { message: assistantText('ok') },
+    ])
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_agent_id: 'coordinator-knit',
+            current_task_id: 'task-789',
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    expect(observedInput).toMatchObject({
+      tasksPath: '/workspace/project/memory/TASKS.json',
+      progressPath: '/workspace/project/memory/PROGRESS.md',
+      taskId: 'task-789',
+      agentId: 'coordinator-knit',
+      reason: 'decision_required',
+      summary: 'Need a clear product call before continuing.',
+    })
+    expect(observedInput?.['details']).toContain('"source": "live Looma run"')
+  })
+
+  it('allows review handoff for verification-only tasks after durable verification evidence and self-critique', async () => {
+    const registry = new ToolRegistry()
+    let updateCalls = 0
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: 'persists task state',
+        inputSchema: z.object({
+          tasksPath: z.string().optional(),
+          taskId: z.string(),
+          status: z.string(),
+        }),
+        execute: async () => {
+          updateCalls += 1
+          return { output: 'task updated', is_error: false, metadata: { taskId: 'task-mobile' } }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse('update-task', {
+          taskId: 'task-mobile',
+          status: 'review',
+        }),
+      },
+      { message: assistantText('done') },
+    ])
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_task_id: 'task-mobile',
+            current_task_title: 'Mobile: test on real device (Safari iOS, Chrome Android)',
+            current_task_spec_excerpt: 'Manual testing only. Visual/functional correctness only.',
+            current_task_has_review_proof_packet: true,
+            review_handoff_evidence: {
+              taskId: 'task-mobile',
+              inspectedImplementationFile: false,
+              changedOrVerified: true,
+            },
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    expect(updateCalls).toBe(1)
+    expect(events.some((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.output === 'task updated',
+    )).toBe(true)
+  })
+
+  it('allows review handoff only after the authoritative verification command set succeeds', async () => {
+    const registry = new ToolRegistry()
+    let updateCalls = 0
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'template contents', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async (input) => ({
+          output: `${input.command} ok`,
+          is_error: false,
+          metadata: {
+            success: true,
+            exitCode: 0,
+            executedCommand: input.command,
+            usedAuthoritativeCommand: true,
+          },
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string(),
+          taskId: z.string(),
+          status: z.string(),
+        }),
+        execute: async () => {
+          updateCalls += 1
+          return { output: 'updated', is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'read-1',
+              name: 'read-file',
+              input: { filePath: '/workspace/project/knit/web/app/components/organisms/VersionHistoryDialog.vue' },
+            },
+          ],
+        },
+      },
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'shell-1',
+              name: 'shell',
+              input: { command: 'pnpm --filter @knit-app typecheck' },
+            },
+          ],
+        },
+      },
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'shell-2',
+              name: 'shell',
+              input: { command: 'pnpm --filter @knit-app build' },
+            },
+          ],
+        },
+      },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-verify',
+            status: 'review',
+            note: {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: `**Self-critique:**
+For each acceptance criterion:
+- [ac-1]: Met — Added the missing diff action.
+- [ac-7]: Met — Typecheck passes.
+- [ac-8]: Met — Build succeeds.
+
+Minimum-scope check:
+- Files changed: /workspace/project/knit/web/app/components/organisms/VersionHistoryDialog.vue
+- Smallest useful change?: yes
+- Anything to revert before review?: none
+
+Review proof packet:
+- Changed files / diff scope: /workspace/project/knit/web/app/components/organisms/VersionHistoryDialog.vue
+- Verification commands passed: pnpm --filter @knit-app typecheck passed; pnpm --filter @knit-app build passed
+- Working hypothesis at handoff: The diff action work is complete and both authoritative commands passed.
+- Known gaps / follow-up: none
+
+Out-of-scope changes introduced: none
+Uncertainties: none`,
+            },
+          },
+          'update-verify',
+        ),
+      },
+      { message: assistantText('ok') },
+    ])
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 8,
+          toolMetadata: {
+            current_task_id: 'task-verify',
+            current_task_verification_commands: [
+              'pnpm --filter @knit-app typecheck',
+              'pnpm --filter @knit-app build',
+            ],
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    expect(updateCalls).toBe(1)
+    expect(events.some((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.output === 'updated',
+    )).toBe(true)
+  })
+
+  it('treats an authority-mapped shell command as the canonical verification command for resumed handoff', async () => {
+    const registry = new ToolRegistry()
+    let updateCalls = 0
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async (input) => ({
+          output: `${input.command} ok`,
+          is_error: false,
+          metadata: {
+            success: true,
+            exitCode: 0,
+            executedCommand: 'tsc --noEmit --project frontend/tsconfig.json',
+            usedAuthoritativeCommand: true,
+          },
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string().optional(),
+          taskId: z.string(),
+          status: z.string(),
+          note: z.object({
+            agentId: z.string(),
+            role: z.string(),
+            content: z.string(),
+          }).optional(),
+        }),
+        execute: async (input) => {
+          if (input.status === 'review') updateCalls += 1
+          return { output: 'updated', is_error: false, metadata: { taskId: input.taskId } }
+        },
+      }),
+    )
+
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('shell', { command: 'tsc --noEmit' }, 'shell-1') },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-verify-alias',
+            status: 'review',
+            note: {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: `**Self-critique:**
+For each acceptance criterion:
+- [ac-1]: Met — Verification passed.
+
+Minimum-scope check:
+- Files changed: /workspace/project/frontend/app/pages/register.vue
+- Smallest useful change?: yes
+- Anything to revert before review?: none
+
+Review proof packet:
+- Changed files / diff scope: /workspace/project/frontend/app/pages/register.vue
+- Verification commands passed: tsc --noEmit --project frontend/tsconfig.json passed
+- Working hypothesis at handoff: The authority-mapped verification command passed for the changed register page.
+- Known gaps / follow-up: none`,
+            },
+          },
+          'review-1',
+        ),
+      },
+      { message: assistantText('ok') },
+    ])
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 6,
+          toolMetadata: {
+            current_task_id: 'task-verify-alias',
+            current_task_has_review_proof_packet: true,
+            review_handoff_evidence: {
+              taskId: 'task-verify-alias',
+              inspectedImplementationFile: false,
+              changedOrVerified: false,
+            },
+            current_task_checkpoint_files_touched: [
+              'frontend/app/pages/register.vue',
+            ],
+            current_task_verification_commands: [
+              'tsc --noEmit --project frontend/tsconfig.json',
+            ],
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    expect(updateCalls).toBe(1)
+    expect(events.some((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.output === 'updated',
+    )).toBe(true)
+  })
+
+  it('blocks review handoff when changed task files introduce a missing local import path', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'guildhall-missing-import-'))
+    try {
+      const taskRoot = join(tempRoot, 'knit')
+      const sourceFile = join(taskRoot, 'web', 'app', 'components', 'organisms', 'VersionHistoryDialog.vue')
+      mkdirSync(join(taskRoot, 'web', 'app', 'components', 'organisms'), { recursive: true })
+      writeFileSync(
+        sourceFile,
+        [
+          "<script setup lang=\"ts\">",
+          "import LoomaButton from '@/components/atoms/LoomaButton.vue'",
+          '</script>',
+          '',
+        ].join('\n'),
+      )
+
+      const registry = new ToolRegistry()
+      let updateCalls = 0
+      registry.register(
+        defineTool({
+          name: 'read-file',
+          description: '',
+          inputSchema: z.object({ filePath: z.string() }),
+          isReadOnly: () => true,
+          execute: async () => ({ output: 'source read', is_error: false }),
+        }),
+      )
+      registry.register(
+        defineTool({
+          name: 'shell',
+          description: '',
+          inputSchema: z.object({ command: z.string() }),
+          isReadOnly: () => true,
+          execute: async (input) => ({
+            output: `${input.command} ok`,
+            is_error: false,
+            metadata: {
+              success: true,
+              exitCode: 0,
+              executedCommand: input.command,
+              usedAuthoritativeCommand: true,
+            },
+          }),
+        }),
+      )
+      registry.register(
+        defineTool({
+          name: 'update-task',
+          description: '',
+          inputSchema: z.object({
+            tasksPath: z.string(),
+            taskId: z.string(),
+            status: z.string(),
+          }),
+          execute: async () => {
+            updateCalls += 1
+            return { output: 'updated', is_error: false }
+          },
+        }),
+      )
+      const client = new ScriptedApiClient([
+        {
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'read-1',
+                name: 'read-file',
+                input: { filePath: sourceFile },
+              },
+            ],
+          },
+        },
+        {
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'shell-1',
+                name: 'shell',
+                input: { command: 'pnpm --filter @knit-app typecheck' },
+              },
+            ],
+          },
+        },
+        {
+          message: assistantToolUse(
+            'update-task',
+            {
+              taskId: 'task-import-189j8he',
+              status: 'review',
+              note: {
+                agentId: 'worker-agent',
+                role: 'self-critique',
+                content: `**Self-critique:**
+For each acceptance criterion:
+- [ac-1]: Met — Added the version diff controls.
+- [ac-7]: Met — Typecheck passes.
+
+Minimum-scope check:
+- Files changed: ${sourceFile}
+- Smallest useful change?: yes
+- Anything to revert before review?: none
+
+Out-of-scope changes introduced: none
+Uncertainties: none`,
+              },
+            },
+            'update-missing-import',
+          ),
+        },
+        { message: assistantText('ok') },
+      ])
+
+      const events = await drain(
+        runQuery(
+          {
+            apiClient: client,
+            toolRegistry: registry,
+            permissionChecker: autoChecker(),
+            cwd: tempRoot,
+            model: 'test',
+            systemPrompt: '',
+            maxTokens: 256,
+            maxTurns: 8,
+            toolMetadata: {
+              current_task_id: 'task-import-189j8he',
+              current_task_worktree_path: taskRoot,
+              current_task_project_path: taskRoot,
+              current_task_checkpoint_files_touched: [
+                'web/app/components/organisms/VersionHistoryDialog.vue',
+              ],
+              current_task_verification_commands: [
+                'pnpm --filter @knit-app typecheck',
+              ],
+            },
+          },
+          [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+        ),
+      )
+
+      const blocked = events.find((e) =>
+        e.type === 'tool_execution_completed' &&
+        e.output.includes('Missing import: "@/components/atoms/LoomaButton.vue"'),
+      )
+      expect(updateCalls).toBe(0)
+      expect(blocked?.type === 'tool_execution_completed' ? blocked.is_error : false).toBe(true)
+      expect(blocked?.type === 'tool_execution_completed' ? blocked.output : '').toContain('VersionHistoryDialog.vue')
+      expect(blocked?.type === 'tool_execution_completed' ? blocked.output : '').toContain('LoomaButton.vue')
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true })
+    }
+  })
+
   it('nudges the agent after repeating the same failed tool call', async () => {
     const registry = new ToolRegistry()
     registry.register(
@@ -1997,7 +3325,7 @@ Uncertainties: none`,
     )).toBe(true)
   })
 
-  it('refuses more read-only exploration after the exact likely target file is confirmed missing', async () => {
+  it('requires parent-path validation after a likely target file is confirmed missing', async () => {
     const registry = new ToolRegistry()
     registry.register(
       defineTool({
@@ -2054,14 +3382,14 @@ Uncertainties: none`,
 
     expect(events.some(e =>
       e.type === 'status' &&
-      e.message.includes('confirmed the exact likely target file is missing'),
+      e.message.includes('requiring parent-path validation'),
     )).toBe(true)
     expect(messages.some(message =>
       message.role === 'user' &&
       message.content.some(block =>
         block.type === 'tool_result' &&
         block.is_error === true &&
-        String(block.content).includes(`The likely target file does not exist yet at ${targetPath}`),
+        String(block.content).includes('Create that file only if its parent directory exists and matches the project structure'),
       ),
     )).toBe(true)
   })
@@ -2612,6 +3940,501 @@ Uncertainties: none`,
     )).toBe(true)
   })
 
+  it('treats recovery checkpoints that say to refresh self-critique and hand off to review as handoff checkpoints, not exploratory ones', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async ({ filePath }) => ({
+          output: `contents of ${String(filePath)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          taskId: z.string(),
+          status: z.string(),
+          note: z.object({
+            agentId: z.string(),
+            role: z.string(),
+            content: z.string(),
+          }).optional(),
+        }),
+        execute: async () => ({
+          output: 'updated',
+          is_error: false,
+        }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/src/commentInserter.ts' },
+          'toolu_1',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-012',
+            status: 'in_progress',
+            note: {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: '**Self-critique:** all acceptance criteria still hold.',
+            },
+          },
+          'toolu_2',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_id: 'task-012',
+            current_task_checkpoint_next_action: 'Resume from the recorded verification evidence, write or refresh the self-critique note, then hand off to review.',
+            current_task_checkpoint_files_touched: [
+              'packages/converter/src/features/functionDeclaration.ts',
+              'packages/converter/src/features/variableDeclaration.ts',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(events.some((e) =>
+      e.type === 'status' &&
+      e.message.includes('demanding one self-critique persistence tool call or escalation next'),
+    )).toBe(true)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'text' &&
+        block.text.includes('Call update-task with { taskId: "task-012"'),
+      ),
+    )).toBe(true)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'text' &&
+        block.text.includes('If you must read first, only use read-file on the checkpoint-touched files'),
+      ),
+    )).toBe(false)
+  })
+
+  it('treats implementation-focused recovery checkpoints as mutation checkpoints even if they mention self-critique later', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async ({ filePath }) => ({
+          output: `contents of ${String(filePath)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/src/jsdocHelpers.ts' },
+          'toolu_mutation_cp',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 3,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_id: 'task-012',
+            current_task_checkpoint_next_action:
+              'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_files_touched: [
+              'packages/converter/src/jsdocHelpers.ts',
+              'packages/converter/src/typescriptToJsdoc.ts',
+            ],
+            current_task_verification_commands: [
+              'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+              'cd packages/converter && pnpm vitest --run test/jsdoc-to-ts.test.ts',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(events.some((e) =>
+      e.type === 'status' &&
+      e.message.includes('mutation checkpoint'),
+    )).toBe(true)
+    expect(events.some((e) =>
+      e.type === 'status' &&
+      e.message.includes('self-critique persistence tool call'),
+    )).toBe(false)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'text' &&
+        block.text.includes('call shell with exactly one of these authoritative commands') &&
+        block.text.includes('cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts'),
+      ),
+    )).toBe(true)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'text' &&
+        !block.text.includes('Call update-task with { taskId: "task-012"'),
+      ),
+    )).toBe(true)
+  })
+
+  it('allows one checkpoint-scoped reread after a failed authoritative verification rerun', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async ({ filePath }) => ({
+          output: `contents of ${String(filePath)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({
+          output: 'failing focused verification output',
+          is_error: true,
+        }),
+      }),
+    )
+    const projectRoot = '/workspace/project'
+    const touchedRelative = 'packages/converter/src/commentInserter.ts'
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'shell',
+          { command: 'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts' },
+          'toolu_shell',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: `${projectRoot}/${touchedRelative}` },
+          'toolu_read',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: projectRoot,
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 5,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_id: 'task-012',
+            current_task_project_path: projectRoot,
+            current_task_checkpoint_next_action:
+              'Resume from the active worktree diff, refresh focused verification, and keep the task in implementation until the focused checks are green.',
+            current_task_checkpoint_files_touched: [
+              touchedRelative,
+              'packages/converter/src/features/variableDeclaration.ts',
+            ],
+            current_task_checkpoint_safe_mutation_surface: [
+              touchedRelative,
+              'packages/converter/src/features/variableDeclaration.ts',
+            ],
+            current_task_verification_commands: [
+              'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+              'cd packages/converter && pnpm vitest --run test/jsdoc-to-ts.test.ts',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(events.some((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'read-file' &&
+      String(e.output).includes(`${projectRoot}/${touchedRelative}`) &&
+      e.is_error === false,
+    )).toBe(true)
+    expect(events.some((e) =>
+      e.type === 'status' &&
+      e.message.includes('demanding one exact file mutation or escalation next'),
+    )).toBe(false)
+  })
+
+  it('refuses a multi-file reread batch immediately after a failed authoritative verification rerun', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async ({ filePath }) => ({
+          output: `contents of ${String(filePath)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({
+          output: 'failing focused verification output',
+          is_error: true,
+        }),
+      }),
+    )
+    const projectRoot = '/workspace/project'
+    const sourcePath = `${projectRoot}/packages/converter/src/commentInserter.ts`
+    const supportPath = `${projectRoot}/packages/converter/src/jsdocHelpers.ts`
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'shell',
+          { command: 'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts' },
+          'toolu_shell',
+        ),
+      },
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'toolu_read_1', name: 'read-file', input: { filePath: sourcePath } },
+            { type: 'tool_use', id: 'toolu_read_2', name: 'read-file', input: { filePath: supportPath } },
+          ],
+        },
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: projectRoot,
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 5,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_id: 'task-012',
+            current_task_checkpoint_next_action:
+              'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_files_touched: [
+              'packages/converter/src/commentInserter.ts',
+              'packages/converter/src/jsdocHelpers.ts',
+              'packages/converter/test/ts-to-jsdoc.test.ts',
+            ],
+            current_task_verification_commands: [
+              'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(events.some((event) =>
+      event.type === 'status' &&
+      event.message.includes('mutation checkpoint'),
+    )).toBe(true)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        block.is_error === true &&
+        typeof block.content === 'string' &&
+        block.content.includes('Your very next response must be exactly one tool call and no prose.'),
+      ),
+    )).toBe(true)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        typeof block.content === 'string' &&
+        block.content.includes(`contents of ${sourcePath}`),
+      ),
+    )).toBe(false)
+  })
+
+  it('prefers the latest failed authoritative verification command in mutation-checkpoint nudges', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async ({ filePath }) => ({
+          output: `contents of ${String(filePath)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    const projectRoot = '/workspace/project'
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: `${projectRoot}/packages/converter/src/commentInserter.ts` },
+          'toolu_read',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: projectRoot,
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_id: 'task-012',
+            current_task_checkpoint_next_action:
+              'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_files_touched: [
+              'packages/converter/src/commentInserter.ts',
+            ],
+            current_task_checkpoint_safe_mutation_surface: [
+              'packages/converter/src/commentInserter.ts',
+            ],
+            current_task_verification_commands: [
+              'pnpm run build',
+              'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+              'pnpm run lint',
+            ],
+            current_task_verification_history: [
+              {
+                command: 'pnpm run build',
+                passed: true,
+                observedAt: '2026-05-14T14:00:00.000Z',
+              },
+              {
+                command: 'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+                passed: false,
+                observedAt: '2026-05-14T14:01:00.000Z',
+              },
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'text' &&
+        block.text.includes('call shell with the last failing authoritative command first') &&
+        block.text.includes('cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts'),
+      ),
+    )).toBe(true)
+  })
+
   it('demands an exact file mutation tool call after mutation-checkpoint read drift', async () => {
     const registry = new ToolRegistry()
     registry.register(
@@ -2710,6 +4533,756 @@ Uncertainties: none`,
     )).toBe(true)
   })
 
+  it('allows a checkpoint-scoped read after edit-file misses a stale oldString', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string(), cwd: z.string().optional() }),
+        execute: async () => ({
+          output: 'settings.vue(118,15): error TS2551: Property sendInvite does not exist',
+          is_error: true,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'edit-file',
+        description: '',
+        inputSchema: z.object({
+          filePath: z.string(),
+          oldString: z.string(),
+          newString: z.string(),
+        }),
+        execute: async () => ({
+          output:
+            'Error editing /workspace/project/web/app/pages/settings.vue: oldString was not found in the file. Re-read the file and use an exact substring from the current contents.',
+          is_error: true,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({
+          output: 'fresh settings.vue contents with the current slugPrefix line',
+          is_error: false,
+        }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'shell',
+          { command: 'cd web && pnpm typecheck', cwd: '/workspace/project' },
+          'toolu_verify',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: 'web/app/pages/settings.vue' },
+          'toolu_initial_read',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'edit-file',
+          {
+            filePath: 'web/app/pages/settings.vue',
+            oldString: '  const slugPrefix = computed(() => slug.value ?? \'\')',
+            newString: '  const slugPrefix = computed(() => slug.value ?? \'\')\n\n  async function sendInvite() {}',
+          },
+          'toolu_edit',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: 'web/app/pages/settings.vue' },
+          'toolu_read_after_stale_edit',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 5,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_checkpoint_next_action:
+              'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_files_touched: [
+              'web/app/pages/settings.vue',
+              'web/server/api/workspaces/[id]/invite.post.ts',
+            ],
+            current_task_checkpoint_safe_mutation_surface: [
+              'web/app/pages/settings.vue',
+              'web/server/api/workspaces/[id]/invite.post.ts',
+            ],
+            current_task_verification_commands: ['cd web && pnpm typecheck'],
+            current_task_verification_history: [{
+              command: 'cd web && pnpm typecheck',
+              passed: false,
+              observedAt: '2026-05-16T00:00:00.000Z',
+            }],
+          },
+        },
+        messages,
+      ),
+    )
+
+    const readCompletions = events.filter((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'read-file'
+    )
+    expect(readCompletions.some((e) => String(e.output).includes('fresh settings.vue contents'))).toBe(true)
+    expect(events.some((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'read-file' &&
+      String(e.output).includes('Call edit-file on web/app/pages/settings.vue now'),
+    )).toBe(false)
+  })
+
+  it('uses the strict checkpoint mutation nudge when a worker diagnoses the bug but emits no tool call', async () => {
+    const client = new ScriptedApiClient([
+      {
+        message: assistantText(
+          'The failing test points at commentInserter.ts. Let me patch the insertion logic.',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: new ToolRegistry(),
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          noToolTurnNudge: 'Take the next concrete step now.',
+          noToolTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_id: 'task-012',
+            current_task_checkpoint_next_action:
+              'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_files_touched: [
+              'packages/converter/src/commentInserter.ts',
+              'packages/converter/src/features/variableDeclaration.ts',
+            ],
+            current_task_checkpoint_safe_mutation_surface: [
+              'packages/converter/src/commentInserter.ts',
+              'packages/converter/src/features/variableDeclaration.ts',
+            ],
+            current_task_verification_commands: [
+              'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+              'cd packages/converter && pnpm vitest --run test/jsdoc-to-ts.test.ts',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(events.some((e) =>
+      e.type === 'status' &&
+      e.message.includes('checkpoint-directed tool call'),
+    )).toBe(true)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'text' &&
+        block.text.includes('If you are rerunning verification first, call shell with exactly one of these authoritative commands') &&
+        block.text.includes('packages/converter/src/commentInserter.ts'),
+      ),
+    )).toBe(true)
+  })
+
+  it('stops a checkpoint lane explicitly after repeated no-tool responses', async () => {
+    const client = new ScriptedApiClient([
+      {
+        message: assistantText(
+          'The failing test points at commentInserter.ts. Let me patch the insertion logic.',
+        ),
+      },
+      {
+        message: assistantText(
+          'I still need to patch the insertion logic before rerunning verification.',
+        ),
+      },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: new ToolRegistry(),
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          noToolTurnNudge: 'Take the next concrete step now.',
+          noToolTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_id: 'task-012',
+            current_task_checkpoint_next_action:
+              'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_files_touched: [
+              'packages/converter/src/commentInserter.ts',
+              'packages/converter/src/features/variableDeclaration.ts',
+            ],
+            current_task_checkpoint_safe_mutation_surface: [
+              'packages/converter/src/commentInserter.ts',
+              'packages/converter/src/features/variableDeclaration.ts',
+            ],
+            current_task_verification_commands: [
+              'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(client.requests).toHaveLength(2)
+    expect(events.some((e) =>
+      e.type === 'status' &&
+      e.message.includes('checkpoint-directed tool call'),
+    )).toBe(true)
+    expect(events.some((e) =>
+      e.type === 'status' &&
+      e.message.includes('ending this turn so the coordinator can treat it as no progress'),
+    )).toBe(true)
+  })
+
+  it('prefers the checkpoint safe mutation surface over raw touched-file order when nudging the next mutation', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async ({ filePath }) => ({
+          output: `contents of ${String(filePath)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'edit-file',
+        description: '',
+        inputSchema: z.object({
+          filePath: z.string(),
+          oldString: z.string(),
+          newString: z.string(),
+        }),
+        execute: async () => ({
+          output: 'edited',
+          is_error: false,
+        }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/test/ts-to-jsdoc.test.ts' },
+          'toolu_1',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 3,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_checkpoint_next_action:
+              'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_files_touched: [
+              '.gitignore',
+              'package.json',
+              'packages/converter/package.json',
+              'packages/converter/src/commentInserter.ts',
+              'packages/converter/src/features/functionDeclaration.ts',
+              'packages/converter/test/ts-to-jsdoc.test.ts',
+            ],
+            current_task_checkpoint_safe_mutation_surface: [
+              'packages/converter/test/ts-to-jsdoc.test.ts',
+              'packages/converter/src/commentInserter.ts',
+              'packages/converter/src/features/functionDeclaration.ts',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(events.some((e) =>
+      e.type === 'status' &&
+      e.message.includes('mutation checkpoint'),
+    )).toBe(true)
+    expect(messages.some((message) =>
+      message.content.some((block) =>
+        (
+          (block.type === 'text' && block.text.includes('Call edit-file on packages/converter/test/ts-to-jsdoc.test.ts now')) ||
+          (block.type === 'tool_result' && typeof block.content === 'string' && block.content.includes('Call edit-file on packages/converter/test/ts-to-jsdoc.test.ts now'))
+        ) &&
+        !(
+          (block.type === 'text' && block.text.includes('Call edit-file on .gitignore now')) ||
+          (block.type === 'tool_result' && typeof block.content === 'string' && block.content.includes('Call edit-file on .gitignore now'))
+        ),
+      ),
+    )).toBe(true)
+  })
+
+  it('allows one checkpoint-scoped read after an authoritative verification command fails in the same turn', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string(), timeoutMs: z.number().optional() }),
+        isReadOnly: () => false,
+        execute: async ({ command }) => ({
+          output: `FAIL ${String(command)}`,
+          is_error: true,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async ({ filePath }) => ({
+          output: `contents of ${String(filePath)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    const firstClient = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'shell',
+          {
+            command: 'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+            timeoutMs: 60_000,
+          },
+          'toolu_verify',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/src/jsdocHelpers.ts' },
+          'toolu_followthrough',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    await drain(
+      runQuery(
+        {
+          apiClient: firstClient,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_id: 'task-012',
+            current_task_checkpoint_next_action:
+              'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_files_touched: [
+              'packages/converter/src/jsdocHelpers.ts',
+              'packages/converter/src/typescriptToJsdoc.ts',
+            ],
+            current_task_verification_commands: [
+              'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+              'cd packages/converter && pnpm vitest --run test/jsdoc-to-ts.test.ts',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        typeof block.content === 'string' &&
+        block.content.includes('contents of /workspace/project/packages/converter/src/jsdocHelpers.ts'),
+      ),
+    )).toBe(true)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        typeof block.content === 'string' &&
+        block.content.includes('The latest checkpoint already told you what to do next'),
+      ),
+    )).toBe(false)
+  })
+
+  it('refuses a second checkpoint-scoped read-only follow-through turn after authoritative verification fails', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string(), timeoutMs: z.number().optional() }),
+        isReadOnly: () => false,
+        execute: async ({ command }) => ({
+          output: `FAIL ${String(command)}`,
+          is_error: true,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async ({ filePath }) => ({
+          output: `contents of ${String(filePath)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'shell',
+          {
+            command: 'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+            timeoutMs: 60_000,
+          },
+          'toolu_verify_round2',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/src/jsdocHelpers.ts' },
+          'toolu_src_round2',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/test/ts-to-jsdoc.test.ts' },
+          'toolu_test_round2',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 5,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_id: 'task-012',
+            current_task_checkpoint_next_action:
+              'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_files_touched: [
+              'packages/converter/src/jsdocHelpers.ts',
+              'packages/converter/src/typescriptToJsdoc.ts',
+              'packages/converter/test/ts-to-jsdoc.test.ts',
+            ],
+            current_task_verification_commands: [
+              'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+              'cd packages/converter && pnpm vitest --run test/jsdoc-to-ts.test.ts',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        typeof block.content === 'string' &&
+        block.content.includes('contents of /workspace/project/packages/converter/src/jsdocHelpers.ts'),
+      ),
+    )).toBe(true)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        typeof block.content === 'string' &&
+        block.content.includes('contents of /workspace/project/packages/converter/test/ts-to-jsdoc.test.ts'),
+      ),
+    )).toBe(false)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'text' &&
+        block.text.includes('Your very next response must be exactly one tool call and no prose.'),
+      ),
+    )).toBe(true)
+  })
+
+  it('advances a verification-backed checkpoint after a successful authoritative shell command', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string(), timeoutMs: z.number().optional() }),
+        isReadOnly: () => false,
+        execute: async ({ command }) => ({
+          output: `PASS ${String(command)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async ({ filePath }) => ({
+          output: `contents of ${String(filePath)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    const toolMetadata: Record<string, unknown> = {
+      current_agent_id: 'worker-agent',
+      current_task_id: 'task-012',
+      current_task_checkpoint_next_action:
+        'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+      current_task_checkpoint_files_touched: [
+        'packages/converter/src/jsdocHelpers.ts',
+        'packages/converter/test/ts-to-jsdoc.test.ts',
+      ],
+      current_task_verification_commands: [
+        'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+      ],
+    }
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'shell',
+          {
+            command: 'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+            timeoutMs: 60_000,
+          },
+          'toolu_verify_success',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 5,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata,
+        },
+        messages,
+      ),
+    )
+
+    expect(toolMetadata['current_task_checkpoint_next_action']).toBe(
+      'Inspect the checkpoint-touched files against the verification result, then fix whatever still fails before you write the structured self-critique.',
+    )
+
+  })
+
+  it('allows verification-backed likely-target reads on a resumed checkpoint before rerunning shell in the same turn', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async ({ filePath }) => ({
+          output: `contents of ${String(filePath)}`,
+          is_error: false,
+        }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/src/features/featureRegistry.ts' },
+          'toolu_supporting_target',
+        ),
+      },
+      {
+        message: assistantToolUse(
+          'read-file',
+          { filePath: '/workspace/project/packages/converter/src/commentPreserver.ts' },
+          'toolu_supporting_target_2',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          noProgressToolNames: ['shell', 'write-checkpoint'],
+          noProgressTurnNudge: 'Make concrete implementation progress now.',
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_id: 'task-012',
+            current_task_checkpoint_next_action:
+              'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.',
+            current_task_checkpoint_files_touched: [
+              'packages/converter/src/jsdocHelpers.ts',
+              'packages/converter/src/typescriptToJsdoc.ts',
+            ],
+            current_task_likely_target_files: [
+              'packages/converter/src/typescriptToJsdoc.ts',
+              'packages/converter/src/features/functionDeclaration.ts',
+              'packages/converter/test/ts-to-jsdoc.test.ts',
+            ],
+            current_task_verification_commands: [
+              'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
+              'cd packages/converter && pnpm vitest --run test/jsdoc-to-ts.test.ts',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        typeof block.content === 'string' &&
+        block.content.includes('contents of /workspace/project/packages/converter/src/features/featureRegistry.ts'),
+      ),
+    )).toBe(true)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        typeof block.content === 'string' &&
+        block.content.includes('The latest checkpoint already told you what to do next'),
+      ),
+    )).toBe(false)
+  })
+
   it('refuses more read-only exploration after an authoritative likely target file has already been inspected', async () => {
     const registry = new ToolRegistry()
     registry.register(
@@ -2777,6 +5350,85 @@ Uncertainties: none`,
         String(block.content).includes(`You have already inspected an authoritative likely target file at ${targetPath}`),
       ),
     )).toBe(true)
+  })
+
+  it('allows reading another uninspected likely target when verification still names multiple files', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async (input) => ({
+          output: `fresh contents of ${input.filePath}`,
+          is_error: false,
+        }),
+      }),
+    )
+    const firstTarget = '/workspace/project/web/server/api/workspaces/[id]/invite.post.ts'
+    const secondTarget = '/workspace/project/web/app/pages/settings.vue'
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('read-file', { filePath: secondTarget }, 'toolu_0') },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 3,
+          noProgressToolNames: ['update-task'],
+          noProgressTurnNudge: 'Stop researching and mutate the file now.',
+          noProgressTurnNudgeLimit: 1,
+          noProgressTurnThreshold: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_checkpoint_next_action:
+              'Rerun the focused verification command and fix whatever still fails in the checkpoint-touched files.',
+            current_task_likely_target_files: [firstTarget, secondTarget],
+            current_task_checkpoint_files_touched: [
+              'web/server/api/workspaces/[id]/invite.post.ts',
+              'web/app/pages/settings.vue',
+            ],
+            current_task_verification_commands: ['cd web && pnpm typecheck'],
+            read_file_state: [
+              {
+                path: firstTarget,
+                span: 'lines 1-120',
+                preview: 'invite endpoint contents',
+                timestamp: Date.now() / 1000,
+              },
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(events.some(e =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'read-file' &&
+      e.is_error === false &&
+      String(e.output).includes(secondTarget),
+    )).toBe(true)
+    expect(messages.some(message =>
+      message.role === 'user' &&
+      message.content.some(block =>
+        block.type === 'tool_result' &&
+        block.is_error === true &&
+        String(block.content).includes('already inspected an authoritative likely target file'),
+      ),
+    )).toBe(false)
   })
 
   it('ends the turn after repeated exact-target read-only refusals in the same worker pass', async () => {
@@ -2892,6 +5544,66 @@ Uncertainties: none`,
         block.text.includes('run a focused verification command tied to the file you just changed') &&
         block.text.includes('exactly one tool call and no prose'),
       ),
+    )).toBe(true)
+  })
+
+  it('allows one scoped likely-target read pass after a stale handoff checkpoint before re-tightening', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: 'reads a file',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async (input) => ({
+          output: `read ${input.filePath}`,
+          is_error: false,
+        }),
+      }),
+    )
+    const likelyTarget = '/workspace/project/packages/converter/src/typescriptToJsdoc.ts'
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('read-file', { filePath: likelyTarget }, 'toolu_0') },
+      { message: assistantToolUse('read-file', { filePath: likelyTarget }, 'toolu_1') },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 5,
+          noProgressToolNames: ['update-task', 'write-checkpoint'],
+          noProgressTurnThreshold: 1,
+          noProgressTurnNudgeLimit: 1,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_checkpoint_next_action: 'Transition task to review after verifying the implementation state.',
+            current_task_likely_target_files: [likelyTarget],
+            current_task_checkpoint_files_touched: [
+              'packages/converter/test/ts-to-jsdoc.test.ts',
+              'packages/converter/test/jsdoc-to-ts.test.ts',
+            ],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(events.some((e) =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'read-file' &&
+      e.is_error === false &&
+      String(e.output).includes(likelyTarget),
     )).toBe(true)
   })
 

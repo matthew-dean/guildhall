@@ -122,7 +122,7 @@ export async function ensureWorktreeForDispatch(
     task.worktreePath &&
     task.branchName === expectedBranch
   ) {
-    await ensureProjectRuntimeLinks({
+    await pruneProjectRuntimeLinks({
       projectPath,
       worktreePath: task.worktreePath,
     })
@@ -139,12 +139,34 @@ export async function ensureWorktreeForDispatch(
     }
   }
 
+  if (task.branchName === expectedBranch) {
+    await input.gitDriver.attachWorktree(projectPath, {
+      worktreePath: expectedPath,
+      branch: expectedBranch,
+    })
+    await pruneProjectRuntimeLinks({
+      projectPath,
+      worktreePath: expectedPath,
+    })
+    await ensureWorkspaceSiblingLinks({
+      workspacePath,
+      projectPath,
+      worktreePath: expectedPath,
+    })
+    return {
+      worktreePath: expectedPath,
+      branchName: expectedBranch,
+      baseBranch: task.baseBranch ?? baseBranch,
+      created: true,
+    }
+  }
+
   await gitDriver.createWorktree(projectPath, {
     worktreePath: expectedPath,
     branch: expectedBranch,
     baseBranch,
   })
-  await ensureProjectRuntimeLinks({
+  await pruneProjectRuntimeLinks({
     projectPath,
     worktreePath: expectedPath,
   })
@@ -193,21 +215,18 @@ interface EnsureWorkspaceSiblingLinksInput {
   worktreePath: string
 }
 
-interface EnsureProjectRuntimeLinksInput {
+interface PruneProjectRuntimeLinksInput {
   projectPath: string
   worktreePath: string
 }
 
-async function ensureProjectRuntimeLinks(
-  input: EnsureProjectRuntimeLinksInput,
+async function pruneProjectRuntimeLinks(
+  input: PruneProjectRuntimeLinksInput,
 ): Promise<void> {
   const normalizedProject = path.resolve(input.projectPath)
   const normalizedWorktree = path.resolve(input.worktreePath)
   if (!(await exists(normalizedProject))) return
-  await ensureDirSymlink({
-    sourcePath: path.join(normalizedProject, 'node_modules'),
-    linkPath: path.join(normalizedWorktree, 'node_modules'),
-  })
+  await pruneDirSymlink(path.join(normalizedWorktree, 'node_modules'))
 
   const entries = await fs.readdir(normalizedProject, { withFileTypes: true })
   for (const entry of entries) {
@@ -216,10 +235,7 @@ async function ensureProjectRuntimeLinks(
     const packageRoot = path.join(normalizedProject, entry.name)
     const hasPackageJson = await exists(path.join(packageRoot, 'package.json'))
     if (!hasPackageJson) continue
-    await ensureDirSymlink({
-      sourcePath: path.join(packageRoot, 'node_modules'),
-      linkPath: path.join(normalizedWorktree, entry.name, 'node_modules'),
-    })
+    await pruneDirSymlink(path.join(normalizedWorktree, entry.name, 'node_modules'))
   }
 }
 
@@ -273,6 +289,12 @@ async function ensureDirSymlink(input: {
     return
   }
   await fs.symlink(target, input.linkPath, 'dir')
+}
+
+async function pruneDirSymlink(linkPath: string): Promise<void> {
+  const existing = await readSymlinkTarget(linkPath)
+  if (existing === null) return
+  await fs.unlink(linkPath)
 }
 
 async function exists(filePath: string): Promise<boolean> {
