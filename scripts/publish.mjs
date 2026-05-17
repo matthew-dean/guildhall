@@ -171,6 +171,7 @@ if (gitRefExists(`refs/tags/v${nextVersion}`)) {
 
 log(`\n✓ Published guildhall@${nextVersion}`)
 log(`  Push when ready:  git push origin main --follow-tags`)
+log(`  Pushing v${nextVersion} triggers the GitHub release workflow for guildhall-macos.tar.gz.`)
 
 // ---------------------------------------------------------------------------
 // Helpers

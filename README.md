@@ -87,6 +87,14 @@ Recommended on macOS:
 curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | sh
 ```
 
+That command downloads the latest `guildhall-macos.tar.gz` asset from the
+current GitHub Release and verifies it against the matching `.sha256` asset.
+To install a specific release instead:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.5.0 sh
+```
+
 Also supported:
 
 ```bash

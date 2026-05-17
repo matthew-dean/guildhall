@@ -2782,3 +2782,9 @@ screen.
   suite now passes with explicit project ids on mutating route tests,
   in-memory git drivers for lifecycle-only fixtures, and shared gate-command
   authority moved into core so the engine no longer imports from tools.
+- Release artifact truth on `2026-05-17`: the curl installer no longer depends
+  on an undocumented/manual asset assumption. A tag-triggered GitHub Actions
+  workflow now builds the macOS package on a macOS runner, uploads
+  `guildhall-macos.tar.gz` and `guildhall-macos.tar.gz.sha256` to the GitHub
+  Release, verifies the checksum in the installer before unpacking, and the
+  quick-start docs explain both latest and pinned installs.

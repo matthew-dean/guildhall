@@ -28,6 +28,17 @@ curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts
 
 That installer drops in the bundled Guildhall runtime, including its own Node
 binary on macOS, so you do not need to pre-install Node for the default path.
+The script downloads `guildhall-macos.tar.gz` from the latest GitHub Release,
+which is produced by the release workflow whenever a `v*` tag is pushed.
+
+To pin a specific release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.5.0 sh
+```
+
+Each GitHub Release also includes `guildhall-macos.tar.gz.sha256`; the
+installer downloads that checksum and verifies the package before unpacking it.
 
 If you would rather install from npm instead:
 

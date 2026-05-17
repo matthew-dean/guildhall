@@ -1,0 +1,75 @@
+name: Build release artifacts
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to package'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos-package:
+    name: macOS packaged installer
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify release gates
+        run: |
+          pnpm typecheck
+          pnpm docs:check-help-sync
+          pnpm docs:build
+          pnpm lint:deps
+          pnpm test
+
+      - name: Build macOS package
+        run: pnpm build:macos-package
+
+      - name: Write checksum
+        run: |
+          cd artifacts/macos
+          shasum -a 256 guildhall-macos.tar.gz > guildhall-macos.tar.gz.sha256
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: guildhall-macos
+          path: |
+            artifacts/macos/guildhall-macos.tar.gz
+            artifacts/macos/guildhall-macos.tar.gz.sha256
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/macos/guildhall-macos.tar.gz
+            artifacts/macos/guildhall-macos.tar.gz.sha256
+          generate_release_notes: true
+          make_latest: true

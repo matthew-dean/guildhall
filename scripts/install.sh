@@ -21,12 +21,34 @@ artifact_url() {
   fi
 }
 
+checksum_url() {
+  if [ -n "${GUILDHALL_CHECKSUM_URL:-}" ]; then
+    printf '%s' "$GUILDHALL_CHECKSUM_URL"
+  else
+    printf '%s.sha256' "$(artifact_url)"
+  fi
+}
+
+verify_checksum() {
+  CHECKSUM_FILE="$TMP_DIR/guildhall-macos.tar.gz.sha256"
+  curl -fsSL "$(checksum_url)" -o "$CHECKSUM_FILE"
+  EXPECTED_SHA="$(awk '{print $1}' "$CHECKSUM_FILE")"
+  ACTUAL_SHA="$(shasum -a 256 "$TMP_DIR/guildhall-macos.tar.gz" | awk '{print $1}')"
+  if [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
+    printf 'Checksum mismatch for guildhall-macos.tar.gz\n' >&2
+    printf 'Expected: %s\n' "$EXPECTED_SHA" >&2
+    printf 'Actual:   %s\n' "$ACTUAL_SHA" >&2
+    exit 1
+  fi
+}
+
 mkdir -p "$APP_DIR" "$BIN_DIR" "$LOCAL_BIN_DIR" "$GUILDHALL_HOME/logs"
 
 if [ -n "${GUILDHALL_ARTIFACT_DIR:-}" ]; then
   cp -R "$GUILDHALL_ARTIFACT_DIR" "$TMP_DIR/guildhall-macos"
 else
   curl -fsSL "$(artifact_url)" -o "$TMP_DIR/guildhall-macos.tar.gz"
+  verify_checksum
   tar -xzf "$TMP_DIR/guildhall-macos.tar.gz" -C "$TMP_DIR"
 fi
 
