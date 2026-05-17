@@ -8,6 +8,7 @@ import {
   pickNextTask,
   shouldResumeAgentSession,
   isSessionSnapshotFreshForTask,
+  type OrchestratorAgent,
   type OrchestratorAgentSet,
   type ReviewerFanoutRunner,
 } from '../orchestrator.js'
@@ -5962,7 +5963,7 @@ describe('Orchestrator.tick — FR-10 escalations', () => {
     const task = queue.tasks.find((candidate) => candidate.id === 'task-invite')
     expect(task?.status).toBe('in_progress')
     expect(task?.assignedTo).toBe('worker-agent')
-    expect(task?.blockReason).toBeNull()
+    expect(task?.blockReason ?? null).toBeNull()
     expect(task?.escalations[0]?.resolvedBy).toBe('orchestrator')
     expect(task?.escalations[0]?.resolution).toContain('self-authored verification failure')
     expect(task?.notes.at(-1)?.content).toContain('repair the failed verification')

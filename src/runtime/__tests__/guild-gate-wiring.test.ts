@@ -4,6 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import yaml from 'js-yaml'
 import { Orchestrator, type OrchestratorAgentSet } from '../orchestrator.js'
+import { InMemoryGitDriver } from '../git-driver.js'
 import type { ResolvedConfig } from '@guildhall/config'
 import type { Task, TaskQueue, DesignSystem } from '@guildhall/core'
 
@@ -164,7 +165,11 @@ describe('Orchestrator — guild-gate pre-pass at gate_check', () => {
     const task = mkTask({ status: 'gate_check' })
     await writeQueue([task])
     const agents = agentSet()
-    const orch = new Orchestrator({ config: baseConfig(), agents })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
 
     const outcome = await orch.tick()
     expect(outcome.kind).not.toBe('idle')
@@ -192,7 +197,11 @@ describe('Orchestrator — guild-gate pre-pass at gate_check', () => {
     const task = mkTask({ status: 'gate_check' })
     await writeQueue([task])
     const agents = agentSet()
-    const orch = new Orchestrator({ config: baseConfig(), agents })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
 
     await orch.tick()
 
@@ -210,7 +219,11 @@ describe('Orchestrator — guild-gate pre-pass at gate_check', () => {
     const task = mkTask({ status: 'gate_check' })
     await writeQueue([task])
     const agents = agentSet()
-    const orch = new Orchestrator({ config: baseConfig(), agents })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
 
     await orch.tick()
 

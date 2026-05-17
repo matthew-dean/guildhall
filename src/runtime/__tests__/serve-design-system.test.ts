@@ -13,10 +13,11 @@ import { buildServeApp } from '../serve.js'
 //   POST /api/project/design-system/approve  → stamps approvedBy='human' + approvedAt
 
 let tmpDir: string
+let projectId: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-ds-'))
-  bootstrapWorkspace(tmpDir, { name: 'DS Test' })
+  projectId = bootstrapWorkspace(tmpDir, { name: 'DS Test' }).id ?? path.basename(tmpDir)
 })
 
 afterEach(async () => {
@@ -26,6 +27,12 @@ afterEach(async () => {
 async function readDS(): Promise<DesignSystem> {
   const raw = await fs.readFile(path.join(tmpDir, 'memory', 'design-system.yaml'), 'utf-8')
   return DesignSystem.parse(yaml.load(raw) ?? {})
+}
+
+function projectUrl(route: string): string {
+  const url = new URL(`http://localhost${route}`)
+  url.searchParams.set('projectId', projectId)
+  return url.toString()
 }
 
 describe('GET /api/project/design-system', () => {
@@ -39,7 +46,7 @@ describe('GET /api/project/design-system', () => {
 
   it('returns the current design system + a summary once drafted', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await app.fetch(new Request('http://localhost/api/project/design-system', {
+    await app.fetch(new Request(projectUrl('/api/project/design-system'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -66,7 +73,7 @@ describe('GET /api/project/design-system', () => {
 describe('POST /api/project/design-system/approve', () => {
   it('returns 400 when nothing has been drafted yet', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/design-system/approve', {
+    const res = await app.fetch(new Request(projectUrl('/api/project/design-system/approve'), {
       method: 'POST',
     }))
     expect(res.status).toBe(400)
@@ -74,7 +81,7 @@ describe('POST /api/project/design-system/approve', () => {
 
   it('stamps approvedBy + approvedAt on the on-disk YAML', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const seed = await app.fetch(new Request('http://localhost/api/project/design-system', {
+    const seed = await app.fetch(new Request(projectUrl('/api/project/design-system'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -92,7 +99,7 @@ describe('POST /api/project/design-system/approve', () => {
     }))
     const seedBody = await seed.json()
     expect(seedBody).toMatchObject({ ok: true })
-    const r = await app.fetch(new Request('http://localhost/api/project/design-system/approve', {
+    const r = await app.fetch(new Request(projectUrl('/api/project/design-system/approve'), {
       method: 'POST',
     }))
     expect(r.status).toBe(200)
@@ -115,15 +122,15 @@ describe('POST /api/project/design-system/approve', () => {
       copyVoice: { tone: 'plain', bannedTerms: [], preferredTerms: [], examples: [] },
       authoredBy: 'agent:spec-agent',
     })
-    await app.fetch(new Request('http://localhost/api/project/design-system', {
+    await app.fetch(new Request(projectUrl('/api/project/design-system'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload('#0ea5e9')),
     }))
-    await app.fetch(new Request('http://localhost/api/project/design-system/approve', {
+    await app.fetch(new Request(projectUrl('/api/project/design-system/approve'), {
       method: 'POST',
     }))
-    await app.fetch(new Request('http://localhost/api/project/design-system', {
+    await app.fetch(new Request(projectUrl('/api/project/design-system'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload('#ff0000')),

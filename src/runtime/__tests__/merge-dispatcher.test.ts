@@ -206,7 +206,6 @@ describe('shelveSupersededFixupTasks', () => {
     expect(queue.tasks[1]).toMatchObject({
       status: 'shelved',
       assignedTo: null,
-      blockReason: null,
       shelveReason: {
         code: 'duplicate',
         rejectedBy: 'system:merge-dispatcher',

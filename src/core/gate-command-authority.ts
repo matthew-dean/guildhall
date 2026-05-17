@@ -1,4 +1,4 @@
-import type { HardGate } from '@guildhall/core'
+import type { HardGate } from './gate.js'
 
 function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, ' ')

@@ -18,6 +18,7 @@ import type { TaskQueue } from '@guildhall/core'
 
 let tmpDir: string
 let memoryDir: string
+let projectId: string
 
 async function readQueue(): Promise<TaskQueue> {
   const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf-8')
@@ -38,7 +39,7 @@ async function writeDraftSpec(spec: string): Promise<void> {
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-meta-'))
-  bootstrapWorkspace(tmpDir, { name: 'Meta Serve Test' })
+  projectId = bootstrapWorkspace(tmpDir, { name: 'Meta Serve Test' }).id ?? path.basename(tmpDir)
   memoryDir = path.join(tmpDir, 'memory')
 })
 
@@ -68,6 +69,12 @@ coordinators:
       - New API surface
 \`\`\`
 `
+
+function projectUrl(route: string): string {
+  const url = new URL(`http://localhost${route}`)
+  url.searchParams.set('projectId', projectId)
+  return url.toString()
+}
 
 describe('GET /api/project/meta-intake/draft', () => {
   it('returns no-task before any meta-intake has been seeded', async () => {
@@ -126,7 +133,7 @@ describe('POST /api/project/meta-intake/approve', () => {
     await writeDraftSpec(SAMPLE_SPEC)
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/meta-intake/approve', { method: 'POST' }),
+      new Request(projectUrl('/api/project/meta-intake/approve'), { method: 'POST' }),
     )
     expect(res.status).toBe(200)
     const body = await res.json() as Record<string, any>
@@ -148,7 +155,7 @@ describe('POST /api/project/meta-intake/approve', () => {
     // Don't write any spec.
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/meta-intake/approve', { method: 'POST' }),
+      new Request(projectUrl('/api/project/meta-intake/approve'), { method: 'POST' }),
     )
     expect(res.status).toBe(400)
     const body = await res.json() as Record<string, any>
@@ -158,7 +165,7 @@ describe('POST /api/project/meta-intake/approve', () => {
   it('returns an error when no meta-intake task has been created', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/meta-intake/approve', { method: 'POST' }),
+      new Request(projectUrl('/api/project/meta-intake/approve'), { method: 'POST' }),
     )
     expect(res.status).toBe(400)
     const body = await res.json() as Record<string, any>
@@ -170,10 +177,10 @@ describe('POST /api/project/meta-intake/approve', () => {
     await writeDraftSpec(SAMPLE_SPEC)
     const { app } = buildServeApp({ projectPath: tmpDir })
     await app.fetch(
-      new Request('http://localhost/api/project/meta-intake/approve', { method: 'POST' }),
+      new Request(projectUrl('/api/project/meta-intake/approve'), { method: 'POST' }),
     )
     const res2 = await app.fetch(
-      new Request('http://localhost/api/project/meta-intake/approve', { method: 'POST' }),
+      new Request(projectUrl('/api/project/meta-intake/approve'), { method: 'POST' }),
     )
     // Second call: task is already done with empty spec after completion? Actually
     // approveMetaIntake leaves spec in place, so this should produce 0 added
@@ -213,7 +220,7 @@ describe('POST /api/project/meta-intake/synthesize', () => {
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/meta-intake/synthesize', { method: 'POST' }),
+      new Request(projectUrl('/api/project/meta-intake/synthesize'), { method: 'POST' }),
     )
     expect(res.status).toBe(200)
     const body = await res.json() as Record<string, any>

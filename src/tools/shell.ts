@@ -22,7 +22,7 @@ import {
   classifyGateCommand,
   parseAuthoritativeCommands,
   reconcileShellCommandWithAuthority,
-} from './gate-command-authority.js'
+} from '@guildhall/core'
 
 const OUTPUT_TRUNCATE_LIMIT = 12_000
 

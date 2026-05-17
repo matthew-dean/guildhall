@@ -2776,3 +2776,9 @@ screen.
   explicit `import-draft-review` notes, leaving 42 gated `import_draft`
   candidates for human shaping rather than auto-promoting anything into the
   runnable queue.
+- Release-gate cleanup on `2026-05-17`: the 0.5.0 pre-publish run exposed
+  stale tests around project-scoped mutating APIs, optional `blockReason`,
+  task-bootstrap metadata, and temp-workspace git-driver assumptions. The
+  suite now passes with explicit project ids on mutating route tests,
+  in-memory git drivers for lifecycle-only fixtures, and shared gate-command
+  authority moved into core so the engine no longer imports from tools.

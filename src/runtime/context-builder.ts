@@ -280,9 +280,11 @@ function renderLatestCheckpoint(task: Task, checkpoint: Checkpoint | null): stri
   }
   if (checkpoint.resumeContext?.verification?.length) {
     const latestVerification = checkpoint.resumeContext.verification[checkpoint.resumeContext.verification.length - 1]
-    lines.push(
-      `- Latest authoritative verification: ${latestVerification.command} (${latestVerification.passed ? 'passed' : 'failed'})${latestVerification.summary ? ` — ${latestVerification.summary}` : ''}`,
-    )
+    if (latestVerification) {
+      lines.push(
+        `- Latest authoritative verification: ${latestVerification.command} (${latestVerification.passed ? 'passed' : 'failed'})${latestVerification.summary ? ` — ${latestVerification.summary}` : ''}`,
+      )
+    }
   }
   if (checkpoint.resumeContext?.companionFiles?.length) {
     lines.push(`- Companion files: ${checkpoint.resumeContext.companionFiles.join(', ')}`)

@@ -44,7 +44,7 @@ import { HookEvent, type HookExecutor } from './hooks.js'
 import { PermissionChecker } from './permissions.js'
 import { recordToolCarryover } from './tool-carryover.js'
 import type { AnyTool, ToolExecutionContext, ToolRegistry } from './tools.js'
-import { parseAuthoritativeCommands, reconcileShellCommandWithAuthority } from '../tools/gate-command-authority.js'
+import { parseAuthoritativeCommands, reconcileShellCommandWithAuthority } from '@guildhall/core'
 
 const REACTIVE_COMPACT_STATUS_MESSAGE =
   'Prompt too long; compacting conversation memory and retrying.'

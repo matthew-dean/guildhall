@@ -161,6 +161,7 @@ describe('FR-16 end-to-end: orchestrator → OHJSON stream', () => {
     const orch = new Orchestrator({
       config: baseConfig(),
       agents: agentSet({ worker, reviewer, gateChecker }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
     })
 
     const stream: string[] = []
@@ -273,6 +274,7 @@ describe('FR-16 end-to-end: orchestrator → OHJSON stream', () => {
     const orch = new Orchestrator({
       config: baseConfig(),
       agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true, currentBranch: 'main' }),
     })
 
     const outcome = await orch.tick()

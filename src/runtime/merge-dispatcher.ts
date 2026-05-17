@@ -287,7 +287,7 @@ export function shelveSupersededFixupTasks(
     if (task.status === 'done' || task.status === 'shelved') continue
     task.status = 'shelved'
     task.assignedTo = null
-    task.blockReason = null
+    task.blockReason = undefined
     task.shelveReason = {
       code: 'duplicate',
       detail:

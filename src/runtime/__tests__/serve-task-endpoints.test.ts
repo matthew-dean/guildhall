@@ -50,7 +50,7 @@ async function seedTask(id: string, overrides: Record<string, any> = {}): Promis
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-tasks-'))
-  projectId = bootstrapWorkspace(tmpDir, { name: 'Task Endpoints Test' }).id
+  projectId = bootstrapWorkspace(tmpDir, { name: 'Task Endpoints Test' }).id ?? path.basename(tmpDir)
   memoryDir = path.join(tmpDir, 'memory')
 })
 

@@ -2040,7 +2040,7 @@ export class Orchestrator {
             if (queuedTask) {
               queuedTask.branchName = recovered.branchName
               queuedTask.baseBranch = baseBranch
-              queuedTask.blockReason = null
+              queuedTask.blockReason = undefined
               queuedTask.notes.push({
                 agentId: 'coordinator',
                 role: 'checkpoint',
@@ -3242,7 +3242,7 @@ export class Orchestrator {
           newest.resolvedBy = 'orchestrator'
           taskAfter.status = 'review'
           ensureReviewerOwnership(taskAfter)
-          taskAfter.blockReason = null
+          taskAfter.blockReason = undefined
           taskAfter.updatedAt = now
           queueAfter.lastUpdated = now
           await this.writeQueue(queueAfter)
@@ -3279,7 +3279,7 @@ export class Orchestrator {
           newest.resolvedBy = 'orchestrator'
           taskAfter.status = 'in_progress'
           ensureWorkerOwnership(taskAfter)
-          taskAfter.blockReason = null
+          taskAfter.blockReason = undefined
           taskAfter.notes.push({
             agentId: 'coordinator',
             role: 'checkpoint',
@@ -3391,10 +3391,7 @@ export class Orchestrator {
               strategy: landingStrategy,
               result: 'skipped',
               mergedAt: this.now(),
-              detail:
-                worktreeMode === 'none'
-                  ? 'worktree isolation disabled — merge skipped'
-                  : 'branch metadata missing — merge skipped',
+              detail: 'branch metadata missing — merge skipped',
             }
           }
         } else {
@@ -3998,7 +3995,7 @@ export class Orchestrator {
     input.task.remediationAttempts = (input.task.remediationAttempts ?? 0) + 1
     input.task.status = 'in_progress'
     ensureWorkerOwnership(input.task)
-    input.task.blockReason = null
+    input.task.blockReason = undefined
     input.task.notes.push({
       agentId: 'coordinator-remediation',
       role: 'checkpoint',
@@ -5359,7 +5356,8 @@ export class Orchestrator {
 
   private hasGuildhallOwnershipTrail(task: Task): boolean {
     if ((task.notes ?? []).some((note) => note.agentId !== 'human')) return true
-    if ((task.progress ?? []).some((entry) => entry.agentId !== 'human')) return true
+    const progress = (task as Task & { progress?: Array<{ agentId?: string }> }).progress
+    if ((progress ?? []).some((entry) => entry.agentId !== 'human')) return true
     if ((task.reviewVerdicts ?? []).length > 0) return true
     if ((task.gateResults ?? []).length > 0) return true
     if ((task.escalations ?? []).length > 0) return true
@@ -5448,7 +5446,7 @@ export class Orchestrator {
         if (activeEscalations(task).length > 0) continue
         task.status = 'review'
         task.assignedTo = 'reviewer-agent'
-        task.blockReason = null
+        task.blockReason = undefined
         task.notes.push({
           agentId: 'coordinator',
           role: 'recovery',
@@ -5497,7 +5495,7 @@ export class Orchestrator {
         if (activeEscalations(task).length > 0) continue
         task.status = 'review'
         task.assignedTo = 'reviewer-agent'
-        task.blockReason = null
+        task.blockReason = undefined
         task.notes.push({
           agentId: 'coordinator',
           role: 'recovery',
@@ -5529,7 +5527,7 @@ export class Orchestrator {
       }
       task.status = 'in_progress'
       task.assignedTo = 'worker-agent'
-      task.blockReason = null
+      task.blockReason = undefined
       task.notes.push({
         agentId: 'coordinator',
         role: 'recovery',
@@ -7227,7 +7225,7 @@ function normalizedWorkerCheckpointNextAction(
     isWorkerSelfCritiqueNote(note),
   )
   const hasRecordedVerificationFailure = checkpointHasRecordedVerificationFailure(
-    checkpoint?.resumeContext?.verification,
+    typeof checkpoint === 'string' ? undefined : checkpoint?.resumeContext?.verification,
   )
   if (
     hasSelfCritique &&

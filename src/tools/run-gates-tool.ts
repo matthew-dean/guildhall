@@ -7,10 +7,10 @@ import type { HardGate } from '@guildhall/core'
 import {
   parseAuthoritativeCommands,
   reconcileRequestedGatesWithAuthority,
-} from './gate-command-authority.js'
+} from '@guildhall/core'
 import { summarizeScopedHardGateDisposition } from './gate-scope-exceptions.js'
 
-export { reconcileRequestedGatesWithAuthority } from './gate-command-authority.js'
+export { reconcileRequestedGatesWithAuthority } from '@guildhall/core'
 
 function metadataStringArray(metadata: Record<string, unknown>, key: string): string[] {
   return Array.isArray(metadata[key])

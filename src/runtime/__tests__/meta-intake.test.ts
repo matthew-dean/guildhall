@@ -116,7 +116,7 @@ describe('createMetaIntakeTask', () => {
       path.join(memoryDir, 'exploring', `${META_INTAKE_TASK_ID}.md`),
       'utf-8',
     )
-    expect(transcript).toContain('coordinator definitions')
+    expect(transcript).toContain('internal routing slices')
     expect(transcript).toContain('system')
   })
 

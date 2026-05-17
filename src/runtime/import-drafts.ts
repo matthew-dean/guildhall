@@ -5,7 +5,7 @@ function trimmed(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-function noteArray(task: Task): Array<{ agentId?: string; role?: string }> {
+function noteArray(task: Task): Task['notes'] {
   return Array.isArray(task.notes) ? task.notes : []
 }
 

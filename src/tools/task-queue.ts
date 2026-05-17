@@ -132,7 +132,8 @@ export async function updateTask(
       ? normalizeSpecForTaskProjectPath(input.spec, task.projectPath)
       : undefined
     const normalizedAcceptanceCriteria = input.acceptanceCriteria !== undefined
-      ? input.acceptanceCriteria.map((criterion) => normalizeAcceptanceCriterionForTaskProjectPath(criterion, task.projectPath))
+      ? z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
+        .map((criterion) => normalizeAcceptanceCriterionForTaskProjectPath(criterion, task.projectPath))
       : undefined
 
     if (input.title !== undefined) task.title = input.title
@@ -269,9 +270,9 @@ function normalizeSpecForTaskProjectPath(spec: string, taskProjectPath: string):
 }
 
 function normalizeAcceptanceCriterionForTaskProjectPath(
-  criterion: z.input<typeof AcceptanceCriteria>,
+  criterion: z.infer<typeof AcceptanceCriteria>,
   taskProjectPath: string,
-): z.input<typeof AcceptanceCriteria> {
+): z.infer<typeof AcceptanceCriteria> {
   const prefix = duplicatedProjectPathPrefix(taskProjectPath)
   if (!prefix) return criterion
   return {

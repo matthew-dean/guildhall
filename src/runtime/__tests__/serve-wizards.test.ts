@@ -14,15 +14,22 @@ import { bootstrapWorkspace } from '@guildhall/config'
 import { buildServeApp } from '../serve.js'
 
 let tmpDir: string
+let projectId: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-wizards-'))
-  bootstrapWorkspace(tmpDir, { name: 'Wizards Test' })
+  projectId = bootstrapWorkspace(tmpDir, { name: 'Wizards Test' }).id ?? path.basename(tmpDir)
 })
 
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
+
+function projectUrl(route: string): string {
+  const url = new URL(`http://localhost${route}`)
+  url.searchParams.set('projectId', projectId)
+  return url.toString()
+}
 
 describe('GET /api/project/wizards', () => {
   it('returns onboard wizard with step statuses derived from on-disk facts', async () => {
@@ -53,7 +60,7 @@ describe('POST /api/project/wizards/:id/skip', () => {
   it('marks a skippable step as skipped and writes memory/wizards.yaml', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/wizards/onboard/skip', {
+      new Request(projectUrl('/api/project/wizards/onboard/skip'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ stepId: 'direction' }),
@@ -74,7 +81,7 @@ describe('POST /api/project/wizards/:id/skip', () => {
   it('rejects skipping a non-skippable step', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/wizards/onboard/skip', {
+      new Request(projectUrl('/api/project/wizards/onboard/skip'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ stepId: 'provider' }),
@@ -86,14 +93,14 @@ describe('POST /api/project/wizards/:id/skip', () => {
   it('unskip removes the marker', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     await app.fetch(
-      new Request('http://localhost/api/project/wizards/onboard/skip', {
+      new Request(projectUrl('/api/project/wizards/onboard/skip'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ stepId: 'direction' }),
       }),
     )
     const res = await app.fetch(
-      new Request('http://localhost/api/project/wizards/onboard/unskip', {
+      new Request(projectUrl('/api/project/wizards/onboard/unskip'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ stepId: 'direction' }),
@@ -113,7 +120,7 @@ describe('POST /api/project/coordinators/seed', () => {
   it('appends requested archetype coordinators to guildhall.yaml', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/coordinators/seed', {
+      new Request(projectUrl('/api/project/coordinators/seed'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ archetypes: ['tech', 'product'] }),
@@ -136,7 +143,7 @@ describe('POST /api/project/coordinators/seed', () => {
   it('rejects empty archetype list', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/coordinators/seed', {
+      new Request(projectUrl('/api/project/coordinators/seed'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ archetypes: [] }),
@@ -148,14 +155,14 @@ describe('POST /api/project/coordinators/seed', () => {
   it('is idempotent — re-seeding with an existing id adds nothing', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     await app.fetch(
-      new Request('http://localhost/api/project/coordinators/seed', {
+      new Request(projectUrl('/api/project/coordinators/seed'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ archetypes: ['tech'] }),
       }),
     )
     const res = await app.fetch(
-      new Request('http://localhost/api/project/coordinators/seed', {
+      new Request(projectUrl('/api/project/coordinators/seed'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ archetypes: ['tech'] }),
@@ -204,7 +211,7 @@ describe('POST /api/project/brief', () => {
   it('writes memory/project-brief.md when content is substantive', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/brief', {
+      new Request(projectUrl('/api/project/brief'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -230,7 +237,7 @@ describe('POST /api/project/brief', () => {
   it('rejects thin content', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/brief', {
+      new Request(projectUrl('/api/project/brief'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ content: 'short' }),

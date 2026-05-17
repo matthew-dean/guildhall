@@ -61,6 +61,7 @@ describe('resolveEffectiveTaskBootstrapBlock', () => {
     expect(result).toEqual({
       commands: ['pnpm install'],
       successGates: ['cd web && pnpm typecheck', 'cd web && pnpm build', 'pnpm lint'],
+      timeoutMs: 300_000,
     })
   })
 })

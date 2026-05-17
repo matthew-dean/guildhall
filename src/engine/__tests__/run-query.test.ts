@@ -1110,7 +1110,7 @@ describe('runQuery — unknown tool + invalid input', () => {
           status: z.string(),
         }),
         execute: async () => {
-          called = true
+          reviewCalls += 1
           return { output: 'updated', is_error: false }
         },
       }),
@@ -4652,7 +4652,7 @@ Uncertainties: none`,
       ),
     )
 
-    const readCompletions = events.filter((e) =>
+    const readCompletions = events.filter((e): e is Extract<typeof e, { type: 'tool_execution_completed' }> =>
       e.type === 'tool_execution_completed' &&
       e.tool_name === 'read-file'
     )

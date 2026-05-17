@@ -8,6 +8,7 @@ import {
   resolveConfig,
   registerWorkspace,
   setProvider,
+  updateGlobalConfig,
   updateProjectConfig,
 } from '@guildhall/config'
 import {
@@ -42,6 +43,7 @@ import {
 import { PermissionMode } from '@guildhall/engine'
 import { LivenessTracker } from '../liveness.js'
 import { buildServeApp } from '../serve.js'
+import { InMemoryGitDriver } from '../git-driver.js'
 
 // ---------------------------------------------------------------------------
 // End-to-end integration tests
@@ -150,6 +152,10 @@ function resolveBootstrapped() {
   return resolveConfig({ workspacePath: tmpDir })
 }
 
+function memoryGitDriver() {
+  return new InMemoryGitDriver({ clean: true, currentBranch: 'main' })
+}
+
 // ---------------------------------------------------------------------------
 // AC-03: the orchestrator processes a task from exploring → done end-to-end.
 //
@@ -243,7 +249,12 @@ describe('E2E AC-03: task lifecycle exploring → done', () => {
     }
 
     const config = resolveBootstrapped()
-    const orch = new Orchestrator({ config, agents, idleShutdownAfterTicks: 2 })
+    const orch = new Orchestrator({
+      config,
+      agents,
+      idleShutdownAfterTicks: 2,
+      gitDriver: memoryGitDriver(),
+    })
 
     const observedStatuses: TaskStatus[] = []
     for (let i = 0; i < 12; i++) {
@@ -389,6 +400,7 @@ coordinators:
       config,
       agents,
       idleShutdownAfterTicks: 2,
+      gitDriver: memoryGitDriver(),
     })
 
     // Drive until the task is done (should be 5 productive ticks).
@@ -496,6 +508,7 @@ describe('E2E 0.5.0: service over projects', () => {
       config: resolveConfig({ workspacePath: tmpDir }),
       agents,
       idleShutdownAfterTicks: 2,
+      gitDriver: memoryGitDriver(),
     })
     for (let i = 0; i < 12; i++) {
       const outcome = await orch.tick()
@@ -548,6 +561,7 @@ describe('E2E 0.5.0: service over projects', () => {
       )
 
       setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+      updateGlobalConfig({ preferredProvider: 'anthropic-api' })
       updateProjectConfig(tmpDir, { allowPaidProviderFallback: true })
       const selectRes = await app.fetch(new Request('http://localhost/api/service/select-project', {
         method: 'POST',
@@ -570,14 +584,25 @@ describe('E2E 0.5.0: service over projects', () => {
         ]),
       )
 
-      const startRes = await app.fetch(new Request('http://localhost/api/project/start', { method: 'POST' }))
+      const startRes = await app.fetch(new Request('http://localhost/api/project/start?projectId=service-proof', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      }))
+      if (startRes.status !== 200) {
+        throw new Error(`start failed: ${JSON.stringify(await startRes.json())}`)
+      }
       expect(startRes.status).toBe(200)
       const activityRes = await app.fetch(new Request('http://localhost/api/project/activity'))
       const activity = (await activityRes.json()) as { running?: boolean; runStatus?: string }
       expect(activity.running).toBe(true)
       expect(activity.runStatus).toBe('running')
 
-      const stopRes = await app.fetch(new Request('http://localhost/api/project/stop', { method: 'POST' }))
+      const stopRes = await app.fetch(new Request('http://localhost/api/project/stop?projectId=service-proof', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      }))
       expect(stopRes.status).toBe(200)
       const stopped = (await stopRes.json()) as { ok?: boolean }
       expect(stopped.ok).toBe(true)
@@ -631,6 +656,7 @@ describe('E2E: FR-10 escalation round-trip', () => {
         coordinators: {},
       },
       idleShutdownAfterTicks: 2,
+      gitDriver: memoryGitDriver(),
     })
 
     const firstTick = await orch.tick()
@@ -693,6 +719,7 @@ describe('E2E: FR-15 per-task permission mode clamp propagates through the orche
         coordinators: {},
       },
       idleShutdownAfterTicks: 2,
+      gitDriver: memoryGitDriver(),
     })
 
     await orch.tick()
@@ -805,6 +832,7 @@ describe('E2E AC-22: report_issue → coordinator remediation inbox', () => {
         },
       },
       idleShutdownAfterTicks: 2,
+      gitDriver: memoryGitDriver(),
     })
     orch.liveness.register('worker-agent', 'task-001')
 
@@ -902,6 +930,7 @@ describe('E2E AC-15: proposeTask → orchestrator tick → status per task_origi
         coordinators: { looma: stubAgent('looma-coordinator') },
       },
       idleShutdownAfterTicks: 2,
+      gitDriver: memoryGitDriver(),
     })
 
     // Bootstrap writes TASKS.json as a bare array (legacy shape); re-write
@@ -1104,6 +1133,7 @@ describe('E2E AC-16: worker pre-rejection → pre_rejection_policy applied on ti
         coordinators: { looma: stubAgent('looma-coordinator') },
       },
       idleShutdownAfterTicks: 3,
+      gitDriver: memoryGitDriver(),
     })
 
     let terminalDecided = false
@@ -1264,6 +1294,7 @@ describe('E2E AC-21: stall (>45s silence under strict) → coordinator remediati
       },
       liveness,
       idleShutdownAfterTicks: 2,
+      gitDriver: memoryGitDriver(),
     })
 
     // Pull `strict` into the tracker from agent-settings.yaml (this is what
@@ -1428,6 +1459,7 @@ describe('E2E AC-23: crash → checkpoint → reclaim → restart_from_checkpoin
         },
       },
       idleShutdownAfterTicks: 2,
+      gitDriver: memoryGitDriver(),
     })
     // Deliberately do NOT call orch.liveness.register('worker-dead', ...).
 
@@ -1586,6 +1618,7 @@ describe('E2E AC-23: crash → checkpoint → reclaim → restart_from_checkpoin
         },
       },
       idleShutdownAfterTicks: 2,
+      gitDriver: memoryGitDriver(),
     })
 
     // Now = 2026-04-20T00:00:00Z → checkpoint is ~24h old.

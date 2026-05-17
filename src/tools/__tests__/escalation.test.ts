@@ -365,6 +365,7 @@ describe('hasOpenEscalation', () => {
 
   it('returns true when at least one escalation is unresolved', () => {
     const task = seedTask({
+      status: 'blocked',
       escalations: [
         {
           id: 'esc-1',

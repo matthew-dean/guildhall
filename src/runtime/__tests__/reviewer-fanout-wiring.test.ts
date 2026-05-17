@@ -20,6 +20,7 @@ import type {
 } from '@guildhall/engine'
 import type { ConversationMessage, UsageSnapshot } from '@guildhall/protocol'
 import { z } from 'zod'
+import { InMemoryGitDriver } from '../git-driver.js'
 
 // ---------------------------------------------------------------------------
 // Integration test: reviewer fan-out at `review`. The Orchestrator, when
@@ -217,6 +218,10 @@ function builtContextStub() {
   }
 }
 
+function memoryGitDriver() {
+  return new InMemoryGitDriver({ clean: true, currentBranch: 'main' })
+}
+
 describe('Orchestrator — reviewer fan-out at review', () => {
   it('default fanout reviewers inspect files from the task projectPath', async () => {
     let observedCwd: string | null = null
@@ -328,7 +333,12 @@ describe('Orchestrator — reviewer fan-out at review', () => {
       )
     }
 
-    const orch = new Orchestrator({ config: baseConfig(), agents, reviewerFanout: runner })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      reviewerFanout: runner,
+      gitDriver: memoryGitDriver(),
+    })
     await orch.tick()
 
     // Runner was invoked with the applicable reviewer personas.
@@ -375,7 +385,12 @@ describe('Orchestrator — reviewer fan-out at review', () => {
       })
     }
 
-    const orch = new Orchestrator({ config: baseConfig(), agents, reviewerFanout: runner })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      reviewerFanout: runner,
+      gitDriver: memoryGitDriver(),
+    })
     await orch.tick()
 
     const q = await readQueue()
@@ -398,7 +413,11 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     const agents = agentSet()
 
     // No reviewerFanout in options → legacy path fires.
-    const orch = new Orchestrator({ config: baseConfig(), agents })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      gitDriver: memoryGitDriver(),
+    })
     await orch.tick()
 
     expect((agents.reviewer as ReturnType<typeof stubAgent>).calls.length).toBeGreaterThan(0)
@@ -441,7 +460,12 @@ describe('Orchestrator — reviewer fan-out at review', () => {
         }),
       )
 
-    const orch = new Orchestrator({ config: baseConfig(), agents, reviewerFanout: runner })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      reviewerFanout: runner,
+      gitDriver: memoryGitDriver(),
+    })
     await orch.tick()
 
     expect(approvingReviewer.calls).toHaveLength(1)
@@ -472,7 +496,12 @@ describe('Orchestrator — reviewer fan-out at review', () => {
       )
     }
 
-    const orch = new Orchestrator({ config: baseConfig(), agents, reviewerFanout: runner })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      reviewerFanout: runner,
+      gitDriver: memoryGitDriver(),
+    })
     const outcome = await orch.tick()
 
     // Outcome should be the blocked-max-revisions variant.
@@ -519,7 +548,12 @@ describe('Orchestrator — reviewer fan-out at review', () => {
         }),
       )
 
-    const orch = new Orchestrator({ config: baseConfig(), agents, reviewerFanout: runner })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      reviewerFanout: runner,
+      gitDriver: memoryGitDriver(),
+    })
     const outcome = await orch.tick()
 
     expect(outcome.kind).toBe('processed')

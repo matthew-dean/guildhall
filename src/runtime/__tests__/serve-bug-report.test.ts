@@ -12,10 +12,11 @@ import { buildServeApp } from '../serve.js'
 
 let tmpDir: string
 let tasksPath: string
+let projectId: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-bug-'))
-  bootstrapWorkspace(tmpDir, {
+  projectId = bootstrapWorkspace(tmpDir, {
     name: 'Bug Test',
     coordinators: [
       {
@@ -39,7 +40,7 @@ beforeEach(async () => {
         escalationTriggers: [],
       },
     ],
-  })
+  }).id ?? path.basename(tmpDir)
   tasksPath = path.join(tmpDir, 'memory', 'TASKS.json')
 })
 
@@ -56,10 +57,16 @@ async function readQueue(): Promise<TaskQueue> {
   return TaskQueue.parse(parsed)
 }
 
+function projectUrl(route: string, id = projectId): string {
+  const url = new URL(`http://localhost${route}`)
+  url.searchParams.set('projectId', id)
+  return url.toString()
+}
+
 describe('POST /api/project/bug-report', () => {
   it('creates a proposed task with priority=high and routes to the first coordinator by default', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/bug-report', {
+    const res = await app.fetch(new Request(projectUrl('/api/project/bug-report'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -81,7 +88,7 @@ describe('POST /api/project/bug-report', () => {
 
   it('routes by stack-trace top frame when no domain is given', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/bug-report', {
+    const res = await app.fetch(new Request(projectUrl('/api/project/bug-report'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -98,7 +105,7 @@ describe('POST /api/project/bug-report', () => {
 
   it('respects an explicit domain override', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await app.fetch(new Request('http://localhost/api/project/bug-report', {
+    await app.fetch(new Request(projectUrl('/api/project/bug-report'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -115,7 +122,7 @@ describe('POST /api/project/bug-report', () => {
 
   it('rejects a report with no title', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/bug-report', {
+    const res = await app.fetch(new Request(projectUrl('/api/project/bug-report'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ body: 'only body' }),
@@ -125,7 +132,7 @@ describe('POST /api/project/bug-report', () => {
 
   it('rejects a report with no body', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/bug-report', {
+    const res = await app.fetch(new Request(projectUrl('/api/project/bug-report'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title: 'only title' }),
@@ -137,16 +144,16 @@ describe('POST /api/project/bug-report', () => {
     // Fresh workspace with zero coordinators.
     const emptyDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-bug-empty-'))
     try {
-      bootstrapWorkspace(emptyDir, { name: 'No Coords' })
+      const emptyProjectId = bootstrapWorkspace(emptyDir, { name: 'No Coords' }).id ?? path.basename(emptyDir)
       const { app } = buildServeApp({ projectPath: emptyDir })
-      const res = await app.fetch(new Request('http://localhost/api/project/bug-report', {
+      const res = await app.fetch(new Request(projectUrl('/api/project/bug-report', emptyProjectId), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ title: 't', body: 'b' }),
       }))
       expect(res.status).toBe(400)
       const j = (await res.json()) as { error: string }
-      expect(j.error).toMatch(/no coordinators/i)
+      expect(j.error).toMatch(/inferred repo structure/i)
     } finally {
       await fs.rm(emptyDir, { recursive: true, force: true })
     }

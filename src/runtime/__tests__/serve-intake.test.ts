@@ -8,10 +8,11 @@ import { buildServeApp } from '../serve.js'
 
 let tmpDir: string
 let tasksPath: string
+let projectId: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-intake-'))
-  bootstrapWorkspace(tmpDir, {
+  projectId = bootstrapWorkspace(tmpDir, {
     name: 'Intake Test',
     coordinators: [
       {
@@ -35,7 +36,7 @@ beforeEach(async () => {
         escalationTriggers: [],
       },
     ],
-  })
+  }).id ?? path.basename(tmpDir)
   tasksPath = path.join(tmpDir, 'memory', 'TASKS.json')
 })
 
@@ -52,10 +53,16 @@ async function readQueue(): Promise<TaskQueue> {
   return TaskQueue.parse(parsed)
 }
 
+function projectUrl(route: string): string {
+  const url = new URL(`http://localhost${route}`)
+  url.searchParams.set('projectId', projectId)
+  return url.toString()
+}
+
 describe('POST /api/project/intake', () => {
   it('uses the matching coordinator subproject for the requested domain', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/intake', {
+    const res = await app.fetch(new Request(projectUrl('/api/project/intake'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -71,7 +78,7 @@ describe('POST /api/project/intake', () => {
 
   it('falls back to the first coordinator and its subproject path when domain is omitted', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/intake', {
+    const res = await app.fetch(new Request(projectUrl('/api/project/intake'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({

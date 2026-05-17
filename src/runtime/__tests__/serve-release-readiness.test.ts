@@ -11,10 +11,11 @@ import { buildServeApp } from '../serve.js'
 
 let tmpDir: string
 let tasksPath: string
+let projectId: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-'))
-  bootstrapWorkspace(tmpDir, { name: 'Release Test' })
+  projectId = bootstrapWorkspace(tmpDir, { name: 'Release Test' }).id ?? path.basename(tmpDir)
   tasksPath = path.join(tmpDir, 'memory', 'TASKS.json')
 })
 
@@ -53,6 +54,12 @@ function makeTask(overrides: Partial<Task>): Task {
 async function seed(tasks: Task[]): Promise<void> {
   const queue: TaskQueue = { version: 1, lastUpdated: new Date().toISOString(), tasks }
   await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+}
+
+function projectUrl(route: string): string {
+  const url = new URL(`http://localhost${route}`)
+  url.searchParams.set('projectId', projectId)
+  return url.toString()
 }
 
 describe('GET /api/project/release-readiness', () => {
@@ -172,7 +179,7 @@ describe('GET /api/project/release-readiness', () => {
   it('reports the design-system approval state', async () => {
     // Draft a DS via the endpoint, then check before/after approval.
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await app.fetch(new Request('http://localhost/api/project/design-system', {
+    await app.fetch(new Request(projectUrl('/api/project/design-system'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -191,7 +198,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.designSystem.approved).toBe(false)
     expect(body.designSystem.revision).toBe(1)
 
-    await app.fetch(new Request('http://localhost/api/project/design-system/approve', { method: 'POST' }))
+    await app.fetch(new Request(projectUrl('/api/project/design-system/approve'), { method: 'POST' }))
     res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
     body = await res.json() as any
     expect(body.designSystem.approved).toBe(true)

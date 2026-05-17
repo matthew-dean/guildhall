@@ -801,7 +801,7 @@ export function resolveEffectiveTaskBootstrapBlock(input: {
   task: Pick<Task, 'projectPath'>
   workspaceProjectPath: string
   workspaceBootstrap?: BootstrapBlock
-}): { commands: readonly string[]; successGates: readonly string[] } | null {
+}): { commands: readonly string[]; successGates: readonly string[]; timeoutMs: number } | null {
   const bootstrap = input.workspaceBootstrap
   if (!bootstrap) return null
   const taskProjectPath = resolveEffectiveTaskProjectPath(input.task, input.workspaceProjectPath)
@@ -812,6 +812,7 @@ export function resolveEffectiveTaskBootstrapBlock(input: {
     successGates: effectiveBootstrapGateCommands(bootstrap).map((command) =>
       rewriteWorkspaceScopedCommandForTask(command, input.workspaceProjectPath, taskProjectPath),
     ),
+    timeoutMs: bootstrap.timeoutMs,
   }
 }
 
