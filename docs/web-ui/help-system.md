@@ -9,8 +9,6 @@ help_summary: |
 
 # In-UI help system
 
-<UiReferenceNav />
-
 The UI surfaces inline help via `<Help>`, a Svelte component that pairs each helpable concept in the UI with exactly one page in these docs.
 
 ## How it works

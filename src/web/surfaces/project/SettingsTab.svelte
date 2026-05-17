@@ -22,6 +22,7 @@
   import Help from '../../lib/Help.svelte'
   import { nav } from '../../lib/nav.svelte.js'
   import { project } from '../../lib/project.svelte.js'
+  import { projectFetch } from '../../lib/project-routes.js'
 
   interface Props {
     subView?: string | null
@@ -97,7 +98,7 @@
   let providerStatus = $state<ProviderStatus | null>(null)
 
   $effect(() => {
-    fetch('/api/setup/status')
+    projectFetch('/api/setup/status')
       .then(r => r.json())
       .then(s => {
         initialized = Boolean(s.initialized)
@@ -105,14 +106,14 @@
         id = s.id ?? ''
       })
       .catch(() => (initialized = false))
-    fetch('/api/config/levers')
+    projectFetch('/api/config/levers')
       .then(r => r.json())
       .then(j => {
         if (j.error) leversError = String(j.error)
         else levers = j.levers ?? []
       })
       .catch(err => (leversError = err instanceof Error ? err.message : String(err)))
-    fetch('/api/project/design-system')
+    projectFetch('/api/project/design-system')
       .then(r => r.json())
       .then(j => (designSystem = j?.designSystem ?? null))
       .catch(() => (designSystem = null))
@@ -131,7 +132,7 @@
 
   async function loadBootstrap() {
     try {
-      const r = await fetch('/api/project/bootstrap/status')
+      const r = await projectFetch('/api/project/bootstrap/status')
       bootstrapInfo = (await r.json()) as BootstrapInfo
     } catch {
       bootstrapInfo = null
@@ -168,7 +169,7 @@
     bootstrapRunning = true
     bootstrapError = null
     try {
-      const r = await fetch('/api/project/bootstrap/run', { method: 'POST' })
+      const r = await projectFetch('/api/project/bootstrap/run', { method: 'POST' })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j?.error) {
         bootstrapError = j?.error ?? `HTTP ${r.status}`
@@ -188,13 +189,13 @@
   async function resetLevers() {
     try {
       leversError = null
-      const r = await fetch('/api/config/levers/reset', { method: 'POST' })
+      const r = await projectFetch('/api/config/levers/reset', { method: 'POST' })
       const j = await r.json().catch(() => ({}))
       if (j?.error) {
         leversError = String(j.error)
         return
       }
-      const fresh = await fetch('/api/config/levers').then(r => r.json())
+      const fresh = await projectFetch('/api/config/levers').then(r => r.json())
       levers = fresh.levers ?? []
     } catch (err) {
       leversError = err instanceof Error ? err.message : String(err)
@@ -224,7 +225,7 @@
     if (!/^[a-z0-9-]+$/.test(slug)) return flashIdentity('Invalid ID', true)
     savingIdentity = true
     try {
-      const r = await fetch('/api/setup/identity', {
+      const r = await projectFetch('/api/setup/identity', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: nm, id: slug }),
@@ -239,10 +240,10 @@
   }
 
   async function approveDesignSystem() {
-    const r = await fetch('/api/project/design-system/approve', { method: 'POST' })
+    const r = await projectFetch('/api/project/design-system/approve', { method: 'POST' })
     const j = await r.json()
     if (j.error) return alert('Approve failed: ' + j.error)
-    const reload = await fetch('/api/project/design-system').then(r => r.json())
+    const reload = await projectFetch('/api/project/design-system').then(r => r.json())
     designSystem = reload?.designSystem ?? null
   }
 

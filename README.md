@@ -92,7 +92,7 @@ current GitHub Release and verifies it against the matching `.sha256` asset.
 To install a specific release instead:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.5.0 sh
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.5.1 sh
 ```
 
 Also supported:
@@ -125,7 +125,7 @@ Setup covers:
 
 1. **Identity** — project name and id
 2. **Provider** — Claude Code CLI, Codex CLI, local OpenAI-compatible server, or API key
-3. **Launch** — start with the dashboard or kick off bootstrap/meta-intake
+3. **Launch** — open the project shell and let GuildHall guide setup from there
 
 ## The model
 
@@ -169,10 +169,12 @@ GuildHall is closer to a **project operations surface**:
 
 ```text
 guildhall serve [path]    Start the local service if needed, then open GuildHall
-guildhall start [path]    Start the local service without opening the browser
+guildhall start           Start the local service without opening the browser
 guildhall open [path]     Open the running service
 guildhall stop            Stop the local service
 guildhall init [path]     Initialize one project directly
+guildhall register <path> Register an existing initialized project
+guildhall list            List registered projects
 guildhall run [id|path]   Run the orchestrator headlessly
 guildhall help            Full command list
 ```

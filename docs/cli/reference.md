@@ -3,22 +3,23 @@ title: CLI reference
 help_topic: reference.cli
 help_summary: |
   Every shipped `guildhall` subcommand — init, register, unregister, list,
-  run, serve, start, open, stop, config, intake, approve-spec, resume,
-  meta-intake, and approve-meta-intake — with flags and examples.
+  run, serve, start, open, stop, and config — with flags and examples.
 ---
 
 # CLI reference
 
 **Entry point:** `src/runtime/cli.ts` (bundled to `dist/cli.js` → `guildhall` bin).
 
-The CLI talks to the same local service and project files as the browser UI. Use
-it when the terminal is the faster control surface or when you want Guildhall
-inside another script.
+The CLI talks to the same local service and project files as the browser UI.
+Use it for local service lifecycle, project registry management, and focused
+debug runs. Task creation, approval, and setup interviews live in the browser
+UI and HTTP API rather than as separate human-facing CLI commands.
 
 ## `guildhall init [path]`
 
-Interactive setup flow. Creates `guildhall.yaml`, registers the project, and
-opens the browser UI at the setup wizard for that project.
+Open the setup flow for a project. The default path launches the browser setup
+wizard; completing that flow creates `guildhall.yaml` and registers the
+project.
 
 Flags:
 
@@ -86,48 +87,10 @@ Stop the background Guildhall service.
 
 Re-run the setup wizard against an existing project.
 
-## `guildhall intake "<ask>"`
-
-Create a new `exploring` task (FR-12). The Spec Agent picks it up on the next tick.
-
-Flags:
-
-- `--workspace <id|path>` — target project. The flag keeps the runtime term.
-- `--domain <id>` — *required*; which coordinator domain owns this task.
-- `--project <path>` — override projectPath for this task only.
-- `--title <string>` — short human title.
-- `--task-id <id>` — supply an explicit id.
-
-## `guildhall approve-spec <task-id>`
-
-Advance a task from `spec_review` to `ready`.
-
-Flags: `--workspace <id|path>` (target project), `--note <string>`.
-
-## `guildhall resume <task-id>`
-
-Append a follow-up message to an `exploring` task (continues the intake conversation).
-
-Flags: `--workspace <id|path>` (target project), `--message <string>`, `--resolve-escalation <id>`, `--resolution <string>`.
-
-## `guildhall meta-intake`
-
-Bootstrap coordinators by interviewing the agent about your codebase (FR-14). Writes a draft; does not modify `guildhall.yaml` until approved.
-
-Flags: `--workspace <id|path>` (target project), `--force` (re-run even if already bootstrapped).
-
-## `guildhall approve-meta-intake`
-
-Merge the meta-intake draft into `guildhall.yaml`.
-
-Flags: `--workspace <id|path>` (target project).
-
 ## Examples
 
 ```bash
 guildhall init ~/projects/my-app
 guildhall run my-app --domain ui
-guildhall intake "add a ghost button" --workspace my-app --domain ui
-guildhall approve-spec task-001 --workspace my-app
 guildhall serve
 ```

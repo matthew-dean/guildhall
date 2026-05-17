@@ -22,6 +22,7 @@ describe('release artifact contract', () => {
 
   it('keeps the documented curl installer tied to GitHub latest releases', () => {
     const installer = read('scripts/install.sh')
+    const manifest = JSON.parse(read('package.json')) as { version: string }
     const readme = read('README.md')
     const quickStart = read('docs/guide/quick-start.md')
 
@@ -39,7 +40,8 @@ describe('release artifact contract', () => {
     expect(installer).toContain('Checksum mismatch')
     expect(readme).toContain(curlCommand)
     expect(quickStart).toContain(curlCommand)
-    expect(quickStart).toContain('GUILDHALL_VERSION=0.5.0')
+    expect(readme).toContain(`GUILDHALL_VERSION=${manifest.version}`)
+    expect(quickStart).toContain(`GUILDHALL_VERSION=${manifest.version}`)
     expect(quickStart).toContain('guildhall-macos.tar.gz.sha256')
   })
 })

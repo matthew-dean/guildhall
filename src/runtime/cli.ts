@@ -8,16 +8,6 @@ import { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
 import { runInit } from './init.js'
 import { runServe } from './serve.js'
 import {
-  createExploringTask,
-  approveSpec,
-  resumeExploring,
-} from './intake.js'
-import {
-  createMetaIntakeTask,
-  approveMetaIntake,
-  workspaceNeedsMetaIntake,
-} from './meta-intake.js'
-import {
   listWorkspaces,
   findWorkspace,
   registerWorkspace,
@@ -261,6 +251,19 @@ export function resolveServiceLifecycleIntent(
 //   guildhall config [id|path]          — re-run the init wizard on an existing workspace
 // ---------------------------------------------------------------------------
 
+export const SHIPPED_CLI_COMMANDS = [
+  'init',
+  'register',
+  'unregister',
+  'list',
+  'run',
+  'serve',
+  'start',
+  'stop',
+  'open',
+  'config',
+] as const
+
 const [command = 'help', ...args] = process.argv.slice(2)
 
 function getFlag(flag: string): string | undefined {
@@ -289,8 +292,8 @@ function positionals(): string[] {
   return result
 }
 
-function printHelp() {
-  console.log(`
+export function renderHelpText(): string {
+  return `
 GuildHall — multi-agent operating system for software projects
 
 Usage:
@@ -316,40 +319,18 @@ Usage:
 
   guildhall config [id|path]         Re-run the init wizard on an existing workspace
 
-  guildhall intake <ask>             Create a new task in the exploring phase (FR-12)
-    --workspace <id|path>        Target workspace (default: current directory)
-    --domain <id>                Coordinator domain this task belongs to (required)
-    --project <path>             Project path for the task (default: workspace path)
-    --title <string>             Explicit title (default: derived from the ask)
-    --task-id <id>               Override the generated task id
-
-  guildhall approve-spec <task-id>   Approve a reviewed spec → ready
-    --workspace <id|path>        Target workspace
-    --note <string>              Optional approval note to record
-
-  guildhall resume <task-id>         Add a follow-up message to an exploring task
-    --workspace <id|path>        Target workspace
-    --message <string>           New user message to append to the transcript
-    --resolve-escalation <id>    If set, resolve this escalation before resuming
-    --resolution <string>        Resolution text (with --resolve-escalation)
-
-  guildhall meta-intake              Inspect the repo and draft internal routing (FR-14)
-    --workspace <id|path>        Target workspace (default: current directory)
-    --force                      Seed the task even if coordinators already exist
-
-  guildhall approve-meta-intake      Merge meta-intake draft into guildhall.yaml
-    --workspace <id|path>        Target workspace
-
 Options:
   --help, -h                     Show this help
 
 Examples:
   guildhall init ~/projects/my-app
   guildhall run looma
-  guildhall intake "add a ghost button variant" --workspace looma --domain looma
-  guildhall approve-spec task-001 --workspace looma
   guildhall serve
-`.trim())
+`.trim()
+}
+
+function printHelp() {
+  console.log(renderHelpText())
 }
 
 async function cmdInit() {
@@ -593,196 +574,6 @@ async function cmdServeInternal() {
   })
 }
 
-function loadWorkspaceByFlagOrCwd(flag?: string) {
-  const raw = flag ?? process.cwd()
-  const entry = findWorkspace(raw)
-  if (entry) return loadWorkspace(entry.path)
-  return loadWorkspace(raw)
-}
-
-async function cmdIntake() {
-  const pos = positionals()
-  const ask = pos[0]
-  const wsFlag = getFlag('--workspace')
-  const domain = getFlag('--domain')
-  const projectFlag = getFlag('--project')
-  const title = getFlag('--title')
-  const taskIdOverride = getFlag('--task-id')
-
-  if (!ask) {
-    console.error('[guildhall] Usage: guildhall intake "<fuzzy ask>" --domain <id>')
-    process.exit(1)
-  }
-  if (!domain) {
-    console.error('[guildhall] Missing --domain flag (the coordinator that owns this task)')
-    process.exit(1)
-  }
-
-  let workspace
-  try {
-    workspace = loadWorkspaceByFlagOrCwd(wsFlag)
-  } catch (err) {
-    console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
-    process.exit(1)
-  }
-
-  try {
-    const result = await createExploringTask({
-      memoryDir: workspace.config.memoryDir,
-      ask,
-      domain,
-      projectPath: projectFlag ? expandPath(projectFlag) : workspace.config.projectPath,
-      ...(title ? { title } : {}),
-      ...(taskIdOverride ? { taskId: taskIdOverride } : {}),
-    })
-    console.log(`[guildhall] ✓ Created task ${result.taskId} in exploring`)
-    console.log(`[guildhall]   Transcript: ${result.transcriptPath}`)
-    console.log(`[guildhall]   Run "guildhall run ${workspace.config.workspaceId}" to start the intake conversation.`)
-  } catch (err) {
-    console.error(`[guildhall] Intake failed: ${err instanceof Error ? err.message : String(err)}`)
-    process.exit(1)
-  }
-}
-
-async function cmdApproveSpec() {
-  const pos = positionals()
-  const taskId = pos[0]
-  const wsFlag = getFlag('--workspace')
-  const note = getFlag('--note')
-
-  if (!taskId) {
-    console.error('[guildhall] Usage: guildhall approve-spec <task-id>')
-    process.exit(1)
-  }
-
-  let workspace
-  try {
-    workspace = loadWorkspaceByFlagOrCwd(wsFlag)
-  } catch (err) {
-    console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
-    process.exit(1)
-  }
-
-  const result = await approveSpec({
-    memoryDir: workspace.config.memoryDir,
-    taskId,
-    ...(note ? { approvalNote: note } : {}),
-  })
-  if (!result.success) {
-    console.error(`[guildhall] Approval failed: ${result.error}`)
-    process.exit(1)
-  }
-  console.log(`[guildhall] ✓ ${taskId} advanced to ${result.newStatus}`)
-}
-
-async function cmdResumeExploring() {
-  const pos = positionals()
-  const taskId = pos[0]
-  const wsFlag = getFlag('--workspace')
-  const message = getFlag('--message')
-  const escalationId = getFlag('--resolve-escalation')
-  const resolution = getFlag('--resolution')
-
-  if (!taskId) {
-    console.error('[guildhall] Usage: guildhall resume <task-id>')
-    process.exit(1)
-  }
-
-  let workspace
-  try {
-    workspace = loadWorkspaceByFlagOrCwd(wsFlag)
-  } catch (err) {
-    console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
-    process.exit(1)
-  }
-
-  const result = await resumeExploring({
-    memoryDir: workspace.config.memoryDir,
-    taskId,
-    ...(message ? { message } : {}),
-    ...(escalationId ? { resolveEscalationId: escalationId } : {}),
-    ...(resolution ? { resolution } : {}),
-  })
-  if (!result.success) {
-    console.error(`[guildhall] Resume failed: ${result.error}`)
-    process.exit(1)
-  }
-  console.log(`[guildhall] ✓ Task ${taskId} resumed. Run "guildhall run" to continue the intake.`)
-}
-
-async function cmdMetaIntake() {
-  const wsFlag = getFlag('--workspace')
-  const force = args.includes('--force')
-
-  let workspace
-  try {
-    workspace = loadWorkspaceByFlagOrCwd(wsFlag)
-  } catch (err) {
-    console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
-    process.exit(1)
-  }
-
-  if (!force && !workspaceNeedsMetaIntake(workspace.config.workspacePath)) {
-    console.log('[guildhall] Workspace already has coordinators. Re-run with --force to seed anyway.')
-    return
-  }
-
-  try {
-    const result = await createMetaIntakeTask({
-      memoryDir: workspace.config.memoryDir,
-      projectPath: workspace.config.projectPath,
-    })
-    if (result.alreadyExists) {
-      console.log(`[guildhall] Meta-intake task already exists: ${result.taskId}`)
-    } else {
-      console.log(`[guildhall] ✓ Seeded meta-intake task: ${result.taskId}`)
-    }
-    console.log(`[guildhall]   Transcript: ${result.transcriptPath}`)
-    console.log(`[guildhall]   Run "guildhall run ${workspace.config.workspaceId}" to start the interview.`)
-    console.log(`[guildhall]   After approval, run "guildhall approve-meta-intake" to write guildhall.yaml.`)
-  } catch (err) {
-    console.error(`[guildhall] Meta-intake failed: ${err instanceof Error ? err.message : String(err)}`)
-    process.exit(1)
-  }
-}
-
-async function cmdApproveMetaIntake() {
-  const wsFlag = getFlag('--workspace')
-
-  let workspace
-  try {
-    workspace = loadWorkspaceByFlagOrCwd(wsFlag)
-  } catch (err) {
-    console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
-    process.exit(1)
-  }
-
-  const result = await approveMetaIntake({
-    workspacePath: workspace.config.workspacePath,
-    memoryDir: workspace.config.memoryDir,
-  })
-  if (!result.success) {
-    console.error(`[guildhall] Meta-intake approval failed: ${result.error}`)
-    process.exit(1)
-  }
-  console.log(`[guildhall] ✓ Meta-intake approved. Added ${result.coordinatorsAdded ?? 0} coordinator(s) to guildhall.yaml.`)
-  if (result.leversSet) {
-    const { project, domainDefault, overrides, rejected } = result.leversSet
-    const parts: string[] = []
-    if (project.length > 0) parts.push(`project: ${project.join(', ')}`)
-    if (domainDefault.length > 0) parts.push(`domain-default: ${domainDefault.join(', ')}`)
-    for (const [d, names] of Object.entries(overrides)) {
-      parts.push(`override[${d}]: ${names.join(', ')}`)
-    }
-    if (parts.length > 0) {
-      console.log(`[guildhall] ✓ Inferred levers written to memory/agent-settings.yaml — ${parts.join(' | ')}`)
-    }
-    for (const r of rejected) {
-      console.warn(`[guildhall] ⚠ Skipped inferred lever ${r.scope}.${r.lever}: ${r.reason}`)
-    }
-  }
-}
-
 async function cmdConfig() {
   const pos = positionals()
   const idOrPath = pos[0]
@@ -814,11 +605,6 @@ async function main() {
     case 'open':    return cmdOpen()
     case 'serve-internal': return cmdServeInternal()
     case 'config':  return cmdConfig()
-    case 'intake':  return cmdIntake()
-    case 'approve-spec': return cmdApproveSpec()
-    case 'resume':  return cmdResumeExploring()
-    case 'meta-intake': return cmdMetaIntake()
-    case 'approve-meta-intake': return cmdApproveMetaIntake()
     default:
       console.error(`[guildhall] Unknown command: ${command}`)
       console.error(`[guildhall] Run "guildhall help" for usage.`)

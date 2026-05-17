@@ -9,9 +9,9 @@ help_summary: |
 
 # Setup wizard
 
-<UiReferenceNav />
-
-Lives at `/setup` and is rendered by `src/web/surfaces/SetupWizard.svelte`.
+The setup wizard appears when a project folder is not ready to run yet. It
+collects the minimum project identity and provider information Guildhall needs
+before it can create tasks or start work.
 
 ## Steps
 

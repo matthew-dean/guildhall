@@ -51,10 +51,10 @@ This keeps prompts tight — agents get only what they need for the current deci
 
 `src/runtime/remediation.ts` handles self-healing actions. [`remediation_autonomy`](../levers/remediation-autonomy) decides whether to act autonomously, confirm destructive actions, confirm all, or pause everything on issue.
 
-## Intake and meta-intake
+## Intake and setup shaping
 
-- `src/runtime/intake.ts` — the flow driven by `guildhall intake`.
-- `src/runtime/meta-intake.ts` — bootstrap flow (`guildhall meta-intake`) that inspects the repo, infers internal routing, and drafts starter tasks.
+- `src/runtime/intake.ts` — task-shaping flow used by the dashboard when work needs a clearer spec before it can run.
+- `src/runtime/meta-intake.ts` — setup flow used by the dashboard to inspect a repo, infer internal routing, and draft starter tasks.
 
 ## CLI and server entry points
 

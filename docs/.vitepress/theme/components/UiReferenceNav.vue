@@ -32,18 +32,18 @@ const normalizedItems = computed(() =>
 
 <template>
   <nav class="gh-ui-subnav" aria-label="UI reference navigation" :data-theme="isDark ? 'dark' : 'light'">
-    <p class="gh-ui-subnav__eyebrow">UI reference</p>
-    <ul class="gh-ui-subnav__list">
-      <li v-for="item in normalizedItems" :key="item.href">
-        <a
-          class="gh-ui-subnav__link"
-          :class="{ 'is-active': item.isActive }"
-          :href="item.href"
-          :aria-current="item.isActive ? 'page' : undefined"
-        >
-          {{ item.text }}
-        </a>
-      </li>
-    </ul>
+    <p class="gh-ui-subnav__eyebrow">UI pages</p>
+    <div class="gh-ui-subnav__list">
+      <a
+        v-for="item in normalizedItems"
+        :key="item.href"
+        class="gh-ui-subnav__link"
+        :class="{ 'is-active': item.isActive }"
+        :href="item.href"
+        :aria-current="item.isActive ? 'page' : undefined"
+      >
+        {{ item.text }}
+      </a>
+    </div>
   </nav>
 </template>

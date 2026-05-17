@@ -70,31 +70,29 @@
 
 .gh-ui-subnav {
   display: grid;
-  gap: var(--gh-space-3);
-  padding: clamp(var(--gh-space-3), 1.8vw, var(--gh-space-4));
-  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 68%, transparent);
-  border-radius: var(--gh-radius-3);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--gh-color-surface-raised) 92%, transparent),
-      color-mix(in srgb, var(--gh-color-surface-sunken) 86%, transparent)
-    );
+  gap: var(--gh-space-2);
+  margin-block: var(--gh-space-4) var(--gh-space-5);
+  padding: var(--gh-space-3) 0;
+  border-block: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 68%, transparent);
+  list-style: none;
+}
+
+.gh-ui-subnav * {
+  list-style: none;
 }
 
 .gh-ui-subnav__eyebrow {
   margin: 0;
   color: var(--gh-color-text-muted);
-  font-size: var(--gh-type-size-label);
+  font-size: 0.8rem;
   font-weight: var(--gh-type-weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0;
 }
 
 .gh-ui-subnav__list {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--gh-space-2);
+  gap: 0.35rem 0.85rem;
   padding: 0;
   margin: 0;
   list-style: none;
@@ -103,45 +101,34 @@
 .gh-ui-subnav__link {
   display: inline-flex;
   align-items: center;
-  min-block-size: 2.5rem;
-  padding-inline: 0.95rem;
-  border: 1px solid color-mix(in srgb, var(--gh-color-border-subtle) 64%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--gh-color-surface-raised) 58%, transparent);
+  justify-content: center;
+  padding-block: 0.1rem;
+  border-block-end: 2px solid transparent;
   color: var(--gh-color-text-secondary);
-  font-size: 0.95rem;
+  font-size: 0.92rem;
   font-weight: var(--gh-type-weight-medium);
   text-decoration: none;
   transition:
     border-color 140ms ease,
-    background-color 140ms ease,
     color 140ms ease;
 }
 
+.vp-doc .gh-ui-subnav__link {
+  text-decoration: none !important;
+}
+
 .gh-ui-subnav__link:hover {
-  border-color: color-mix(in srgb, var(--gh-color-action-primary) 44%, var(--gh-color-border-subtle));
+  border-block-end-color: color-mix(in srgb, var(--gh-color-action-primary) 34%, transparent);
   color: var(--gh-color-text-primary);
-  background: color-mix(in srgb, var(--gh-color-surface-elevated) 72%, transparent);
 }
 
 .gh-ui-subnav__link.is-active {
-  border-color: color-mix(in srgb, var(--gh-color-action-primary) 54%, var(--gh-color-border-subtle));
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--gh-color-action-primary) 16%, var(--gh-color-surface-elevated)),
-      color-mix(in srgb, var(--gh-color-surface-elevated) 92%, transparent)
-    );
+  border-block-end-color: color-mix(in srgb, var(--gh-color-action-primary) 72%, transparent);
   color: var(--gh-color-text-primary);
 }
 
 :root[data-gh-theme='light'] .gh-ui-subnav {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--gh-color-surface-raised) 95%, white),
-      color-mix(in srgb, var(--gh-color-surface-sunken) 82%, white)
-    );
+  border-block-color: color-mix(in srgb, var(--gh-color-border-subtle) 78%, transparent);
 }
 
 .vp-doc h1,

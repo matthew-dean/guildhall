@@ -9,9 +9,8 @@ help_summary: |
 
 # Providers page
 
-<UiReferenceNav />
-
-`src/web/surfaces/ProvidersPage.svelte`. Credential and model management.
+Use the Providers page to connect the model services Guildhall can use for
+planning, implementation, review, and gates.
 
 For each provider, the page shows:
 

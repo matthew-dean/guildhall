@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-
-import { resolveServiceLifecycleIntent } from '../cli.js'
+import { renderHelpText, resolveServiceLifecycleIntent, SHIPPED_CLI_COMMANDS } from '../cli.js'
 
 describe('resolveServiceLifecycleIntent', () => {
   it('treats serve as a friendly open-and-start path with a cwd launch hint', () => {
@@ -46,5 +45,36 @@ describe('resolveServiceLifecycleIntent', () => {
   it('recognizes open and stop as service lifecycle helpers', () => {
     expect(resolveServiceLifecycleIntent('open', [], { cwd: '/tmp/x' })?.kind).toBe('open')
     expect(resolveServiceLifecycleIntent('stop', [], { cwd: '/tmp/x' })?.kind).toBe('stop')
+  })
+})
+
+describe('Guildhall CLI surface', () => {
+  it('keeps the shipped command list focused on service, project registry, and debug run controls', () => {
+    expect(SHIPPED_CLI_COMMANDS).toEqual([
+      'init',
+      'register',
+      'unregister',
+      'list',
+      'run',
+      'serve',
+      'start',
+      'stop',
+      'open',
+      'config',
+    ])
+  })
+
+  it('does not expose task mutation commands in help', () => {
+    const help = renderHelpText()
+
+    for (const command of SHIPPED_CLI_COMMANDS) {
+      expect(help).toContain(`guildhall ${command}`)
+    }
+
+    expect(help).not.toContain('guildhall intake')
+    expect(help).not.toContain('guildhall approve-spec')
+    expect(help).not.toContain('guildhall resume')
+    expect(help).not.toContain('guildhall meta-intake')
+    expect(help).not.toContain('guildhall approve-meta-intake')
   })
 })

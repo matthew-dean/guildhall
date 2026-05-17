@@ -1,10 +1,12 @@
 ---
-title: Running the orchestrator
+title: Running Guildhall
 ---
 
-# Running the orchestrator
+# Running Guildhall
 
-The orchestrator is the process that advances tasks. It ticks through each domain, asks coordinators to evaluate their queues, dispatches workers, collects reviews, and runs gates.
+Running Guildhall means letting the local service advance project tasks. The
+service asks coordinators what can move next, dispatches workers, collects
+reviews, and runs gates before work is called done.
 
 ## From the dashboard
 
@@ -47,7 +49,11 @@ guildhall stop
 
 ## Fanout
 
-By default the orchestrator runs one task at a time per domain. Set [`concurrent_task_dispatch`](../levers/concurrent-task-dispatch) to `fanout_N` to run up to N tasks in parallel. Combined with [`worktree_isolation: per_task`](../levers/worktree-isolation), each parallel task runs in its own git worktree.
+By default Guildhall runs one task at a time per domain. Set
+[`concurrent_task_dispatch`](../levers/concurrent-task-dispatch) to `fanout_N`
+to run up to N tasks in parallel. Combined with
+[`worktree_isolation: per_task`](../levers/worktree-isolation), each parallel
+task runs in its own git worktree.
 
 ## Stop, pause, and stage transitions
 
@@ -55,8 +61,7 @@ By default the orchestrator runs one task at a time per domain. Set [`concurrent
   in the project shell. The current agent turn finishes gracefully; state is
   snapshotted.
 - **Pause or shelve a task**: use the task drawer or project actions in the UI.
-- **Resume spec shaping**: `guildhall resume <task-id>` appends a follow-up to
-  an `exploring` task.
+- **Resume spec shaping**: answer or follow up from Thread or the task drawer.
 
 ## What a "tick" does
 

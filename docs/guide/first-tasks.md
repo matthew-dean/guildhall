@@ -1,0 +1,56 @@
+---
+title: First task set
+pageClass: gh-first-visit-page
+---
+
+# First task set
+
+Before you press **Start**, make the first task set boring in the best way:
+small, grounded, and easy to verify.
+
+## Start with three to five tasks
+
+That is enough to prove sequencing and review without burying a bad assumption
+inside a huge queue.
+
+Good first tasks:
+
+- fix one known failure
+- implement one narrow behavior
+- update one doc for a clear audience
+- add one test surface for code that already exists
+
+Weak first tasks:
+
+- "Build the whole product."
+- "Clean up everything."
+- "Make the UI better."
+- "Review all code."
+
+## Give each task a finish line
+
+Each runnable task should answer:
+
+- What should change?
+- Where is the likely work area?
+- How can the work be checked?
+- What would make the reviewer reject it?
+
+If those answers are missing, leave the item as a draft or answer the question
+in Thread.
+
+## Treat drafts as a holding area
+
+A draft means "maybe work, not ready yet." It should not auto-run just because
+Guildhall found it in a file.
+
+Approve the draft when it has enough evidence. Keep it as a draft when it
+needs a human choice, release planning, or a clearer success signal.
+
+## Start when the queue is honest
+
+Before starting, check that at least one task is ready, no task is waiting for
+your answer, and blockers are visible where you can act on them.
+
+Once started, Guildhall should keep showing motion: live events, transcript
+movement, worktree/bootstrap status, reviewer decisions, and blockers.
