@@ -1,32 +1,64 @@
 import { defineConfig } from 'vitepress'
 
-const guideGettingStartedItems = [
-  { text: 'Quick start', link: '/guide/quick-start' },
-  { text: 'Introduction', link: '/guide/introduction' },
+const guideStartItems = [
+  { text: 'Start here', link: '/guide/quick-start' },
+  { text: 'New project', link: '/guide/new-project' },
+  { text: 'Existing project', link: '/guide/existing-project' },
+  { text: 'First task set', link: '/guide/first-tasks' },
+  { text: 'Many projects', link: '/guide/managing-projects' },
+]
+
+const guideOperateItems = [
   { text: 'The dashboard', link: '/guide/dashboard' },
-  { text: 'Onboarding and levers', link: '/guide/onboarding-and-levers' },
   { text: 'Setup wizard', link: '/web-ui/setup' },
   { text: 'Project view', link: '/web-ui/project-view' },
   { text: 'Task drawer', link: '/web-ui/task-drawer' },
-  { text: 'Core concepts', link: '/guide/concepts' },
   { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
+  { text: 'Running Guildhall', link: '/guide/running' },
 ]
 
-const guideWorkingItems = [
+const guideReferenceItems = [
+  { text: 'Introduction', link: '/guide/introduction' },
+  { text: 'Core concepts', link: '/guide/concepts' },
   { text: 'Project files & workspace state', link: '/guide/workspaces' },
+  { text: 'Onboarding and levers', link: '/guide/onboarding-and-levers' },
   { text: 'Coordinators & domains', link: '/guide/coordinators' },
   { text: 'Agents & models', link: '/guide/agents-and-models' },
-  { text: 'Running the orchestrator', link: '/guide/running' },
 ]
 
 const guideSidebarSections = [
   {
-    text: 'Getting started',
-    items: guideGettingStartedItems,
+    text: 'First run',
+    items: guideStartItems,
   },
   {
-    text: 'Working with Guildhall',
-    items: guideWorkingItems,
+    text: 'Operate Guildhall',
+    items: guideOperateItems,
+  },
+  {
+    text: 'Deeper reference',
+    items: guideReferenceItems,
+  },
+]
+
+const webUiSidebarSections = [
+  {
+    text: 'Web UI',
+    items: [
+      { text: 'Overview', link: '/web-ui/' },
+      { text: 'Projects home', link: '/web-ui/dashboard' },
+      { text: 'Setup wizard', link: '/web-ui/setup' },
+      { text: 'Project shell', link: '/web-ui/project-view' },
+      { text: 'Task drawer', link: '/web-ui/task-drawer' },
+      { text: 'Providers', link: '/web-ui/providers' },
+    ],
+  },
+  {
+    text: 'Implementation reference',
+    items: [
+      { text: 'Design tokens', link: '/web-ui/design-tokens' },
+      { text: 'In-UI help', link: '/web-ui/help-system' },
+    ],
   },
 ]
 
@@ -44,14 +76,14 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: 'Start', link: '/guide/quick-start' },
-      { text: 'Guide', link: '/guide/introduction' },
+      { text: 'Guide', link: '/guide/' },
       { text: 'CLI', link: '/cli/' },
       { text: 'Reference', link: '/reference/' },
       {
         text: 'More',
         items: [
           { text: 'UI reference', link: '/web-ui/' },
-          { text: 'Guide', link: '/guide/introduction' },
+          { text: 'Guide', link: '/guide/' },
           { text: 'Levers', link: '/levers/' },
           { text: 'Subsystems', link: '/subsystems/' },
           { text: 'Design notes', link: '/design/' },
@@ -152,7 +184,7 @@ export default defineConfig({
           ],
         },
       ],
-      '/web-ui/': guideSidebarSections,
+      '/web-ui/': webUiSidebarSections,
       '/reference/': [
         {
           text: 'Reference',
@@ -171,6 +203,7 @@ export default defineConfig({
           text: 'Releases',
           items: [
             { text: 'Overview', link: '/releases/' },
+            { text: '0.5.1', link: '/releases/0.5.1' },
             { text: '0.5.0', link: '/releases/0.5.0' },
             { text: '0.4.0', link: '/releases/0.4.0' },
           ],

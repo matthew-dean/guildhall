@@ -9,8 +9,6 @@ help_summary: |
 
 # Design tokens
 
-<UiReferenceNav />
-
 All UI styling uses CSS custom properties declared in `src/web/tokens.css`. No component file contains hardcoded hex values, raw px sizes, or one-off radii — everything references a token.
 
 ## Token groups

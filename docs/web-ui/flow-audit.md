@@ -2800,3 +2800,25 @@ screen.
   the portable `pnpm deploy --prod` form and only retries with `--legacy` when
   pnpm explicitly reports the v10 non-injected workspace requirement, clearing
   the partial deploy target before retrying.
+- Docs IA and route-contract alignment on `2026-05-17`: the VitePress guide
+  was reworked from a new-user information architecture perspective. The
+  getting-started path now starts with short journey pages for new projects,
+  existing projects, first task sets, and many-project operation before
+  sending readers into deeper reference material. The UI-reference nav no
+  longer renders as accidental Markdown list buttons, and docs were checked
+  against current route/provider/task-drawer code. During that audit the
+  Settings tab's project/config/setup calls were switched to `projectFetch`
+  so project-scoped pages follow the same explicit `projectId` contract the
+  HTTP API now documents.
+- CLI surface simplification on `2026-05-17`: task mutation commands were
+  removed from the shipped human-facing CLI (`intake`, `approve-spec`,
+  `resume`, `meta-intake`, `approve-meta-intake`). The CLI now stays focused
+  on service lifecycle, project registry/setup, and headless debug runs while
+  task creation, approval, and interview flows remain in the browser UI and
+  HTTP API. Added a CLI surface test to keep the smaller command list and help
+  output intentional.
+- 0.5.1 release prep on `2026-05-17`: public docs no longer describe removed
+  task-shaping CLI commands as active entrypoints, the runtime subsystem page
+  now frames intake/meta-intake as dashboard-driven flows, and the pinned
+  installer example/test now follows the package version so the release docs
+  do not drift during the next patch release.

@@ -15,8 +15,6 @@ the `/projects` service home for scanning registered projects, and the
 project shell where setup, tasks, live runs, reviewer calls, and release
 readiness actually play out.
 
-<UiReferenceNav />
-
 Use it for the everyday loop:
 
 1. Open the service home or jump straight into a project shell.
@@ -39,13 +37,11 @@ under `~/.guildhall/`.
 - [Task drawer](./task-drawer) — task detail pane.
 - [Providers page](./providers) — credential management.
 
-## Design system
+## Implementation reference
 
-Tokens, components, and conventions: [Design tokens](./design-tokens).
-
-## In-UI help
-
-How the `?` icons stay in sync with these docs: [Help system](./help-system).
+Most users do not need this. If you are working on Guildhall itself, the
+implementation reference covers [design tokens](./design-tokens) and the
+[in-UI help system](./help-system).
 
 If the UI does something weird, the receipts are usually sitting in plain files
-and a readable Svelte shell instead of hiding behind a theatrical spinner.
+that can be inspected directly.
