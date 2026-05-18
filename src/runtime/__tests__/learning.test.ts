@@ -4,17 +4,25 @@ import path from 'node:path'
 import os from 'node:os'
 import type { WorkspaceImportDraft } from '../workspace-import/index.js'
 import type { WorkspaceImportReview } from '../workspace-import/review.js'
+import type { Task } from '@guildhall/core'
 import {
   buildLearningSnapshot,
+  collectReflectionTriggers,
+  dismissSuggestedLearning,
   globalLearningPath,
+  persistLearningCandidates,
   projectLearningPath,
   readGlobalLearning,
   readProjectLearning,
+  recordTaskReflection,
+  recordUserCorrection,
   recordWorkspaceImportApproval,
   recordWorkspaceImportDismissal,
   resetGlobalLearning,
+  resetSuggestedLearnings,
   resetProjectLearning,
 } from '../learning.js'
+import type { LearningCandidate } from '../policy.js'
 
 let tmpDir: string
 let previousHome: string | undefined
@@ -237,5 +245,232 @@ describe('learning loop for workspace import', () => {
       draft: sampleDraft(),
     })
     expect(snapshot.effective.defaults.selectedAreaKeys).toEqual(['looma', 'knit'])
+  })
+})
+
+function mkTask(overrides: Partial<Task> = {}): Task {
+  return {
+    id: 'task-001',
+    title: 'Fix invite flow',
+    description: 'Repair invite flow.',
+    domain: 'looma',
+    projectPath: tmpDir,
+    status: 'done',
+    priority: 'normal',
+    acceptanceCriteria: [],
+    outOfScope: [],
+    dependsOn: [],
+    notes: [],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    escalations: [],
+    agentIssues: [],
+    revisionCount: 0,
+    remediationAttempts: 0,
+    origination: 'human',
+    createdAt: '2026-05-18T20:00:00.000Z',
+    updatedAt: '2026-05-18T20:10:00.000Z',
+    ...overrides,
+  }
+}
+
+function candidate(overrides: Partial<LearningCandidate> = {}): LearningCandidate {
+  return {
+    id: 'learn-project-paths',
+    source: 'task',
+    summary: 'For this project, invite work usually touches web/server/api/workspaces/[id]/invite.post.ts.',
+    evidence: [
+      {
+        kind: 'task',
+        summary: 'Task completed after editing web/server/api/workspaces/[id]/invite.post.ts.',
+        ref: 'task-001',
+      },
+    ],
+    proposedScope: 'project',
+    proposedDestination: 'project_memory',
+    confidence: 'medium',
+    risk: 'low',
+    requiresApproval: true,
+    ...overrides,
+  }
+}
+
+describe('reflection learning candidates', () => {
+  it('detects reflection triggers for done, blocked, playbook, correction, and model-lane outcomes', () => {
+    const triggers = collectReflectionTriggers(mkTask({
+      status: 'blocked',
+      notes: [
+        {
+          agentId: 'coordinator',
+          role: 'recovery-playbook',
+          content: JSON.stringify({ status: 'succeeded', playbook: 'repair_touched_file_failure' }),
+          timestamp: '2026-05-18T20:04:00.000Z',
+        },
+        {
+          agentId: 'user',
+          role: 'user-correction',
+          content: 'Prefer shorter public-doc summaries.',
+          timestamp: '2026-05-18T20:05:00.000Z',
+        },
+      ],
+      reviewVerdicts: [
+        {
+          verdict: 'revise',
+          reviewerPath: 'llm',
+          reason: 'Model lane failed before review.',
+          llmError: 'provider timeout',
+          failingSignals: [],
+          recordedAt: '2026-05-18T20:06:00.000Z',
+        },
+      ],
+    }))
+
+    expect(triggers.map(trigger => trigger.source)).toEqual([
+      'blocked',
+      'playbook_success',
+      'user_correction',
+      'model_lane_failure',
+    ])
+
+    const doneTriggers = collectReflectionTriggers(mkTask({ status: 'done' }))
+    expect(doneTriggers.map(trigger => trigger.source)).toEqual(['done'])
+  })
+
+  it('persists project-only path facts as project suggested learnings, not global preferences', async () => {
+    await persistLearningCandidates({
+      memoryDir: path.join(tmpDir, 'memory'),
+      candidates: [
+        candidate({
+          id: 'project-invite-path',
+          proposedScope: 'project',
+          proposedDestination: 'project_memory',
+          summary: 'This project keeps invite API work under web/server/api/workspaces.',
+        }),
+      ],
+    })
+
+    const project = readProjectLearning(path.join(tmpDir, 'memory'))
+    const global = readGlobalLearning()
+    expect(project.suggestedLearnings.map(item => item.id)).toEqual(['project-invite-path'])
+    expect(project.suggestedLearnings[0]).toMatchObject({
+      destination: 'project_memory',
+      status: 'suggested',
+      scope: 'project',
+    })
+    expect(global.suggestedLearnings).toEqual([])
+  })
+
+  it('records task reflection candidates after completed playbook-backed work', async () => {
+    await recordTaskReflection({
+      memoryDir: path.join(tmpDir, 'memory'),
+      task: mkTask({
+        status: 'done',
+        notes: [
+          {
+            agentId: 'coordinator',
+            role: 'recovery-playbook',
+            content: JSON.stringify({
+              status: 'succeeded',
+              playbook: 'repair_touched_file_failure',
+              summary: 'Focused repair succeeded after rerunning the invite typecheck.',
+              allowedPaths: ['web/server/api/workspaces/[id]/invite.post.ts'],
+            }),
+            timestamp: '2026-05-18T20:04:00.000Z',
+          },
+        ],
+      }),
+    })
+
+    const project = readProjectLearning(path.join(tmpDir, 'memory'))
+    expect(project.suggestedLearnings[0]).toMatchObject({
+      source: 'task',
+      destination: 'project_memory',
+      scope: 'project',
+      status: 'suggested',
+    })
+    expect(project.suggestedLearnings[0]?.summary).toContain('Focused repair succeeded')
+  })
+
+  it('turns repeated user style corrections into a suggested global preference', async () => {
+    await recordUserCorrection({
+      memoryDir: path.join(tmpDir, 'memory'),
+      correction: 'Please keep public docs concise and skip implementation trivia.',
+      category: 'public_docs_style',
+    })
+    expect(readGlobalLearning().suggestedLearnings).toEqual([])
+
+    await recordUserCorrection({
+      memoryDir: path.join(tmpDir, 'memory'),
+      correction: 'Again, keep public docs concise and skip implementation trivia.',
+      category: 'public_docs_style',
+    })
+
+    const global = readGlobalLearning()
+    expect(global.suggestedLearnings).toHaveLength(1)
+    expect(global.suggestedLearnings[0]).toMatchObject({
+      destination: 'user_preference',
+      scope: 'user_global',
+      status: 'suggested',
+      confidence: 'medium',
+    })
+    expect(global.suggestedLearnings[0]?.summary).toContain('public docs')
+  })
+
+  it('keeps product suggestions inert until a human accepts them', async () => {
+    const before = buildLearningSnapshot({
+      memoryDir: path.join(tmpDir, 'memory'),
+      review: sampleReview(),
+      draft: sampleDraft(),
+    }).effective.defaults
+
+    await persistLearningCandidates({
+      memoryDir: path.join(tmpDir, 'memory'),
+      candidates: [
+        candidate({
+          id: 'product-recovery-loop',
+          proposedScope: 'guildhall_product',
+          proposedDestination: 'product_suggestion',
+          summary: 'Guildhall should make recovery playbook failures more visible.',
+          requiresApproval: true,
+        }),
+      ],
+    })
+
+    const afterSnapshot = buildLearningSnapshot({
+      memoryDir: path.join(tmpDir, 'memory'),
+      review: sampleReview(),
+      draft: sampleDraft(),
+    })
+    expect(afterSnapshot.effective.defaults).toEqual(before)
+    expect(afterSnapshot.project.suggestedLearnings[0]).toMatchObject({
+      id: 'product-recovery-loop',
+      destination: 'product_suggestion',
+      status: 'suggested',
+      requiresApproval: true,
+    })
+  })
+
+  it('supports dismissing and resetting suggested learnings', async () => {
+    await persistLearningCandidates({
+      memoryDir: path.join(tmpDir, 'memory'),
+      candidates: [candidate({ id: 'project-invite-path' })],
+    })
+
+    await dismissSuggestedLearning({
+      memoryDir: path.join(tmpDir, 'memory'),
+      id: 'project-invite-path',
+      scope: 'project',
+    })
+
+    expect(readProjectLearning(path.join(tmpDir, 'memory')).suggestedLearnings[0]?.status)
+      .toBe('dismissed')
+
+    await resetSuggestedLearnings({
+      memoryDir: path.join(tmpDir, 'memory'),
+      scope: 'project',
+    })
+
+    expect(readProjectLearning(path.join(tmpDir, 'memory')).suggestedLearnings).toEqual([])
   })
 })

@@ -71,6 +71,7 @@ import {
   type ProjectLevers,
 } from '@guildhall/levers'
 import { buildContext, resolveLikelyTaskFiles } from './context-builder.js'
+import { recordTaskReflection } from './learning.js'
 import {
   modelForAgentName,
   roleForAgentName,
@@ -3616,6 +3617,12 @@ export class Orchestrator {
         transitioned,
         ...(transitioned ? {} : { note: 'no transition' }),
       })
+      if (transitioned && (afterStatus === 'done' || afterStatus === 'blocked')) {
+        await recordTaskReflection({
+          memoryDir: this.opts.config.memoryDir,
+          task: taskAfter,
+        })
+      }
       await this.maybeWriteReviewPacket(taskAfter)
 
       // FR-24: teardown on terminal transitions. `pending_pr` is preserved —

@@ -5,6 +5,8 @@ import { ensureGuildhallHome, guildhallHomeDir } from '@guildhall/config'
 import { z } from 'zod'
 import type { WorkspaceImportReview } from './workspace-import/review.js'
 import type { WorkspaceImportDraft } from './workspace-import/index.js'
+import type { Task } from '@guildhall/core'
+import type { LearningCandidate } from './policy.js'
 
 const TaskSelectionMode = z.enum(['all', 'tight'])
 
@@ -35,17 +37,62 @@ const ProductSuggestionSchema = z.object({
   evidence: z.array(z.string()),
 })
 
+const EvidenceRefSchema = z.object({
+  kind: z.enum(['task', 'verification', 'tool_error', 'review', 'checkpoint']),
+  summary: z.string(),
+  ref: z.string().optional(),
+})
+
+const SuggestedLearningSchema = z.object({
+  id: z.string(),
+  source: z.enum(['task', 'blocker', 'user_correction', 'review', 'gate', 'model_eval']),
+  summary: z.string(),
+  evidence: z.array(EvidenceRefSchema).default([]),
+  scope: z.enum(['project', 'user_global', 'guildhall_product']),
+  destination: z.enum([
+    'project_memory',
+    'project_skill',
+    'project_policy',
+    'user_preference',
+    'product_suggestion',
+    'model_lane_recommendation',
+    'task_audit_only',
+  ]),
+  confidence: z.enum(['low', 'medium', 'high']),
+  risk: z.enum(['low', 'medium', 'high']),
+  requiresApproval: z.boolean(),
+  status: z.enum(['suggested', 'active', 'dismissed']).default('suggested'),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  dismissedAt: z.string().optional(),
+})
+
 const LearningRecordSchema = z.object({
   version: z.literal(1).default(1),
   workspaceImport: WorkspaceImportLearningSchema.default({}),
   coordinatorSuggestions: z.array(CoordinatorSuggestionSchema).default([]),
   productSuggestions: z.array(ProductSuggestionSchema).default([]),
+  suggestedLearnings: z.array(SuggestedLearningSchema).default([]),
+  userCorrectionCounts: z.record(z.string(), z.number().int().nonnegative()).default({}),
 })
 
 export type WorkspaceImportLearning = z.infer<typeof WorkspaceImportLearningSchema>
 export type CoordinatorSuggestion = z.infer<typeof CoordinatorSuggestionSchema>
 export type ProductSuggestion = z.infer<typeof ProductSuggestionSchema>
+export type SuggestedLearning = z.infer<typeof SuggestedLearningSchema>
 export type LearningRecord = z.infer<typeof LearningRecordSchema>
+
+export interface ReflectionTrigger {
+  source:
+    | 'done'
+    | 'blocked'
+    | 'playbook_success'
+    | 'playbook_failure'
+    | 'user_correction'
+    | 'model_lane_failure'
+  summary: string
+  ref?: string
+}
 
 export interface WorkspaceImportDefaults {
   selectedAreaKeys: string[]
@@ -105,6 +152,78 @@ async function writeLearningFile(filePath: string, record: LearningRecord): Prom
   await writeFile(filePath, JSON.stringify(LearningRecordSchema.parse(record), null, 2), 'utf8')
 }
 
+function upsertSuggestedLearning(
+  record: LearningRecord,
+  candidate: LearningCandidate,
+  now: string,
+): LearningRecord {
+  if (candidate.proposedDestination === 'task_audit_only') return LearningRecordSchema.parse(record)
+  const suggested: SuggestedLearning = SuggestedLearningSchema.parse({
+    id: candidate.id,
+    source: candidate.source,
+    summary: candidate.summary,
+    evidence: candidate.evidence,
+    scope: candidate.proposedScope,
+    destination: candidate.proposedDestination,
+    confidence: candidate.confidence,
+    risk: candidate.risk,
+    requiresApproval: candidate.requiresApproval,
+    status: 'suggested',
+    createdAt: now,
+    updatedAt: now,
+  })
+  const existing = record.suggestedLearnings.find((item) => item.id === candidate.id)
+  const next = existing
+    ? record.suggestedLearnings.map((item) =>
+        item.id === candidate.id
+          ? SuggestedLearningSchema.parse({
+              ...item,
+              ...suggested,
+              createdAt: item.createdAt,
+              status: item.status === 'dismissed' ? 'dismissed' : suggested.status,
+              dismissedAt: item.dismissedAt,
+            })
+          : item,
+      )
+    : [...record.suggestedLearnings, suggested]
+  return LearningRecordSchema.parse({ ...record, suggestedLearnings: next })
+}
+
+function candidateBelongsInGlobal(candidate: LearningCandidate): boolean {
+  return (
+    candidate.proposedScope === 'user_global' ||
+    candidate.proposedDestination === 'user_preference' ||
+    candidate.proposedDestination === 'model_lane_recommendation'
+  )
+}
+
+export async function persistLearningCandidates(input: {
+  memoryDir: string
+  candidates: readonly LearningCandidate[]
+}): Promise<LearningSnapshot> {
+  const now = new Date().toISOString()
+  let projectRecord = readProjectLearning(input.memoryDir)
+  let userRecord = readGlobalLearning()
+
+  for (const candidate of input.candidates) {
+    if (candidate.proposedDestination === 'task_audit_only') continue
+    if (candidateBelongsInGlobal(candidate)) {
+      userRecord = upsertSuggestedLearning(userRecord, candidate, now)
+    } else {
+      projectRecord = upsertSuggestedLearning(projectRecord, candidate, now)
+    }
+  }
+
+  await writeLearningFile(projectLearningPath(input.memoryDir), projectRecord)
+  await writeLearningFile(globalLearningPath(), userRecord)
+
+  return buildLearningSnapshot({
+    memoryDir: input.memoryDir,
+    review: { areaGroups: [], sourceGroups: [], totalTaskCandidates: 0, totalMilestones: 0, totalGoals: 0 },
+    draft: { goals: [], milestones: [], context: [], stats: { inputSignals: 0, drafted: 0, deduped: 0 }, tasks: [] },
+  })
+}
+
 export function readProjectLearning(memoryDir: string): LearningRecord {
   return readLearningFile(projectLearningPath(memoryDir))
 }
@@ -121,6 +240,253 @@ export async function resetProjectLearning(memoryDir: string): Promise<void> {
 export async function resetGlobalLearning(): Promise<void> {
   ensureGuildhallHome()
   await writeLearningFile(globalLearningPath(), defaultLearningRecord())
+}
+
+export function collectReflectionTriggers(task: Task): ReflectionTrigger[] {
+  const triggers: ReflectionTrigger[] = []
+  if (task.status === 'done') {
+    triggers.push({
+      source: 'done',
+      summary: `Task ${task.id} completed.`,
+      ref: task.id,
+    })
+  }
+  if (task.status === 'blocked') {
+    triggers.push({
+      source: 'blocked',
+      summary: task.blockReason ?? `Task ${task.id} is blocked.`,
+      ref: task.id,
+    })
+  }
+  for (const note of task.notes) {
+    if (note.role === 'recovery-playbook') {
+      try {
+        const parsed = JSON.parse(note.content) as Record<string, unknown>
+        const status = parsed['status']
+        const playbook = typeof parsed['playbook'] === 'string' ? parsed['playbook'] : 'recovery'
+        if (status === 'succeeded') {
+          triggers.push({
+            source: 'playbook_success',
+            summary: `Recovery playbook succeeded: ${playbook}.`,
+            ref: note.timestamp,
+          })
+        } else if (status === 'failed') {
+          triggers.push({
+            source: 'playbook_failure',
+            summary: `Recovery playbook failed: ${playbook}.`,
+            ref: note.timestamp,
+          })
+        }
+      } catch {
+        // Ignore malformed historical notes; reflection should never break task flow.
+      }
+    }
+    if (note.role === 'user-correction') {
+      triggers.push({
+        source: 'user_correction',
+        summary: note.content,
+        ref: note.timestamp,
+      })
+    }
+  }
+  for (const verdict of task.reviewVerdicts) {
+    if (verdict.llmError) {
+      triggers.push({
+        source: 'model_lane_failure',
+        summary: verdict.llmError,
+        ref: verdict.recordedAt,
+      })
+    }
+  }
+  return triggers
+}
+
+function writeLearningByScope(
+  memoryDir: string,
+  scope: 'project' | 'user_global',
+  updater: (record: LearningRecord) => LearningRecord,
+): Promise<void> {
+  if (scope === 'project') {
+    return writeLearningFile(projectLearningPath(memoryDir), updater(readProjectLearning(memoryDir)))
+  }
+  ensureGuildhallHome()
+  return writeLearningFile(globalLearningPath(), updater(readGlobalLearning()))
+}
+
+export async function dismissSuggestedLearning(input: {
+  memoryDir: string
+  id: string
+  scope: 'project' | 'user_global'
+}): Promise<void> {
+  const now = new Date().toISOString()
+  await writeLearningByScope(input.memoryDir, input.scope, (record) =>
+    LearningRecordSchema.parse({
+      ...record,
+      suggestedLearnings: record.suggestedLearnings.map((item) =>
+        item.id === input.id
+          ? { ...item, status: 'dismissed', updatedAt: now, dismissedAt: now }
+          : item,
+      ),
+    }),
+  )
+}
+
+export async function resetSuggestedLearnings(input: {
+  memoryDir: string
+  scope: 'project' | 'user_global'
+}): Promise<void> {
+  await writeLearningByScope(input.memoryDir, input.scope, (record) =>
+    LearningRecordSchema.parse({ ...record, suggestedLearnings: [] }),
+  )
+}
+
+export async function recordUserCorrection(input: {
+  memoryDir: string
+  category: string
+  correction: string
+}): Promise<void> {
+  const now = new Date().toISOString()
+  const userRecord = readGlobalLearning()
+  const count = (userRecord.userCorrectionCounts[input.category] ?? 0) + 1
+  let nextRecord = LearningRecordSchema.parse({
+    ...userRecord,
+    userCorrectionCounts: {
+      ...userRecord.userCorrectionCounts,
+      [input.category]: count,
+    },
+  })
+
+  if (count >= 2) {
+    const label = input.category.replaceAll('_', ' ')
+    nextRecord = upsertSuggestedLearning(
+      nextRecord,
+      {
+        id: `user-correction-${input.category}`,
+        source: 'user_correction',
+        summary: `Repeated user correction about ${label}: ${input.correction}`,
+        evidence: [
+          {
+            kind: 'task',
+            summary: input.correction,
+          },
+        ],
+        proposedScope: 'user_global',
+        proposedDestination: 'user_preference',
+        confidence: count >= 3 ? 'high' : 'medium',
+        risk: 'low',
+        requiresApproval: true,
+      },
+      now,
+    )
+  }
+
+  await writeLearningFile(globalLearningPath(), nextRecord)
+}
+
+function parseRecoveryPlaybookNote(content: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(content)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+function taskReflectionCandidates(task: Task): LearningCandidate[] {
+  const candidates: LearningCandidate[] = []
+  for (const note of task.notes) {
+    if (note.role !== 'recovery-playbook') continue
+    const parsed = parseRecoveryPlaybookNote(note.content)
+    if (!parsed) continue
+    const playbook = typeof parsed['playbook'] === 'string' ? parsed['playbook'] : 'recovery'
+    const summary = typeof parsed['summary'] === 'string' ? parsed['summary'] : ''
+    const allowedPaths = Array.isArray(parsed['allowedPaths'])
+      ? parsed['allowedPaths'].filter((value): value is string => typeof value === 'string')
+      : []
+    if (parsed['status'] === 'succeeded' && allowedPaths.length > 0) {
+      candidates.push({
+        id: `task-${task.id}-${playbook}-paths`,
+        source: 'task',
+        summary:
+          summary ||
+          `Recovery playbook ${playbook} succeeded for project paths: ${allowedPaths.join(', ')}.`,
+        evidence: [
+          {
+            kind: 'checkpoint',
+            summary: `Successful playbook ${playbook} used ${allowedPaths.join(', ')}.`,
+            ref: note.timestamp,
+          },
+        ],
+        proposedScope: 'project',
+        proposedDestination: 'project_memory',
+        confidence: 'medium',
+        risk: 'low',
+        requiresApproval: true,
+      })
+    }
+    if (parsed['status'] === 'failed') {
+      candidates.push({
+        id: `task-${task.id}-${playbook}-failure-product`,
+        source: 'blocker',
+        summary:
+          summary ||
+          `Recovery playbook ${playbook} failed and may need a product-level improvement.`,
+        evidence: [
+          {
+            kind: 'task',
+            summary: `Failed playbook ${playbook} on task ${task.id}.`,
+            ref: note.timestamp,
+          },
+        ],
+        proposedScope: 'guildhall_product',
+        proposedDestination: 'product_suggestion',
+        confidence: 'medium',
+        risk: 'low',
+        requiresApproval: true,
+      })
+    }
+  }
+  for (const verdict of task.reviewVerdicts) {
+    if (!verdict.llmError) continue
+    candidates.push({
+      id: `task-${task.id}-model-lane-${verdict.recordedAt}`,
+      source: 'model_eval',
+      summary: `Model lane failure during ${verdict.reviewerPath} review: ${verdict.llmError}`,
+      evidence: [
+        {
+          kind: 'review',
+          summary: verdict.reason,
+          ref: verdict.recordedAt,
+        },
+      ],
+      proposedScope: 'user_global',
+      proposedDestination: 'model_lane_recommendation',
+      confidence: 'low',
+      risk: 'low',
+      requiresApproval: true,
+    })
+  }
+  return candidates
+}
+
+export async function recordTaskReflection(input: {
+  memoryDir: string
+  task: Task
+}): Promise<LearningSnapshot> {
+  for (const trigger of collectReflectionTriggers(input.task)) {
+    if (trigger.source !== 'user_correction') continue
+    await recordUserCorrection({
+      memoryDir: input.memoryDir,
+      category: 'general_user_expectations',
+      correction: trigger.summary,
+    })
+  }
+  return persistLearningCandidates({
+    memoryDir: input.memoryDir,
+    candidates: taskReflectionCandidates(input.task),
+  })
 }
 
 function incrementCounts(

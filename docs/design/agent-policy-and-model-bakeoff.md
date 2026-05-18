@@ -709,17 +709,17 @@ Files likely touched:
 
 Todos:
 
-- [ ] Add reflection trigger points for done, blocked, playbook success,
+- [x] Add reflection trigger points for done, blocked, playbook success,
   playbook failure, user correction, and model lane failure.
-- [ ] Add `LearningCandidate` persistence as suggested records.
-- [ ] Add coordinator routing rules for `project_memory`, `project_skill`,
+- [x] Add `LearningCandidate` persistence as suggested records.
+- [x] Add coordinator routing rules for `project_memory`, `project_skill`,
   `user_preference`, `product_suggestion`, and `task_audit_only`.
-- [ ] Add tests proving project-only path facts stay project-scoped.
-- [ ] Add tests proving repeated user style corrections can become a suggested
+- [x] Add tests proving project-only path facts stay project-scoped.
+- [x] Add tests proving repeated user style corrections can become a suggested
   user/global preference.
-- [ ] Add tests proving product suggestions do not change runtime behavior.
-- [ ] Add confidence and approval rules.
-- [ ] Add reset/dismiss support for suggested learnings.
+- [x] Add tests proving product suggestions do not change runtime behavior.
+- [x] Add confidence and approval rules.
+- [x] Add reset/dismiss support for suggested learnings.
 
 Acceptance criteria:
 

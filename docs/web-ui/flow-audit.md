@@ -657,6 +657,18 @@ screen.
   section that tells the worker not to do broad repo research while a focused
   playbook is active. Focused runtime regression passed with `317` tests and
   `pnpm typecheck` passed.
+- Completed the Phase 3 reflection and learning-candidate routing slice.
+  Guildhall now detects reflection triggers for done, blocked, playbook
+  success/failure, user correction, and model-lane failure outcomes; persists
+  `LearningCandidate` records as inspectable suggested learnings; routes
+  project memory/skill/policy candidates to project learning, user preferences
+  and model-lane recommendations to global learning, product suggestions as
+  inert suggestions, and task-audit-only candidates nowhere. Repeated user
+  corrections can become suggested global preferences, completed
+  playbook-backed work can suggest project memory, suggested learnings can be
+  dismissed/reset, and orchestrator completion/block transitions run the
+  reflection recorder. Focused learning/orchestrator regression passed with
+  `11` tests and `pnpm typecheck` passed.
 
 - Completed the `0.5.0` macOS packaging slice. Guildhall now has a
   buildable packaged artifact at `artifacts/macos/guildhall-macos`,

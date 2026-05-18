@@ -26,6 +26,7 @@ import { InMemoryGitDriver } from '../git-driver.js'
 import { writeCheckpoint } from '@guildhall/tools'
 import { appendFailureClassificationNote, classifyAgentFailure } from '../policy.js'
 import { commandEvidence, touchedFiles } from './policy-fixtures.js'
+import { readProjectLearning } from '../learning.js'
 
 // ---------------------------------------------------------------------------
 // Orchestrator feedback-loop tests
@@ -2320,6 +2321,48 @@ describe('Orchestrator.tick — feedback loop', () => {
     expect(reviewCall!.prompt).toContain('added focused unit coverage')
     expect(reviewCall!.prompt).toContain('## Policy Decision Packet')
     expect(reviewCall!.prompt).toContain('repair_touched_file_failure')
+  })
+
+  it('records reflection learning when completed work has a successful playbook', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'in_progress',
+      }),
+    ])
+    const worker = stubAgent('worker-agent', async () => {
+      await mutateTask('a', {
+        status: 'done',
+        notes: [
+          {
+            agentId: 'coordinator',
+            role: 'recovery-playbook',
+            content: JSON.stringify({
+              status: 'succeeded',
+              playbook: 'repair_touched_file_failure',
+              summary: 'Focused invite repair succeeded.',
+              allowedPaths: ['web/server/api/workspaces/[id]/invite.post.ts'],
+            }),
+            timestamp: '2026-05-18T20:04:00.000Z',
+          } as any,
+        ],
+      })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    await orch.tick()
+
+    const learning = readProjectLearning(memoryDir)
+    expect(learning.suggestedLearnings[0]).toMatchObject({
+      source: 'task',
+      destination: 'project_memory',
+      scope: 'project',
+      status: 'suggested',
+    })
+    expect(learning.suggestedLearnings[0]?.summary).toContain('Focused invite repair succeeded')
   })
 
   it('uses implementation self-critique notes and filters command-shaped artifact paths from the review packet', async () => {
