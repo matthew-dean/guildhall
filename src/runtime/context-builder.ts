@@ -224,6 +224,46 @@ function renderLikelyTaskFiles(task: Task, checkpointFilesTouched: readonly stri
   return ['**Likely target files:**', ...files.map((file) => `- ${file}`)].join('\n')
 }
 
+function renderActiveRecoveryPlaybook(task: Task): string {
+  const note = [...task.notes].reverse().find((candidate) => {
+    if (candidate.role !== 'recovery-playbook') return false
+    try {
+      const parsed = JSON.parse(candidate.content) as Record<string, unknown>
+      return parsed['status'] === 'started'
+    } catch {
+      return false
+    }
+  })
+  if (!note) return ''
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(note.content) as Record<string, unknown>
+  } catch {
+    return ''
+  }
+  const playbook = typeof parsed['playbook'] === 'string' ? parsed['playbook'] : 'recovery'
+  const summary = typeof parsed['summary'] === 'string' ? parsed['summary'] : ''
+  const command = typeof parsed['command'] === 'string' ? parsed['command'] : ''
+  const maxTurns = typeof parsed['maxTurns'] === 'number' ? parsed['maxTurns'] : undefined
+  const allowedPaths = Array.isArray(parsed['allowedPaths'])
+    ? parsed['allowedPaths'].filter((value): value is string => typeof value === 'string')
+    : []
+  const allowedTools = Array.isArray(parsed['allowedTools'])
+    ? parsed['allowedTools'].filter((value): value is string => typeof value === 'string')
+    : []
+
+  return [
+    `**Playbook:** ${playbook}`,
+    summary ? `- Summary: ${summary}` : '',
+    command ? `- Authoritative command: \`${command}\`` : '',
+    allowedPaths.length > 0 ? `- Allowed paths: ${allowedPaths.join(', ')}` : '',
+    allowedTools.length > 0 ? `- Allowed tools: ${allowedTools.join(', ')}` : '',
+    typeof maxTurns === 'number' ? `- Max turns: ${maxTurns}` : '',
+    '- Do not do broad repo research while this focused recovery playbook is active.',
+    '- If the allowed paths or command are no longer valid, raise a concrete escalation instead of improvising outside the playbook.',
+  ].filter(Boolean).join('\n')
+}
+
 function hasWorkerSelfCritiqueNote(task: Task): boolean {
   return [...task.notes].reverse().some((note) => {
     const role = typeof note.role === 'string' ? note.role.trim().toLowerCase() : ''
@@ -660,6 +700,7 @@ export async function buildContext(
   const reviewRubrics = coreRubrics
   const latestCheckpoint = renderLatestCheckpoint(task, checkpoint)
   const likelyTaskFiles = renderLikelyTaskFiles(task, checkpoint?.filesTouched ?? [])
+  const activeRecoveryPlaybook = renderActiveRecoveryPlaybook(task)
   const resolvedEscalationGuidance = renderResolvedEscalationGuidance(task)
   const reviewerFeedbackCutoffMs = (() => {
     const cutoff = latestResolvedRetryEscalationAt(task)
@@ -717,6 +758,9 @@ export async function buildContext(
       : '',
     likelyTaskFiles
       ? `\n### Likely Target Files\n${likelyTaskFiles}`
+      : '',
+    activeRecoveryPlaybook
+      ? `\n### Active Recovery Playbook\n${activeRecoveryPlaybook}`
       : '',
     recentAgentNotes.length > 0
       ? `\n### Agent Notes\n${recentAgentNotes.join('\n\n')}`

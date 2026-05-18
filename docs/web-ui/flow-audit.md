@@ -42,7 +42,9 @@ screen.
 
 - [x] Split the "agents need to be smarter" work into immediate `0.5.x`
   decision-point unblockers versus `0.6.0` policy/runtime architecture.
-  See `docs/design/agent-policy-and-model-bakeoff.md`.
+  The 0.6.0 note now combines bounded improvisation, typed recovery playbooks,
+  coordinator-routed project/system learning, and model bakeoff work. See
+  `docs/design/agent-policy-and-model-bakeoff.md`.
 - [x] Normalize dirty-repo setup blockers in Thread so the user sees the repo
   name and the concrete commit/stash recovery action instead of raw setup
   prose.
@@ -611,7 +613,7 @@ screen.
 - [x] `guildhall-architecture-006` Prove unattended throughput in stages:
   finish one, finish three, then run until blocked or exhausted. The `0.5.0`
   proof is satisfied by the live project trio; the broader generalized policy
-  runtime and model bakeoff are explicitly tracked in
+  runtime, learning loop, bounded improvisation, and model bakeoff are tracked in
   `docs/design/agent-policy-and-model-bakeoff.md` for `0.6.0`.
 
 ## Task Log Rule
@@ -622,6 +624,39 @@ screen.
   debugging and Looma/Knit testing.
 
 ## Latest Progress
+
+- Started the `0.6.0` policy/learning implementation in
+  `/Users/matthew/git/worktrees/guildhall-0.6-policy-learning` on
+  `feature/0.6-policy-learning-runtime`. Baseline `pnpm test` passed
+  (`142` files, `2196` tests), and the first Phase 1 slice added
+  `src/runtime/policy.ts` with typed failure classifications, recovery
+  playbook ids, decision-packet shapes, learning-candidate shapes, and
+  deterministic classifier coverage for self-authored verification failures,
+  stale `oldString` edit targets, and reviewer infrastructure noise. Focused
+  `pnpm vitest run src/runtime/__tests__/policy.test.ts` and `pnpm typecheck`
+  passed.
+- Continued the Phase 1 policy slice by wiring self-authored verification
+  recovery through the classifier. When Guildhall keeps a worker in the repair
+  lane instead of treating its own verification failure as a human blocker, the
+  task now gets a `policy-classification` audit note. Thread escalation details
+  also include the compact policy read when a blocked task has that note.
+- Completed the first review-handoff packet slice for `0.6.0`: policy evidence
+  fixture builders now cover command evidence, touched files, review verdicts,
+  and checkpoint evidence, and review packets include a synthesized
+  `Policy Decision Packet` from the latest `policy-classification` audit note.
+  Focused runtime regression passed with `269` tests, and `pnpm typecheck`
+  passed after the fixture shape was corrected to Guildhall's
+  `approve`/`revise` verdict contract.
+- Completed the Phase 2 bounded recovery-playbook slice. `RecoveryPlan`
+  resolution now maps classifier output into explicit playbooks with allowed
+  tools, allowed paths, commands, max-turn budgets, success signals, and stop
+  signals. Self-authored verification recovery now writes a
+  `recovery-playbook` audit note, dirty-checkout packaging/stops write
+  playbook audit notes, Thread escalation details can explain the active
+  recovery path, and worker context renders an `Active Recovery Playbook`
+  section that tells the worker not to do broad repo research while a focused
+  playbook is active. Focused runtime regression passed with `317` tests and
+  `pnpm typecheck` passed.
 
 - Completed the `0.5.0` macOS packaging slice. Guildhall now has a
   buildable packaged artifact at `artifacts/macos/guildhall-macos`,

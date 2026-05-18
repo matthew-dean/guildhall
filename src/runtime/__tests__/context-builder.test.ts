@@ -136,6 +136,37 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).not.toContain('Note number 1')
   })
 
+  it('surfaces active recovery playbooks as focused worker instructions', async () => {
+    const taskWithPlaybook: Task = {
+      ...baseTask,
+      notes: [
+        {
+          agentId: 'coordinator',
+          role: 'recovery-playbook',
+          content: JSON.stringify({
+            status: 'started',
+            playbook: 'repair_touched_file_failure',
+            summary:
+              'Trying focused repair in checkpoint-touched files before asking for a human decision.',
+            allowedPaths: ['web/app/composables/use-presence.ts'],
+            allowedTools: ['read-file', 'edit-file', 'run-shell-command', 'raise-escalation'],
+            command: 'cd web && pnpm typecheck',
+            maxTurns: 2,
+          }),
+          timestamp: '2026-05-18T20:31:00Z',
+        },
+      ],
+    }
+
+    const ctx = await buildContext(taskWithPlaybook, tmpDir)
+
+    expect(ctx.taskSummary).toContain('### Active Recovery Playbook')
+    expect(ctx.taskSummary).toContain('repair_touched_file_failure')
+    expect(ctx.taskSummary).toContain('Trying focused repair')
+    expect(ctx.taskSummary).toContain('web/app/composables/use-presence.ts')
+    expect(ctx.taskSummary).toContain('Do not do broad repo research')
+  })
+
 
   it('surfaces likely target files from the spec and automated commands', async () => {
     const taskWithTargets: Task = {

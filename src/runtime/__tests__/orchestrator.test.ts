@@ -24,6 +24,8 @@ import {
 } from '@guildhall/levers'
 import { InMemoryGitDriver } from '../git-driver.js'
 import { writeCheckpoint } from '@guildhall/tools'
+import { appendFailureClassificationNote, classifyAgentFailure } from '../policy.js'
+import { commandEvidence, touchedFiles } from './policy-fixtures.js'
 
 // ---------------------------------------------------------------------------
 // Orchestrator feedback-loop tests
@@ -2261,16 +2263,36 @@ describe('Orchestrator.tick — feedback loop', () => {
       }),
     ])
     const worker = stubAgent('worker-agent', async () => {
+      const notes: Task['notes'] = [
+        {
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: '**Self-critique:**\n- AC-1: Met — added focused unit coverage.',
+          timestamp: '2026-04-01T00:02:00Z',
+        } as any,
+      ]
+      appendFailureClassificationNote(
+        { id: 'a', notes },
+        classifyAgentFailure({
+          taskId: 'a',
+          touchedFiles: touchedFiles('web/tests/unit/composables/use-presence.test.ts'),
+          verification: [
+            commandEvidence({
+              command: 'pnpm test -- use-presence',
+              passed: false,
+              summary:
+                'web/tests/unit/composables/use-presence.test.ts(6,5): expected true to be false',
+            }),
+          ],
+        }),
+        {
+          agentId: 'coordinator',
+          timestamp: '2026-04-01T00:02:30Z',
+        },
+      )
       await mutateTask('a', {
         status: 'review',
-        notes: [
-          {
-            agentId: 'worker-agent',
-            role: 'self-critique',
-            content: '**Self-critique:**\n- AC-1: Met — added focused unit coverage.',
-            timestamp: '2026-04-01T00:02:00Z',
-          } as any,
-        ],
+        notes,
       })
     })
     const reviewer = stubAgent('reviewer-agent')
@@ -2287,12 +2309,17 @@ describe('Orchestrator.tick — feedback loop', () => {
     expect(packet).toContain('use-presence.test.ts')
     expect(packet).toContain('## Latest Self-Critique')
     expect(packet).toContain('added focused unit coverage')
+    expect(packet).toContain('## Policy Decision Packet')
+    expect(packet).toContain('Verification failed in files the worker already touched')
+    expect(packet).toContain('repair_touched_file_failure')
 
     const [reviewCall] = reviewer.calls
     expect(reviewCall).toBeDefined()
     expect(reviewCall!.prompt).toContain('## Review Packet')
     expect(reviewCall!.prompt).toContain('use-presence.test.ts')
     expect(reviewCall!.prompt).toContain('added focused unit coverage')
+    expect(reviewCall!.prompt).toContain('## Policy Decision Packet')
+    expect(reviewCall!.prompt).toContain('repair_touched_file_failure')
   })
 
   it('uses implementation self-critique notes and filters command-shaped artifact paths from the review packet', async () => {
@@ -5966,6 +5993,24 @@ describe('Orchestrator.tick — FR-10 escalations', () => {
     expect(task?.blockReason ?? null).toBeNull()
     expect(task?.escalations[0]?.resolvedBy).toBe('orchestrator')
     expect(task?.escalations[0]?.resolution).toContain('self-authored verification failure')
+    const policyNote = task?.notes.find((note) => note.role === 'policy-classification')
+    expect(policyNote).toBeTruthy()
+    expect(JSON.parse(policyNote?.content ?? '{}')).toMatchObject({
+      class: 'self_authored_verification_failure',
+      safePlaybooks: ['repair_touched_file_failure', 'rerun_authoritative_command'],
+    })
+    const playbookNote = task?.notes.find((note) => note.role === 'recovery-playbook')
+    expect(playbookNote).toBeTruthy()
+    expect(JSON.parse(playbookNote?.content ?? '{}')).toMatchObject({
+      status: 'started',
+      playbook: 'repair_touched_file_failure',
+      command: 'cd web && pnpm typecheck',
+      maxTurns: 2,
+      allowedPaths: [
+        'web/app/pages/settings.vue',
+        'web/server/api/workspaces/[id]/invite.post.ts',
+      ],
+    })
     expect(task?.notes.at(-1)?.content).toContain('repair the failed verification')
   })
 
