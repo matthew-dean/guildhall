@@ -43,4 +43,16 @@ export const TEST_ENGINEER_RUBRIC: SoftGateRubricItem[] = [
       'Do new tests exercise meaningful behavior, not just bump coverage numbers on happy paths?',
     weight: 0.6,
   },
+  {
+    id: 'test-coverage-floor-explicit',
+    question:
+      'Does the change preserve or raise the declared coverage floor, and does any exemption name the uncovered risk and why it is acceptable?',
+    weight: 0.8,
+  },
+  {
+    id: 'test-ui-coverage-layered',
+    question:
+      'For UI changes, is stateful behavior covered with component-level tests while layout, routing, and browser-only behavior are covered in a real browser?',
+    weight: 0.8,
+  },
 ]

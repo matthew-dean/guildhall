@@ -42,7 +42,9 @@ screen.
 
 - [x] Split the "agents need to be smarter" work into immediate `0.5.x`
   decision-point unblockers versus `0.6.0` policy/runtime architecture.
-  See `docs/design/agent-policy-and-model-bakeoff.md`.
+  The 0.6.0 note now combines bounded improvisation, typed recovery playbooks,
+  coordinator-routed project/system learning, and model bakeoff work. See
+  `docs/design/agent-policy-and-model-bakeoff.md`.
 - [x] Normalize dirty-repo setup blockers in Thread so the user sees the repo
   name and the concrete commit/stash recovery action instead of raw setup
   prose.
@@ -58,6 +60,39 @@ screen.
   backlog management surface keeps the full content width. Live browser check
   on `http://127.0.0.1:7777/projects/looma-knit/work` confirmed the Work list
   renders without `Live activity` and the project-level ticker remains visible.
+- [x] Make Thread the primary path for imported-task shaping and task-scoped
+  questions. Imported notes now show their starting point and source reference
+  on the Thread card, expose `Add context` and `Let Guildhall shape this`
+  inline, and nest active questions under the task instead of rendering a
+  separate peer card. The details pane remains an optional inspection path, not
+  the required place to keep a task moving.
+- [x] Fix the new-project setup regression where `/setup?step=3` attempted to
+  seed meta-intake through `/api/project/meta-intake` without a `projectId`.
+  The setup wizard now keeps an explicit project id after identity creation,
+  moves the URL to `/projects/:id/setup?...`, and scopes setup follow-up API
+  calls before the route has fully caught up. A route-helper regression test
+  covers the `/setup` page posting a project mutation for the newly-created
+  project id.
+- [x] Tighten project routing after the `font-something` project surfaced from
+  the legacy selected-project path. Project pages now pass the route project id
+  into project API refresh/start/stop/inbox calls and build top-bar links from
+  that explicit id. Legacy `/project/...` pages canonicalize to
+  `/projects/:id/...` as soon as the loaded project id is known, so a visible
+  project cannot keep using unscoped navigation that falls back to the project
+  list or mutable foreground project. The routing setup card also now starts
+  meta-intake inline instead of showing a generic `Open` button to `/`.
+- [x] Add deterministic route coverage for this failure class. Vitest now
+  checks that project action hrefs from runtime payloads normalize into
+  `/projects/:id/...` routes, and that every active onboard setup step has a
+  real submit endpoint or project-safe href instead of falling through to `/`.
+- [x] Add coverage guardrails for the 0.5.1 hardening path. The default
+  `pnpm test:coverage` command now enforces the current honest floor
+  (`83%` statements/lines/functions, `75%` branches), while
+  `pnpm test:coverage:90` and the PR workflow document the future 90% gate.
+  New happy-dom coverage protects real user flows across Thread inline setup,
+  imported-draft shaping, task-scoped question batching, Current task states,
+  provider/global-model settings, workspace import review, and routing-slice
+  coordinator screens.
 - [x] Run the final focused test/build sweep and push the release-hardening
   batch.
 
@@ -611,7 +646,7 @@ screen.
 - [x] `guildhall-architecture-006` Prove unattended throughput in stages:
   finish one, finish three, then run until blocked or exhausted. The `0.5.0`
   proof is satisfied by the live project trio; the broader generalized policy
-  runtime and model bakeoff are explicitly tracked in
+  runtime, learning loop, bounded improvisation, and model bakeoff are tracked in
   `docs/design/agent-policy-and-model-bakeoff.md` for `0.6.0`.
 
 ## Task Log Rule
@@ -2822,3 +2857,56 @@ screen.
   now frames intake/meta-intake as dashboard-driven flows, and the pinned
   installer example/test now follows the package version so the release docs
   do not drift during the next patch release.
+- Coverage baseline on `2026-05-18`: `pnpm test:coverage` now measures
+  `src/**/*.{ts,svelte}` only, excluding test files and declarations. The
+  current honest baseline is intentionally low because browser-rendered Svelte
+  surfaces are counted but not covered by Vitest yet; the gate now prevents
+  regression from that baseline instead of reporting packaged artifacts or
+  pretending the repo already meets an 80% source-wide floor.
+- Rendered UI coverage on `2026-05-18`: added the first repo-owned Playwright
+  suite for the dashboard. It boots deterministic fixture projects on an
+  isolated home/port, then checks mobile Projects scrolling, explicit project
+  route opening, legacy `/project/thread` canonicalization, task-scoped
+  questions, and answer-control vertical centering. The option rows now center
+  the checkbox/radio mark with the option text instead of pinning the mark to
+  the top of tall choices.
+- Component coverage split on `2026-05-19`: Svelte components now mount inside
+  Vitest through `@testing-library/svelte` and `happy-dom`, so UI components
+  contribute real executed lines to `pnpm test:coverage` instead of only
+  appearing in the denominator. The first component-level coverage targets the
+  task-question affordance in `AgentQuestion.svelte`; browser-only truths such
+  as scroll behavior and visual centering remain in Playwright.
+- Guild coverage policy on `2026-05-19`: the Test Engineer persona now treats
+  coverage as an explicit guild contract. Specs must name the declared coverage
+  floor, the command that enforces it, and any intentional exemptions; UI work
+  must split component-level state tests from real-browser layout/routing tests
+  instead of hiding behind vague "best practices."
+- PR gates on `2026-05-19`: added a minimal GitHub PR workflow for install,
+  typecheck, help-doc sync, dependency-boundary linting, unit/integration
+  tests, build, and rendered UI checks. The 90% source-wide coverage gate is
+  represented by `pnpm test:coverage:90` and documented in the workflow as the
+  command to swap in once the current 82.4% baseline reaches the guild target.
+- Coverage push on `2026-05-19`: `pnpm test:coverage` now reaches the 90%
+  source-wide line target with real added coverage around setup/provider flows, task-drawer
+  approvals, Thread inline approvals/questions/load errors, project event
+  streams, project-scoped fetch wrapping, search/gate helpers, intake modal
+  creation and bug filing, project provider/model overrides, Settings
+  bootstrap/identity/levers/design-system flows, Inbox agent-handled/dismiss
+  flows, Projects start/stop/attach failure handling, Workspace Import source
+  and task narrowing, ProjectView bootstrap/mobile/uninitialized states,
+  drawer provenance/history/transcript/experts audit trails, SetupWizard
+  validation/provider/meta-intake approval states, TaskCard navigation/status
+  summaries, and the agent settings persistence tool. The last stretch added
+  real endpoint, provider, session-storage, network/web guard, drawer checklist,
+  suggestion, and tooltip behavior coverage instead of inert line-touching.
+  The new IntakeModal tests caught a real shared `Select`
+  binding bug; `Select.svelte` now updates its bound value in its explicit
+  change handler. The expanded Thread tests also caught a real meta-intake
+  control-flow bug where a "Create split proposal" button could render while
+  still calling the generic project start endpoint; Thread now routes that
+  completed meta-intake path to `/api/project/meta-intake/synthesize`.
+  The `DoThisNext.svelte` coverage caught another real UI flow bug: when the
+  highest-priority inbox item pointed at the current page, the banner hid all
+  actions instead of showing the next actionable item. Latest verification:
+  `pnpm test:coverage` passed with 2,415 tests and 90.00% lines, and
+  `pnpm typecheck` passed.

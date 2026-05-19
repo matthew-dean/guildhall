@@ -77,6 +77,24 @@ function projectUrl(route: string): string {
 }
 
 describe('GET /api/project/meta-intake/draft', () => {
+  it('returns an uninitialized status before setup has created guildhall.yaml', async () => {
+    const uninitializedDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-meta-uninitialized-'))
+    try {
+      const { app } = buildServeApp({ projectPath: uninitializedDir })
+      const res = await app.fetch(new Request('http://localhost/api/project/meta-intake/draft'))
+      expect(res.status).toBe(200)
+      const body = await res.json() as Record<string, any>
+      expect(body).toMatchObject({
+        status: 'uninitialized',
+        taskExists: false,
+        specReady: false,
+        drafts: [],
+      })
+    } finally {
+      await fs.rm(uninitializedDir, { recursive: true, force: true })
+    }
+  })
+
   it('returns no-task before any meta-intake has been seeded', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request('http://localhost/api/project/meta-intake/draft'))

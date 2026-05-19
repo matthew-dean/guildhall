@@ -1,5 +1,7 @@
 import { defineConfig } from 'vitest/config'
 import { resolve } from 'node:path'
+import { svelte } from '@sveltejs/vite-plugin-svelte'
+import { svelteTesting } from '@testing-library/svelte/vite'
 
 /**
  * Single unified vitest config for the flat layout.
@@ -10,6 +12,10 @@ import { resolve } from 'node:path'
  * `vitest run src/runtime` etc. — no projects indirection needed.
  */
 export default defineConfig({
+  plugins: [
+    svelte(),
+    svelteTesting(),
+  ],
   resolve: {
     alias: [
       'agents',
@@ -40,7 +46,13 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],
-      thresholds: { lines: 80, functions: 80, branches: 70 },
+      include: ['src/**/*.{ts,svelte}'],
+      exclude: [
+        'src/**/*.test.ts',
+        'src/**/*.d.ts',
+        'src/**/__tests__/**',
+      ],
+      thresholds: { statements: 83, lines: 83, functions: 83, branches: 75 },
     },
   },
 })

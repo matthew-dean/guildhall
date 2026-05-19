@@ -99,6 +99,128 @@ describe('buildThread', () => {
     }
   })
 
+  it('lets the routing setup step seed meta-intake instead of linking to the project list', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: false,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+
+      const routingStep = thread.turns.find(turn => turn.id === 'setup:routing')
+      if (!routingStep || routingStep.kind !== 'setup_step') throw new Error('expected routing setup step')
+      expect(thread.activeTurnId).toBe('setup:routing')
+      expect(routingStep.affordance).toBe('inline-button')
+      expect(routingStep.actionLabel).toBe('Let Guildhall inspect the repo')
+      expect(routingStep.submitEndpoint).toBe('/api/project/meta-intake')
+      expect(routingStep.actionHref).toBeUndefined()
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('does not emit generic project-list links for onboard setup steps', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const snapshots: ProjectSnapshot[] = [
+        {
+          projectPath,
+          bootstrapVerified: false,
+          hasProvider: false,
+          hasDirection: false,
+          workspaceImportReviewed: false,
+          taskCount: 0,
+          wizardState: emptyWizardsState(),
+        },
+        {
+          projectPath,
+          config: { id: 'demo', name: 'Demo' },
+          bootstrapVerified: false,
+          hasProvider: false,
+          hasDirection: false,
+          workspaceImportReviewed: false,
+          taskCount: 0,
+          wizardState: emptyWizardsState(),
+        },
+        {
+          projectPath,
+          config: { id: 'demo', name: 'Demo' },
+          bootstrapVerified: false,
+          hasProvider: true,
+          hasDirection: false,
+          workspaceImportReviewed: false,
+          taskCount: 0,
+          wizardState: emptyWizardsState(),
+        },
+        {
+          projectPath,
+          config: { id: 'demo', name: 'Demo', bootstrap: { verifiedAt: new Date().toISOString() }, coordinators: [] },
+          bootstrapVerified: true,
+          hasProvider: true,
+          hasDirection: false,
+          workspaceImportReviewed: false,
+          taskCount: 0,
+          wizardState: emptyWizardsState(),
+        },
+        {
+          projectPath,
+          config: { id: 'demo', name: 'Demo', bootstrap: { verifiedAt: new Date().toISOString() }, coordinators: [{ id: 'frontend', name: 'Frontend' }] },
+          bootstrapVerified: true,
+          hasProvider: true,
+          hasDirection: false,
+          workspaceImportReviewed: false,
+          taskCount: 0,
+          wizardState: emptyWizardsState(),
+        },
+        {
+          projectPath,
+          config: { id: 'demo', name: 'Demo', bootstrap: { verifiedAt: new Date().toISOString() }, coordinators: [{ id: 'frontend', name: 'Frontend' }] },
+          bootstrapVerified: true,
+          hasProvider: true,
+          hasDirection: true,
+          workspaceImportReviewed: false,
+          taskCount: 0,
+          wizardState: emptyWizardsState(),
+        },
+        {
+          projectPath,
+          config: { id: 'demo', name: 'Demo', bootstrap: { verifiedAt: new Date().toISOString() }, coordinators: [{ id: 'frontend', name: 'Frontend' }] },
+          bootstrapVerified: true,
+          hasProvider: true,
+          hasDirection: true,
+          workspaceImportReviewed: true,
+          taskCount: 0,
+          wizardState: emptyWizardsState(),
+        },
+      ]
+
+      for (const snapshot of snapshots) {
+        const thread = buildThread({ projectPath, snapshot })
+        const activeSetup = thread.turns.find(turn => turn.kind === 'setup_step' && turn.status === 'active')
+        if (!activeSetup || activeSetup.kind !== 'setup_step') throw new Error('expected active setup step')
+        expect(activeSetup.actionHref).not.toBe('/')
+        expect(Boolean(activeSetup.submitEndpoint || activeSetup.actionHref)).toBe(true)
+      }
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('keeps project direction active ahead of a large imported-draft queue and collapses the queue to one turn', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
@@ -556,6 +678,85 @@ describe('buildThread', () => {
       const questionTurn = questionTurns[0]
       if (!questionTurn || questionTurn.kind !== 'agent_question') throw new Error('expected question turn')
       expect(questionTurn.question.prompt).toBe('Pick one')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('groups multiple open questions under one task turn with imported source context', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const now = new Date().toISOString()
+      const sourcePath = path.join(projectPath, 'knit', 'PROJECT_STATE.md')
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-import-1',
+              title: 'Block menu / block side menu',
+              description: 'knit/PROJECT_STATE.md: - [ ] Block menu / block side menu',
+              status: 'exploring',
+              createdAt: now,
+              updatedAt: now,
+              notes: [
+                {
+                  agentId: 'workspace-importer',
+                  role: 'importer',
+                  content: `Imported from: ${sourcePath}`,
+                  timestamp: now,
+                },
+              ],
+              openQuestions: [
+                {
+                  id: 'q-scope',
+                  kind: 'choice',
+                  askedBy: 'spec-agent',
+                  askedAt: now,
+                  prompt: 'Should drag-and-drop reordering be in scope?',
+                  choices: ['Include drag-handle in scope', 'Drag-handle is out of scope'],
+                  selectionMode: 'single',
+                },
+                {
+                  id: 'q-target',
+                  kind: 'text',
+                  askedBy: 'spec-agent',
+                  askedAt: now,
+                  prompt: 'Which editor package owns the block menu?',
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: now },
+          coordinators: [{ id: 'knit', name: 'Knit' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+
+      const questionTurns = thread.turns.filter((turn) => turn.kind === 'agent_question')
+      expect(questionTurns).toHaveLength(1)
+      const questionTurn = questionTurns[0]
+      if (!questionTurn || questionTurn.kind !== 'agent_question') throw new Error('expected question turn')
+      expect(thread.activeTurnId).toBe('q:task-import-1:questions')
+      expect(questionTurn.taskDescription).toContain('Block menu / block side menu')
+      expect(questionTurn.sourceNote?.references).toEqual([sourcePath])
+      expect(questionTurn.questions?.map((question) => question.id)).toEqual(['q-scope', 'q-target'])
+      expect(thread.turns.some((turn) => turn.id === 'inflight:task-import-1')).toBe(false)
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }

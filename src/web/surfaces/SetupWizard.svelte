@@ -17,7 +17,7 @@
   import Help from '../lib/Help.svelte'
   import { friendlyStewardName } from '../lib/display.js'
   import { nav } from '../lib/nav.svelte.js'
-  import { currentProjectHref, projectFetch } from '../lib/project-routes.js'
+  import { currentProjectHref, projectFetch, projectHref } from '../lib/project-routes.js'
 
   interface Defaults {
     suggestedName?: string
@@ -65,6 +65,8 @@
   }
 
   let { projectId: _projectId = null }: Props = $props()
+  const routeProjectId = $derived(_projectId?.trim() || null)
+  let activeProjectId = $state<string | null>(null)
 
   let step = $state<1 | 2 | 3>(1)
   let identity = $state<Status>({})
@@ -112,12 +114,29 @@
       .slice(0, 40)
   }
 
+  function setupFetch(input: string, init?: RequestInit): Promise<Response> {
+    return projectFetch(input, init, activeProjectId)
+  }
+
+  function setupHref(nextStep: 1 | 2 | 3): string {
+    return activeProjectId ? projectHref(activeProjectId, `/setup?step=${nextStep}`) : `/setup?step=${nextStep}`
+  }
+
+  function dashboardHref(): string {
+    return activeProjectId ? projectHref(activeProjectId, '/thread') : currentProjectHref('/thread')
+  }
+
+  $effect(() => {
+    if (routeProjectId && activeProjectId !== routeProjectId) activeProjectId = routeProjectId
+  })
+
   $effect(() => {
     Promise.all([
-      projectFetch('/api/setup/defaults').then(r => r.json() as Promise<Defaults>),
-      projectFetch('/api/setup/status').then(r => r.json() as Promise<Status>),
+      setupFetch('/api/setup/defaults').then(r => r.json() as Promise<Defaults>),
+      setupFetch('/api/setup/status').then(r => r.json() as Promise<Status>),
     ])
       .then(([defaults, status]) => {
+        if (status.initialized && status.id) activeProjectId = status.id
         identity = {
           name: status.name || defaults.suggestedName,
           id: status.id || defaults.suggestedId,
@@ -150,7 +169,7 @@
 
   $effect(() => {
     if (step !== 2 || providers) return
-    projectFetch('/api/setup/providers')
+    setupFetch('/api/setup/providers')
       .then(r => r.json())
       .then(j => {
         if (j.error) return
@@ -183,16 +202,17 @@
       return (idError = 'ID must be lowercase letters, numbers, and dashes only')
     busy = true
     try {
-      const r = await projectFetch('/api/setup/identity', {
+      const r = await setupFetch('/api/setup/identity', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: nm, id: slug }),
       })
       const j = await r.json()
       if (j.error) return (nameError = j.error)
+      activeProjectId = typeof j.id === 'string' && j.id.trim() ? j.id.trim() : slug
       identity = { ...identity, name: nm, id: slug, initialized: true }
       step = 2
-      history.replaceState({}, '', '/setup?step=2')
+      history.replaceState({}, '', setupHref(2))
     } finally {
       busy = false
     }
@@ -211,7 +231,7 @@
       if (selectedProvider === 'llama-cpp') {
         body.lmStudioUrl = llamaUrl.trim() || providers?.['llama-cpp']?.url || 'http://localhost:1234/v1'
       }
-      const r = await projectFetch('/api/setup/providers/config', {
+      const r = await setupFetch('/api/setup/providers/config', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -220,7 +240,7 @@
       if (j.error) return alert('Save failed: ' + j.error)
       identity = { ...identity, providerConfigured: true }
       step = 3
-      history.replaceState({}, '', '/setup?step=3')
+      history.replaceState({}, '', setupHref(3))
       void hydrateLaunchState()
     } finally {
       busy = false
@@ -228,13 +248,13 @@
   }
 
   function skipToDashboard() {
-    nav(currentProjectHref('/thread'))
+    nav(dashboardHref())
   }
 
   async function startBootstrap() {
     bootstrapBusy = true
     try {
-      const r = await projectFetch('/api/project/meta-intake', { method: 'POST' })
+      const r = await setupFetch('/api/project/meta-intake', { method: 'POST' })
       const j = await r.json()
       if (j.error) {
         bootstrapBusy = false
@@ -250,9 +270,9 @@
 
   async function ensureCoordinatorRunning(): Promise<boolean> {
     try {
-      const detail = await projectFetch('/api/project', { cache: 'no-store' }).then(r => r.json())
+      const detail = await setupFetch('/api/project', { cache: 'no-store' }).then(r => r.json())
       if (detail?.run?.status === 'running') return true
-      const r = await projectFetch('/api/project/start', { method: 'POST' })
+      const r = await setupFetch('/api/project/start', { method: 'POST' })
       if (!r.ok) {
         return false
       }
@@ -280,8 +300,8 @@
     try {
       activityNow = Date.now()
       const [projectRes, draftRes] = await Promise.all([
-        projectFetch('/api/project', { cache: 'no-store' }),
-        draft ? Promise.resolve(null) : projectFetch('/api/project/meta-intake/draft', { cache: 'no-store' }),
+        setupFetch('/api/project', { cache: 'no-store' }),
+        draft ? Promise.resolve(null) : setupFetch('/api/project/meta-intake/draft', { cache: 'no-store' }),
       ])
       const projectDetail = await projectRes.json()
       const draftInfo = draft ?? ((await draftRes?.json()) as MetaIntakeDraft | undefined)
@@ -324,7 +344,7 @@
     const poll = async () => {
       if (!bootstrapWatchActive || destroyed) return
       try {
-        const r = await projectFetch('/api/project/meta-intake/draft')
+        const r = await setupFetch('/api/project/meta-intake/draft')
         const j = (await r.json()) as MetaIntakeDraft
         await refreshLaunchActivity(j)
         if (j.status === 'draft-ready' && j.drafts?.length > 0) {
@@ -336,7 +356,7 @@
         if (j.status === 'approved') {
           bootstrapWatchActive = false
           bootstrapLive = false
-          setTimeout(() => nav(currentProjectHref('/thread')), 400)
+          setTimeout(() => nav(dashboardHref()), 400)
           return
         }
       } catch {
@@ -349,7 +369,7 @@
 
   async function hydrateLaunchState(): Promise<void> {
     try {
-      const r = await projectFetch('/api/project/meta-intake/draft', { cache: 'no-store' })
+      const r = await setupFetch('/api/project/meta-intake/draft', { cache: 'no-store' })
       if (!r.ok) return
       const j = (await r.json()) as MetaIntakeDraft
       await refreshLaunchActivity(j)
@@ -384,13 +404,13 @@
     approving = true
     approvalError = null
     try {
-      const r = await projectFetch('/api/project/meta-intake/approve', { method: 'POST' })
+      const r = await setupFetch('/api/project/meta-intake/approve', { method: 'POST' })
       const j = await r.json()
       if (j.error) {
         approvalError = j.error
         return
       }
-      setTimeout(() => nav(currentProjectHref('/thread')), 500)
+      setTimeout(() => nav(dashboardHref()), 500)
     } finally {
       approving = false
     }
@@ -432,7 +452,7 @@
         </Stack>
       </Card>
       <Row justify="end" gap="2">
-        <Button variant="secondary" onclick={() => nav(currentProjectHref('/thread'))}>Cancel</Button>
+        <Button variant="secondary" onclick={() => nav(dashboardHref())}>Cancel</Button>
         <Button variant="primary" disabled={busy} onclick={saveIdentity}>
           Save and continue →
         </Button>
@@ -466,7 +486,7 @@
           variant="secondary"
           onclick={() => {
             step = 1
-            history.replaceState({}, '', '/setup?step=1')
+            history.replaceState({}, '', setupHref(1))
           }}
         >
           ← Back

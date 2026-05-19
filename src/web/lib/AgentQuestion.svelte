@@ -345,7 +345,7 @@
     display: grid;
     grid-template-columns: 18px minmax(0, 1fr);
     gap: var(--s-2);
-    align-items: start;
+    align-items: center;
     text-align: left;
     width: 100%;
     min-height: 42px;
@@ -371,7 +371,7 @@
     font-size: var(--fs-0);
     font-weight: 800;
     line-height: 1;
-    margin-top: 1px;
+    margin-top: 0;
     position: relative;
   }
   .choice.multi .choice-mark {

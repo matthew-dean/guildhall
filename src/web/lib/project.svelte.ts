@@ -14,11 +14,11 @@ class ProjectStore {
   #requestSeq = 0
   #appliedSeq = 0
 
-  async refresh(): Promise<ProjectDetail | null> {
+  async refresh(projectId?: string | null): Promise<ProjectDetail | null> {
     const requestSeq = ++this.#requestSeq
     this.loading = true
     try {
-      const r = await projectFetch('/api/project', { cache: 'no-store' })
+      const r = await projectFetch('/api/project', { cache: 'no-store' }, projectId)
       const j = (await r.json()) as ProjectDetail
       if (requestSeq < this.#appliedSeq) return this.detail
       if (j.error) {

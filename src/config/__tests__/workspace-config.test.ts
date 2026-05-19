@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs'
+import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
@@ -9,6 +9,9 @@ import {
   findWorkspaceRoot,
   resolveMemoryDir,
   FORGE_YAML_FILENAME,
+  readAgentSettings,
+  writeAgentSettings,
+  updateAgentSettings,
 } from '../workspace-config.js'
 
 const TMP = join(tmpdir(), `forge-ws-test-${process.pid}`)
@@ -125,6 +128,18 @@ describe('workspace-config', () => {
       mkdirSync(wsDir)
       expect(() => readWorkspaceConfig(wsDir)).toThrow(/guildhall.yaml not found/)
     })
+
+    it('explains YAML parse and schema validation failures', () => {
+      const parseDir = join(TMP, 'bad-yaml')
+      mkdirSync(parseDir)
+      writeFileSync(join(parseDir, FORGE_YAML_FILENAME), 'name: [unterminated\n')
+      expect(() => readWorkspaceConfig(parseDir)).toThrow(/Failed to parse/)
+
+      const schemaDir = join(TMP, 'bad-schema')
+      mkdirSync(schemaDir)
+      writeFileSync(join(schemaDir, FORGE_YAML_FILENAME), 'name: 123\ncoordinators: []\n')
+      expect(() => readWorkspaceConfig(schemaDir)).toThrow(/Invalid guildhall.yaml/)
+    })
   })
 
   // -------------------------------------------------------------------------
@@ -133,6 +148,117 @@ describe('workspace-config', () => {
   describe('resolveMemoryDir', () => {
     it('returns <workspacePath>/memory', () => {
       expect(resolveMemoryDir('/home/user/project')).toBe('/home/user/project/memory')
+    })
+  })
+
+  describe('agent settings', () => {
+    it('returns defaults when no overrides file exists and round-trips explicit settings', () => {
+      const wsDir = join(TMP, 'agent-settings')
+      bootstrapWorkspace(wsDir, { name: 'Agent Settings' })
+
+      expect(readAgentSettings(wsDir)).toMatchObject({
+        version: 1,
+        addIgnore: [],
+        history: [],
+      })
+
+      writeAgentSettings(wsDir, {
+        version: 1,
+        models: { worker: 'qwen-worker' },
+        coordinators: {},
+        addIgnore: ['dist'],
+        history: [],
+      })
+
+      expect(readAgentSettings(wsDir)).toMatchObject({
+        models: { worker: 'qwen-worker' },
+        addIgnore: ['dist'],
+      })
+    })
+
+    it('reports malformed and schema-invalid agent override files', () => {
+      const wsDir = join(TMP, 'bad-agent-settings')
+      bootstrapWorkspace(wsDir, { name: 'Bad Agent Settings' })
+      const overridesPath = join(wsDir, 'memory', 'agent-overrides.yaml')
+
+      writeFileSync(overridesPath, 'version: [unterminated\n')
+      expect(() => readAgentSettings(wsDir)).toThrow(/Failed to parse memory\/agent-overrides.yaml/)
+
+      writeFileSync(overridesPath, 'version: nope\n')
+      expect(() => readAgentSettings(wsDir)).toThrow(/Invalid memory\/agent-overrides.yaml/)
+    })
+
+    it('merges coordinator settings append-only while deduplicating repeated facts', () => {
+      const wsDir = join(TMP, 'merge-agent-settings')
+      bootstrapWorkspace(wsDir, { name: 'Merge Agent Settings' })
+
+      const first = updateAgentSettings(
+        wsDir,
+        {
+          models: { worker: 'worker-a' },
+          coordinators: {
+            knit: {
+              addConcerns: [
+                {
+                  id: 'mobile',
+                  description: 'Real mobile verification matters.',
+                  reviewQuestions: ['Was the mobile path verified?'],
+                },
+              ],
+              removeConcerns: ['old-concern'],
+              addAutonomousDecisions: ['Choose routine copy edits'],
+              addEscalationTriggers: ['Schema change'],
+              history: [],
+            },
+          },
+          addIgnore: ['dist'],
+        },
+        { agentRole: 'coordinator', rationale: 'Initial tuning' },
+      )
+
+      expect(first.coordinators.knit?.history).toHaveLength(1)
+
+      const second = updateAgentSettings(
+        wsDir,
+        {
+          models: { reviewer: 'reviewer-a' },
+          coordinators: {
+            knit: {
+              addConcerns: [
+                {
+                  id: 'mobile',
+                  description: 'Duplicate should collapse.',
+                  reviewQuestions: ['Was the mobile path verified?'],
+                },
+                {
+                  id: 'a11y',
+                  description: 'Keyboard checks matter.',
+                  reviewQuestions: ['Was keyboard access verified?'],
+                },
+              ],
+              removeConcerns: ['old-concern', 'stale-concern'],
+              addAutonomousDecisions: ['Choose routine copy edits'],
+              addEscalationTriggers: ['Schema change', 'Auth change'],
+              mandateAddendum: 'Prefer scoped mobile proof.',
+              history: [],
+            },
+          },
+          addIgnore: ['dist', 'coverage'],
+          heartbeatInterval: 9,
+        },
+        { agentRole: 'reviewer', rationale: 'Tighten review loop' },
+      )
+
+      expect(second.models).toMatchObject({ worker: 'worker-a', reviewer: 'reviewer-a' })
+      expect(second.addIgnore).toEqual(['dist', 'coverage'])
+      expect(second.heartbeatInterval).toBe(9)
+      expect(second.coordinators.knit?.addConcerns.map(concern => concern.id)).toEqual(['mobile', 'a11y'])
+      expect(second.coordinators.knit?.removeConcerns).toEqual(['old-concern', 'stale-concern'])
+      expect(second.coordinators.knit?.addAutonomousDecisions).toEqual(['Choose routine copy edits'])
+      expect(second.coordinators.knit?.addEscalationTriggers).toEqual(['Schema change', 'Auth change'])
+      expect(second.coordinators.knit?.mandateAddendum).toBe('Prefer scoped mobile proof.')
+      expect(second.coordinators.knit?.history).toHaveLength(2)
+      expect(second.history).toHaveLength(2)
     })
   })
 })

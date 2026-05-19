@@ -63,6 +63,11 @@ interface TurnBase {
   phase: TurnPhase
 }
 
+export interface TaskSourceNote {
+  description?: string | undefined
+  references: string[]
+}
+
 /**
  * Setup step rendered as a chat turn. Simple setup work is handled inline so
  * Thread owns the setup flow; only genuinely separate flows link out.
@@ -110,7 +115,10 @@ export interface AgentQuestionTurn extends TurnBase {
   kind: 'agent_question'
   taskId: string
   taskTitle: string
+  taskDescription?: string | undefined
+  sourceNote?: TaskSourceNote | undefined
   liveAgent?: { name: string; startedAt?: string | undefined } | undefined
+  activity?: LiveActivity[] | undefined
   // Mirrors AgentQuestion union from src/core/task.ts; kept loose here so the
   // server doesn't have to re-import the zod schema for projection.
   question: {
@@ -126,6 +134,7 @@ export interface AgentQuestionTurn extends TurnBase {
     choices?: string[] | undefined
     selectionMode?: 'single' | 'multiple' | undefined
   }
+  questions?: AgentQuestionTurn['question'][] | undefined
 }
 
 /** Spec ready for the user to approve / revise. */
@@ -170,6 +179,8 @@ export interface InFlightTurn extends TurnBase {
   kind: 'inflight'
   taskId: string
   taskTitle: string
+  taskDescription?: string | undefined
+  sourceNote?: TaskSourceNote | undefined
   taskStatus?: string | undefined
   summary: string
   importedDraft?: boolean | undefined
@@ -347,6 +358,33 @@ function truncateDisplayTitle(value: string, max = 72): string {
   const singleLine = value.replace(/\s+/g, ' ').trim()
   if (singleLine.length <= max) return singleLine
   return `${singleLine.slice(0, max - 1).trim()}...`
+}
+
+function truncateSummary(value: string, max = 220): string {
+  const singleLine = value.replace(/\s+/g, ' ').trim()
+  if (singleLine.length <= max) return singleLine
+  return `${singleLine.slice(0, max - 1).trim()}...`
+}
+
+function cleanTaskDescription(task: Task): string | undefined {
+  const description = typeof task.description === 'string' ? task.description.trim() : ''
+  return description ? truncateSummary(description) : undefined
+}
+
+function sourceNoteForTask(task: Task): TaskSourceNote | undefined {
+  const references: string[] = []
+  for (const note of Array.isArray(task.notes) ? task.notes : []) {
+    const content = typeof note?.content === 'string' ? note.content.trim() : ''
+    const match = content.match(/^Imported from:\s*(.+)$/i)
+    if (!match?.[1]) continue
+    for (const raw of match[1].split(',')) {
+      const ref = raw.trim()
+      if (ref && !references.includes(ref)) references.push(ref)
+    }
+  }
+  const description = cleanTaskDescription(task)
+  if (references.length === 0 && !description) return undefined
+  return { description, references }
 }
 
 function displayTaskTitle(task: Task): string {
@@ -588,6 +626,11 @@ const SETUP_STEP_ACTIONS: Record<string, SetupAction> = {
     submitEndpoint: '/api/project/bootstrap/run',
   },
   coordinator: {
+    affordance: 'inline-button',
+    actionLabel: 'Let Guildhall inspect the repo',
+    submitEndpoint: '/api/project/meta-intake',
+  },
+  routing: {
     affordance: 'inline-button',
     actionLabel: 'Let Guildhall inspect the repo',
     submitEndpoint: '/api/project/meta-intake',
@@ -1004,6 +1047,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const taskId = typeof t.id === 'string' ? t.id : ''
     const taskTitle = displayTaskTitle(t)
     if (!taskId) continue
+    const taskDescription = cleanTaskDescription(t)
+    const sourceNote = sourceNoteForTask(t)
     const taskStatus = typeof t.status === 'string' ? t.status : ''
     const createdAt =
       typeof t.createdAt === 'string' ? t.createdAt : new Date().toISOString()
@@ -1059,6 +1104,13 @@ export function buildThread(opts: BuildThreadOptions): Thread {
           ? (t.openQuestions as Array<Record<string, unknown>>)
           : []).filter((q) => !isObsoleteVisibleQuestion(t, q))
     const seenQuestionSignatures = new Set<string>()
+    const visibleQuestions: Array<{
+      q: Record<string, unknown>
+      qid: string
+      askedAt: string
+      answeredAt?: string | undefined
+      question: AgentQuestionTurn['question']
+    }> = []
     for (const q of openQs) {
       const signature = openQuestionSignature(q)
       const answeredAt = typeof q.answeredAt === 'string' ? q.answeredAt : undefined
@@ -1067,24 +1119,11 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       const askedAt = typeof q.askedAt === 'string' ? q.askedAt : createdAt
       if (!qid) continue
       if (!answeredAt && signature) seenQuestionSignatures.add(signature)
-      // Agent questions are co-active: any unanswered question on the task
-      // is independently 'active' so the user can answer them in any order.
-      // We DO NOT bump `activeAssigned` here — that flag gates the strictly
-      // linear turn kinds (setup steps, brief approval, spec review). A batch
-      // of related questions on one task should all surface as live cards.
-      const status: TurnStatus = answeredAt ? 'done' : 'active'
-      turns.push({
-        kind: 'agent_question',
-        id: `q:${taskId}:${qid}`,
-        at: askedAt,
-        persona: typeof q.askedBy === 'string' && q.askedBy.includes('spec')
-          ? 'spec'
-          : 'coord',
-        status,
-        phase: status === 'done' ? 'done' : 'intake',
-        taskId,
-        taskTitle,
-        liveAgent,
+      visibleQuestions.push({
+        q,
+        qid,
+        askedAt,
+        answeredAt,
         question: {
           kind: (q.kind as 'confirm' | 'yesno' | 'choice' | 'text') ?? 'text',
           id: qid,
@@ -1102,6 +1141,51 @@ export function buildThread(opts: BuildThreadOptions): Thread {
             ? q.selectionMode
             : undefined,
         },
+      })
+    }
+    const unansweredQuestions = visibleQuestions.filter((entry) => !entry.answeredAt)
+    const answeredQuestions = visibleQuestions.filter((entry) => entry.answeredAt)
+    if (unansweredQuestions.length > 0) {
+      const first = unansweredQuestions[0]!
+      // Agent questions are co-active, but the Thread should still show one
+      // state for one task. The UI renders the rest as a subsection.
+      turns.push({
+        kind: 'agent_question',
+        id: unansweredQuestions.length === 1 ? `q:${taskId}:${first.qid}` : `q:${taskId}:questions`,
+        at: first.askedAt,
+        persona: typeof first.q.askedBy === 'string' && first.q.askedBy.includes('spec')
+          ? 'spec'
+          : 'coord',
+        status: 'active',
+        phase: 'intake',
+        taskId,
+        taskTitle,
+        taskDescription,
+        sourceNote,
+        liveAgent,
+        activity: liveActivity.get(taskId),
+        question: first.question,
+        questions: unansweredQuestions.length > 1
+          ? unansweredQuestions.map((entry) => entry.question)
+          : undefined,
+      })
+    }
+    for (const entry of answeredQuestions) {
+      turns.push({
+        kind: 'agent_question',
+        id: `q:${taskId}:${entry.qid}`,
+        at: entry.askedAt,
+        persona: typeof entry.q.askedBy === 'string' && entry.q.askedBy.includes('spec')
+          ? 'spec'
+          : 'coord',
+        status: 'done',
+        phase: 'done',
+        taskId,
+        taskTitle,
+        taskDescription,
+        sourceNote,
+        liveAgent,
+        question: entry.question,
       })
     }
 
@@ -1255,6 +1339,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         phase,
         taskId,
         taskTitle,
+        taskDescription,
+        sourceNote,
         taskStatus,
         summary,
         importedDraft,

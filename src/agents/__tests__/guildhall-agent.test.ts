@@ -278,7 +278,7 @@ describe('FR-17 skill composition', () => {
     expect(sys).toContain('Use tabs not spaces.')
   })
 
-  it('GuildhallAgent with no skills sends the base prompt unmodified', async () => {
+  it('GuildhallAgent with no skills still inherits engineering defaults', async () => {
     const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
     const agent = new GuildhallAgent({
       name: 'plain',
@@ -288,7 +288,9 @@ describe('FR-17 skill composition', () => {
     })
     await agent.generate('go')
     const sys = client.requests[0]?.system_prompt ?? ''
-    expect(sys).toBe('BASE ONLY')
+    expect(sys).toContain('BASE ONLY')
+    expect(sys).toContain('# Engineering defaults')
+    expect(sys).not.toContain('## Skills')
   })
 
   it('factory functions forward skills into the composed prompt', async () => {

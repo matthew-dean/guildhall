@@ -39,7 +39,7 @@
   import InteractionCardLayout from '../../lib/InteractionCardLayout.svelte'
   import { onEvent } from '../../lib/events.js'
   import { nav } from '../../lib/nav.svelte.js'
-  import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
+  import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { buildThreadPhaseGroups } from '../../lib/project-data.js'
   import { project } from '../../lib/project.svelte.js'
   import { toast } from 'svelte-sonner'
@@ -88,7 +88,10 @@
     kind: 'agent_question'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string
+    taskDescription?: string | undefined
+    sourceNote?: { description?: string | undefined; references: string[] } | undefined
     liveAgent?: LiveAgent | undefined
+    activity?: LiveActivity[] | undefined
     question: {
       kind: 'confirm' | 'yesno' | 'choice' | 'text'
       id: string; askedBy: string; askedAt: string
@@ -97,6 +100,7 @@
       restatement?: string; prompt?: string; choices?: string[]
       selectionMode?: 'single' | 'multiple' | undefined
     }
+    questions?: AgentQuestionTurn['question'][] | undefined
   }
   interface SpecReviewTurn {
     kind: 'spec_review'
@@ -128,6 +132,8 @@
     kind: 'inflight'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string; taskStatus?: string; summary: string
+    taskDescription?: string | undefined
+    sourceNote?: { description?: string | undefined; references: string[] } | undefined
     importedDraft?: boolean | undefined
     liveAgent?: LiveAgent | undefined
     activity?: LiveActivity[] | undefined
@@ -515,6 +521,10 @@
 
   const phaseGroups = $derived(buildThreadPhaseGroups(turns))
 
+  function questionsForTurn(turn: AgentQuestionTurn): AgentQuestionTurn['question'][] {
+    return turn.questions && turn.questions.length > 0 ? turn.questions : [turn.question]
+  }
+
   function captureTurn(node: HTMLDivElement, id: string) {
     turnElements.set(id, node)
     return {
@@ -818,7 +828,10 @@
         t.kind === 'agent_question' && t.taskId === taskId && t.status === 'active',
       )
     const answers = sectionQuestions
-      .map(t => ({ questionId: t.question.id, answer: staged[t.question.id] }))
+      .flatMap(t => questionsForTurn(t).map(question => ({
+        questionId: question.id,
+        answer: staged[question.id],
+      })))
       .filter((a): a is { questionId: string; answer: string } => typeof a.answer === 'string' && a.answer.length > 0)
     if (answers.length === 0) return
     busyTaskId = taskId
@@ -904,13 +917,13 @@
       return turn.summary
     }
     if (turn.taskStatus === 'import_draft' && !turn.liveAgent) {
-      return 'Imported from your project notes. Review the draft first, then let Guildhall shape it into a complete task.'
+      return 'Imported from your project notes. Let Guildhall shape it into a complete task, or add context before it starts.'
     }
     if (turn.taskStatus === 'exploring' && !turn.liveAgent) {
       return turn.taskId === 'task-workspace-import'
         ? 'Guildhall already drafted part of this import review. Review it if you want, or press Start to let Guildhall keep turning your project notes into candidate tasks.'
         : turn.importedDraft
-          ? 'Guildhall shaped part of this draft already. Review it if you want, or press Start to keep shaping it.'
+          ? 'Guildhall has started shaping this imported note. Continue in Thread or add context before the next pass.'
           : isQueuedSpecRevision(turn)
             ? 'Guildhall already has the draft spec plus your latest answers. Press Start when you want Guildhall to revise it.'
             : 'Guildhall drafted a first pass here. Review it if you want, or press Start to let Guildhall revise the draft.'
@@ -961,7 +974,7 @@
       case 'import_draft': return 'Let Guildhall shape this'
       case 'exploring':
         if (turn.taskId === 'task-meta-intake') return 'Let Guildhall keep setting this up'
-        return turn.importedDraft ? 'Continue shaping draft' : isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
+        return turn.importedDraft ? 'Continue shaping' : isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
       case 'review': return 'Resume review'
       case 'gate_check': return 'Resume gates'
       case 'in_progress': return 'Resume work'
@@ -1074,7 +1087,9 @@
       if (t.kind !== 'agent_question' || t.status !== 'active') continue
       const slot = out[t.taskId] ?? { taskId: t.taskId, turnIds: [], askedQuestionIds: [] }
       slot.turnIds.push(t.id)
-      slot.askedQuestionIds.push(t.question.id)
+      for (const question of questionsForTurn(t)) {
+        slot.askedQuestionIds.push(question.id)
+      }
       out[t.taskId] = slot
     }
     return out
@@ -1252,7 +1267,7 @@
                   {#if t.status === 'active'}
                     {#if t.affordance === 'link' && t.actionHref}
                       <Row justify="end" gap="2">
-                        <Button variant="primary" onclick={() => nav(t.actionHref!)}>{t.actionLabel}</Button>
+                        <Button variant="primary" onclick={() => nav(projectActionHref(t.actionHref!))}>{t.actionLabel}</Button>
                       </Row>
                     {:else if t.affordance === 'inline-text'}
                       <div class="setup-form">
@@ -1393,6 +1408,41 @@
                   {@const hasStaged = hasStagedAnswersForTask(t.taskId)}
                   {@const stagedSummary = stagedSummaryForTask(t.taskId)}
                   {@const totalQuestions = totalCountForTask(t.taskId)}
+                  {@const questions = questionsForTurn(t)}
+                  {#if t.taskDescription || t.sourceNote}
+                    <div class="task-context">
+                      {#if t.taskDescription}
+                        <div class="field">
+                          <span class="field-label">Starting point</span>
+                          <Markdown source={t.taskDescription} />
+                        </div>
+                      {/if}
+                      {#if t.sourceNote?.references?.length}
+                        <div class="field">
+                          <span class="field-label">Imported from</span>
+                          <div class="source-list">
+                            {#each t.sourceNote.references as ref (ref)}
+                              <code>{ref}</code>
+                            {/each}
+                          </div>
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
+                  <h3 class="prompt">{totalQuestions === 1 ? 'Question about this task' : `${totalQuestions} questions about this task`}</h3>
+                  {#if t.activity?.length}
+                    <div class="live-activity" aria-label="Recent agent activity">
+                      {#each t.activity as item, index (`${item.at ?? 'event'}:${item.label}:${index}`)}
+                        <StatusLine
+                          label={item.label}
+                          detail={item.detail}
+                          time={activityElapsed(item.at)}
+                          tone={item.tone}
+                          pulse={item.tone === 'running'}
+                        />
+                      {/each}
+                    </div>
+                  {/if}
                   {#if hasStaged && totalQuestions > 1 && sectionFooterTurnId[t.id] === t.taskId}
                     <div class="question-submit-banner">
                       <div>
@@ -1409,25 +1459,31 @@
                       </Button>
                     </div>
                   {/if}
-                  {#if staged[t.question.id]}
-                    <div class="prompt"><Markdown source={t.question.restatement ?? t.question.prompt ?? ''} /></div>
-                    <div class="field"><span class="field-label">Staged</span>
-                      <div class="answer"><Markdown source={staged[t.question.id]} inline /></div>
-                    </div>
-                    <Row justify="end">
-                      <Button
-                        variant="ghost"
-                        disabled={busyTaskId === t.taskId}
-                        onclick={() => clearStagedQuestion(t)}
-                      >Change</Button>
-                    </Row>
-                  {:else}
-                    <AgentQuestion
-                      question={t.question}
-                      busy={busyTaskId === t.taskId}
-                      onAnswer={(a) => answerQuestion(t, a)}
-                    />
-                  {/if}
+                  <div class="question-stack">
+                    {#each questions as question (question.id)}
+                      <div class="question-inline">
+                        {#if staged[question.id]}
+                          <div class="prompt"><Markdown source={question.restatement ?? question.prompt ?? ''} /></div>
+                          <div class="field"><span class="field-label">Staged</span>
+                            <div class="answer"><Markdown source={staged[question.id]} inline /></div>
+                          </div>
+                          <Row justify="end">
+                            <Button
+                              variant="ghost"
+                              disabled={busyTaskId === t.taskId}
+                              onclick={() => clearStagedQuestion({ ...t, question })}
+                            >Change</Button>
+                          </Row>
+                        {:else}
+                          <AgentQuestion
+                            question={question}
+                            busy={busyTaskId === t.taskId}
+                            onAnswer={(a) => answerQuestion({ ...t, question }, a)}
+                          />
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
                 {:else}
                   <div class="prompt"><Markdown source={t.question.restatement ?? t.question.prompt ?? ''} /></div>
                   {#if t.question.answer}
@@ -1599,10 +1655,30 @@
                   description={taskStateDescription(t)}
                   tone={taskStateTone(t)}
                 />
-                {#if t.taskStatus === 'exploring' && !t.liveAgent && !isQueuedSpecRevision(t)}
+                {#if t.taskDescription || t.sourceNote}
+                  <div class="task-context">
+                    {#if t.taskDescription}
+                      <div class="field">
+                        <span class="field-label">Starting point</span>
+                        <Markdown source={t.taskDescription} />
+                      </div>
+                    {/if}
+                    {#if t.sourceNote?.references?.length}
+                      <div class="field">
+                        <span class="field-label">Imported from</span>
+                        <div class="source-list">
+                          {#each t.sourceNote.references as ref (ref)}
+                            <code>{ref}</code>
+                          {/each}
+                        </div>
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
+                {#if t.taskId !== 'task-meta-intake' && t.taskStatus === 'exploring' && !t.liveAgent && !isQueuedSpecRevision(t)}
                   <Row justify="end" gap="2" wrap>
-                    <Button variant="human" onclick={() => nav(currentTaskHref(t.taskId))}>
-                      Review draft...
+                    <Button variant="secondary" onclick={() => nav(currentTaskHref(t.taskId))}>
+                      Inspect details
                     </Button>
                     <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
                       Add note
@@ -1679,16 +1755,30 @@
               {:else}
                   <Row justify="end" gap="2">
                     {#if t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !t.liveAgent}
-                      <Button variant="human" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
-                        Review draft...
+                      <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
+                        Inspect details
                       </Button>
+                      <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
+                        Add context
+                      </Button>
+                      {#if t.taskStatus === 'import_draft'}
+                        <Button variant="agent" disabled={busyTurnId === t.id} onclick={() => shapeDraft(t)}>
+                          <Icon name="sparkles" size={14} />
+                          {startTaskLabel(t)}
+                        </Button>
+                      {:else if canStartTaskTurn(t)}
+                        <Button variant="agent" disabled={runBusy || busyTurnId === t.id} onclick={() => startTaskRun(t.taskId)}>
+                          <Icon name="sparkles" size={14} />
+                          {startTaskLabel(t)}
+                        </Button>
+                      {/if}
                     {:else if t.taskId === 'task-meta-intake' && !t.liveAgent}
                       <Button variant="secondary" onclick={focusSetupPhase}>
                         Open setup
                       </Button>
                       {#if !startReadiness?.canStart}
                         {#if startReadiness?.actionHref}
-                          <Button variant="human" onclick={() => nav(startReadiness.actionHref)}>
+                          <Button variant="human" onclick={() => nav(projectActionHref(startReadiness.actionHref))}>
                             <Icon name="arrow-right" size={14} />
                             {metaSetupActionLabel()}
                           </Button>
@@ -1724,7 +1814,7 @@
                       </Button>
                     {:else}
                       <Button variant={t.taskStatus === 'exploring' ? 'human' : 'secondary'} onclick={() => nav(currentTaskHref(t.taskId))}>
-                        {t.taskStatus === 'exploring' ? 'Review draft...' : 'Open task'}
+                        {t.taskStatus === 'exploring' ? 'Inspect details' : 'Open task'}
                       </Button>
                       {#if canStartTaskTurn(t)}
                         <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
@@ -1779,23 +1869,6 @@
             </InteractionCardLayout>
           </Card>
         </div>
-        {#if sectionFooterTurnId[t.id]}
-          {@const tid = sectionFooterTurnId[t.id]!}
-          {@const total = totalCountForTask(tid)}
-          {@const ready = stagedCountForTask(tid)}
-          <div class="section-footer">
-            <span class="section-status">
-              {ready} of {total} answered
-            </span>
-            <Button
-              variant="primary"
-              disabled={busyTaskId === tid || ready === 0}
-              onclick={() => submitSection(tid)}
-            >
-              {ready === total ? `Submit ${total} answer${total === 1 ? '' : 's'}` : `Submit ${ready} of ${total}`}
-            </Button>
-          </div>
-        {/if}
               {/each}
             </Stack>
           {/if}
@@ -2004,6 +2077,39 @@
     font-size: var(--fs-1);
     color: var(--text-muted);
     font-weight: 500;
+  }
+  .task-context {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    padding: var(--s-2) var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg-raised-2);
+  }
+  .source-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-1);
+  }
+  .source-list code {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .question-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+  .question-inline {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    padding: var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
   }
   .setup-form {
     display: grid;

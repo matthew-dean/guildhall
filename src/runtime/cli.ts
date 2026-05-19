@@ -42,11 +42,11 @@ interface ServiceRuntimeState {
   startedAt: string
 }
 
-function serviceUrlForPort(port: number): string {
+export function serviceUrlForPort(port: number): string {
   return `http://localhost:${port}`
 }
 
-function launchRouteForProject(pathHint: string | null): string {
+export function launchRouteForProject(pathHint: string | null): string {
   if (!pathHint) return '/projects'
   const resolved = resolve(pathHint)
   try {
@@ -70,11 +70,11 @@ export interface ServiceLifecycleIntent {
   openBrowser: boolean
 }
 
-function serviceStatePath(home = homedir()): string {
+export function serviceStatePath(home = homedir()): string {
   return join(home, '.guildhall', SERVICE_STATE_FILENAME)
 }
 
-function isPidAlive(pid: number): boolean {
+export function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
@@ -83,7 +83,7 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
-function readServiceRuntimeState(home = homedir()): ServiceRuntimeState | null {
+export function readServiceRuntimeState(home = homedir()): ServiceRuntimeState | null {
   const path = serviceStatePath(home)
   if (!existsSync(path)) return null
   try {
@@ -107,17 +107,17 @@ function readServiceRuntimeState(home = homedir()): ServiceRuntimeState | null {
   }
 }
 
-function clearServiceRuntimeState(home = homedir()): void {
+export function clearServiceRuntimeState(home = homedir()): void {
   rmSync(serviceStatePath(home), { force: true })
 }
 
-function clearServiceRuntimeStateIfOwnedByPid(pid: number, home = homedir()): void {
+export function clearServiceRuntimeStateIfOwnedByPid(pid: number, home = homedir()): void {
   const current = readServiceRuntimeState(home)
   if (!current || current.pid !== pid) return
   clearServiceRuntimeState(home)
 }
 
-async function probeLiveService(port = DEFAULT_DASHBOARD_PORT): Promise<ServiceRuntimeState | null> {
+export async function probeLiveService(port = DEFAULT_DASHBOARD_PORT): Promise<ServiceRuntimeState | null> {
   try {
     const response = await fetch(`${serviceUrlForPort(port)}/api/service`)
     if (!response.ok) return null
@@ -138,7 +138,7 @@ async function probeLiveService(port = DEFAULT_DASHBOARD_PORT): Promise<ServiceR
   }
 }
 
-function persistServiceRuntimeState(state: ServiceRuntimeState, home = homedir()): void {
+export function persistServiceRuntimeState(state: ServiceRuntimeState, home = homedir()): void {
   mkdirSync(join(home, '.guildhall'), { recursive: true })
   const path = serviceStatePath(home)
   try {
@@ -148,7 +148,7 @@ function persistServiceRuntimeState(state: ServiceRuntimeState, home = homedir()
   }
 }
 
-async function discoverServiceRuntimeState(
+export async function discoverServiceRuntimeState(
   port = DEFAULT_DASHBOARD_PORT,
   home = homedir(),
 ): Promise<ServiceRuntimeState | null> {
@@ -164,10 +164,11 @@ async function discoverServiceRuntimeState(
   return null
 }
 
-function parseArgs(rawArgs: string[]): {
+export function parseArgs(rawArgs: string[]): {
   getFlag: (flag: string) => string | undefined
   positionals: string[]
 } {
+  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks'])
   function getFlag(flag: string): string | undefined {
     const idx = rawArgs.indexOf(flag)
     return idx !== -1 ? rawArgs[idx + 1] : undefined
@@ -179,7 +180,7 @@ function parseArgs(rawArgs: string[]): {
     if (a === undefined) continue
     if (a.startsWith('--')) {
       const next = rawArgs[i + 1]
-      if (next !== undefined && !next.startsWith('--')) i++
+      if (valueFlags.has(a) && next !== undefined && !next.startsWith('--')) i++
       continue
     }
     positionals.push(a)

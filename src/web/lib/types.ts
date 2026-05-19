@@ -235,6 +235,11 @@ export interface TaskThreadTurnBase {
   phase: 'setup' | 'intake' | 'spec' | 'ready' | 'inflight' | 'blocked' | 'done'
   taskId: string
   taskTitle: string
+  taskDescription?: string
+  sourceNote?: {
+    description?: string
+    references: string[]
+  }
 }
 
 export interface TaskThreadBriefTurn extends TaskThreadTurnBase {
@@ -254,7 +259,9 @@ export interface TaskThreadBriefTurn extends TaskThreadTurnBase {
 export interface TaskThreadQuestionTurn extends TaskThreadTurnBase {
   kind: 'agent_question'
   liveAgent?: TaskTurnLiveAgent
+  activity?: TaskTurnLiveActivity[]
   question: AgentQuestion
+  questions?: AgentQuestion[]
 }
 
 export interface TaskThreadSpecReviewTurn extends TaskThreadTurnBase {

@@ -4,8 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { bootstrapWorkspace } from '@guildhall/config'
-import { readProjectConfig } from '@guildhall/config'
+import { bootstrapWorkspace, readProjectConfig, readWorkspaceConfig, writeProjectConfig, writeWorkspaceConfig } from '@guildhall/config'
 import { defaultAgentSettingsPath, loadLeverSettings, makeDefaultSettings } from '@guildhall/levers'
 import { buildServeApp } from '../serve.js'
 
@@ -89,6 +88,137 @@ describe('GET /api/config/levers', () => {
     const res = await app.fetch(new Request('http://localhost/api/config/levers'))
     expect(res.status).toBe(200)
     await fs.access(settingsPath) // now exists
+  })
+})
+
+describe('general project status endpoints', () => {
+  it('reports setup status and generated setup defaults for the selected project', async () => {
+    writeWorkspaceConfig(tmpDir, {
+      ...readWorkspaceConfig(tmpDir),
+      id: PROJECT_ID,
+      name: 'Settings Test',
+      coordinators: [
+        {
+          id: 'frontend',
+          domain: 'frontend',
+          mandate: 'Own UI work.',
+          concerns: [],
+          autonomousDecisions: [],
+          escalationTriggers: [],
+        },
+      ],
+      ignore: ['node_modules', 'dist', '.git', 'coverage'],
+    })
+    writeProjectConfig(tmpDir, { ...readProjectConfig(tmpDir), preferredProvider: 'openai-api' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const status = await app.fetch(new Request(scoped('/api/setup/status')))
+    expect(status.status).toBe(200)
+    const statusBody = await status.json() as Record<string, any>
+    expect(statusBody).toMatchObject({
+      initialized: true,
+      providerConfigured: true,
+      name: 'Settings Test',
+      id: PROJECT_ID,
+      coordinatorCount: 1,
+    })
+
+    const defaults = await app.fetch(new Request(scoped('/api/setup/defaults')))
+    expect(defaults.status).toBe(200)
+    const defaultsBody = await defaults.json() as Record<string, any>
+    expect(defaultsBody.suggestedName).toBe('Settings Test')
+    expect(defaultsBody.suggestedId).toBe(PROJECT_ID)
+    expect(Array.isArray(defaultsBody.localModels)).toBe(true)
+    expect(Array.isArray(defaultsBody.cloudModels)).toBe(true)
+  })
+
+  it('redacts local config secrets and filters noisy progress entries', async () => {
+    writeProjectConfig(tmpDir, {
+      ...readProjectConfig(tmpDir),
+      preferredProvider: 'anthropic-api',
+      anthropicApiKey: 'sk-ant-secret',
+      openaiApiKey: 'sk-openai-secret',
+    })
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'PROGRESS.md'),
+      [
+        '# Progress',
+        '',
+        '### 💓 HEARTBEAT',
+        'routine tick',
+        '---',
+        '### Worker blocked',
+        'Useful blocker detail',
+        '---',
+        '### Escalation',
+        'error: Exceeded maximum turn limit',
+        '---',
+      ].join('\n'),
+      'utf-8',
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const config = await app.fetch(new Request(scoped('/api/config')))
+    expect(config.status).toBe(200)
+    const configBody = await config.json() as Record<string, any>
+    expect(configBody.anthropicApiKey).toBe('•••')
+    expect(configBody.openaiApiKey).toBe('•••')
+
+    const progress = await app.fetch(new Request(scoped('/api/project/progress')))
+    expect(progress.status).toBe(200)
+    const progressBody = await progress.json() as { progress: string }
+    expect(progressBody.progress).toContain('Worker blocked')
+    expect(progressBody.progress).toContain('Useful blocker detail')
+    expect(progressBody.progress).not.toContain('HEARTBEAT')
+    expect(progressBody.progress).not.toContain('Exceeded maximum turn limit')
+  })
+
+  it('reports bootstrap and workspace-import status before either flow has work to do', async () => {
+    writeWorkspaceConfig(tmpDir, {
+      ...readWorkspaceConfig(tmpDir),
+      id: PROJECT_ID,
+      name: 'Settings Test',
+      bootstrap: {
+        commands: ['node --version'],
+        successGates: ['node --version'],
+        timeoutMs: 300_000,
+        provenance: {
+          establishedBy: 'test',
+          establishedAt: '2026-05-19T16:00:00.000Z',
+          tried: [{ command: 'node --version', result: 'pass' }],
+        },
+      },
+      coordinators: [],
+      ignore: ['node_modules', 'dist', '.git', 'coverage'],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const needsMeta = await app.fetch(new Request(scoped('/api/project/needs-meta-intake')))
+    expect(needsMeta.status).toBe(200)
+    expect(await needsMeta.json()).toMatchObject({ needsMetaIntake: expect.any(Boolean) })
+
+    const bootstrap = await app.fetch(new Request(scoped('/api/project/bootstrap/status')))
+    expect(bootstrap.status).toBe(200)
+    const bootstrapBody = await bootstrap.json() as Record<string, any>
+    expect(bootstrapBody.configured).toBe(true)
+    expect(bootstrapBody.bootstrap.commands).toEqual(['node --version'])
+    expect(bootstrapBody.bootstrap.successGates).toEqual(['node --version'])
+    expect(bootstrapBody.bootstrap.provenance.establishedBy).toBe('test')
+
+    const importStatus = await app.fetch(new Request(scoped('/api/project/workspace-import/status')))
+    expect(importStatus.status).toBe(200)
+    const importBody = await importStatus.json() as Record<string, any>
+    expect(importBody).toMatchObject({
+      seeded: false,
+      taskStatus: null,
+      specPresent: false,
+      leverPosition: expect.any(String),
+    })
+    expect(importBody.draft).toMatchObject({
+      goals: expect.any(Number),
+      tasks: expect.any(Number),
+      milestones: expect.any(Number),
+    })
   })
 })
 

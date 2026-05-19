@@ -13,7 +13,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url))
-const CONTENT_DIR = join(MODULE_DIR, 'engineering-defaults')
+const DIST_CONTENT_DIR = join(MODULE_DIR, 'engineering-defaults')
+const SOURCE_CONTENT_DIR = MODULE_DIR
 
 export type EngineeringDefaultTopic =
   | 'voice'
@@ -49,16 +50,17 @@ let cached: readonly EngineeringDefault[] | null = null
 
 export function loadEngineeringDefaults(): readonly EngineeringDefault[] {
   if (cached) return cached
-  if (!existsSync(CONTENT_DIR)) {
+  const contentDir = existsSync(DIST_CONTENT_DIR) ? DIST_CONTENT_DIR : SOURCE_CONTENT_DIR
+  if (!existsSync(contentDir)) {
     cached = []
     return cached
   }
-  const files = readdirSync(CONTENT_DIR).filter((n) => n.endsWith('.md')).sort()
+  const files = readdirSync(contentDir).filter((n) => n.endsWith('.md')).sort()
   const defaults: EngineeringDefault[] = []
   for (const file of files) {
     const topic = file.replace(/\.md$/, '') as EngineeringDefaultTopic
     if (!ALL_TOPICS.includes(topic)) continue
-    const content = readFileSync(join(CONTENT_DIR, file), 'utf8').trim()
+    const content = readFileSync(join(contentDir, file), 'utf8').trim()
     defaults.push({ topic, content })
   }
   cached = defaults

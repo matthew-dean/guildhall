@@ -142,6 +142,19 @@ describe('BUILTIN_GUILDS', () => {
       }
     }
   })
+  it('Test Engineer enforces an explicit coverage floor instead of vague best practices', () => {
+    const testEngineer = BUILTIN_GUILDS.find((g) => g.slug === 'test-engineer')!
+    const rubricQuestions = testEngineer.rubric?.map((item) => item.question).join('\n') ?? ''
+
+    expect(testEngineer.principles).toContain('declared coverage floor')
+    expect(testEngineer.principles).toContain('90%+')
+    expect(testEngineer.principles).toContain('component-level tests')
+    expect(testEngineer.principles).toContain('real-browser tests')
+    expect(testEngineer.specContribution).toContain('command enforces it')
+    expect(rubricQuestions).toContain('declared coverage floor')
+    expect(rubricQuestions).toContain('component-level')
+    expect(rubricQuestions).toContain('real browser')
+  })
 })
 
 describe('selectApplicableGuilds', () => {

@@ -48,6 +48,8 @@
 
   const currentView = $derived<ProjectView>(props.initialView ?? 'thread')
   const currentSub = $derived<string | null>(props.initialSub ?? null)
+  const routeProjectId = $derived(props.projectId?.trim() || null)
+  const activeProjectId = $derived(routeProjectId ?? project.detail?.id ?? null)
   let busy = $state(false)
   let runError = $state<string | null>(null)
   let intakeOpen = $state(false)
@@ -91,7 +93,7 @@
 
   async function loadInbox(): Promise<void> {
     try {
-      const r = await projectFetch('/api/project/inbox', { cache: 'no-store' })
+      const r = await projectFetch('/api/project/inbox', { cache: 'no-store' }, activeProjectId)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const j = (await r.json()) as {
         items?: InboxItem[]
@@ -110,6 +112,7 @@
   }
 
   $effect(() => {
+    activeProjectId
     void loadInbox()
   })
   $effect(() => {
@@ -146,13 +149,13 @@
 
   $effect(() => {
     path.value
-    void project.refresh()
+    void project.refresh(routeProjectId)
   })
 
   $effect(() => {
     if (refreshHandle) clearInterval(refreshHandle)
     refreshHandle = setInterval(() => {
-      void project.refresh()
+      void project.refresh(activeProjectId)
     }, 5000)
     return () => {
       if (refreshHandle) {
@@ -223,9 +226,19 @@
   $effect(() => {
     const off = onEvent(ev => {
       const t = ev.event?.type ?? ''
-      if (t.startsWith('supervisor_') || t === 'provider_health_changed') void project.refresh()
+      if (t.startsWith('supervisor_') || t === 'provider_health_changed') void project.refresh(activeProjectId)
     })
     return off
+  })
+
+  $effect(() => {
+    if (routeProjectId || !activeProjectId || !path.value.startsWith('/project')) return
+    const legacySuffix = path.value === '/project'
+      ? '/thread'
+      : path.value.startsWith('/project/')
+        ? path.value.slice('/project'.length)
+        : '/thread'
+    nav(currentProjectHref(legacySuffix, activeProjectId))
   })
 
   interface NavEntry {
@@ -240,30 +253,30 @@
   const needsMeta = $derived(coordinators.length === 0)
 
   const entries = $derived<NavEntry[]>([
-    { id: 'thread', label: 'Thread', icon: 'sparkles', path: currentProjectHref('/thread') },
-    { id: 'inbox', label: 'Needs you', icon: 'inbox', path: currentProjectHref('/notifications') },
-    { id: 'work', label: 'Work', icon: 'activity', path: currentProjectHref('/work') },
-    { id: 'timeline', label: 'Timeline', icon: 'clock', path: currentProjectHref('/timeline') },
+    { id: 'thread', label: 'Thread', icon: 'sparkles', path: currentProjectHref('/thread', activeProjectId) },
+    { id: 'inbox', label: 'Needs you', icon: 'inbox', path: currentProjectHref('/notifications', activeProjectId) },
+    { id: 'work', label: 'Work', icon: 'activity', path: currentProjectHref('/work', activeProjectId) },
+    { id: 'timeline', label: 'Timeline', icon: 'clock', path: currentProjectHref('/timeline', activeProjectId) },
     {
       id: 'release',
       label: 'Release',
       icon: 'rocket',
-      path: currentProjectHref('/release'),
+      path: currentProjectHref('/release', activeProjectId),
       subs: [
-        { id: 'verdict', label: 'Verdict', path: currentProjectHref('/release') },
-        { id: 'criteria', label: 'Criteria', path: currentProjectHref('/release/criteria') },
+        { id: 'verdict', label: 'Verdict', path: currentProjectHref('/release', activeProjectId) },
+        { id: 'criteria', label: 'Criteria', path: currentProjectHref('/release/criteria', activeProjectId) },
       ],
     },
     {
       id: 'settings',
       label: 'Settings',
       icon: 'settings',
-      path: currentProjectHref('/settings'),
+      path: currentProjectHref('/settings', activeProjectId),
       subs: [
-        { id: 'ready', label: 'Ready', path: currentProjectHref('/settings') },
-        { id: 'providers', label: 'Providers', path: currentProjectHref('/settings/providers') },
-        { id: 'facts', label: 'Facts', path: currentProjectHref('/settings/facts') },
-        { id: 'advanced', label: 'Advanced', path: currentProjectHref('/settings/advanced') },
+        { id: 'ready', label: 'Ready', path: currentProjectHref('/settings', activeProjectId) },
+        { id: 'providers', label: 'Providers', path: currentProjectHref('/settings/providers', activeProjectId) },
+        { id: 'facts', label: 'Facts', path: currentProjectHref('/settings/facts', activeProjectId) },
+        { id: 'advanced', label: 'Advanced', path: currentProjectHref('/settings/advanced', activeProjectId) },
       ],
     },
   ])
@@ -298,7 +311,7 @@
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ mode }),
-      })
+      }, activeProjectId)
       if (!res.ok) {
         try {
           const body = (await res.json()) as { error?: string; code?: string }
@@ -308,13 +321,13 @@
         }
         return
       }
-      setTimeout(() => void project.refresh(), 300)
+      setTimeout(() => void project.refresh(activeProjectId), 300)
       setTimeout(() => {
-        void project.refresh()
+        void project.refresh(activeProjectId)
         void loadInbox()
       }, 1500)
       setTimeout(() => {
-        void project.refresh()
+        void project.refresh(activeProjectId)
         void loadInbox()
       }, 3200)
     } finally {
@@ -326,7 +339,7 @@
     busy = true
     runError = null
     try {
-      const res = await projectFetch('/api/project/stop', { method: 'POST' })
+      const res = await projectFetch('/api/project/stop', { method: 'POST' }, activeProjectId)
       if (!res.ok) {
         try {
           const body = (await res.json()) as { error?: string }
@@ -336,7 +349,7 @@
         }
         return
       }
-      setTimeout(() => void project.refresh(), 300)
+      setTimeout(() => void project.refresh(activeProjectId), 300)
     } finally {
       busy = false
     }
@@ -885,7 +898,7 @@
               type="button"
               class="tasks-indicator"
               class:has-stuck={stuckCount > 0}
-              onclick={() => go(currentProjectHref('/work'))}
+              onclick={() => go(currentProjectHref('/work', activeProjectId))}
               title="Jump to Work"
               aria-label="{activeCount} {activeCountLabel}, {awaitingApprovalCount} awaiting approval, {stuckCount} stuck"
             >
@@ -903,7 +916,7 @@
               type="button"
               class="inbox-indicator"
               class:warn-only={!inboxHasHighSeverity}
-              onclick={() => go(currentProjectHref('/notifications'))}
+              onclick={() => go(currentProjectHref('/notifications', activeProjectId))}
               title="Jump to Notifications"
               aria-label="{inboxActionableCount} notifications need you"
             >
@@ -1008,7 +1021,7 @@
           <NoticeBand tone="danger" icon="alert-triangle" density="compact">
             <strong>{bootstrapFailureText}</strong>
             {#snippet actions()}
-              <a href={currentProjectHref('/settings/ready')} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/ready')) }}>Open Ready</a>
+              <a href={currentProjectHref('/settings/ready', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/ready', activeProjectId)) }}>Open Ready</a>
             {/snippet}
           </NoticeBand>
         {/if}
@@ -1032,7 +1045,7 @@
           >
             <strong>{providerWarningText}</strong>
             {#snippet actions()}
-              <a href={currentProjectHref('/settings/providers')} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers')) }}>Open Settings</a>
+              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>Open Settings</a>
             {/snippet}
           </NoticeBand>
         {/if}
@@ -1040,7 +1053,7 @@
           <NoticeBand tone="warn" icon="activity" density="compact">
             <strong>{providerHealthText}</strong>
             {#snippet actions()}
-              <a href={currentProjectHref('/settings/providers')} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers')) }}>Open Settings</a>
+              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>Open Settings</a>
             {/snippet}
           </NoticeBand>
         {/if}
@@ -1053,9 +1066,9 @@
             <strong>{runStopSummaryText}</strong>
             {#snippet actions()}
               {#if runStopSummary?.stopReason === 'awaiting_human'}
-                <a href={currentProjectHref('/thread')} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/thread')) }}>Open Thread</a>
+                <a href={currentProjectHref('/thread', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/thread', activeProjectId)) }}>Open Thread</a>
               {:else if runStopSummary?.stopReason === 'blocked_only'}
-                <a href={currentProjectHref('/notifications')} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/notifications')) }}>Open Notifications</a>
+                <a href={currentProjectHref('/notifications', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/notifications', activeProjectId)) }}>Open Notifications</a>
               {/if}
             {/snippet}
           </NoticeBand>

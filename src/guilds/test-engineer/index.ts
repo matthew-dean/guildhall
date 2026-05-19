@@ -16,7 +16,8 @@ When the Test Engineer applies, the spec for this task must answer:
 - Are there **algebraic properties** worth property-based tests (roundtrip, idempotence, associativity)?
 - Does this change **require integration** with a real DB / queue / external system, or can unit tests cover it?
 - Are any **new test utilities** (builders, fixtures, fakes) needed, or does the existing harness suffice?
-- What's the **coverage posture** for the changed code (target floor, or documented exemption)?
+- What **declared coverage floor** applies now, what command enforces it, and which changed files are intentionally exempt?
+- For UI work, which behavior belongs in component-level tests and which rendering/layout truth requires real-browser tests?
 Testing strategy in the spec prevents untestable code from being merged.
 `.trim()
 
