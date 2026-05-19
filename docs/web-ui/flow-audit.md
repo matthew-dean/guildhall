@@ -62,6 +62,22 @@ screen.
   renders without `Live activity` and the project-level ticker remains visible.
 - [x] Run the final focused test/build sweep and push the release-hardening
   batch.
+- [x] Prove the `0.6.0` policy/learning loop compounds on the real Looma +
+  Knit project without polluting its project memory. On `2026-05-19`, a
+  one-off Vitest harness backed up `/Users/matthew/git/oss/looma-knit/memory`,
+  exercised the runtime against the real learning store, and restored the
+  original files after reset. Evidence: the proof classified a focused Knit
+  workspace API typecheck failure as `self_authored_verification_failure`,
+  selected bounded playbook `repair_touched_file_failure` with max 2 turns,
+  command `cd knit/web && pnpm typecheck`, and allowed path
+  `knit/web/server/api/workspaces/members.get.ts`; reflection emitted active
+  project learning
+  `task-phase7-proof-workspace-api-repair_touched_file_failure-paths`; a failed
+  bounded playbook emitted inert product suggestion
+  `task-phase7-proof-failed-playbook-repair_touched_file_failure-failure-product`;
+  project skill `phase7-proof-workspace-api-skill` was injected into a future
+  workspace-members context; and project learning / project skill reset cleared
+  all proof records before restoring the original Looma/Knit memory files.
 
 ## 0.5.0 Release Threshold
 

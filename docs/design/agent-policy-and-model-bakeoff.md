@@ -850,17 +850,37 @@ Target project:
 
 Proof steps:
 
-- [ ] Run a task that hits a known recoverable blocker.
-- [ ] Confirm Guildhall classifies the blocker.
-- [ ] Confirm Guildhall chooses a bounded playbook.
-- [ ] Confirm the agent repairs or stops with a concrete human question.
-- [ ] Complete or intentionally block the task.
-- [ ] Confirm reflection emits the right learning candidate.
-- [ ] Confirm the coordinator routes it to project memory, project skill,
+- [x] Run a task that hits a known recoverable blocker.
+- [x] Confirm Guildhall classifies the blocker.
+- [x] Confirm Guildhall chooses a bounded playbook.
+- [x] Confirm the agent repairs or stops with a concrete human question.
+- [x] Complete or intentionally block the task.
+- [x] Confirm reflection emits the right learning candidate.
+- [x] Confirm the coordinator routes it to project memory, project skill,
   user/global preference, product suggestion, or task audit only.
-- [ ] Confirm a future run uses the approved project learning or skill.
-- [ ] Confirm the user can inspect and reset the learning.
-- [ ] Record the result in `docs/web-ui/flow-audit.md`.
+- [x] Confirm a future run uses the approved project learning or skill.
+- [x] Confirm the user can inspect and reset the learning.
+- [x] Record the result in `docs/web-ui/flow-audit.md`.
+
+Proof result:
+
+- `2026-05-19`: a one-off Vitest harness exercised the real
+  `/Users/matthew/git/oss/looma-knit` memory store and restored the original
+  project learning files afterward. The proof classified a focused Knit
+  workspace API typecheck failure as `self_authored_verification_failure`,
+  selected the bounded `repair_touched_file_failure` playbook with max 2 turns,
+  command `cd knit/web && pnpm typecheck`, and allowed path
+  `knit/web/server/api/workspaces/members.get.ts`.
+- The successful playbook emitted project learning
+  `task-phase7-proof-workspace-api-repair_touched_file_failure-paths`, which
+  was accepted as active project memory. A failed bounded playbook emitted inert
+  product suggestion
+  `task-phase7-proof-failed-playbook-repair_touched_file_failure-failure-product`.
+- Project skill `phase7-proof-workspace-api-skill` was activated and then
+  injected into a future workspace-members task context, proving later runs can
+  reuse approved project learning. Project learning and project skill reset
+  paths cleared the proof records before the original Looma/Knit files were
+  restored.
 
 Acceptance criteria:
 
@@ -886,7 +906,7 @@ Acceptance criteria:
 - [ ] product suggestions are inert until approved
 - [ ] model bakeoff reports include cost, outcome, false escalations, and
   packet quality
-- [ ] a real project proof shows a learning improving a future run
+- [x] a real project proof shows a learning improving a future run
 - [ ] docs explain the difference between bounded improvisation and unbounded
   autonomy
 
