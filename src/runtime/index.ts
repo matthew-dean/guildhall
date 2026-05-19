@@ -198,6 +198,23 @@ export {
   META_INTAKE_TASK_ID,
   META_INTAKE_DOMAIN,
 } from './meta-intake.js'
+
+export {
+  DETERMINISTIC_BASELINE_LANE,
+  aggregateBakeoffReport,
+  historicalFailureScenarios,
+  learningCandidatesFromBakeoffReport,
+  renderBakeoffMarkdown,
+  runModelBakeoff,
+} from './model-bakeoff.js'
+export type {
+  BakeoffOutcome,
+  BakeoffReport,
+  LaneReport,
+  ModelLaneConfig,
+  ReplayRunRecord,
+  ReplayScenario,
+} from './model-bakeoff.js'
 export type {
   CreateMetaIntakeInput,
   CreateMetaIntakeResult,

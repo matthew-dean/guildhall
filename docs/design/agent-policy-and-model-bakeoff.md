@@ -817,18 +817,19 @@ Files likely touched:
 - `src/runtime/model-bakeoff.ts`
 - `src/runtime/__tests__/model-bakeoff.test.ts`
 - `scripts/`
+- `package.json`
 - `docs/design/agent-policy-and-model-bakeoff.md`
 
 Todos:
 
-- [ ] Define replay scenario metadata.
-- [ ] Add replay fixtures for the historical 0.5.0 failure set.
-- [ ] Record outcome, tool count, cost, false escalations, false approvals,
+- [x] Define replay scenario metadata.
+- [x] Add replay fixtures for the historical 0.5.0 failure set.
+- [x] Record outcome, tool count, cost, false escalations, false approvals,
   playbook success, and packet quality.
-- [ ] Add a deterministic baseline lane.
-- [ ] Add CLI or script entrypoint for running bakeoff scenarios.
-- [ ] Add report output grouped by lane.
-- [ ] Add tests for report aggregation.
+- [x] Add a deterministic baseline lane.
+- [x] Add CLI or script entrypoint for running bakeoff scenarios.
+- [x] Add report output grouped by lane.
+- [x] Add tests for report aggregation.
 
 Acceptance criteria:
 

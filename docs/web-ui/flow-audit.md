@@ -683,6 +683,12 @@ screen.
   quiet Learning subtab for project learnings, user preferences, project skills,
   and builder suggestions. Focused learning endpoint tests and `pnpm typecheck`
   passed, then the full `pnpm test` sweep passed.
+- Completed the Phase 6 model bakeoff harness slice. Guildhall now has
+  historical 0.5.0 replay scenario metadata, a deterministic baseline lane,
+  model lane report aggregation, cost/outcome/false-decision/playbook/packet
+  quality metrics, learning-candidate conversion for failed runs, markdown/JSON
+  report rendering, and `pnpm model:bakeoff` for writing the report artifact.
+  Focused model-bakeoff tests and a `pnpm model:bakeoff` smoke passed.
 
 - Completed the `0.5.0` macOS packaging slice. Guildhall now has a
   buildable packaged artifact at `artifacts/macos/guildhall-macos`,
