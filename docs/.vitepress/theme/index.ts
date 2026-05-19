@@ -3,6 +3,7 @@ import { defineComponent, h, onBeforeUnmount, onMounted } from 'vue'
 
 import '../../../packages/ui/src/styles.css'
 import './custom.css'
+import DocsBreadcrumbs from './components/DocsBreadcrumbs.vue'
 import UiReferenceNav from './components/UiReferenceNav.vue'
 
 const GuildhallThemeLayout = defineComponent({
@@ -37,7 +38,13 @@ const GuildhallThemeLayout = defineComponent({
       observer?.disconnect()
     })
 
-    return () => h(DefaultTheme.Layout, null, slots)
+    return () => h(DefaultTheme.Layout, null, {
+      ...slots,
+      'doc-before': () => [
+        slots['doc-before']?.(),
+        h(DocsBreadcrumbs),
+      ],
+    })
   },
 })
 

@@ -131,6 +131,52 @@
   border-block-color: color-mix(in srgb, var(--gh-color-border-subtle) 78%, transparent);
 }
 
+.VPNavBarMenuLink.active,
+.VPNavBarMenuGroup.active .button {
+  color: var(--gh-color-text-primary);
+}
+
+.VPNavBarMenuLink.active span,
+.VPNavBarMenuGroup.active .text {
+  border-block-end: 2px solid color-mix(in srgb, var(--gh-color-action-primary) 74%, transparent);
+}
+
+.gh-doc-breadcrumbs {
+  margin-block: 0 var(--gh-space-4);
+  color: var(--gh-color-text-muted);
+  font-size: var(--gh-type-size-1);
+  font-weight: var(--gh-type-weight-medium);
+}
+
+.gh-doc-breadcrumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gh-doc-breadcrumbs li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.gh-doc-breadcrumbs li + li::before {
+  content: "/";
+  color: color-mix(in srgb, var(--gh-color-text-muted) 68%, transparent);
+}
+
+.gh-doc-breadcrumbs a {
+  color: var(--gh-color-text-secondary);
+  text-decoration: none;
+}
+
+.gh-doc-breadcrumbs a:hover {
+  color: var(--gh-color-text-primary);
+}
+
 .vp-doc h1,
 .vp-doc h2,
 .vp-doc h3 {

@@ -13,6 +13,7 @@ const guideOperateItems = [
   { text: 'Memory and recovery', link: '/guide/memory-and-recovery' },
   { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
   { text: 'Running Guildhall', link: '/guide/running' },
+  { text: 'UI reference ↗', link: '/web-ui/' },
 ]
 
 const guideReferenceItems = [
@@ -77,13 +78,14 @@ export default defineConfig({
   ],
   themeConfig: {
     nav: [
-      { text: 'Start', link: '/guide/quick-start' },
-      { text: 'Guide', link: '/guide/' },
-      { text: 'UI reference', link: '/web-ui/' },
-      { text: 'CLI', link: '/cli/' },
-      { text: 'Reference', link: '/reference/' },
+      { text: 'Start', link: '/guide/quick-start', activeMatch: '^/guide/quick-start' },
+      { text: 'Guide', link: '/guide/', activeMatch: '^/guide/' },
+      { text: 'UI reference', link: '/web-ui/', activeMatch: '^/web-ui/' },
+      { text: 'CLI', link: '/cli/', activeMatch: '^/cli/' },
+      { text: 'Reference', link: '/reference/', activeMatch: '^/reference/' },
       {
         text: 'More',
+        activeMatch: '^/(levers|subsystems|design|releases)/',
         items: [
           { text: 'Levers', link: '/levers/' },
           { text: 'Subsystems', link: '/subsystems/' },

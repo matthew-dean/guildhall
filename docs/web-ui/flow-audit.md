@@ -2985,3 +2985,9 @@ Navigation follow-up on `2026-05-19`: the docs sidebar should only change when
 the reader intentionally changes top-level sections. Guide now stays focused on
 journey and operating concepts; UI-specific pages live only under the top-level
 Web UI reference section instead of being duplicated into Guide.
+
+Navigation orientation follow-up on `2026-05-19`: Guide has at most one
+section-jump link to the UI reference, marked with a jump icon. The top
+navigation now has explicit active-match rules, and doc pages render
+breadcrumbs so the active section is visible even when the top nav is collapsed
+at narrower widths.
