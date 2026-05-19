@@ -134,6 +134,10 @@ export async function dismissProjectSkillProposal(input: {
   return next
 }
 
+export async function resetProjectSkillProposals(memoryDir: string): Promise<void> {
+  writeProjectSkillStore(memoryDir, { version: 1, proposals: [] })
+}
+
 function matchesTrigger(proposal: ProjectSkillProposal, text: string): boolean {
   const haystack = text.toLowerCase()
   return proposal.triggerKeywords.some((keyword) => haystack.includes(keyword.toLowerCase()))

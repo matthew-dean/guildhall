@@ -676,6 +676,13 @@ screen.
   context only when the workspace explicitly enables project-local skills.
   Focused project-skill/context/config tests, `pnpm typecheck`, docs gates, and
   full `pnpm test` passed.
+- Completed the Phase 5 learning inspection slice. `/api/project/learning`
+  now includes project skill proposals and product suggestions; learning action
+  endpoints support accept, dismiss, reset, and make-project-wide; project skill
+  proposal actions support activate, dismiss, and reset; and Settings now has a
+  quiet Learning subtab for project learnings, user preferences, project skills,
+  and builder suggestions. Focused learning endpoint tests and `pnpm typecheck`
+  passed, then the full `pnpm test` sweep passed.
 
 - Completed the `0.5.0` macOS packaging slice. Guildhall now has a
   buildable packaged artifact at `artifacts/macos/guildhall-macos`,

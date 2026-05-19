@@ -781,23 +781,23 @@ Files likely touched:
 
 - `src/runtime/serve.ts`
 - `src/web/surfaces/project/SettingsTab.svelte`
-- `src/web/surfaces/project/FactsTab.svelte`
-- `src/web/lib/types.ts`
+- `src/web/surfaces/ProjectView.svelte`
 - `src/runtime/__tests__/serve-settings.test.ts`
 - `docs/reference/agent-settings.md`
+- `docs/reference/http-api.md`
 - `docs/reference/memory-layout.md`
 
 Todos:
 
-- [ ] Add API endpoints for listing project learnings, user preferences, skill
+- [x] Add API endpoints for listing project learnings, user preferences, skill
   proposals, and product suggestions.
-- [ ] Add actions for accept, dismiss, reset, and make-project-wide where
+- [x] Add actions for accept, dismiss, reset, and make-project-wide where
   applicable.
-- [ ] Add a quiet project settings section for active/suggested learnings.
-- [ ] Add a builder-facing diagnostic view for product suggestions.
-- [ ] Add UI copy that explains learned behavior in product terms.
-- [ ] Add endpoint tests for each mutation.
-- [ ] Add docs for where records live and how to reset them.
+- [x] Add a quiet project settings section for active/suggested learnings.
+- [x] Add a builder-facing diagnostic view for product suggestions.
+- [x] Add UI copy that explains learned behavior in product terms.
+- [x] Add endpoint tests for each mutation.
+- [x] Add docs for where records live and how to reset them.
 
 Acceptance criteria:
 

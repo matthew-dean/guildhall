@@ -48,6 +48,44 @@
     copyVoice?: { tone?: string }
     a11y?: { minContrastRatio?: number }
   }
+  interface LearningEvidence {
+    kind?: string
+    summary?: string
+    ref?: string
+  }
+  interface SuggestedLearning {
+    id: string
+    summary: string
+    destination: string
+    scope: 'project' | 'user_global' | 'guildhall_product' | string
+    confidence: 'low' | 'medium' | 'high' | string
+    risk: 'low' | 'medium' | 'high' | string
+    status: 'suggested' | 'active' | 'dismissed' | string
+    requiresApproval?: boolean
+    evidence?: LearningEvidence[]
+    updatedAt?: string
+  }
+  interface ProductSuggestion {
+    id: string
+    title: string
+    summary: string
+    evidence?: string[]
+  }
+  interface ProjectSkillProposal {
+    id: string
+    name: string
+    description: string
+    status: 'suggested' | 'active' | 'dismissed' | string
+    risk?: 'low' | 'medium' | 'high' | string
+    triggerKeywords?: string[]
+    requiresApproval?: boolean
+  }
+  interface LearningSnapshot {
+    project: { suggestedLearnings: SuggestedLearning[] } | null
+    user: { suggestedLearnings: SuggestedLearning[] } | null
+    effective: { productSuggestions: ProductSuggestion[] } | null
+    projectSkillProposals: ProjectSkillProposal[]
+  }
 
   let initialized = $state<boolean | null>(null)
   let name = $state('')
@@ -58,6 +96,9 @@
   let levers = $state<Lever[] | null>(null)
   let leversError = $state<string | null>(null)
   let designSystem = $state<DesignSystem | null | undefined>(undefined)
+  let learning = $state<LearningSnapshot | null>(null)
+  let learningError = $state<string | null>(null)
+  let learningBusy = $state<string | null>(null)
 
   interface BootstrapStep {
     kind: 'command' | 'gate'
@@ -128,6 +169,7 @@
       })
       .catch(() => (providerStatus = { configured: false }))
     void loadBootstrap()
+    void loadLearning()
   })
 
   async function loadBootstrap() {
@@ -136,6 +178,26 @@
       bootstrapInfo = (await r.json()) as BootstrapInfo
     } catch {
       bootstrapInfo = null
+    }
+  }
+
+  async function loadLearning() {
+    try {
+      learningError = null
+      const r = await projectFetch('/api/project/learning')
+      const j = await r.json()
+      if (j.error) {
+        learningError = String(j.error)
+        return
+      }
+      learning = {
+        project: j.project ?? null,
+        user: j.user ?? null,
+        effective: j.effective ?? null,
+        projectSkillProposals: j.projectSkillProposals ?? [],
+      }
+    } catch (err) {
+      learningError = err instanceof Error ? err.message : String(err)
     }
   }
 
@@ -202,6 +264,48 @@
     }
   }
 
+  async function runLearningAction(kind: string, scope: 'project' | 'user_global', id?: string) {
+    learningBusy = `${kind}:${scope}:${id ?? 'all'}`
+    try {
+      const r = await projectFetch('/api/project/learning/action', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind, scope, id }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j?.error) {
+        learningError = j?.error ?? `HTTP ${r.status}`
+        return
+      }
+      await loadLearning()
+    } catch (err) {
+      learningError = err instanceof Error ? err.message : String(err)
+    } finally {
+      learningBusy = null
+    }
+  }
+
+  async function runSkillAction(kind: string, id?: string, approved = false) {
+    learningBusy = `skill:${kind}:${id ?? 'all'}`
+    try {
+      const r = await projectFetch('/api/project/skill-proposals/action', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind, id, approved }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j?.error) {
+        learningError = j?.error ?? `HTTP ${r.status}`
+        return
+      }
+      await loadLearning()
+    } catch (err) {
+      learningError = err instanceof Error ? err.message : String(err)
+    } finally {
+      learningBusy = null
+    }
+  }
+
   const coordinators = $derived(project.detail?.config?.coordinators ?? [])
 
   const bootstrapReady = $derived(Boolean(bootstrapInfo?.configured && bootstrapInfo?.status?.success))
@@ -264,6 +368,20 @@
         (designSystem.tokens?.radius?.length ?? 0) +
         (designSystem.tokens?.shadow?.length ?? 0)
       : 0,
+  )
+  const projectLearnings = $derived(learning?.project?.suggestedLearnings ?? [])
+  const userLearnings = $derived(learning?.user?.suggestedLearnings ?? [])
+  const skillProposals = $derived(learning?.projectSkillProposals ?? [])
+  const productSuggestions = $derived(learning?.effective?.productSuggestions ?? [])
+  const activeLearningCount = $derived(
+    projectLearnings.filter(item => item.status === 'active').length +
+      userLearnings.filter(item => item.status === 'active').length +
+      skillProposals.filter(item => item.status === 'active').length,
+  )
+  const suggestedLearningCount = $derived(
+    projectLearnings.filter(item => item.status === 'suggested').length +
+      userLearnings.filter(item => item.status === 'suggested').length +
+      skillProposals.filter(item => item.status === 'suggested').length,
   )
 </script>
 
@@ -465,6 +583,197 @@
             {/each}
           </div>
         </FrameCard>
+      {/if}
+    {:else if section === 'learning'}
+      <SectionHeader
+        eyebrow="Settings"
+        title="Learned behavior"
+        description="Project defaults, reusable project skills, and builder suggestions Guildhall has learned from completed work."
+        headingTag="h2"
+        density="compact"
+      >
+        {#snippet meta()}
+          <StatusPill label={`${activeLearningCount} active`} tone={activeLearningCount > 0 ? 'ok' : 'neutral'} />
+          <StatusPill label={`${suggestedLearningCount} suggested`} tone={suggestedLearningCount > 0 ? 'warn' : 'neutral'} />
+        {/snippet}
+      </SectionHeader>
+
+      {#if learningError}
+        <NoticeBand tone="danger" role="alert" label="Learning" title="Could not load learned behavior" density="compact">
+          <p>{learningError}</p>
+        </NoticeBand>
+      {:else if !learning}
+        <NoticeBand tone="neutral" role="status" label="Learning" title="Loading learned behavior" density="compact">
+          <p>Reading project and user learning records…</p>
+        </NoticeBand>
+      {:else}
+        <div class="learning-grid">
+          <FrameCard class="learning-card">
+            {#snippet header()}
+              <SectionHeader
+                title="Project learnings"
+                description="Defaults and project facts Guildhall can apply in this workspace."
+                headingTag="h3"
+                density="dense"
+              />
+            {/snippet}
+            <Stack gap="3">
+              {#if projectLearnings.length === 0}
+                <p class="muted">No project-specific learning records yet.</p>
+              {:else}
+                {#each projectLearnings as item (item.id)}
+                  <article class="learning-item">
+                    <header class="learning-title">
+                      <strong>{item.summary}</strong>
+                      <StatusPill label={item.status} tone={item.status === 'active' ? 'ok' : item.status === 'dismissed' ? 'neutral' : 'warn'} density="dense" />
+                    </header>
+                    <div class="learning-meta">
+                      <span>{item.destination.replaceAll('_', ' ')}</span>
+                      <span>{item.confidence} confidence</span>
+                      <span>{item.risk} risk</span>
+                    </div>
+                    {#if item.evidence?.length}
+                      <ul class="learning-evidence">
+                        {#each item.evidence as evidence, i (`${item.id}-${i}`)}
+                          <li>{evidence.summary}</li>
+                        {/each}
+                      </ul>
+                    {/if}
+                    <Row gap="2" justify="end">
+                      {#if item.status === 'suggested'}
+                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runLearningAction('accept', 'project', item.id)}>Accept</Button>
+                      {/if}
+                      {#if item.status !== 'dismissed'}
+                        <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runLearningAction('dismiss', 'project', item.id)}>Dismiss</Button>
+                      {/if}
+                    </Row>
+                  </article>
+                {/each}
+              {/if}
+              <Row justify="end">
+                <Button size="sm" variant="ghost" disabled={learningBusy !== null || projectLearnings.length === 0} onclick={() => runLearningAction('reset', 'project')}>Reset project learnings</Button>
+              </Row>
+            </Stack>
+          </FrameCard>
+
+          <FrameCard class="learning-card">
+            {#snippet header()}
+              <SectionHeader
+                title="User preferences"
+                description="Repeated preferences Guildhall has noticed across work."
+                headingTag="h3"
+                density="dense"
+              />
+            {/snippet}
+            <Stack gap="3">
+              {#if userLearnings.length === 0}
+                <p class="muted">No user preference records yet.</p>
+              {:else}
+                {#each userLearnings as item (item.id)}
+                  <article class="learning-item">
+                    <header class="learning-title">
+                      <strong>{item.summary}</strong>
+                      <StatusPill label={item.status} tone={item.status === 'active' ? 'ok' : item.status === 'dismissed' ? 'neutral' : 'warn'} density="dense" />
+                    </header>
+                    <div class="learning-meta">
+                      <span>{item.destination.replaceAll('_', ' ')}</span>
+                      <span>{item.confidence} confidence</span>
+                    </div>
+                    <Row gap="2" justify="end">
+                      {#if item.status === 'suggested'}
+                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runLearningAction('accept', 'user_global', item.id)}>Accept</Button>
+                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runLearningAction('make-project-wide', 'user_global', item.id)}>Use here</Button>
+                      {/if}
+                      {#if item.status !== 'dismissed'}
+                        <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runLearningAction('dismiss', 'user_global', item.id)}>Dismiss</Button>
+                      {/if}
+                    </Row>
+                  </article>
+                {/each}
+              {/if}
+              <Row justify="end">
+                <Button size="sm" variant="ghost" disabled={learningBusy !== null || userLearnings.length === 0} onclick={() => runLearningAction('reset', 'user_global')}>Reset user preferences</Button>
+              </Row>
+            </Stack>
+          </FrameCard>
+
+          <FrameCard class="learning-card">
+            {#snippet header()}
+              <SectionHeader
+                title="Project skills"
+                description="Reusable project procedures that can enter worker context when their triggers match."
+                headingTag="h3"
+                density="dense"
+              />
+            {/snippet}
+            <Stack gap="3">
+              {#if skillProposals.length === 0}
+                <p class="muted">No project skill proposals yet.</p>
+              {:else}
+                {#each skillProposals as skill (skill.id)}
+                  <article class="learning-item">
+                    <header class="learning-title">
+                      <strong>{skill.name}</strong>
+                      <StatusPill label={skill.status} tone={skill.status === 'active' ? 'ok' : skill.status === 'dismissed' ? 'neutral' : 'warn'} density="dense" />
+                    </header>
+                    <p class="learning-copy">{skill.description}</p>
+                    {#if skill.triggerKeywords?.length}
+                      <div class="learning-meta">
+                        {#each skill.triggerKeywords as keyword (`${skill.id}-${keyword}`)}
+                          <span>{keyword}</span>
+                        {/each}
+                      </div>
+                    {/if}
+                    <Row gap="2" justify="end">
+                      {#if skill.status === 'suggested'}
+                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runSkillAction('activate', skill.id, true)}>Activate</Button>
+                      {/if}
+                      {#if skill.status !== 'dismissed'}
+                        <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runSkillAction('dismiss', skill.id)}>Dismiss</Button>
+                      {/if}
+                    </Row>
+                  </article>
+                {/each}
+              {/if}
+              <Row justify="end">
+                <Button size="sm" variant="ghost" disabled={learningBusy !== null || skillProposals.length === 0} onclick={() => runSkillAction('reset')}>Reset project skills</Button>
+              </Row>
+            </Stack>
+          </FrameCard>
+
+          <FrameCard class="learning-card learning-card-wide">
+            {#snippet header()}
+              <SectionHeader
+                title="Builder suggestions"
+                description="Guildhall product improvements raised by project runs."
+                headingTag="h3"
+                density="dense"
+              />
+            {/snippet}
+            {#if productSuggestions.length === 0}
+              <p class="muted">No product suggestions yet.</p>
+            {:else}
+              <div class="suggestion-list">
+                {#each productSuggestions as suggestion (suggestion.id)}
+                  <article class="learning-item">
+                    <header class="learning-title">
+                      <strong>{suggestion.title}</strong>
+                      <StatusPill label="builder" tone="info" density="dense" />
+                    </header>
+                    <p class="learning-copy">{suggestion.summary}</p>
+                    {#if suggestion.evidence?.length}
+                      <ul class="learning-evidence">
+                        {#each suggestion.evidence as evidence, i (`${suggestion.id}-${i}`)}
+                          <li>{evidence}</li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </article>
+                {/each}
+              </div>
+            {/if}
+          </FrameCard>
+        </div>
       {/if}
     {:else if section === 'advanced'}
       <SectionHeader
@@ -758,6 +1067,64 @@
     gap: var(--gh-space-4);
   }
 
+  .learning-grid {
+    display: grid;
+    gap: var(--gh-space-4);
+  }
+
+  .learning-item {
+    display: grid;
+    gap: var(--gh-space-2);
+    padding: var(--gh-space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+    min-inline-size: 0;
+  }
+
+  .learning-title {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    align-items: start;
+    justify-content: space-between;
+    min-inline-size: 0;
+  }
+
+  .learning-title strong {
+    min-inline-size: 0;
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+  }
+
+  .learning-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+  }
+
+  .learning-copy {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+  }
+
+  .learning-evidence {
+    margin: 0;
+    padding-inline-start: var(--gh-space-4);
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+
+  .suggestion-list {
+    display: grid;
+    gap: var(--gh-space-3);
+  }
+
   .lever-scope {
     text-transform: uppercase;
     letter-spacing: 0;
@@ -845,7 +1212,15 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
+    .learning-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     :global(.advanced-card-wide) {
+      grid-column: 1 / -1;
+    }
+
+    :global(.learning-card-wide) {
       grid-column: 1 / -1;
     }
   }

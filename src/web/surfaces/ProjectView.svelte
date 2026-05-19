@@ -263,6 +263,7 @@
         { id: 'ready', label: 'Ready', path: currentProjectHref('/settings') },
         { id: 'providers', label: 'Providers', path: currentProjectHref('/settings/providers') },
         { id: 'facts', label: 'Facts', path: currentProjectHref('/settings/facts') },
+        { id: 'learning', label: 'Learning', path: currentProjectHref('/settings/learning') },
         { id: 'advanced', label: 'Advanced', path: currentProjectHref('/settings/advanced') },
       ],
     },

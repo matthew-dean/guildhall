@@ -331,6 +331,53 @@ export async function dismissSuggestedLearning(input: {
   )
 }
 
+export async function acceptSuggestedLearning(input: {
+  memoryDir: string
+  id: string
+  scope: 'project' | 'user_global'
+}): Promise<void> {
+  const now = new Date().toISOString()
+  await writeLearningByScope(input.memoryDir, input.scope, (record) =>
+    LearningRecordSchema.parse({
+      ...record,
+      suggestedLearnings: record.suggestedLearnings.map((item) =>
+        item.id === input.id
+          ? { ...item, status: 'active', updatedAt: now }
+          : item,
+      ),
+    }),
+  )
+}
+
+export async function makeSuggestedLearningProjectWide(input: {
+  memoryDir: string
+  id: string
+}): Promise<void> {
+  const global = readGlobalLearning()
+  const source = global.suggestedLearnings.find((item) => item.id === input.id)
+  if (!source) throw new Error(`Suggested learning not found: ${input.id}`)
+  const now = new Date().toISOString()
+  await writeLearningByScope(input.memoryDir, 'project', (record) => {
+    const projectId = `project-${source.id}`
+    const next = SuggestedLearningSchema.parse({
+      ...source,
+      id: projectId,
+      scope: 'project',
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+      dismissedAt: undefined,
+    })
+    return LearningRecordSchema.parse({
+      ...record,
+      suggestedLearnings: [
+        ...record.suggestedLearnings.filter((item) => item.id !== projectId),
+        next,
+      ],
+    })
+  })
+}
+
 export async function resetSuggestedLearnings(input: {
   memoryDir: string
   scope: 'project' | 'user_global'
@@ -714,6 +761,14 @@ export function buildLearningSnapshot(input: {
   const project = readProjectLearning(input.memoryDir)
   const user = readGlobalLearning()
   const defaults = buildWorkspaceImportDefaults(input.review, input.draft, project, user)
+  const suggestedProductSuggestions = project.suggestedLearnings
+    .filter((item) => item.destination === 'product_suggestion')
+    .map((item) => ({
+      id: item.id,
+      title: item.summary,
+      summary: item.summary,
+      evidence: item.evidence.map((evidence) => evidence.summary),
+    }))
 
   return {
     project,
@@ -727,7 +782,10 @@ export function buildLearningSnapshot(input: {
       }),
       defaults,
       coordinatorSuggestions: project.coordinatorSuggestions,
-      productSuggestions: project.productSuggestions,
+      productSuggestions: [
+        ...project.productSuggestions,
+        ...suggestedProductSuggestions,
+      ],
     },
   }
 }

@@ -79,7 +79,9 @@ project-route helpers when it is operating under `/projects/:id/...`.
 | `POST /api/project/workspace-import/rerun` | Re-run import discovery. |
 | `POST /api/project/workspace-import/approve` | Promote reviewed import findings. |
 | `POST /api/project/workspace-import/dismiss` | Dismiss current import review without deleting it. |
-| `GET /api/project/learning` | Effective project/user learning snapshot. |
+| `GET /api/project/learning` | Effective project/user learning snapshot, project skill proposals, and builder suggestions. |
+| `POST /api/project/learning/action` | Accept, dismiss, reset, or make a suggested learning project-wide. |
+| `POST /api/project/skill-proposals/action` | Activate, dismiss, or reset project skill proposals. |
 
 ## Config & providers
 
