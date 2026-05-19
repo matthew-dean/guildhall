@@ -2977,3 +2977,6 @@ and Windows-style `C:\Users\...` normalization to slash-separated `~/...`
 display paths. The rebuilt Projects page was inspected in-browser with no
 `/Users/...` or `C:\Users...` strings in the rendered DOM, then
 `docs/assets/ui-audit/projects.png` was retaken from that page.
+
+Follow-up on `2026-05-19`: the Projects screenshot now has an AVIF sibling and
+docs pages render it through `<picture>` with the PNG retained as fallback.

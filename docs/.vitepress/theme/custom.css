@@ -247,6 +247,12 @@
   box-shadow: 0 16px 32px color-mix(in srgb, black 22%, transparent);
 }
 
+.gh-home-page .vp-doc picture,
+.gh-first-visit-page .vp-doc picture,
+.gh-doc-picture {
+  display: block;
+}
+
 .gh-home-page .vp-doc blockquote,
 .gh-first-visit-page .vp-doc blockquote {
   border-inline-start-color: var(--gh-color-feedback-accent);
@@ -261,6 +267,7 @@
 .gh-first-visit-page .vp-doc > div > ul,
 .gh-first-visit-page .vp-doc > div > ol,
 .gh-first-visit-page .vp-doc > div > div[class*='language-'],
+.gh-first-visit-page .vp-doc > div > picture,
 .gh-first-visit-page .vp-doc > div > figure {
   max-inline-size: 52rem;
 }

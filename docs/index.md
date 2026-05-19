@@ -29,7 +29,10 @@ description: Local service for unattended software work with visible state, revi
     </div>
     <div class="gh-home-hero__media">
       <figure class="gh-doc-shot">
-        <img src="./assets/ui-audit/projects.png" alt="Guildhall projects home showing several local projects with status, activity, and start controls." />
+        <picture>
+          <source srcset="./assets/ui-audit/projects.avif" type="image/avif" />
+          <img src="./assets/ui-audit/projects.png" alt="Guildhall projects home showing several local projects with status, activity, and start controls." />
+        </picture>
         <figcaption>
           <strong>The service starts with your projects.</strong>
           Open the shell that needs attention, start another run, or attach a new repo without guessing which hidden session is active.

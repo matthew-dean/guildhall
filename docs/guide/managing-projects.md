@@ -27,7 +27,10 @@ click into a different repo.
 
 ## Use the projects home to triage
 
-![Guildhall projects home with Looma + Knit, T minus t, Fair Labor License, and Font something visible as local project cards.](../assets/ui-audit/projects.png)
+<picture class="gh-doc-picture">
+  <source srcset="../assets/ui-audit/projects.avif" type="image/avif" />
+  <img src="../assets/ui-audit/projects.png" alt="Guildhall projects home with Looma + Knit, T minus t, Fair Labor License, and Font something visible as local project cards." />
+</picture>
 
 The projects home should answer:
 

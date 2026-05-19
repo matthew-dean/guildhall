@@ -11,7 +11,10 @@ where setup, task intake, live progress, reviewer calls, and release
 readiness actually play out. It tries very hard not to make you remember more
 than you should.
 
-![Guildhall projects home showing several local projects with status, activity, and start controls.](../assets/ui-audit/projects.png)
+<picture class="gh-doc-picture">
+  <source srcset="../assets/ui-audit/projects.avif" type="image/avif" />
+  <img src="../assets/ui-audit/projects.png" alt="Guildhall projects home showing several local projects with status, activity, and start controls." />
+</picture>
 
 ![Guildhall work view with active tasks, live progress, and reviewer signals.](../assets/ui-audit/work.png)
 

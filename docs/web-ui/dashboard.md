@@ -26,7 +26,10 @@ If the page cannot answer those three questions fast, it is being decorative whe
 - Blocked work and unresolved escalations
 - Enough signal to tell whether opening the shell is likely to be a quick check or a proper firefight
 
-![Guildhall projects home showing multiple local projects with paused, stable, and ready states.](../assets/ui-audit/projects.png)
+<picture class="gh-doc-picture">
+  <source srcset="../assets/ui-audit/projects.avif" type="image/avif" />
+  <img src="../assets/ui-audit/projects.png" alt="Guildhall projects home showing multiple local projects with paused, stable, and ready states." />
+</picture>
 
 The Projects home is deliberately shallow. It helps you choose where to look
 next; the detailed Thread, Work, Settings, Learning, and Release surfaces stay
