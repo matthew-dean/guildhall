@@ -2960,3 +2960,20 @@ screen.
   now frames intake/meta-intake as dashboard-driven flows, and the pinned
   installer example/test now follows the package version so the release docs
   do not drift during the next patch release.
+
+## Active Path Display Audit
+
+- [x] Normalize user-home project paths in visible UI to `~`, including
+  Windows-style user profile paths in tests.
+- [x] Keep product feedback issue drafts from pasting absolute user-home paths
+  into GitHub.
+- [x] Rebuild and retake the projects screenshot after the UI shows
+  user-relative paths, then audit docs screenshots for `/Users/...` leakage.
+
+Completion note on `2026-05-19`: Projects home cards, project attach/facts
+surfaces, and product feedback issue drafts now pass user-home paths through the
+shared `formatUserPath` display helper. The focused tests cover macOS, Linux,
+and Windows-style `C:\Users\...` normalization to slash-separated `~/...`
+display paths. The rebuilt Projects page was inspected in-browser with no
+`/Users/...` or `C:\Users...` strings in the rendered DOM, then
+`docs/assets/ui-audit/projects.png` was retaken from that page.

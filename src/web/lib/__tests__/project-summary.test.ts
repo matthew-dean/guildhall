@@ -10,7 +10,7 @@ describe('summarizeProjects', () => {
         {
           id: 'guildhall',
           name: 'Guildhall',
-          path: '/work/guildhall',
+          path: '/Users/matthew/work/guildhall',
           selected: true,
           tags: ['cli', 'orchestrator'],
           summary: 'Guildhall runs autonomous engineering workflows over local projects.',
@@ -28,7 +28,7 @@ describe('summarizeProjects', () => {
       {
         id: 'guildhall',
         name: 'Guildhall',
-        path: '/work/guildhall',
+        path: '~/work/guildhall',
         statusLabel: 'Running',
         tone: 'active',
         stageLabel: 'Running',
@@ -81,6 +81,22 @@ describe('summarizeProjects', () => {
       canStart: true,
       canStop: false,
     })
+  })
+
+  it('normalizes Windows user-profile project paths for display', () => {
+    const service: ServiceDetail = {
+      projects: [
+        {
+          id: 'guildhall',
+          name: 'Guildhall',
+          path: 'C:\\Users\\Matthew\\git\\oss\\guildhall',
+          taskCounts: { total: 0, active: 0, draftReview: 0, blocked: 0, done: 0, shelved: 0 },
+          run: { status: 'stopped' },
+        },
+      ],
+    }
+
+    expect(summarizeProjects(service)[0]?.path).toBe('~/git/oss/guildhall')
   })
 
   it('treats uninitialized projects as setup-only entries', () => {

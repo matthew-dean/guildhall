@@ -1,3 +1,5 @@
+import { formatUserPath } from './display-path.js'
+
 export interface ProductFeedbackSuggestion {
   id: string
   title: string
@@ -25,7 +27,7 @@ function buildIssueBody(input: {
   project?: ProductFeedbackProject | null
 }): string {
   const projectName = input.project?.name?.trim()
-  const projectPath = input.project?.path?.trim()
+  const projectPath = formatUserPath(input.project?.path)
   const evidence = input.suggestion.evidence?.filter(item => item.trim().length > 0) ?? []
   return [
     '## Product feedback',
