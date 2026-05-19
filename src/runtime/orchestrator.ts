@@ -3009,7 +3009,6 @@ export class Orchestrator {
         const madeExploringProgress =
           transitioned ||
           taskAfter.updatedAt !== task.updatedAt ||
-          transcriptAppended ||
           fallbackBriefAuthored ||
           fallbackQuestionPosted
 

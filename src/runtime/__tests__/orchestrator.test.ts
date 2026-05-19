@@ -727,6 +727,34 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.escalations[0]!.reason).toBe('human_judgment_required')
   })
 
+  it('does not count transcript-only intake narration as spec progress', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      'I have the answers now and will write the product brief and full spec next.',
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const first = await orch.tick()
+    const second = await orch.tick()
+    const third = await orch.tick()
+
+    expect(first.kind).toBe('processed')
+    expect(second.kind).toBe('processed')
+    expect(third.kind).toBe('escalated')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('blocked')
+    expect(task.blockReason).toMatch(/no visible progress/i)
+    expect(task.productBrief).toBeUndefined()
+    expect(task.spec).toBeUndefined()
+  })
+
   it('persists plain-text spec-agent questions to transcript and openQuestions', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
     const spec = stubAgent(

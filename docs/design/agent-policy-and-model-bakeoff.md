@@ -72,6 +72,20 @@ the coordinator responsible for deciding where each improvement belongs:
 
 That routing decision is the center of the `0.6.0` design.
 
+Guildhall should also make the project journey itself a first-class artifact,
+not an emergent side effect of task status changes. The fuller product
+philosophy is captured in the
+[Project construction manifesto](./project-construction-manifesto): Guildhall
+should survey the site, draft blueprints, frame work, assign trades, inspect
+against the plan, handle change orders, and decide when the project is livable
+or shippable.
+
+For this policy note, the important operational consequence is simple: agents
+should be flexible inside a construction mode, not vague across all possible
+modes. A policy packet should tell an agent whether it is surveying,
+blueprinting, framing, building, inspecting, writing a change order, or clearing
+a punch list, and what durable artifact proves progress in that mode.
+
 ## 0.5.x Track: Decision-Point Unblockers
 
 This is table-stakes product behavior, not future architecture.

@@ -45,6 +45,11 @@ screen.
   The 0.6.0 note now combines bounded improvisation, typed recovery playbooks,
   coordinator-routed project/system learning, and model bakeoff work. See
   `docs/design/agent-policy-and-model-bakeoff.md`.
+- [x] Capture the house/construction model as a canonical product philosophy
+  instead of leaving it in chat. See
+  `docs/design/project-construction-manifesto.md` for the guild roles, site
+  survey, blueprint, foundation, framing, trade work, inspection, change order,
+  punch list, and occupancy model that should guide 0.6.0 planning work.
 - [x] Normalize dirty-repo setup blockers in Thread so the user sees the repo
   name and the concrete commit/stash recovery action instead of raw setup
   prose.
@@ -686,6 +691,18 @@ screen.
   project advancement follows the emerging "outline first, then fill" process:
   structure/requirements as an inspectable deliverable, followed by bounded
   implementation against that accepted structure.
+- Live Looma + Knit walkthrough on `2026-05-19` answered the three active
+  shaping clusters (`Block menu / block side menu`, `Floating toolbar`, and
+  `Link editing UI`) with conservative Looma-library defaults, then started
+  the project. The run exposed a real intake-progress bug: after answers were
+  present, the spec agent narrated that it would write the brief/spec and
+  appended transcript text, but Guildhall counted transcript-only narration as
+  progress even though no product brief, spec, acceptance criteria, or question
+  changed. The orchestrator now treats transcript-only intake narration as
+  no-progress so the agent must produce a skeleton artifact or the task
+  escalates honestly. Focused and full verification passed afterward:
+  `pnpm typecheck`, focused orchestrator/policy/model/settings tests, and
+  `pnpm test:coverage` (`2,458` tests, `90.07%` line coverage).
 
 - Started the `0.6.0` policy/learning implementation in
   `/Users/matthew/git/worktrees/guildhall-0.6-policy-learning` on
