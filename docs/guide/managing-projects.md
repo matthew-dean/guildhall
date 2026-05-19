@@ -60,7 +60,12 @@ When the service is busy, the UI should make that clear:
 
 As projects get larger, the right flow is not "run everything in created
 order." Guildhall should help shape smaller active sets and keep broad future
-work out of the runnable queue until it is ready.
+work out of the runnable queue until it has a blueprint.
 
 Today, keep the first active set small and review imported drafts before
 approving them.
+
+Over time, this becomes the project-manager layer: survey existing material,
+frame releases and phases, promote one active tranche, inspect the results,
+then reshape the plan with explicit change orders when reality teaches the
+guild something new.

@@ -4,9 +4,10 @@ title: Running Guildhall
 
 # Running Guildhall
 
-Running Guildhall means letting the local service advance project tasks. The
-service asks coordinators what can move next, dispatches workers, collects
-reviews, and runs gates before work is called done.
+Running Guildhall means letting the local service advance project tasks through
+the construction loop. The service asks coordinators what can move next,
+dispatches workers for trade work, collects inspections, and runs gates before
+work is called done.
 
 ## From the dashboard
 
@@ -23,6 +24,10 @@ is the main operating path: you can inspect Thread, Work, Needs you, task
 drawers, and release state without leaving the UI.
 
 The dashboard uses the same runtime as the CLI. Progress is appended to `memory/PROGRESS.md`, events are streamed to `memory/events.ndjson`, and the full transcript per task lives under `memory/transcripts/`.
+
+Progress should also leave a durable artifact: a task blueprint, decision,
+change order, implementation diff, verification result, review finding, or
+learning record. Transcript motion alone is not enough.
 
 ## From the CLI
 
@@ -69,7 +74,7 @@ Each tick:
 
 1. For each domain (filtered by `--domain` if set): ask the coordinator to evaluate its queue.
 2. Dispatch any ready tasks to workers (respecting `concurrent_task_dispatch`).
-3. For any tasks in `review`: run reviewer fan-out.
+3. For any tasks in `review`: run reviewer fan-out as inspection.
 4. For any tasks in `gate_check`: run hard gates.
 5. Persist state; emit events.
 

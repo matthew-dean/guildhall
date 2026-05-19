@@ -2,7 +2,7 @@
 
 # GuildHall
 
-**A local workspace for running software work with a guild of AI experts.**
+**A local workspace where a guild of AI experts plans, builds, reviews, and finishes software work.**
 
 [![npm](https://img.shields.io/npm/v/guildhall.svg)](https://www.npmjs.com/package/guildhall)
 [![node](https://img.shields.io/node/v/guildhall.svg)](https://nodejs.org)
@@ -19,10 +19,11 @@ instruction to go be clever. GuildHall is for people who would rather **run the
 work** than babysit a prompt loop.
 
 GuildHall is a **local workspace for software projects**. It gives you a guided
-process for handing work to a guild of specialists: coordinators, workers,
-reviewers, and gate-checkers. They do not just freestyle forever. Work moves
-through explicit stages, review, and gates so you can see what is happening,
-where it is stuck, and when human judgment is actually needed.
+process for handing work to a guild of specialists: coordinators, spec agents,
+workers, reviewers, and gate-checkers. They do not just improvise forever.
+GuildHall surveys the repo, drafts a blueprint, frames the work, assigns the
+trade work, inspects the result, and records change orders when the plan needs
+to move.
 
 The UI is the point. You open GuildHall, attach a project folder, and work from
 a real product surface instead of memorizing 1,000 CLI spells. The CLI exists,
@@ -32,22 +33,25 @@ is the friendly front door.
 Under the hood, GuildHall runs as a **local service over your projects**.
 
 The top level is a **Projects** view. Inside each project, GuildHall keeps the
-queue, transcripts, settings, and live task state together.
+blueprints, tasks, transcripts, settings, and live project state together.
 
 ## What it does
 
-GuildHall helps with software work that benefits from a little structure:
+GuildHall helps with software work that benefits from explicit structure:
 
-- intake and shape tasks
-- draft and review specs
-- implement changes
-- run reviews and gates
+- survey a project and its existing plans
+- draft and review task blueprints
+- frame runnable work into a smaller active set
+- implement changes as bounded trade work
+- run inspections, reviews, and gates
+- record change orders when reality changes the plan
 - keep a durable audit trail of what happened
 
 The core idea is simple:
 
 - you describe the work
-- GuildHall routes it through the right agents
+- GuildHall shapes it into a blueprint
+- GuildHall routes it through the right guild roles
 - you step in when judgment, clarification, or approval is needed
 
 That structure is what makes it different from open-ended harnesses. GuildHall
@@ -147,22 +151,23 @@ Typical files look like:
 
 At runtime, GuildHall coordinates a few core roles:
 
-- **Spec** — shapes and clarifies work
-- **Coordinator** — owns a domain and its tradeoffs
-- **Worker** — implements changes
-- **Reviewer** — checks the task from expert perspectives
+- **Spec** — drafts the blueprint and clarifies open questions
+- **Coordinator** — keeps the project or domain coherent
+- **Worker** — performs bounded trade work against the accepted blueprint
+- **Reviewer** — inspects the task from expert perspectives
 - **Gate checker** — runs the deterministic completion bar
 
 ## Why it feels different
 
 Most AI coding tools are still basically chat-shaped.
 
-GuildHall is closer to a **project operations surface**:
+GuildHall is closer to a **software construction surface**:
 
-- work is a queue, not a conversation transcript
+- work is framed against a blueprint, not just a conversation transcript
 - state persists to disk
 - runs can continue beyond a single chat moment
-- review and gates are part of the workflow instead of an afterthought
+- inspections, review, and gates are part of the workflow instead of an afterthought
+- change orders make scope or sequencing shifts explicit
 - decisions are exposed through explicit settings and levers
 
 ## Useful commands
@@ -184,6 +189,7 @@ For the full CLI reference, see [docs/cli/reference.md](./docs/cli/reference.md)
 ## Learn more
 
 - [Quick start](./docs/guide/quick-start.md)
+- [How Guildhall builds](./docs/guide/how-guildhall-builds.md)
 - [Introduction](./docs/guide/introduction.md)
 - [Core concepts](./docs/guide/concepts.md)
 - [CLI reference](./docs/cli/reference.md)

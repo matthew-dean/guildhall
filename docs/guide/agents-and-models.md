@@ -4,14 +4,17 @@ title: Agents & models
 
 # Agents & models
 
-Five agent roles exist, each backed by a different system prompt and tool set:
+Five agent roles exist, each backed by a different system prompt and tool set.
+The construction model is the simplest way to understand the split: one role
+drafts the blueprint, one keeps the job coherent, one performs trade work, one
+inspects, and one enforces deterministic checks.
 
 | Role | Responsibility | Typical model tier |
 |---|---|---|
-| `spec` | Interviews the user to refine tasks in `exploring`. | High — reasoning-heavy. |
-| `coordinator` | Makes promotion/rejection decisions per domain. | High. |
-| `worker` | Writes code, runs commands, ships diffs. | Mid-to-high — coding-specific. |
-| `reviewer` | Evaluates completed work against spec + rubric. | Mid. |
+| `spec` | Surveys missing context and drafts the task blueprint in `exploring`. | High — reasoning-heavy. |
+| `coordinator` | Keeps the project/domain plan coherent and makes promotion/rejection decisions. | High. |
+| `worker` | Performs bounded trade work against the accepted blueprint. | Mid-to-high — coding-specific. |
+| `reviewer` | Inspects completed work against the blueprint + rubric. | Mid. |
 | `gateChecker` | Runs deterministic checks and custom gates. | Low — mostly shell/parse. |
 
 ## Assigning models

@@ -50,6 +50,12 @@ screen.
   `docs/design/project-construction-manifesto.md` for the guild roles, site
   survey, blueprint, foundation, framing, trade work, inspection, change order,
   punch list, and occupancy model that should guide 0.6.0 planning work.
+- [x] Start permeating the public docs with the construction model. Added
+  `docs/guide/how-guildhall-builds.md`, linked it from the start/guide
+  sidebars, and updated the home page, quick start, introduction, core
+  concepts, project walkthroughs, first-task guidance, task lifecycle,
+  projects/work guide, many-projects guide, and 0.6.0 release note to use
+  blueprint/framing/trade work/inspection/change-order language.
 - [x] Normalize dirty-repo setup blockers in Thread so the user sees the repo
   name and the concrete commit/stash recovery action instead of raw setup
   prose.

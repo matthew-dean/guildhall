@@ -3,16 +3,16 @@ layout: page
 pageClass: gh-home-page
 title: Guildhall
 titleTemplate: Let the guild carry the work
-description: Local service for unattended software work with visible state, reviewer guardrails, and inspectable transcripts.
+description: Local service where a guild of AI helpers plans, builds, reviews, and finishes software work with visible state.
 ---
 
 <section class="gh-home">
   <section class="gh-home-hero">
     <div class="gh-home-hero__copy">
-      <p class="gh-kicker">Local service. Visible state. Fewer things to remember.</p>
+      <p class="gh-kicker">Local guild. Shared plans. Visible work.</p>
       <h1>Let the guild carry the work.</h1>
       <p class="gh-home-subhead">As unattended as you want. As auditable as you need.</p>
-      <p class="gh-home-lede">Guildhall runs over your projects from a local service. Queue state, reviewer calls, and transcripts stay attached to the work so you can let it run, step in when needed, and still understand what happened.</p>
+      <p class="gh-home-lede">Guildhall runs over your projects from a local service. It surveys the repo, drafts plans, frames tasks, assigns workers, inspects the results, and keeps every important decision attached to the work.</p>
       <div class="gh-home-hero__actions">
         <div class="gh-cta-row">
           <a class="gh-cta gh-cta-primary" href="/guildhall/guide/quick-start">Get started</a>
@@ -21,9 +21,9 @@ description: Local service for unattended software work with visible state, revi
           <a class="gh-cta gh-cta-secondary" href="https://github.com/matthew-dean/guildhall">Read the code</a>
         </div>
         <ul class="gh-home-hero__badges" aria-label="Guildhall strengths">
-          <li>Visible queue and blockers</li>
-          <li>Reviewer verdicts with receipts</li>
-          <li>Inspectable guardrails</li>
+          <li>Blueprints before build work</li>
+          <li>Trade work with receipts</li>
+          <li>Inspections before done</li>
         </ul>
       </div>
     </div>
@@ -43,6 +43,7 @@ description: Local service for unattended software work with visible state, revi
         <h2>Less babysitting. More legible runs.</h2>
         <ul>
           <li>Run work from a real project surface instead of juggling hidden session state.</li>
+          <li>Give agents a blueprint to build against instead of asking them to improvise the whole job.</li>
           <li>Keep reviewer calls and transcripts close enough to challenge.</li>
           <li>Turn autonomy up or down without handing your judgment to a mystery box.</li>
         </ul>
@@ -54,7 +55,7 @@ description: Local service for unattended software work with visible state, revi
     <div class="gh-section-heading">
       <p class="gh-kicker">Actual product</p>
       <h2>Real state, early in the story.</h2>
-      <p>Guildhall earns trust by putting the moving parts where you can see them. Setup, task flow, release readiness, and the drawer full of evidence are part of the product.</p>
+      <p>Guildhall earns trust by putting the moving parts where you can see them. Site survey, task blueprints, active trade work, inspections, release readiness, and the drawer full of evidence are part of the product.</p>
     </div>
     <figure class="gh-doc-shot">
       <img src="./assets/ui-audit/inbox.png" alt="Guildhall thread view showing setup prompts, active work, and human decisions in a single feed." />
@@ -77,16 +78,16 @@ description: Local service for unattended software work with visible state, revi
     </div>
     <div class="gh-signal-grid">
       <article class="gh-signal-card">
+        <h3>Blueprints before build work</h3>
+        <p>Guildhall should shape the work before it implements: goal, scope, non-goals, acceptance criteria, and verification plan.</p>
+      </article>
+      <article class="gh-signal-card">
         <h3>Reviewers with teeth</h3>
-        <p>Work does not become done because a worker sounded confident. It becomes done because reviewers, checks, and release rules agree it can move forward.</p>
+        <p>Work does not become done because a worker sounded confident. It becomes done because inspectors, checks, and release rules agree it can move forward.</p>
       </article>
       <article class="gh-signal-card">
-        <h3>Guardrails, not guesses</h3>
-        <p>Bootstrap checks, environment checks, and release gates make it harder for the system to quietly plow through a broken setup and call it initiative.</p>
-      </article>
-      <article class="gh-signal-card">
-        <h3>Visible transcripts</h3>
-        <p>When the guild does something strange, you can read the transcript instead of staring at a spinner and reconstructing the plot from vibes.</p>
+        <h3>Change orders, not drift</h3>
+        <p>When reality changes the plan, Guildhall should name the old assumption, the new evidence, and the scope or sequence change.</p>
       </article>
       <article class="gh-signal-card">
         <h3>Levers, not vibes</h3>
@@ -98,7 +99,7 @@ description: Local service for unattended software work with visible state, revi
       </article>
       <article class="gh-signal-card">
         <h3>Visible state</h3>
-        <p>The queue, blockers, and release posture stay legible. Hidden state is funny only until it ships.</p>
+        <p>The blueprint, active build work, blockers, inspections, and release posture stay legible. Hidden state is funny only until it ships.</p>
       </article>
     </div>
   </section>
@@ -116,7 +117,7 @@ description: Local service for unattended software work with visible state, revi
       <div class="gh-guild-supporting">
         <article class="gh-guild-copy">
           <h3>Different roles, different instincts</h3>
-          <p>The coordinator routes, workers push, reviewers doubt, and gates insist on evidence. That is the useful personality in the system.</p>
+          <p>The coordinator keeps the job coherent, spec agents draft blueprints, workers perform trade work, reviewers inspect, and gates insist on evidence. That is the useful personality in the system.</p>
         </article>
         <figure class="gh-guild-figure gh-guild-figure-secondary">
           <img src="./assets/illustrations/reviewer-flow.svg" alt="Illustration of Guildhall reviewer and release gate flow." />

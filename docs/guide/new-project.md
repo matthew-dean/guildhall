@@ -6,7 +6,8 @@ pageClass: gh-first-visit-page
 # New project
 
 Empty repos, young repos, and ideas that still mostly live in your head all
-need the same first move: make the project visible and prove one small loop.
+need the same first move: survey the site, draft a small blueprint, and prove
+one build-and-inspect loop.
 
 ## 1. Open the repo
 
@@ -27,9 +28,9 @@ project-scoped, so it should not depend on a temporary folder name.
 Pick the account, CLI, or local model Guildhall should use. You can change
 this later; the first run only needs one working path.
 
-## 4. Create one starter task
+## 4. Draft one starter blueprint
 
-Start with a task that proves the system can move:
+Start with a task blueprint that proves the system can move:
 
 - create the first README
 - add a tiny route or component
@@ -42,7 +43,8 @@ has enough project context and a shaped plan.
 ## 5. Start and watch
 
 Press **Start** only after the task is clear enough to judge. You should see
-live movement in the shell: the task changing state, notes appearing, and any
-blocker attached to the project.
+live movement in the shell: the task changing state, notes appearing,
+verification or review evidence accumulating, and any blocker attached to the
+project.
 
 Next: [First task set](./first-tasks).

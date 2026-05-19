@@ -11,6 +11,8 @@ actually touch:
 - **Tasks** are the pieces of work you ask it to move.
 - **Specs and policy** shape how work is planned, reviewed, recovered, and
   learned from.
+- **Blueprints and inspections** are how the guild keeps work coherent without
+  turning every run into a hidden chat transcript.
 
 Setting up your first project? Start with [Get started](./quick-start).
 
@@ -35,4 +37,5 @@ Setting up your first project? Start with [Get started](./quick-start).
 ## Concepts
 
 - [Introduction](./introduction) — what kind of tool Guildhall is.
+- [How Guildhall builds](./how-guildhall-builds) — the construction model behind planning, implementation, review, and release.
 - [Core concepts](./concepts) — vocabulary tour.
