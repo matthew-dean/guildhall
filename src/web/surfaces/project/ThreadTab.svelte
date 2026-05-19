@@ -48,6 +48,7 @@
   type TurnPersona = 'intake' | 'spec' | 'worker' | 'reviewer' | 'coord' | 'system'
   type TurnStatus = 'done' | 'active' | 'pending'
   type TurnPhase = 'setup' | 'intake' | 'spec' | 'ready' | 'inflight' | 'blocked' | 'done'
+  type ConstructionMode = 'survey' | 'blueprint' | 'frame' | 'build' | 'inspect' | 'change_order' | 'punch_list'
   type SetupAffordance = 'link' | 'inline-text' | 'inline-textarea' | 'inline-button' | 'inline-choice'
   interface LiveAgent {
     name: string
@@ -77,6 +78,7 @@
     kind: 'brief_approval'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string
+    constructionMode?: ConstructionMode | undefined
     brief: {
       userJob?: string; successMetric?: string; successCriteria?: string
       antiPatterns?: string[]; rolloutPlan?: string; authoredBy?: string
@@ -88,6 +90,7 @@
     kind: 'agent_question'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string
+    constructionMode?: ConstructionMode | undefined
     taskDescription?: string | undefined
     sourceNote?: { description?: string | undefined; references: string[] } | undefined
     liveAgent?: LiveAgent | undefined
@@ -106,6 +109,7 @@
     kind: 'spec_review'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string; spec: string
+    constructionMode?: ConstructionMode | undefined
     draftCoordinators?: Array<{
       id: string
       name?: string
@@ -119,6 +123,7 @@
     kind: 'escalation'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string; escalationId: string
+    constructionMode?: ConstructionMode | undefined
     summary: string; details?: string
     activity?: LiveActivity[] | undefined
   }
@@ -126,12 +131,14 @@
     kind: 'review_feedback'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string
+    constructionMode?: ConstructionMode | undefined
     summary: string; feedback: string; revisionCount?: number | undefined
   }
   interface InFlightTurn {
     kind: 'inflight'
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string; taskStatus?: string; summary: string
+    constructionMode?: ConstructionMode | undefined
     taskDescription?: string | undefined
     sourceNote?: { description?: string | undefined; references: string[] } | undefined
     importedDraft?: boolean | undefined
@@ -399,6 +406,20 @@
     if (t.kind === 'inflight' && t.status === 'active' && !t.liveAgent) return 'neutral'
     if (t.kind === 'spec_review' && t.status === 'active') return 'neutral'
     return t.status === 'active' ? 'neutral' : 'neutral'
+  }
+
+  function constructionModeLabel(t: Turn): string | null {
+    if (!('constructionMode' in t)) return null
+    switch (t.constructionMode) {
+      case 'survey': return 'Survey'
+      case 'blueprint': return 'Blueprint'
+      case 'frame': return 'Frame'
+      case 'build': return 'Build'
+      case 'inspect': return 'Inspect'
+      case 'change_order': return 'Change order'
+      case 'punch_list': return 'Punch list'
+      default: return null
+    }
   }
 
   function showStatusChip(t: Turn): boolean {
@@ -1218,6 +1239,9 @@
             <InteractionCardLayout>
               {#snippet status()}
                 <Row align="center" gap="2">
+                  {#if constructionModeLabel(t)}
+                    <Chip label={constructionModeLabel(t) ?? ''} tone="neutral" />
+                  {/if}
                   {#if ownershipLabel(t)}
                     <Chip label={ownershipLabel(t) ?? ''} tone={ownershipTone(t)} />
                   {/if}

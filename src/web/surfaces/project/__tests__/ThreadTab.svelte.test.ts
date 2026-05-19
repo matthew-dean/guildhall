@@ -47,6 +47,7 @@ function importedDraftTurn(overrides: Record<string, unknown> = {}) {
     phase: 'intake',
     taskId: 'task-import-link-controls',
     taskTitle: 'Knit: add link editor controls',
+    constructionMode: 'blueprint',
     taskStatus: 'import_draft',
     importedDraft: true,
     summary: 'Imported from your project notes.',
@@ -69,6 +70,7 @@ function questionTurn(id: string, questionId: string, prompt: string, choices: s
     phase: 'blocked',
     taskId: 'task-link-controls',
     taskTitle: 'Knit: add link editor controls',
+    constructionMode: 'change_order',
     taskDescription: 'Imported draft needs one narrowed answer before work starts.',
     sourceNote: {
       references: ['docs/roadmap.md'],
@@ -95,6 +97,7 @@ function briefTurn(overrides: Record<string, unknown> = {}) {
     phase: 'spec',
     taskId: 'task-link-controls',
     taskTitle: 'Knit: add link editor controls',
+    constructionMode: 'blueprint',
     brief: {
       userJob: 'Edit links inline.',
       successMetric: 'The editor can create and remove links.',
@@ -114,6 +117,7 @@ function specReviewTurn(taskId: string, overrides: Record<string, unknown> = {})
     phase: 'spec',
     taskId,
     taskTitle: taskId === 'task-meta-intake' ? 'Inspect the repo' : 'Knit: add link editor controls',
+    constructionMode: 'blueprint',
     spec: '## Summary\nBuild the focused link editor controls.\n\n## Acceptance Criteria\n- The focused controls exist.',
     ...overrides,
   }
@@ -129,6 +133,7 @@ function metaIntakeTurn(overrides: Record<string, unknown> = {}) {
     phase: 'setup',
     taskId: 'task-meta-intake',
     taskTitle: 'Inspect the repo',
+    constructionMode: 'survey',
     taskStatus: 'exploring',
     summary: 'Guildhall should infer the repo structure itself.',
     ...overrides,
@@ -145,6 +150,7 @@ function workerTurn(overrides: Record<string, unknown> = {}) {
     phase: 'inflight',
     taskId: 'task-link-controls',
     taskTitle: 'Knit: add link editor controls',
+    constructionMode: 'build',
     taskStatus: 'in_progress',
     summary: 'Worker is implementing link controls.',
     ...overrides,
@@ -365,6 +371,22 @@ describe('ThreadTab', () => {
         ),
       ).toBe(true)
     })
+  })
+
+  it('shows construction stage chips on task turns', async () => {
+    installFetchFakes(
+      [
+        importedDraftTurn({ id: 'draft-stage', taskId: 'task-draft-stage', constructionMode: 'blueprint' }),
+        workerTurn({ id: 'worker-stage', taskId: 'task-worker-stage', constructionMode: 'build' }),
+      ],
+      'draft-stage',
+    )
+
+    render(ThreadTab)
+
+    await screen.findByText('Blueprint')
+    await userEvent.click(screen.getByRole('button', { name: /paused/i }))
+    expect(screen.getByText('Build')).toBeTruthy()
   })
 
   it('stages multiple task questions and submits them as one answer batch', async () => {

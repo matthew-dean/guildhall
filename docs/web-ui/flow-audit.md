@@ -76,6 +76,12 @@ screen.
   core, and includes `constructionMode` on task-derived Thread turns. Focused
   verification passed for `src/core/__tests__/construction-mode.test.ts` and
   `src/runtime/__tests__/thread.test.ts`.
+- [x] Surface construction mode in Thread cards as a compact stage signal so
+  the user can tell whether a task is being surveyed, blueprinted, framed,
+  built, inspected, changed, or punched down without opening the details pane.
+  Thread now renders the construction mode as a neutral chip beside ownership
+  and status, with component coverage for visible and collapsed-phase task
+  cards.
 - [x] Normalize dirty-repo setup blockers in Thread so the user sees the repo
   name and the concrete commit/stash recovery action instead of raw setup
   prose.
