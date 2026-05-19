@@ -4,17 +4,15 @@ title: Guide
 
 # Guide
 
-The guide is for understanding and operating Guildhall after the first-run path
-is clear. If you are setting up your first project, start with
-[Get started](./quick-start) instead.
-
-Guildhall is easiest to use when the guide follows the product domains you
+Guildhall starts to make sense when the docs follow the product domains you
 actually touch:
 
 - **Projects** are the repos Guildhall can see.
 - **Tasks** are the pieces of work you ask it to move.
 - **Specs and policy** shape how work is planned, reviewed, recovered, and
   learned from.
+
+Setting up your first project? Start with [Get started](./quick-start).
 
 ## Projects
 

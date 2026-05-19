@@ -10,10 +10,9 @@ help_summary: |
 
 # Guildhall app
 
-The app is the main way to operate Guildhall. It has two useful scales:
-the `/projects` service home for scanning registered projects, and the
-project shell where setup, tasks, live runs, reviewer calls, and release
-readiness actually play out.
+The app has two useful scales: the `/projects` service home for scanning
+registered projects, and the project shell where setup, tasks, live runs,
+reviewer calls, and release readiness actually play out.
 
 Use it for the everyday loop:
 
@@ -39,9 +38,8 @@ under `~/.guildhall/`.
 
 ## Implementation reference
 
-Most users do not need this. If you are working on Guildhall itself, the
-implementation reference covers [design tokens](./design-tokens) and the
-[in-UI help system](./help-system).
+Guildhall maintainers can inspect the [design tokens](./design-tokens) and
+[in-UI help system](./help-system) behind the app surface.
 
 If the UI does something weird, the receipts are usually sitting in plain files
 that can be inspected directly.

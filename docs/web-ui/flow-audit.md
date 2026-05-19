@@ -3018,3 +3018,8 @@ swap the whole left rail without breadcrumb context.
 Deep reference follow-up on `2026-05-19`: levers, subsystems, and releases are
 still allowed to use their own detailed sidebars, but Reference marks them as
 section jumps and breadcrumbs keep them under the Reference top-level context.
+
+Content polish follow-up on `2026-05-19`: public docs copy was swept for
+meta-explanatory scaffolding such as "this page exists" and "use this path."
+Guide, first-run, app, dashboard, and workspace intros now lead with the
+product behavior or user job instead of explaining the page's purpose.
