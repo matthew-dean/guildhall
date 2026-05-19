@@ -44,6 +44,12 @@ export type ModelConfigInput = z.infer<typeof ModelConfigInputSchema>
 export type ProviderModelShortcut = z.infer<typeof ProviderModelShortcutSchema>
 export type ProviderModelAssignments = z.infer<typeof ProviderModelAssignmentsSchema>
 
+const ProjectSkillsConfig = z.object({
+  projectLocal: z.object({
+    enabled: z.boolean().default(false),
+  }).default({}),
+}).default({})
+
 // ---------------------------------------------------------------------------
 // guildhall.yaml — per-workspace configuration
 // Lives next to the project's code (or in a .guildhall/ subdir).
@@ -101,6 +107,11 @@ export const WorkspaceYamlConfig = z.object({
 
   // Optional tags for grouping workspaces in the dashboard
   tags: z.array(z.string()).default([]),
+
+  // Project-local learned skills are opt-in: global/user skills are always
+  // available, but project-specific procedural memory must be explicitly
+  // enabled by the workspace before it enters agent context.
+  skills: ProjectSkillsConfig.optional(),
 
   // FR-24: runtime-resource isolation. Consumed when the project-scope lever
   // `runtime_isolation` is set to `slot_allocation`. All fields optional — the
@@ -394,6 +405,7 @@ export const ResolvedConfig = z.object({
   maxRevisions: z.number(),
   heartbeatInterval: z.number(),
   ignore: z.array(z.string()),
+  skills: ProjectSkillsConfig.optional(),
 
   // Network & credentials (from global config + env)
   lmStudioUrl: z.string(),

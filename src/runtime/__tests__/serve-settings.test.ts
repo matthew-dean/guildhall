@@ -6,7 +6,10 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { bootstrapWorkspace, readProjectConfig, readWorkspaceConfig, writeProjectConfig, writeWorkspaceConfig } from '@guildhall/config'
 import { defaultAgentSettingsPath, loadLeverSettings, makeDefaultSettings } from '@guildhall/levers'
+import { proposeProjectSkill } from '@guildhall/skills'
 import { buildServeApp } from '../serve.js'
+import { persistLearningCandidates } from '../learning.js'
+import type { LearningCandidate } from '../policy.js'
 
 const execFileP = promisify(execFile)
 
@@ -743,6 +746,160 @@ describe('GET/POST /api/project/learning', () => {
       project: { workspaceImport: { approvedRuns: number } } | null
     }
     expect(afterResetBody.project?.workspaceImport.approvedRuns).toBe(0)
+  })
+
+  it('lists learning records and supports accept, dismiss, reset, and make-project-wide', async () => {
+    const memoryDir = path.join(tmpDir, 'memory')
+    const projectCandidate: LearningCandidate = {
+      id: 'project-invite-path',
+      source: 'task',
+      summary: 'Invite work usually touches web/server/api/workspaces routes.',
+      evidence: [{ kind: 'task', summary: 'Recovered invite task.', ref: 'task-invite' }],
+      proposedScope: 'project',
+      proposedDestination: 'project_memory',
+      confidence: 'medium',
+      risk: 'low',
+      requiresApproval: true,
+    }
+    const userCandidate: LearningCandidate = {
+      id: 'global-doc-style',
+      source: 'user_correction',
+      summary: 'Prefer shorter public docs with less implementation trivia.',
+      evidence: [{ kind: 'task', summary: 'User corrected docs tone.', ref: 'task-docs' }],
+      proposedScope: 'user_global',
+      proposedDestination: 'user_preference',
+      confidence: 'medium',
+      risk: 'low',
+      requiresApproval: true,
+    }
+    const productCandidate: LearningCandidate = {
+      id: 'product-recovery-visibility',
+      source: 'blocker',
+      summary: 'Make failed recovery playbooks more visible to builders.',
+      evidence: [{ kind: 'task', summary: 'Playbook failed.', ref: 'task-blocked' }],
+      proposedScope: 'guildhall_product',
+      proposedDestination: 'product_suggestion',
+      confidence: 'medium',
+      risk: 'low',
+      requiresApproval: true,
+    }
+    await persistLearningCandidates({
+      memoryDir,
+      candidates: [projectCandidate, userCandidate, productCandidate],
+    })
+    await proposeProjectSkill({
+      memoryDir,
+      proposal: {
+        id: 'invite-route-skill',
+        name: 'invite-route-skill',
+        description: 'Repair invite routes',
+        triggerKeywords: ['invite'],
+        content: 'Use existing workspace route helpers before adding utilities.',
+        risk: 'medium',
+        requiresApproval: true,
+      },
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const before = await app.fetch(new Request(scoped('/api/project/learning')))
+    expect(before.status).toBe(200)
+    const beforeBody = (await before.json()) as {
+      project: { suggestedLearnings: Array<{ id: string; status: string }> } | null
+      user: { suggestedLearnings: Array<{ id: string; status: string }> } | null
+      effective: { productSuggestions: Array<{ id: string }> } | null
+      projectSkillProposals: Array<{ id: string; status: string }>
+    }
+    expect(beforeBody.project?.suggestedLearnings.map(item => item.id)).toContain('project-invite-path')
+    expect(beforeBody.user?.suggestedLearnings.map(item => item.id)).toContain('global-doc-style')
+    expect(beforeBody.effective?.productSuggestions.map(item => item.id)).toContain('product-recovery-visibility')
+    expect(beforeBody.projectSkillProposals[0]).toMatchObject({
+      id: 'invite-route-skill',
+      status: 'suggested',
+    })
+
+    const accept = await app.fetch(
+      new Request(scoped('/api/project/learning/action'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'accept', scope: 'project', id: 'project-invite-path' }),
+      }),
+    )
+    expect(accept.status).toBe(200)
+
+    const makeProjectWide = await app.fetch(
+      new Request(scoped('/api/project/learning/action'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'make-project-wide', id: 'global-doc-style' }),
+      }),
+    )
+    expect(makeProjectWide.status).toBe(200)
+
+    const dismiss = await app.fetch(
+      new Request(scoped('/api/project/learning/action'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'dismiss', scope: 'user_global', id: 'global-doc-style' }),
+      }),
+    )
+    expect(dismiss.status).toBe(200)
+
+    const activateSkill = await app.fetch(
+      new Request(scoped('/api/project/skill-proposals/action'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'activate', id: 'invite-route-skill', approved: true }),
+      }),
+    )
+    expect(activateSkill.status).toBe(200)
+
+    const after = await app.fetch(new Request(scoped('/api/project/learning')))
+    const afterBody = (await after.json()) as {
+      project: { suggestedLearnings: Array<{ id: string; status: string; scope: string }> } | null
+      user: { suggestedLearnings: Array<{ id: string; status: string }> } | null
+      projectSkillProposals: Array<{ id: string; status: string }>
+    }
+    expect(afterBody.project?.suggestedLearnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'project-invite-path', status: 'active' }),
+        expect.objectContaining({ id: 'project-global-doc-style', status: 'active', scope: 'project' }),
+      ]),
+    )
+    expect(afterBody.user?.suggestedLearnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'global-doc-style', status: 'dismissed' }),
+      ]),
+    )
+    expect(afterBody.projectSkillProposals[0]).toMatchObject({
+      id: 'invite-route-skill',
+      status: 'active',
+    })
+
+    const reset = await app.fetch(
+      new Request(scoped('/api/project/learning/action'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'reset', scope: 'project' }),
+      }),
+    )
+    expect(reset.status).toBe(200)
+
+    const skillReset = await app.fetch(
+      new Request(scoped('/api/project/skill-proposals/action'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'reset' }),
+      }),
+    )
+    expect(skillReset.status).toBe(200)
+
+    const final = await app.fetch(new Request(scoped('/api/project/learning')))
+    const finalBody = (await final.json()) as {
+      project: { suggestedLearnings: unknown[] } | null
+      projectSkillProposals: unknown[]
+    }
+    expect(finalBody.project?.suggestedLearnings).toEqual([])
+    expect(finalBody.projectSkillProposals).toEqual([])
   })
 })
 

@@ -131,6 +131,70 @@
   border-block-color: color-mix(in srgb, var(--gh-color-border-subtle) 78%, transparent);
 }
 
+.VPNavBarMenuLink.active,
+.VPNavBarMenuGroup.active .button {
+  color: var(--gh-color-text-primary);
+}
+
+.VPNavBarMenuLink.active {
+  position: relative;
+}
+
+.VPNavBarMenuLink.active::after,
+.VPNavBarMenuGroup.active .button::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: 0.32rem;
+  block-size: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gh-color-action-primary) 74%, transparent);
+}
+
+.VPNavBarMenuGroup.active .button .text {
+  position: relative;
+}
+
+.VPNavBarMenuGroup.active .button::after {
+  inset-inline: 0.1rem 1.1rem;
+}
+
+.gh-doc-breadcrumbs {
+  margin-block: 0 var(--gh-space-4);
+  color: var(--gh-color-text-muted);
+  font-size: var(--gh-type-size-1);
+  font-weight: var(--gh-type-weight-medium);
+}
+
+.gh-doc-breadcrumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gh-doc-breadcrumbs li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.gh-doc-breadcrumbs li + li::before {
+  content: "/";
+  color: color-mix(in srgb, var(--gh-color-text-muted) 68%, transparent);
+}
+
+.gh-doc-breadcrumbs a {
+  color: var(--gh-color-text-secondary);
+  text-decoration: none;
+}
+
+.gh-doc-breadcrumbs a:hover {
+  color: var(--gh-color-text-primary);
+}
+
 .vp-doc h1,
 .vp-doc h2,
 .vp-doc h3 {
@@ -247,6 +311,12 @@
   box-shadow: 0 16px 32px color-mix(in srgb, black 22%, transparent);
 }
 
+.gh-home-page .vp-doc picture,
+.gh-first-visit-page .vp-doc picture,
+.gh-doc-picture {
+  display: block;
+}
+
 .gh-home-page .vp-doc blockquote,
 .gh-first-visit-page .vp-doc blockquote {
   border-inline-start-color: var(--gh-color-feedback-accent);
@@ -261,6 +331,7 @@
 .gh-first-visit-page .vp-doc > div > ul,
 .gh-first-visit-page .vp-doc > div > ol,
 .gh-first-visit-page .vp-doc > div > div[class*='language-'],
+.gh-first-visit-page .vp-doc > div > picture,
 .gh-first-visit-page .vp-doc > div > figure {
   max-inline-size: 52rem;
 }

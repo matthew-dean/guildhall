@@ -34,6 +34,7 @@
   import { activeEscalations } from '../lib/escalation.js'
   import { buildProjectTicker } from '../lib/project-activity.js'
   import { buildProviderIndicator } from '../lib/provider-indicator.js'
+  import { formatUserPath } from '../lib/display-path.js'
   import { humanizeProjectName } from '../lib/project-name.js'
   import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { EventEnvelope, ProjectView, ProviderStatus } from '../lib/types.js'
@@ -75,6 +76,8 @@
   let latestTickerEvent = $state<EventEnvelope | null>(null)
   let tickerNow = $state(Date.now())
   const projectDisplayName = $derived(humanizeProjectName(project.detail?.name ?? project.detail?.id ?? 'Project'))
+  const projectDisplayPath = $derived(formatUserPath(project.detail?.path))
+  const projectDisplayPathLeaf = $derived(projectDisplayPath.split('/').filter(Boolean).pop() ?? 'This project')
 
   $effect(() => {
     window.dispatchEvent(
@@ -276,6 +279,7 @@
         { id: 'ready', label: 'Ready', path: currentProjectHref('/settings', activeProjectId) },
         { id: 'providers', label: 'Providers', path: currentProjectHref('/settings/providers', activeProjectId) },
         { id: 'facts', label: 'Facts', path: currentProjectHref('/settings/facts', activeProjectId) },
+        { id: 'learning', label: 'Learning', path: currentProjectHref('/settings/learning', activeProjectId) },
         { id: 'advanced', label: 'Advanced', path: currentProjectHref('/settings/advanced', activeProjectId) },
       ],
     },
@@ -695,7 +699,7 @@
       onfocusin={openRailPreview}
       onfocusout={closeRailPreview}
     >
-      <div class="rail-head" title={detail.path}>
+      <div class="rail-head" title={projectDisplayPath}>
         <div class="rail-head-top">
           <div class="rail-project">{projectDisplayName}</div>
           <div class="rail-head-actions">
@@ -760,8 +764,8 @@
       </header>
     {/snippet}
     <ProjectAttachFlow
-      projectName={detail.path?.split('/').pop() ?? 'This project'}
-      projectPath={detail.path}
+      projectName={projectDisplayPathLeaf}
+      projectPath={projectDisplayPath}
     />
   </ProjectShell>
 {:else if project.error}

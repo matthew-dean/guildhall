@@ -9,7 +9,9 @@ help_summary: |
 
 # Projects home keeps the local service organized
 
-This page exists so Guildhall can behave like a local service over projects instead of a one-repo session. You attach a folder, scan what is moving, and open the shell that actually needs your eyes.
+Guildhall behaves like a local service over projects, not a one-repo session.
+Attach a folder, scan what is moving, and open the shell that actually needs
+your eyes.
 
 ## What the dashboard should answer quickly
 
@@ -26,4 +28,11 @@ If the page cannot answer those three questions fast, it is being decorative whe
 - Blocked work and unresolved escalations
 - Enough signal to tell whether opening the shell is likely to be a quick check or a proper firefight
 
-![Guildhall project shell showing thread, setup prompts, and current work items.](../assets/ui-audit/inbox.png)
+<picture class="gh-doc-picture">
+  <source srcset="../assets/ui-audit/projects.avif" type="image/avif" />
+  <img src="../assets/ui-audit/projects.png" alt="Guildhall projects home showing multiple local projects with paused, stable, and ready states." />
+</picture>
+
+The Projects home is deliberately shallow. It helps you choose where to look
+next; the detailed Thread, Work, Settings, Learning, and Release surfaces stay
+inside the project shell.

@@ -32,7 +32,7 @@ A medieval **guildhall**, where masters, journeymen, and apprentices work under
 shared standards, and admission to each tier requires producing a verified
 *masterpiece*. In Guildhall, that verification is the review + gate pipeline.
 
-## Where to go next
+## Next
 
 - Start the service for a project: [Quick start](./quick-start).
 - Tour the operating surface: [dashboard](./dashboard).

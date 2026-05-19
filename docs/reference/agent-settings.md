@@ -13,6 +13,14 @@ The lever-storage file. Seeded by `makeDefaultSettings()` on first read and edit
 
 During onboarding, meta-intake may infer initial positions from your project-guidance answers. Approved inferences are written here with `setBy: spec-agent-intake`; defaults that were not inferred remain `setBy: system-default`.
 
+Learned behavior is stored separately. `memory/learning.json` holds
+project-scoped learned defaults and suggestions, `memory/project-skills.json`
+holds project skill proposals, and `~/.guildhall/learning.json` holds
+user/global preferences. Use Settings → Learning to inspect project memories,
+cross-project preferences, project playbooks, and product ideas. Suggested
+records stay off until you choose to use them; `agent-settings.yaml` remains
+the explicit lever file.
+
 ## Shape
 
 ```yaml

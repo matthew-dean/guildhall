@@ -636,18 +636,18 @@ Files likely touched:
 
 Todos:
 
-- [ ] Add `FailureClass`, `FailureClassification`, `RecoveryPlan`,
+- [x] Add `FailureClass`, `FailureClassification`, `RecoveryPlan`,
   `AgentDecisionPacket`, and `LearningCandidate` types.
-- [ ] Add fixture builders for command evidence, touched files, review verdicts,
+- [x] Add fixture builders for command evidence, touched files, review verdicts,
   and checkpoint evidence.
-- [ ] Add failing tests for self-authored verification failure classification.
-- [ ] Add failing tests for stale edit target classification after
+- [x] Add failing tests for self-authored verification failure classification.
+- [x] Add failing tests for stale edit target classification after
   `oldString was not found`.
-- [ ] Add failing tests for reviewer infrastructure-noise classification.
-- [ ] Add minimal deterministic classifier implementation.
-- [ ] Store classification output in task audit/progress metadata.
-- [ ] Render a compact classification reason in Thread/blocker summaries.
-- [ ] Ensure existing review handoff tests still pass with synthesized packets.
+- [x] Add failing tests for reviewer infrastructure-noise classification.
+- [x] Add minimal deterministic classifier implementation.
+- [x] Store classification output in task audit/progress metadata.
+- [x] Render a compact classification reason in Thread/blocker summaries.
+- [x] Ensure existing review handoff tests still pass with synthesized packets.
 
 Acceptance criteria:
 
@@ -672,17 +672,17 @@ Files likely touched:
 
 Todos:
 
-- [ ] Add the `RecoveryPlaybookId` enum and `RecoveryPlan` resolver.
-- [ ] Move focused reread behavior into `reread_focused_file`.
-- [ ] Move stale edit recovery into `refresh_stale_edit_target`.
-- [ ] Move failed touched-file verification repair into
+- [x] Add the `RecoveryPlaybookId` enum and `RecoveryPlan` resolver.
+- [x] Move focused reread behavior into `reread_focused_file`.
+- [x] Move stale edit recovery into `refresh_stale_edit_target`.
+- [x] Move failed touched-file verification repair into
   `repair_touched_file_failure`.
-- [ ] Move checkpoint continuation into `resume_from_checkpoint`.
-- [ ] Move dirty checkout ownership handling into `package_owned_dirty_work`
+- [x] Move checkpoint continuation into `resume_from_checkpoint`.
+- [x] Move dirty checkout ownership handling into `package_owned_dirty_work`
   and `stop_with_external_setup_action`.
-- [ ] Add a per-playbook max-turn counter.
-- [ ] Add stop-signal handling so a failed playbook cannot loop silently.
-- [ ] Add audit entries whenever a playbook starts, succeeds, or fails.
+- [x] Add a per-playbook max-turn counter.
+- [x] Add stop-signal handling so a failed playbook cannot loop silently.
+- [x] Add audit entries whenever a playbook starts, succeeds, or fails.
 
 Acceptance criteria:
 
@@ -709,17 +709,17 @@ Files likely touched:
 
 Todos:
 
-- [ ] Add reflection trigger points for done, blocked, playbook success,
+- [x] Add reflection trigger points for done, blocked, playbook success,
   playbook failure, user correction, and model lane failure.
-- [ ] Add `LearningCandidate` persistence as suggested records.
-- [ ] Add coordinator routing rules for `project_memory`, `project_skill`,
+- [x] Add `LearningCandidate` persistence as suggested records.
+- [x] Add coordinator routing rules for `project_memory`, `project_skill`,
   `user_preference`, `product_suggestion`, and `task_audit_only`.
-- [ ] Add tests proving project-only path facts stay project-scoped.
-- [ ] Add tests proving repeated user style corrections can become a suggested
+- [x] Add tests proving project-only path facts stay project-scoped.
+- [x] Add tests proving repeated user style corrections can become a suggested
   user/global preference.
-- [ ] Add tests proving product suggestions do not change runtime behavior.
-- [ ] Add confidence and approval rules.
-- [ ] Add reset/dismiss support for suggested learnings.
+- [x] Add tests proving product suggestions do not change runtime behavior.
+- [x] Add confidence and approval rules.
+- [x] Add reset/dismiss support for suggested learnings.
 
 Acceptance criteria:
 
@@ -738,24 +738,32 @@ state.
 Files likely touched:
 
 - `src/skills/index.ts`
-- `src/skills/registry.ts`
-- `src/skills/loader.ts`
+- `src/skills/project-skills.ts`
 - `src/config/resolve.ts`
 - `src/config/schemas.ts`
 - `src/runtime/context-builder.ts`
-- `src/runtime/__tests__/skills.test.ts`
+- `src/skills/__tests__/skills.test.ts`
 - `src/runtime/__tests__/context-builder.test.ts`
+- `src/config/__tests__/schemas.test.ts`
+
+Project skills are project-scoped procedural memory, not global assistant
+skills. Global skills describe durable ways Guildhall should help the user or
+operate across workspaces; project skills capture repeatable task logic that is
+only valid inside one workspace's memory directory. They remain suggested until
+activated, can be dismissed, and enter worker context only when the workspace
+explicitly enables project-local skills and the current task matches their
+trigger keywords.
 
 Todos:
 
-- [ ] Define the project skill proposal schema.
-- [ ] Add project-local skill loading behind an explicit project setting.
-- [ ] Add trigger matching so project skills enter context only when relevant.
-- [ ] Add approval flow for activating suggested project skills.
-- [ ] Add tests proving project skills do not load globally.
-- [ ] Add tests proving dismissed skills stay dismissed.
-- [ ] Add context-builder tests for relevant project skill injection.
-- [ ] Add docs text explaining project skills versus global skills.
+- [x] Define the project skill proposal schema.
+- [x] Add project-local skill loading behind an explicit project setting.
+- [x] Add trigger matching so project skills enter context only when relevant.
+- [x] Add approval flow for activating suggested project skills.
+- [x] Add tests proving project skills do not load globally.
+- [x] Add tests proving dismissed skills stay dismissed.
+- [x] Add context-builder tests for relevant project skill injection.
+- [x] Add docs text explaining project skills versus global skills.
 
 Acceptance criteria:
 
@@ -773,23 +781,23 @@ Files likely touched:
 
 - `src/runtime/serve.ts`
 - `src/web/surfaces/project/SettingsTab.svelte`
-- `src/web/surfaces/project/FactsTab.svelte`
-- `src/web/lib/types.ts`
+- `src/web/surfaces/ProjectView.svelte`
 - `src/runtime/__tests__/serve-settings.test.ts`
 - `docs/reference/agent-settings.md`
+- `docs/reference/http-api.md`
 - `docs/reference/memory-layout.md`
 
 Todos:
 
-- [ ] Add API endpoints for listing project learnings, user preferences, skill
+- [x] Add API endpoints for listing project learnings, user preferences, skill
   proposals, and product suggestions.
-- [ ] Add actions for accept, dismiss, reset, and make-project-wide where
+- [x] Add actions for accept, dismiss, reset, and make-project-wide where
   applicable.
-- [ ] Add a quiet project settings section for active/suggested learnings.
-- [ ] Add a builder-facing diagnostic view for product suggestions.
-- [ ] Add UI copy that explains learned behavior in product terms.
-- [ ] Add endpoint tests for each mutation.
-- [ ] Add docs for where records live and how to reset them.
+- [x] Add a quiet project settings section for active/suggested learnings.
+- [x] Add a builder-facing diagnostic view for product suggestions.
+- [x] Add UI copy that explains learned behavior in product terms.
+- [x] Add endpoint tests for each mutation.
+- [x] Add docs for where records live and how to reset them.
 
 Acceptance criteria:
 
@@ -809,18 +817,19 @@ Files likely touched:
 - `src/runtime/model-bakeoff.ts`
 - `src/runtime/__tests__/model-bakeoff.test.ts`
 - `scripts/`
+- `package.json`
 - `docs/design/agent-policy-and-model-bakeoff.md`
 
 Todos:
 
-- [ ] Define replay scenario metadata.
-- [ ] Add replay fixtures for the historical 0.5.0 failure set.
-- [ ] Record outcome, tool count, cost, false escalations, false approvals,
+- [x] Define replay scenario metadata.
+- [x] Add replay fixtures for the historical 0.5.0 failure set.
+- [x] Record outcome, tool count, cost, false escalations, false approvals,
   playbook success, and packet quality.
-- [ ] Add a deterministic baseline lane.
-- [ ] Add CLI or script entrypoint for running bakeoff scenarios.
-- [ ] Add report output grouped by lane.
-- [ ] Add tests for report aggregation.
+- [x] Add a deterministic baseline lane.
+- [x] Add CLI or script entrypoint for running bakeoff scenarios.
+- [x] Add report output grouped by lane.
+- [x] Add tests for report aggregation.
 
 Acceptance criteria:
 
@@ -841,17 +850,37 @@ Target project:
 
 Proof steps:
 
-- [ ] Run a task that hits a known recoverable blocker.
-- [ ] Confirm Guildhall classifies the blocker.
-- [ ] Confirm Guildhall chooses a bounded playbook.
-- [ ] Confirm the agent repairs or stops with a concrete human question.
-- [ ] Complete or intentionally block the task.
-- [ ] Confirm reflection emits the right learning candidate.
-- [ ] Confirm the coordinator routes it to project memory, project skill,
+- [x] Run a task that hits a known recoverable blocker.
+- [x] Confirm Guildhall classifies the blocker.
+- [x] Confirm Guildhall chooses a bounded playbook.
+- [x] Confirm the agent repairs or stops with a concrete human question.
+- [x] Complete or intentionally block the task.
+- [x] Confirm reflection emits the right learning candidate.
+- [x] Confirm the coordinator routes it to project memory, project skill,
   user/global preference, product suggestion, or task audit only.
-- [ ] Confirm a future run uses the approved project learning or skill.
-- [ ] Confirm the user can inspect and reset the learning.
-- [ ] Record the result in `docs/web-ui/flow-audit.md`.
+- [x] Confirm a future run uses the approved project learning or skill.
+- [x] Confirm the user can inspect and reset the learning.
+- [x] Record the result in `docs/web-ui/flow-audit.md`.
+
+Proof result:
+
+- `2026-05-19`: a one-off Vitest harness exercised the real
+  `/Users/matthew/git/oss/looma-knit` memory store and restored the original
+  project learning files afterward. The proof classified a focused Knit
+  workspace API typecheck failure as `self_authored_verification_failure`,
+  selected the bounded `repair_touched_file_failure` playbook with max 2 turns,
+  command `cd knit/web && pnpm typecheck`, and allowed path
+  `knit/web/server/api/workspaces/members.get.ts`.
+- The successful playbook emitted project learning
+  `task-phase7-proof-workspace-api-repair_touched_file_failure-paths`, which
+  was accepted as active project memory. A failed bounded playbook emitted inert
+  product suggestion
+  `task-phase7-proof-failed-playbook-repair_touched_file_failure-failure-product`.
+- Project skill `phase7-proof-workspace-api-skill` was activated and then
+  injected into a future workspace-members task context, proving later runs can
+  reuse approved project learning. Project learning and project skill reset
+  paths cleared the proof records before the original Looma/Knit files were
+  restored.
 
 Acceptance criteria:
 
@@ -867,18 +896,18 @@ Acceptance criteria:
 
 `0.6.0` can claim this feature when:
 
-- [ ] every worker blocked/no-progress transition has a failure classification
-- [ ] at least five recovery paths are implemented as named playbooks
-- [ ] review handoff includes a typed decision packet
-- [ ] done/blocked/playbook outcomes can trigger reflection
-- [ ] coordinator routing separates project, user/global, and product learnings
-- [ ] project learning records can be inspected, accepted/dismissed, and reset
-- [ ] project skill proposals are trigger-scoped and project-local
-- [ ] product suggestions are inert until approved
-- [ ] model bakeoff reports include cost, outcome, false escalations, and
+- [x] every worker blocked/no-progress transition has a failure classification
+- [x] at least five recovery paths are implemented as named playbooks
+- [x] review handoff includes a typed decision packet
+- [x] done/blocked/playbook outcomes can trigger reflection
+- [x] coordinator routing separates project, user/global, and product learnings
+- [x] project learning records can be inspected, accepted/dismissed, and reset
+- [x] project skill proposals are trigger-scoped and project-local
+- [x] product suggestions are inert until approved
+- [x] model bakeoff reports include cost, outcome, false escalations, and
   packet quality
-- [ ] a real project proof shows a learning improving a future run
-- [ ] docs explain the difference between bounded improvisation and unbounded
+- [x] a real project proof shows a learning improving a future run
+- [x] docs explain the difference between bounded improvisation and unbounded
   autonomy
 
 ## Decision

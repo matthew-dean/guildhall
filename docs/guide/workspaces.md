@@ -7,8 +7,8 @@ title: Project files and workspace state
 In the product, you mostly see **projects**. In the config and runtime layers,
 the same unit is still called a **workspace**.
 
-In practice, one workspace usually maps to one project folder, so you can read
-this page as "how Guildhall stores a project on disk."
+In practice, one workspace usually maps to one project folder. These are the
+files that make a project durable across service restarts and agent sessions.
 
 A workspace is a directory containing:
 

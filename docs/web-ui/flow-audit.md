@@ -95,6 +95,22 @@ screen.
   coordinator screens.
 - [x] Run the final focused test/build sweep and push the release-hardening
   batch.
+- [x] Prove the `0.6.0` policy/learning loop compounds on the real Looma +
+  Knit project without polluting its project memory. On `2026-05-19`, a
+  one-off Vitest harness backed up `/Users/matthew/git/oss/looma-knit/memory`,
+  exercised the runtime against the real learning store, and restored the
+  original files after reset. Evidence: the proof classified a focused Knit
+  workspace API typecheck failure as `self_authored_verification_failure`,
+  selected bounded playbook `repair_touched_file_failure` with max 2 turns,
+  command `cd knit/web && pnpm typecheck`, and allowed path
+  `knit/web/server/api/workspaces/members.get.ts`; reflection emitted active
+  project learning
+  `task-phase7-proof-workspace-api-repair_touched_file_failure-paths`; a failed
+  bounded playbook emitted inert product suggestion
+  `task-phase7-proof-failed-playbook-repair_touched_file_failure-failure-product`;
+  project skill `phase7-proof-workspace-api-skill` was injected into a future
+  workspace-members context; and project learning / project skill reset cleared
+  all proof records before restoring the original Looma/Knit memory files.
 
 ## 0.5.0 Release Threshold
 
@@ -657,6 +673,139 @@ screen.
   debugging and Looma/Knit testing.
 
 ## Latest Progress
+
+- Merged `origin/main` into `feature/coverage-hardening-90` without rewriting
+  the published branch history. The merge brought in the policy/learning and
+  model-bakeoff work, then the branch restored the release gate with real
+  regression coverage: Settings now exercises the Learning controls, policy
+  tests cover decision-packet revival, bounded recovery playbooks, and
+  user-facing classification copy, and model-bakeoff tests cover markdown
+  report rendering. Verification on `2026-05-19`: `pnpm typecheck` passed and
+  `pnpm test:coverage` passed with `2,457` tests and `90.06%` line coverage.
+  Next live pass should walk the three registered projects again and check that
+  project advancement follows the emerging "outline first, then fill" process:
+  structure/requirements as an inspectable deliverable, followed by bounded
+  implementation against that accepted structure.
+
+- Started the `0.6.0` policy/learning implementation in
+  `/Users/matthew/git/worktrees/guildhall-0.6-policy-learning` on
+  `feature/0.6-policy-learning-runtime`. Baseline `pnpm test` passed
+  (`142` files, `2196` tests), and the first Phase 1 slice added
+  `src/runtime/policy.ts` with typed failure classifications, recovery
+  playbook ids, decision-packet shapes, learning-candidate shapes, and
+  deterministic classifier coverage for self-authored verification failures,
+  stale `oldString` edit targets, and reviewer infrastructure noise. Focused
+  `pnpm vitest run src/runtime/__tests__/policy.test.ts` and `pnpm typecheck`
+  passed.
+- Continued the Phase 1 policy slice by wiring self-authored verification
+  recovery through the classifier. When Guildhall keeps a worker in the repair
+  lane instead of treating its own verification failure as a human blocker, the
+  task now gets a `policy-classification` audit note. Thread escalation details
+  also include the compact policy read when a blocked task has that note.
+- Completed the first review-handoff packet slice for `0.6.0`: policy evidence
+  fixture builders now cover command evidence, touched files, review verdicts,
+  and checkpoint evidence, and review packets include a synthesized
+  `Policy Decision Packet` from the latest `policy-classification` audit note.
+  Focused runtime regression passed with `269` tests, and `pnpm typecheck`
+  passed after the fixture shape was corrected to Guildhall's
+  `approve`/`revise` verdict contract.
+- Completed the Phase 2 bounded recovery-playbook slice. `RecoveryPlan`
+  resolution now maps classifier output into explicit playbooks with allowed
+  tools, allowed paths, commands, max-turn budgets, success signals, and stop
+  signals. Self-authored verification recovery now writes a
+  `recovery-playbook` audit note, dirty-checkout packaging/stops write
+  playbook audit notes, Thread escalation details can explain the active
+  recovery path, and worker context renders an `Active Recovery Playbook`
+  section that tells the worker not to do broad repo research while a focused
+  playbook is active. Focused runtime regression passed with `317` tests and
+  `pnpm typecheck` passed.
+- Completed the Phase 3 reflection and learning-candidate routing slice.
+  Guildhall now detects reflection triggers for done, blocked, playbook
+  success/failure, user correction, and model-lane failure outcomes; persists
+  `LearningCandidate` records as inspectable suggested learnings; routes
+  project memory/skill/policy candidates to project learning, user preferences
+  and model-lane recommendations to global learning, product suggestions as
+  inert suggestions, and task-audit-only candidates nowhere. Repeated user
+  corrections can become suggested global preferences, completed
+  playbook-backed work can suggest project memory, suggested learnings can be
+  dismissed/reset, and orchestrator completion/block transitions run the
+  reflection recorder. Focused learning/orchestrator regression passed with
+  `11` tests and `pnpm typecheck` passed.
+- Completed the Phase 4 project-skill application slice. Guildhall now stores
+  project skill proposals in the workspace memory directory, keeps them
+  suggested until approved or low-risk activation, allows dismissal, selects
+  only active trigger-matching project skills, and injects them into worker
+  context only when the workspace explicitly enables project-local skills.
+  Focused project-skill/context/config tests, `pnpm typecheck`, docs gates, and
+  full `pnpm test` passed.
+- Completed the Phase 5 learning inspection slice. `/api/project/learning`
+  now includes project skill proposals and product suggestions; learning action
+  endpoints support accept, dismiss, reset, and make-project-wide; project skill
+  proposal actions support activate, dismiss, and reset; and Settings now has a
+  quiet Learning subtab for project learnings, user preferences, project skills,
+  and builder suggestions. Focused learning endpoint tests and `pnpm typecheck`
+  passed, then the full `pnpm test` sweep passed.
+- Completed the Phase 6 model bakeoff harness slice. Guildhall now has
+  historical 0.5.0 replay scenario metadata, a deterministic baseline lane,
+  model lane report aggregation, cost/outcome/false-decision/playbook/packet
+  quality metrics, learning-candidate conversion for failed runs, markdown/JSON
+  report rendering, and `pnpm model:bakeoff` for writing the report artifact.
+  Focused model-bakeoff tests and a `pnpm model:bakeoff` smoke passed.
+- Checked the `0.6.0` policy/learning branch against release acceptance and
+  walked the branch UI on real projects via `http://localhost:7781` instead of
+  the installed `0.5.1` service on port `7777`. Looma + Knit opened to a calm
+  Thread with concrete human questions, and Settings -> Learning showed no
+  leftover Phase 7 proof records while still exposing project/user learning,
+  project skill, product suggestion, and reset surfaces. T-minus-t and Fair
+  Labor License opened as terminal/stable projects and their Learning settings
+  rendered cleanly. The acceptance pass found one real gap: worker
+  turn-limit/timeout/no-progress escalations raised blockers without a
+  `policy-classification` note. That is now fixed; focused red/green coverage
+  proves turn-limit and no-progress paths write `model_tool_use_failure`, while
+  worker target-file timeouts write `provider_unavailable`.
+- Re-reviewed Settings -> Learning from a user-experience perspective instead
+  of treating endpoint/control presence as enough. The first pass was still too
+  internal: "project learnings", "project skills", "builder suggestions",
+  destination names, confidence/risk chips, disabled reset buttons, and product
+  suggestions mixed into project memory made the surface feel like a system
+  inspector. The UI now frames the area as "Memory and habits"; separates "This
+  project", "Across projects", "Project playbooks", and "Ideas for Guildhall";
+  uses plain actions like "Use this", "Use everywhere", "Use playbook", and
+  "Ignore"; hides reset buttons when there is nothing to reset; and keeps
+  product suggestions out of the actionable project-memory list. A temporary
+  populated Looma + Knit sample verified the distinction, then the original
+  project memory files were restored with no `ux-sample` or `phase7-proof`
+  residue.
+- Added a concrete feedback path for inert Guildhall product ideas. Each item
+  under "Ideas for Guildhall" now has a "Give product feedback" link that opens
+  a prefilled `matthew-dean/guildhall` GitHub issue draft with the product idea,
+  evidence, project name/path, and suggestion id. It remains review-before-send:
+  Guildhall does not create the issue automatically. Browser verification used
+  a temporary Looma + Knit product suggestion and confirmed the generated issue
+  URL, then restored the original project memory with no
+  `ux-feedback-issue-sample` residue.
+- Continued the release-acceptance walkthrough on the branch build at
+  `http://localhost:7783` against the real Looma + Knit project. The empty
+  Learning state remained understandable and quiet, and a temporary populated
+  sample proved the control flow for project memories, cross-project
+  preferences, project playbooks, and product ideas. The walkthrough caught a
+  real UX bug: "Use only here" created the project-scoped learning but left the
+  original cross-project suggestion marked as still waiting, which made the
+  action feel incomplete. `makeSuggestedLearningProjectWide` now dismisses the
+  original global suggestion after creating the active project copy, and focused
+  learning/settings tests cover the contract. Browser verification confirmed
+  the fixed flow, "Use playbook" activation, and the inert "Give product
+  feedback" GitHub issue draft URL. The original Looma + Knit and global
+  learning files were restored afterward with no `acceptance-` residue.
+- Started the public VitePress docs follow-through for the 0.6.0 branch. The
+  docs now include a current Projects home screenshot, a Memory and recovery
+  guide for bounded playbooks and scoped learning, a 0.6.0 release note, and
+  updated reference text for Settings -> Learning, project playbooks, and
+  product-feedback issue drafts. Screenshot capture also exposed that the
+  Learning settings two-column layout was too eager at laptop width, so the
+  responsive breakpoint now keeps it one calm column until the container is
+  genuinely wide enough. Temporary docs-demo learning records were restored
+  afterward with no `docs-demo-` residue.
 
 - Completed the `0.5.0` macOS packaging slice. Guildhall now has a
   buildable packaged artifact at `artifacts/macos/guildhall-macos`,
@@ -2910,3 +3059,66 @@ screen.
   actions instead of showing the next actionable item. Latest verification:
   `pnpm test:coverage` passed with 2,415 tests and 90.00% lines, and
   `pnpm typecheck` passed.
+
+## Active Path Display Audit
+
+- [x] Normalize user-home project paths in visible UI to `~`, including
+  Windows-style user profile paths in tests.
+- [x] Keep product feedback issue drafts from pasting absolute user-home paths
+  into GitHub.
+- [x] Rebuild and retake the projects screenshot after the UI shows
+  user-relative paths, then audit docs screenshots for `/Users/...` leakage.
+
+Completion note on `2026-05-19`: Projects home cards, project attach/facts
+surfaces, and product feedback issue drafts now pass user-home paths through the
+shared `formatUserPath` display helper. The focused tests cover macOS, Linux,
+and Windows-style `C:\Users\...` normalization to slash-separated `~/...`
+display paths. The rebuilt Projects page was inspected in-browser with no
+`/Users/...` or `C:\Users...` strings in the rendered DOM, then
+`docs/assets/ui-audit/projects.png` was retaken from that page.
+
+Follow-up on `2026-05-19`: the Projects screenshot now has an AVIF sibling and
+docs pages render it through `<picture>` with the PNG retained as fallback.
+
+Navigation follow-up on `2026-05-19`: the docs sidebar should only change when
+the reader intentionally changes top-level sections. Guide now stays focused on
+journey and operating concepts; UI-specific pages live only under the top-level
+Web UI reference section instead of being duplicated into Guide.
+
+Navigation orientation follow-up on `2026-05-19`: Guide has at most one
+section-jump link to the UI reference, marked with a jump icon. The top
+navigation now has explicit active-match rules, and doc pages render
+breadcrumbs so the active section is visible even when the top nav is collapsed
+at narrower widths.
+
+Public docs boundary follow-up on `2026-05-19`: internal design notes,
+Superpowers plans/specs, and this live flow audit are excluded from the
+VitePress source set. Public docs may use sanitized UI assets from
+`docs/assets/ui-audit/`, but repo-local planning and audit notes should not be
+published as product documentation.
+
+Navigation simplification follow-up on `2026-05-19`: top-level docs nav now
+uses reader-intent labels only: Get started, Guide, and Reference. CLI, app
+pages, levers, subsystems, releases, and config schema pages live under
+Reference instead of competing as separate top-level product surfaces, and the
+app docs are labeled as Guildhall app pages rather than UI reference.
+
+Guide IA follow-up on `2026-05-19`: first-run pages are isolated under Get
+started, while Guide is organized around product domains: Projects, Tasks,
+Specs & policy, and Concepts. Get started breadcrumbs now identify those pages
+as Get started rather than Guide, so setup, day-to-day operation, and technical
+reference no longer reuse the same orientation labels.
+
+Reference IA follow-up on `2026-05-19`: Reference now uses one stable sidebar
+across app pages, CLI pages, config/state pages, levers, subsystems, and
+releases. Clicking within Reference should not collapse into a tiny sub-nav or
+swap the whole left rail without breadcrumb context.
+
+Deep reference follow-up on `2026-05-19`: levers, subsystems, and releases are
+still allowed to use their own detailed sidebars, but Reference marks them as
+section jumps and breadcrumbs keep them under the Reference top-level context.
+
+Content polish follow-up on `2026-05-19`: public docs copy was swept for
+meta-explanatory scaffolding such as "this page exists" and "use this path."
+Guide, first-run, app, dashboard, and workspace intros now lead with the
+product behavior or user job instead of explaining the page's purpose.

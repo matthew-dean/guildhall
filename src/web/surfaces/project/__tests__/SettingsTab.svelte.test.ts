@@ -206,4 +206,117 @@ describe('SettingsTab', () => {
     await userEvent.click(screen.getByRole('button', { name: /approve current draft/i }))
     await screen.findByText('approved')
   })
+
+  it('reviews learned project habits, preferences, playbooks, and product ideas', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/setup/status') {
+        return json({ initialized: true, name: 'Looma + Knit', id: 'looma-knit' })
+      }
+      if (url.pathname === '/api/config/levers') return json({ levers: [] })
+      if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/providers/status') return json({ configured: true, active: 'OpenAI-compatible API' })
+      if (url.pathname === '/api/project/bootstrap/status') return json({ configured: false, needed: true, status: null })
+      if (url.pathname === '/api/project/learning/action') {
+        expect(url.searchParams.get('projectId')).toBe('looma-knit')
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          kind: 'accept',
+          scope: 'project',
+          id: 'learn-1',
+        })
+        return json({ ok: true })
+      }
+      if (url.pathname === '/api/project/skill-proposals/action') {
+        expect(url.searchParams.get('projectId')).toBe('looma-knit')
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          kind: 'activate',
+          id: 'skill-1',
+          approved: true,
+        })
+        return json({ ok: true })
+      }
+      if (url.pathname === '/api/project/learning') {
+        const accepted = fetchMock.mock.calls.some(([prior]) => String(prior).includes('/api/project/learning/action'))
+        const skillActivated = fetchMock.mock.calls.some(([prior]) => String(prior).includes('/api/project/skill-proposals/action'))
+        return json({
+          project: {
+            suggestedLearnings: [
+              {
+                id: 'learn-1',
+                summary: 'Run Knit typecheck from web root after API changes.',
+                destination: 'project_memory',
+                scope: 'project',
+                confidence: 'high',
+                risk: 'medium',
+                status: accepted ? 'active' : 'suggested',
+                evidence: [{ summary: 'The workspace members task failed until the scoped typecheck was rerun.' }],
+              },
+            ],
+          },
+          user: {
+            suggestedLearnings: [
+              {
+                id: 'user-1',
+                summary: 'Prefer sentence-case project titles.',
+                destination: 'user_preference',
+                scope: 'user_global',
+                confidence: 'medium',
+                risk: 'low',
+                status: 'suggested',
+              },
+            ],
+          },
+          effective: {
+            productSuggestions: [
+              {
+                id: 'product-1',
+                title: 'Make outline-first task shaping explicit',
+                summary: 'Ask coordinators to draft structure before implementation.',
+                evidence: ['Navigation work needed a stable outline before UI fill-in.'],
+              },
+            ],
+          },
+          projectSkillProposals: [
+            {
+              id: 'skill-1',
+              name: 'Workspace API repair playbook',
+              description: 'Read the API route, run the scoped typecheck, then patch the narrow handler.',
+              status: skillActivated ? 'active' : 'suggested',
+              triggerKeywords: ['workspace', 'api'],
+            },
+          ],
+        })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SettingsTab, { subView: 'learning' })
+
+    await screen.findByRole('heading', { name: /memory and habits/i })
+    expect(screen.getByText('0 in use')).toBeInTheDocument()
+    expect(screen.getByText('3 waiting')).toBeInTheDocument()
+    expect(screen.getByText('Run Knit typecheck from web root after API changes.')).toBeInTheDocument()
+    expect(screen.getByText('Project memory')).toBeInTheDocument()
+    expect(screen.getByText('Strong signal')).toBeInTheDocument()
+    expect(screen.getByText('Needs care')).toBeInTheDocument()
+    expect(screen.getByText('Prefer sentence-case project titles.')).toBeInTheDocument()
+    expect(screen.getByText('Workspace API repair playbook')).toBeInTheDocument()
+    expect(screen.getByText('workspace')).toBeInTheDocument()
+    expect(screen.getByText('api')).toBeInTheDocument()
+    expect(screen.getByText('Make outline-first task shaping explicit')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /give product feedback/i })).toHaveAttribute(
+      'href',
+      expect.stringContaining('Make+outline-first+task+shaping+explicit'),
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: /use this/i }))
+    await screen.findByText('1 in use')
+    expect(screen.getByText('2 waiting')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /use playbook/i }))
+    await screen.findByText('2 in use')
+  })
 })

@@ -23,6 +23,7 @@
   import { nav } from '../../lib/nav.svelte.js'
   import { project } from '../../lib/project.svelte.js'
   import { projectFetch } from '../../lib/project-routes.js'
+  import { buildProductFeedbackIssueUrl } from '../../lib/product-feedback.js'
 
   interface Props {
     subView?: string | null
@@ -48,6 +49,44 @@
     copyVoice?: { tone?: string }
     a11y?: { minContrastRatio?: number }
   }
+  interface LearningEvidence {
+    kind?: string
+    summary?: string
+    ref?: string
+  }
+  interface SuggestedLearning {
+    id: string
+    summary: string
+    destination: string
+    scope: 'project' | 'user_global' | 'guildhall_product' | string
+    confidence: 'low' | 'medium' | 'high' | string
+    risk: 'low' | 'medium' | 'high' | string
+    status: 'suggested' | 'active' | 'dismissed' | string
+    requiresApproval?: boolean
+    evidence?: LearningEvidence[]
+    updatedAt?: string
+  }
+  interface ProductSuggestion {
+    id: string
+    title: string
+    summary: string
+    evidence?: string[]
+  }
+  interface ProjectSkillProposal {
+    id: string
+    name: string
+    description: string
+    status: 'suggested' | 'active' | 'dismissed' | string
+    risk?: 'low' | 'medium' | 'high' | string
+    triggerKeywords?: string[]
+    requiresApproval?: boolean
+  }
+  interface LearningSnapshot {
+    project: { suggestedLearnings: SuggestedLearning[] } | null
+    user: { suggestedLearnings: SuggestedLearning[] } | null
+    effective: { productSuggestions: ProductSuggestion[] } | null
+    projectSkillProposals: ProjectSkillProposal[]
+  }
 
   let initialized = $state<boolean | null>(null)
   let name = $state('')
@@ -58,6 +97,9 @@
   let levers = $state<Lever[] | null>(null)
   let leversError = $state<string | null>(null)
   let designSystem = $state<DesignSystem | null | undefined>(undefined)
+  let learning = $state<LearningSnapshot | null>(null)
+  let learningError = $state<string | null>(null)
+  let learningBusy = $state<string | null>(null)
 
   interface BootstrapStep {
     kind: 'command' | 'gate'
@@ -128,6 +170,7 @@
       })
       .catch(() => (providerStatus = { configured: false }))
     void loadBootstrap()
+    void loadLearning()
   })
 
   async function loadBootstrap() {
@@ -136,6 +179,32 @@
       bootstrapInfo = (await r.json()) as BootstrapInfo
     } catch {
       bootstrapInfo = null
+    }
+  }
+
+  async function loadLearning() {
+    try {
+      learningError = null
+      const r = await projectFetch('/api/project/learning')
+      const j = await r.json().catch(() => null)
+      if (!r.ok || !j || typeof j !== 'object') {
+        learningError = j && typeof j === 'object' && 'error' in j
+          ? String(j.error)
+          : `HTTP ${r.status}`
+        return
+      }
+      if ('error' in j && j.error) {
+        learningError = String(j.error)
+        return
+      }
+      learning = {
+        project: 'project' in j ? j.project ?? null : null,
+        user: 'user' in j ? j.user ?? null : null,
+        effective: 'effective' in j ? j.effective ?? null : null,
+        projectSkillProposals: 'projectSkillProposals' in j ? j.projectSkillProposals ?? [] : [],
+      }
+    } catch (err) {
+      learningError = err instanceof Error ? err.message : String(err)
     }
   }
 
@@ -202,6 +271,48 @@
     }
   }
 
+  async function runLearningAction(kind: string, scope: 'project' | 'user_global', id?: string) {
+    learningBusy = `${kind}:${scope}:${id ?? 'all'}`
+    try {
+      const r = await projectFetch('/api/project/learning/action', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind, scope, id }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j?.error) {
+        learningError = j?.error ?? `HTTP ${r.status}`
+        return
+      }
+      await loadLearning()
+    } catch (err) {
+      learningError = err instanceof Error ? err.message : String(err)
+    } finally {
+      learningBusy = null
+    }
+  }
+
+  async function runSkillAction(kind: string, id?: string, approved = false) {
+    learningBusy = `skill:${kind}:${id ?? 'all'}`
+    try {
+      const r = await projectFetch('/api/project/skill-proposals/action', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind, id, approved }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j?.error) {
+        learningError = j?.error ?? `HTTP ${r.status}`
+        return
+      }
+      await loadLearning()
+    } catch (err) {
+      learningError = err instanceof Error ? err.message : String(err)
+    } finally {
+      learningBusy = null
+    }
+  }
+
   const coordinators = $derived(project.detail?.config?.coordinators ?? [])
 
   const bootstrapReady = $derived(Boolean(bootstrapInfo?.configured && bootstrapInfo?.status?.success))
@@ -265,6 +376,82 @@
         (designSystem.tokens?.shadow?.length ?? 0)
       : 0,
   )
+  const projectLearnings = $derived(
+    (learning?.project?.suggestedLearnings ?? [])
+      .filter(item => item.scope === 'project' && item.destination !== 'product_suggestion'),
+  )
+  const userLearnings = $derived(
+    (learning?.user?.suggestedLearnings ?? [])
+      .filter(item => item.scope === 'user_global' || item.destination === 'user_preference' || item.destination === 'model_lane_recommendation'),
+  )
+  const skillProposals = $derived(learning?.projectSkillProposals ?? [])
+  const productSuggestions = $derived(learning?.effective?.productSuggestions ?? [])
+  const activeLearningCount = $derived(
+    projectLearnings.filter(item => item.status === 'active').length +
+      userLearnings.filter(item => item.status === 'active').length +
+      skillProposals.filter(item => item.status === 'active').length,
+  )
+  const suggestedLearningCount = $derived(
+    projectLearnings.filter(item => item.status === 'suggested').length +
+      userLearnings.filter(item => item.status === 'suggested').length +
+      skillProposals.filter(item => item.status === 'suggested').length,
+  )
+
+  function learningDestinationLabel(destination: string): string {
+    switch (destination) {
+      case 'project_memory':
+        return 'Project memory'
+      case 'project_skill':
+        return 'Project playbook'
+      case 'project_policy':
+        return 'Project rule'
+      case 'user_preference':
+        return 'Your preference'
+      case 'model_lane_recommendation':
+        return 'Model suggestion'
+      case 'product_suggestion':
+        return 'Guildhall idea'
+      default:
+        return destination.replaceAll('_', ' ')
+    }
+  }
+
+  function learningStatusLabel(status: string): string {
+    switch (status) {
+      case 'active':
+        return 'in use'
+      case 'suggested':
+        return 'waiting'
+      case 'dismissed':
+        return 'ignored'
+      default:
+        return status
+    }
+  }
+
+  function learningStatusTone(status: string): 'ok' | 'warn' | 'neutral' {
+    if (status === 'active') return 'ok'
+    if (status === 'suggested') return 'warn'
+    return 'neutral'
+  }
+
+  function confidenceLabel(confidence: string): string {
+    switch (confidence) {
+      case 'high':
+        return 'Strong signal'
+      case 'medium':
+        return 'Some evidence'
+      case 'low':
+        return 'Weak signal'
+      default:
+        return confidence
+    }
+  }
+
+  function riskLabel(risk: string | undefined): string | null {
+    if (!risk || risk === 'low') return null
+    return risk === 'medium' ? 'Needs care' : 'High impact'
+  }
 </script>
 
 {#if initialized === null}
@@ -465,6 +652,218 @@
             {/each}
           </div>
         </FrameCard>
+      {/if}
+    {:else if section === 'learning'}
+      <SectionHeader
+        eyebrow="Settings"
+        title="Memory and habits"
+        description="Review the habits Guildhall wants to reuse. Suggested items stay off until you choose to use them."
+        headingTag="h2"
+        density="compact"
+      >
+        {#snippet meta()}
+          <StatusPill label={`${activeLearningCount} in use`} tone={activeLearningCount > 0 ? 'ok' : 'neutral'} />
+          <StatusPill label={`${suggestedLearningCount} waiting`} tone={suggestedLearningCount > 0 ? 'warn' : 'neutral'} />
+        {/snippet}
+      </SectionHeader>
+
+      {#if learningError}
+        <NoticeBand tone="danger" role="alert" label="Learning" title="Could not load learned behavior" density="compact">
+          <p>{learningError}</p>
+        </NoticeBand>
+      {:else if !learning}
+        <NoticeBand tone="neutral" role="status" label="Learning" title="Loading learned behavior" density="compact">
+          <p>Reading project and user learning records…</p>
+        </NoticeBand>
+      {:else}
+        <div class="learning-grid">
+          <FrameCard class="learning-card">
+            {#snippet header()}
+              <SectionHeader
+                title="This project"
+                description="Repo-specific habits, commands, and facts. These do not affect other projects."
+                headingTag="h3"
+                density="dense"
+              />
+            {/snippet}
+            <Stack gap="3">
+              {#if projectLearnings.length === 0}
+                <p class="muted">Nothing saved yet. After a task teaches Guildhall a repeatable project habit, it will ask here before reusing it.</p>
+              {:else}
+                {#each projectLearnings as item (item.id)}
+                  <article class="learning-item">
+                    <header class="learning-title">
+                      <strong>{item.summary}</strong>
+                      <StatusPill label={learningStatusLabel(item.status)} tone={learningStatusTone(item.status)} density="dense" />
+                    </header>
+                    <div class="learning-meta">
+                      <span>{learningDestinationLabel(item.destination)}</span>
+                      <span>{confidenceLabel(item.confidence)}</span>
+                      {#if riskLabel(item.risk)}
+                        <span>{riskLabel(item.risk)}</span>
+                      {/if}
+                    </div>
+                    {#if item.evidence?.length}
+                      <p class="learning-label">Why Guildhall suggested this</p>
+                      <ul class="learning-evidence">
+                        {#each item.evidence as evidence, i (`${item.id}-${i}`)}
+                          <li>{evidence.summary}</li>
+                        {/each}
+                      </ul>
+                    {/if}
+                    <Row gap="2" justify="end">
+                      {#if item.status === 'suggested'}
+                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runLearningAction('accept', 'project', item.id)}>Use this</Button>
+                      {/if}
+                      {#if item.status !== 'dismissed'}
+                        <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runLearningAction('dismiss', 'project', item.id)}>Ignore</Button>
+                      {/if}
+                    </Row>
+                  </article>
+                {/each}
+              {/if}
+              {#if projectLearnings.length > 0}
+                <Row justify="end">
+                  <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runLearningAction('reset', 'project')}>Forget project memories</Button>
+                </Row>
+              {/if}
+            </Stack>
+          </FrameCard>
+
+          <FrameCard class="learning-card">
+            {#snippet header()}
+              <SectionHeader
+                title="Across projects"
+                description="Preferences Guildhall noticed from repeated corrections. You can use them everywhere or only here."
+                headingTag="h3"
+                density="dense"
+              />
+            {/snippet}
+            <Stack gap="3">
+              {#if userLearnings.length === 0}
+                <p class="muted">No cross-project preferences yet. Guildhall needs repeated evidence before suggesting one.</p>
+              {:else}
+                {#each userLearnings as item (item.id)}
+                  <article class="learning-item">
+                    <header class="learning-title">
+                      <strong>{item.summary}</strong>
+                      <StatusPill label={learningStatusLabel(item.status)} tone={learningStatusTone(item.status)} density="dense" />
+                    </header>
+                    <div class="learning-meta">
+                      <span>{learningDestinationLabel(item.destination)}</span>
+                      <span>{confidenceLabel(item.confidence)}</span>
+                    </div>
+                    <Row gap="2" justify="end">
+                      {#if item.status === 'suggested'}
+                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runLearningAction('accept', 'user_global', item.id)}>Use everywhere</Button>
+                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runLearningAction('make-project-wide', 'user_global', item.id)}>Use only here</Button>
+                      {/if}
+                      {#if item.status !== 'dismissed'}
+                        <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runLearningAction('dismiss', 'user_global', item.id)}>Ignore</Button>
+                      {/if}
+                    </Row>
+                  </article>
+                {/each}
+              {/if}
+              {#if userLearnings.length > 0}
+                <Row justify="end">
+                  <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runLearningAction('reset', 'user_global')}>Forget cross-project preferences</Button>
+                </Row>
+              {/if}
+            </Stack>
+          </FrameCard>
+
+          <FrameCard class="learning-card">
+            {#snippet header()}
+              <SectionHeader
+                title="Project playbooks"
+                description="Step-by-step procedures Guildhall can add to worker context when a matching task appears."
+                headingTag="h3"
+                density="dense"
+              />
+            {/snippet}
+            <Stack gap="3">
+              {#if skillProposals.length === 0}
+                <p class="muted">No playbooks yet. Guildhall will suggest one only after a workflow looks worth repeating.</p>
+              {:else}
+                {#each skillProposals as skill (skill.id)}
+                  <article class="learning-item">
+                    <header class="learning-title">
+                      <strong>{skill.name}</strong>
+                      <StatusPill label={learningStatusLabel(skill.status)} tone={learningStatusTone(skill.status)} density="dense" />
+                    </header>
+                    <p class="learning-copy">{skill.description}</p>
+                    {#if skill.triggerKeywords?.length}
+                      <p class="learning-label">Used when a task mentions</p>
+                      <div class="learning-meta">
+                        {#each skill.triggerKeywords as keyword (`${skill.id}-${keyword}`)}
+                          <span>{keyword}</span>
+                        {/each}
+                      </div>
+                    {/if}
+                    <Row gap="2" justify="end">
+                      {#if skill.status === 'suggested'}
+                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runSkillAction('activate', skill.id, true)}>Use playbook</Button>
+                      {/if}
+                      {#if skill.status !== 'dismissed'}
+                        <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runSkillAction('dismiss', skill.id)}>Ignore</Button>
+                      {/if}
+                    </Row>
+                  </article>
+                {/each}
+              {/if}
+              {#if skillProposals.length > 0}
+                <Row justify="end">
+                  <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runSkillAction('reset')}>Forget project playbooks</Button>
+                </Row>
+              {/if}
+            </Stack>
+          </FrameCard>
+
+          <FrameCard class="learning-card learning-card-wide">
+            {#snippet header()}
+              <SectionHeader
+                title="Ideas for Guildhall"
+                description="Product improvements Guildhall noticed. These are notes for builders; they do not change this project."
+                headingTag="h3"
+                density="dense"
+              />
+            {/snippet}
+            {#if productSuggestions.length === 0}
+              <p class="muted">No product ideas yet.</p>
+            {:else}
+              <div class="suggestion-list">
+                {#each productSuggestions as suggestion (suggestion.id)}
+                  <article class="learning-item">
+                    <header class="learning-title">
+                      <strong>{suggestion.title}</strong>
+                      <StatusPill label="not active" tone="info" density="dense" />
+                    </header>
+                    <p class="learning-copy">{suggestion.summary}</p>
+                    {#if suggestion.evidence?.length}
+                      <p class="learning-label">Evidence</p>
+                      <ul class="learning-evidence">
+                        {#each suggestion.evidence as evidence, i (`${suggestion.id}-${i}`)}
+                          <li>{evidence}</li>
+                        {/each}
+                      </ul>
+                    {/if}
+                    <Row justify="end">
+                      <a
+                        class="feedback-link"
+                        href={buildProductFeedbackIssueUrl({ suggestion, project: project.detail })}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Give product feedback
+                      </a>
+                    </Row>
+                  </article>
+                {/each}
+              </div>
+            {/if}
+          </FrameCard>
+        </div>
       {/if}
     {:else if section === 'advanced'}
       <SectionHeader
@@ -758,6 +1157,98 @@
     gap: var(--gh-space-4);
   }
 
+  .learning-grid {
+    display: grid;
+    gap: var(--gh-space-4);
+  }
+
+  .learning-item {
+    display: grid;
+    gap: var(--gh-space-2);
+    padding: var(--gh-space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+    min-inline-size: 0;
+  }
+
+  .learning-title {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    align-items: start;
+    justify-content: space-between;
+    min-inline-size: 0;
+  }
+
+  .learning-title strong {
+    min-inline-size: 0;
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+  }
+
+  .learning-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+  }
+
+  .learning-copy {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+  }
+
+  .learning-label {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    font-weight: 700;
+    line-height: var(--lh-tight);
+    text-transform: uppercase;
+  }
+
+  .learning-evidence {
+    margin: 0;
+    padding-inline-start: var(--gh-space-4);
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+
+  .suggestion-list {
+    display: grid;
+    gap: var(--gh-space-3);
+  }
+
+  .feedback-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 22px;
+    padding: 2px var(--s-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-1);
+    background: var(--bg-raised-2);
+    color: var(--text);
+    font-size: var(--fs-1);
+    font-weight: 600;
+    line-height: 1;
+    text-decoration: none;
+    white-space: nowrap;
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
+      0 1px 0 color-mix(in srgb, black 22%, transparent);
+  }
+
+  .feedback-link:hover {
+    background: color-mix(in srgb, var(--bg-raised-2) 82%, white 18%);
+    border-color: color-mix(in srgb, var(--border-strong) 68%, var(--text) 32%);
+  }
+
   .lever-scope {
     text-transform: uppercase;
     letter-spacing: 0;
@@ -846,6 +1337,16 @@
     }
 
     :global(.advanced-card-wide) {
+      grid-column: 1 / -1;
+    }
+  }
+
+  @container (min-width: 84rem) {
+    .learning-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    :global(.learning-card-wide) {
       grid-column: 1 / -1;
     }
   }

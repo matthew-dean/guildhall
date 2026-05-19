@@ -9,41 +9,61 @@ const guideStartItems = [
 ]
 
 const guideOperateItems = [
-  { text: 'The dashboard', link: '/guide/dashboard' },
-  { text: 'Setup wizard', link: '/web-ui/setup' },
-  { text: 'Project view', link: '/web-ui/project-view' },
-  { text: 'Task drawer', link: '/web-ui/task-drawer' },
-  { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
+  { text: 'Projects and work', link: '/guide/dashboard' },
+  { text: 'Project files & state', link: '/guide/workspaces' },
   { text: 'Running Guildhall', link: '/guide/running' },
+  { text: 'App reference ↗', link: '/web-ui/' },
 ]
 
-const guideReferenceItems = [
+const guideTaskItems = [
+  { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
+  { text: 'Memory and recovery', link: '/guide/memory-and-recovery' },
+]
+
+const guideSpecItems = [
+  { text: 'Onboarding and levers', link: '/guide/onboarding-and-levers' },
+  { text: 'Internal routing', link: '/guide/coordinators' },
+  { text: 'Agents & models', link: '/guide/agents-and-models' },
+]
+
+const guideConceptItems = [
   { text: 'Introduction', link: '/guide/introduction' },
   { text: 'Core concepts', link: '/guide/concepts' },
-  { text: 'Project files & workspace state', link: '/guide/workspaces' },
-  { text: 'Onboarding and levers', link: '/guide/onboarding-and-levers' },
-  { text: 'Coordinators & domains', link: '/guide/coordinators' },
-  { text: 'Agents & models', link: '/guide/agents-and-models' },
 ]
 
 const guideSidebarSections = [
   {
-    text: 'First run',
-    items: guideStartItems,
+    text: 'Guide',
+    items: [{ text: 'Overview', link: '/guide/' }],
   },
   {
-    text: 'Operate Guildhall',
+    text: 'Projects',
     items: guideOperateItems,
   },
   {
-    text: 'Deeper reference',
-    items: guideReferenceItems,
+    text: 'Tasks',
+    items: guideTaskItems,
+  },
+  {
+    text: 'Specs & policy',
+    items: guideSpecItems,
+  },
+  {
+    text: 'Concepts',
+    items: guideConceptItems,
   },
 ]
 
-const webUiSidebarSections = [
+const getStartedSidebarSections = [
   {
-    text: 'Web UI',
+    text: 'Get started',
+    items: guideStartItems,
+  },
+]
+
+const referenceSidebarSections = [
+  {
+    text: 'Guildhall app',
     items: [
       { text: 'Overview', link: '/web-ui/' },
       { text: 'Projects home', link: '/web-ui/dashboard' },
@@ -60,6 +80,31 @@ const webUiSidebarSections = [
       { text: 'In-UI help', link: '/web-ui/help-system' },
     ],
   },
+  {
+    text: 'Command line',
+    items: [
+      { text: 'CLI overview', link: '/cli/' },
+      { text: 'Command reference', link: '/cli/reference' },
+    ],
+  },
+  {
+    text: 'Project state',
+    items: [
+      { text: 'guildhall.yaml', link: '/reference/workspace-config' },
+      { text: 'agent-settings.yaml', link: '/reference/agent-settings' },
+      { text: 'Environment variables', link: '/reference/env' },
+      { text: 'Memory layout', link: '/reference/memory-layout' },
+      { text: 'Web server routes', link: '/reference/http-api' },
+    ],
+  },
+  {
+    text: 'System reference',
+    items: [
+      { text: 'Levers ↗', link: '/levers/' },
+      { text: 'Subsystems ↗', link: '/subsystems/' },
+      { text: 'Releases ↗', link: '/releases/' },
+    ],
+  },
 ]
 
 export default defineConfig({
@@ -68,6 +113,7 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   base: '/guildhall/',
+  srcExclude: ['design/**', 'superpowers/**', 'web-ui/flow-audit.md'],
   appearance: 'dark',
   head: [
     ['link', { rel: 'icon', href: '/guildhall/favicon.svg' }],
@@ -75,28 +121,20 @@ export default defineConfig({
   ],
   themeConfig: {
     nav: [
-      { text: 'Start', link: '/guide/quick-start' },
-      { text: 'Guide', link: '/guide/' },
-      { text: 'CLI', link: '/cli/' },
-      { text: 'Reference', link: '/reference/' },
-      {
-        text: 'More',
-        items: [
-          { text: 'UI reference', link: '/web-ui/' },
-          { text: 'Guide', link: '/guide/' },
-          { text: 'Levers', link: '/levers/' },
-          { text: 'Subsystems', link: '/subsystems/' },
-          { text: 'Design notes', link: '/design/' },
-          { text: 'Releases', link: '/releases/' },
-          { text: 'guildhall.yaml', link: '/reference/workspace-config' },
-        ],
-      },
+      { text: 'Get started', link: '/guide/quick-start', activeMatch: '^/guide/(quick-start|new-project|existing-project|first-tasks|managing-projects)' },
+      { text: 'Guide', link: '/guide/', activeMatch: '^/guide/(?!(quick-start|new-project|existing-project|first-tasks|managing-projects))' },
+      { text: 'Reference', link: '/reference/', activeMatch: '^/(reference|cli|web-ui|levers|subsystems|releases)/' },
     ],
     sidebar: {
+      '/guide/quick-start': getStartedSidebarSections,
+      '/guide/new-project': getStartedSidebarSections,
+      '/guide/existing-project': getStartedSidebarSections,
+      '/guide/first-tasks': getStartedSidebarSections,
+      '/guide/managing-projects': getStartedSidebarSections,
       '/guide/': guideSidebarSections,
       '/subsystems/': [
         {
-          text: 'Overview',
+          text: 'Subsystems',
           items: [{ text: 'Architecture', link: '/subsystems/' }],
         },
         {
@@ -140,7 +178,7 @@ export default defineConfig({
       ],
       '/levers/': [
         {
-          text: 'Lever reference',
+          text: 'Levers',
           items: [
             { text: 'How levers work', link: '/levers/' },
             { text: 'Provenance', link: '/levers/provenance' },
@@ -175,50 +213,18 @@ export default defineConfig({
           ],
         },
       ],
-      '/cli/': [
-        {
-          text: 'CLI',
-          items: [
-            { text: 'Overview', link: '/cli/' },
-            { text: 'Command reference', link: '/cli/reference' },
-          ],
-        },
-      ],
-      '/web-ui/': webUiSidebarSections,
-      '/reference/': [
-        {
-          text: 'Reference',
-          items: [
-            { text: 'CLI', link: '/cli/reference' },
-            { text: 'guildhall.yaml', link: '/reference/workspace-config' },
-            { text: 'agent-settings.yaml', link: '/reference/agent-settings' },
-            { text: 'Environment variables', link: '/reference/env' },
-            { text: 'Memory layout', link: '/reference/memory-layout' },
-            { text: 'Web server routes', link: '/reference/http-api' },
-          ],
-        },
-      ],
+      '/cli/': referenceSidebarSections,
+      '/web-ui/': referenceSidebarSections,
+      '/reference/': referenceSidebarSections,
       '/releases/': [
         {
           text: 'Releases',
           items: [
             { text: 'Overview', link: '/releases/' },
+            { text: '0.6.0', link: '/releases/0.6.0' },
             { text: '0.5.1', link: '/releases/0.5.1' },
             { text: '0.5.0', link: '/releases/0.5.0' },
             { text: '0.4.0', link: '/releases/0.4.0' },
-          ],
-        },
-      ],
-      '/design/': [
-        {
-          text: 'Design notes',
-          items: [
-            { text: 'Disagreement & handoff', link: '/design/disagreement-and-handoff' },
-            { text: 'UI structural audit', link: '/design/ui-audit' },
-            { text: 'Symphony comparison', link: '/design/symphony-comparison' },
-            { text: 'Beads and one-task pivot', link: '/design/beads-and-one-task-pivot' },
-            { text: 'Provider abstraction and throughput', link: '/design/provider-abstraction-and-throughput' },
-            { text: 'Node vs Deno packaging for 0.5.0', link: '/design/deno-vs-node-packaging' },
           ],
         },
       ],

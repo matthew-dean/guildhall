@@ -15,7 +15,7 @@ description: Local service for unattended software work with visible state, revi
       <p class="gh-home-lede">Guildhall runs over your projects from a local service. Queue state, reviewer calls, and transcripts stay attached to the work so you can let it run, step in when needed, and still understand what happened.</p>
       <div class="gh-home-hero__actions">
         <div class="gh-cta-row">
-          <a class="gh-cta gh-cta-primary" href="/guildhall/guide/">Start here</a>
+          <a class="gh-cta gh-cta-primary" href="/guildhall/guide/quick-start">Get started</a>
           <a class="gh-cta gh-cta-secondary" href="/guildhall/guide/new-project">New project</a>
           <a class="gh-cta gh-cta-secondary" href="/guildhall/guide/existing-project">Existing project</a>
           <a class="gh-cta gh-cta-secondary" href="https://github.com/matthew-dean/guildhall">Read the code</a>
@@ -29,10 +29,13 @@ description: Local service for unattended software work with visible state, revi
     </div>
     <div class="gh-home-hero__media">
       <figure class="gh-doc-shot">
-        <img src="./assets/ui-audit/work.png" alt="Guildhall work view showing active tasks, live progress, and reviewer checkpoints in one shell." />
+        <picture>
+          <source srcset="./assets/ui-audit/projects.avif" type="image/avif" />
+          <img src="./assets/ui-audit/projects.png" alt="Guildhall projects home showing several local projects with status, activity, and start controls." />
+        </picture>
         <figcaption>
-          <strong>The shell is the point.</strong>
-          Work, progress, review state, and the latest trouble all sit in one place instead of asking you to remember which tab held the truth.
+          <strong>The service starts with your projects.</strong>
+          Open the shell that needs attention, start another run, or attach a new repo without guessing which hidden session is active.
         </figcaption>
       </figure>
       <div class="gh-home-hero__proof">
@@ -90,6 +93,10 @@ description: Local service for unattended software work with visible state, revi
         <p>Autonomy, reviewer strictness, remediation behavior, and fanout live in named settings instead of whatever mood the tool woke up in.</p>
       </article>
       <article class="gh-signal-card">
+        <h3>Memory with receipts</h3>
+        <p>Project habits, cross-project preferences, and product suggestions stay inspectable, reversible, and scoped to the layer where they belong.</p>
+      </article>
+      <article class="gh-signal-card">
         <h3>Visible state</h3>
         <p>The queue, blockers, and release posture stay legible. Hidden state is funny only until it ships.</p>
       </article>
@@ -133,14 +140,14 @@ description: Local service for unattended software work with visible state, revi
         <h3>Already strong</h3>
         <ul>
           <li>Local service over real repos</li>
+          <li>Projects home for scanning several registered projects</li>
           <li>Visible reviewer and release flow</li>
-          <li>Task transcripts, provenance, and inspectable guardrails</li>
+          <li>Task transcripts, provenance, scoped memory, and inspectable guardrails</li>
         </ul>
       </article>
       <article class="gh-limit-card">
         <h3>Still being tightened</h3>
         <ul>
-          <li>The projects home is still catching up to the project shell.</li>
           <li>Some denser views still want calmer grouping and better rhythm.</li>
           <li>The right amount of unattended behavior still depends on the project and the operator.</li>
         </ul>

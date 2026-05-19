@@ -133,12 +133,22 @@ import {
 } from './workspace-import/index.js'
 import { buildWorkspaceImportReview, filterWorkspaceImportDraft } from './workspace-import/review.js'
 import {
+  acceptSuggestedLearning,
   buildLearningSnapshot,
+  dismissSuggestedLearning,
+  makeSuggestedLearningProjectWide,
   recordWorkspaceImportApproval,
   recordWorkspaceImportDismissal,
   resetGlobalLearning,
   resetProjectLearning,
+  resetSuggestedLearnings,
 } from './learning.js'
+import {
+  activateProjectSkillProposal,
+  dismissProjectSkillProposal,
+  readProjectSkillProposals,
+  resetProjectSkillProposals,
+} from '@guildhall/skills'
 import { normalizeImportedDraftTask } from './import-drafts.js'
 import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
 import { buildThread } from './thread.js'
@@ -2850,7 +2860,78 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
       }
       const review = buildWorkspaceImportReview(draft, existingTasks, project.path)
-      return c.json(buildLearningSnapshot({ memoryDir, review, draft }))
+      return c.json({
+        ...buildLearningSnapshot({ memoryDir, review, draft }),
+        projectSkillProposals: readProjectSkillProposals(memoryDir),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/learning/action', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const body = await c.req.json().catch(() => ({})) as {
+        kind?: 'accept' | 'dismiss' | 'reset' | 'make-project-wide'
+        scope?: 'project' | 'user_global'
+        id?: string
+      }
+      const memoryDir = join(project.path, 'memory')
+      const scope = body.scope === 'user_global' ? 'user_global' : 'project'
+      if (body.kind === 'accept') {
+        if (!body.id) return c.json({ error: 'id is required' }, 400)
+        await acceptSuggestedLearning({ memoryDir, id: body.id, scope })
+        return c.json({ ok: true, kind: body.kind, scope, id: body.id })
+      }
+      if (body.kind === 'dismiss') {
+        if (!body.id) return c.json({ error: 'id is required' }, 400)
+        await dismissSuggestedLearning({ memoryDir, id: body.id, scope })
+        return c.json({ ok: true, kind: body.kind, scope, id: body.id })
+      }
+      if (body.kind === 'make-project-wide') {
+        if (!body.id) return c.json({ error: 'id is required' }, 400)
+        await makeSuggestedLearningProjectWide({ memoryDir, id: body.id })
+        return c.json({ ok: true, kind: body.kind, scope: 'project', id: body.id })
+      }
+      if (body.kind === 'reset') {
+        await resetSuggestedLearnings({ memoryDir, scope })
+        return c.json({ ok: true, kind: body.kind, scope })
+      }
+      return c.json({ error: 'unknown learning action' }, 400)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/skill-proposals/action', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const body = await c.req.json().catch(() => ({})) as {
+        kind?: 'activate' | 'dismiss' | 'reset'
+        id?: string
+        approved?: boolean
+      }
+      const memoryDir = join(project.path, 'memory')
+      if (body.kind === 'activate') {
+        if (!body.id) return c.json({ error: 'id is required' }, 400)
+        await activateProjectSkillProposal({
+          memoryDir,
+          id: body.id,
+          approved: body.approved === true,
+        })
+        return c.json({ ok: true, kind: body.kind, id: body.id })
+      }
+      if (body.kind === 'dismiss') {
+        if (!body.id) return c.json({ error: 'id is required' }, 400)
+        await dismissProjectSkillProposal({ memoryDir, id: body.id })
+        return c.json({ ok: true, kind: body.kind, id: body.id })
+      }
+      if (body.kind === 'reset') {
+        await resetProjectSkillProposals(memoryDir)
+        return c.json({ ok: true, kind: body.kind })
+      }
+      return c.json({ error: 'unknown skill proposal action' }, 400)
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }

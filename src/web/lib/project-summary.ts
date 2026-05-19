@@ -1,5 +1,6 @@
 import type { ProjectRun, ServiceDetail, ServiceProjectSummary } from './types.js'
 import { buildProjectCardTicker, type ProjectActivityLine } from './project-activity.js'
+import { formatUserPath } from './display-path.js'
 import { humanizeProjectName } from './project-name.js'
 
 export interface ProjectCardSummary {
@@ -108,7 +109,7 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
   return {
     id: project.id,
     name: humanizeProjectName(project.name),
-    path: project.path,
+    path: formatUserPath(project.path),
     statusLabel: statusLabel(project, counts),
     tone:
       initializationNeeded || project.run?.status === 'error'

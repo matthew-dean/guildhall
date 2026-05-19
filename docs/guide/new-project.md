@@ -5,9 +5,8 @@ pageClass: gh-first-visit-page
 
 # New project
 
-Use this path when the repo is empty, young, or still mostly in your head. The
-goal is not to generate a giant backlog. The goal is to make the project
-visible and prove one small loop.
+Empty repos, young repos, and ideas that still mostly live in your head all
+need the same first move: make the project visible and prove one small loop.
 
 ## 1. Open the repo
 

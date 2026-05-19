@@ -7,6 +7,7 @@
 <script lang="ts">
   import Card from '../../lib/Card.svelte'
   import Stack from '../../lib/Stack.svelte'
+  import { formatUserPath } from '../../lib/display-path.js'
   import { friendlyStewardName } from '../../lib/display.js'
   import { nav } from '../../lib/nav.svelte.js'
   import { projectFetch } from '../../lib/project-routes.js'
@@ -91,7 +92,7 @@
       <dl class="kv">
         <dt>Name</dt><dd>{facts.identity.name}</dd>
         <dt>Id</dt><dd><code>{facts.identity.id}</code></dd>
-        <dt>Path</dt><dd><code>{facts.identity.path}</code></dd>
+        <dt>Path</dt><dd><code>{formatUserPath(facts.identity.path)}</code></dd>
       </dl>
     </Card>
 
