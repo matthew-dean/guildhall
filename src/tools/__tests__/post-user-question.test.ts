@@ -359,4 +359,52 @@ describe('postUserQuestionTool', () => {
     }
     expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
   })
+
+  it('rejects topic labels masquerading as choice answers', async () => {
+    const metadata: Record<string, unknown> = {
+      tasks_path: tasksPath,
+      current_task_id: 'task-001',
+      current_agent_id: 'spec-agent',
+    }
+
+    const result = await postUserQuestionTool.execute(
+      {
+        kind: 'choice',
+        body: 'Spec updated with inline chip + CSS confirmed. Two questions remain:',
+        choices: ['Extension ownership', 'Knit integration'],
+        selectionMode: 'single',
+      },
+      { cwd: '/tmp', metadata },
+    )
+
+    expect(result.is_error).toBe(true)
+    expect(result.output).toContain('question choices must be answers')
+
+    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
+      tasks: Array<{ openQuestions?: Array<unknown> }>
+    }
+    expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
+  })
+
+  it('does not infer topic labels as answers from assistant prose saying questions remain', async () => {
+    const metadata: Record<string, unknown> = {
+      tasks_path: tasksPath,
+      current_task_id: 'task-001',
+      current_agent_id: 'spec-agent',
+      last_assistant_text: [
+        'Spec updated with inline chip + CSS confirmed. Two questions remain:',
+        '',
+        '- Extension ownership',
+        '- Knit integration',
+      ].join('\n'),
+    }
+
+    const result = await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
+    expect(result.is_error).toBe(true)
+
+    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
+      tasks: Array<{ openQuestions?: Array<unknown> }>
+    }
+    expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
+  })
 })

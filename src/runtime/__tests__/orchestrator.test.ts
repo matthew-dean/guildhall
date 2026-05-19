@@ -1268,6 +1268,31 @@ describe('Orchestrator.tick — routing', () => {
     })
   })
 
+  it('does not promote topic labels into fallback choice answers when prose says questions remain', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Mentions' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'Spec updated with inline chip + CSS confirmed. Two questions remain:',
+        '',
+        '- Extension ownership',
+        '- Knit integration',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions ?? []).toHaveLength(0)
+  })
+
   it('preserves fallback brief and question state when a spec turn hits the max turn limit after plain-text output', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Collections coverage' })])
     const spec = {

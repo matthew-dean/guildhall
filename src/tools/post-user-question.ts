@@ -123,6 +123,31 @@ function isPlanningPrompt(promptBody: string): boolean {
   )
 }
 
+function isQuestionListPrompt(promptBody: string): boolean {
+  const normalized = promptBody
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+  return (
+    /\b(?:two|three|four|five|\d+)\s+questions?\s+remain\b/.test(normalized) ||
+    /\bquestions?\s+remain\b/.test(normalized) ||
+    /\bposted\s+(?:two|three|four|five|\d+)\s+questions?\b/.test(normalized) ||
+    /\bquestions?\s+to\s+help\b/.test(normalized)
+  )
+}
+
+function validateQuestionShape(input: {
+  kind?: string
+  body?: string
+  choices?: string[]
+}): string | null {
+  if (input.kind === 'choice' && input.body && isQuestionListPrompt(input.body)) {
+    return 'choice question choices must be answers to one prompt, not labels for separate questions'
+  }
+  return null
+}
+
 function resolveQuestionDefaults(
   input: Pick<PostUserQuestionInput, 'tasksPath' | 'taskId' | 'askedBy'>,
   metadata: Record<string, unknown>,
@@ -165,6 +190,7 @@ function inferQuestionsFromAssistantText(text: string): InferredQuestion[] {
     const promptLike = /pick one\b|choose one\b|select one\b|\?$|:\s*$|success look like/i.test(promptBody)
     if (!promptLike) continue
     if (isPlanningPrompt(promptBody)) continue
+    if (isQuestionListPrompt(promptBody)) continue
     const summaryLike =
       /i['’]ll draft the full spec with\b|i will draft the full spec with\b|once you (?:pick|answer).+i['’]ll draft\b/i
         .test(promptBody)
@@ -229,6 +255,7 @@ function inferQuestionsFromAssistantText(text: string): InferredQuestion[] {
   const sectionQuestions = sections
     .map<InferredQuestion | null>((section) => {
       if (isPlanningPrompt(section.heading)) return null
+      if (isQuestionListPrompt(section.heading)) return null
       const choices = section.lines
         .map((line) => parseStructuredOptionLine(line))
         .filter(Boolean)
@@ -259,12 +286,14 @@ function resolveQuestionPayload(
     ?? (input.kind === 'confirm' ? input.restatement : input.prompt)
 
   if (input.kind && resolvedBody) {
-    return {
+    const payload = {
       kind: input.kind,
       body: resolvedBody,
       ...(input.choices ? { choices: input.choices } : {}),
       ...(input.selectionMode ? { selectionMode: input.selectionMode } : {}),
     }
+    const validationError = validateQuestionShape(payload)
+    return validationError ? { error: validationError } : payload
   }
 
   const bucketKey = 'inferred_post_user_questions'
@@ -293,6 +322,12 @@ export async function postUserQuestion(
   if (input.kind === 'choice' && (!input.choices || input.choices.length < 2)) {
     return { success: false, error: 'kind=choice requires 2..6 choices' }
   }
+  const validationError = validateQuestionShape({
+    kind: input.kind,
+    body: input.body,
+    choices: input.choices,
+  })
+  if (validationError) return { success: false, error: validationError }
   if (!input.tasksPath?.trim()) return { success: false, error: 'Missing tasksPath' }
   if (!input.taskId?.trim()) return { success: false, error: 'Missing taskId' }
   if (!input.askedBy?.trim()) return { success: false, error: 'Missing askedBy' }

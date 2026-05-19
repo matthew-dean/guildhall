@@ -96,6 +96,10 @@ screen.
 - [x] Collapse same-task draft-review and open-question states into one Thread
   card. A task with an unanswered question should show the question as the
   current task state, not a second card next to its unapproved brief.
+- [x] Reject malformed choice questions whose "answers" are actually labels
+  for separate questions. Agents must post each concrete question separately
+  or infer a default; Thread should not render topic labels like `Extension
+  ownership` / `Knit integration` as choose-one answers.
 - [x] Normalize dirty-repo setup blockers in Thread so the user sees the repo
   name and the concrete commit/stash recovery action instead of raw setup
   prose.
