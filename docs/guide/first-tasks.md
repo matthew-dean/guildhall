@@ -40,6 +40,11 @@ Each runnable task should answer:
 If those answers are missing, leave the item as a draft or answer the question
 in Thread.
 
+Do not over-specify routine mechanics. If a decision is conventional and the
+repo gives enough evidence, Guildhall should recommend the default and keep
+moving. Save human attention for product intent, audience, user flow, content,
+constraints, and the finish line.
+
 ## Treat drafts as a holding area
 
 A draft means "maybe work, not framed yet." It should not auto-run just because

@@ -43,6 +43,18 @@ Good Guildhall work should feel balanced. The plan, task, implementation,
 verification, docs, and release criteria should fit together instead of each
 being locally reasonable but globally confused.
 
+The process should also stay proportional. Guildhall should not turn planning
+into a burden that slows the real product down. It should ask for human input
+when the answer changes intent, audience, user flow, risk, data ownership, or
+release quality. For routine engineering choices, it should infer a good
+default from the project and offer a small set of sensible options only when
+the choice actually matters.
+
+For example, Guildhall should not list every possible database engine. It
+should first decide whether the project needs a database. If it does, it should
+recommend the most fitting option with a short rationale and maybe one or two
+realistic alternatives.
+
 ## What each layer means
 
 | Construction layer | Software layer | What Guildhall should produce |
@@ -101,6 +113,10 @@ When a worker starts, it should already know:
 
 When review happens, reviewers should inspect against the plan, not just decide
 whether the worker sounded confident.
+
+When Guildhall needs the owner, the question should be bounded and useful. A
+good question protects product quality. A bad question offloads routine
+strategy onto the human operator.
 
 ## Where to go next
 

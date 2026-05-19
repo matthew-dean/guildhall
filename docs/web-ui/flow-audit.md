@@ -56,6 +56,10 @@ screen.
   concepts, project walkthroughs, first-task guidance, task lifecycle,
   projects/work guide, many-projects guide, and 0.6.0 release note to use
   blueprint/framing/trade work/inspection/change-order language.
+- [x] Add the proportional-process guardrail to the construction model: process
+  serves product quality, so Guildhall should infer or recommend routine
+  implementation choices and reserve human questions for owner intent,
+  audience, user flow, risk, data ownership, and release criteria.
 - [x] Normalize dirty-repo setup blockers in Thread so the user sees the repo
   name and the concrete commit/stash recovery action instead of raw setup
   prose.

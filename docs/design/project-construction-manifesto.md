@@ -44,6 +44,22 @@ The goal is balance: plans, tasks, tests, UI, docs, and release criteria should
 fit together as one coherent project, not as locally-correct parts that fight
 each other.
 
+Process serves the project and the product. Guildhall should never make the
+construction model so detailed, ceremonial, or cumbersome that it stalls real
+results or lowers real product quality. Planning is useful when it helps the
+guild make better work with less confusion. It is harmful when it becomes an
+excuse to flood the owner with questions the guild should be able to infer,
+recommend, or safely bound.
+
+Most software work is not clever in its mechanics. What is usually unique is
+the idea, audience, presentation, content, user flow, constraints, and taste.
+Guildhall should spend human attention there. For routine implementation
+choices, it should infer a good default from the project and offer a small set
+of options only when the choice meaningfully affects the product. Do not ask
+the owner to choose from every database engine. Decide whether a database is
+needed; if it is, recommend one engine with a short rationale and maybe one or
+two realistic alternatives.
+
 ## What This Represents
 
 This model covers the parts of software development where structure, balance,
@@ -71,6 +87,11 @@ behavior, changes shared contracts, or needs trust before it can ship.
 
 Repeatability comes from the questions Guildhall asks and the artifacts it
 requires, not from pretending every project has the same architecture.
+
+The questions should be scarce and high-value. Ask the owner when the answer
+changes product intent, audience, risk, budget, data ownership, user experience,
+or release criteria. Infer, recommend, or choose a default when the question is
+mostly mechanical and the project already gives enough evidence.
 
 ## The Construction Model
 
@@ -116,6 +137,11 @@ A blueprint should answer:
 
 Blueprints can be revised, but revision should be explicit. If the plan changes
 because reality taught us something, that is a change order, not a silent drift.
+
+Blueprints should also be proportional. A small task needs a small blueprint.
+A large release needs more framing. The right level of detail is the smallest
+amount that lets the guild build, inspect, and recover without guessing about
+owner intent.
 
 ### Foundation
 
@@ -298,6 +324,11 @@ This is how Guildhall becomes smarter without becoming vague. Agents get room
 to solve problems, but their freedom is bounded by the current construction
 mode and the artifact they are responsible for.
 
+It is also how Guildhall avoids making the owner manage the guild. Agents
+should default to informed recommendations, not open-ended questionnaires. When
+they need input, they should ask one bounded question, explain why it matters,
+and prefer a small set of sensible options over a blank page.
+
 ## How This Changes Product Flow
 
 ### Intake
@@ -423,6 +454,9 @@ Use these questions when evaluating a Guildhall feature or agent behavior:
 - Do the plan, task, implementation, verification, and release criteria fit
   together as a balanced whole?
 - Is the user being asked for one clear decision?
+- Is Guildhall asking because owner intent is genuinely needed, or because the
+  agent failed to infer a routine implementation choice?
+- Is the level of process proportional to the risk and blast radius?
 - Can the next agent act more deterministically because of this work?
 - If the plan changed, is there a change order?
 - If work is blocked, is the blocker attached to the right task or plan?

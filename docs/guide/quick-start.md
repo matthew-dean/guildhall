@@ -28,6 +28,10 @@ task set, and see whether the work moves with clear evidence. Read
 [How Guildhall builds](./how-guildhall-builds) when you want the full mental
 model.
 
+You should not have to answer a long setup questionnaire. Guildhall should
+infer routine defaults, recommend a path, and ask only when the answer changes
+what you are trying to build or how safe the run will be.
+
 ## Install
 
 ```bash
