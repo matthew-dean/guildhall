@@ -20,7 +20,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import type { Task } from '@guildhall/core'
+import { constructionModeForTask, type ConstructionMode, type Task } from '@guildhall/core'
 import { activeEscalations } from '@guildhall/tools'
 import {
   buildSnapshot,
@@ -94,6 +94,7 @@ export interface BriefTurn extends TurnBase {
   kind: 'brief_approval'
   taskId: string
   taskTitle: string
+  constructionMode: ConstructionMode
   brief: {
     userJob?: string | undefined
     successMetric?: string | undefined
@@ -115,6 +116,7 @@ export interface AgentQuestionTurn extends TurnBase {
   kind: 'agent_question'
   taskId: string
   taskTitle: string
+  constructionMode: ConstructionMode
   taskDescription?: string | undefined
   sourceNote?: TaskSourceNote | undefined
   liveAgent?: { name: string; startedAt?: string | undefined } | undefined
@@ -142,6 +144,7 @@ export interface SpecReviewTurn extends TurnBase {
   kind: 'spec_review'
   taskId: string
   taskTitle: string
+  constructionMode: ConstructionMode
   spec: string
   draftCoordinators?: Array<{
     id: string
@@ -158,6 +161,7 @@ export interface EscalationTurn extends TurnBase {
   kind: 'escalation'
   taskId: string
   taskTitle: string
+  constructionMode: ConstructionMode
   escalationId: string
   summary: string
   details?: string | undefined
@@ -169,6 +173,7 @@ export interface ReviewFeedbackTurn extends TurnBase {
   kind: 'review_feedback'
   taskId: string
   taskTitle: string
+  constructionMode: ConstructionMode
   summary: string
   feedback: string
   revisionCount?: number | undefined
@@ -179,6 +184,7 @@ export interface InFlightTurn extends TurnBase {
   kind: 'inflight'
   taskId: string
   taskTitle: string
+  constructionMode: ConstructionMode
   taskDescription?: string | undefined
   sourceNote?: TaskSourceNote | undefined
   taskStatus?: string | undefined
@@ -1105,6 +1111,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const taskDescription = cleanTaskDescription(t)
     const sourceNote = sourceNoteForTask(t)
     const taskStatus = typeof t.status === 'string' ? t.status : ''
+    const constructionMode = constructionModeForTask(t)
     const createdAt =
       typeof t.createdAt === 'string' ? t.createdAt : new Date().toISOString()
 
@@ -1139,6 +1146,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         phase: status === 'done' ? 'done' : 'intake',
         taskId,
         taskTitle,
+        constructionMode,
         brief: {
           userJob: brief.userJob,
           successMetric: brief.successMetric,
@@ -1215,6 +1223,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         phase: 'intake',
         taskId,
         taskTitle,
+        constructionMode,
         taskDescription,
         sourceNote,
         liveAgent,
@@ -1237,6 +1246,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         phase: 'done',
         taskId,
         taskTitle,
+        constructionMode,
         taskDescription,
         sourceNote,
         liveAgent,
@@ -1284,6 +1294,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
           : 'done',
         taskId,
         taskTitle,
+        constructionMode,
         summary: compactReviewSummary(content),
         feedback: content,
         revisionCount: reviewIndex + 1,
@@ -1328,6 +1339,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         phase: status === 'active' ? 'spec' : 'intake',
         taskId,
         taskTitle,
+        constructionMode,
         spec,
         draftCoordinators,
       })
@@ -1394,6 +1406,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         phase,
         taskId,
         taskTitle,
+        constructionMode,
         taskDescription,
         sourceNote,
         taskStatus,
@@ -1433,6 +1446,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         phase: 'blocked',
         taskId,
         taskTitle,
+        constructionMode,
         escalationId: escId,
         summary,
         details: compactEscalationDetailsWithPolicy(

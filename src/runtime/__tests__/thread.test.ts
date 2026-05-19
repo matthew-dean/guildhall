@@ -64,6 +64,59 @@ describe('buildThread', () => {
     }
   })
 
+  it('projects construction mode onto task turns', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const now = new Date().toISOString()
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-blueprint',
+              title: 'Shape the task',
+              status: 'exploring',
+              createdAt: now,
+              updatedAt: now,
+            },
+            {
+              id: 'task-build',
+              title: 'Build the task',
+              status: 'in_progress',
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: now },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 2,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
+
+      const blueprint = thread.turns.find(turn => turn.id === 'inflight:task-blueprint')
+      const build = thread.turns.find(turn => turn.id === 'inflight:task-build')
+      expect((blueprint as { constructionMode?: string } | undefined)?.constructionMode).toBe('blueprint')
+      expect((build as { constructionMode?: string } | undefined)?.constructionMode).toBe('build')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('advances past bootstrap setup when runtime bootstrap truth is already green', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

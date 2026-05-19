@@ -438,6 +438,11 @@ machinery manual of inner workings.
 - Add learning routes that separate project memory, user preference, and
   Guildhall product improvements.
 
+The first implementation substrate is tracked in
+`docs/superpowers/specs/2026-05-19-guildhall-construction-runtime-integration.md`
+and
+`docs/superpowers/plans/2026-05-19-guildhall-construction-runtime-integration.md`.
+
 ### Later: Extract the Substrate
 
 Guildhall may eventually expose its task, delegation, learning, and audit

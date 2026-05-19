@@ -60,6 +60,22 @@ screen.
   serves product quality, so Guildhall should infer or recommend routine
   implementation choices and reserve human questions for owner intent,
   audience, user flow, risk, data ownership, and release criteria.
+- [x] Start building the construction model into the actual agent behavior.
+  Core agent prompts now map spec/coordinator/worker/reviewer roles to
+  blueprint/general-contractor/trade-work/inspection modes, require
+  proportional owner questions, and tell workers/reviewers to treat spec
+  failures as explicit change-order evidence instead of vague blockers.
+- [x] Write the construction-runtime integration spec and implementation plan
+  before expanding beyond prompt guidance. See
+  `docs/superpowers/specs/2026-05-19-guildhall-construction-runtime-integration.md`
+  and
+  `docs/superpowers/plans/2026-05-19-guildhall-construction-runtime-integration.md`.
+- [x] Add derived construction-mode metadata and Thread payload tests. The
+  runtime now derives `survey`, `blueprint`, `frame`, `build`, `inspect`,
+  `change_order`, and `punch_list` from task state, exports the helper from
+  core, and includes `constructionMode` on task-derived Thread turns. Focused
+  verification passed for `src/core/__tests__/construction-mode.test.ts` and
+  `src/runtime/__tests__/thread.test.ts`.
 - [x] Normalize dirty-repo setup blockers in Thread so the user sees the repo
   name and the concrete commit/stash recovery action instead of raw setup
   prose.

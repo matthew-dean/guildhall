@@ -235,6 +235,7 @@ export interface TaskThreadTurnBase {
   phase: 'setup' | 'intake' | 'spec' | 'ready' | 'inflight' | 'blocked' | 'done'
   taskId: string
   taskTitle: string
+  constructionMode?: 'survey' | 'blueprint' | 'frame' | 'build' | 'inspect' | 'change_order' | 'punch_list'
   taskDescription?: string
   sourceNote?: {
     description?: string
