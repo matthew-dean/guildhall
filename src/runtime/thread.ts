@@ -1115,52 +1115,6 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const createdAt =
       typeof t.createdAt === 'string' ? t.createdAt : new Date().toISOString()
 
-    // Brief approval (or done card)
-    const brief = t.productBrief as
-      | {
-          userJob?: string
-          successMetric?: string
-          successCriteria?: string
-          antiPatterns?: string[]
-          rolloutPlan?: string
-          authoredBy?: string
-          approvedAt?: string | null
-        }
-      | undefined
-    const approvedAt = brief && typeof brief === 'object' ? brief.approvedAt ?? null : null
-    const liveAgent = liveAgents.get(taskId)
-    if (brief && typeof brief === 'object') {
-      const briefStillNeedsHuman = !approvedAt && taskStatus === 'exploring'
-      const status: TurnStatus = !briefStillNeedsHuman
-        ? 'done'
-        : !activeAssigned
-          ? 'active'
-          : 'pending'
-      if (status === 'active') activeAssigned = true
-      turns.push({
-        kind: 'brief_approval',
-        id: `brief:${taskId}`,
-        at: createdAt,
-        persona: 'spec',
-        status,
-        phase: status === 'done' ? 'done' : 'intake',
-        taskId,
-        taskTitle,
-        constructionMode,
-        brief: {
-          userJob: brief.userJob,
-          successMetric: brief.successMetric,
-          successCriteria: brief.successCriteria,
-          antiPatterns: brief.antiPatterns,
-          rolloutPlan: brief.rolloutPlan,
-          authoredBy: brief.authoredBy,
-        },
-        liveAgent,
-        approvedAt,
-      })
-    }
-
-    // Open agent questions
     const openQs = isTerminalQuestionState(taskStatus)
       ? []
       : (Array.isArray(t.openQuestions)
@@ -1208,6 +1162,53 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     }
     const unansweredQuestions = visibleQuestions.filter((entry) => !entry.answeredAt)
     const answeredQuestions = visibleQuestions.filter((entry) => entry.answeredAt)
+
+    // Brief approval (or done card)
+    const brief = t.productBrief as
+      | {
+          userJob?: string
+          successMetric?: string
+          successCriteria?: string
+          antiPatterns?: string[]
+          rolloutPlan?: string
+          authoredBy?: string
+          approvedAt?: string | null
+        }
+      | undefined
+    const approvedAt = brief && typeof brief === 'object' ? brief.approvedAt ?? null : null
+    const liveAgent = liveAgents.get(taskId)
+    if (brief && typeof brief === 'object' && unansweredQuestions.length === 0) {
+      const briefStillNeedsHuman = !approvedAt && taskStatus === 'exploring'
+      const status: TurnStatus = !briefStillNeedsHuman
+        ? 'done'
+        : !activeAssigned
+          ? 'active'
+          : 'pending'
+      if (status === 'active') activeAssigned = true
+      turns.push({
+        kind: 'brief_approval',
+        id: `brief:${taskId}`,
+        at: createdAt,
+        persona: 'spec',
+        status,
+        phase: status === 'done' ? 'done' : 'intake',
+        taskId,
+        taskTitle,
+        constructionMode,
+        brief: {
+          userJob: brief.userJob,
+          successMetric: brief.successMetric,
+          successCriteria: brief.successCriteria,
+          antiPatterns: brief.antiPatterns,
+          rolloutPlan: brief.rolloutPlan,
+          authoredBy: brief.authoredBy,
+        },
+        liveAgent,
+        approvedAt,
+      })
+    }
+
+    // Open agent questions
     if (unansweredQuestions.length > 0) {
       const first = unansweredQuestions[0]!
       // Agent questions are co-active, but the Thread should still show one

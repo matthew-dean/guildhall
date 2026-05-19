@@ -815,6 +815,72 @@ describe('buildThread', () => {
     }
   })
 
+  it('shows one task state when a draft brief also has an unanswered question', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const now = new Date().toISOString()
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-import-mentions',
+              title: 'Mentions',
+              description: 'looma/docs/editor-roadmap.md: - Mentions',
+              status: 'exploring',
+              productBrief: {
+                userJob: 'Build the Looma editor mentions feature.',
+                successMetric: 'Mentions can be inserted and rendered.',
+                successCriteria: 'The worker has concrete acceptance criteria.',
+                approvedAt: null,
+              },
+              openQuestions: [
+                {
+                  id: 'q-chip-style',
+                  kind: 'choice',
+                  askedBy: 'spec-agent',
+                  askedAt: now,
+                  prompt: 'Should Looma ship inline mention chip rendering?',
+                  choices: ['Looma ships chip CSS', 'Apps style the chip'],
+                  selectionMode: 'single',
+                },
+              ],
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: now },
+          coordinators: [{ id: 'looma', name: 'Looma' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+
+      expect(thread.activeTurnId).toBe('q:task-import-mentions:q-chip-style')
+      expect(
+        thread.turns.filter((turn) => 'taskId' in turn && turn.taskId === 'task-import-mentions'),
+      ).toHaveLength(1)
+      expect(thread.turns.find((turn) => turn.id === 'brief:task-import-mentions')).toBeUndefined()
+      expect(thread.turns.find((turn) => turn.id === 'q:task-import-mentions:q-chip-style')?.kind).toBe('agent_question')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('keeps an unanswered agent question active and demotes spec review until the question is answered', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

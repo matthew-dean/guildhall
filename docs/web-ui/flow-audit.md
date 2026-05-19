@@ -93,6 +93,9 @@ screen.
   blindly claimed by the worker before Guildhall records that the plan is
   worth building. Missing-blueprint `ready` tasks should route back to
   blueprint drafting instead of becoming `in_progress`.
+- [x] Collapse same-task draft-review and open-question states into one Thread
+  card. A task with an unanswered question should show the question as the
+  current task state, not a second card next to its unapproved brief.
 - [x] Normalize dirty-repo setup blockers in Thread so the user sees the repo
   name and the concrete commit/stash recovery action instead of raw setup
   prose.
