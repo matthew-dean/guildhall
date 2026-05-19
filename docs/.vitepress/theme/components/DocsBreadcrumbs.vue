@@ -12,7 +12,6 @@ const sections: Record<string, { label: string; href: string }> = {
   reference: { label: 'Reference', href: '/reference/' },
   levers: { label: 'Levers', href: '/levers/' },
   subsystems: { label: 'Subsystems', href: '/subsystems/' },
-  design: { label: 'Design notes', href: '/design/' },
   releases: { label: 'Releases', href: '/releases/' },
 }
 

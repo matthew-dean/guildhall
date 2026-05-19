@@ -71,6 +71,7 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   base: '/guildhall/',
+  srcExclude: ['design/**', 'superpowers/**', 'web-ui/flow-audit.md'],
   appearance: 'dark',
   head: [
     ['link', { rel: 'icon', href: '/guildhall/favicon.svg' }],
@@ -85,11 +86,10 @@ export default defineConfig({
       { text: 'Reference', link: '/reference/', activeMatch: '^/reference/' },
       {
         text: 'More',
-        activeMatch: '^/(levers|subsystems|design|releases)/',
+        activeMatch: '^/(levers|subsystems|releases)/',
         items: [
           { text: 'Levers', link: '/levers/' },
           { text: 'Subsystems', link: '/subsystems/' },
-          { text: 'Design notes', link: '/design/' },
           { text: 'Releases', link: '/releases/' },
           { text: 'guildhall.yaml', link: '/reference/workspace-config' },
         ],
@@ -210,19 +210,6 @@ export default defineConfig({
             { text: '0.5.1', link: '/releases/0.5.1' },
             { text: '0.5.0', link: '/releases/0.5.0' },
             { text: '0.4.0', link: '/releases/0.4.0' },
-          ],
-        },
-      ],
-      '/design/': [
-        {
-          text: 'Design notes',
-          items: [
-            { text: 'Disagreement & handoff', link: '/design/disagreement-and-handoff' },
-            { text: 'UI structural audit', link: '/design/ui-audit' },
-            { text: 'Symphony comparison', link: '/design/symphony-comparison' },
-            { text: 'Beads and one-task pivot', link: '/design/beads-and-one-task-pivot' },
-            { text: 'Provider abstraction and throughput', link: '/design/provider-abstraction-and-throughput' },
-            { text: 'Node vs Deno packaging for 0.5.0', link: '/design/deno-vs-node-packaging' },
           ],
         },
       ],

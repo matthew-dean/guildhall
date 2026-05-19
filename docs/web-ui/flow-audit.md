@@ -2991,3 +2991,9 @@ section-jump link to the UI reference, marked with a jump icon. The top
 navigation now has explicit active-match rules, and doc pages render
 breadcrumbs so the active section is visible even when the top nav is collapsed
 at narrower widths.
+
+Public docs boundary follow-up on `2026-05-19`: internal design notes,
+Superpowers plans/specs, and this live flow audit are excluded from the
+VitePress source set. Public docs may use sanitized UI assets from
+`docs/assets/ui-audit/`, but repo-local planning and audit notes should not be
+published as product documentation.
