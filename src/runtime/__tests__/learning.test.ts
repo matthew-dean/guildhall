@@ -475,6 +475,37 @@ describe('reflection learning candidates', () => {
     expect(readProjectLearning(path.join(tmpDir, 'memory')).suggestedLearnings).toEqual([])
   })
 
+  it('forgets global correction counts when resetting user-global suggestions', async () => {
+    const memoryDir = path.join(tmpDir, 'memory')
+    await recordUserCorrection({
+      memoryDir,
+      correction: 'Keep public docs direct.',
+      category: 'public_docs_style',
+    })
+    await recordUserCorrection({
+      memoryDir,
+      correction: 'Again, keep public docs direct.',
+      category: 'public_docs_style',
+    })
+    expect(readGlobalLearning().suggestedLearnings).toHaveLength(1)
+    expect(readGlobalLearning().userCorrectionCounts.public_docs_style).toBe(2)
+
+    await resetSuggestedLearnings({
+      memoryDir,
+      scope: 'user_global',
+    })
+    expect(readGlobalLearning().suggestedLearnings).toEqual([])
+    expect(readGlobalLearning().userCorrectionCounts).toEqual({})
+
+    await recordUserCorrection({
+      memoryDir,
+      correction: 'Keep public docs direct.',
+      category: 'public_docs_style',
+    })
+    expect(readGlobalLearning().suggestedLearnings).toEqual([])
+    expect(readGlobalLearning().userCorrectionCounts.public_docs_style).toBe(1)
+  })
+
   it('resolves a global suggestion when making it project-wide', async () => {
     const memoryDir = path.join(tmpDir, 'memory')
     await persistLearningCandidates({

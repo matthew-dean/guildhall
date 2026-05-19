@@ -443,7 +443,9 @@ function compactEscalationDetails(value: string | undefined): string | undefined
 }
 
 function latestPolicyClassificationSummary(notes: Array<Record<string, unknown>>): string | undefined {
-  for (const note of [...notes].reverse()) {
+  for (let index = notes.length - 1; index >= 0; index -= 1) {
+    const note = notes[index]
+    if (!note) continue
     if (note.role !== 'policy-classification') continue
     const content = typeof note.content === 'string' ? note.content : ''
     if (!content.trim()) continue
@@ -459,7 +461,9 @@ function latestPolicyClassificationSummary(notes: Array<Record<string, unknown>>
 }
 
 function latestRecoveryPlaybookSummary(notes: Array<Record<string, unknown>>): string | undefined {
-  for (const note of [...notes].reverse()) {
+  for (let index = notes.length - 1; index >= 0; index -= 1) {
+    const note = notes[index]
+    if (!note) continue
     if (note.role !== 'recovery-playbook') continue
     const content = typeof note.content === 'string' ? note.content : ''
     if (!content.trim()) continue

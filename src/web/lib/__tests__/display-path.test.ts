@@ -16,6 +16,11 @@ describe('formatUserPath', () => {
     expect(formatUserPath('C:/Users/Matthew/git/oss/guildhall')).toBe('~/git/oss/guildhall')
   })
 
+  it('redacts Windows user-profile paths regardless of prefix casing', () => {
+    expect(formatUserPath('c:\\users\\Matthew\\git\\oss\\guildhall')).toBe('~/git/oss/guildhall')
+    expect(formatUserPath('C:/users/Matthew/git/oss/guildhall')).toBe('~/git/oss/guildhall')
+  })
+
   it('leaves non-user-home paths recognizable while normalizing separators', () => {
     expect(formatUserPath('/Volumes/work/guildhall')).toBe('/Volumes/work/guildhall')
     expect(formatUserPath('D:\\work\\guildhall')).toBe('D:/work/guildhall')

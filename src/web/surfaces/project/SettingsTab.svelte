@@ -186,16 +186,22 @@
     try {
       learningError = null
       const r = await projectFetch('/api/project/learning')
-      const j = await r.json()
-      if (j.error) {
+      const j = await r.json().catch(() => null)
+      if (!r.ok || !j || typeof j !== 'object') {
+        learningError = j && typeof j === 'object' && 'error' in j
+          ? String(j.error)
+          : `HTTP ${r.status}`
+        return
+      }
+      if ('error' in j && j.error) {
         learningError = String(j.error)
         return
       }
       learning = {
-        project: j.project ?? null,
-        user: j.user ?? null,
-        effective: j.effective ?? null,
-        projectSkillProposals: j.projectSkillProposals ?? [],
+        project: 'project' in j ? j.project ?? null : null,
+        user: 'user' in j ? j.user ?? null : null,
+        effective: 'effective' in j ? j.effective ?? null : null,
+        projectSkillProposals: 'projectSkillProposals' in j ? j.projectSkillProposals ?? [] : [],
       }
     } catch (err) {
       learningError = err instanceof Error ? err.message : String(err)

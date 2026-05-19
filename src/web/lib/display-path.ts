@@ -3,9 +3,9 @@ export function formatUserPath(path: string | null | undefined): string {
   if (normalized.length === 0) return ''
 
   const homePatterns = [
-    /^\/Users\/[^/]+(?=\/|$)/,
-    /^\/home\/[^/]+(?=\/|$)/,
-    /^[A-Za-z]:\/Users\/[^/]+(?=\/|$)/,
+    /^\/Users\/[^/]+(?=\/|$)/i,
+    /^\/home\/[^/]+(?=\/|$)/i,
+    /^[A-Za-z]:\/Users\/[^/]+(?=\/|$)/i,
   ]
   for (const pattern of homePatterns) {
     if (pattern.test(normalized)) {

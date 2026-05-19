@@ -393,7 +393,11 @@ export async function resetSuggestedLearnings(input: {
   scope: 'project' | 'user_global'
 }): Promise<void> {
   await writeLearningByScope(input.memoryDir, input.scope, (record) =>
-    LearningRecordSchema.parse({ ...record, suggestedLearnings: [] }),
+    LearningRecordSchema.parse({
+      ...record,
+      suggestedLearnings: [],
+      userCorrectionCounts: input.scope === 'user_global' ? {} : record.userCorrectionCounts,
+    }),
   )
 }
 
