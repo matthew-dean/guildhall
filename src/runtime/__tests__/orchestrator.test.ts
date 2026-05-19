@@ -3609,6 +3609,8 @@ describe('Orchestrator.tick — error handling', () => {
     const q = await readQueue()
     expect(q.tasks[0]!.status).toBe('blocked')
     expect(q.tasks[0]!.escalations[0]!.summary).toContain('Worker stopped')
+    expect(q.tasks[0]!.notes.find((note) => note.role === 'policy-classification')?.content)
+      .toContain('"class":"model_tool_use_failure"')
   })
 
   it('preserves durable spec progress instead of escalating when turn limit hits after update-task work', async () => {
@@ -7649,6 +7651,8 @@ describe('Orchestrator worker no-progress escalation', () => {
     expect(task?.status).toBe('blocked')
     expect(task?.escalations.length).toBe(1)
     expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress')
+    expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
+      .toContain('"class":"model_tool_use_failure"')
   })
 
   it('tries one autonomous checkpoint remediation before blocking repeated checkpoint no-progress stops', async () => {
@@ -7748,6 +7752,8 @@ describe('Orchestrator worker no-progress escalation', () => {
     task = queue.tasks.find((candidate) => candidate.id === 'task-blank')
     expect(task?.status).toBe('blocked')
     expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress')
+    expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
+      .toContain('"class":"model_tool_use_failure"')
   })
 
   it('treats dirty worktrees as no progress when a failed checkpointed verification gets no new worker evidence', async () => {
@@ -7882,6 +7888,8 @@ describe('Orchestrator worker no-progress escalation', () => {
     expect(task?.status).toBe('blocked')
     expect(task?.escalations.length).toBe(1)
     expect(task?.escalations[0]?.summary).toContain('Worker timed out after failing to mutate')
+    expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
+      .toContain('"class":"provider_unavailable"')
   })
 })
 

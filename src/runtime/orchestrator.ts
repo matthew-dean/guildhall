@@ -169,6 +169,7 @@ import {
   classifyAgentFailure,
   renderAgentDecisionPacket,
   resolveRecoveryPlan,
+  type FailureClassification,
 } from './policy.js'
 import {
   selectApplicableGuilds,
@@ -1687,6 +1688,23 @@ export class Orchestrator {
     return next
   }
 
+  private async annotateWorkerBlockedClassification(input: {
+    taskId: string
+    agentId: string
+    classification: FailureClassification
+  }): Promise<void> {
+    const queue = await this.readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === input.taskId)
+    if (!task) return
+    appendFailureClassificationNote(task, input.classification, {
+      agentId: input.agentId,
+      timestamp: this.now(),
+    })
+    task.updatedAt = this.now()
+    queue.lastUpdated = this.now()
+    await this.writeQueue(queue)
+  }
+
   /**
    * FR-30: read the current `agent_health_strictness` lever and sync the
    * tracker. Callers (serve layer, tests) invoke this when the lever may
@@ -2818,6 +2836,24 @@ export class Orchestrator {
           details: message,
         })
         if (escalation.success && escalation.escalationId) {
+          await this.annotateWorkerBlockedClassification({
+            taskId: task.id,
+            agentId: 'coordinator',
+            classification: {
+              class: 'model_tool_use_failure',
+              confidence: 'medium',
+              evidence: [{
+                kind: 'task',
+                summary: `${friendlyRuntimeAgentName(agent.name)} stopped after hitting its turn limit.`,
+                ref: message,
+              }],
+              scope: 'task',
+              safePlaybooks: ['ask_concrete_human_question'],
+              needsHuman: true,
+              humanQuestion:
+                'The worker exhausted its turn budget without a safe next autonomous move. Should Guildhall retry from the checkpoint, narrow the task, or stop?',
+            },
+          })
           return {
             kind: 'escalated',
             taskId: task.id,
@@ -2851,6 +2887,24 @@ export class Orchestrator {
               `demanded concrete progress on the authoritative likely target files.`,
           })
           if (escalation.success && escalation.escalationId) {
+            await this.annotateWorkerBlockedClassification({
+              taskId: task.id,
+              agentId: 'coordinator',
+              classification: {
+                class: 'provider_unavailable',
+                confidence: 'medium',
+                evidence: [{
+                  kind: 'task',
+                  summary: 'Worker timed out before mutating the likely target file.',
+                  ref: message,
+                }],
+                scope: 'task',
+                safePlaybooks: ['ask_concrete_human_question'],
+                needsHuman: true,
+                humanQuestion:
+                  'The worker timed out without touching the likely target file. Should Guildhall retry this lane, switch provider, or narrow the task?',
+              },
+            })
             return {
               kind: 'escalated',
               taskId: task.id,
@@ -3251,6 +3305,25 @@ export class Orchestrator {
                 `escalate instead of ending another no-op step.`,
             })
             this.clearWorkerNoProgress(task.id)
+            await this.annotateWorkerBlockedClassification({
+              taskId: task.id,
+              agentId: 'coordinator',
+              classification: {
+                class: 'model_tool_use_failure',
+                confidence: 'medium',
+                evidence: [{
+                  kind: 'task',
+                  summary: `Worker made no visible progress after ${attempts} passes.`,
+                  ref:
+                    'Task remained in progress with no worktree edits, note, or status transition after likely-target nudges.',
+                }],
+                scope: 'task',
+                safePlaybooks: ['ask_concrete_human_question'],
+                needsHuman: true,
+                humanQuestion:
+                  'The worker made no visible progress after focused nudges. Should Guildhall retry from checkpoint, narrow the task, or stop?',
+              },
+            })
             await this.maybeCleanupWorktree(taskAfter, worktreeMode)
             return {
               kind: 'escalated',

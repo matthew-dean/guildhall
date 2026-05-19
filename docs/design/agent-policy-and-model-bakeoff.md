@@ -896,18 +896,18 @@ Acceptance criteria:
 
 `0.6.0` can claim this feature when:
 
-- [ ] every worker blocked/no-progress transition has a failure classification
-- [ ] at least five recovery paths are implemented as named playbooks
-- [ ] review handoff includes a typed decision packet
-- [ ] done/blocked/playbook outcomes can trigger reflection
-- [ ] coordinator routing separates project, user/global, and product learnings
-- [ ] project learning records can be inspected, accepted/dismissed, and reset
-- [ ] project skill proposals are trigger-scoped and project-local
-- [ ] product suggestions are inert until approved
-- [ ] model bakeoff reports include cost, outcome, false escalations, and
+- [x] every worker blocked/no-progress transition has a failure classification
+- [x] at least five recovery paths are implemented as named playbooks
+- [x] review handoff includes a typed decision packet
+- [x] done/blocked/playbook outcomes can trigger reflection
+- [x] coordinator routing separates project, user/global, and product learnings
+- [x] project learning records can be inspected, accepted/dismissed, and reset
+- [x] project skill proposals are trigger-scoped and project-local
+- [x] product suggestions are inert until approved
+- [x] model bakeoff reports include cost, outcome, false escalations, and
   packet quality
 - [x] a real project proof shows a learning improving a future run
-- [ ] docs explain the difference between bounded improvisation and unbounded
+- [x] docs explain the difference between bounded improvisation and unbounded
   autonomy
 
 ## Decision

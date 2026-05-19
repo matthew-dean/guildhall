@@ -705,6 +705,18 @@ screen.
   quality metrics, learning-candidate conversion for failed runs, markdown/JSON
   report rendering, and `pnpm model:bakeoff` for writing the report artifact.
   Focused model-bakeoff tests and a `pnpm model:bakeoff` smoke passed.
+- Checked the `0.6.0` policy/learning branch against release acceptance and
+  walked the branch UI on real projects via `http://localhost:7781` instead of
+  the installed `0.5.1` service on port `7777`. Looma + Knit opened to a calm
+  Thread with concrete human questions, and Settings -> Learning showed no
+  leftover Phase 7 proof records while still exposing project/user learning,
+  project skill, product suggestion, and reset surfaces. T-minus-t and Fair
+  Labor License opened as terminal/stable projects and their Learning settings
+  rendered cleanly. The acceptance pass found one real gap: worker
+  turn-limit/timeout/no-progress escalations raised blockers without a
+  `policy-classification` note. That is now fixed; focused red/green coverage
+  proves turn-limit and no-progress paths write `model_tool_use_failure`, while
+  worker target-file timeouts write `provider_unavailable`.
 
 - Completed the `0.5.0` macOS packaging slice. Guildhall now has a
   buildable packaged artifact at `artifacts/macos/guildhall-macos`,
