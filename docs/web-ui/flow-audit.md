@@ -717,6 +717,19 @@ screen.
   `policy-classification` note. That is now fixed; focused red/green coverage
   proves turn-limit and no-progress paths write `model_tool_use_failure`, while
   worker target-file timeouts write `provider_unavailable`.
+- Re-reviewed Settings -> Learning from a user-experience perspective instead
+  of treating endpoint/control presence as enough. The first pass was still too
+  internal: "project learnings", "project skills", "builder suggestions",
+  destination names, confidence/risk chips, disabled reset buttons, and product
+  suggestions mixed into project memory made the surface feel like a system
+  inspector. The UI now frames the area as "Memory and habits"; separates "This
+  project", "Across projects", "Project playbooks", and "Ideas for Guildhall";
+  uses plain actions like "Use this", "Use everywhere", "Use playbook", and
+  "Ignore"; hides reset buttons when there is nothing to reset; and keeps
+  product suggestions out of the actionable project-memory list. A temporary
+  populated Looma + Knit sample verified the distinction, then the original
+  project memory files were restored with no `ux-sample` or `phase7-proof`
+  residue.
 
 - Completed the `0.5.0` macOS packaging slice. Guildhall now has a
   buildable packaged artifact at `artifacts/macos/guildhall-macos`,

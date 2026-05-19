@@ -369,8 +369,14 @@
         (designSystem.tokens?.shadow?.length ?? 0)
       : 0,
   )
-  const projectLearnings = $derived(learning?.project?.suggestedLearnings ?? [])
-  const userLearnings = $derived(learning?.user?.suggestedLearnings ?? [])
+  const projectLearnings = $derived(
+    (learning?.project?.suggestedLearnings ?? [])
+      .filter(item => item.scope === 'project' && item.destination !== 'product_suggestion'),
+  )
+  const userLearnings = $derived(
+    (learning?.user?.suggestedLearnings ?? [])
+      .filter(item => item.scope === 'user_global' || item.destination === 'user_preference' || item.destination === 'model_lane_recommendation'),
+  )
   const skillProposals = $derived(learning?.projectSkillProposals ?? [])
   const productSuggestions = $derived(learning?.effective?.productSuggestions ?? [])
   const activeLearningCount = $derived(
@@ -383,6 +389,62 @@
       userLearnings.filter(item => item.status === 'suggested').length +
       skillProposals.filter(item => item.status === 'suggested').length,
   )
+
+  function learningDestinationLabel(destination: string): string {
+    switch (destination) {
+      case 'project_memory':
+        return 'Project memory'
+      case 'project_skill':
+        return 'Project playbook'
+      case 'project_policy':
+        return 'Project rule'
+      case 'user_preference':
+        return 'Your preference'
+      case 'model_lane_recommendation':
+        return 'Model suggestion'
+      case 'product_suggestion':
+        return 'Guildhall idea'
+      default:
+        return destination.replaceAll('_', ' ')
+    }
+  }
+
+  function learningStatusLabel(status: string): string {
+    switch (status) {
+      case 'active':
+        return 'in use'
+      case 'suggested':
+        return 'waiting'
+      case 'dismissed':
+        return 'ignored'
+      default:
+        return status
+    }
+  }
+
+  function learningStatusTone(status: string): 'ok' | 'warn' | 'neutral' {
+    if (status === 'active') return 'ok'
+    if (status === 'suggested') return 'warn'
+    return 'neutral'
+  }
+
+  function confidenceLabel(confidence: string): string {
+    switch (confidence) {
+      case 'high':
+        return 'Strong signal'
+      case 'medium':
+        return 'Some evidence'
+      case 'low':
+        return 'Weak signal'
+      default:
+        return confidence
+    }
+  }
+
+  function riskLabel(risk: string | undefined): string | null {
+    if (!risk || risk === 'low') return null
+    return risk === 'medium' ? 'Needs care' : 'High impact'
+  }
 </script>
 
 {#if initialized === null}
@@ -587,14 +649,14 @@
     {:else if section === 'learning'}
       <SectionHeader
         eyebrow="Settings"
-        title="Learned behavior"
-        description="Project defaults, reusable project skills, and builder suggestions Guildhall has learned from completed work."
+        title="Memory and habits"
+        description="Review the habits Guildhall wants to reuse. Suggested items stay off until you choose to use them."
         headingTag="h2"
         density="compact"
       >
         {#snippet meta()}
-          <StatusPill label={`${activeLearningCount} active`} tone={activeLearningCount > 0 ? 'ok' : 'neutral'} />
-          <StatusPill label={`${suggestedLearningCount} suggested`} tone={suggestedLearningCount > 0 ? 'warn' : 'neutral'} />
+          <StatusPill label={`${activeLearningCount} in use`} tone={activeLearningCount > 0 ? 'ok' : 'neutral'} />
+          <StatusPill label={`${suggestedLearningCount} waiting`} tone={suggestedLearningCount > 0 ? 'warn' : 'neutral'} />
         {/snippet}
       </SectionHeader>
 
@@ -611,28 +673,31 @@
           <FrameCard class="learning-card">
             {#snippet header()}
               <SectionHeader
-                title="Project learnings"
-                description="Defaults and project facts Guildhall can apply in this workspace."
+                title="This project"
+                description="Repo-specific habits, commands, and facts. These do not affect other projects."
                 headingTag="h3"
                 density="dense"
               />
             {/snippet}
             <Stack gap="3">
               {#if projectLearnings.length === 0}
-                <p class="muted">No project-specific learning records yet.</p>
+                <p class="muted">Nothing saved yet. After a task teaches Guildhall a repeatable project habit, it will ask here before reusing it.</p>
               {:else}
                 {#each projectLearnings as item (item.id)}
                   <article class="learning-item">
                     <header class="learning-title">
                       <strong>{item.summary}</strong>
-                      <StatusPill label={item.status} tone={item.status === 'active' ? 'ok' : item.status === 'dismissed' ? 'neutral' : 'warn'} density="dense" />
+                      <StatusPill label={learningStatusLabel(item.status)} tone={learningStatusTone(item.status)} density="dense" />
                     </header>
                     <div class="learning-meta">
-                      <span>{item.destination.replaceAll('_', ' ')}</span>
-                      <span>{item.confidence} confidence</span>
-                      <span>{item.risk} risk</span>
+                      <span>{learningDestinationLabel(item.destination)}</span>
+                      <span>{confidenceLabel(item.confidence)}</span>
+                      {#if riskLabel(item.risk)}
+                        <span>{riskLabel(item.risk)}</span>
+                      {/if}
                     </div>
                     {#if item.evidence?.length}
+                      <p class="learning-label">Why Guildhall suggested this</p>
                       <ul class="learning-evidence">
                         {#each item.evidence as evidence, i (`${item.id}-${i}`)}
                           <li>{evidence.summary}</li>
@@ -641,83 +706,88 @@
                     {/if}
                     <Row gap="2" justify="end">
                       {#if item.status === 'suggested'}
-                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runLearningAction('accept', 'project', item.id)}>Accept</Button>
+                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runLearningAction('accept', 'project', item.id)}>Use this</Button>
                       {/if}
                       {#if item.status !== 'dismissed'}
-                        <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runLearningAction('dismiss', 'project', item.id)}>Dismiss</Button>
+                        <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runLearningAction('dismiss', 'project', item.id)}>Ignore</Button>
                       {/if}
                     </Row>
                   </article>
                 {/each}
               {/if}
-              <Row justify="end">
-                <Button size="sm" variant="ghost" disabled={learningBusy !== null || projectLearnings.length === 0} onclick={() => runLearningAction('reset', 'project')}>Reset project learnings</Button>
-              </Row>
+              {#if projectLearnings.length > 0}
+                <Row justify="end">
+                  <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runLearningAction('reset', 'project')}>Forget project memories</Button>
+                </Row>
+              {/if}
             </Stack>
           </FrameCard>
 
           <FrameCard class="learning-card">
             {#snippet header()}
               <SectionHeader
-                title="User preferences"
-                description="Repeated preferences Guildhall has noticed across work."
+                title="Across projects"
+                description="Preferences Guildhall noticed from repeated corrections. You can use them everywhere or only here."
                 headingTag="h3"
                 density="dense"
               />
             {/snippet}
             <Stack gap="3">
               {#if userLearnings.length === 0}
-                <p class="muted">No user preference records yet.</p>
+                <p class="muted">No cross-project preferences yet. Guildhall needs repeated evidence before suggesting one.</p>
               {:else}
                 {#each userLearnings as item (item.id)}
                   <article class="learning-item">
                     <header class="learning-title">
                       <strong>{item.summary}</strong>
-                      <StatusPill label={item.status} tone={item.status === 'active' ? 'ok' : item.status === 'dismissed' ? 'neutral' : 'warn'} density="dense" />
+                      <StatusPill label={learningStatusLabel(item.status)} tone={learningStatusTone(item.status)} density="dense" />
                     </header>
                     <div class="learning-meta">
-                      <span>{item.destination.replaceAll('_', ' ')}</span>
-                      <span>{item.confidence} confidence</span>
+                      <span>{learningDestinationLabel(item.destination)}</span>
+                      <span>{confidenceLabel(item.confidence)}</span>
                     </div>
                     <Row gap="2" justify="end">
                       {#if item.status === 'suggested'}
-                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runLearningAction('accept', 'user_global', item.id)}>Accept</Button>
-                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runLearningAction('make-project-wide', 'user_global', item.id)}>Use here</Button>
+                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runLearningAction('accept', 'user_global', item.id)}>Use everywhere</Button>
+                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runLearningAction('make-project-wide', 'user_global', item.id)}>Use only here</Button>
                       {/if}
                       {#if item.status !== 'dismissed'}
-                        <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runLearningAction('dismiss', 'user_global', item.id)}>Dismiss</Button>
+                        <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runLearningAction('dismiss', 'user_global', item.id)}>Ignore</Button>
                       {/if}
                     </Row>
                   </article>
                 {/each}
               {/if}
-              <Row justify="end">
-                <Button size="sm" variant="ghost" disabled={learningBusy !== null || userLearnings.length === 0} onclick={() => runLearningAction('reset', 'user_global')}>Reset user preferences</Button>
-              </Row>
+              {#if userLearnings.length > 0}
+                <Row justify="end">
+                  <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runLearningAction('reset', 'user_global')}>Forget cross-project preferences</Button>
+                </Row>
+              {/if}
             </Stack>
           </FrameCard>
 
           <FrameCard class="learning-card">
             {#snippet header()}
               <SectionHeader
-                title="Project skills"
-                description="Reusable project procedures that can enter worker context when their triggers match."
+                title="Project playbooks"
+                description="Step-by-step procedures Guildhall can add to worker context when a matching task appears."
                 headingTag="h3"
                 density="dense"
               />
             {/snippet}
             <Stack gap="3">
               {#if skillProposals.length === 0}
-                <p class="muted">No project skill proposals yet.</p>
+                <p class="muted">No playbooks yet. Guildhall will suggest one only after a workflow looks worth repeating.</p>
               {:else}
                 {#each skillProposals as skill (skill.id)}
                   <article class="learning-item">
                     <header class="learning-title">
                       <strong>{skill.name}</strong>
-                      <StatusPill label={skill.status} tone={skill.status === 'active' ? 'ok' : skill.status === 'dismissed' ? 'neutral' : 'warn'} density="dense" />
+                      <StatusPill label={learningStatusLabel(skill.status)} tone={learningStatusTone(skill.status)} density="dense" />
                     </header>
                     <p class="learning-copy">{skill.description}</p>
                     {#if skill.triggerKeywords?.length}
+                      <p class="learning-label">Used when a task mentions</p>
                       <div class="learning-meta">
                         {#each skill.triggerKeywords as keyword (`${skill.id}-${keyword}`)}
                           <span>{keyword}</span>
@@ -726,42 +796,45 @@
                     {/if}
                     <Row gap="2" justify="end">
                       {#if skill.status === 'suggested'}
-                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runSkillAction('activate', skill.id, true)}>Activate</Button>
+                        <Button size="sm" variant="secondary" disabled={learningBusy !== null} onclick={() => runSkillAction('activate', skill.id, true)}>Use playbook</Button>
                       {/if}
                       {#if skill.status !== 'dismissed'}
-                        <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runSkillAction('dismiss', skill.id)}>Dismiss</Button>
+                        <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runSkillAction('dismiss', skill.id)}>Ignore</Button>
                       {/if}
                     </Row>
                   </article>
                 {/each}
               {/if}
-              <Row justify="end">
-                <Button size="sm" variant="ghost" disabled={learningBusy !== null || skillProposals.length === 0} onclick={() => runSkillAction('reset')}>Reset project skills</Button>
-              </Row>
+              {#if skillProposals.length > 0}
+                <Row justify="end">
+                  <Button size="sm" variant="ghost" disabled={learningBusy !== null} onclick={() => runSkillAction('reset')}>Forget project playbooks</Button>
+                </Row>
+              {/if}
             </Stack>
           </FrameCard>
 
           <FrameCard class="learning-card learning-card-wide">
             {#snippet header()}
               <SectionHeader
-                title="Builder suggestions"
-                description="Guildhall product improvements raised by project runs."
+                title="Ideas for Guildhall"
+                description="Product improvements Guildhall noticed. These are notes for builders; they do not change this project."
                 headingTag="h3"
                 density="dense"
               />
             {/snippet}
             {#if productSuggestions.length === 0}
-              <p class="muted">No product suggestions yet.</p>
+              <p class="muted">No product ideas yet.</p>
             {:else}
               <div class="suggestion-list">
                 {#each productSuggestions as suggestion (suggestion.id)}
                   <article class="learning-item">
                     <header class="learning-title">
                       <strong>{suggestion.title}</strong>
-                      <StatusPill label="builder" tone="info" density="dense" />
+                      <StatusPill label="not active" tone="info" density="dense" />
                     </header>
                     <p class="learning-copy">{suggestion.summary}</p>
                     {#if suggestion.evidence?.length}
+                      <p class="learning-label">Evidence</p>
                       <ul class="learning-evidence">
                         {#each suggestion.evidence as evidence, i (`${suggestion.id}-${i}`)}
                           <li>{evidence}</li>
@@ -1110,6 +1183,15 @@
     color: var(--text-muted);
     font-size: var(--fs-2);
     line-height: var(--lh-body);
+  }
+
+  .learning-label {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    font-weight: 700;
+    line-height: var(--lh-tight);
+    text-transform: uppercase;
   }
 
   .learning-evidence {
