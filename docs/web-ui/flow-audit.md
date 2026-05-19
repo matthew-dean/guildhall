@@ -730,6 +730,14 @@ screen.
   populated Looma + Knit sample verified the distinction, then the original
   project memory files were restored with no `ux-sample` or `phase7-proof`
   residue.
+- Added a concrete feedback path for inert Guildhall product ideas. Each item
+  under "Ideas for Guildhall" now has a "Give product feedback" link that opens
+  a prefilled `matthew-dean/guildhall` GitHub issue draft with the product idea,
+  evidence, project name/path, and suggestion id. It remains review-before-send:
+  Guildhall does not create the issue automatically. Browser verification used
+  a temporary Looma + Knit product suggestion and confirmed the generated issue
+  URL, then restored the original project memory with no
+  `ux-feedback-issue-sample` residue.
 
 - Completed the `0.5.0` macOS packaging slice. Guildhall now has a
   buildable packaged artifact at `artifacts/macos/guildhall-macos`,

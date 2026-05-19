@@ -23,6 +23,7 @@
   import { nav } from '../../lib/nav.svelte.js'
   import { project } from '../../lib/project.svelte.js'
   import { projectFetch } from '../../lib/project-routes.js'
+  import { buildProductFeedbackIssueUrl } from '../../lib/product-feedback.js'
 
   interface Props {
     subView?: string | null
@@ -841,6 +842,16 @@
                         {/each}
                       </ul>
                     {/if}
+                    <Row justify="end">
+                      <a
+                        class="feedback-link"
+                        href={buildProductFeedbackIssueUrl({ suggestion, project: project.detail })}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Give product feedback
+                      </a>
+                    </Row>
                   </article>
                 {/each}
               </div>
@@ -1205,6 +1216,31 @@
   .suggestion-list {
     display: grid;
     gap: var(--gh-space-3);
+  }
+
+  .feedback-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 22px;
+    padding: 2px var(--s-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-1);
+    background: var(--bg-raised-2);
+    color: var(--text);
+    font-size: var(--fs-1);
+    font-weight: 600;
+    line-height: 1;
+    text-decoration: none;
+    white-space: nowrap;
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
+      0 1px 0 color-mix(in srgb, black 22%, transparent);
+  }
+
+  .feedback-link:hover {
+    background: color-mix(in srgb, var(--bg-raised-2) 82%, white 18%);
+    border-color: color-mix(in srgb, var(--border-strong) 68%, var(--text) 32%);
   }
 
   .lever-scope {
