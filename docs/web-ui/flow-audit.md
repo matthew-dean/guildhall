@@ -82,6 +82,13 @@ screen.
   Thread now renders the construction mode as a neutral chip beside ownership
   and status, with component coverage for visible and collapsed-phase task
   cards.
+- [x] Inject construction mode into agent task context so role prompts and
+  per-task instructions line up. Workers should see when they are building
+  against an accepted blueprint; spec/coordinator/reviewer paths should see
+  their equivalent survey/blueprint/frame/inspection/change-order mode.
+  `buildContext` now adds the derived mode and responsibility line to the
+  Current Task summary; focused context-builder coverage guards the worker
+  `build` responsibility.
 - [x] Normalize dirty-repo setup blockers in Thread so the user sees the repo
   name and the concrete commit/stash recovery action instead of raw setup
   prose.
