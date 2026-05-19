@@ -45,7 +45,7 @@ const guideSidebarSections = [
     items: guideTaskItems,
   },
   {
-    text: 'Specs, policy, and agents',
+    text: 'Specs & policy',
     items: guideSpecItems,
   },
   {
@@ -61,7 +61,7 @@ const getStartedSidebarSections = [
   },
 ]
 
-const webUiSidebarSections = [
+const referenceSidebarSections = [
   {
     text: 'Guildhall app',
     items: [
@@ -78,6 +78,31 @@ const webUiSidebarSections = [
     items: [
       { text: 'Design tokens', link: '/web-ui/design-tokens' },
       { text: 'In-UI help', link: '/web-ui/help-system' },
+    ],
+  },
+  {
+    text: 'Command line',
+    items: [
+      { text: 'CLI overview', link: '/cli/' },
+      { text: 'Command reference', link: '/cli/reference' },
+    ],
+  },
+  {
+    text: 'Project state',
+    items: [
+      { text: 'guildhall.yaml', link: '/reference/workspace-config' },
+      { text: 'agent-settings.yaml', link: '/reference/agent-settings' },
+      { text: 'Environment variables', link: '/reference/env' },
+      { text: 'Memory layout', link: '/reference/memory-layout' },
+      { text: 'Web server routes', link: '/reference/http-api' },
+    ],
+  },
+  {
+    text: 'System reference',
+    items: [
+      { text: 'Levers ↗', link: '/levers/' },
+      { text: 'Subsystems ↗', link: '/subsystems/' },
+      { text: 'Releases ↗', link: '/releases/' },
     ],
   },
 ]
@@ -188,33 +213,9 @@ export default defineConfig({
           ],
         },
       ],
-      '/cli/': [
-        {
-          text: 'CLI',
-          items: [
-            { text: 'Overview', link: '/cli/' },
-            { text: 'Command reference', link: '/cli/reference' },
-          ],
-        },
-      ],
-      '/web-ui/': webUiSidebarSections,
-      '/reference/': [
-        {
-          text: 'Reference',
-          items: [
-            { text: 'CLI', link: '/cli/reference' },
-            { text: 'Guildhall app', link: '/web-ui/' },
-            { text: 'guildhall.yaml', link: '/reference/workspace-config' },
-            { text: 'agent-settings.yaml', link: '/reference/agent-settings' },
-            { text: 'Environment variables', link: '/reference/env' },
-            { text: 'Memory layout', link: '/reference/memory-layout' },
-            { text: 'Web server routes', link: '/reference/http-api' },
-            { text: 'Levers', link: '/levers/' },
-            { text: 'Subsystems', link: '/subsystems/' },
-            { text: 'Releases', link: '/releases/' },
-          ],
-        },
-      ],
+      '/cli/': referenceSidebarSections,
+      '/web-ui/': referenceSidebarSections,
+      '/reference/': referenceSidebarSections,
       '/releases/': [
         {
           text: 'Releases',

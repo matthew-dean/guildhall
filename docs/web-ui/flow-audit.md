@@ -3006,5 +3006,15 @@ app docs are labeled as Guildhall app pages rather than UI reference.
 
 Guide IA follow-up on `2026-05-19`: first-run pages are isolated under Get
 started, while Guide is organized around product domains: Projects, Tasks,
-Specs/policy/agents, and Concepts. This keeps setup, day-to-day operation, and
-technical reference from reusing the same sidebar vocabulary.
+Specs & policy, and Concepts. Get started breadcrumbs now identify those pages
+as Get started rather than Guide, so setup, day-to-day operation, and technical
+reference no longer reuse the same orientation labels.
+
+Reference IA follow-up on `2026-05-19`: Reference now uses one stable sidebar
+across app pages, CLI pages, config/state pages, levers, subsystems, and
+releases. Clicking within Reference should not collapse into a tiny sub-nav or
+swap the whole left rail without breadcrumb context.
+
+Deep reference follow-up on `2026-05-19`: levers, subsystems, and releases are
+still allowed to use their own detailed sidebars, but Reference marks them as
+section jumps and breadcrumbs keep them under the Reference top-level context.

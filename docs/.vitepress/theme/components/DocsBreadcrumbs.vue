@@ -10,10 +10,18 @@ const sections: Record<string, { label: string; href: string }> = {
   'web-ui': { label: 'Reference', href: '/reference/' },
   cli: { label: 'Reference', href: '/reference/' },
   reference: { label: 'Reference', href: '/reference/' },
-  levers: { label: 'Levers', href: '/levers/' },
-  subsystems: { label: 'Subsystems', href: '/subsystems/' },
-  releases: { label: 'Releases', href: '/releases/' },
+  levers: { label: 'Reference', href: '/reference/' },
+  subsystems: { label: 'Reference', href: '/reference/' },
+  releases: { label: 'Reference', href: '/reference/' },
 }
+
+const getStartedPaths = new Set([
+  '/guide/quick-start',
+  '/guide/new-project',
+  '/guide/existing-project',
+  '/guide/first-tasks',
+  '/guide/managing-projects',
+])
 
 const crumbs = computed(() => {
   const base = site.value.base.replace(/\/$/, '')
@@ -21,12 +29,19 @@ const crumbs = computed(() => {
     ? route.path.slice(base.length)
     : route.path
   const path = rawPath.replace(/\.html$/, '')
+  const normalizedPath = path.replace(/\/$/, '')
+  if (getStartedPaths.has(normalizedPath)) {
+    return [
+      { label: 'Get started', href: '/guide/quick-start' },
+      { label: page.value.title || 'Get started' },
+    ]
+  }
+
   const parts = path.split('/').filter(Boolean)
   const section = sections[parts[0] ?? '']
   if (!section) return []
 
   const normalizedSectionHref = section.href.replace(/\/$/, '')
-  const normalizedPath = path.replace(/\/$/, '')
   const currentTitle = page.value.title || section.label
   if (normalizedPath === normalizedSectionHref) {
     return [{ label: section.label }]

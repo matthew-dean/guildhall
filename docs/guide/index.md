@@ -13,8 +13,8 @@ actually touch:
 
 - **Projects** are the repos Guildhall can see.
 - **Tasks** are the pieces of work you ask it to move.
-- **Specs, policy, and agents** shape how work is planned, reviewed, recovered,
-  and learned from.
+- **Specs and policy** shape how work is planned, reviewed, recovered, and
+  learned from.
 
 ## Projects
 
@@ -28,7 +28,7 @@ actually touch:
 - [Task lifecycle](./task-lifecycle) — how a task moves from idea to done.
 - [Memory and recovery](./memory-and-recovery) — how Guildhall classifies blockers, tries bounded playbooks, and keeps learned behavior inspectable.
 
-## Specs, Policy, And Agents
+## Specs And Policy
 
 - [Onboarding and levers](./onboarding-and-levers) — how policy gets proposed and approved.
 - [Internal routing](./coordinators) — how Guildhall routes work without making you manage a steward roster.

@@ -15,7 +15,7 @@ description: Local service for unattended software work with visible state, revi
       <p class="gh-home-lede">Guildhall runs over your projects from a local service. Queue state, reviewer calls, and transcripts stay attached to the work so you can let it run, step in when needed, and still understand what happened.</p>
       <div class="gh-home-hero__actions">
         <div class="gh-cta-row">
-          <a class="gh-cta gh-cta-primary" href="/guildhall/guide/">Start here</a>
+          <a class="gh-cta gh-cta-primary" href="/guildhall/guide/quick-start">Get started</a>
           <a class="gh-cta gh-cta-secondary" href="/guildhall/guide/new-project">New project</a>
           <a class="gh-cta gh-cta-secondary" href="/guildhall/guide/existing-project">Existing project</a>
           <a class="gh-cta gh-cta-secondary" href="https://github.com/matthew-dean/guildhall">Read the code</a>
