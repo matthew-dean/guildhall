@@ -10,9 +10,6 @@ const guideStartItems = [
 
 const guideOperateItems = [
   { text: 'The dashboard', link: '/guide/dashboard' },
-  { text: 'Setup wizard', link: '/guide/setup-wizard' },
-  { text: 'Project shell', link: '/guide/project-shell' },
-  { text: 'Task drawer', link: '/guide/task-drawer' },
   { text: 'Memory and recovery', link: '/guide/memory-and-recovery' },
   { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
   { text: 'Running Guildhall', link: '/guide/running' },
