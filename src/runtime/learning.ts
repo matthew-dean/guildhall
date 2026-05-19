@@ -376,6 +376,16 @@ export async function makeSuggestedLearningProjectWide(input: {
       ],
     })
   })
+  await writeLearningByScope(input.memoryDir, 'user_global', (record) =>
+    LearningRecordSchema.parse({
+      ...record,
+      suggestedLearnings: record.suggestedLearnings.map((item) =>
+        item.id === input.id
+          ? { ...item, status: 'dismissed', updatedAt: now, dismissedAt: now }
+          : item,
+      ),
+    }),
+  )
 }
 
 export async function resetSuggestedLearnings(input: {

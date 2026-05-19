@@ -738,6 +738,19 @@ screen.
   a temporary Looma + Knit product suggestion and confirmed the generated issue
   URL, then restored the original project memory with no
   `ux-feedback-issue-sample` residue.
+- Continued the release-acceptance walkthrough on the branch build at
+  `http://localhost:7783` against the real Looma + Knit project. The empty
+  Learning state remained understandable and quiet, and a temporary populated
+  sample proved the control flow for project memories, cross-project
+  preferences, project playbooks, and product ideas. The walkthrough caught a
+  real UX bug: "Use only here" created the project-scoped learning but left the
+  original cross-project suggestion marked as still waiting, which made the
+  action feel incomplete. `makeSuggestedLearningProjectWide` now dismisses the
+  original global suggestion after creating the active project copy, and focused
+  learning/settings tests cover the contract. Browser verification confirmed
+  the fixed flow, "Use playbook" activation, and the inert "Give product
+  feedback" GitHub issue draft URL. The original Looma + Knit and global
+  learning files were restored afterward with no `acceptance-` residue.
 
 - Completed the `0.5.0` macOS packaging slice. Guildhall now has a
   buildable packaged artifact at `artifacts/macos/guildhall-macos`,

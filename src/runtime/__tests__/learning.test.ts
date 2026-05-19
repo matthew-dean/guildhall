@@ -10,6 +10,7 @@ import {
   collectReflectionTriggers,
   dismissSuggestedLearning,
   globalLearningPath,
+  makeSuggestedLearningProjectWide,
   persistLearningCandidates,
   projectLearningPath,
   readGlobalLearning,
@@ -472,5 +473,41 @@ describe('reflection learning candidates', () => {
     })
 
     expect(readProjectLearning(path.join(tmpDir, 'memory')).suggestedLearnings).toEqual([])
+  })
+
+  it('resolves a global suggestion when making it project-wide', async () => {
+    const memoryDir = path.join(tmpDir, 'memory')
+    await persistLearningCandidates({
+      memoryDir,
+      candidates: [
+        candidate({
+          id: 'global-compact-controls',
+          proposedScope: 'user_global',
+          proposedDestination: 'user_preference',
+          summary: 'Prefer compact controls.',
+          requiresApproval: true,
+        }),
+      ],
+    })
+
+    await makeSuggestedLearningProjectWide({ memoryDir, id: 'global-compact-controls' })
+
+    expect(readProjectLearning(memoryDir).suggestedLearnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'project-global-compact-controls',
+          scope: 'project',
+          status: 'active',
+        }),
+      ]),
+    )
+    expect(readGlobalLearning().suggestedLearnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'global-compact-controls',
+          status: 'dismissed',
+        }),
+      ]),
+    )
   })
 })
