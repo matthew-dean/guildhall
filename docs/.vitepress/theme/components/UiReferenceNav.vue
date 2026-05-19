@@ -31,8 +31,8 @@ const normalizedItems = computed(() =>
 </script>
 
 <template>
-  <nav class="gh-ui-subnav" aria-label="UI reference navigation" :data-theme="isDark ? 'dark' : 'light'">
-    <p class="gh-ui-subnav__eyebrow">UI pages</p>
+  <nav class="gh-ui-subnav" aria-label="Guildhall app navigation" :data-theme="isDark ? 'dark' : 'light'">
+    <p class="gh-ui-subnav__eyebrow">App pages</p>
     <div class="gh-ui-subnav__list">
       <a
         v-for="item in normalizedItems"

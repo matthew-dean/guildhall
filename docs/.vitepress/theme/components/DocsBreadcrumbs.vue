@@ -7,8 +7,8 @@ const { page, site } = useData()
 
 const sections: Record<string, { label: string; href: string }> = {
   guide: { label: 'Guide', href: '/guide/' },
-  'web-ui': { label: 'UI reference', href: '/web-ui/' },
-  cli: { label: 'CLI', href: '/cli/' },
+  'web-ui': { label: 'Reference', href: '/reference/' },
+  cli: { label: 'Reference', href: '/reference/' },
   reference: { label: 'Reference', href: '/reference/' },
   levers: { label: 'Levers', href: '/levers/' },
   subsystems: { label: 'Subsystems', href: '/subsystems/' },

@@ -9,20 +9,26 @@ const guideStartItems = [
 ]
 
 const guideOperateItems = [
-  { text: 'The dashboard', link: '/guide/dashboard' },
-  { text: 'Memory and recovery', link: '/guide/memory-and-recovery' },
-  { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
+  { text: 'Projects and work', link: '/guide/dashboard' },
+  { text: 'Project files & state', link: '/guide/workspaces' },
   { text: 'Running Guildhall', link: '/guide/running' },
-  { text: 'UI reference ↗', link: '/web-ui/' },
+  { text: 'App reference ↗', link: '/web-ui/' },
 ]
 
-const guideReferenceItems = [
+const guideTaskItems = [
+  { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
+  { text: 'Memory and recovery', link: '/guide/memory-and-recovery' },
+]
+
+const guideSpecItems = [
+  { text: 'Onboarding and levers', link: '/guide/onboarding-and-levers' },
+  { text: 'Internal routing', link: '/guide/coordinators' },
+  { text: 'Agents & models', link: '/guide/agents-and-models' },
+]
+
+const guideConceptItems = [
   { text: 'Introduction', link: '/guide/introduction' },
   { text: 'Core concepts', link: '/guide/concepts' },
-  { text: 'Project files & workspace state', link: '/guide/workspaces' },
-  { text: 'Onboarding and levers', link: '/guide/onboarding-and-levers' },
-  { text: 'Coordinators & domains', link: '/guide/coordinators' },
-  { text: 'Agents & models', link: '/guide/agents-and-models' },
 ]
 
 const guideSidebarSections = [
@@ -31,22 +37,33 @@ const guideSidebarSections = [
     items: [{ text: 'Overview', link: '/guide/' }],
   },
   {
-    text: 'First run',
-    items: guideStartItems,
-  },
-  {
-    text: 'Operate Guildhall',
+    text: 'Projects',
     items: guideOperateItems,
   },
   {
-    text: 'Deeper reference',
-    items: guideReferenceItems,
+    text: 'Tasks',
+    items: guideTaskItems,
+  },
+  {
+    text: 'Specs, policy, and agents',
+    items: guideSpecItems,
+  },
+  {
+    text: 'Concepts',
+    items: guideConceptItems,
+  },
+]
+
+const getStartedSidebarSections = [
+  {
+    text: 'Get started',
+    items: guideStartItems,
   },
 ]
 
 const webUiSidebarSections = [
   {
-    text: 'Web UI',
+    text: 'Guildhall app',
     items: [
       { text: 'Overview', link: '/web-ui/' },
       { text: 'Projects home', link: '/web-ui/dashboard' },
@@ -79,23 +96,16 @@ export default defineConfig({
   ],
   themeConfig: {
     nav: [
-      { text: 'Start', link: '/guide/quick-start', activeMatch: '^/guide/quick-start' },
-      { text: 'Guide', link: '/guide/', activeMatch: '^/guide/' },
-      { text: 'UI reference', link: '/web-ui/', activeMatch: '^/web-ui/' },
-      { text: 'CLI', link: '/cli/', activeMatch: '^/cli/' },
-      { text: 'Reference', link: '/reference/', activeMatch: '^/reference/' },
-      {
-        text: 'More',
-        activeMatch: '^/(levers|subsystems|releases)/',
-        items: [
-          { text: 'Levers', link: '/levers/' },
-          { text: 'Subsystems', link: '/subsystems/' },
-          { text: 'Releases', link: '/releases/' },
-          { text: 'guildhall.yaml', link: '/reference/workspace-config' },
-        ],
-      },
+      { text: 'Get started', link: '/guide/quick-start', activeMatch: '^/guide/(quick-start|new-project|existing-project|first-tasks|managing-projects)' },
+      { text: 'Guide', link: '/guide/', activeMatch: '^/guide/(?!(quick-start|new-project|existing-project|first-tasks|managing-projects))' },
+      { text: 'Reference', link: '/reference/', activeMatch: '^/(reference|cli|web-ui|levers|subsystems|releases)/' },
     ],
     sidebar: {
+      '/guide/quick-start': getStartedSidebarSections,
+      '/guide/new-project': getStartedSidebarSections,
+      '/guide/existing-project': getStartedSidebarSections,
+      '/guide/first-tasks': getStartedSidebarSections,
+      '/guide/managing-projects': getStartedSidebarSections,
       '/guide/': guideSidebarSections,
       '/subsystems/': [
         {
@@ -193,11 +203,15 @@ export default defineConfig({
           text: 'Reference',
           items: [
             { text: 'CLI', link: '/cli/reference' },
+            { text: 'Guildhall app', link: '/web-ui/' },
             { text: 'guildhall.yaml', link: '/reference/workspace-config' },
             { text: 'agent-settings.yaml', link: '/reference/agent-settings' },
             { text: 'Environment variables', link: '/reference/env' },
             { text: 'Memory layout', link: '/reference/memory-layout' },
             { text: 'Web server routes', link: '/reference/http-api' },
+            { text: 'Levers', link: '/levers/' },
+            { text: 'Subsystems', link: '/subsystems/' },
+            { text: 'Releases', link: '/releases/' },
           ],
         },
       ],

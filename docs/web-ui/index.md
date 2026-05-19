@@ -1,5 +1,5 @@
 ---
-title: Web UI overview
+title: Guildhall app overview
 help_topic: web.overview
 help_summary: |
   The browser UI is the main Guildhall interface. It is served by
@@ -8,9 +8,9 @@ help_summary: |
   product surface.
 ---
 
-# Web UI
+# Guildhall app
 
-The web UI is the main way to operate Guildhall. It has two useful scales:
+The app is the main way to operate Guildhall. It has two useful scales:
 the `/projects` service home for scanning registered projects, and the
 project shell where setup, tasks, live runs, reviewer calls, and release
 readiness actually play out.
@@ -24,7 +24,7 @@ Use it for the everyday loop:
 5. Inspect transcripts, reviews, gates, and provenance.
 6. Resolve escalations and tune settings.
 
-The UI is still transparent: project state lands in `guildhall.yaml`,
+The app is still transparent: project state lands in `guildhall.yaml`,
 `.guildhall/config.yaml`, and `memory/*`, while machine-scoped state such as
 the project registry, provider credentials, and default provider choice live
 under `~/.guildhall/`.

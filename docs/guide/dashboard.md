@@ -1,15 +1,14 @@
 ---
-title: The dashboard
+title: Projects and work
 pageClass: gh-first-visit-page
 ---
 
-# The dashboard is where the state becomes readable
+# Projects and work
 
-Guildhall is easiest to understand once you see the shell. The browser
-experience starts at the service home, then narrows into the project shell
-where setup, task intake, live progress, reviewer calls, and release
-readiness actually play out. It tries very hard not to make you remember more
-than you should.
+Guildhall is easiest to understand once you see how projects and work relate.
+The app starts at the service home, then narrows into the project shell where
+setup, task intake, live progress, reviewer calls, and release readiness play
+out. It tries very hard not to make you remember more than you should.
 
 <picture class="gh-doc-picture">
   <source srcset="../assets/ui-audit/projects.avif" type="image/avif" />

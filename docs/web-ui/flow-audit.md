@@ -2997,3 +2997,14 @@ Superpowers plans/specs, and this live flow audit are excluded from the
 VitePress source set. Public docs may use sanitized UI assets from
 `docs/assets/ui-audit/`, but repo-local planning and audit notes should not be
 published as product documentation.
+
+Navigation simplification follow-up on `2026-05-19`: top-level docs nav now
+uses reader-intent labels only: Get started, Guide, and Reference. CLI, app
+pages, levers, subsystems, releases, and config schema pages live under
+Reference instead of competing as separate top-level product surfaces, and the
+app docs are labeled as Guildhall app pages rather than UI reference.
+
+Guide IA follow-up on `2026-05-19`: first-run pages are isolated under Get
+started, while Guide is organized around product domains: Projects, Tasks,
+Specs/policy/agents, and Concepts. This keeps setup, day-to-day operation, and
+technical reference from reusing the same sidebar vocabulary.
