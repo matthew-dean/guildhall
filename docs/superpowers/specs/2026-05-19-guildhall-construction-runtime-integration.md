@@ -159,7 +159,32 @@ It must not:
 - push forward on a bad blueprint without naming the changed assumption and
   evidence
 
-### 4. Reviewer Performs Inspection Against the Blueprint
+### 4. Runtime Runs Blueprint Sanity Review Before Build
+
+Plans are durable, not permanent. A task should not move from "accepted
+blueprint" into worker execution merely because it has a `ready` status.
+Before the worker claims it, Guildhall must record a small sanity review that
+asks whether the blueprint is worth building now.
+
+First slice behavior:
+
+- A `ready` task with a usable spec receives a `blueprint-review` note with
+  outcome `approve_blueprint`, then the deterministic worker claim may proceed.
+- A `ready` task without a usable spec is routed back to `exploring` with a
+  `revise_blueprint` note instead of being assigned to a worker.
+- The review is explicit audit evidence. It does not add a new owner approval
+  step for routine work.
+- Later slices can replace or augment the deterministic review with domain
+  expert fan-out that can return `split_blueprint`, `merge_blueprint`,
+  `shelve_blueprint`, or `change_order_needed`.
+
+It must not:
+
+- let workers be the first line of defense against obviously missing plans
+- silently reinterpret a bad task while leaving it marked ready
+- turn every small task into a committee process
+
+### 5. Reviewer Performs Inspection Against the Blueprint
 
 The reviewer must inspect the work against the accepted blueprint and selected
 rubrics.
@@ -177,7 +202,7 @@ It must not:
 - reject correct task-local work because it imagines a broader renovation
 - turn a plan problem into vague "needs revision" feedback
 
-### 5. Runtime Preserves Construction Context
+### 6. Runtime Preserves Construction Context
 
 The runtime should surface construction state where it already has enough
 information:
@@ -193,7 +218,7 @@ information:
 This does not require a large schema migration in the first slice. It can start
 as derived metadata in Thread/task payloads and explicit agent prompts.
 
-### 6. Questions Must Carry a Reason
+### 7. Questions Must Carry a Reason
 
 When the spec agent asks the owner a question, the task UI should be able to
 answer:
@@ -205,7 +230,7 @@ answer:
 First slice can enforce this through prompt tests and existing question shape.
 Later slices can add explicit structured fields.
 
-### 7. Change Orders Become First-Class
+### 8. Change Orders Become First-Class
 
 When a worker or reviewer discovers that the blueprint is wrong, the system
 should record:
@@ -244,9 +269,12 @@ can add a typed `changeOrders` collection on tasks.
 6. Runtime or Thread payload has a small derived construction mode helper with
    tests, unless the implementation plan explicitly defers it to the next
    slice.
-7. Docs and flow audit point from the manifesto to this implementation spec and
+7. Ready tasks receive an explicit blueprint sanity review before worker claim.
+   Missing-blueprint ready tasks route back to `exploring` instead of becoming
+   `in_progress`.
+8. Docs and flow audit point from the manifesto to this implementation spec and
    plan.
-8. Verification passes:
+9. Verification passes:
    - `pnpm vitest run src/agents/__tests__/guildhall-agent.test.ts --coverage=false`
    - `pnpm typecheck`
    - `pnpm docs:build && pnpm docs:check-help-sync`

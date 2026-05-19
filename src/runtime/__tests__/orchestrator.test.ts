@@ -1540,6 +1540,56 @@ describe('Orchestrator.tick — routing', () => {
     })
   })
 
+  it('records a blueprint sanity review before claiming ready work', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: 'approved spec' })])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('in_progress')
+    expect(q.tasks[0]!.notes.some((note) =>
+      note.agentId === 'blueprint-sanity-review' &&
+      note.role === 'blueprint-review' &&
+      note.content.includes('approve_blueprint'),
+    )).toBe(true)
+    expect(q.tasks[0]!.notes.at(-1)?.content).toBe('Claimed ready task for worker-agent.')
+    expect(worker.calls).toHaveLength(0)
+  })
+
+  it('routes ready tasks without a usable blueprint back to exploring', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: '' })])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('blueprint-sanity-review')
+      expect(out.beforeStatus).toBe('ready')
+      expect(out.afterStatus).toBe('exploring')
+      expect(out.transitioned).toBe(true)
+    }
+    expect(worker.calls).toHaveLength(0)
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('exploring')
+    expect(q.tasks[0]!.assignedTo).toBeNull()
+    expect(q.tasks[0]!.notes.at(-1)).toMatchObject({
+      agentId: 'blueprint-sanity-review',
+      role: 'blueprint-review',
+    })
+    expect(q.tasks[0]!.notes.at(-1)?.content).toContain('revise_blueprint')
+  })
+
   it('dispatches drafted spec_review tasks to the owning coordinator and clears stale ownership', async () => {
     await writeQueue([
       mkTask({

@@ -89,6 +89,10 @@ screen.
   `buildContext` now adds the derived mode and responsibility line to the
   Current Task summary; focused context-builder coverage guards the worker
   `build` responsibility.
+- [x] Add a pre-worker blueprint sanity review so a `ready` task is not
+  blindly claimed by the worker before Guildhall records that the plan is
+  worth building. Missing-blueprint `ready` tasks should route back to
+  blueprint drafting instead of becoming `in_progress`.
 - [x] Normalize dirty-repo setup blockers in Thread so the user sees the repo
   name and the concrete commit/stash recovery action instead of raw setup
   prose.

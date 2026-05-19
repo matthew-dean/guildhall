@@ -237,6 +237,14 @@ function friendlyRuntimeAgentName(agentName: string): string {
   }
 }
 
+function hasBlueprintSanityReview(task: Task): boolean {
+  return task.notes.some((note) => note.role === 'blueprint-review')
+}
+
+function hasUsableBlueprint(task: Task): boolean {
+  return typeof task.spec === 'string' && task.spec.trim().length > 0
+}
+
 function isIgnorableCheckpointPath(file: string): boolean {
   const normalized = file.replace(/\\/g, '/').replace(/^\.\//, '')
   return (
@@ -4414,6 +4422,47 @@ export class Orchestrator {
           transitioned: false,
           revisionCount: target.revisionCount,
         }
+      }
+
+      if (!hasBlueprintSanityReview(target)) {
+        if (!hasUsableBlueprint(target)) {
+          target.status = 'exploring'
+          target.assignedTo = null
+          target.notes.push({
+            agentId: 'blueprint-sanity-review',
+            role: 'blueprint-review',
+            content: 'revise_blueprint: Task was ready but has no usable blueprint/spec. Routing back to blueprint drafting before worker assignment.',
+            timestamp: this.now(),
+          })
+          target.updatedAt = this.now()
+          queue.lastUpdated = this.now()
+          await this.writeQueue(queue)
+
+          await this.logTickProgress({
+            task: target,
+            agent: 'blueprint-sanity-review',
+            beforeStatus,
+            afterStatus: target.status,
+            transitioned: true,
+          })
+
+          return {
+            kind: 'processed',
+            taskId: target.id,
+            agent: 'blueprint-sanity-review',
+            beforeStatus,
+            afterStatus: target.status,
+            transitioned: true,
+            revisionCount: target.revisionCount,
+          }
+        }
+
+        target.notes.push({
+          agentId: 'blueprint-sanity-review',
+          role: 'blueprint-review',
+          content: 'approve_blueprint: Task has a usable blueprint/spec. Worker may build against it.',
+          timestamp: this.now(),
+        })
       }
 
       target.status = 'in_progress'

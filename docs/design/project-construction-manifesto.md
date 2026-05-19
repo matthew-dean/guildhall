@@ -138,6 +138,24 @@ A blueprint should answer:
 Blueprints can be revised, but revision should be explicit. If the plan changes
 because reality taught us something, that is a change order, not a silent drift.
 
+Plans are durable, not permanent. Durable means agents can build against them,
+inspectors can evaluate against them, later guild members can inherit the
+reasoning, and the project does not dissolve into vibes every turn. Not
+permanent means new evidence, changed owner needs, implementation discoveries,
+and completed work can all justify revising the plan.
+
+Guildhall should build to the plan, inspect against the plan, and revise the
+plan when reality earns it. Refinements should become explicit artifacts:
+updated blueprints, change orders, phase-plan revisions, decision records, or
+punch-list items. They should not appear as invisible drift in the worker's
+implementation.
+
+Before a worker starts, the relevant guild should ask a basic sanity question:
+"Is this blueprint worth building?" That review should be proportional, not a
+ceremony. It exists to catch tasks that are already done, too vague, low-value,
+conflicting with project direction, missing real acceptance criteria, better
+split or merged, or blocked by a missing owner decision.
+
 Blueprints should also be proportional. A small task needs a small blueprint.
 A large release needs more framing. The right level of detail is the smallest
 amount that lets the guild build, inspect, and recover without guessing about

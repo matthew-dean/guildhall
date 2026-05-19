@@ -22,6 +22,8 @@
 - Create `src/core/__tests__/construction-mode.test.ts`: status and blocker mapping tests.
 - Modify `docs/design/project-construction-manifesto.md`: link to the implementation spec.
 - Modify `docs/web-ui/flow-audit.md`: track implementation progress.
+- Modify `src/runtime/orchestrator.ts`: record blueprint sanity review before ready-task worker claim.
+- Modify `src/runtime/__tests__/orchestrator.test.ts`: cover approve/revise sanity-review outcomes.
 
 ## Task 1: Protect Agent Prompt Behavior
 
@@ -330,3 +332,129 @@ Expected: commit succeeds.
   additive runtime payload, docs links, and verification.
 - Placeholder scan: no `TBD`, `TODO`, or "fill in later" steps.
 - Type consistency: `ConstructionMode` values match the spec definitions.
+
+## Task 6: Enforce Blueprint Sanity Review Before Worker Claim
+
+**Files:**
+- Modify: `docs/design/project-construction-manifesto.md`
+- Modify: `docs/superpowers/specs/2026-05-19-guildhall-construction-runtime-integration.md`
+- Modify: `src/runtime/orchestrator.ts`
+- Modify: `src/runtime/__tests__/orchestrator.test.ts`
+- Modify: `docs/web-ui/flow-audit.md`
+
+- [x] **Step 1: Document the doctrine**
+
+Add the doctrine to the manifesto and spec:
+
+```md
+Plans are durable, not permanent. Guildhall should build to the plan,
+inspect against the plan, and revise the plan when reality earns it.
+Before a worker starts, Guildhall records a proportional blueprint sanity
+review so obvious plan defects do not reach implementation.
+```
+
+- [x] **Step 2: Write failing orchestrator tests**
+
+Add tests near `claims ready tasks deterministically without a coordinator call`:
+
+```ts
+it('records a blueprint sanity review before claiming ready work', async () => {
+  await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: 'approved spec' })])
+  const worker = stubAgent('worker-agent')
+  const orch = new Orchestrator({ config: baseConfig(), agents: agentSet({ worker }) })
+
+  const out = await orch.tick()
+
+  expect(out.kind).toBe('processed')
+  const q = await readQueue()
+  expect(q.tasks[0]!.status).toBe('in_progress')
+  expect(q.tasks[0]!.notes.some((note) =>
+    note.role === 'blueprint-review' &&
+    note.content.includes('approve_blueprint'),
+  )).toBe(true)
+  expect(q.tasks[0]!.notes.at(-1)?.content).toBe('Claimed ready task for worker-agent.')
+})
+
+it('routes ready tasks without a usable blueprint back to exploring', async () => {
+  await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: '' })])
+  const worker = stubAgent('worker-agent')
+  const orch = new Orchestrator({ config: baseConfig(), agents: agentSet({ worker }) })
+
+  const out = await orch.tick()
+
+  expect(out.kind).toBe('processed')
+  if (out.kind === 'processed') {
+    expect(out.beforeStatus).toBe('ready')
+    expect(out.afterStatus).toBe('exploring')
+  }
+  expect(worker.calls).toHaveLength(0)
+  const q = await readQueue()
+  expect(q.tasks[0]!.status).toBe('exploring')
+  expect(q.tasks[0]!.notes.at(-1)).toMatchObject({
+    agentId: 'blueprint-sanity-review',
+    role: 'blueprint-review',
+  })
+  expect(q.tasks[0]!.notes.at(-1)?.content).toContain('revise_blueprint')
+})
+```
+
+- [x] **Step 3: Implement minimal deterministic sanity review**
+
+In `src/runtime/orchestrator.ts`, add helpers:
+
+```ts
+function hasBlueprintSanityReview(task: Task): boolean {
+  return task.notes.some((note) => note.role === 'blueprint-review')
+}
+
+function hasUsableBlueprint(task: Task): boolean {
+  return typeof task.spec === 'string' && task.spec.trim().length > 0
+}
+```
+
+Inside `claimReadyTaskInline`, before assigning the worker:
+
+```ts
+if (!hasBlueprintSanityReview(target)) {
+  if (!hasUsableBlueprint(target)) {
+    target.status = 'exploring'
+    target.assignedTo = null
+    target.notes.push({
+      agentId: 'blueprint-sanity-review',
+      role: 'blueprint-review',
+      content: 'revise_blueprint: Task was ready but has no usable blueprint/spec. Routing back to blueprint drafting before worker assignment.',
+      timestamp: this.now(),
+    })
+    target.updatedAt = this.now()
+    queue.lastUpdated = this.now()
+    await this.writeQueue(queue)
+    await this.logTickProgress({ task: target, agent: 'blueprint-sanity-review', beforeStatus, afterStatus: target.status, transitioned: true })
+    return { kind: 'processed', taskId: target.id, agent: 'blueprint-sanity-review', beforeStatus, afterStatus: target.status, transitioned: true, revisionCount: target.revisionCount }
+  }
+
+  target.notes.push({
+    agentId: 'blueprint-sanity-review',
+    role: 'blueprint-review',
+    content: 'approve_blueprint: Task has a usable blueprint/spec. Worker may build against it.',
+    timestamp: this.now(),
+  })
+}
+```
+
+- [x] **Step 4: Run focused tests**
+
+Run:
+
+```bash
+pnpm vitest run src/runtime/__tests__/orchestrator.test.ts --coverage=false
+```
+
+- [x] **Step 5: Run final checks**
+
+Run:
+
+```bash
+pnpm typecheck
+pnpm docs:build && pnpm docs:check-help-sync
+git diff --check
+```
