@@ -1330,12 +1330,14 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    .learning-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
     :global(.advanced-card-wide) {
       grid-column: 1 / -1;
+    }
+  }
+
+  @container (min-width: 84rem) {
+    .learning-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     :global(.learning-card-wide) {

@@ -11,6 +11,8 @@ where setup, task intake, live progress, reviewer calls, and release
 readiness actually play out. It tries very hard not to make you remember more
 than you should.
 
+![Guildhall projects home showing several local projects with status, activity, and start controls.](../assets/ui-audit/projects.png)
+
 ![Guildhall work view with active tasks, live progress, and reviewer signals.](../assets/ui-audit/work.png)
 
 ## What it does well
@@ -18,6 +20,7 @@ than you should.
 - **Service over projects**: the dashboard is not married to one repo. It runs as a local service and keeps multiple projects available from one place.
 - **File-backed, not hidden**: project state still lives in `guildhall.yaml`, `.guildhall/config.yaml`, and `memory/*`, while machine-wide state such as the registry and provider credentials lives in `~/.guildhall/`. The UI is a clearer window into that state, not a secret second database.
 - **One operating surface**: the service home gets you into the right project, and the shell carries the detailed state without feeling like a separate product.
+- **Learning you can inspect**: Settings -> Learning shows project habits, cross-project preferences, project playbooks, and Guildhall product ideas without adding a new approval step to every task.
 
 ## Most of the real loop lives in the browser
 

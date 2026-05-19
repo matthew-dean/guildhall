@@ -30,6 +30,7 @@ Use these when you are looking at the app and want to understand a screen.
 - [Setup wizard](../web-ui/setup) — first-run identity, provider, and launch flow.
 - [Project view](../web-ui/project-view) — the shell where Thread, Work, Planner, Settings, and release state live.
 - [Task drawer](../web-ui/task-drawer) — task evidence, transcript, review, history, and provenance.
+- [Memory and recovery](./memory-and-recovery) — how Guildhall classifies blockers, tries bounded playbooks, and keeps learned behavior inspectable.
 - [Task lifecycle](./task-lifecycle) — how a task moves from idea to done.
 - [Running Guildhall](./running) — browser controls first, CLI commands when you need them.
 

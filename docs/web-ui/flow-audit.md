@@ -751,6 +751,15 @@ screen.
   the fixed flow, "Use playbook" activation, and the inert "Give product
   feedback" GitHub issue draft URL. The original Looma + Knit and global
   learning files were restored afterward with no `acceptance-` residue.
+- Started the public VitePress docs follow-through for the 0.6.0 branch. The
+  docs now include a current Projects home screenshot, a Memory and recovery
+  guide for bounded playbooks and scoped learning, a 0.6.0 release note, and
+  updated reference text for Settings -> Learning, project playbooks, and
+  product-feedback issue drafts. Screenshot capture also exposed that the
+  Learning settings two-column layout was too eager at laptop width, so the
+  responsive breakpoint now keeps it one calm column until the container is
+  genuinely wide enough. Temporary docs-demo learning records were restored
+  afterward with no `docs-demo-` residue.
 
 - Completed the `0.5.0` macOS packaging slice. Guildhall now has a
   buildable packaged artifact at `artifacts/macos/guildhall-macos`,

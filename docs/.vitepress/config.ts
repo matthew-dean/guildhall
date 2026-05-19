@@ -13,6 +13,7 @@ const guideOperateItems = [
   { text: 'Setup wizard', link: '/web-ui/setup' },
   { text: 'Project view', link: '/web-ui/project-view' },
   { text: 'Task drawer', link: '/web-ui/task-drawer' },
+  { text: 'Memory and recovery', link: '/guide/memory-and-recovery' },
   { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
   { text: 'Running Guildhall', link: '/guide/running' },
 ]
@@ -203,6 +204,7 @@ export default defineConfig({
           text: 'Releases',
           items: [
             { text: 'Overview', link: '/releases/' },
+            { text: '0.6.0', link: '/releases/0.6.0' },
             { text: '0.5.1', link: '/releases/0.5.1' },
             { text: '0.5.0', link: '/releases/0.5.0' },
             { text: '0.4.0', link: '/releases/0.4.0' },

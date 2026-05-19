@@ -16,8 +16,10 @@ During onboarding, meta-intake may infer initial positions from your project-gui
 Learned behavior is stored separately. `memory/learning.json` holds
 project-scoped learned defaults and suggestions, `memory/project-skills.json`
 holds project skill proposals, and `~/.guildhall/learning.json` holds
-user/global preferences. Use Settings → Learning to inspect or reset those
-records; `agent-settings.yaml` remains the explicit lever file.
+user/global preferences. Use Settings → Learning to inspect project memories,
+cross-project preferences, project playbooks, and product ideas. Suggested
+records stay off until you choose to use them; `agent-settings.yaml` remains
+the explicit lever file.
 
 ## Shape
 

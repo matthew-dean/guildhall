@@ -26,4 +26,8 @@ If the page cannot answer those three questions fast, it is being decorative whe
 - Blocked work and unresolved escalations
 - Enough signal to tell whether opening the shell is likely to be a quick check or a proper firefight
 
-![Guildhall project shell showing thread, setup prompts, and current work items.](../assets/ui-audit/inbox.png)
+![Guildhall projects home showing multiple local projects with paused, stable, and ready states.](../assets/ui-audit/projects.png)
+
+The Projects home is deliberately shallow. It helps you choose where to look
+next; the detailed Thread, Work, Settings, Learning, and Release surfaces stay
+inside the project shell.

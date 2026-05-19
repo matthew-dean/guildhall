@@ -27,6 +27,8 @@ click into a different repo.
 
 ## Use the projects home to triage
 
+![Guildhall projects home with Looma + Knit, T minus t, Fair Labor License, and Font something visible as local project cards.](../assets/ui-audit/projects.png)
+
 The projects home should answer:
 
 - which projects are active
