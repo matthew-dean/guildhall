@@ -6,11 +6,16 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
   SkillRegistry,
+  activateProjectSkillProposal,
+  dismissProjectSkillProposal,
   getBundledSkills,
   getUserSkillsDir,
   loadSkillRegistry,
   loadSkillsFromDirs,
   parseSkillFrontmatter,
+  proposeProjectSkill,
+  readProjectSkillProposals,
+  selectRelevantProjectSkills,
 } from '../index.js'
 
 let baseDir: string
@@ -173,5 +178,87 @@ describe('loadSkillRegistry', () => {
     const registry = loadSkillRegistry()
     expect(registry.get(collidedName)?.source).toBe('user')
     expect(registry.get(collidedName)?.description).toBe('from user')
+  })
+})
+
+describe('project skill proposals', () => {
+  it('keeps project skill proposals inspectable and inactive until approved', async () => {
+    await proposeProjectSkill({
+      memoryDir: baseDir,
+      proposal: {
+        id: 'nuxt-invite-skill',
+        name: 'nuxt-invite-skill',
+        description: 'Repair Nuxt invite routes',
+        triggerKeywords: ['invite', 'workspace'],
+        content: 'Use the existing workspace route helpers before adding new utilities.',
+        risk: 'medium',
+        requiresApproval: true,
+      },
+    })
+
+    const proposals = readProjectSkillProposals(baseDir)
+    expect(proposals[0]).toMatchObject({
+      id: 'nuxt-invite-skill',
+      status: 'suggested',
+      requiresApproval: true,
+    })
+    expect(selectRelevantProjectSkills(proposals, 'fix invite route')).toEqual([])
+
+    await expect(activateProjectSkillProposal({
+      memoryDir: baseDir,
+      id: 'nuxt-invite-skill',
+    })).rejects.toThrow(/approval/i)
+
+    await activateProjectSkillProposal({
+      memoryDir: baseDir,
+      id: 'nuxt-invite-skill',
+      approved: true,
+    })
+
+    const active = selectRelevantProjectSkills(
+      readProjectSkillProposals(baseDir),
+      'fix invite route',
+    )
+    expect(active).toHaveLength(1)
+    expect(active[0]).toMatchObject({
+      name: 'nuxt-invite-skill',
+      source: 'project',
+    })
+  })
+
+  it('does not select dismissed project skills or skills from another project', async () => {
+    await proposeProjectSkill({
+      memoryDir: baseDir,
+      proposal: {
+        id: 'dismissed-skill',
+        name: 'dismissed-skill',
+        description: 'Dismissed',
+        triggerKeywords: ['billing'],
+        content: 'Do billing-specific steps.',
+        risk: 'low',
+        requiresApproval: false,
+      },
+    })
+    await activateProjectSkillProposal({ memoryDir: baseDir, id: 'dismissed-skill' })
+    await dismissProjectSkillProposal({ memoryDir: baseDir, id: 'dismissed-skill' })
+
+    const otherProject = join(baseDir, 'other-memory')
+    await proposeProjectSkill({
+      memoryDir: otherProject,
+      proposal: {
+        id: 'other-skill',
+        name: 'other-skill',
+        description: 'Other project only',
+        triggerKeywords: ['billing'],
+        content: 'Only the other project should see this.',
+        risk: 'low',
+        requiresApproval: false,
+      },
+    })
+    await activateProjectSkillProposal({ memoryDir: otherProject, id: 'other-skill' })
+
+    expect(selectRelevantProjectSkills(readProjectSkillProposals(baseDir), 'billing')).toEqual([])
+    expect(selectRelevantProjectSkills(readProjectSkillProposals(otherProject), 'billing'))
+      .toHaveLength(1)
   })
 })

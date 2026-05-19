@@ -7,6 +7,7 @@ import { promisify } from 'node:util'
 import { buildContext, resolveLikelyTaskFiles } from '../context-builder.js'
 import type { Task } from '@guildhall/core'
 import { writeCheckpoint } from '@guildhall/tools'
+import { proposeProjectSkill, activateProjectSkillProposal } from '@guildhall/skills'
 
 // ---------------------------------------------------------------------------
 // Context builder tests (AC-04)
@@ -165,6 +166,42 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('Trying focused repair')
     expect(ctx.taskSummary).toContain('web/app/composables/use-presence.ts')
     expect(ctx.taskSummary).toContain('Do not do broad repo research')
+  })
+
+  it('injects active matching project skills only when project skills are enabled', async () => {
+    await proposeProjectSkill({
+      memoryDir: tmpDir,
+      proposal: {
+        id: 'invite-route-skill',
+        name: 'invite-route-skill',
+        description: 'Repair invite routes',
+        triggerKeywords: ['invite', 'workspace'],
+        content: 'Use the existing workspace route helpers before adding new utilities.',
+        risk: 'low',
+        requiresApproval: false,
+      },
+    })
+    await activateProjectSkillProposal({ memoryDir: tmpDir, id: 'invite-route-skill' })
+    const task: Task = {
+      ...baseTask,
+      title: 'Fix invite route',
+      description: 'Repair workspace invite handling.',
+    }
+
+    const disabled = await buildContext(task, tmpDir)
+    expect(disabled.taskSummary).not.toContain('### Project Skills')
+
+    const enabled = await buildContext(task, tmpDir, { projectSkillsEnabled: true })
+    expect(enabled.taskSummary).toContain('### Project Skills')
+    expect(enabled.taskSummary).toContain('invite-route-skill')
+    expect(enabled.taskSummary).toContain('Use the existing workspace route helpers')
+
+    const unrelated = await buildContext(
+      { ...baseTask, title: 'Fix billing report', description: 'Repair invoice export.' },
+      tmpDir,
+      { projectSkillsEnabled: true },
+    )
+    expect(unrelated.taskSummary).not.toContain('### Project Skills')
   })
 
 

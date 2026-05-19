@@ -738,24 +738,32 @@ state.
 Files likely touched:
 
 - `src/skills/index.ts`
-- `src/skills/registry.ts`
-- `src/skills/loader.ts`
+- `src/skills/project-skills.ts`
 - `src/config/resolve.ts`
 - `src/config/schemas.ts`
 - `src/runtime/context-builder.ts`
-- `src/runtime/__tests__/skills.test.ts`
+- `src/skills/__tests__/skills.test.ts`
 - `src/runtime/__tests__/context-builder.test.ts`
+- `src/config/__tests__/schemas.test.ts`
+
+Project skills are project-scoped procedural memory, not global assistant
+skills. Global skills describe durable ways Guildhall should help the user or
+operate across workspaces; project skills capture repeatable task logic that is
+only valid inside one workspace's memory directory. They remain suggested until
+activated, can be dismissed, and enter worker context only when the workspace
+explicitly enables project-local skills and the current task matches their
+trigger keywords.
 
 Todos:
 
-- [ ] Define the project skill proposal schema.
-- [ ] Add project-local skill loading behind an explicit project setting.
-- [ ] Add trigger matching so project skills enter context only when relevant.
-- [ ] Add approval flow for activating suggested project skills.
-- [ ] Add tests proving project skills do not load globally.
-- [ ] Add tests proving dismissed skills stay dismissed.
-- [ ] Add context-builder tests for relevant project skill injection.
-- [ ] Add docs text explaining project skills versus global skills.
+- [x] Define the project skill proposal schema.
+- [x] Add project-local skill loading behind an explicit project setting.
+- [x] Add trigger matching so project skills enter context only when relevant.
+- [x] Add approval flow for activating suggested project skills.
+- [x] Add tests proving project skills do not load globally.
+- [x] Add tests proving dismissed skills stay dismissed.
+- [x] Add context-builder tests for relevant project skill injection.
+- [x] Add docs text explaining project skills versus global skills.
 
 Acceptance criteria:
 

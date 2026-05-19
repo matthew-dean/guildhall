@@ -2382,7 +2382,9 @@ export class Orchestrator {
         ? nestedWorktreeProjectPath
         : activeWorktreePath
 
-    const ctx = await buildContext(task, this.opts.config.memoryDir)
+    const ctx = await buildContext(task, this.opts.config.memoryDir, {
+      projectSkillsEnabled: this.opts.config.skills?.projectLocal?.enabled === true,
+    })
     const tasksPath = this.tasksPath()
     const likelyTargetFiles = resolveLikelyTaskFiles(task)
     const effectiveTaskSuccessGatesRaw =
@@ -4915,7 +4917,9 @@ export class Orchestrator {
     if (personas.length === 0) return null
 
     // Build the JIT context once; every persona sees the same facts.
-    const ctx = await buildContext(task, this.opts.config.memoryDir)
+    const ctx = await buildContext(task, this.opts.config.memoryDir, {
+      projectSkillsEnabled: this.opts.config.skills?.projectLocal?.enabled === true,
+    })
 
     let verdicts: PersonaVerdict[]
     try {
@@ -7054,7 +7058,8 @@ export async function runOrchestrator(
   // factory receives the same frozen skill list so the composed system prompt
   // is deterministic across the orchestrator loop.
   const workspaceSkillDir = path.join(config.memoryDir, '..', 'skills')
-  const skills = loadSkillRegistry({ extraSkillDirs: [workspaceSkillDir] }).listSkills()
+  const workspaceSkillDirs = config.skills?.projectLocal?.enabled === true ? [workspaceSkillDir] : []
+  const skills = loadSkillRegistry({ extraSkillDirs: workspaceSkillDirs }).listSkills()
 
   // FR-18: build a single HookExecutor from the workspace config's `hooks`
   // passthrough. Every agent shares the same executor so hook state (e.g. a

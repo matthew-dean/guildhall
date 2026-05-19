@@ -669,6 +669,13 @@ screen.
   dismissed/reset, and orchestrator completion/block transitions run the
   reflection recorder. Focused learning/orchestrator regression passed with
   `11` tests and `pnpm typecheck` passed.
+- Completed the Phase 4 project-skill application slice. Guildhall now stores
+  project skill proposals in the workspace memory directory, keeps them
+  suggested until approved or low-risk activation, allows dismissal, selects
+  only active trigger-matching project skills, and injects them into worker
+  context only when the workspace explicitly enables project-local skills.
+  Focused project-skill/context/config tests, `pnpm typecheck`, docs gates, and
+  full `pnpm test` passed.
 
 - Completed the `0.5.0` macOS packaging slice. Guildhall now has a
   buildable packaged artifact at `artifacts/macos/guildhall-macos`,
