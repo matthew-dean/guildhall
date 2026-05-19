@@ -34,6 +34,7 @@
     "clean": "rm -rf dist",
     "release": "node scripts/publish.mjs",
     "release:dry": "node scripts/publish.mjs --dry-run",
+    "model:bakeoff": "node scripts/model-bakeoff.mjs",
     "docs:extract-help": "node scripts/extract-help-topics.mjs",
     "docs:check-help-sync": "node scripts/check-help-sync.mjs",
     "docs:dev": "npm run docs:extract-help && vitepress dev docs",

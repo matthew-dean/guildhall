@@ -5,6 +5,9 @@ This audit is based on the live GuildHall shell in this worktree as of
 
 Captured routes and screenshots:
 
+- `docs/assets/ui-audit/projects.png`
+  - `docs/assets/ui-audit/projects.avif` is the preferred rendered source in
+    docs pages; the PNG stays as the fallback.
 - `docs/assets/ui-audit/inbox.png`
 - `docs/assets/ui-audit/work.png`
 - `docs/assets/ui-audit/planner.png`

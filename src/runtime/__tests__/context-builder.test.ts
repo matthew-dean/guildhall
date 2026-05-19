@@ -7,6 +7,7 @@ import { promisify } from 'node:util'
 import { buildContext, resolveLikelyTaskFiles } from '../context-builder.js'
 import type { Task } from '@guildhall/core'
 import { writeCheckpoint } from '@guildhall/tools'
+import { proposeProjectSkill, activateProjectSkillProposal } from '@guildhall/skills'
 
 // ---------------------------------------------------------------------------
 // Context builder tests (AC-04)
@@ -134,6 +135,73 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('Note number 5')
     expect(ctx.taskSummary).not.toContain('Note number 4')
     expect(ctx.taskSummary).not.toContain('Note number 1')
+  })
+
+  it('surfaces active recovery playbooks as focused worker instructions', async () => {
+    const taskWithPlaybook: Task = {
+      ...baseTask,
+      notes: [
+        {
+          agentId: 'coordinator',
+          role: 'recovery-playbook',
+          content: JSON.stringify({
+            status: 'started',
+            playbook: 'repair_touched_file_failure',
+            summary:
+              'Trying focused repair in checkpoint-touched files before asking for a human decision.',
+            allowedPaths: ['web/app/composables/use-presence.ts'],
+            allowedTools: ['read-file', 'edit-file', 'run-shell-command', 'raise-escalation'],
+            command: 'cd web && pnpm typecheck',
+            maxTurns: 2,
+          }),
+          timestamp: '2026-05-18T20:31:00Z',
+        },
+      ],
+    }
+
+    const ctx = await buildContext(taskWithPlaybook, tmpDir)
+
+    expect(ctx.taskSummary).toContain('### Active Recovery Playbook')
+    expect(ctx.taskSummary).toContain('repair_touched_file_failure')
+    expect(ctx.taskSummary).toContain('Trying focused repair')
+    expect(ctx.taskSummary).toContain('web/app/composables/use-presence.ts')
+    expect(ctx.taskSummary).toContain('Do not do broad repo research')
+  })
+
+  it('injects active matching project skills only when project skills are enabled', async () => {
+    await proposeProjectSkill({
+      memoryDir: tmpDir,
+      proposal: {
+        id: 'invite-route-skill',
+        name: 'invite-route-skill',
+        description: 'Repair invite routes',
+        triggerKeywords: ['invite', 'workspace'],
+        content: 'Use the existing workspace route helpers before adding new utilities.',
+        risk: 'low',
+        requiresApproval: false,
+      },
+    })
+    await activateProjectSkillProposal({ memoryDir: tmpDir, id: 'invite-route-skill' })
+    const task: Task = {
+      ...baseTask,
+      title: 'Fix invite route',
+      description: 'Repair workspace invite handling.',
+    }
+
+    const disabled = await buildContext(task, tmpDir)
+    expect(disabled.taskSummary).not.toContain('### Project Skills')
+
+    const enabled = await buildContext(task, tmpDir, { projectSkillsEnabled: true })
+    expect(enabled.taskSummary).toContain('### Project Skills')
+    expect(enabled.taskSummary).toContain('invite-route-skill')
+    expect(enabled.taskSummary).toContain('Use the existing workspace route helpers')
+
+    const unrelated = await buildContext(
+      { ...baseTask, title: 'Fix billing report', description: 'Repair invoice export.' },
+      tmpDir,
+      { projectSkillsEnabled: true },
+    )
+    expect(unrelated.taskSummary).not.toContain('### Project Skills')
   })
 
 

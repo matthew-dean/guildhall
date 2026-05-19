@@ -1,5 +1,5 @@
 ---
-title: Web UI overview
+title: Guildhall app overview
 help_topic: web.overview
 help_summary: |
   The browser UI is the main Guildhall interface. It is served by
@@ -8,12 +8,11 @@ help_summary: |
   product surface.
 ---
 
-# Web UI
+# Guildhall app
 
-The web UI is the main way to operate Guildhall. It has two useful scales:
-the `/projects` service home for scanning registered projects, and the
-project shell where setup, tasks, live runs, reviewer calls, and release
-readiness actually play out.
+The app has two useful scales: the `/projects` service home for scanning
+registered projects, and the project shell where setup, tasks, live runs,
+reviewer calls, and release readiness actually play out.
 
 Use it for the everyday loop:
 
@@ -24,7 +23,7 @@ Use it for the everyday loop:
 5. Inspect transcripts, reviews, gates, and provenance.
 6. Resolve escalations and tune settings.
 
-The UI is still transparent: project state lands in `guildhall.yaml`,
+The app is still transparent: project state lands in `guildhall.yaml`,
 `.guildhall/config.yaml`, and `memory/*`, while machine-scoped state such as
 the project registry, provider credentials, and default provider choice live
 under `~/.guildhall/`.
@@ -39,9 +38,8 @@ under `~/.guildhall/`.
 
 ## Implementation reference
 
-Most users do not need this. If you are working on Guildhall itself, the
-implementation reference covers [design tokens](./design-tokens) and the
-[in-UI help system](./help-system).
+Guildhall maintainers can inspect the [design tokens](./design-tokens) and
+[in-UI help system](./help-system) behind the app surface.
 
 If the UI does something weird, the receipts are usually sitting in plain files
 that can be inspected directly.

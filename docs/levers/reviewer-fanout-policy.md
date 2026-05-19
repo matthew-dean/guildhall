@@ -30,6 +30,5 @@ How the orchestrator aggregates verdicts when multiple persona reviewers (guilds
 - `coordinator_adjudicates_on_conflict` when reviewer personas often disagree on style and you want a single responsible decision-maker.
 - `advisory` for experimental domains where you're still calibrating what "good" looks like.
 
-## See also
-
-- [Disagreement & handoff](../design/disagreement-and-handoff) — design notes on how substantive conflicts get resolved.
+Substantive reviewer conflicts should be resolved through the configured
+fanout policy and recorded in the task audit trail.

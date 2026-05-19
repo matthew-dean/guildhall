@@ -172,6 +172,14 @@ describe('WorkspaceYamlConfig', () => {
     expect(config.bootstrap).toBeUndefined()
   })
 
+  it('keeps project-local skills disabled unless explicitly enabled', () => {
+    expect(WorkspaceYamlConfig.parse({ name: 'Test' }).skills).toBeUndefined()
+    expect(WorkspaceYamlConfig.parse({
+      name: 'Test',
+      skills: { projectLocal: { enabled: true } },
+    }).skills?.projectLocal.enabled).toBe(true)
+  })
+
   it('parses a bootstrap block with commands and successGates', () => {
     const config = WorkspaceYamlConfig.parse({
       name: 'Test',

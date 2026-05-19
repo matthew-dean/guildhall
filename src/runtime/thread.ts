@@ -442,6 +442,61 @@ function compactEscalationDetails(value: string | undefined): string | undefined
   return summary.length > 220 ? `${summary.slice(0, 217).trimEnd()}...` : summary
 }
 
+function latestPolicyClassificationSummary(notes: Array<Record<string, unknown>>): string | undefined {
+  for (let index = notes.length - 1; index >= 0; index -= 1) {
+    const note = notes[index]
+    if (!note) continue
+    if (note.role !== 'policy-classification') continue
+    const content = typeof note.content === 'string' ? note.content : ''
+    if (!content.trim()) continue
+    try {
+      const parsed = JSON.parse(content) as { summary?: unknown }
+      const summary = typeof parsed.summary === 'string' ? stripMarkdown(parsed.summary) : ''
+      if (summary) return summary
+    } catch {
+      continue
+    }
+  }
+  return undefined
+}
+
+function latestRecoveryPlaybookSummary(notes: Array<Record<string, unknown>>): string | undefined {
+  for (let index = notes.length - 1; index >= 0; index -= 1) {
+    const note = notes[index]
+    if (!note) continue
+    if (note.role !== 'recovery-playbook') continue
+    const content = typeof note.content === 'string' ? note.content : ''
+    if (!content.trim()) continue
+    try {
+      const parsed = JSON.parse(content) as { summary?: unknown; playbook?: unknown; status?: unknown }
+      const summary = typeof parsed.summary === 'string' ? stripMarkdown(parsed.summary) : ''
+      if (summary) return summary
+      const playbook = typeof parsed.playbook === 'string' ? parsed.playbook : ''
+      const status = typeof parsed.status === 'string' ? parsed.status : ''
+      if (playbook) return `${playbook}${status ? ` ${status}` : ''}`
+    } catch {
+      continue
+    }
+  }
+  return undefined
+}
+
+function compactEscalationDetailsWithPolicy(
+  value: string | undefined,
+  notes: Array<Record<string, unknown>>,
+): string | undefined {
+  const base = compactEscalationDetails(value)
+  const policy = latestPolicyClassificationSummary(notes)
+  const recovery = latestRecoveryPlaybookSummary(notes)
+  if (!policy && !recovery) return base
+  const prefix = [
+    policy ? `Policy read: ${policy}` : '',
+    recovery ? `Recovery path: ${recovery}` : '',
+  ].filter(Boolean).join(' ')
+  const combined = base ? `${prefix} ${base}` : prefix
+  return combined.length > 260 ? `${combined.slice(0, 257).trimEnd()}...` : combined
+}
+
 function guessedProjectDirection(projectPath: string): string {
   const readmePath = join(projectPath, 'README.md')
   if (!existsSync(readmePath)) return ''
@@ -1294,8 +1349,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         taskTitle,
         escalationId: escId,
         summary,
-        details: compactEscalationDetails(
+        details: compactEscalationDetailsWithPolicy(
           typeof esc.details === 'string' ? esc.details : undefined,
+          notes,
         ),
         activity: liveActivity.get(taskId),
       })

@@ -5,9 +5,9 @@ pageClass: gh-first-visit-page
 
 # Existing project
 
-Use this path when the repo already has README files, plans, specs, TODOs, or
-partly finished work. The point is to let Guildhall find evidence without
-pretending every note is already a safe task.
+Existing repos usually arrive with README notes, plans, specs, TODOs, and
+partly finished work. Guildhall should find that evidence without pretending
+every note is already a safe task.
 
 ## 1. Open the repo in Guildhall
 

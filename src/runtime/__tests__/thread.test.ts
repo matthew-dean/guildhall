@@ -1162,6 +1162,84 @@ coordinators:
     }
   })
 
+  it('includes compact policy classification context on blocked escalation turns', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Fix invite flow',
+              status: 'blocked',
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+              notes: [
+                {
+                  agentId: 'coordinator',
+                  role: 'policy-classification',
+                  timestamp: new Date().toISOString(),
+                  content: JSON.stringify({
+                    class: 'self_authored_verification_failure',
+                    summary:
+                      'Verification failed in files the worker already touched; Guildhall can keep this in focused repair.',
+                  }),
+                },
+                {
+                  agentId: 'coordinator',
+                  role: 'recovery-playbook',
+                  timestamp: new Date().toISOString(),
+                  content: JSON.stringify({
+                    status: 'started',
+                    playbook: 'repair_touched_file_failure',
+                    summary:
+                      'Trying focused repair in checkpoint-touched files before asking for a human decision.',
+                  }),
+                },
+              ],
+              escalations: [
+                {
+                  id: 'esc-task-1-1',
+                  reason: 'decision_required',
+                  summary: 'Worker raised a blocker for its own failed verification.',
+                  details: 'settings.vue cannot find sendInvite.',
+                  raisedAt: new Date().toISOString(),
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'core', name: 'Core' }],
+        },
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+
+      const turn = thread.turns.find(t => t.kind === 'escalation')
+      if (!turn || turn.kind !== 'escalation') throw new Error('expected escalation turn')
+      expect(turn.details).toContain('Policy read:')
+      expect(turn.details).toContain('Recovery path:')
+      expect(turn.details).toContain('focused repair')
+      expect(turn.details).toContain('settings.vue cannot find sendInvite')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('compresses oversized reviewer escalation details into a short task-card digest', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

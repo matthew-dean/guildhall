@@ -71,6 +71,7 @@ import {
   type ProjectLevers,
 } from '@guildhall/levers'
 import { buildContext, resolveLikelyTaskFiles } from './context-builder.js'
+import { recordTaskReflection } from './learning.js'
 import {
   modelForAgentName,
   roleForAgentName,
@@ -161,6 +162,15 @@ import {
 } from './reviewer-dispatch.js'
 import { runGuildGates } from './guild-gate-runner.js'
 import { loadDesignSystem } from './design-system-store.js'
+import {
+  appendFailureClassificationNote,
+  appendRecoveryPlaybookNote,
+  buildAgentDecisionPacket,
+  classifyAgentFailure,
+  renderAgentDecisionPacket,
+  resolveRecoveryPlan,
+  type FailureClassification,
+} from './policy.js'
 import {
   selectApplicableGuilds,
   reviewersForTask,
@@ -1678,6 +1688,23 @@ export class Orchestrator {
     return next
   }
 
+  private async annotateWorkerBlockedClassification(input: {
+    taskId: string
+    agentId: string
+    classification: FailureClassification
+  }): Promise<void> {
+    const queue = await this.readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === input.taskId)
+    if (!task) return
+    appendFailureClassificationNote(task, input.classification, {
+      agentId: input.agentId,
+      timestamp: this.now(),
+    })
+    task.updatedAt = this.now()
+    queue.lastUpdated = this.now()
+    await this.writeQueue(queue)
+  }
+
   /**
    * FR-30: read the current `agent_health_strictness` lever and sync the
    * tracker. Callers (serve layer, tests) invoke this when the lever may
@@ -2049,6 +2076,32 @@ export class Orchestrator {
                   `at ${recovered.commitSha ?? '<unknown commit>'}. Guildhall will continue from an isolated task branch.`,
                 timestamp: now,
               })
+              appendRecoveryPlaybookNote(
+                queuedTask,
+                resolveRecoveryPlan({
+                  taskId: queuedTask.id,
+                  classification: {
+                    class: 'dirty_checkout_owned',
+                    confidence: 'high',
+                    evidence: [{
+                      kind: 'task',
+                      summary: `Shared checkout edits were packaged into ${recovered.branchName}.`,
+                      ref: recovered.commitSha,
+                    }],
+                    scope: 'task',
+                    safePlaybooks: ['package_owned_dirty_work'],
+                    needsHuman: false,
+                  },
+                  notes: queuedTask.notes,
+                }),
+                {
+                  agentId: 'coordinator',
+                  timestamp: now,
+                  status: 'succeeded',
+                  summary:
+                    `Packaged Guildhall-owned dirty checkout work into ${recovered.branchName}.`,
+                },
+              )
               queuedTask.updatedAt = now
               queue.lastUpdated = now
               await this.writeQueue(queue)
@@ -2074,6 +2127,34 @@ export class Orchestrator {
                   'Guildhall stopped retrying until the repo is clean and the task is resumed.',
                 timestamp: now,
               })
+              appendRecoveryPlaybookNote(
+                queuedTask,
+                resolveRecoveryPlan({
+                  taskId: queuedTask.id,
+                  classification: {
+                    class: 'dirty_checkout_external',
+                    confidence: 'high',
+                    evidence: [{
+                      kind: 'task',
+                      summary: message,
+                      ref: effectiveTaskProjectPath,
+                    }],
+                    scope: 'task',
+                    safePlaybooks: ['stop_with_external_setup_action'],
+                    needsHuman: true,
+                    humanQuestion:
+                      'Commit or stash the target repo changes, then resume this task.',
+                  },
+                  notes: queuedTask.notes,
+                }),
+                {
+                  agentId: 'coordinator',
+                  timestamp: now,
+                  status: 'succeeded',
+                  summary:
+                    'Stopped with a concrete external setup action for dirty checkout state.',
+                },
+              )
               queuedTask.updatedAt = now
               queue.lastUpdated = now
               await this.writeQueue(queue)
@@ -2319,7 +2400,9 @@ export class Orchestrator {
         ? nestedWorktreeProjectPath
         : activeWorktreePath
 
-    const ctx = await buildContext(task, this.opts.config.memoryDir)
+    const ctx = await buildContext(task, this.opts.config.memoryDir, {
+      projectSkillsEnabled: this.opts.config.skills?.projectLocal?.enabled === true,
+    })
     const tasksPath = this.tasksPath()
     const likelyTargetFiles = resolveLikelyTaskFiles(task)
     const effectiveTaskSuccessGatesRaw =
@@ -2753,6 +2836,24 @@ export class Orchestrator {
           details: message,
         })
         if (escalation.success && escalation.escalationId) {
+          await this.annotateWorkerBlockedClassification({
+            taskId: task.id,
+            agentId: 'coordinator',
+            classification: {
+              class: 'model_tool_use_failure',
+              confidence: 'medium',
+              evidence: [{
+                kind: 'task',
+                summary: `${friendlyRuntimeAgentName(agent.name)} stopped after hitting its turn limit.`,
+                ref: message,
+              }],
+              scope: 'task',
+              safePlaybooks: ['ask_concrete_human_question'],
+              needsHuman: true,
+              humanQuestion:
+                'The worker exhausted its turn budget without a safe next autonomous move. Should Guildhall retry from the checkpoint, narrow the task, or stop?',
+            },
+          })
           return {
             kind: 'escalated',
             taskId: task.id,
@@ -2786,6 +2887,24 @@ export class Orchestrator {
               `demanded concrete progress on the authoritative likely target files.`,
           })
           if (escalation.success && escalation.escalationId) {
+            await this.annotateWorkerBlockedClassification({
+              taskId: task.id,
+              agentId: 'coordinator',
+              classification: {
+                class: 'provider_unavailable',
+                confidence: 'medium',
+                evidence: [{
+                  kind: 'task',
+                  summary: 'Worker timed out before mutating the likely target file.',
+                  ref: message,
+                }],
+                scope: 'task',
+                safePlaybooks: ['ask_concrete_human_question'],
+                needsHuman: true,
+                humanQuestion:
+                  'The worker timed out without touching the likely target file. Should Guildhall retry this lane, switch provider, or narrow the task?',
+              },
+            })
             return {
               kind: 'escalated',
               taskId: task.id,
@@ -3186,6 +3305,25 @@ export class Orchestrator {
                 `escalate instead of ending another no-op step.`,
             })
             this.clearWorkerNoProgress(task.id)
+            await this.annotateWorkerBlockedClassification({
+              taskId: task.id,
+              agentId: 'coordinator',
+              classification: {
+                class: 'model_tool_use_failure',
+                confidence: 'medium',
+                evidence: [{
+                  kind: 'task',
+                  summary: `Worker made no visible progress after ${attempts} passes.`,
+                  ref:
+                    'Task remained in progress with no worktree edits, note, or status transition after likely-target nudges.',
+                }],
+                scope: 'task',
+                safePlaybooks: ['ask_concrete_human_question'],
+                needsHuman: true,
+                humanQuestion:
+                  'The worker made no visible progress after focused nudges. Should Guildhall retry from checkpoint, narrow the task, or stop?',
+              },
+            })
             await this.maybeCleanupWorktree(taskAfter, worktreeMode)
             return {
               kind: 'escalated',
@@ -3280,6 +3418,35 @@ export class Orchestrator {
           taskAfter.status = 'in_progress'
           ensureWorkerOwnership(taskAfter)
           taskAfter.blockReason = undefined
+          const classification = classifyAgentFailure({
+            taskId: taskAfter.id,
+            blockReason: [
+              newest.summary,
+              newest.details,
+            ].filter(Boolean).join('\n'),
+            touchedFiles: checkpoint?.filesTouched ?? [],
+            verification: checkpoint?.resumeContext?.verification ?? [],
+          })
+          appendFailureClassificationNote(
+            taskAfter,
+            classification,
+            {
+              agentId: 'coordinator',
+              timestamp: now,
+            },
+          )
+          const recoveryPlan = resolveRecoveryPlan({
+            taskId: taskAfter.id,
+            classification,
+            touchedFiles: checkpoint?.filesTouched ?? [],
+            verification: checkpoint?.resumeContext?.verification ?? [],
+            notes: taskAfter.notes,
+          })
+          appendRecoveryPlaybookNote(taskAfter, recoveryPlan, {
+            agentId: 'coordinator',
+            timestamp: now,
+            status: 'started',
+          })
           taskAfter.notes.push({
             agentId: 'coordinator',
             role: 'checkpoint',
@@ -3342,6 +3509,32 @@ export class Orchestrator {
                   `before marking the task complete${recovered.commitSha ? ` (${recovered.commitSha})` : ''}.`,
                 timestamp: this.now(),
               })
+              appendRecoveryPlaybookNote(
+                taskAfter,
+                resolveRecoveryPlan({
+                  taskId: taskAfter.id,
+                  classification: {
+                    class: 'dirty_checkout_owned',
+                    confidence: 'high',
+                    evidence: [{
+                      kind: 'task',
+                      summary: `Shared checkout edits were checkpointed into ${recovered.branchName}.`,
+                      ref: recovered.commitSha,
+                    }],
+                    scope: 'task',
+                    safePlaybooks: ['package_owned_dirty_work'],
+                    needsHuman: false,
+                  },
+                  notes: taskAfter.notes,
+                }),
+                {
+                  agentId: 'coordinator',
+                  timestamp: this.now(),
+                  status: 'succeeded',
+                  summary:
+                    `Packaged Guildhall-owned dirty checkout work into ${recovered.branchName}.`,
+                },
+              )
               taskAfter.mergeRecord = {
                 fromBranch: recovered.branchName,
                 toBranch: taskAfter.baseBranch,
@@ -3363,6 +3556,34 @@ export class Orchestrator {
                   'Guildhall finished the task but failed to package shared-checkout edits into an isolated task branch, so it blocked the task instead of silently leaving dirty work behind.',
                 timestamp: this.now(),
               })
+              appendRecoveryPlaybookNote(
+                taskAfter,
+                resolveRecoveryPlan({
+                  taskId: taskAfter.id,
+                  classification: {
+                    class: 'dirty_checkout_owned',
+                    confidence: 'medium',
+                    evidence: [{
+                      kind: 'task',
+                      summary:
+                        'Shared checkout edits could not be packaged into an isolated task branch.',
+                    }],
+                    scope: 'task',
+                    safePlaybooks: ['package_owned_dirty_work'],
+                    needsHuman: true,
+                    humanQuestion:
+                      'Resolve the dirty shared checkout state, then resume this task.',
+                  },
+                  notes: taskAfter.notes,
+                }),
+                {
+                  agentId: 'coordinator',
+                  timestamp: this.now(),
+                  status: 'failed',
+                  summary:
+                    'Failed to package Guildhall-owned dirty checkout work into a task branch.',
+                },
+              )
               taskAfter.mergeRecord = {
                 fromBranch: taskAfter.branchName ?? '<unknown>',
                 toBranch: taskAfter.baseBranch ?? '<unknown>',
@@ -3471,6 +3692,12 @@ export class Orchestrator {
         transitioned,
         ...(transitioned ? {} : { note: 'no transition' }),
       })
+      if (transitioned && (afterStatus === 'done' || afterStatus === 'blocked')) {
+        await recordTaskReflection({
+          memoryDir: this.opts.config.memoryDir,
+          task: taskAfter,
+        })
+      }
       await this.maybeWriteReviewPacket(taskAfter)
 
       // FR-24: teardown on terminal transitions. `pending_pr` is preserved —
@@ -4763,7 +4990,9 @@ export class Orchestrator {
     if (personas.length === 0) return null
 
     // Build the JIT context once; every persona sees the same facts.
-    const ctx = await buildContext(task, this.opts.config.memoryDir)
+    const ctx = await buildContext(task, this.opts.config.memoryDir, {
+      projectSkillsEnabled: this.opts.config.skills?.projectLocal?.enabled === true,
+    })
 
     let verdicts: PersonaVerdict[]
     try {
@@ -5691,6 +5920,9 @@ export class Orchestrator {
       '## Latest Checkpoint',
       ...this.renderCheckpoint(checkpoint),
       '',
+      '## Policy Decision Packet',
+      ...this.renderPolicyDecisionPacket(task, checkpoint),
+      '',
       '## Commands And Gates',
       ...this.renderGateResults(task),
       '',
@@ -5709,6 +5941,17 @@ export class Orchestrator {
     ]
 
     return lines.join('\n')
+  }
+
+  private renderPolicyDecisionPacket(task: Task, checkpoint: Checkpoint | null): string[] {
+    const packet = buildAgentDecisionPacket({
+      taskId: task.id,
+      role: task.status === 'review' ? 'reviewer' : 'coordinator',
+      notes: task.notes,
+      touchedFiles: checkpoint?.filesTouched ?? [],
+      lastCommand: checkpoint?.resumeContext?.verification.at(-1),
+    })
+    return renderAgentDecisionPacket(packet)
   }
 
   private async renderChangedFiles(task: Task): Promise<{ summary: string[]; excerpts: string[] }> {
@@ -6888,7 +7131,8 @@ export async function runOrchestrator(
   // factory receives the same frozen skill list so the composed system prompt
   // is deterministic across the orchestrator loop.
   const workspaceSkillDir = path.join(config.memoryDir, '..', 'skills')
-  const skills = loadSkillRegistry({ extraSkillDirs: [workspaceSkillDir] }).listSkills()
+  const workspaceSkillDirs = config.skills?.projectLocal?.enabled === true ? [workspaceSkillDir] : []
+  const skills = loadSkillRegistry({ extraSkillDirs: workspaceSkillDirs }).listSkills()
 
   // FR-18: build a single HookExecutor from the workspace config's `hooks`
   // passthrough. Every agent shares the same executor so hook state (e.g. a

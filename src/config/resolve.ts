@@ -142,6 +142,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
     maxRevisions: workspace.maxRevisions ?? global.maxRevisions,
     heartbeatInterval: workspace.heartbeatInterval ?? global.heartbeatInterval,
     ignore: workspace.ignore,
+    skills: workspace.skills ?? {},
     lmStudioUrl,
     servePort,
     ...(workspace.runtime ? { runtime: workspace.runtime } : {}),
