@@ -2980,3 +2980,9 @@ display paths. The rebuilt Projects page was inspected in-browser with no
 
 Follow-up on `2026-05-19`: the Projects screenshot now has an AVIF sibling and
 docs pages render it through `<picture>` with the PNG retained as fallback.
+
+Navigation follow-up on `2026-05-19`: the docs sidebar should only change when
+the reader intentionally changes top-level sections. Guide sidebar entries no
+longer route directly into `/web-ui/*`; setup, project shell, and task drawer
+now have guide-owned pages, while the Web UI reference remains a separate
+top-level section.

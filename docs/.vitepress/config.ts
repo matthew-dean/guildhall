@@ -10,9 +10,9 @@ const guideStartItems = [
 
 const guideOperateItems = [
   { text: 'The dashboard', link: '/guide/dashboard' },
-  { text: 'Setup wizard', link: '/web-ui/setup' },
-  { text: 'Project view', link: '/web-ui/project-view' },
-  { text: 'Task drawer', link: '/web-ui/task-drawer' },
+  { text: 'Setup wizard', link: '/guide/setup-wizard' },
+  { text: 'Project shell', link: '/guide/project-shell' },
+  { text: 'Task drawer', link: '/guide/task-drawer' },
   { text: 'Memory and recovery', link: '/guide/memory-and-recovery' },
   { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
   { text: 'Running Guildhall', link: '/guide/running' },
@@ -28,6 +28,10 @@ const guideReferenceItems = [
 ]
 
 const guideSidebarSections = [
+  {
+    text: 'Guide',
+    items: [{ text: 'Overview', link: '/guide/' }],
+  },
   {
     text: 'First run',
     items: guideStartItems,
@@ -78,13 +82,12 @@ export default defineConfig({
     nav: [
       { text: 'Start', link: '/guide/quick-start' },
       { text: 'Guide', link: '/guide/' },
+      { text: 'UI reference', link: '/web-ui/' },
       { text: 'CLI', link: '/cli/' },
       { text: 'Reference', link: '/reference/' },
       {
         text: 'More',
         items: [
-          { text: 'UI reference', link: '/web-ui/' },
-          { text: 'Guide', link: '/guide/' },
           { text: 'Levers', link: '/levers/' },
           { text: 'Subsystems', link: '/subsystems/' },
           { text: 'Design notes', link: '/design/' },
@@ -97,7 +100,7 @@ export default defineConfig({
       '/guide/': guideSidebarSections,
       '/subsystems/': [
         {
-          text: 'Overview',
+          text: 'Subsystems',
           items: [{ text: 'Architecture', link: '/subsystems/' }],
         },
         {
@@ -141,7 +144,7 @@ export default defineConfig({
       ],
       '/levers/': [
         {
-          text: 'Lever reference',
+          text: 'Levers',
           items: [
             { text: 'How levers work', link: '/levers/' },
             { text: 'Provenance', link: '/levers/provenance' },
