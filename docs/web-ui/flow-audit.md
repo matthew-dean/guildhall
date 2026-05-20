@@ -49,6 +49,10 @@ screen.
   current package version to its release note, and the release index states
   that the public docs track the current release from `main` rather than
   version-pinned historical docs.
+- [x] Make Get Started concrete. `docs/guide/quick-start.md` now shows example
+  first-run questions, useful answers, runtime blockers, and a full mini
+  first-run scenario so new users can feel the product loop before opening
+  their own repo.
 - [x] Split the "agents need to be smarter" work into immediate `0.5.x`
   decision-point unblockers versus `0.6.0` policy/runtime architecture.
   The 0.6.0 note now combines bounded improvisation, typed recovery playbooks,
