@@ -29,6 +29,7 @@
   import Textarea from '../../lib/Textarea.svelte'
   import Select from '../../lib/Select.svelte'
   import Markdown from '../../lib/Markdown.svelte'
+  import Modal from '../../lib/Modal.svelte'
   import AgentQuestion from '../../lib/AgentQuestion.svelte'
   import StatusLight from '../../lib/StatusLight.svelte'
   import StatusDot from '../../lib/StatusDot.svelte'
@@ -194,6 +195,9 @@
   let contextTurnId = $state<string | null>(null)
   let contextDrafts = $state<Record<string, string>>({})
   let contextErrors = $state<Record<string, string>>({})
+  let sourcePreview = $state<{ ref: string; displayPath: string; content: string; truncated: boolean } | null>(null)
+  let sourcePreviewLoadingRef = $state<string | null>(null)
+  let sourcePreviewError = $state<string | null>(null)
   let importHandoff = $state<{ tasksAdded: number; sourceCount: number } | null>(null)
   let importHandoffFocused = $state(false)
   let lastScrolledId = $state<string | null>(null)
@@ -252,19 +256,38 @@
     staged = next
   }
 
-  function sourceHref(ref: string): string {
+  function sourcePath(ref: string): string {
     const cleaned = ref.trim()
-    if (!cleaned) return '#'
+    if (!cleaned) return ''
     const fileMatch = cleaned.match(/^(.+?\.(?:md|mdx|txt|tsx?|jsx?|svelte|vue|json|ya?ml|css|scss|html))(?:[:#].*)?$/i)
-    const candidate = (fileMatch?.[1] ?? cleaned).trim()
-    const absolute = candidate.startsWith('/')
-      ? candidate
-      : project.detail?.path
-        ? `${project.detail.path.replace(/\/+$/, '')}/${candidate.replace(/^\/+/, '')}`
-        : candidate
-    return absolute.startsWith('/')
-      ? `file://${absolute.split('/').map(encodeURIComponent).join('/')}`
-      : `#source-${encodeURIComponent(absolute)}`
+    return (fileMatch?.[1] ?? cleaned).trim()
+  }
+
+  async function openSourceNote(ref: string): Promise<void> {
+    const candidate = sourcePath(ref)
+    if (!candidate) return
+    sourcePreviewLoadingRef = ref
+    sourcePreviewError = null
+    try {
+      const r = await scopedProjectFetch(`/api/project/source-note?path=${encodeURIComponent(candidate)}`, { cache: 'no-store' })
+      const body = (await r.json().catch(() => ({}))) as {
+        error?: string
+        displayPath?: string
+        content?: string
+        truncated?: boolean
+      }
+      if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`)
+      sourcePreview = {
+        ref,
+        displayPath: body.displayPath ?? candidate,
+        content: body.content ?? '',
+        truncated: Boolean(body.truncated),
+      }
+    } catch (err) {
+      sourcePreviewError = err instanceof Error ? err.message : String(err)
+    } finally {
+      sourcePreviewLoadingRef = null
+    }
   }
 
   async function load(): Promise<void> {
@@ -1695,12 +1718,21 @@
                           <span class="field-label">Imported from</span>
                           <div class="source-list">
                             {#each t.sourceNote.references as ref (ref)}
-                              {@const href = sourceHref(ref)}
-                              <a class="source-ref" href={href} target="_blank" rel="noreferrer" title="Open source note">
+                              <button
+                                type="button"
+                                class="source-ref"
+                                title="Open source note"
+                                aria-label={`Open source note ${ref}`}
+                                disabled={sourcePreviewLoadingRef === ref}
+                                onclick={() => void openSourceNote(ref)}
+                              >
                                 <code>{ref}</code>
-                              </a>
+                              </button>
                             {/each}
                           </div>
+                          {#if sourcePreviewError}
+                            <p class="error">{sourcePreviewError}</p>
+                          {/if}
                         </div>
                       {/if}
                     </div>
@@ -1740,8 +1772,11 @@
                         {/if}
                       </Stack>
                     {:else}
-                      <p class="detail">Need the premise explained first? Ask for context; Guildhall will keep this question open.</p>
-                      <Button variant="ghost" size="sm" disabled={busyTurnId === t.id} onclick={() => (contextTurnId = t.id)}>
+                      <div class="question-context-copy">
+                        <strong>Need more context?</strong>
+                        <span>Ask Guildhall to explain the source note or current assumption before you answer. This keeps the question open.</span>
+                      </div>
+                      <Button variant="secondary" size="sm" disabled={busyTurnId === t.id} onclick={() => (contextTurnId = t.id)}>
                         Ask for context
                       </Button>
                     {/if}
@@ -1984,12 +2019,21 @@
                         <span class="field-label">Imported from</span>
                         <div class="source-list">
                           {#each t.sourceNote.references as ref (ref)}
-                            {@const href = sourceHref(ref)}
-                            <a class="source-ref" href={href} target="_blank" rel="noreferrer" title="Open source note">
+                            <button
+                              type="button"
+                              class="source-ref"
+                              title="Open source note"
+                              aria-label={`Open source note ${ref}`}
+                              disabled={sourcePreviewLoadingRef === ref}
+                              onclick={() => void openSourceNote(ref)}
+                            >
                               <code>{ref}</code>
-                            </a>
+                            </button>
                           {/each}
                         </div>
+                        {#if sourcePreviewError}
+                          <p class="error">{sourcePreviewError}</p>
+                        {/if}
                       </div>
                     {/if}
                   </div>
@@ -2201,6 +2245,31 @@
     </Stack>
   {/if}
 </div>
+
+<Modal
+  open={Boolean(sourcePreview)}
+  title="Source note"
+  size="lg"
+  onClose={() => {
+    sourcePreview = null
+    sourcePreviewError = null
+  }}
+>
+  {#if sourcePreview}
+    <div class="source-preview">
+      <div class="source-preview-path">
+        <span>Imported from</span>
+        <code>{sourcePreview.displayPath}</code>
+      </div>
+      {#if sourcePreview.truncated}
+        <p class="source-preview-warning">Preview truncated to keep Thread responsive.</p>
+      {/if}
+      <div class="source-preview-body">
+        <Markdown source={sourcePreview.content || '_This source note is empty._'} />
+      </div>
+    </div>
+  {/if}
+</Modal>
 
 <style>
   .thread {
@@ -2542,12 +2611,29 @@
     overflow-wrap: anywhere;
   }
   .source-ref {
-    color: inherit;
-    text-decoration: none;
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--accent-2);
+    cursor: pointer;
+    font: inherit;
+    padding: 0;
+    text-align: left;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--accent-2) 50%, transparent);
+    text-underline-offset: 3px;
+  }
+  .source-ref:disabled {
+    cursor: progress;
+    opacity: 0.65;
   }
   .source-ref:hover code {
-    border-color: var(--accent);
+    border-color: var(--accent-2);
     color: var(--text);
+  }
+  .source-ref:focus-visible code {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
   }
   .question-context-actions {
     display: flex;
@@ -2555,13 +2641,58 @@
     justify-content: space-between;
     gap: var(--s-2);
     flex-wrap: wrap;
-    padding: var(--s-2) var(--s-3);
-    border: 1px dashed var(--border);
+    padding: var(--s-3);
+    border: 1px solid var(--border);
     border-radius: var(--r-2);
-    background: color-mix(in srgb, var(--bg-raised-2) 70%, transparent);
+    background: var(--bg);
   }
   .question-context-actions :global(.stack) {
     width: 100%;
+  }
+  .question-context-copy {
+    min-width: 220px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    color: var(--text);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+  }
+  .question-context-copy span {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+  }
+  .source-preview {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+  }
+  .source-preview-path {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-1);
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+  .source-preview-path code {
+    color: var(--text);
+    text-transform: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .source-preview-warning {
+    margin: 0;
+    color: var(--warn);
+    font-size: var(--fs-1);
+  }
+  .source-preview-body {
+    padding: var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
   }
   .question-stack {
     display: flex;

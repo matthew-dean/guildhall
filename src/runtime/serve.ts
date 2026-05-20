@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, mkdirSync, statSync, writeFileSync, readdirSync, type Dirent, promises as fsp } from 'node:fs'
-import { dirname, join, resolve, basename } from 'node:path'
+import { dirname, join, resolve, basename, relative, isAbsolute, sep as pathSeparator } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
@@ -2979,6 +2979,49 @@ export function buildServeApp(opts: ServeOptions = {}): {
         recentEvents: supervisor.recent(project.id, undefined, project.path),
       })
       return c.json(thread)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/source-note', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const requested = c.req.query('path')?.trim()
+      if (!requested) return c.json({ error: 'path is required' }, 400)
+
+      const projectRoot = resolve(project.path)
+      const candidate = requested.startsWith('/')
+        ? resolve(requested)
+        : resolve(projectRoot, requested)
+      const rel = relative(projectRoot, candidate)
+      if (rel === '..' || rel.startsWith(`..${pathSeparator}`) || isAbsolute(rel)) {
+        return c.json({ error: 'Source note path must stay inside the project.' }, 403)
+      }
+
+      const stat = await fsp.stat(candidate).catch((err: unknown) => {
+        if ((err as { code?: string })?.code === 'ENOENT') return null
+        throw err
+      })
+      if (!stat || !stat.isFile()) return c.json({ error: 'Source note not found.' }, 404)
+      const [realProjectRoot, realCandidate] = await Promise.all([
+        fsp.realpath(projectRoot),
+        fsp.realpath(candidate),
+      ])
+      const realRel = relative(realProjectRoot, realCandidate)
+      if (realRel === '..' || realRel.startsWith(`..${pathSeparator}`) || isAbsolute(realRel)) {
+        return c.json({ error: 'Source note path must stay inside the project.' }, 403)
+      }
+
+      const maxChars = 96_000
+      const raw = await fsp.readFile(candidate, 'utf8')
+      const truncated = raw.length > maxChars
+      return c.json({
+        path: candidate,
+        displayPath: realRel || rel || basename(candidate),
+        content: truncated ? raw.slice(0, maxChars) : raw,
+        truncated,
+      })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }

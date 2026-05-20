@@ -3288,3 +3288,10 @@ pinned macOS installer examples in README and Quick Start now point at
 `pnpm release:dry 0.6.0 --allow-branch --allow-dirty` all passed. The dry run
 built the npm tarball and macOS package artifact; it used the branch/dirty
 overrides only because this was a release-prep branch with pending changes.
+
+Thread source-context follow-up on `2026-05-20`: imported source references in
+Thread cards now open an in-app Source note preview instead of pretending a
+`file://` link is a useful app action. The preview endpoint is project-scoped
+and rejects paths outside the project. The question context affordance is now a
+visible secondary action with explicit copy about asking Guildhall to explain
+the source note/current assumption before the human answers.

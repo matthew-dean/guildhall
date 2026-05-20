@@ -218,6 +218,14 @@ function installFetchFakes(turns: unknown[], activeTurnId: string | null) {
     if (url.startsWith('/api/project/thread')) {
       return json({ turns, activeTurnId, caughtUp: false })
     }
+    if (url.startsWith('/api/project/source-note')) {
+      return json({
+        path: '/repo/looma-knit/docs/roadmap.md',
+        displayPath: 'docs/roadmap.md',
+        content: '# Roadmap source\n\nThis is the source note Guildhall used.',
+        truncated: false,
+      })
+    }
     if (url.startsWith('/api/project/task/') && url.endsWith('/shape-draft?projectId=looma-knit')) {
       return json({ ok: true })
     }
@@ -450,9 +458,11 @@ describe('ThreadTab', () => {
     expect(screen.getByText('Build URL input, display text, open-in-new-tab, and remove link controls.')).toBeTruthy()
     expect(screen.getByText('docs/roadmap.md')).toBeTruthy()
     expect(screen.getByText('web/app/components/editor/toolbar.ts')).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'docs/roadmap.md' }).getAttribute('href')).toBe(
-      'file:///repo/looma-knit/docs/roadmap.md',
-    )
+    await userEvent.click(screen.getByRole('button', { name: 'Open source note docs/roadmap.md' }))
+    await screen.findByRole('dialog', { name: 'Source note' })
+    expect(screen.getByText('Roadmap source')).toBeTruthy()
+    expect(screen.getByText('This is the source note Guildhall used.')).toBeTruthy()
+    expect(calls.some(call => call.url.includes('/api/project/source-note') && call.url.includes('projectId=looma-knit'))).toBe(true)
 
     await userEvent.click(screen.getByRole('button', { name: /draft task brief/i }))
     await waitFor(() => {
@@ -717,7 +727,8 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
     await screen.findByText('Pick one: what is the single source of truth for migration status?')
-    expect(screen.getByText(/Need the premise explained first/)).toBeTruthy()
+    expect(screen.getByText('Need more context?')).toBeTruthy()
+    expect(screen.getByText(/Ask Guildhall to explain the source note or current assumption before you answer/)).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: /ask for context/i }))
     await userEvent.type(

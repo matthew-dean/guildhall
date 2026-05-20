@@ -131,3 +131,57 @@ describe('POST /api/project/intake', () => {
     expect(queue.tasks[0]?.projectPath).toBe(path.join(tmpDir, 'knit'))
   })
 })
+
+describe('GET /api/project/source-note', () => {
+  it('returns a project-scoped source note for in-app preview', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'docs', 'PROJECT_STATE.md'), '# Project state\n\nKnown facts.')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/source-note?path=docs%2FPROJECT_STATE.md')))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as { displayPath?: string; content?: string; truncated?: boolean }
+    expect(body.displayPath).toBe('docs/PROJECT_STATE.md')
+    expect(body.content).toContain('# Project state')
+    expect(body.content).toContain('Known facts.')
+    expect(body.truncated).toBe(false)
+  })
+
+  it('rejects source note paths outside the current project', async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-source-outside-'))
+    try {
+      const outsidePath = path.join(outsideDir, 'secret.md')
+      await fs.writeFile(outsidePath, 'not part of this project')
+      const { app } = buildServeApp({ projectPath: tmpDir })
+
+      const url = projectUrl(`/api/project/source-note?path=${encodeURIComponent(outsidePath)}`)
+      const res = await app.fetch(new Request(url))
+
+      expect(res.status).toBe(403)
+      const body = await res.json() as { error?: string }
+      expect(body.error).toContain('inside the project')
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects source note symlinks that escape the current project', async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-source-symlink-'))
+    try {
+      const outsidePath = path.join(outsideDir, 'secret.md')
+      await fs.writeFile(outsidePath, 'not part of this project')
+      await fs.mkdir(path.join(tmpDir, 'docs'), { recursive: true })
+      await fs.symlink(outsidePath, path.join(tmpDir, 'docs', 'linked-secret.md'))
+      const { app } = buildServeApp({ projectPath: tmpDir })
+
+      const res = await app.fetch(new Request(projectUrl('/api/project/source-note?path=docs%2Flinked-secret.md')))
+
+      expect(res.status).toBe(403)
+      const body = await res.json() as { error?: string }
+      expect(body.error).toContain('inside the project')
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true })
+    }
+  })
+})
