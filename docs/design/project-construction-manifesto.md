@@ -445,14 +445,15 @@ machinery manual of inner workings.
 - Ensure imported drafts expose their source notes and evidence.
 - Require worker handoffs to include prior attempts and verification context.
 
-### 0.6.0: Build the Planning Layer
+### 0.6.0: Land the Construction Substrate
 
-- Add a project manager role that groups tasks into releases, phases,
-  dependencies, priorities, and active tranches.
-- Promote project journey as a first-class artifact.
-- Add blueprint/change-order records for meaningful plan changes.
+- Promote construction mode as visible task metadata so users can see survey,
+  blueprint, build, inspection, change-order, and punch-list work.
 - Add policy packets that tell agents their construction mode, authority,
   allowed mutation surface, verification standard, and escalation rule.
+- Add blueprint/change-order records for meaningful plan changes.
+- Add bounded recovery playbooks, typed blocker classifications, and scoped
+  learning records.
 - Add learning routes that separate project memory, user preference, and
   Guildhall product improvements.
 
@@ -460,6 +461,15 @@ The first implementation substrate is tracked in
 `docs/superpowers/specs/2026-05-19-guildhall-construction-runtime-integration.md`
 and
 `docs/superpowers/plans/2026-05-19-guildhall-construction-runtime-integration.md`.
+
+### 0.6.x: Build the Planning Layer
+
+- Add a project manager role that groups tasks into releases, phases,
+  dependencies, priorities, and active tranches.
+- Promote project journey as a first-class artifact.
+- Make release shaping explain why each task belongs now versus later.
+- Let project repair rerun site survey, blueprint, framing, and change-order
+  steps when project facts change.
 
 ### Later: Extract the Substrate
 

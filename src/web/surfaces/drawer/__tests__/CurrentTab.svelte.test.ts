@@ -166,9 +166,10 @@ describe('CurrentTab', () => {
       },
     ])
 
-    expect(screen.getByText('Needs shaping')).toBeTruthy()
+    expect(screen.getByText('Needs task brief')).toBeTruthy()
+    expect(screen.getByText(/Next step: turn this note into a task brief with scope, evidence, and acceptance criteria/)).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /review draft/i }))
-    await userEvent.click(screen.getByRole('button', { name: /let guildhall shape this/i }))
+    await userEvent.click(screen.getByRole('button', { name: /draft task brief/i }))
 
     expect(props.onOpenSpecTab).toHaveBeenCalledOnce()
     expect(props.onShapeDraft).toHaveBeenCalledOnce()

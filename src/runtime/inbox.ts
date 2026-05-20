@@ -195,7 +195,7 @@ function failedBootstrapDetail(projectPath: string): string | null {
   const status = readJsonSafe(join(projectPath, 'memory', 'bootstrap.json')) as BootstrapStatus | null
   if (!status || status.success !== false) return null
   const failed = status.steps.find(s => s.result === 'fail')
-  if (!failed) return 'The last bootstrap run failed. Open Ready to rerun the project checks.'
+  if (!failed) return 'The last readiness check failed. Open readiness checks to rerun the project checks.'
   const firstUsefulLine = bootstrapOutputLine(failed.output)
   return `${failed.command} failed with exit ${failed.exitCode}${firstUsefulLine ? `: ${firstUsefulLine}` : '.'}`
 }
@@ -372,8 +372,8 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
         taskId: nextDraftId,
         title:
           importDrafts.length === 1
-            ? '1 imported draft needs shaping'
-            : `${importDrafts.length} imported drafts need shaping`,
+            ? '1 imported draft needs a task brief'
+            : `${importDrafts.length} imported drafts need task briefs`,
         detail: queuedDetail,
         actionHref: '/task/' + encodeURIComponent(nextDraftId),
       })

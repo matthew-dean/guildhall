@@ -13,31 +13,43 @@ class ProjectStore {
   error: string | null = $state(null)
   #requestSeq = 0
   #appliedSeq = 0
+  #inFlight: Promise<ProjectDetail | null> | null = null
+  #inFlightProjectId: string | null = null
 
   async refresh(projectId?: string | null): Promise<ProjectDetail | null> {
+    const normalizedProjectId = projectId?.trim() || null
+    if (this.#inFlight && this.#inFlightProjectId === normalizedProjectId) return this.#inFlight
+    this.#inFlightProjectId = normalizedProjectId
     const requestSeq = ++this.#requestSeq
     this.loading = true
-    try {
-      const r = await projectFetch('/api/project', { cache: 'no-store' }, projectId)
-      const j = (await r.json()) as ProjectDetail
-      if (requestSeq < this.#appliedSeq) return this.detail
-      if (j.error) {
+    this.#inFlight = (async () => {
+      try {
+        const r = await projectFetch('/api/project', { cache: 'no-store' }, normalizedProjectId)
+        const j = (await r.json()) as ProjectDetail
+        if (requestSeq < this.#appliedSeq) return this.detail
+        if (j.error) {
+          this.#appliedSeq = requestSeq
+          this.error = j.error
+          return null
+        }
         this.#appliedSeq = requestSeq
-        this.error = j.error
+        this.error = null
+        this.detail = j
+        return j
+      } catch (err) {
+        if (requestSeq < this.#appliedSeq) return this.detail
+        this.#appliedSeq = requestSeq
+        this.error = err instanceof Error ? err.message : String(err)
         return null
+      } finally {
+        if (requestSeq === this.#requestSeq) this.loading = false
+        if (this.#inFlightProjectId === normalizedProjectId) {
+          this.#inFlight = null
+          this.#inFlightProjectId = null
+        }
       }
-      this.#appliedSeq = requestSeq
-      this.error = null
-      this.detail = j
-      return j
-    } catch (err) {
-      if (requestSeq < this.#appliedSeq) return this.detail
-      this.#appliedSeq = requestSeq
-      this.error = err instanceof Error ? err.message : String(err)
-      return null
-    } finally {
-      if (requestSeq === this.#requestSeq) this.loading = false
-    }
+    })()
+    return this.#inFlight
   }
 }
 

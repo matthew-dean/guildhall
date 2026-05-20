@@ -284,7 +284,7 @@ describe('buildProjectCardTicker', () => {
     ).toEqual({
       tone: 'warn',
       pulse: false,
-      label: 'Needs shaping',
+      label: 'Needs task briefs',
       message: '2 imported drafts waiting',
     })
 

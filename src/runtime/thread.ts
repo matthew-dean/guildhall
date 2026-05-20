@@ -85,6 +85,11 @@ export interface SetupStepTurn extends TurnBase {
   currentValue?: string | undefined
   placeholder?: string | undefined
   choices?: Array<{ value: string; label: string }> | undefined
+  contextSummary?: {
+    intro: string
+    facts: string[]
+    uncertainty: string
+  } | undefined
 }
 
 /**
@@ -731,6 +736,59 @@ function setupCurrentValue(stepId: string, snap: ProjectSnapshot, projectPath: s
   }
 }
 
+function taskCountSummary(tasks: Task[]): string {
+  if (tasks.length === 0) return 'No tasks have been created yet.'
+  const counts = new Map<string, number>()
+  for (const task of tasks) {
+    const status = typeof task.status === 'string' ? task.status : 'unknown'
+    counts.set(status, (counts.get(status) ?? 0) + 1)
+  }
+  const parts = Array.from(counts.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([status, count]) => `${count} ${status.replace(/_/g, ' ')}`)
+  return `${tasks.length} task${tasks.length === 1 ? '' : 's'} on record: ${parts.join(', ')}.`
+}
+
+function coordinatorSummary(snap: ProjectSnapshot): string {
+  const coordinators = snap.config?.coordinators ?? []
+  if (coordinators.length === 0) return 'No coordinator areas have been saved yet.'
+  const names = coordinators
+    .map((coordinator) => coordinator.name ?? coordinator.id)
+    .filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
+  if (names.length === 0) return `${coordinators.length} coordinator area${coordinators.length === 1 ? '' : 's'} saved.`
+  return `Coordinator areas: ${names.join(', ')}.`
+}
+
+function setupContextSummary(
+  stepId: string,
+  status: TurnStatus,
+  snap: ProjectSnapshot,
+  projectPath: string,
+  tasks: Task[],
+  currentValue: string | undefined,
+): SetupStepTurn['contextSummary'] {
+  if ((stepId !== 'direction' && stepId !== 'workspaceImport') || status === 'done') return undefined
+  const projectName = snap.config?.name?.trim() || basename(projectPath)
+  const durableDirection = currentValue?.trim() || setupCurrentValue('direction', snap, projectPath)?.trim()
+  const currentRead = durableDirection
+    ? `Current read: ${durableDirection}`
+    : 'Current read: no durable project direction has been saved yet.'
+  const uncertainty = stepId === 'workspaceImport'
+    ? 'If these files, priorities, or constraints are stale, correct the project direction or source notes before approving imported tasks. The review should use this snapshot as evidence, not as permanent project truth.'
+    : 'If the goal, audience, architecture, priorities, or constraints have changed, add that here. The saved direction is the durable plan input, and it can be revised later as the project changes.'
+  return {
+    intro: "This is Guildhall's current snapshot from local files and setup state, not permanent project truth.",
+    facts: [
+      `Project: ${projectName} (${basename(projectPath)}).`,
+      currentRead,
+      coordinatorSummary(snap),
+      snap.bootstrapVerified ? 'Bootstrap has been verified before.' : 'Bootstrap is not verified yet.',
+      taskCountSummary(tasks),
+    ],
+    uncertainty,
+  }
+}
+
 function phaseForTurn(turn: ThreadTurn): TurnPhase {
   if (turn.kind === 'review_feedback') return turn.phase
   if (turn.status === 'done') return 'done'
@@ -1093,6 +1151,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       actionLabel: 'Open',
       actionHref: '/',
     }
+    const currentValue = setupCurrentValue(step.id, snap, opts.projectPath) ?? action.currentValue
     turns.push({
       kind: 'setup_step',
       id: `setup:${step.id}`,
@@ -1105,7 +1164,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       why: step.why,
       skippable: step.skippable,
       ...action,
-      currentValue: setupCurrentValue(step.id, snap, opts.projectPath) ?? action.currentValue,
+      currentValue,
+      contextSummary: setupContextSummary(step.id, status, snap, opts.projectPath, tasks, currentValue),
     })
   }
 
@@ -1380,7 +1440,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       const summary =
         effectiveLiveAgent
           ? importedDraft && effectiveLiveAgent.name === 'spec-agent'
-            ? 'Guildhall is shaping this imported draft now.'
+            ? 'Guildhall is drafting a task brief for this imported note now.'
             : taskId === META_INTAKE_TASK_ID
               ? 'Guildhall is inspecting the repo and drafting starter tasks now.'
             : `${friendlyAgentName(effectiveLiveAgent.name)} is working on this now.`
@@ -1392,13 +1452,13 @@ export function buildThread(opts: BuildThreadOptions): Thread {
                 : 'Guildhall has a partial setup draft here.'
           : taskStatus === 'import_draft'
             ? importDraftTasks.length > 1
-              ? `Imported draft waiting for shaping. ${importDraftTasks.length - 1} more drafts are queued behind it.`
-              : 'Imported draft waiting for shaping.'
+              ? `Imported draft needs a task brief. ${importDraftTasks.length - 1} more drafts are queued behind it.`
+              : 'Imported draft needs a task brief.'
             : taskStatus === 'exploring'
               ? importedDraft
                 ? importDraftTasks.length > 1
-                  ? `Imported draft waiting for shaping. ${importDraftTasks.length - 1} more drafts are queued behind it.`
-                  : 'Imported draft waiting for shaping.'
+                  ? `Imported draft has a task brief in progress. ${importDraftTasks.length - 1} more drafts are queued behind it.`
+                  : 'Imported draft has a task brief in progress.'
               : queuedSpecRevision
                 ? 'Guildhall has your latest answers and a spec draft. The next step is for Guildhall to revise the spec.'
               : 'The spec author is shaping this task.'

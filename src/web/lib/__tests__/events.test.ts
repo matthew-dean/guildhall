@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   connectStream,
+  disconnectStream,
   eventCssClass,
   eventTaskId,
   onEvent,
@@ -42,6 +43,7 @@ describe('event stream wiring', () => {
   })
 
   afterEach(() => {
+    disconnectStream()
     vi.restoreAllMocks()
   })
 
@@ -94,6 +96,18 @@ describe('event stream wiring', () => {
     expect(instances).toHaveLength(2)
     expect(instances[0]!.close).toHaveBeenCalled()
     expect(instances[1]!.url).toBe('/api/project/events?projectId=fair-labor-license')
+  })
+
+  it('can close the stream while a project route performs its initial data load', () => {
+    connectStream()
+    expect(instances).toHaveLength(1)
+
+    disconnectStream()
+    expect(instances[0]!.close).toHaveBeenCalled()
+
+    connectStream()
+    expect(instances).toHaveLength(2)
+    expect(instances[1]!.url).toBe('/api/project/events?projectId=looma-knit')
   })
 })
 

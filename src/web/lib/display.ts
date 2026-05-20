@@ -18,7 +18,7 @@ export function friendlyStewardName(_legacyName: string | undefined, domain?: st
 export function friendlyStatus(status: string | undefined): string {
   switch (status) {
     case 'proposed': return 'Backlog'
-    case 'import_draft': return 'Needs shaping'
+    case 'import_draft': return 'Needs task brief'
     case 'exploring': return 'Intake'
     case 'spec_review': return 'Awaiting approval'
     case 'pending': return 'Ready'

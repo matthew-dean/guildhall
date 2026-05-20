@@ -496,7 +496,7 @@ describe('ProjectView', () => {
     expect(screen.getByRole('button', { name: /fix the bootstrap failure before adding tasks/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /fix the bootstrap failure before starting/i })).toBeDisabled()
 
-    await user.click(screen.getByRole('link', { name: /open ready/i }))
+    await user.click(screen.getByRole('link', { name: /open readiness checks/i }))
     expect(path.value).toBe('/projects/looma-knit/settings/ready')
   })
 

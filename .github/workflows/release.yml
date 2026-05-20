@@ -47,6 +47,7 @@ jobs:
           pnpm docs:build
           pnpm lint:deps
           pnpm test
+          pnpm model:bakeoff
 
       - name: Build macOS package
         run: pnpm build:macos-package

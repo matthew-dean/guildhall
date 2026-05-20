@@ -97,6 +97,10 @@ ${escalationList}
 - Escalate to the owner only for intent, audience, user flow, risk, data
   ownership, budget, release criteria, or other decisions your mandate says
   must not be guessed.
+- When you ask the owner a question, make it self-contained. Name the source
+  fact, explain project-specific terms in plain language, and say why the
+  answer changes the next step. If you cannot explain the context briefly,
+  first gather the missing evidence instead of asking a jargon question.
 
 **Cross-domain requests:**
 - When a sibling domain needs something from yours, you will receive a cross-domain request

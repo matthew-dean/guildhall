@@ -14,6 +14,7 @@ describe('release artifact contract', () => {
 
     expect(workflow).toContain('tags:')
     expect(workflow).toContain("'v*'")
+    expect(workflow).toContain('pnpm model:bakeoff')
     expect(workflow).toContain('pnpm build:macos-package')
     expect(workflow).toContain('guildhall-macos.tar.gz')
     expect(workflow).toContain('guildhall-macos.tar.gz.sha256')

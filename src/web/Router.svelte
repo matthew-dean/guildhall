@@ -10,7 +10,7 @@
   import ProvidersPage from './surfaces/ProvidersPage.svelte'
   import { Toaster } from 'svelte-sonner'
   import { path, nav } from './lib/nav.svelte.js'
-  import { connectStream } from './lib/events.js'
+  import { connectStream, disconnectStream } from './lib/events.js'
   import { parseRoute } from './lib/router.js'
   import { currentProjectHref } from './lib/project-routes.js'
 
@@ -20,7 +20,9 @@
   // register via onEvent() / onStatus().
   $effect(() => {
     path.value
-    connectStream()
+    disconnectStream()
+    const handle = setTimeout(() => connectStream(), 750)
+    return () => clearTimeout(handle)
   })
 
   function closeDrawer() {

@@ -304,7 +304,7 @@ export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectA
     return {
       tone: 'warn',
       pulse: false,
-      label: 'Needs shaping',
+      label: 'Needs task briefs',
       message: `${counts.draftReview} imported ${pluralize(counts.draftReview, 'draft')} waiting`,
     }
   }

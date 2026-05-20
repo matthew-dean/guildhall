@@ -72,7 +72,7 @@
         return {
           verb: 'Verify your bootstrap commands',
           why: 'Agents won’t dispatch until install + gate commands are verified.',
-          button: 'Open Ready',
+          button: 'Open readiness checks',
           href: item.actionHref ?? '/settings/ready',
         }
       case 'setup_pending':

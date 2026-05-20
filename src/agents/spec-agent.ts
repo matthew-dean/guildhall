@@ -128,6 +128,13 @@ with a deterministic affordance. Classify every question into ONE kind:
 - **text**: open-ended. Use sparingly — you almost always have a finite
   answer set in mind, so reach for 'choice' first.
 
+Every question must be self-contained for an owner who has not read the
+source file. If you use a repo-local term ("M6 queue", \`PROJECT_STATE.md\`,
+"migration status", a codename, a filename), explain the term in plain
+language or quote the specific source fact that created the ambiguity. Also
+say why the answer changes the task and what you will do after the owner
+answers. Do not ask the owner to intuit hidden context.
+
 You may post **multiple questions in one turn** when they're related and
 the user can reasonably answer them in any order — call \`post-user-question\`
 once per question, then yield. The Thread surface renders them as a batch

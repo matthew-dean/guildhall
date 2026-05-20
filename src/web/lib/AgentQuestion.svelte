@@ -126,7 +126,7 @@
         question.selectionMode === 'multiple' ||
         (
           question.selectionMode !== 'single' &&
-          /pick all|select all|all that apply|choose all|which of these should|which of these do|which options|which parts|which items/i.test(question.prompt ?? '')
+          /pick all|select all|all that apply|choose all|which of these should|which of these do|which options|which parts|which items/i.test(displayPrompt(question.prompt))
         )
       ),
   )

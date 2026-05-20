@@ -64,7 +64,7 @@ describe('DoThisNext', () => {
     expect(screen.getByText('Agents won’t dispatch until install + gate commands are verified.')).toBeTruthy()
     expect(screen.getByText('1 more in Inbox ›')).toBeTruthy()
 
-    await userEvent.click(screen.getByRole('button', { name: /open ready/i }))
+    await userEvent.click(screen.getByRole('button', { name: /open readiness checks/i }))
 
     expect(path.value).toBe('/projects/looma-knit/settings/ready')
   })

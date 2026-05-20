@@ -73,6 +73,8 @@
   let inboxItems = $state<InboxItem[]>([])
   let inboxLoaded = $state(false)
   let inboxError = $state<string | null>(null)
+  let inboxLoadInFlight = false
+  let inboxLoadQueued = false
   let latestTickerEvent = $state<EventEnvelope | null>(null)
   let tickerNow = $state(Date.now())
   const projectDisplayName = $derived(humanizeProjectName(project.detail?.name ?? project.detail?.id ?? 'Project'))
@@ -95,6 +97,11 @@
   })
 
   async function loadInbox(): Promise<void> {
+    if (inboxLoadInFlight) {
+      inboxLoadQueued = true
+      return
+    }
+    inboxLoadInFlight = true
     try {
       const r = await projectFetch('/api/project/inbox', { cache: 'no-store' }, activeProjectId)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -111,6 +118,11 @@
       inboxError = err instanceof Error ? err.message : String(err)
     } finally {
       inboxLoaded = true
+      inboxLoadInFlight = false
+      if (inboxLoadQueued) {
+        inboxLoadQueued = false
+        void loadInbox()
+      }
     }
   }
 
@@ -1025,7 +1037,7 @@
           <NoticeBand tone="danger" icon="alert-triangle" density="compact">
             <strong>{bootstrapFailureText}</strong>
             {#snippet actions()}
-              <a href={currentProjectHref('/settings/ready', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/ready', activeProjectId)) }}>Open Ready</a>
+              <a href={currentProjectHref('/settings/ready', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/ready', activeProjectId)) }}>Open readiness checks</a>
             {/snippet}
           </NoticeBand>
         {/if}
@@ -1084,7 +1096,7 @@
 
         <div class="body">
           {#if currentView === 'thread'}
-            <ThreadTab />
+            <ThreadTab projectId={activeProjectId} />
           {:else if currentView === 'inbox'}
             <InboxTab items={inboxItems} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
           {:else if currentView === 'workspace-import'}

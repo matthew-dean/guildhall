@@ -392,8 +392,8 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByText('Imported from your project notes. Review it here, then let Guildhall shape it into a complete task.')
-    await userEvent.click(screen.getByRole('button', { name: /let guildhall shape this/i }))
+    await screen.findByText(/Next step: turn this note into a task brief with scope, evidence, and acceptance criteria/)
+    await userEvent.click(screen.getByRole('button', { name: /draft task brief/i }))
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/shape-draft'))).toBe(true)

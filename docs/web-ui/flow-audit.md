@@ -104,6 +104,72 @@ screen.
   activity. The durable-progress guard still nudges agents to stop reading and
   write a brief/spec/question/escalation, but it should not appear as repeated
   `Failed glob` / `Failed file read` errors.
+- [x] Make imported-draft cards name the actual artifact and add a compact
+  operations mode for crowded Thread phases. Thread, Current task, project
+  summaries, inbox titles, and task drawer copy now say `Needs task brief` /
+  `Draft task brief`, and expanded phases with eight or more turns render as
+  two-line operation rows with a `Show cards` escape hatch.
+- [x] Add the missing high-volume operations summary and priority ordering for
+  crowded Thread phases. Thread now leads with compact counts for `need you`,
+  `working`, `blocked`, `queued`, and `drafts`, and crowded rows sort by
+  attention / live work / blockers / queued work instead of becoming a raw
+  chronological wall.
+- [x] Reconcile the current `0.6.0` release note against the older planning
+  target. The release candidate now explicitly claims the construction/policy
+  substrate and leaves the full project-manager release-shaping layer as
+  carry-forward work instead of pretending active tranche selection is done.
+- [x] Add the missing `pnpm model:bakeoff` gate to the GitHub release workflow
+  so tagged release packaging enforces the same validation claimed in the
+  `0.6.0` note.
+- [x] Re-check the coverage release bar. A release-readiness run on
+  `2026-05-19` is back over 90% for statements, lines, and functions
+  (`90.20%` statements/lines, `90.15%` functions). The stricter future
+  `pnpm test:coverage:90` gate still fails branches at `77.46%`, so the
+  all-dimension target remains a larger branch-coverage hardening project
+  rather than a blocker for a statements/lines/functions 90% release bar.
+- [x] Improve task-scoped question handling after live Looma + Knit testing
+  showed jargon-heavy questions (`M6 queue`, migration-status ownership) with
+  no context path. Thread now lets the user ask for missing question context
+  without marking the question answered, keeps staged answer submission after
+  the question stack, and renders imported source references as clickable
+  source links on both imported-draft and question cards. Agent/tool guidance
+  now requires self-contained owner questions that explain the source fact,
+  why the answer matters, and what happens next.
+- [x] Re-run the release-readiness sweep after the coverage nudge:
+  `pnpm test` passed `2,497` tests, `pnpm typecheck`, `pnpm docs:check-help-sync`,
+  `pnpm docs:build`, `pnpm lint:deps`, `pnpm model:bakeoff`, `pnpm build`,
+  `pnpm test:ui`, and `git diff --check` all exited cleanly. Known non-blocking
+  output: dependency-cruiser orphan warnings and third-party Svelte warnings
+  from `svelte-sonner` / `runed`.
+- [x] Do a fresh live project walkthrough after the release sweep. Projects home
+  loads and scrolls; `fair-labor-license` and `t-minus-t` both show caught-up
+  done states. `looma-knit` is not runnable without user input because Thread
+  reports six pending answers, including still-jargony task questions. `font-
+  something` eventually surfaces a real bootstrap blocker: `cd model && pixi
+  install` fails because `pixi` is not on the path; the route also lingers on
+  `Loading...` for several seconds before the blocker appears.
+- [x] Fix the project Thread `Loading...` hang found on `font-something`.
+  Root cause was the project SSE stream opening before route-local data loads,
+  which could starve the initial `/api/project/thread` request in the browser.
+  Router now closes/debounces the stream on route changes and reconnects after
+  initial data gets a lane; Thread also receives the explicit route project id
+  instead of falling back through ambient selected-project state. Verified in
+  the installed local app: `font-something` now renders its setup/intake/done
+  sections instead of hanging, while the remaining `pixi` bootstrap blocker is
+  real project state.
+- [x] Add a project memory check-in to direction and existing-work review
+  without turning temporary evidence into permanent truth. Thread now shows
+  "What Guildhall knows right now" as a recomputed snapshot from files, setup
+  state, coordinator areas, bootstrap state, and task counts; the editable
+  direction remains the durable owner input that guides future task shaping and
+  can be revised when project facts change.
+- [x] Clean up the readiness language and unblock the current `font-something`
+  bootstrap. The confusing `Open Ready` action now says `Open readiness
+  checks`; after `pixi` was installed, rerunning bootstrap showed the stale
+  failure was replaced by a bad app gate, so `font-something/guildhall.yaml`
+  now uses `cd app && pnpm run build` instead of the nonexistent
+  `cd app && pnpm run typecheck`. The latest readiness run passed all install
+  commands and gates.
 - [x] Normalize dirty-repo setup blockers in Thread so the user sees the repo
   name and the concrete commit/stash recovery action instead of raw setup
   prose.
@@ -3193,3 +3259,19 @@ Content polish follow-up on `2026-05-19`: public docs copy was swept for
 meta-explanatory scaffolding such as "this page exists" and "use this path."
 Guide, first-run, app, dashboard, and workspace intros now lead with the
 product behavior or user job instead of explaining the page's purpose.
+
+Release-prep follow-up on `2026-05-20`: 0.6.0 docs were reconciled with the
+current runtime surface before release. `docs/releases/0.6.0.md` now names the
+construction substrate that actually landed in this line: clearer imported-task
+brief language, compact crowded Thread rows, task-scoped context follow-ups,
+the project memory check-in, readiness-label cleanup, and release packaging
+proof. The construction manifesto now treats the larger planning/release-shaping
+layer as 0.6.x follow-up instead of claiming it is fully landed in 0.6.0. The
+pinned macOS installer examples in README and Quick Start now point at
+`GUILDHALL_VERSION=0.6.0`, matching `package.json`. Verification completed:
+`pnpm docs:check-help-sync`, `pnpm docs:build`, `pnpm typecheck`,
+`pnpm model:bakeoff`, `pnpm lint:deps`, `pnpm test`, `pnpm build`,
+`pnpm test:ui`, `git diff --check`, and
+`pnpm release:dry 0.6.0 --allow-branch --allow-dirty` all passed. The dry run
+built the npm tarball and macOS package artifact; it used the branch/dirty
+overrides only because this was a release-prep branch with pending changes.

@@ -44,6 +44,13 @@
   import { project } from '../../lib/project.svelte.js'
   import { toast } from 'svelte-sonner'
 
+  interface Props {
+    projectId?: string | null
+  }
+
+  const props = $props<Props>()
+  const explicitProjectId = $derived(props.projectId?.trim() || null)
+
   // ---- Turn shape (mirrors src/runtime/thread.ts) ------------------------
   type TurnPersona = 'intake' | 'spec' | 'worker' | 'reviewer' | 'coord' | 'system'
   type TurnStatus = 'done' | 'active' | 'pending'
@@ -73,6 +80,11 @@
     actionHref?: string | undefined; submitEndpoint?: string | undefined
     currentValue?: string | undefined; placeholder?: string | undefined
     choices?: Array<{ value: string; label: string }> | undefined
+    contextSummary?: {
+      intro: string
+      facts: string[]
+      uncertainty: string
+    } | undefined
   }
   interface BriefTurn {
     kind: 'brief_approval'
@@ -179,6 +191,9 @@
   let replyDrafts = $state<Record<string, string>>({})
   let replyErrors = $state<Record<string, string>>({})
   let sentReplies = $state<Record<string, boolean>>({})
+  let contextTurnId = $state<string | null>(null)
+  let contextDrafts = $state<Record<string, string>>({})
+  let contextErrors = $state<Record<string, string>>({})
   let importHandoff = $state<{ tasksAdded: number; sourceCount: number } | null>(null)
   let importHandoffFocused = $state(false)
   let lastScrolledId = $state<string | null>(null)
@@ -192,6 +207,7 @@
     blocked: false,
     done: false,
   })
+  let expandedCrowdedPhases = $state<Record<string, boolean>>({})
   let pollHandle: ReturnType<typeof setInterval> | null = null
   let clockHandle: ReturnType<typeof setInterval> | null = null
   let loadTimer: ReturnType<typeof setTimeout> | null = null
@@ -209,8 +225,16 @@
   // gets one resume with the full set of answers, not N partial resumes.
   let staged = $state<Record<string, string>>({})
 
+  function scopedProjectFetch(input: string, init?: RequestInit): Promise<Response> {
+    return projectFetch(input, init, explicitProjectId)
+  }
+
+  function refreshProject(): Promise<unknown> {
+    return project.refresh(explicitProjectId)
+  }
+
   async function persistDraftAnswer(taskId: string, questionId: string, answer: string): Promise<void> {
-    await projectFetch(`/api/project/task/${encodeURIComponent(taskId)}/stage-answer`, {
+    await scopedProjectFetch(`/api/project/task/${encodeURIComponent(taskId)}/stage-answer`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ questionId, answer }),
@@ -228,9 +252,24 @@
     staged = next
   }
 
+  function sourceHref(ref: string): string {
+    const cleaned = ref.trim()
+    if (!cleaned) return '#'
+    const fileMatch = cleaned.match(/^(.+?\.(?:md|mdx|txt|tsx?|jsx?|svelte|vue|json|ya?ml|css|scss|html))(?:[:#].*)?$/i)
+    const candidate = (fileMatch?.[1] ?? cleaned).trim()
+    const absolute = candidate.startsWith('/')
+      ? candidate
+      : project.detail?.path
+        ? `${project.detail.path.replace(/\/+$/, '')}/${candidate.replace(/^\/+/, '')}`
+        : candidate
+    return absolute.startsWith('/')
+      ? `file://${absolute.split('/').map(encodeURIComponent).join('/')}`
+      : `#source-${encodeURIComponent(absolute)}`
+  }
+
   async function load(): Promise<void> {
     try {
-      const r = await projectFetch('/api/project/thread', { cache: 'no-store' })
+      const r = await scopedProjectFetch('/api/project/thread', { cache: 'no-store' })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const j = (await r.json()) as { turns?: Turn[]; activeTurnId?: string | null; caughtUp?: boolean }
       turns = j.turns ?? []
@@ -541,6 +580,29 @@
   }
 
   const phaseGroups = $derived(buildThreadPhaseGroups(turns))
+  const compactPhaseThreshold = 8
+  const operationSummary = $derived.by(() => {
+    let needsYou = 0
+    let working = 0
+    let blocked = 0
+    let queued = 0
+    let drafts = 0
+    for (const turn of turns) {
+      const owner = ownershipLabel(turn)
+      if (owner === 'Needs you') needsYou += 1
+      if (turnLiveAgent(turn)) working += 1
+      if (turn.kind === 'escalation') blocked += 1
+      if (owner === 'Guildhall next') queued += 1
+      if (turn.kind === 'inflight' && turn.importedDraft) drafts += 1
+    }
+    return { needsYou, working, blocked, queued, drafts }
+  })
+  const displayPhaseGroups = $derived.by(() =>
+    phaseGroups.map(group => ({
+      ...group,
+      turns: [...group.turns].sort(compareOperationTurns),
+    })),
+  )
 
   function questionsForTurn(turn: AgentQuestionTurn): AgentQuestionTurn['question'][] {
     return turn.questions && turn.questions.length > 0 ? turn.questions : [turn.question]
@@ -605,6 +667,97 @@
     expandedPhases = { ...expandedPhases, [phase]: !expandedPhases[phase] }
   }
 
+  function shouldCompactPhase(group: { phase: TurnPhase; turns: Turn[] }): boolean {
+    return group.turns.length >= compactPhaseThreshold && !expandedCrowdedPhases[group.phase]
+  }
+
+  function operationPriority(t: Turn): number {
+    if (ownershipLabel(t) === 'Needs you') return 0
+    if (turnLiveAgent(t)) return 1
+    if (t.kind === 'escalation' || t.phase === 'blocked') return 2
+    if (ownershipLabel(t) === 'Guildhall next') return 3
+    if (t.kind === 'inflight' && t.importedDraft) return 4
+    if (t.status === 'active') return 5
+    if (t.status === 'pending') return 6
+    return 7
+  }
+
+  function compareOperationTurns(left: Turn, right: Turn): number {
+    const priority = operationPriority(left) - operationPriority(right)
+    if (priority !== 0) return priority
+    return (right.at ?? '').localeCompare(left.at ?? '')
+  }
+
+  function toggleCrowdedPhase(group: { phase: TurnPhase }): void {
+    expandedCrowdedPhases = {
+      ...expandedCrowdedPhases,
+      [group.phase]: !expandedCrowdedPhases[group.phase],
+    }
+  }
+
+  function operationCountLabel(count: number, singular: string, plural = `${singular}s`): string {
+    return `${count} ${count === 1 ? singular : plural}`
+  }
+
+  function compactStatusLabel(t: Turn): string {
+    const owner = ownershipLabel(t)
+    if (owner) return owner
+    if (t.kind === 'inflight') return taskStateLabel(t)
+    if (t.kind === 'agent_question') return 'Question'
+    if (t.kind === 'brief_approval') return 'Task brief ready'
+    if (t.kind === 'spec_review') return 'Spec review'
+    if (t.kind === 'escalation') return 'Blocked'
+    if (t.kind === 'review_feedback') return 'Revision'
+    if (t.kind === 'setup_step') return t.status === 'done' ? 'Done' : 'Setup'
+    return t.status === 'done' ? 'Done' : 'Queued'
+  }
+
+  function compactTurnTitle(t: Turn): string {
+    return 'taskTitle' in t ? displayTaskTitle(t) : t.title
+  }
+
+  function compactTurnDescription(t: Turn): string {
+    if (t.kind === 'inflight') {
+      if (t.importedDraft && t.taskStatus === 'import_draft' && !t.liveAgent) {
+        return 'Needs task brief: turn this note into scope, evidence, and acceptance criteria.'
+      }
+      if (t.importedDraft && t.taskStatus === 'exploring' && !t.liveAgent) {
+        return 'Task brief in progress: continue shaping the imported note.'
+      }
+      if (t.liveAgent) return liveAgentMessage(t.liveAgent)
+      if (t.checklist) return `${t.checklist.title}: ${t.checklist.doneCount} of ${t.checklist.totalSteps} complete.`
+      return taskStateDescription(t)
+    }
+    if (t.kind === 'agent_question') {
+      const count = questionsForTurn(t).length
+      return count === 1 ? 'Needs one answer before the task can continue.' : `Needs ${count} answers before the task can continue.`
+    }
+    if (t.kind === 'brief_approval') return 'Review the task brief; approve it to queue worker execution.'
+    if (t.kind === 'spec_review') return t.taskId === 'task-meta-intake' ? 'Review the project split Guildhall inferred.' : 'Review the spec before worker execution.'
+    if (t.kind === 'escalation') return t.summary
+    if (t.kind === 'review_feedback') return t.summary
+    if (t.kind === 'setup_step') return t.why
+    return 'Open for details.'
+  }
+
+  function compactTone(t: Turn): 'active' | 'warn' | 'idle' {
+    if (turnLiveAgent(t)) return 'active'
+    if (ownershipLabel(t) === 'Needs you' || t.kind === 'escalation') return 'warn'
+    return t.status === 'active' ? 'active' : 'idle'
+  }
+
+  function openCompactTurn(t: Turn): void {
+    if ('taskId' in t) {
+      nav(currentTaskHref(t.taskId))
+      return
+    }
+    expandedCrowdedPhases = { ...expandedCrowdedPhases, [t.phase]: true }
+    queueMicrotask(() => {
+      const el = turnElements.get(t.id)
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
+  }
+
   function expandOnly(phase: TurnPhase): void {
     expandedPhases = {
       setup: phase === 'setup',
@@ -646,9 +799,9 @@
   async function approveBrief(turn: BriefTurn): Promise<void> {
     busyTurnId = turn.id
     try {
-      await projectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/approve-brief`, { method: 'POST' })
+      await scopedProjectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/approve-brief`, { method: 'POST' })
       await load()
-      await project.refresh()
+      await refreshProject()
       await load()
     } finally { busyTurnId = null }
   }
@@ -661,7 +814,7 @@
         : turn.taskId === 'task-workspace-import'
           ? '/api/project/workspace-import/approve'
         : `/api/project/task/${encodeURIComponent(turn.taskId)}/approve-spec`
-      await projectFetch(endpoint, { method: 'POST' })
+      await scopedProjectFetch(endpoint, { method: 'POST' })
       await load()
     } finally { busyTurnId = null }
   }
@@ -680,7 +833,7 @@
     if (!message) return
     busyTurnId = turn.id
     try {
-      const r = await projectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/resume`, {
+      const r = await scopedProjectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/resume`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -704,11 +857,48 @@
     }
   }
 
+  function setContextDraft(turnId: string, value: string): void {
+    contextDrafts = { ...contextDrafts, [turnId]: value }
+    if (contextErrors[turnId]) {
+      const next = { ...contextErrors }
+      delete next[turnId]
+      contextErrors = next
+    }
+  }
+
+  async function askQuestionContext(turn: AgentQuestionTurn): Promise<void> {
+    const message = (contextDrafts[turn.id] ?? '').trim()
+    if (!message) return
+    busyTurnId = turn.id
+    try {
+      const r = await scopedProjectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/resume`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          preserveStatus: true,
+          message: `Before I answer the open question, explain the missing context and evidence. User said: ${message}`,
+        }),
+      })
+      const j = await r.json().catch(() => ({})) as { error?: string }
+      if (!r.ok || j.error) {
+        contextErrors = { ...contextErrors, [turn.id]: j.error ?? `HTTP ${r.status}` }
+        return
+      }
+      const next = { ...contextDrafts }
+      delete next[turn.id]
+      contextDrafts = next
+      contextTurnId = null
+      await load()
+    } finally {
+      busyTurnId = null
+    }
+  }
+
   async function synthesizeMetaIntake(turn: InFlightTurn): Promise<void> {
     busyTurnId = turn.id
     replyErrors[turn.id] = ''
     try {
-      const r = await projectFetch('/api/project/meta-intake/synthesize', { method: 'POST' })
+      const r = await scopedProjectFetch('/api/project/meta-intake/synthesize', { method: 'POST' })
       if (!r.ok) {
         const j = (await r.json().catch(() => ({}))) as { error?: string }
         throw new Error(j.error ?? `HTTP ${r.status}`)
@@ -814,7 +1004,7 @@
     }
     busyTurnId = turn.id
     try {
-      const r = await projectFetch(turn.submitEndpoint, {
+      const r = await scopedProjectFetch(turn.submitEndpoint, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -857,7 +1047,7 @@
     if (answers.length === 0) return
     busyTaskId = taskId
     try {
-      await projectFetch(`/api/project/task/${encodeURIComponent(taskId)}/answer-questions`, {
+      await scopedProjectFetch(`/api/project/task/${encodeURIComponent(taskId)}/answer-questions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ answers }),
@@ -880,7 +1070,7 @@
     }
     busyTaskId = turn.taskId
     try {
-      await projectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/answer-questions`, {
+      await scopedProjectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/answer-questions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ answers: [{ questionId: turn.question.id, answer: trimmed }] }),
@@ -904,8 +1094,8 @@
     if (turn.liveAgent?.name === 'reviewer-agent') return 'Review'
     if (turn.liveAgent?.name === 'gate-checker-agent') return 'Gates'
     switch (turn.taskStatus) {
-      case 'import_draft': return 'Needs shaping'
-      case 'exploring': return turn.importedDraft ? 'Needs shaping' : isQueuedSpecRevision(turn) ? 'Spec revision queued' : 'Intake'
+      case 'import_draft': return 'Needs task brief'
+      case 'exploring': return turn.importedDraft ? 'Task brief in progress' : isQueuedSpecRevision(turn) ? 'Spec revision queued' : 'Intake'
       case 'ready': return 'Ready'
       case 'gate_check': return 'Gates'
       case 'review': return 'Review'
@@ -923,7 +1113,7 @@
     }
     if (turn.liveAgent?.name === 'spec-agent') {
       if (turn.importedDraft) {
-        return 'Guildhall is turning this imported note into a real task draft now.'
+        return 'Guildhall is turning this imported note into a task brief now.'
       }
       return turn.taskId === 'task-workspace-import'
         ? 'Guildhall is turning your existing project notes into candidate tasks now.'
@@ -938,13 +1128,13 @@
       return turn.summary
     }
     if (turn.taskStatus === 'import_draft' && !turn.liveAgent) {
-      return 'Imported from your project notes. Let Guildhall shape it into a complete task, or add context before it starts.'
+      return 'Imported from your project notes, but not ready for a worker yet. Next step: turn this note into a task brief with scope, evidence, and acceptance criteria.'
     }
     if (turn.taskStatus === 'exploring' && !turn.liveAgent) {
       return turn.taskId === 'task-workspace-import'
         ? 'Guildhall already drafted part of this import review. Review it if you want, or press Start to let Guildhall keep turning your project notes into candidate tasks.'
         : turn.importedDraft
-          ? 'Guildhall has started shaping this imported note. Continue in Thread or add context before the next pass.'
+          ? 'Guildhall started the task brief for this imported note. Continue drafting the brief here, or add context before the next pass.'
           : isQueuedSpecRevision(turn)
             ? 'Guildhall already has the draft spec plus your latest answers. Press Start when you want Guildhall to revise it.'
             : 'Guildhall drafted a first pass here. Review it if you want, or press Start to let Guildhall revise the draft.'
@@ -992,10 +1182,10 @@
     if (metaIntakeChecklistComplete(turn)) return 'Create split proposal'
     switch (turn.taskStatus) {
       case 'ready': return 'Start work'
-      case 'import_draft': return 'Let Guildhall shape this'
+      case 'import_draft': return 'Draft task brief'
       case 'exploring':
         if (turn.taskId === 'task-meta-intake') return 'Let Guildhall keep setting this up'
-        return turn.importedDraft ? 'Continue shaping' : isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
+        return turn.importedDraft ? 'Continue task brief' : isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
       case 'review': return 'Resume review'
       case 'gate_check': return 'Resume gates'
       case 'in_progress': return 'Resume work'
@@ -1054,7 +1244,7 @@
     runBusy = true
     runError = null
     try {
-      const res = await projectFetch('/api/project/start', {
+      const res = await scopedProjectFetch('/api/project/start', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -1068,7 +1258,7 @@
         return
       }
       await load()
-      await project.refresh()
+      await refreshProject()
     } catch (err) {
       runError = err instanceof Error ? err.message : String(err)
     } finally {
@@ -1079,7 +1269,7 @@
   async function shapeDraft(turn: InFlightTurn): Promise<void> {
     busyTurnId = turn.id
     try {
-      const res = await projectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/shape-draft`, {
+      const res = await scopedProjectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/shape-draft`, {
         method: 'POST',
       })
       const body = await res.json().catch(() => ({})) as { error?: string }
@@ -1088,7 +1278,7 @@
         return
       }
       await load()
-      await project.refresh()
+      await refreshProject()
     } finally {
       busyTurnId = null
     }
@@ -1202,7 +1392,15 @@
     </Card>
   {:else}
     <Stack gap="3">
-      {#each phaseGroups as group (group.phase)}
+      <div class="operation-summary" aria-label="Thread operations summary">
+        <span>{operationCountLabel(operationSummary.needsYou, 'needs you', 'need you')}</span>
+        <span>{operationCountLabel(operationSummary.working, 'working', 'working')}</span>
+        <span>{operationCountLabel(operationSummary.blocked, 'blocked', 'blocked')}</span>
+        <span>{operationCountLabel(operationSummary.queued, 'queued', 'queued')}</span>
+        <span>{operationCountLabel(operationSummary.drafts, 'draft')}</span>
+      </div>
+
+      {#each displayPhaseGroups as group (group.phase)}
         <section class="phase">
           <button
             type="button"
@@ -1227,6 +1425,45 @@
             <Chip label={String(group.turns.length)} tone={phaseCountTone(group)} />
           </button>
           {#if expandedPhases[group.phase]}
+            {#if shouldCompactPhase(group)}
+              <div class="compact-ops" aria-label={`Compact ${group.label} operations`}>
+                <div class="compact-ops-head">
+                  <span>{group.turns.length} compact rows</span>
+                  <Button variant="ghost" size="sm" onclick={() => toggleCrowdedPhase(group)}>
+                    Show cards
+                  </Button>
+                </div>
+                <div class="compact-ops-list">
+                  {#each group.turns as t (t.id)}
+                    <button
+                      type="button"
+                      class="compact-op-row"
+                      data-turn-id={t.id}
+                      onclick={() => openCompactTurn(t)}
+                    >
+                      <StatusDot
+                        tone={compactTone(t)}
+                        pulse={Boolean(turnLiveAgent(t))}
+                        size="sm"
+                        ariaLabel={compactStatusLabel(t)}
+                      />
+                      <span class="compact-op-copy">
+                        <span class="compact-op-main">
+                          <span class="compact-op-title">{compactTurnTitle(t)}</span>
+                          <span class="compact-op-chips">
+                            {#if constructionModeLabel(t)}
+                              <Chip label={constructionModeLabel(t) ?? ''} tone="neutral" />
+                            {/if}
+                            <Chip label={compactStatusLabel(t)} tone={ownershipTone(t)} />
+                          </span>
+                        </span>
+                        <span class="compact-op-detail">{compactTurnDescription(t)}</span>
+                      </span>
+                    </button>
+                  {/each}
+                </div>
+              </div>
+            {:else}
             <Stack gap="3" class="phase-body">
               {#each group.turns as t (t.id)}
         <div
@@ -1289,6 +1526,18 @@
                   </div>
                   <p class="why">{t.why}</p>
                   {#if t.status === 'active'}
+                    {#if t.contextSummary}
+                      <div class="setup-context" aria-label="What Guildhall knows right now">
+                        <strong>What Guildhall knows right now</strong>
+                        <p>{t.contextSummary.intro}</p>
+                        <ul>
+                          {#each t.contextSummary.facts as fact}
+                            <li>{fact}</li>
+                          {/each}
+                        </ul>
+                        <p>{t.contextSummary.uncertainty}</p>
+                      </div>
+                    {/if}
                     {#if t.affordance === 'link' && t.actionHref}
                       <Row justify="end" gap="2">
                         <Button variant="primary" onclick={() => nav(projectActionHref(t.actionHref!))}>{t.actionLabel}</Button>
@@ -1446,7 +1695,10 @@
                           <span class="field-label">Imported from</span>
                           <div class="source-list">
                             {#each t.sourceNote.references as ref (ref)}
-                              <code>{ref}</code>
+                              {@const href = sourceHref(ref)}
+                              <a class="source-ref" href={href} target="_blank" rel="noreferrer" title="Open source note">
+                                <code>{ref}</code>
+                              </a>
                             {/each}
                           </div>
                         </div>
@@ -1454,6 +1706,46 @@
                     </div>
                   {/if}
                   <h3 class="prompt">{totalQuestions === 1 ? 'Question about this task' : `${totalQuestions} questions about this task`}</h3>
+                  <div class="question-context-actions">
+                    {#if contextTurnId === t.id}
+                      <Stack gap="2">
+                        <Textarea
+                          value={contextDrafts[t.id] ?? ''}
+                          rows={3}
+                          placeholder="Ask what the agent means or what source/evidence it is using"
+                          disabled={busyTurnId === t.id}
+                          oninput={(v) => setContextDraft(t.id, v)}
+                        />
+                        <Row justify="end" gap="2">
+                          <Button
+                            variant="ghost"
+                            disabled={busyTurnId === t.id}
+                            onclick={() => {
+                              contextTurnId = null
+                              setContextDraft(t.id, '')
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            disabled={busyTurnId === t.id || !(contextDrafts[t.id] ?? '').trim()}
+                            onclick={() => askQuestionContext(t)}
+                          >
+                            Ask for context
+                          </Button>
+                        </Row>
+                        {#if contextErrors[t.id]}
+                          <p class="error">{contextErrors[t.id]}</p>
+                        {/if}
+                      </Stack>
+                    {:else}
+                      <p class="detail">Need the premise explained first? Ask for context; Guildhall will keep this question open.</p>
+                      <Button variant="ghost" size="sm" disabled={busyTurnId === t.id} onclick={() => (contextTurnId = t.id)}>
+                        Ask for context
+                      </Button>
+                    {/if}
+                  </div>
                   {#if t.activity?.length}
                     <div class="live-activity" aria-label="Recent agent activity">
                       {#each t.activity as item, index (`${item.at ?? 'event'}:${item.label}:${index}`)}
@@ -1465,22 +1757,6 @@
                           pulse={item.tone === 'running'}
                         />
                       {/each}
-                    </div>
-                  {/if}
-                  {#if hasStaged && totalQuestions > 1 && sectionFooterTurnId[t.id] === t.taskId}
-                    <div class="question-submit-banner">
-                      <div>
-                        <div class="question-submit-title">Answers are staged</div>
-                        <div class="question-submit-copy">{stagedSummary}</div>
-                      </div>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled={busyTaskId === t.taskId}
-                        onclick={() => submitSection(t.taskId)}
-                      >
-                        Submit answers
-                      </Button>
                     </div>
                   {/if}
                   <div class="question-stack">
@@ -1508,6 +1784,22 @@
                       </div>
                     {/each}
                   </div>
+                  {#if hasStaged && totalQuestions > 1 && sectionFooterTurnId[t.id] === t.taskId}
+                    <div class="question-submit-banner">
+                      <div>
+                        <div class="question-submit-title">Answers staged</div>
+                        <div class="question-submit-copy">{stagedSummary}</div>
+                      </div>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={busyTaskId === t.taskId}
+                        onclick={() => submitSection(t.taskId)}
+                      >
+                        Submit answers
+                      </Button>
+                    </div>
+                  {/if}
                 {:else}
                   <div class="prompt"><Markdown source={t.question.restatement ?? t.question.prompt ?? ''} /></div>
                   {#if t.question.answer}
@@ -1692,7 +1984,10 @@
                         <span class="field-label">Imported from</span>
                         <div class="source-list">
                           {#each t.sourceNote.references as ref (ref)}
-                            <code>{ref}</code>
+                            {@const href = sourceHref(ref)}
+                            <a class="source-ref" href={href} target="_blank" rel="noreferrer" title="Open source note">
+                              <code>{ref}</code>
+                            </a>
                           {/each}
                         </div>
                       </div>
@@ -1895,6 +2190,7 @@
         </div>
               {/each}
             </Stack>
+            {/if}
           {/if}
         </section>
       {/each}
@@ -1926,6 +2222,28 @@
   }
   .handoff-copy span {
     color: var(--text-muted);
+  }
+  .operation-summary {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: var(--s-1);
+    padding: var(--s-1);
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: var(--bg-raised);
+  }
+  .operation-summary span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: var(--s-1) var(--s-2);
+    border-radius: var(--r-0);
+    background: var(--bg);
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    font-weight: 650;
+    text-align: center;
   }
   .phase {
     display: flex;
@@ -1996,6 +2314,83 @@
     padding-top: var(--s-1);
     border-left: 2px solid color-mix(in srgb, var(--accent) 24%, var(--border));
   }
+  .compact-ops {
+    margin-left: var(--s-3);
+    padding: var(--s-2) 0 var(--s-1) var(--s-3);
+    border-left: 2px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  }
+  .compact-ops-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+    margin-bottom: var(--s-2);
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    font-weight: 650;
+  }
+  .compact-ops-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-1);
+  }
+  .compact-op-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: var(--s-2);
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: var(--bg-raised);
+    color: var(--text);
+    padding: var(--s-2);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .compact-op-row:hover {
+    background: var(--bg-raised-2);
+    border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+  }
+  .compact-op-copy {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 2px;
+  }
+  .compact-op-main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--s-2);
+    min-width: 0;
+  }
+  .compact-op-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-1);
+    font-weight: 650;
+    line-height: var(--lh-tight);
+  }
+  .compact-op-chips {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-1);
+    min-width: max-content;
+  }
+  .compact-op-detail {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    line-height: var(--lh-normal);
+  }
   .turn :global(.card) {
     padding: var(--s-3);
   }
@@ -2062,6 +2457,31 @@
     line-height: inherit;
   }
   .why { margin: 0; color: var(--text-muted); font-size: var(--fs-2); line-height: var(--lh-body); }
+  .setup-context {
+    display: grid;
+    gap: var(--s-2);
+    padding: var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+  .setup-context strong {
+    color: var(--text);
+    font-size: var(--fs-1);
+    font-weight: 700;
+  }
+  .setup-context p {
+    margin: 0;
+  }
+  .setup-context ul {
+    display: grid;
+    gap: var(--s-1);
+    margin: 0;
+    padding-inline-start: var(--s-4);
+  }
   .gating-row {
     display: flex;
     align-items: center;
@@ -2079,7 +2499,7 @@
     border: 1px solid var(--border);
     border-radius: var(--r-2);
     background: var(--bg-raised-2);
-    margin-bottom: var(--s-2);
+    margin-top: var(--s-2);
     flex-wrap: wrap;
   }
   .question-submit-title {
@@ -2120,6 +2540,28 @@
     max-width: 100%;
     white-space: normal;
     overflow-wrap: anywhere;
+  }
+  .source-ref {
+    color: inherit;
+    text-decoration: none;
+  }
+  .source-ref:hover code {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+  .question-context-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+    padding: var(--s-2) var(--s-3);
+    border: 1px dashed var(--border);
+    border-radius: var(--r-2);
+    background: color-mix(in srgb, var(--bg-raised-2) 70%, transparent);
+  }
+  .question-context-actions :global(.stack) {
+    width: 100%;
   }
   .question-stack {
     display: flex;
@@ -2349,6 +2791,17 @@
     margin: 0;
   }
   @media (max-width: 640px) {
+    .operation-summary {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .compact-op-main {
+      grid-template-columns: minmax(0, 1fr);
+      align-items: start;
+    }
+    .compact-op-chips {
+      flex-wrap: wrap;
+      min-width: 0;
+    }
     .setup-form {
       grid-template-columns: 1fr;
     }

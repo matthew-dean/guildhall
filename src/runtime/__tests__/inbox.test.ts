@@ -374,7 +374,7 @@ describe('buildInbox', () => {
     if (!hit || hit.kind !== 'import_draft_queue') throw new Error('unreachable')
     expect(hit.severity).toBe('medium')
     expect(hit.taskId).toBe('task-import-a')
-    expect(hit.title).toBe('2 imported drafts need shaping')
+    expect(hit.title).toBe('2 imported drafts need task briefs')
     expect(hit.detail).toMatch(/Inspect the repo and draft starter tasks/)
     expect(hit.actionHref).toBe('/task/task-import-a')
   })

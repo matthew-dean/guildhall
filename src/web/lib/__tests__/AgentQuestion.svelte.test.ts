@@ -80,6 +80,27 @@ describe('AgentQuestion', () => {
     )
   })
 
+  it('infers multi-select behavior from the prompt and can unselect a staged option', async () => {
+    const user = userEvent.setup()
+    const onAnswer = vi.fn()
+
+    render(AgentQuestion, {
+      question: question({
+        prompt: 'Pick all that apply for the release checklist.',
+      }),
+      onAnswer,
+    })
+
+    const first = screen.getByRole('button', { name: 'URL input + Display text input' })
+    const second = screen.getByRole('button', { name: 'URL input + Display text + Open in new tab' })
+    await user.click(first)
+    await user.click(second)
+    await user.click(first)
+    await user.click(screen.getByRole('button', { name: 'Send' }))
+
+    expect(onAnswer).toHaveBeenCalledWith('URL input + Display text + Open in new tab')
+  })
+
   it('opens the free-text reply path for Other without requiring the details pane', async () => {
     const user = userEvent.setup()
     const onAnswer = vi.fn()
@@ -145,6 +166,42 @@ describe('AgentQuestion', () => {
     expect(onText).toHaveBeenCalledWith('Keep this to link editing only.')
   })
 
+  it('supports free-text corrections for confirm and yes/no questions', async () => {
+    const user = userEvent.setup()
+    const onConfirm = vi.fn()
+    render(AgentQuestion, {
+      question: {
+        kind: 'confirm',
+        id: 'confirm-correction',
+        askedBy: 'coordinator',
+        askedAt: '2026-05-19T15:00:00.000Z',
+        restatement: 'Guildhall should migrate every surface in one pass.',
+      },
+      onAnswer: onConfirm,
+    })
+    await user.click(screen.getByRole('button', { name: /reply/i }))
+    await user.type(screen.getByRole('textbox'), 'No, only the next documented batch.')
+    await user.click(screen.getByRole('button', { name: /^send$/i }))
+    expect(onConfirm).toHaveBeenCalledWith('No, only the next documented batch.')
+    cleanup()
+
+    const onYesNo = vi.fn()
+    render(AgentQuestion, {
+      question: {
+        kind: 'yesno',
+        id: 'yesno-correction',
+        askedBy: 'coordinator',
+        askedAt: '2026-05-19T15:00:00.000Z',
+        prompt: 'Should this include drag handles?',
+      },
+      onAnswer: onYesNo,
+    })
+    await user.click(screen.getByRole('button', { name: /reply/i }))
+    await user.type(screen.getByRole('textbox'), 'Only if the existing roadmap says so.')
+    await user.click(screen.getByRole('button', { name: /^send$/i }))
+    expect(onYesNo).toHaveBeenCalledWith('Only if the existing roadmap says so.')
+  })
+
   it('renders inferred project maps as confirmation instead of ordinary choice chips', async () => {
     const user = userEvent.setup()
     const onAnswer = vi.fn()
@@ -169,5 +226,34 @@ describe('AgentQuestion', () => {
 
     await user.click(screen.getByRole('button', { name: /looks right/i }))
     expect(onAnswer).toHaveBeenCalledWith('looma - component library, knit - product app, spec-agent')
+  })
+
+  it('lets users correct inferred project maps and rewrites importer prompts into plain language', async () => {
+    const user = userEvent.setup()
+    const onProjectMap = vi.fn()
+    render(AgentQuestion, {
+      question: question({
+        prompt: 'Confirm coordinator domains, project areas, and review lanes.',
+        choices: ['docs/editor-roadmap - editor plan'],
+      }),
+      onAnswer: onProjectMap,
+    })
+
+    await user.click(screen.getByRole('button', { name: /correct it/i }))
+    await user.type(screen.getByRole('textbox'), 'Looma owns editor primitives; Knit consumes them.')
+    await user.click(screen.getByRole('button', { name: /^send$/i }))
+    expect(onProjectMap).toHaveBeenCalledWith('Looma owns editor primitives; Knit consumes them.')
+    cleanup()
+
+    render(AgentQuestion, {
+      question: question({
+        prompt: 'Workspace importer scanned the repo and found importable tasks.',
+        choices: ['Mentions', 'Toolbar taxonomy'],
+      }),
+      onAnswer: vi.fn(),
+    })
+
+    expect(screen.getByText('Guildhall found planning notes across several project documents. Which of these should become real tasks? Choose all that apply.')).toBeInTheDocument()
+    expect(screen.getByText('Choose any')).toBeInTheDocument()
   })
 })

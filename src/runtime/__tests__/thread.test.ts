@@ -522,6 +522,116 @@ describe('buildThread', () => {
     }
   })
 
+  it('shows project direction setup as a refreshable snapshot plus durable owner input', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'README.md'),
+        [
+          '# Font Something',
+          '',
+          'AI-powered font generation desktop application.',
+        ].join('\n'),
+      )
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Inspect font workflows',
+              status: 'ready',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+            {
+              id: 'task-2',
+              title: 'Draft onboarding checklist',
+              status: 'blocked',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'font-something',
+          name: 'Font Something',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'design', name: 'Design' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: false,
+        workspaceImportReviewed: true,
+        taskCount: 2,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      const directionStep = thread.turns.find(turn => turn.id === 'setup:direction')
+      if (!directionStep || directionStep.kind !== 'setup_step') throw new Error('expected direction setup step')
+      expect(directionStep.contextSummary?.intro).toMatch(/current snapshot/i)
+      expect(directionStep.contextSummary?.intro).toMatch(/not permanent project truth/i)
+      expect(directionStep.contextSummary?.facts).toEqual(expect.arrayContaining([
+        `Project: Font Something (${path.basename(projectPath)}).`,
+        'Current read: AI-powered font generation desktop application.',
+        'Coordinator areas: Design.',
+        'Bootstrap has been verified before.',
+        '2 tasks on record: 1 blocked, 1 ready.',
+      ]))
+      expect(directionStep.contextSummary?.uncertainty).toMatch(/durable plan input/i)
+      expect(directionStep.contextSummary?.uncertainty).toMatch(/revised later as the project changes/i)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('shows the same current snapshot before reviewing existing project work', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(path.join(projectPath, 'memory', 'project-brief.md'), 'Desktop font generation tool with model and app surfaces.')
+      await writeFile(path.join(projectPath, 'README.md'), '# Font Something\n')
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'font-something',
+          name: 'Font Something',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'model', name: 'Model' }, { id: 'app', name: 'App' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: false,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
+
+      const reviewStep = thread.turns.find(turn => turn.id === 'setup:workspaceImport')
+      if (!reviewStep || reviewStep.kind !== 'setup_step') throw new Error('expected workspace import setup step')
+      expect(reviewStep.contextSummary?.facts).toEqual(expect.arrayContaining([
+        'Current read: Desktop font generation tool with model and app surfaces.',
+        'Coordinator areas: Model, App.',
+      ]))
+      expect(reviewStep.contextSummary?.uncertainty).toMatch(/source notes before approving imported tasks/i)
+      expect(reviewStep.contextSummary?.uncertainty).toMatch(/not as permanent project truth/i)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('replaces legacy generated project-direction boilerplate with the cleaner inferred brief', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
@@ -2069,7 +2179,7 @@ coordinators:
       const turn = thread.turns.find(t => t.kind === 'inflight')
       if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
       expect(turn.importedDraft).toBe(true)
-      expect(turn.summary).toBe('Imported draft waiting for shaping.')
+      expect(turn.summary).toBe('Imported draft has a task brief in progress.')
       expect(turn.checklist).toBeUndefined()
       expect(turn.phase).toBe('intake')
     } finally {

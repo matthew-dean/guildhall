@@ -75,8 +75,8 @@
     if (turn.liveAgent?.name === 'reviewer-agent') return 'Review'
     if (turn.liveAgent?.name === 'gate-checker-agent') return 'Gates'
     switch (turn.taskStatus) {
-      case 'import_draft': return 'Needs shaping'
-      case 'exploring': return turn.importedDraft ? 'Needs shaping' : isQueuedSpecRevision(turn) ? 'Spec revision queued' : 'Intake'
+      case 'import_draft': return 'Needs task brief'
+      case 'exploring': return turn.importedDraft ? 'Task brief in progress' : isQueuedSpecRevision(turn) ? 'Spec revision queued' : 'Intake'
       case 'ready': return 'Ready'
       case 'gate_check': return 'Gates'
       case 'review': return 'Review'
@@ -93,21 +93,21 @@
       return 'Local model is still loading or generating.'
     }
     if (turn.liveAgent?.name === 'spec-agent') {
-      if (turn.importedDraft) return 'Guildhall is shaping this imported draft now.'
+      if (turn.importedDraft) return 'Guildhall is drafting the task brief for this imported note now.'
       return 'Guildhall is drafting this now.'
     }
     if (turn.taskStatus === 'ready' && !turn.liveAgent) {
       return 'Approved and queued. Start Guildhall when you want it to pick this up.'
     }
     if (turn.taskStatus === 'import_draft' && !turn.liveAgent) {
-      return 'Imported from your project notes. Review it here, then let Guildhall shape it into a complete task.'
+      return 'Imported from your project notes, but not ready for a worker yet. Next step: turn this note into a task brief with scope, evidence, and acceptance criteria.'
     }
     if (turn.taskStatus === 'exploring' && !turn.liveAgent) {
       if (isQueuedSpecRevision(turn)) {
         return 'Guildhall already has the draft spec plus your latest answers. Start Guildhall when you want it to revise the spec.'
       }
       return turn.importedDraft
-        ? 'Guildhall shaped part of this draft already. Review it here, then let Guildhall keep shaping it when you are ready.'
+        ? 'Guildhall started the task brief for this imported note. Continue drafting the brief here when you are ready.'
         : 'Guildhall has a partial draft here. Review it, then let Guildhall keep shaping it when you are ready.'
     }
     if (turn.taskStatus === 'in_progress' && !turn.liveAgent) {
@@ -159,8 +159,8 @@
   function runLabel(turn: TaskThreadInFlightTurn): string {
     switch (turn.taskStatus) {
       case 'ready': return 'Start work'
-      case 'import_draft': return 'Let Guildhall shape this'
-      case 'exploring': return turn.importedDraft ? 'Continue shaping draft' : isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
+      case 'import_draft': return 'Draft task brief'
+      case 'exploring': return turn.importedDraft ? 'Continue task brief' : isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
       case 'review': return 'Resume review'
       case 'gate_check': return 'Resume gates'
       case 'in_progress': return 'Resume work'
