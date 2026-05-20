@@ -281,24 +281,28 @@ Decisions
 The Build Map should be calm and compact. It is a planning surface, not a
 Gantt-chart product.
 
-## Visual Model And Zoom Levels
+## Visual Model And Perspective Levels
 
 The construction plan needs more than one view. A user should be able to move
 between the whole project, the current structure, the result being built, one
 area, one slice, and one task without losing orientation.
 
 Use the house metaphor internally, but translate it into product UI language.
+These are perspective levels, not literal map zoom controls. The interface can
+use tabs, grouped bands, filters, summary cards, and detail panels. It should
+feel like changing lenses or drilling into a section, not like navigating a
+canvas.
 
-| Metaphor | Product View | What It Answers | Primary Surface |
+| Metaphor | Product Perspective | What It Answers | Primary Surface |
 | --- | --- | --- | --- |
-| Blueprint | Full construction plan | What are we building, in what shape, and why? | Build Map |
-| Frame | Areas, phases, dependencies, active tranche | What exists now versus later, and what holds it together? | Build Map + Work |
-| Rendered house | Progress/readiness projection | What would be usable if work stopped today? | Timeline + Release |
-| Room | Product area or feature family | What belongs to this section, who owns it, and what is its state? | Build Map detail |
-| Slice | End-to-end user value path | What is Guildhall actively trying to make usable? | Work + task drawer |
-| Task | Concrete build/review unit | What is one agent doing or waiting on? | Task drawer + Thread |
+| Blueprint | Whole-plan perspective | What are we building, in what shape, and why? | Build Map |
+| Frame | Structural perspective | What exists now versus later, and what holds it together? | Build Map + Work |
+| Rendered house | Usability/readiness perspective | What would be usable if work stopped today? | Timeline + Release |
+| Room | Product-area perspective | What belongs to this section, who owns it, and what is its state? | Build Map detail |
+| Slice | User-value perspective | What is Guildhall actively trying to make usable? | Work + task drawer |
+| Task | Work-unit perspective | What is one agent doing or waiting on? | Task drawer + Thread |
 
-The user should never have to choose between "giant map" and "one task card."
+The user should never have to choose between "everything at once" and "one task card."
 Every major surface should preserve both context and focus:
 
 - Where am I in the whole plan?
@@ -336,11 +340,11 @@ Status language:
 
 Do not make users infer these states from task status names alone.
 
-## Build Map Interaction Model
+## Build Map Perspective Model
 
-Build Map is the zoomed-out planning surface.
+Build Map is the broadest planning surface.
 
-It should support these zoom modes:
+It should support these perspective levels:
 
 ### 1. Overview
 
@@ -442,7 +446,7 @@ Each surface should own a different question.
 | Needs You | What decision or action blocks progress? | owner decisions, approvals, blocked questions, risky change orders | notification dump |
 | Work | What is now, next, later, blocked, and done? | active tranche tasks, queued slice work, worker assignments, status movement | raw backlog warehouse |
 | Timeline | What changed over time? | tranche selection, task starts/finishes, change orders, decisions, gate outcomes | chat transcript |
-| Build Map | What is the shape of the project? | phases, areas, slices, dependencies, active tranche, zoom levels | Gantt chart |
+| Build Map | What is the shape of the project? | phases, areas, slices, dependencies, active tranche, perspective levels | Gantt chart |
 | Task Drawer | What is true about this unit? | parent slice, current worker/reviewer, ACs, evidence, history | project-wide plan |
 
 ## Thread Integration
