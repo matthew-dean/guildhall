@@ -145,10 +145,12 @@ areas:
     name: "App Shell"
     purpose: "Create a navigable product frame"
     risk: "medium"
+    ownerGuilds: ["frontend-engineer", "visual-designer"]
   - id: "local-storage"
     name: "Local Storage"
     purpose: "Save and reopen work without network"
     risk: "high"
+    ownerGuilds: ["backend-engineer", "test-engineer"]
 
 phases:
   - id: "foundation"
@@ -201,6 +203,8 @@ tasks:
       sliceId: "create-write-reopen"
       title: "Build the local project shell"
       status: "proposed"
+      assignedRole: "frontend-engineer"
+      workerStatus: "queued"
 
 changeOrders: []
 ```
@@ -277,20 +281,359 @@ Decisions
 The Build Map should be calm and compact. It is a planning surface, not a
 Gantt-chart product.
 
-## Thread Behavior
+## Visual Model And Zoom Levels
 
-Thread should summarize plan changes without forcing the owner to read the full
-Build Map.
+The construction plan needs more than one view. A user should be able to move
+between the whole project, the current structure, the result being built, one
+area, one slice, and one task without losing orientation.
 
-Examples:
+Use the house metaphor internally, but translate it into product UI language.
 
-- "Guildhall mapped this as 6 product areas, 4 phases, and 9 candidate slices."
-- "The active tranche is now `Create, write, save, reopen`."
-- "3 tasks were generated from that slice."
-- "A change order moved cloud sync out of Foundation because local durability is
-  not proven yet."
+| Metaphor | Product View | What It Answers | Primary Surface |
+| --- | --- | --- | --- |
+| Blueprint | Full construction plan | What are we building, in what shape, and why? | Build Map |
+| Frame | Areas, phases, dependencies, active tranche | What exists now versus later, and what holds it together? | Build Map + Work |
+| Rendered house | Progress/readiness projection | What would be usable if work stopped today? | Timeline + Release |
+| Room | Product area or feature family | What belongs to this section, who owns it, and what is its state? | Build Map detail |
+| Slice | End-to-end user value path | What is Guildhall actively trying to make usable? | Work + task drawer |
+| Task | Concrete build/review unit | What is one agent doing or waiting on? | Task drawer + Thread |
 
-Thread cards should link to the relevant plan section.
+The user should never have to choose between "giant map" and "one task card."
+Every major surface should preserve both context and focus:
+
+- Where am I in the whole plan?
+- What is active now?
+- What is waiting?
+- Who or what is working?
+- What needs me?
+- What changed?
+
+## Digestibility Rules
+
+0.7 should make planning more legible, not denser.
+
+Rules:
+
+- show a one-screen summary before detailed lists
+- use progressive disclosure for dependency details
+- group by active tranche before status
+- show later work as muted and collapsed by default
+- show only the top owner decisions in Needs You
+- avoid duplicating the same alert across Thread, Needs You, and Work
+- make every dense view answer one primary question
+- prefer counts and state chips over paragraphs
+- keep "why now?" visible for active work
+- keep "why not now?" available for queued/deferred work
+
+Status language:
+
+- **Now:** active tranche work that can run or is running
+- **Next:** queued work in the active tranche
+- **Later:** planned work outside the active tranche
+- **Blocked:** cannot move until dependency, owner decision, gate, or provider
+  issue is resolved
+- **Done:** accepted into the plan's completed state
+
+Do not make users infer these states from task status names alone.
+
+## Build Map Interaction Model
+
+Build Map is the zoomed-out planning surface.
+
+It should support these zoom modes:
+
+### 1. Overview
+
+Shows:
+
+- project promise
+- current phase
+- active tranche
+- at-a-glance counts:
+  - `3 active tasks`
+  - `2 needs you`
+  - `5 queued next`
+  - `12 later`
+  - `1 blocked`
+- phase progress
+- top three risks or decisions
+
+Purpose: answer "what is Guildhall building right now?"
+
+### 2. Blueprint
+
+Shows:
+
+- all phases
+- all product areas
+- all slices
+- dependency edges
+- active tranche highlight
+- deferred/later slices collapsed by phase
+
+Purpose: answer "what is the shape of the whole job?"
+
+### 3. Frame
+
+Shows:
+
+- active phase
+- current and next slices
+- dependency blockers
+- which areas are touched
+- which guild roles are expected
+
+Purpose: answer "what is structurally holding this phase together?"
+
+### 4. Rendered State
+
+Shows:
+
+- completed slices
+- usable workflows
+- unfinished but visible work
+- release-readiness effect
+- punch-list items
+
+Purpose: answer "what would be livable if we stopped now?"
+
+### 5. Area Detail
+
+Shows one product area:
+
+- purpose
+- owner guilds
+- slices touching this area
+- current tasks
+- known risks
+- change orders
+- verification requirements
+
+Purpose: answer "what is happening in this room?"
+
+### 6. Slice Detail
+
+Shows one vertical slice:
+
+- user value
+- acceptance criteria
+- task list
+- dependencies
+- now/next/later breakdown
+- assigned workers or expected guild roles
+- verification plan
+- current blocker or next action
+
+Purpose: answer "what does it take to make this section usable?"
+
+### 7. Task Detail
+
+Deep-links into the existing task drawer.
+
+Purpose: answer "what is this specific worker/reviewer doing?"
+
+## Surface Responsibilities
+
+Each surface should own a different question.
+
+| Surface | Primary Question | Should Show | Should Not Become |
+| --- | --- | --- | --- |
+| Thread | What is happening and what did Guildhall just need/tell me? | plan events, active work summaries, human prompts, live agent trouble | full roadmap |
+| Needs You | What decision or action blocks progress? | owner decisions, approvals, blocked questions, risky change orders | notification dump |
+| Work | What is now, next, later, blocked, and done? | active tranche tasks, queued slice work, worker assignments, status movement | raw backlog warehouse |
+| Timeline | What changed over time? | tranche selection, task starts/finishes, change orders, decisions, gate outcomes | chat transcript |
+| Build Map | What is the shape of the project? | phases, areas, slices, dependencies, active tranche, zoom levels | Gantt chart |
+| Task Drawer | What is true about this unit? | parent slice, current worker/reviewer, ACs, evidence, history | project-wide plan |
+
+## Thread Integration
+
+Thread remains the command and narrative surface. It should not carry the full
+plan, but it should make plan changes legible.
+
+Thread should show compact cards for:
+
+- construction plan drafted
+- active tranche selected
+- slice promoted/deferred
+- tasks generated from a slice
+- change order proposed or accepted
+- owner decision requested
+- worker blocked on slice dependency
+
+Example cards:
+
+```text
+Build Map updated
+Guildhall mapped this as 5 areas, 4 phases, and 8 slices.
+Now: Create, write, save, reopen.
+[Open Build Map]
+```
+
+```text
+Active tranche
+Create, write, save, reopen
+3 tasks queued. Frontend Engineer starts with App Shell.
+[View slice]
+```
+
+```text
+Change order
+Storage adapter must land before export preview.
+Impact: moves Export Preview from Now to Next.
+[Review change]
+```
+
+Thread should avoid repeating every task state transition. It should narrate
+meaningful plan movement and live interruptions.
+
+## Needs You Integration
+
+Needs You should be the narrowest possible owner-action surface.
+
+Show only:
+
+- required owner decisions
+- spec/tranche approvals when policy requires them
+- change orders that affect product intent, risk, budget, privacy, or release
+  promise
+- unresolved questions blocking active tranche work
+- failed setup/provider/readiness states blocking the active tranche
+
+Each item should include:
+
+- decision title
+- affected slice or phase
+- recommended option
+- why Guildhall cannot safely infer it
+- what happens if the owner defers
+- primary action
+- secondary action to inspect context
+
+Example:
+
+```text
+Needs you
+Target first release surface?
+Affects: First Livable Slice
+Recommendation: Desktop app first
+Why: local/offline behavior is the trust foundation.
+[Approve] [Choose differently] [Inspect slice]
+```
+
+Needs You should not include informational plan updates. Those belong in Thread
+or Timeline.
+
+## Work Integration
+
+Work should become the day-to-day execution surface for the construction plan.
+
+Default grouping:
+
+1. **Now** — active tranche tasks in progress or ready to start
+2. **Next** — queued active-tranche tasks waiting on dependencies or capacity
+3. **Blocked** — tasks blocked by decision, dependency, provider, review, or
+   gate
+4. **Later** — planned slices outside active tranche, collapsed by default
+5. **Done** — completed tasks/slices, compact by default
+
+Work cards should show:
+
+- parent slice
+- current task status
+- assigned worker or expected guild role
+- reviewer/gate state when relevant
+- dependency count
+- "why now" or "why waiting"
+- next action if blocked
+
+Worker visibility:
+
+- show active worker agent when running
+- show expected guild role before assignment
+- show reviewer role during review
+- show capacity/slot if concurrency matters
+- show "waiting for worker" separately from "blocked"
+
+The Work view should make it obvious when Guildhall is making progress versus
+merely accumulating cards.
+
+## Timeline Integration
+
+Timeline should be the chronological audit of meaningful construction movement.
+
+Events to show:
+
+- plan drafted
+- active tranche selected
+- slice promoted/deferred
+- owner decision recorded
+- task generated
+- worker assigned
+- reviewer assigned
+- task completed
+- gate passed/failed
+- change order proposed/accepted/rejected
+- punch-list item created/resolved
+
+Timeline should support filters:
+
+- all
+- decisions
+- active tranche
+- change orders
+- worker activity
+- gates/release
+
+Timeline should not be a transcript. It should be a project history that helps
+the owner understand how the plan evolved.
+
+## At-A-Glance Summary Band
+
+The project shell should have a compact construction summary band when a
+construction plan exists.
+
+Suggested fields:
+
+- current phase
+- active slice/tranche
+- now count
+- needs you count
+- blocked count
+- active worker count
+- next milestone
+
+Example:
+
+```text
+Foundation · Create, write, save, reopen
+Now 3 · Needs you 1 · Blocked 0 · Workers 2 · Next: Local persistence proof
+```
+
+This summary should link to Build Map and filter Work to the active tranche.
+
+## Overwhelm Prevention
+
+Do not surface every dimension at once.
+
+Defaults:
+
+- Build Map opens in Overview, not full Blueprint
+- Work opens to Now/Next, with Later collapsed
+- Needs You shows only actionable blockers
+- Thread shows significant plan events, not every state mutation
+- Timeline defaults to active tranche events
+- Task drawer starts at Now or Spec, not full transcript
+
+Density limits:
+
+- no more than three top risks in Overview
+- no more than five visible owner decisions before grouping
+- no more than seven visible slices before phase grouping collapses
+- no more than one primary CTA per card
+- never show both a task card and its full transcript in the same default view
+
+The product should feel like it is revealing structure on demand, not dumping
+the project database into the user's lap.
 
 ## Intake Behavior
 
@@ -841,4 +1184,3 @@ Focused tests:
    checkpoints?
 6. Which fields should be promoted into `TASKS.json` versus resolved by joining
    against the construction plan at runtime?
-
