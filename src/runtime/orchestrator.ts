@@ -4440,39 +4440,39 @@ export class Orchestrator {
         }
       }
 
-      if (!hasBlueprintSanityReview(target)) {
-        if (!hasUsableBlueprint(target)) {
-          target.status = 'exploring'
-          target.assignedTo = null
-          target.notes.push({
-            agentId: 'blueprint-sanity-review',
-            role: 'blueprint-review',
-            content: 'revise_blueprint: Task was ready but has no usable blueprint/spec. Routing back to blueprint drafting before worker assignment.',
-            timestamp: this.now(),
-          })
-          target.updatedAt = this.now()
-          queue.lastUpdated = this.now()
-          await this.writeQueue(queue)
+      if (!hasUsableBlueprint(target)) {
+        target.status = 'exploring'
+        target.assignedTo = null
+        target.notes.push({
+          agentId: 'blueprint-sanity-review',
+          role: 'blueprint-review',
+          content: 'revise_blueprint: Task was ready but has no usable blueprint/spec. Routing back to blueprint drafting before worker assignment.',
+          timestamp: this.now(),
+        })
+        target.updatedAt = this.now()
+        queue.lastUpdated = this.now()
+        await this.writeQueue(queue)
 
-          await this.logTickProgress({
-            task: target,
-            agent: 'blueprint-sanity-review',
-            beforeStatus,
-            afterStatus: target.status,
-            transitioned: true,
-          })
+        await this.logTickProgress({
+          task: target,
+          agent: 'blueprint-sanity-review',
+          beforeStatus,
+          afterStatus: target.status,
+          transitioned: true,
+        })
 
-          return {
-            kind: 'processed',
-            taskId: target.id,
-            agent: 'blueprint-sanity-review',
-            beforeStatus,
-            afterStatus: target.status,
-            transitioned: true,
-            revisionCount: target.revisionCount,
-          }
+        return {
+          kind: 'processed',
+          taskId: target.id,
+          agent: 'blueprint-sanity-review',
+          beforeStatus,
+          afterStatus: target.status,
+          transitioned: true,
+          revisionCount: target.revisionCount,
         }
+      }
 
+      if (!hasBlueprintSanityReview(target)) {
         target.notes.push({
           agentId: 'blueprint-sanity-review',
           role: 'blueprint-review',

@@ -1615,6 +1615,43 @@ describe('Orchestrator.tick — routing', () => {
     expect(q.tasks[0]!.notes.at(-1)?.content).toContain('revise_blueprint')
   })
 
+  it('revalidates ready task blueprints even when an earlier blueprint review note exists', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'ready',
+        domain: 'ghost',
+        spec: '',
+        notes: [
+          {
+            agentId: 'blueprint-sanity-review',
+            role: 'blueprint-review',
+            content: 'approve_blueprint: Task had a usable blueprint/spec before a later edit.',
+            timestamp: '2026-05-20T00:00:00.000Z',
+          },
+        ],
+      }),
+    ])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('blueprint-sanity-review')
+      expect(out.afterStatus).toBe('exploring')
+    }
+    expect(worker.calls).toHaveLength(0)
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('exploring')
+    expect(q.tasks[0]!.notes.filter(note => note.role === 'blueprint-review')).toHaveLength(2)
+    expect(q.tasks[0]!.notes.at(-1)?.content).toContain('revise_blueprint')
+  })
+
   it('dispatches drafted spec_review tasks to the owning coordinator and clears stale ownership', async () => {
     await writeQueue([
       mkTask({
