@@ -249,6 +249,23 @@ function normalizeExecErrorOutput(err: {
     .join('\n')
 }
 
+function killProcessTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
+  if (!child.pid) return
+  try {
+    if (process.platform === 'win32') {
+      child.kill(signal)
+    } else {
+      process.kill(-child.pid, signal)
+    }
+  } catch {
+    try {
+      child.kill(signal)
+    } catch {
+      // process may already be gone
+    }
+  }
+}
+
 export function runShellSync(input: ShellInput): ShellResult {
   const { command, timeoutMs = 120_000, env } = input
   const cwd = resolveShellCwd(input.cwd, undefined)
@@ -319,6 +336,7 @@ export async function runShell(input: ShellInput): Promise<ShellResult> {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: env ? { ...process.env, ...env } : process.env,
+      detached: process.platform !== 'win32',
     })
 
     let stdout = ''
@@ -366,8 +384,8 @@ export async function runShell(input: ShellInput): Promise<ShellResult> {
 
     const timer = setTimeout(() => {
       timedOut = true
-      child.kill('SIGTERM')
-      setTimeout(() => child.kill('SIGKILL'), 1000).unref()
+      killProcessTree(child, 'SIGTERM')
+      setTimeout(() => killProcessTree(child, 'SIGKILL'), 1000).unref()
     }, timeoutMs)
     timer.unref()
   })

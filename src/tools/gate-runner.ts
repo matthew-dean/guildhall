@@ -35,6 +35,23 @@ export interface GateRunSummary {
 
 const DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024 // 16 KB
 
+function killProcessTree(child: ReturnType<typeof spawn>): void {
+  if (!child.pid) return
+  try {
+    if (process.platform === 'win32') {
+      child.kill('SIGKILL')
+    } else {
+      process.kill(-child.pid, 'SIGKILL')
+    }
+  } catch {
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      // process may already be gone
+    }
+  }
+}
+
 /**
  * Run a single hard gate and return a structured GateResult. Never throws;
  * errors become `passed: false` with the error in `output`.
@@ -52,6 +69,7 @@ export async function runGate(
       cwd: opts.cwd,
       env: { ...process.env, ...(opts.env ?? {}) },
       shell: true,
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
@@ -73,11 +91,7 @@ export async function runGate(
 
     const timeout = setTimeout(() => {
       timedOut = true
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        // process may already be gone
-      }
+      killProcessTree(child)
     }, gate.timeoutMs)
 
     child.on('error', (err) => {
