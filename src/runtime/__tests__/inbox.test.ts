@@ -211,7 +211,13 @@ describe('buildInbox', () => {
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({
+      projectPath: tmpDir,
+      snapshotOptions: {
+        readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+        detectOauthProviders: () => ({ claude: false, codex: false }),
+      },
+    })
     const hit = items.find(i => i.kind === 'bootstrap_missing')
     expect(hit).toBeDefined()
     if (!hit) throw new Error('unreachable')
