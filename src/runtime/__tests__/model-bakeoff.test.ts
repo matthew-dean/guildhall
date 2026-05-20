@@ -6,6 +6,7 @@ import {
   aggregateBakeoffReport,
   historicalFailureScenarios,
   learningCandidatesFromBakeoffReport,
+  renderBakeoffMarkdown,
   runModelBakeoff,
 } from '../model-bakeoff.js'
 
@@ -201,6 +202,23 @@ describe('model bakeoff harness', () => {
     expect(report.lanes).toHaveLength(3)
     expect(report.runs).toHaveLength(9)
     expect(report.lanes.every((lane) => lane.costPerRecoveryLoopUsd !== null)).toBe(true)
+  })
+
+  it('renders a markdown report with cost and packet-quality columns', () => {
+    const report = runModelBakeoff({
+      generatedAt: '2026-05-19T20:00:00.000Z',
+      scenarios: historicalFailureScenarios.slice(0, 1),
+      lanes: [
+        DETERMINISTIC_BASELINE_LANE,
+        { id: 'strong-worker', label: 'Strong worker', kind: 'model', model: 'large-worker' },
+      ],
+    })
+
+    expect(renderBakeoffMarkdown(report)).toContain('# Guildhall Model Bakeoff')
+    expect(renderBakeoffMarkdown(report)).toContain('Generated: 2026-05-19T20:00:00.000Z')
+    expect(renderBakeoffMarkdown(report)).toContain('deterministic-baseline | 0/1 | 1')
+    expect(renderBakeoffMarkdown(report)).toContain('strong-worker | 1/1 | 0')
+    expect(renderBakeoffMarkdown(report)).toContain('| Lane | Completed | Failed | False escalations')
   })
 })
 

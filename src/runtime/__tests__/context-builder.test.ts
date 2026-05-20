@@ -114,6 +114,13 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('worktree bootstrap failed on command `cd knit && pnpm install`')
   })
 
+  it('includes construction mode responsibility in the task summary', async () => {
+    const ctx = await buildContext(baseTask, tmpDir)
+
+    expect(ctx.taskSummary).toContain('**Construction mode:** build')
+    expect(ctx.taskSummary).toContain('Implement against the accepted blueprint')
+  })
+
   it('includes out-of-scope list', async () => {
     const ctx = await buildContext(baseTask, tmpDir)
     expect(ctx.taskSummary).toContain('Knit-specific styling')

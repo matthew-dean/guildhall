@@ -60,6 +60,13 @@ export function connectStream(): void {
   }
 }
 
+export function disconnectStream(): void {
+  if (current) current.close()
+  current = null
+  currentUrl = null
+  setStatus('connecting')
+}
+
 export function summarizeEvent(env: EventEnvelope): string {
   const inner = env.event ?? (env as EventEnvelope as EventEnvelope & Record<string, unknown>)
   const type = (inner.type as string) ?? ''

@@ -13,7 +13,9 @@ change.
 
 ## The Core Promise
 
-Guildhall should feel like a guided control room for software work.
+Guildhall should feel like a guild hall for software work: a place where expert
+roles coordinate around a shared plan, make progress visible, and keep the user
+oriented without making them decode agent internals.
 
 It should not feel like:
 

@@ -20,7 +20,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import type { Task } from '@guildhall/core'
+import { constructionModeForTask, type ConstructionMode, type Task } from '@guildhall/core'
 import { activeEscalations } from '@guildhall/tools'
 import {
   buildSnapshot,
@@ -63,6 +63,11 @@ interface TurnBase {
   phase: TurnPhase
 }
 
+export interface TaskSourceNote {
+  description?: string | undefined
+  references: string[]
+}
+
 /**
  * Setup step rendered as a chat turn. Simple setup work is handled inline so
  * Thread owns the setup flow; only genuinely separate flows link out.
@@ -80,6 +85,11 @@ export interface SetupStepTurn extends TurnBase {
   currentValue?: string | undefined
   placeholder?: string | undefined
   choices?: Array<{ value: string; label: string }> | undefined
+  contextSummary?: {
+    intro: string
+    facts: string[]
+    uncertainty: string
+  } | undefined
 }
 
 /**
@@ -89,6 +99,7 @@ export interface BriefTurn extends TurnBase {
   kind: 'brief_approval'
   taskId: string
   taskTitle: string
+  constructionMode: ConstructionMode
   brief: {
     userJob?: string | undefined
     successMetric?: string | undefined
@@ -110,7 +121,11 @@ export interface AgentQuestionTurn extends TurnBase {
   kind: 'agent_question'
   taskId: string
   taskTitle: string
+  constructionMode: ConstructionMode
+  taskDescription?: string | undefined
+  sourceNote?: TaskSourceNote | undefined
   liveAgent?: { name: string; startedAt?: string | undefined } | undefined
+  activity?: LiveActivity[] | undefined
   // Mirrors AgentQuestion union from src/core/task.ts; kept loose here so the
   // server doesn't have to re-import the zod schema for projection.
   question: {
@@ -126,6 +141,7 @@ export interface AgentQuestionTurn extends TurnBase {
     choices?: string[] | undefined
     selectionMode?: 'single' | 'multiple' | undefined
   }
+  questions?: AgentQuestionTurn['question'][] | undefined
 }
 
 /** Spec ready for the user to approve / revise. */
@@ -133,6 +149,7 @@ export interface SpecReviewTurn extends TurnBase {
   kind: 'spec_review'
   taskId: string
   taskTitle: string
+  constructionMode: ConstructionMode
   spec: string
   draftCoordinators?: Array<{
     id: string
@@ -149,6 +166,7 @@ export interface EscalationTurn extends TurnBase {
   kind: 'escalation'
   taskId: string
   taskTitle: string
+  constructionMode: ConstructionMode
   escalationId: string
   summary: string
   details?: string | undefined
@@ -160,6 +178,7 @@ export interface ReviewFeedbackTurn extends TurnBase {
   kind: 'review_feedback'
   taskId: string
   taskTitle: string
+  constructionMode: ConstructionMode
   summary: string
   feedback: string
   revisionCount?: number | undefined
@@ -170,6 +189,9 @@ export interface InFlightTurn extends TurnBase {
   kind: 'inflight'
   taskId: string
   taskTitle: string
+  constructionMode: ConstructionMode
+  taskDescription?: string | undefined
+  sourceNote?: TaskSourceNote | undefined
   taskStatus?: string | undefined
   summary: string
   importedDraft?: boolean | undefined
@@ -347,6 +369,33 @@ function truncateDisplayTitle(value: string, max = 72): string {
   const singleLine = value.replace(/\s+/g, ' ').trim()
   if (singleLine.length <= max) return singleLine
   return `${singleLine.slice(0, max - 1).trim()}...`
+}
+
+function truncateSummary(value: string, max = 220): string {
+  const singleLine = value.replace(/\s+/g, ' ').trim()
+  if (singleLine.length <= max) return singleLine
+  return `${singleLine.slice(0, max - 1).trim()}...`
+}
+
+function cleanTaskDescription(task: Task): string | undefined {
+  const description = typeof task.description === 'string' ? task.description.trim() : ''
+  return description ? truncateSummary(description) : undefined
+}
+
+function sourceNoteForTask(task: Task): TaskSourceNote | undefined {
+  const references: string[] = []
+  for (const note of Array.isArray(task.notes) ? task.notes : []) {
+    const content = typeof note?.content === 'string' ? note.content.trim() : ''
+    const match = content.match(/^Imported from:\s*(.+)$/i)
+    if (!match?.[1]) continue
+    for (const raw of match[1].split(',')) {
+      const ref = raw.trim()
+      if (ref && !references.includes(ref)) references.push(ref)
+    }
+  }
+  const description = cleanTaskDescription(task)
+  if (references.length === 0 && !description) return undefined
+  return { description, references }
 }
 
 function displayTaskTitle(task: Task): string {
@@ -647,6 +696,11 @@ const SETUP_STEP_ACTIONS: Record<string, SetupAction> = {
     actionLabel: 'Let Guildhall inspect the repo',
     submitEndpoint: '/api/project/meta-intake',
   },
+  routing: {
+    affordance: 'inline-button',
+    actionLabel: 'Let Guildhall inspect the repo',
+    submitEndpoint: '/api/project/meta-intake',
+  },
   direction: {
     affordance: 'inline-textarea',
     actionLabel: 'Save',
@@ -679,6 +733,59 @@ function setupCurrentValue(stepId: string, snap: ProjectSnapshot, projectPath: s
     return existing || guessedProjectDirection(projectPath)
   } catch {
     return guessedProjectDirection(projectPath)
+  }
+}
+
+function taskCountSummary(tasks: Task[]): string {
+  if (tasks.length === 0) return 'No tasks have been created yet.'
+  const counts = new Map<string, number>()
+  for (const task of tasks) {
+    const status = typeof task.status === 'string' ? task.status : 'unknown'
+    counts.set(status, (counts.get(status) ?? 0) + 1)
+  }
+  const parts = Array.from(counts.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([status, count]) => `${count} ${status.replace(/_/g, ' ')}`)
+  return `${tasks.length} task${tasks.length === 1 ? '' : 's'} on record: ${parts.join(', ')}.`
+}
+
+function coordinatorSummary(snap: ProjectSnapshot): string {
+  const coordinators = snap.config?.coordinators ?? []
+  if (coordinators.length === 0) return 'No coordinator areas have been saved yet.'
+  const names = coordinators
+    .map((coordinator) => coordinator.name ?? coordinator.id)
+    .filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
+  if (names.length === 0) return `${coordinators.length} coordinator area${coordinators.length === 1 ? '' : 's'} saved.`
+  return `Coordinator areas: ${names.join(', ')}.`
+}
+
+function setupContextSummary(
+  stepId: string,
+  status: TurnStatus,
+  snap: ProjectSnapshot,
+  projectPath: string,
+  tasks: Task[],
+  currentValue: string | undefined,
+): SetupStepTurn['contextSummary'] {
+  if ((stepId !== 'direction' && stepId !== 'workspaceImport') || status === 'done') return undefined
+  const projectName = snap.config?.name?.trim() || basename(projectPath)
+  const durableDirection = currentValue?.trim() || setupCurrentValue('direction', snap, projectPath)?.trim()
+  const currentRead = durableDirection
+    ? `Current read: ${durableDirection}`
+    : 'Current read: no durable project direction has been saved yet.'
+  const uncertainty = stepId === 'workspaceImport'
+    ? 'If these files, priorities, or constraints are stale, correct the project direction or source notes before approving imported tasks. The review should use this snapshot as evidence, not as permanent project truth.'
+    : 'If the goal, audience, architecture, priorities, or constraints have changed, add that here. The saved direction is the durable plan input, and it can be revised later as the project changes.'
+  return {
+    intro: "This is Guildhall's current snapshot from local files and setup state, not permanent project truth.",
+    facts: [
+      `Project: ${projectName} (${basename(projectPath)}).`,
+      currentRead,
+      coordinatorSummary(snap),
+      snap.bootstrapVerified ? 'Bootstrap has been verified before.' : 'Bootstrap is not verified yet.',
+      taskCountSummary(tasks),
+    ],
+    uncertainty,
   }
 }
 
@@ -775,6 +882,8 @@ function liveAgentsByTask(
       ev?.type === 'error'
     ) {
       live.delete(taskId)
+    } else if (isExpectedResearchBudgetRefusal(ev)) {
+      continue
     } else if (live.has(taskId)) {
       const current = live.get(taskId)!
       live.set(taskId, {
@@ -823,6 +932,14 @@ function liveEventLabel(
     return ev.message.trim()
   }
   return type ? type.replace(/_/g, ' ') : 'Working'
+}
+
+function isExpectedResearchBudgetRefusal(
+  ev: NonNullable<BuildThreadOptions['recentEvents']>[number]['event'],
+): boolean {
+  if (ev?.type !== 'tool_completed' || !ev.is_error) return false
+  const output = String(ev.output ?? ev.message ?? '')
+  return /research budget exhausted|refusing more read-only tool calls|do not call more read-only tools now/i.test(output)
 }
 
 function friendlyToolName(tool: string): string {
@@ -938,6 +1055,7 @@ function activityByTask(
     const ev = envelope.event
     const taskId = typeof ev?.task_id === 'string' ? ev.task_id : null
     if (!taskId) continue
+    if (isExpectedResearchBudgetRefusal(ev)) continue
     const cutoff = cutoffs.get(taskId)
     if (cutoff && envelope.at && Date.parse(envelope.at) < cutoff) continue
     const type = ev?.type ?? ''
@@ -1033,6 +1151,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       actionLabel: 'Open',
       actionHref: '/',
     }
+    const currentValue = setupCurrentValue(step.id, snap, opts.projectPath) ?? action.currentValue
     turns.push({
       kind: 'setup_step',
       id: `setup:${step.id}`,
@@ -1045,7 +1164,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       why: step.why,
       skippable: step.skippable,
       ...action,
-      currentValue: setupCurrentValue(step.id, snap, opts.projectPath) ?? action.currentValue,
+      currentValue,
+      contextSummary: setupContextSummary(step.id, status, snap, opts.projectPath, tasks, currentValue),
     })
   }
 
@@ -1059,61 +1179,26 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const taskId = typeof t.id === 'string' ? t.id : ''
     const taskTitle = displayTaskTitle(t)
     if (!taskId) continue
+    const taskDescription = cleanTaskDescription(t)
+    const sourceNote = sourceNoteForTask(t)
     const taskStatus = typeof t.status === 'string' ? t.status : ''
+    const constructionMode = constructionModeForTask(t)
     const createdAt =
       typeof t.createdAt === 'string' ? t.createdAt : new Date().toISOString()
 
-    // Brief approval (or done card)
-    const brief = t.productBrief as
-      | {
-          userJob?: string
-          successMetric?: string
-          successCriteria?: string
-          antiPatterns?: string[]
-          rolloutPlan?: string
-          authoredBy?: string
-          approvedAt?: string | null
-        }
-      | undefined
-    const approvedAt = brief && typeof brief === 'object' ? brief.approvedAt ?? null : null
-    const liveAgent = liveAgents.get(taskId)
-    if (brief && typeof brief === 'object') {
-      const briefStillNeedsHuman = !approvedAt && taskStatus === 'exploring'
-      const status: TurnStatus = !briefStillNeedsHuman
-        ? 'done'
-        : !activeAssigned
-          ? 'active'
-          : 'pending'
-      if (status === 'active') activeAssigned = true
-      turns.push({
-        kind: 'brief_approval',
-        id: `brief:${taskId}`,
-        at: createdAt,
-        persona: 'spec',
-        status,
-        phase: status === 'done' ? 'done' : 'intake',
-        taskId,
-        taskTitle,
-        brief: {
-          userJob: brief.userJob,
-          successMetric: brief.successMetric,
-          successCriteria: brief.successCriteria,
-          antiPatterns: brief.antiPatterns,
-          rolloutPlan: brief.rolloutPlan,
-          authoredBy: brief.authoredBy,
-        },
-        liveAgent,
-        approvedAt,
-      })
-    }
-
-    // Open agent questions
     const openQs = isTerminalQuestionState(taskStatus)
       ? []
       : (Array.isArray(t.openQuestions)
           ? (t.openQuestions as Array<Record<string, unknown>>)
           : []).filter((q) => !isObsoleteVisibleQuestion(t, q))
     const seenQuestionSignatures = new Set<string>()
+    const visibleQuestions: Array<{
+      q: Record<string, unknown>
+      qid: string
+      askedAt: string
+      answeredAt?: string | undefined
+      question: AgentQuestionTurn['question']
+    }> = []
     for (const q of openQs) {
       const signature = openQuestionSignature(q)
       const answeredAt = typeof q.answeredAt === 'string' ? q.answeredAt : undefined
@@ -1122,24 +1207,11 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       const askedAt = typeof q.askedAt === 'string' ? q.askedAt : createdAt
       if (!qid) continue
       if (!answeredAt && signature) seenQuestionSignatures.add(signature)
-      // Agent questions are co-active: any unanswered question on the task
-      // is independently 'active' so the user can answer them in any order.
-      // We DO NOT bump `activeAssigned` here — that flag gates the strictly
-      // linear turn kinds (setup steps, brief approval, spec review). A batch
-      // of related questions on one task should all surface as live cards.
-      const status: TurnStatus = answeredAt ? 'done' : 'active'
-      turns.push({
-        kind: 'agent_question',
-        id: `q:${taskId}:${qid}`,
-        at: askedAt,
-        persona: typeof q.askedBy === 'string' && q.askedBy.includes('spec')
-          ? 'spec'
-          : 'coord',
-        status,
-        phase: status === 'done' ? 'done' : 'intake',
-        taskId,
-        taskTitle,
-        liveAgent,
+      visibleQuestions.push({
+        q,
+        qid,
+        askedAt,
+        answeredAt,
         question: {
           kind: (q.kind as 'confirm' | 'yesno' | 'choice' | 'text') ?? 'text',
           id: qid,
@@ -1157,6 +1229,100 @@ export function buildThread(opts: BuildThreadOptions): Thread {
             ? q.selectionMode
             : undefined,
         },
+      })
+    }
+    const unansweredQuestions = visibleQuestions.filter((entry) => !entry.answeredAt)
+    const answeredQuestions = visibleQuestions.filter((entry) => entry.answeredAt)
+
+    // Brief approval (or done card)
+    const brief = t.productBrief as
+      | {
+          userJob?: string
+          successMetric?: string
+          successCriteria?: string
+          antiPatterns?: string[]
+          rolloutPlan?: string
+          authoredBy?: string
+          approvedAt?: string | null
+        }
+      | undefined
+    const approvedAt = brief && typeof brief === 'object' ? brief.approvedAt ?? null : null
+    const liveAgent = liveAgents.get(taskId)
+    if (brief && typeof brief === 'object' && unansweredQuestions.length === 0) {
+      const briefStillNeedsHuman = !approvedAt && taskStatus === 'exploring'
+      const status: TurnStatus = !briefStillNeedsHuman
+        ? 'done'
+        : !activeAssigned
+          ? 'active'
+          : 'pending'
+      if (status === 'active') activeAssigned = true
+      turns.push({
+        kind: 'brief_approval',
+        id: `brief:${taskId}`,
+        at: createdAt,
+        persona: 'spec',
+        status,
+        phase: status === 'done' ? 'done' : 'intake',
+        taskId,
+        taskTitle,
+        constructionMode,
+        brief: {
+          userJob: brief.userJob,
+          successMetric: brief.successMetric,
+          successCriteria: brief.successCriteria,
+          antiPatterns: brief.antiPatterns,
+          rolloutPlan: brief.rolloutPlan,
+          authoredBy: brief.authoredBy,
+        },
+        liveAgent,
+        approvedAt,
+      })
+    }
+
+    // Open agent questions
+    if (unansweredQuestions.length > 0) {
+      const first = unansweredQuestions[0]!
+      // Agent questions are co-active, but the Thread should still show one
+      // state for one task. The UI renders the rest as a subsection.
+      turns.push({
+        kind: 'agent_question',
+        id: unansweredQuestions.length === 1 ? `q:${taskId}:${first.qid}` : `q:${taskId}:questions`,
+        at: first.askedAt,
+        persona: typeof first.q.askedBy === 'string' && first.q.askedBy.includes('spec')
+          ? 'spec'
+          : 'coord',
+        status: 'active',
+        phase: 'intake',
+        taskId,
+        taskTitle,
+        constructionMode,
+        taskDescription,
+        sourceNote,
+        liveAgent,
+        activity: liveActivity.get(taskId),
+        question: first.question,
+        questions: unansweredQuestions.length > 1
+          ? unansweredQuestions.map((entry) => entry.question)
+          : undefined,
+      })
+    }
+    for (const entry of answeredQuestions) {
+      turns.push({
+        kind: 'agent_question',
+        id: `q:${taskId}:${entry.qid}`,
+        at: entry.askedAt,
+        persona: typeof entry.q.askedBy === 'string' && entry.q.askedBy.includes('spec')
+          ? 'spec'
+          : 'coord',
+        status: 'done',
+        phase: 'done',
+        taskId,
+        taskTitle,
+        constructionMode,
+        taskDescription,
+        sourceNote,
+        liveAgent,
+        question: entry.question,
       })
     }
 
@@ -1200,6 +1366,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
           : 'done',
         taskId,
         taskTitle,
+        constructionMode,
         summary: compactReviewSummary(content),
         feedback: content,
         revisionCount: reviewIndex + 1,
@@ -1244,6 +1411,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         phase: status === 'active' ? 'spec' : 'intake',
         taskId,
         taskTitle,
+        constructionMode,
         spec,
         draftCoordinators,
       })
@@ -1272,7 +1440,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       const summary =
         effectiveLiveAgent
           ? importedDraft && effectiveLiveAgent.name === 'spec-agent'
-            ? 'Guildhall is shaping this imported draft now.'
+            ? 'Guildhall is drafting a task brief for this imported note now.'
             : taskId === META_INTAKE_TASK_ID
               ? 'Guildhall is inspecting the repo and drafting starter tasks now.'
             : `${friendlyAgentName(effectiveLiveAgent.name)} is working on this now.`
@@ -1284,13 +1452,13 @@ export function buildThread(opts: BuildThreadOptions): Thread {
                 : 'Guildhall has a partial setup draft here.'
           : taskStatus === 'import_draft'
             ? importDraftTasks.length > 1
-              ? `Imported draft waiting for shaping. ${importDraftTasks.length - 1} more drafts are queued behind it.`
-              : 'Imported draft waiting for shaping.'
+              ? `Imported draft needs a task brief. ${importDraftTasks.length - 1} more drafts are queued behind it.`
+              : 'Imported draft needs a task brief.'
             : taskStatus === 'exploring'
               ? importedDraft
                 ? importDraftTasks.length > 1
-                  ? `Imported draft waiting for shaping. ${importDraftTasks.length - 1} more drafts are queued behind it.`
-                  : 'Imported draft waiting for shaping.'
+                  ? `Imported draft has a task brief in progress. ${importDraftTasks.length - 1} more drafts are queued behind it.`
+                  : 'Imported draft has a task brief in progress.'
               : queuedSpecRevision
                 ? 'Guildhall has your latest answers and a spec draft. The next step is for Guildhall to revise the spec.'
               : 'The spec author is shaping this task.'
@@ -1310,6 +1478,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         phase,
         taskId,
         taskTitle,
+        constructionMode,
+        taskDescription,
+        sourceNote,
         taskStatus,
         summary,
         importedDraft,
@@ -1347,6 +1518,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         phase: 'blocked',
         taskId,
         taskTitle,
+        constructionMode,
         escalationId: escId,
         summary,
         details: compactEscalationDetailsWithPolicy(

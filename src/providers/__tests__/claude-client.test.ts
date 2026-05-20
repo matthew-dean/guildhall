@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ApiStreamEvent } from '@guildhall/engine'
 
-import { ClaudeOauthClient } from '../claude-client.js'
+import { AnthropicApiClient, ClaudeOauthClient } from '../claude-client.js'
 
 function sseResponse(frames: string[]): Response {
   const encoder = new TextEncoder()
@@ -170,5 +170,101 @@ describe('ClaudeOauthClient', () => {
     expect(calls).toBe(2)
     expect(events.some((e) => e.type === 'retry')).toBe(true)
     expect(threw).toBeInstanceOf(Error)
+  })
+
+  it('refreshes expired OAuth credentials before making the Claude request', async () => {
+    let captured: RequestInit | undefined
+    const refresh = async (token: string) => {
+      expect(token).toBe('old-refresh')
+      return {
+        accessToken: 'fresh-access',
+        refreshToken: 'fresh-refresh',
+        expiresAt: Date.now() + 3_600_000,
+      }
+    }
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      captured = init
+      return sseResponse([makeFrame('message_stop', { type: 'message_stop' })])
+    }) as unknown as typeof fetch
+    const client = new ClaudeOauthClient({
+      credential: {
+        accessToken: 'expired-access',
+        refreshToken: 'old-refresh',
+        expiresAt: Date.now() - 1,
+      },
+      refresh,
+      fetch: fakeFetch,
+    })
+
+    const events = await collect(client.streamMessage({
+      model: 'claude-sonnet-4-6',
+      messages: [],
+      max_tokens: 1,
+      tools: [],
+    }))
+
+    expect((captured?.headers as Record<string, string>).authorization).toBe('Bearer fresh-access')
+    expect(events.at(-1)?.type).toBe('message_complete')
+  })
+
+  it('supports Anthropic API-key auth on the same SSE path without OAuth-only headers', async () => {
+    let captured: RequestInit | undefined
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      captured = init
+      return sseResponse([
+        makeFrame('content_block_start', {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'text', text: 'initial' },
+        }),
+        makeFrame('content_block_delta', {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: ' text' },
+        }),
+        makeFrame('message_stop', { type: 'message_stop' }),
+      ])
+    }) as unknown as typeof fetch
+
+    const client = new AnthropicApiClient({
+      apiKey: 'sk-ant',
+      fetch: fakeFetch,
+      sessionId: 'anthropic-session',
+    })
+    const events = await collect(client.streamMessage({
+      model: 'claude-sonnet-4-6',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      max_tokens: 128,
+      tools: [],
+    }))
+
+    const headers = captured?.headers as Record<string, string>
+    expect(headers['x-api-key']).toBe('sk-ant')
+    expect(headers.authorization).toBeUndefined()
+    expect(headers['anthropic-beta']).not.toContain('oauth-2025-04-20')
+    expect(events.some(ev => ev.type === 'text_delta' && ev.text === ' text')).toBe(true)
+    const terminal = events.at(-1)
+    expect(terminal?.type).toBe('message_complete')
+    if (terminal?.type === 'message_complete') {
+      expect(terminal.message.content[0]).toEqual({ type: 'text', text: 'initial text' })
+    }
+  })
+
+  it('rejects missing Anthropic API keys and auth failures without retrying', async () => {
+    expect(() => new AnthropicApiClient({ apiKey: '' })).toThrow('requires an apiKey')
+    let calls = 0
+    const fakeFetch = (async () => {
+      calls += 1
+      return new Response('bad key', { status: 401 })
+    }) as unknown as typeof fetch
+    const client = new AnthropicApiClient({ apiKey: 'sk-ant', fetch: fakeFetch, maxRetries: 3 })
+
+    await expect(collect(client.streamMessage({
+      model: 'claude-sonnet-4-6',
+      messages: [],
+      max_tokens: 1,
+      tools: [],
+    }))).rejects.toThrow('Anthropic API rejected key (401): bad key')
+    expect(calls).toBe(1)
   })
 })

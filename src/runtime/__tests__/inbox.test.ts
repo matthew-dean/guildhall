@@ -33,6 +33,16 @@ async function writeFile(rel: string, contents: string): Promise<void> {
   await fs.writeFile(p, contents, 'utf8')
 }
 
+function buildInboxWithProviderSetup(): InboxItem[] {
+  return buildInbox({
+    projectPath: tmpDir,
+    snapshotOptions: {
+      readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+      detectOauthProviders: () => ({ claude: false, codex: false }),
+    },
+  })
+}
+
 /** A minimal, schema-valid agent-settings.yaml with every entry system-default. */
 function fullSystemDefaultSettings(): unknown {
   const now = new Date().toISOString()
@@ -176,7 +186,13 @@ describe('buildInbox', () => {
     await writeYaml('guildhall.yaml', { name: 'x', id: 'x', coordinators: [] })
     await writeJson('memory/workspace-goals.json', { goals: [] })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({
+      projectPath: tmpDir,
+      snapshotOptions: {
+        readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+        detectOauthProviders: () => ({ claude: false, codex: false }),
+      },
+    })
     const hit = items.find(i => i.kind === 'bootstrap_missing')
     expect(hit).toBeDefined()
     if (!hit) throw new Error('unreachable')
@@ -205,7 +221,13 @@ describe('buildInbox', () => {
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInbox({
+      projectPath: tmpDir,
+      snapshotOptions: {
+        readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+        detectOauthProviders: () => ({ claude: false, codex: false }),
+      },
+    })
     const hit = items.find(i => i.kind === 'bootstrap_missing')
     expect(hit).toBeDefined()
     if (!hit) throw new Error('unreachable')
@@ -255,7 +277,7 @@ describe('buildInbox', () => {
     await writeFile('README.md', '# hello')
     await writeFile('package.json', '{}')
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInboxWithProviderSetup()
     const hit = items.find(i => i.kind === 'workspace_import_pending')
     expect(hit).toBeDefined()
     if (!hit || hit.kind !== 'workspace_import_pending') throw new Error('unreachable')
@@ -291,7 +313,7 @@ describe('buildInbox', () => {
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInboxWithProviderSetup()
     const hit = items.find(i => i.kind === 'brief_approval')
     expect(hit).toBeDefined()
     if (!hit || hit.kind !== 'brief_approval') throw new Error('unreachable')
@@ -374,7 +396,7 @@ describe('buildInbox', () => {
     if (!hit || hit.kind !== 'import_draft_queue') throw new Error('unreachable')
     expect(hit.severity).toBe('medium')
     expect(hit.taskId).toBe('task-import-a')
-    expect(hit.title).toBe('2 imported drafts need shaping')
+    expect(hit.title).toBe('2 imported drafts need task briefs')
     expect(hit.detail).toMatch(/Inspect the repo and draft starter tasks/)
     expect(hit.actionHref).toBe('/task/task-import-a')
   })
@@ -492,7 +514,7 @@ describe('buildInbox', () => {
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir })
+    const items = buildInboxWithProviderSetup()
     expect(items.some(i => i.kind === 'agent_question_pending' && i.taskId === 'task-workspace-import')).toBe(false)
     expect(items.some(i => i.kind === 'import_draft_queue')).toBe(true)
   })

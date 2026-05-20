@@ -10,6 +10,7 @@ import {
   recommendModelsForRole,
   findModel,
 } from '../models.js'
+import { defineWorkspace } from '../workspace.js'
 
 describe('MODEL_CATALOG', () => {
   it('contains at least one model per provider type', () => {
@@ -149,5 +150,24 @@ describe('default model assignments', () => {
       const provider = findModel(id)?.provider
       expect(['anthropic', 'openai', 'google']).toContain(provider)
     }
+  })
+})
+
+describe('defineWorkspace', () => {
+  it('fills missing model roles from local defaults while preserving overrides', () => {
+    const workspace = defineWorkspace({
+      name: 'Looma + Knit',
+      coordinators: [],
+      models: {
+        worker: 'custom-worker-model',
+      },
+      maxRevisions: 4,
+      heartbeatInterval: 2,
+    })
+
+    expect(workspace.models?.worker).toBe('custom-worker-model')
+    expect(workspace.models?.spec).toBe(DEFAULT_LOCAL_MODEL_ASSIGNMENT.spec)
+    expect(workspace.maxRevisions).toBe(4)
+    expect(workspace.heartbeatInterval).toBe(2)
   })
 })

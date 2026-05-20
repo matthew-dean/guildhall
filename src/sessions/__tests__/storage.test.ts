@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -155,5 +155,100 @@ describe('session storage', () => {
       permission_mode: 'default',
       invoked_skills: ['plan'],
     })
+  })
+
+  it('sanitizes nested metadata values that are not plain JSON primitives', () => {
+    saveSessionSnapshot({
+      cwd: '/tmp/project',
+      model: 'm',
+      systemPrompt: '',
+      messages: [userMsg('metadata shape')],
+      usage: { input_tokens: 0, output_tokens: 0 },
+      sessionId: 'nested-meta',
+      toolMetadata: {
+        read_file_state: {
+          seen: new Set(['/tmp/a.ts', '/tmp/b.ts']),
+          next: undefined,
+          nested: [{ ok: true }],
+        },
+        task_focus_state: {
+          current: Symbol.for('task'),
+        },
+      },
+    })
+
+    const loaded = loadSessionById('/tmp/project', 'nested-meta')
+    expect(loaded?.tool_metadata).toEqual({
+      read_file_state: {
+        seen: ['/tmp/a.ts', '/tmp/b.ts'],
+        next: 'undefined',
+        nested: [{ ok: true }],
+      },
+      task_focus_state: {
+        current: 'Symbol(task)',
+      },
+    })
+  })
+
+  it('revives malformed snapshots defensively and falls back to latest aliases', () => {
+    const sessionDir = getProjectSessionDir('/tmp/project')
+    saveSessionSnapshot({
+      cwd: '/tmp/project',
+      model: 'm',
+      systemPrompt: '',
+      messages: [userMsg('fallback latest')],
+      usage: { input_tokens: 0, output_tokens: 0 },
+      sessionId: 'latest-target',
+    })
+    writeFileSync(
+      join(sessionDir, 'session-broken.json'),
+      JSON.stringify({
+        session_id: 123,
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'valid revived text' }] },
+          { role: 'user', content: [{ type: 'unknown', text: 'dropped' }] },
+        ],
+        usage: 'bad',
+      }),
+    )
+    writeFileSync(join(sessionDir, 'session-not-json.json'), '{not json')
+
+    const revived = loadSessionById('/tmp/project', 'broken')
+    expect(revived?.session_id).toBe('unknown')
+    expect(revived?.usage).toEqual({ input_tokens: 0, output_tokens: 0 })
+    expect(revived?.summary).toBe('')
+    expect(revived?.message_count).toBe(1)
+
+    expect(loadSessionById('/tmp/project', 'not-json')).toBeNull()
+    expect(loadSessionById('/tmp/project', 'latest')?.session_id).toBe('latest-target')
+  })
+
+  it('lists latest when no named session has the same id and derives missing summaries from messages', () => {
+    const sessionDir = getProjectSessionDir('/tmp/project')
+    saveSessionSnapshot({
+      cwd: '/tmp/project',
+      model: 'm',
+      systemPrompt: '',
+      messages: [userMsg('normal named session')],
+      usage: { input_tokens: 0, output_tokens: 0 },
+      sessionId: 'named',
+    })
+    writeFileSync(
+      join(sessionDir, 'latest.json'),
+      JSON.stringify({
+        session_id: 'latest-only',
+        model: 'fallback-model',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'derived latest summary' }] }],
+      }),
+    )
+
+    const list = listSessionSnapshots('/tmp/project', 10)
+    expect(list.some(s => s.session_id === 'named')).toBe(true)
+    expect(list).toContainEqual(expect.objectContaining({
+      session_id: 'latest-only',
+      summary: 'derived latest summary',
+      message_count: 1,
+      model: 'fallback-model',
+    }))
   })
 })

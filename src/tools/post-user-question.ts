@@ -13,6 +13,9 @@
  * into ONE of the four kinds — no free prose. Multiple choice is the
  * preferred kind whenever there's a small finite answer set, because the
  * UI degrades gracefully (Other... textbox) and the answer is structured.
+ * The prompt itself must include enough plain-language context for a human
+ * who has not read the source file: name the decision, why it matters, and
+ * the evidence/source term if you use repo jargon such as a queue name.
  */
 
 import { defineTool } from '@guildhall/engine'
@@ -123,6 +126,31 @@ function isPlanningPrompt(promptBody: string): boolean {
   )
 }
 
+function isQuestionListPrompt(promptBody: string): boolean {
+  const normalized = promptBody
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+  return (
+    /\b(?:two|three|four|five|\d+)\s+questions?\s+remain\b/.test(normalized) ||
+    /\bquestions?\s+remain\b/.test(normalized) ||
+    /\bposted\s+(?:two|three|four|five|\d+)\s+questions?\b/.test(normalized) ||
+    /\bquestions?\s+to\s+help\b/.test(normalized)
+  )
+}
+
+function validateQuestionShape(input: {
+  kind?: string
+  body?: string
+  choices?: string[]
+}): string | null {
+  if (input.kind === 'choice' && input.body && isQuestionListPrompt(input.body)) {
+    return 'choice question choices must be answers to one prompt, not labels for separate questions'
+  }
+  return null
+}
+
 function resolveQuestionDefaults(
   input: Pick<PostUserQuestionInput, 'tasksPath' | 'taskId' | 'askedBy'>,
   metadata: Record<string, unknown>,
@@ -165,6 +193,7 @@ function inferQuestionsFromAssistantText(text: string): InferredQuestion[] {
     const promptLike = /pick one\b|choose one\b|select one\b|\?$|:\s*$|success look like/i.test(promptBody)
     if (!promptLike) continue
     if (isPlanningPrompt(promptBody)) continue
+    if (isQuestionListPrompt(promptBody)) continue
     const summaryLike =
       /i['’]ll draft the full spec with\b|i will draft the full spec with\b|once you (?:pick|answer).+i['’]ll draft\b/i
         .test(promptBody)
@@ -229,6 +258,7 @@ function inferQuestionsFromAssistantText(text: string): InferredQuestion[] {
   const sectionQuestions = sections
     .map<InferredQuestion | null>((section) => {
       if (isPlanningPrompt(section.heading)) return null
+      if (isQuestionListPrompt(section.heading)) return null
       const choices = section.lines
         .map((line) => parseStructuredOptionLine(line))
         .filter(Boolean)
@@ -259,12 +289,14 @@ function resolveQuestionPayload(
     ?? (input.kind === 'confirm' ? input.restatement : input.prompt)
 
   if (input.kind && resolvedBody) {
-    return {
+    const payload = {
       kind: input.kind,
       body: resolvedBody,
       ...(input.choices ? { choices: input.choices } : {}),
       ...(input.selectionMode ? { selectionMode: input.selectionMode } : {}),
     }
+    const validationError = validateQuestionShape(payload)
+    return validationError ? { error: validationError } : payload
   }
 
   const bucketKey = 'inferred_post_user_questions'
@@ -293,6 +325,12 @@ export async function postUserQuestion(
   if (input.kind === 'choice' && (!input.choices || input.choices.length < 2)) {
     return { success: false, error: 'kind=choice requires 2..6 choices' }
   }
+  const validationError = validateQuestionShape({
+    kind: input.kind,
+    body: input.body,
+    choices: input.choices,
+  })
+  if (validationError) return { success: false, error: validationError }
   if (!input.tasksPath?.trim()) return { success: false, error: 'Missing tasksPath' }
   if (!input.taskId?.trim()) return { success: false, error: 'Missing taskId' }
   if (!input.askedBy?.trim()) return { success: false, error: 'Missing askedBy' }
@@ -352,7 +390,7 @@ export async function postUserQuestion(
 export const postUserQuestionTool = defineTool({
   name: 'post-user-question',
   description:
-    "Post an asynchronous structured question to the user on this task. Use this whenever you need human judgment to proceed — the question lands in the user's Thread feed with a kind-specific affordance, and you should yield (end your turn) so the orchestrator can resume you when an answer arrives. PREFER `kind: 'choice'` whenever the answer space is small and discrete (it always degrades to Other... free-text). For choice questions, set `selectionMode: 'multiple'` when more than one answer may apply; otherwise set `selectionMode: 'single'` or omit it. Use `confirm` to restate intent before committing. Use `yesno` only for genuinely binary calls. Use `text` sparingly — usually a multiple choice with the question phrased as the prompt is better. NEVER bury questions in productBrief.userJob — that field is for what you think the user wants, not for asking them.",
+    "Post an asynchronous structured question to the user on this task. Use this whenever you need human judgment to proceed — the question lands in the user's Thread feed with a kind-specific affordance, and you should yield (end your turn) so the orchestrator can resume you when an answer arrives. PREFER `kind: 'choice'` whenever the answer space is small and discrete (it always degrades to Other... free-text). For choice questions, set `selectionMode: 'multiple'` when more than one answer may apply; otherwise set `selectionMode: 'single'` or omit it. Use `confirm` to restate intent before committing. Use `yesno` only for genuinely binary calls. Use `text` sparingly — usually a multiple choice with the question phrased as the prompt is better. Every prompt must stand alone: explain the source fact or term you are asking about, why the decision matters, and what happens after the answer. NEVER bury questions in productBrief.userJob — that field is for what you think the user wants, not for asking them.",
   inputSchema: postUserQuestionInputSchema,
   jsonSchema: {
     type: 'object',

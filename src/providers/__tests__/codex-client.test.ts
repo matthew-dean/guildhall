@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { ApiStreamEvent } from '@guildhall/engine'
 
@@ -178,5 +178,136 @@ describe('CodexClient', () => {
         }),
       ),
     ).rejects.toThrow(/bad request/)
+  })
+
+  it('serializes multimodal and tool-result conversation history for Codex responses', async () => {
+    let captured: Record<string, unknown> | undefined
+    const fakeFetch = (async (_url: string, init?: RequestInit) => {
+      captured = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      return sseResponse([
+        dataFrame({ type: 'response.output_text.delta', delta: 'ok' }),
+        dataFrame({ type: 'response.completed', response: { status: 'incomplete' } }),
+      ])
+    }) as unknown as typeof fetch
+    const client = new CodexClient({
+      credential: testCred,
+      fetch: fakeFetch,
+      baseUrl: 'https://chatgpt.com/backend-api/codex',
+      sessionId: 'session-1',
+    })
+
+    const events = await collect(client.streamMessage({
+      model: 'gpt-5.3-codex',
+      system_prompt: '',
+      max_tokens: 64,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'look' },
+            { type: 'image', media_type: 'image/png', data: 'abc123', source_path: 'screenshot.png' },
+            { type: 'tool_result', tool_use_id: 'call_1', content: 'tool output', is_error: false },
+          ],
+        },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'I will call it.' },
+            { type: 'tool_use', id: 'call_1', name: 'inspect', input: { path: 'file.ts' } },
+          ],
+        },
+      ],
+      tools: [],
+    }))
+
+    expect(captured?.instructions).toBe('You are Guildhall.')
+    const input = captured?.input as Array<Record<string, unknown>>
+    expect(input[0]).toMatchObject({
+      role: 'user',
+      content: [
+        { type: 'input_text', text: 'look' },
+        { type: 'input_image', image_url: 'data:image/png;base64,abc123' },
+      ],
+    })
+    expect(input[1]).toEqual({
+      type: 'function_call_output',
+      call_id: 'call_1',
+      output: 'tool output',
+    })
+    expect(input[2]).toMatchObject({
+      type: 'message',
+      role: 'assistant',
+    })
+    expect(input[3]).toMatchObject({
+      type: 'function_call',
+      call_id: 'call_1',
+      name: 'inspect',
+      arguments: '{"path":"file.ts"}',
+    })
+    const terminal = events.at(-1)
+    expect(terminal?.type).toBe('message_complete')
+    if (terminal?.type === 'message_complete') {
+      expect(terminal.stop_reason).toBe('length')
+    }
+  })
+
+  it('formats HTTP and stream errors with the server payload details', async () => {
+    const errorFetch = (async () =>
+      new Response(JSON.stringify({ detail: 'account locked' }), { status: 403 })) as unknown as typeof fetch
+    const client = new CodexClient({ credential: testCred, fetch: errorFetch, maxRetries: 0 })
+
+    await expect(collect(client.streamMessage({
+      model: 'gpt-5.3-codex',
+      messages: [],
+      max_tokens: 1,
+      tools: [],
+    }))).rejects.toThrow('account locked')
+
+    const streamFetch = (async () => sseResponse([
+      dataFrame({ type: 'error', error: { message: 'bad stream', code: 'stream_error', request_id: 'req_1' } }),
+    ])) as unknown as typeof fetch
+    const streamClient = new CodexClient({ credential: testCred, fetch: streamFetch })
+    await expect(collect(streamClient.streamMessage({
+      model: 'gpt-5.3-codex',
+      messages: [],
+      max_tokens: 1,
+      tools: [],
+    }))).rejects.toThrow('bad stream (code=stream_error) [request_id=req_1]')
+  })
+
+  it('emits retry telemetry for retryable Codex HTTP failures', async () => {
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      const fakeFetch = (async () => {
+        calls += 1
+        if (calls === 1) return new Response('temporarily overloaded', { status: 503 })
+        return sseResponse([
+          dataFrame({ type: 'response.output_text.delta', delta: 'recovered' }),
+          dataFrame({ type: 'response.completed', response: { status: 'completed' } }),
+        ])
+      }) as unknown as typeof fetch
+      const client = new CodexClient({ credential: testCred, fetch: fakeFetch, maxRetries: 1 })
+      const eventsPromise = collect(client.streamMessage({
+        model: 'gpt-5.3-codex',
+        messages: [],
+        max_tokens: 1,
+        tools: [],
+      }))
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      const events = await eventsPromise
+
+      expect(calls).toBe(2)
+      expect(events[0]).toMatchObject({
+        type: 'retry',
+        attempt: 1,
+        max_attempts: 2,
+        delay_seconds: 1,
+      })
+      expect(events.some(ev => ev.type === 'text_delta' && ev.text === 'recovered')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

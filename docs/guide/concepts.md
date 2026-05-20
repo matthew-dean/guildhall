@@ -16,7 +16,25 @@ Either way, it means one directory containing a `guildhall.yaml` and a
 
 ## Task
 
-A unit of work with a status, a domain, an optional spec, acceptance criteria, hard gates, and review verdicts. Tasks move through a fixed lifecycle: `proposed → exploring → spec_review → ready → in_progress → review → gate_check → done` (terminal: `done`, `shelved`, `blocked`). See [Task lifecycle](./task-lifecycle).
+A framed piece of work with a status, a domain, an optional blueprint/spec,
+acceptance criteria, hard gates, and review verdicts. Tasks move through a
+fixed lifecycle: `proposed → exploring → spec_review → ready → in_progress →
+review → gate_check → done` (terminal: `done`, `shelved`, `blocked`). See
+[Task lifecycle](./task-lifecycle).
+
+## Blueprint
+
+An accepted plan for a project, release, phase, or task. A blueprint names what
+is being built, why it matters, what is in and out of scope, how it will be
+verified, and what assumptions are still risky. See
+[How Guildhall builds](./how-guildhall-builds).
+
+## Framing
+
+The work of turning broad intent into buildable structure: phases, task
+boundaries, dependencies, active tranches, attached questions, likely files,
+and verification standards. Framing is what prevents a project from becoming a
+pile of drafts.
 
 ## Domain
 
@@ -24,7 +42,11 @@ A named slice of the project (e.g. `ui`, `backend`, `infra`) owned by one coordi
 
 ## Coordinator
 
-The persona that owns a domain. Defined in `guildhall.yaml` with a **mandate**, **concerns**, and lists of **autonomous decisions** and **escalation triggers**. The coordinator decides whether tasks in its domain advance; see [Coordinators & domains](./coordinators).
+The general-contractor role for a domain. Defined in `guildhall.yaml` with a
+**mandate**, **concerns**, and lists of **autonomous decisions** and
+**escalation triggers**. The coordinator decides whether tasks in its domain
+advance and keeps the local plan coherent; see
+[Coordinators & domains](./coordinators).
 
 ## Agent
 
@@ -36,7 +58,23 @@ project-level overrides. See [Agents & models](./agents-and-models) and the
 
 ## Guild
 
-A persona with principles, a review rubric, and deterministic checks that sits at the table for relevant tasks. Examples: *Accessibility Specialist*, *Color Theorist*, *Frontend Engineer*. Guilds attach to tasks via an applicability predicate; multiple guilds can review one task (fan-out). See [Guilds](../subsystems/guilds).
+A persona with principles, a review rubric, and deterministic checks that sits
+at the table for relevant tasks. Examples: *Accessibility Specialist*, *Color
+Theorist*, *Frontend Engineer*. Guilds attach to tasks via an applicability
+predicate; multiple guilds can inspect one task (fan-out). See
+[Guilds](../subsystems/guilds).
+
+## Change order
+
+An explicit revision to the accepted plan. Use a change order when new evidence
+changes scope, sequencing, assumptions, or task shape. Change orders should be
+visible because silent drift destroys trust.
+
+## Punch list
+
+The small remaining finish work after the main build is coherent: cleanup,
+docs alignment, missing tests, release notes, polish, and deferred follow-ups.
+The punch list separates shipping blockers from nice-to-have finish work.
 
 ## Lever
 

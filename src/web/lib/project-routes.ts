@@ -25,6 +25,11 @@ export function currentProjectId(): string | null {
   return null
 }
 
+function normalizedProjectId(projectId?: string | null): string | null {
+  const normalized = projectId?.trim()
+  return normalized ? normalized : null
+}
+
 export function projectHref(projectId: string, suffix = '/thread'): string {
   const normalized = suffix.startsWith('/') ? suffix : `/${suffix}`
   return normalized === '/' || normalized === ''
@@ -36,8 +41,8 @@ export function projectTaskHref(projectId: string, taskId: string): string {
   return `/projects/${encodeURIComponent(projectId)}/task/${encodeURIComponent(taskId)}`
 }
 
-export function currentProjectHref(suffix = '/thread'): string {
-  const projectId = currentProjectId()
+export function currentProjectHref(suffix = '/thread', explicitProjectId?: string | null): string {
+  const projectId = normalizedProjectId(explicitProjectId) ?? currentProjectId()
   if (!projectId) {
     const normalized = suffix.startsWith('/') ? suffix : `/${suffix}`
     if (normalized === '' || normalized === '/') return '/project'
@@ -46,15 +51,56 @@ export function currentProjectHref(suffix = '/thread'): string {
   return projectHref(projectId, suffix)
 }
 
-export function currentTaskHref(taskId: string): string {
-  const projectId = currentProjectId()
+export function currentTaskHref(taskId: string, explicitProjectId?: string | null): string {
+  const projectId = normalizedProjectId(explicitProjectId) ?? currentProjectId()
   if (!projectId) return `/task/${encodeURIComponent(taskId)}`
   return projectTaskHref(projectId, taskId)
 }
 
-export function withCurrentProjectQuery(href: string): string {
-  const projectId = currentProjectId()
+export function projectActionHref(href: string, explicitProjectId?: string | null): string {
+  const projectId = normalizedProjectId(explicitProjectId) ?? currentProjectId()
   if (!projectId) return href
+  let url: URL
+  try {
+    url = new URL(href, typeof window !== 'undefined' ? window.location.origin : 'http://localhost')
+  } catch {
+    return href
+  }
+  if (typeof window !== 'undefined' && url.origin !== window.location.origin) return href
+  const suffix = `${url.pathname}${url.search}${url.hash}`
+  if (url.pathname.startsWith('/projects/')) return suffix
+  if (url.pathname === '/task' || url.pathname.startsWith('/task/')) {
+    const taskId = url.pathname.slice('/task/'.length)
+    return taskId ? `${projectTaskHref(projectId, decodeURIComponent(taskId))}${url.search}${url.hash}` : href
+  }
+  const projectSurface =
+    url.pathname === '/thread' ||
+    url.pathname === '/inbox' ||
+    url.pathname === '/notifications' ||
+    url.pathname === '/work' ||
+    url.pathname === '/workspace-import' ||
+    url.pathname === '/planner' ||
+    url.pathname === '/facts' ||
+    url.pathname === '/timeline' ||
+    url.pathname === '/release' ||
+    url.pathname.startsWith('/release/') ||
+    url.pathname === '/settings' ||
+    url.pathname.startsWith('/settings/') ||
+    url.pathname === '/routing' ||
+    url.pathname.startsWith('/routing/') ||
+    url.pathname === '/coordinators' ||
+    url.pathname.startsWith('/coordinators/')
+  if (!projectSurface) return href
+  return projectHref(projectId, suffix)
+}
+
+export function withCurrentProjectQuery(href: string): string {
+  return withProjectQuery(href, currentProjectId())
+}
+
+export function withProjectQuery(href: string, projectId: string | null): string {
+  const scopedProjectId = normalizedProjectId(projectId)
+  if (!scopedProjectId) return href
   let url: URL
   try {
     url = new URL(href, window.location.origin)
@@ -70,13 +116,13 @@ export function withCurrentProjectQuery(href: string): string {
     url.pathname === '/api/setup' ||
     url.pathname.startsWith('/api/setup/')
   if (!projectScoped) return href
-  if (!url.searchParams.has('projectId')) url.searchParams.set('projectId', projectId)
+  if (!url.searchParams.has('projectId')) url.searchParams.set('projectId', scopedProjectId)
   return `${url.pathname}${url.search}${url.hash}`
 }
 
-export function projectFetch(input: string, init?: RequestInit): Promise<Response> {
-  const href = withCurrentProjectQuery(input)
-  const projectId = currentProjectId()
+export function projectFetch(input: string, init?: RequestInit, explicitProjectId?: string | null): Promise<Response> {
+  const projectId = normalizedProjectId(explicitProjectId) ?? currentProjectId()
+  const href = projectId ? withProjectQuery(input, projectId) : withCurrentProjectQuery(input)
   if (!projectId || typeof input !== 'string') return fetch(href, init)
 
   let url: URL

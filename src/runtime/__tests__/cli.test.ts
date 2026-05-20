@@ -1,5 +1,39 @@
-import { describe, expect, it } from 'vitest'
-import { renderHelpText, resolveServiceLifecycleIntent, SHIPPED_CLI_COMMANDS } from '../cli.js'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  clearServiceRuntimeState,
+  clearServiceRuntimeStateIfOwnedByPid,
+  discoverServiceRuntimeState,
+  isPidAlive,
+  launchRouteForProject,
+  parseArgs,
+  persistServiceRuntimeState,
+  probeLiveService,
+  readServiceRuntimeState,
+  renderHelpText,
+  resolveServiceLifecycleIntent,
+  serviceStatePath,
+  serviceUrlForPort,
+  SHIPPED_CLI_COMMANDS,
+} from '../cli.js'
+
+const tmpHomes: string[] = []
+
+function tmpHome(): string {
+  const home = mkdtempSync(join(tmpdir(), 'guildhall-cli-test-'))
+  tmpHomes.push(home)
+  return home
+}
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  for (const home of tmpHomes.splice(0)) {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
 
 describe('resolveServiceLifecycleIntent', () => {
   it('treats serve as a friendly open-and-start path with a cwd launch hint', () => {
@@ -45,6 +79,111 @@ describe('resolveServiceLifecycleIntent', () => {
   it('recognizes open and stop as service lifecycle helpers', () => {
     expect(resolveServiceLifecycleIntent('open', [], { cwd: '/tmp/x' })?.kind).toBe('open')
     expect(resolveServiceLifecycleIntent('stop', [], { cwd: '/tmp/x' })?.kind).toBe('stop')
+  })
+})
+
+describe('CLI service lifecycle helpers', () => {
+  it('parses flags and positionals without letting boolean flags consume paths', () => {
+    const parsed = parseArgs(['--no-open', '/tmp/project', '--port', '9001', '--verbose'])
+
+    expect(parsed.positionals).toEqual(['/tmp/project'])
+    expect(parsed.getFlag('--port')).toBe('9001')
+    expect(parsed.getFlag('--missing')).toBeUndefined()
+  })
+
+  it('persists, reads, clears, and owner-clears service runtime state', () => {
+    const home = tmpHome()
+    const state = {
+      pid: process.pid,
+      port: 7777,
+      url: serviceUrlForPort(7777),
+      startedAt: '2026-05-19T16:00:00.000Z',
+    }
+
+    expect(serviceStatePath(home)).toBe(join(home, '.guildhall', 'service.json'))
+    expect(readServiceRuntimeState(home)).toBeNull()
+
+    persistServiceRuntimeState(state, home)
+    expect(readServiceRuntimeState(home)).toEqual(state)
+
+    clearServiceRuntimeStateIfOwnedByPid(process.pid + 100_000, home)
+    expect(readServiceRuntimeState(home)).toEqual(state)
+
+    clearServiceRuntimeStateIfOwnedByPid(process.pid, home)
+    expect(readServiceRuntimeState(home)).toBeNull()
+
+    persistServiceRuntimeState(state, home)
+    clearServiceRuntimeState(home)
+    expect(readServiceRuntimeState(home)).toBeNull()
+  })
+
+  it('ignores malformed service state files and drops stale recorded processes', async () => {
+    const home = tmpHome()
+    mkdirSync(join(home, '.guildhall'), { recursive: true })
+    writeFileSync(serviceStatePath(home), JSON.stringify({ pid: 'bad', port: 7777, url: 'x', startedAt: 'now' }))
+    expect(readServiceRuntimeState(home)).toBeNull()
+
+    writeFileSync(serviceStatePath(home), '{not json')
+    expect(readServiceRuntimeState(home)).toBeNull()
+
+    persistServiceRuntimeState({
+      pid: process.pid + 100_000,
+      port: 7777,
+      url: serviceUrlForPort(7777),
+      startedAt: '2026-05-19T16:00:00.000Z',
+    }, home)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('not found', { status: 404 })))
+
+    expect(await discoverServiceRuntimeState(7777, home)).toBeNull()
+    expect(readServiceRuntimeState(home)).toBeNull()
+  })
+
+  it('discovers a live service over HTTP and caches it for later calls', async () => {
+    const home = tmpHome()
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      pid: process.pid,
+      startedAt: '2026-05-19T16:00:00.000Z',
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(probeLiveService(7788)).resolves.toEqual({
+      pid: process.pid,
+      port: 7788,
+      url: 'http://localhost:7788',
+      startedAt: '2026-05-19T16:00:00.000Z',
+    })
+
+    await expect(discoverServiceRuntimeState(7788, home)).resolves.toEqual({
+      pid: process.pid,
+      port: 7788,
+      url: 'http://localhost:7788',
+      startedAt: '2026-05-19T16:00:00.000Z',
+    })
+    expect(readServiceRuntimeState(home)?.pid).toBe(process.pid)
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:7788/api/service')
+  })
+
+  it('handles failed probes and exposes pid liveness checks', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('offline')
+    }))
+
+    expect(isPidAlive(process.pid)).toBe(true)
+    expect(isPidAlive(process.pid + 100_000)).toBe(false)
+    await expect(probeLiveService(7799)).resolves.toBeNull()
+  })
+
+  it('chooses setup or project routes from the launch path instead of ambient project state', () => {
+    const initialized = tmpHome()
+    writeFileSync(join(initialized, 'guildhall.yaml'), 'name: Initialized\nid: initialized\ncoordinators: []\n')
+    const uninitialized = tmpHome()
+
+    expect(launchRouteForProject(null)).toBe('/projects')
+    expect(launchRouteForProject(initialized)).toBe('/project')
+    expect(launchRouteForProject(uninitialized)).toBe('/setup')
   })
 })
 

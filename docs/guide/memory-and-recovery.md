@@ -16,8 +16,9 @@ behavior stays inspectable and reversible.**
 
 ## Bounded recovery
 
-Recovery is not open-ended wandering. Each recovery path has a name, path
-bounds, allowed tools, success signals, and stop signals.
+Recovery is not open-ended wandering. Each recovery path has a name,
+construction mode, path bounds, allowed tools, success signals, and stop
+signals.
 
 Examples include:
 
@@ -25,6 +26,7 @@ Examples include:
 - rerunning the authoritative command that failed
 - repairing a touched-file verification failure
 - refreshing a stale edit target after an `oldString` miss
+- proposing a change order when evidence shows the blueprint is wrong
 - stopping with a concrete human question when the setup issue is outside the
   task
 
@@ -74,4 +76,3 @@ decides to act.
 
 The **Give product feedback** button opens a draft issue in the Guildhall GitHub
 repo. Guildhall does not submit the issue automatically.
-

@@ -6,8 +6,8 @@ pageClass: gh-first-visit-page
 # Existing project
 
 Existing repos usually arrive with README notes, plans, specs, TODOs, and
-partly finished work. Guildhall should find that evidence without pretending
-every note is already a safe task.
+partly finished work. Guildhall should survey that evidence, frame the useful
+parts, and avoid pretending every note is already a safe task.
 
 ## 1. Open the repo in Guildhall
 
@@ -19,7 +19,7 @@ guildhall serve
 If the project is not registered yet, attach it from the projects home or
 finish the setup wizard from the project shell.
 
-## 2. Scan for possible work
+## 2. Survey the existing material
 
 Guildhall can look through project files and propose drafts from:
 
@@ -30,12 +30,13 @@ Guildhall can look through project files and propose drafts from:
 - recent git history
 - TODO or FIXME comments
 
-The scan is not approval. It is a way to find possible work and show where it
-came from.
+The scan is not approval. It is the site survey: a way to find possible work,
+show where it came from, and decide what needs framing before it can run.
 
-## 3. Review drafts like a human
+## 3. Review drafts as blueprint candidates
 
-Approve a draft only when it is clear enough to run today.
+Approve a draft only when it is clear enough to become a task blueprint and run
+today.
 
 Leave it as a draft when it is:
 
@@ -47,13 +48,13 @@ Leave it as a draft when it is:
 
 For a large import, review by source instead of approving everything at once.
 
-## 4. Start with the smallest runnable set
+## 4. Start with the smallest framed set
 
 The useful question is not "how many tasks did Guildhall find?" It is "which
 few tasks can move without confusion?"
 
 A good first set has no unresolved human question, a visible success signal,
-and enough context for a worker to act.
+and enough blueprint context for a worker to act without inventing the plan.
 
 ## 5. Start and expect evidence
 

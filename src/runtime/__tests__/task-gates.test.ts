@@ -7,6 +7,8 @@ import {
   resolveEffectiveTaskSuccessGates,
   resolveEffectiveTaskVerificationCommands,
   resolveEffectiveTaskProjectPath,
+  renderTaskScopedGateInstructions,
+  renderTaskScopedVerificationInstructions,
   rewriteWorkspaceCommandsForIsolatedTaskWorktree,
 } from '../task-gates.js'
 
@@ -766,5 +768,35 @@ describe('resolveEffectiveTaskVerificationCommands', () => {
     expect(result).toContain(
       'cd web && pnpm vitest --run tests/unit/composables/use-collections.test.ts tests/unit/composables/use-presence.test.ts tests/unit/shared/subdomain.test.ts',
     )
+  })
+})
+
+describe('task-scoped instruction rendering', () => {
+  it('renders explicit hard gates with the authoritative task path and command list', () => {
+    const rendered = renderTaskScopedGateInstructions({
+      projectPath: '/repo/apps/web',
+      successGates: ['pnpm typecheck', 'pnpm test -- --run login.spec.ts'],
+    })
+
+    expect(rendered).toContain('Run hard gates against `/repo/apps/web`')
+    expect(rendered).toContain('- `pnpm typecheck`')
+    expect(rendered).toContain('- `pnpm test -- --run login.spec.ts`')
+    expect(rendered).toContain('use these commands exactly')
+  })
+
+  it('distinguishes missing verification config from an explicitly empty command list', () => {
+    const missing = renderTaskScopedVerificationInstructions({
+      projectPath: '/repo/apps/web',
+      successGates: undefined,
+    })
+    expect(missing).toContain('No task-scoped verification commands were derived')
+    expect(missing).toContain('avoid inventing extra repo-wide gates')
+
+    const empty = renderTaskScopedVerificationInstructions({
+      projectPath: '/repo/apps/web',
+      successGates: [],
+    })
+    expect(empty).toContain('No verified shell commands are currently configured')
+    expect(empty).toContain('Only run verification that the task itself names explicitly')
   })
 })

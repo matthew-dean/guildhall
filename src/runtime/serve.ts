@@ -4898,7 +4898,7 @@ async function serveWebAsset(
 // Inline dashboard SPA
 // ---------------------------------------------------------------------------
 
-function dashboardHtml(): string {
+export function dashboardHtml(): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>

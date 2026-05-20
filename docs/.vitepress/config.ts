@@ -2,6 +2,7 @@ import { defineConfig } from 'vitepress'
 
 const guideStartItems = [
   { text: 'Start here', link: '/guide/quick-start' },
+  { text: 'How Guildhall builds', link: '/guide/how-guildhall-builds' },
   { text: 'New project', link: '/guide/new-project' },
   { text: 'Existing project', link: '/guide/existing-project' },
   { text: 'First task set', link: '/guide/first-tasks' },
@@ -29,6 +30,7 @@ const guideSpecItems = [
 const guideConceptItems = [
   { text: 'Introduction', link: '/guide/introduction' },
   { text: 'Core concepts', link: '/guide/concepts' },
+  { text: 'How Guildhall builds', link: '/guide/how-guildhall-builds' },
 ]
 
 const guideSidebarSections = [
@@ -121,12 +123,13 @@ export default defineConfig({
   ],
   themeConfig: {
     nav: [
-      { text: 'Get started', link: '/guide/quick-start', activeMatch: '^/guide/(quick-start|new-project|existing-project|first-tasks|managing-projects)' },
-      { text: 'Guide', link: '/guide/', activeMatch: '^/guide/(?!(quick-start|new-project|existing-project|first-tasks|managing-projects))' },
+      { text: 'Get started', link: '/guide/quick-start', activeMatch: '^/guide/(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects)' },
+      { text: 'Guide', link: '/guide/', activeMatch: '^/guide/(?!(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects))' },
       { text: 'Reference', link: '/reference/', activeMatch: '^/(reference|cli|web-ui|levers|subsystems|releases)/' },
     ],
     sidebar: {
       '/guide/quick-start': getStartedSidebarSections,
+      '/guide/how-guildhall-builds': getStartedSidebarSections,
       '/guide/new-project': getStartedSidebarSections,
       '/guide/existing-project': getStartedSidebarSections,
       '/guide/first-tasks': getStartedSidebarSections,

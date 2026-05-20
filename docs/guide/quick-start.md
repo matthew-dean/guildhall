@@ -5,23 +5,32 @@ pageClass: gh-first-visit-page
 
 # Start here
 
-Guildhall is a local app for letting a group of AI helpers work on your real
-projects while keeping the state visible. You do not have to understand AI
-provider setup, agent roles, or internal queues before your first run.
+Guildhall is a local app for letting a guild of AI helpers work on your real
+projects while keeping plans, work, review, and blockers visible. You do not
+have to understand AI provider setup, agent roles, or internal queues before
+your first run.
 
 ![Guildhall settings view showing provider setup and project facts.](../assets/ui-audit/settings.png)
 
 ## The first mental model
 
-Think of Guildhall as a project workbench:
+Think of Guildhall as a small construction office for software:
 
 - **Projects** are your repos.
-- **Tasks** are specific pieces of work you want done.
-- **The guild** is the set of helpers that plan, implement, review, and report.
-- **The shell** is the browser screen where you can see what is happening.
+- **Blueprints** are the accepted plans for what should be built and how it
+  will be checked.
+- **Tasks** are framed pieces of work that can move through the guild.
+- **The guild** is the set of helpers that plan, build, inspect, and report.
+- **The shell** is the browser screen where you can see the job site.
 
 The goal of getting started is simple: open one project, give it one small
-task set, and see whether the work moves with clear evidence.
+task set, and see whether the work moves with clear evidence. Read
+[How Guildhall builds](./how-guildhall-builds) when you want the full mental
+model.
+
+You should not have to answer a long setup questionnaire. Guildhall should
+infer routine defaults, recommend a path, and ask only when the answer changes
+what you are trying to build or how safe the run will be.
 
 ## Install
 
@@ -39,7 +48,7 @@ The installer downloads the latest macOS package from GitHub Releases and
 checks `guildhall-macos.tar.gz.sha256` before installing. To pin a release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.5.1 sh
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.6.0 sh
 ```
 
 ## Open one project
@@ -51,7 +60,8 @@ guildhall serve
 
 Guildhall opens the browser. If this is the first time the repo has been
 opened, the setup wizard asks for only the basics: the project name, a stable
-URL slug, and how the guild should call a model.
+URL slug, and how the guild should call a model. That is the first site survey:
+where is the project, what is it called, and how can the guild work safely?
 
 ![Guildhall thread view showing setup prompts, human questions, and next actions.](../assets/ui-audit/inbox.png)
 
@@ -63,7 +73,8 @@ Use the path that matches your repo:
 - [Existing project](./existing-project): attach a repo that already has plans, docs, or TODOs.
 
 Then read [First task set](./first-tasks) before pressing **Start**. A good
-first run is small enough to watch and concrete enough to verify.
+first run is small enough to watch, concrete enough to verify, and framed well
+enough that the worker is not inventing the plan while building.
 
 ## What success looks like
 

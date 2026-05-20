@@ -26,6 +26,11 @@
     id,
     onchange,
   }: Props = $props()
+
+  function handleChange(e: Event) {
+    value = (e.target as HTMLSelectElement).value
+    onchange?.(value)
+  }
 </script>
 
 <select
@@ -34,7 +39,7 @@
   {id}
   aria-label={ariaLabel}
   bind:value
-  onchange={(e) => onchange?.((e.target as HTMLSelectElement).value)}
+  onchange={handleChange}
 >
   {#each options as opt (opt.value)}
     <option value={opt.value} disabled={opt.disabled}>{opt.label}</option>

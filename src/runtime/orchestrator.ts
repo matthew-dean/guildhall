@@ -237,6 +237,14 @@ function friendlyRuntimeAgentName(agentName: string): string {
   }
 }
 
+function hasBlueprintSanityReview(task: Task): boolean {
+  return task.notes.some((note) => note.role === 'blueprint-review')
+}
+
+function hasUsableBlueprint(task: Task): boolean {
+  return typeof task.spec === 'string' && task.spec.trim().length > 0
+}
+
 function isIgnorableCheckpointPath(file: string): boolean {
   const normalized = file.replace(/\\/g, '/').replace(/^\.\//, '')
   return (
@@ -956,6 +964,20 @@ function parseFallbackOptionLine(line: string): string | null {
   return null
 }
 
+function isQuestionListPrompt(promptBody: string): boolean {
+  const normalized = promptBody
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+  return (
+    /\b(?:two|three|four|five|\d+)\s+questions?\s+remain\b/.test(normalized) ||
+    /\bquestions?\s+remain\b/.test(normalized) ||
+    /\bposted\s+(?:two|three|four|five|\d+)\s+questions?\b/.test(normalized) ||
+    /\bquestions?\s+to\s+help\b/.test(normalized)
+  )
+}
+
 function inferFallbackQuestionsFromPlaintext(text: string): FallbackQuestionDraft[] {
   const trimmed = text.trim()
   if (!trimmed) return []
@@ -984,6 +1006,7 @@ function inferFallbackQuestionsFromPlaintext(text: string): FallbackQuestionDraf
     const promptBody = (headingPrompt?.[1] ?? headingPrompt?.[2] ?? normalizedPromptLine).trim()
     const promptLike = /pick one\b|choose one\b|select one\b|\?$|:\s*$|success look like/i.test(promptBody)
     if (!promptLike) continue
+    if (isQuestionListPrompt(promptBody)) continue
     const summaryLike =
       /i['’]ll draft the full spec with\b|i will draft the full spec with\b|once you (?:pick|answer).+i['’]ll draft\b/i
         .test(promptBody)
@@ -1054,6 +1077,7 @@ function inferFallbackQuestionsFromPlaintext(text: string): FallbackQuestionDraf
         .filter(Boolean)
         .map((line) => line as string)
       if (choices.length >= 2 && choices.length <= 6) {
+        if (isQuestionListPrompt(section.heading)) return null
         const combined = [section.heading, ...section.lines.map((line) => line.trim()).filter((line) => line && !/^-/.test(line))]
           .join('\n')
           .trim()
@@ -3009,7 +3033,6 @@ export class Orchestrator {
         const madeExploringProgress =
           transitioned ||
           taskAfter.updatedAt !== task.updatedAt ||
-          transcriptAppended ||
           fallbackBriefAuthored ||
           fallbackQuestionPosted
 
@@ -4415,6 +4438,47 @@ export class Orchestrator {
           transitioned: false,
           revisionCount: target.revisionCount,
         }
+      }
+
+      if (!hasUsableBlueprint(target)) {
+        target.status = 'exploring'
+        target.assignedTo = null
+        target.notes.push({
+          agentId: 'blueprint-sanity-review',
+          role: 'blueprint-review',
+          content: 'revise_blueprint: Task was ready but has no usable blueprint/spec. Routing back to blueprint drafting before worker assignment.',
+          timestamp: this.now(),
+        })
+        target.updatedAt = this.now()
+        queue.lastUpdated = this.now()
+        await this.writeQueue(queue)
+
+        await this.logTickProgress({
+          task: target,
+          agent: 'blueprint-sanity-review',
+          beforeStatus,
+          afterStatus: target.status,
+          transitioned: true,
+        })
+
+        return {
+          kind: 'processed',
+          taskId: target.id,
+          agent: 'blueprint-sanity-review',
+          beforeStatus,
+          afterStatus: target.status,
+          transitioned: true,
+          revisionCount: target.revisionCount,
+        }
+      }
+
+      if (!hasBlueprintSanityReview(target)) {
+        target.notes.push({
+          agentId: 'blueprint-sanity-review',
+          role: 'blueprint-review',
+          content: 'approve_blueprint: Task has a usable blueprint/spec. Worker may build against it.',
+          timestamp: this.now(),
+        })
       }
 
       target.status = 'in_progress'

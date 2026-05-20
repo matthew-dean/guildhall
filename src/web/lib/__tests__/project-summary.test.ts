@@ -191,7 +191,7 @@ describe('summarizeProjects', () => {
     })
   })
 
-  it('treats imported drafts as shaping work instead of paused execution', () => {
+  it('treats imported drafts as task-brief work instead of paused execution', () => {
     const service: ServiceDetail = {
       projects: [
         {
@@ -211,14 +211,14 @@ describe('summarizeProjects', () => {
     }
 
     expect(summarizeProjects(service)[0]).toMatchObject({
-      statusLabel: 'Needs shaping',
-      stageLabel: 'Needs shaping',
-      activityLabel: '75 imported drafts need shaping.',
+      statusLabel: 'Needs task briefs',
+      stageLabel: 'Needs task briefs',
+      activityLabel: '75 imported drafts need task briefs.',
       counts: { total: 89, active: 0, draftReview: 75, blocked: 0, done: 14, shelved: 0 },
       ticker: {
         tone: 'warn',
         pulse: false,
-        label: 'Needs shaping',
+        label: 'Needs task briefs',
         message: '75 imported drafts waiting',
       },
       canStart: false,

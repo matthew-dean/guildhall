@@ -8,7 +8,7 @@
   import Icon, { type IconName } from '../../lib/Icon.svelte'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
   import { nav } from '../../lib/nav.svelte.js'
-  import { projectFetch } from '../../lib/project-routes.js'
+  import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
 
   interface Props {
     items?: InboxItem[]
@@ -144,10 +144,10 @@
 
   function goTo(item: InboxItem): void {
     if (item.kind === 'brief_approval' || item.kind === 'spec_approval') {
-      nav('/thread')
+      nav(projectActionHref('/thread'))
       return
     }
-    if (item.actionHref) nav(item.actionHref)
+    if (item.actionHref) nav(projectActionHref(item.actionHref))
   }
 
   const priorityItems = $derived(items.filter(item => item.severity !== 'low'))

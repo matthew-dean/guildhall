@@ -76,8 +76,7 @@ describe('runGate', () => {
 
   it('truncates output at maxOutputBytes', async () => {
     const result = await runGate(
-      // Writes ~5000 bytes of 'x'
-      mkGate({ command: 'printf "x%.0s" {1..5000}' }),
+      mkGate({ command: 'node -e "process.stdout.write(\'x\'.repeat(5000))"' }),
       { cwd: tmpDir, maxOutputBytes: 1000 },
     )
     const output = result.output ?? ''

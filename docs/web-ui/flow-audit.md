@@ -45,6 +45,131 @@ screen.
   The 0.6.0 note now combines bounded improvisation, typed recovery playbooks,
   coordinator-routed project/system learning, and model bakeoff work. See
   `docs/design/agent-policy-and-model-bakeoff.md`.
+- [x] Capture the house/construction model as a canonical product philosophy
+  instead of leaving it in chat. See
+  `docs/design/project-construction-manifesto.md` for the guild roles, site
+  survey, blueprint, foundation, framing, trade work, inspection, change order,
+  punch list, and occupancy model that should guide 0.6.0 planning work.
+- [x] Start permeating the public docs with the construction model. Added
+  `docs/guide/how-guildhall-builds.md`, linked it from the start/guide
+  sidebars, and updated the home page, quick start, introduction, core
+  concepts, project walkthroughs, first-task guidance, task lifecycle,
+  projects/work guide, many-projects guide, and 0.6.0 release note to use
+  blueprint/framing/trade work/inspection/change-order language.
+- [x] Add the proportional-process guardrail to the construction model: process
+  serves product quality, so Guildhall should infer or recommend routine
+  implementation choices and reserve human questions for owner intent,
+  audience, user flow, risk, data ownership, and release criteria.
+- [x] Start building the construction model into the actual agent behavior.
+  Core agent prompts now map spec/coordinator/worker/reviewer roles to
+  blueprint/general-contractor/trade-work/inspection modes, require
+  proportional owner questions, and tell workers/reviewers to treat spec
+  failures as explicit change-order evidence instead of vague blockers.
+- [x] Write the construction-runtime integration spec and implementation plan
+  before expanding beyond prompt guidance. See
+  `docs/superpowers/specs/2026-05-19-guildhall-construction-runtime-integration.md`
+  and
+  `docs/superpowers/plans/2026-05-19-guildhall-construction-runtime-integration.md`.
+- [x] Add derived construction-mode metadata and Thread payload tests. The
+  runtime now derives `survey`, `blueprint`, `frame`, `build`, `inspect`,
+  `change_order`, and `punch_list` from task state, exports the helper from
+  core, and includes `constructionMode` on task-derived Thread turns. Focused
+  verification passed for `src/core/__tests__/construction-mode.test.ts` and
+  `src/runtime/__tests__/thread.test.ts`.
+- [x] Surface construction mode in Thread cards as a compact stage signal so
+  the user can tell whether a task is being surveyed, blueprinted, framed,
+  built, inspected, changed, or punched down without opening the details pane.
+  Thread now renders the construction mode as a neutral chip beside ownership
+  and status, with component coverage for visible and collapsed-phase task
+  cards.
+- [x] Inject construction mode into agent task context so role prompts and
+  per-task instructions line up. Workers should see when they are building
+  against an accepted blueprint; spec/coordinator/reviewer paths should see
+  their equivalent survey/blueprint/frame/inspection/change-order mode.
+  `buildContext` now adds the derived mode and responsibility line to the
+  Current Task summary; focused context-builder coverage guards the worker
+  `build` responsibility.
+- [x] Add a pre-worker blueprint sanity review so a `ready` task is not
+  blindly claimed by the worker before Guildhall records that the plan is
+  worth building. Missing-blueprint `ready` tasks should route back to
+  blueprint drafting instead of becoming `in_progress`.
+- [x] Collapse same-task draft-review and open-question states into one Thread
+  card. A task with an unanswered question should show the question as the
+  current task state, not a second card next to its unapproved brief.
+- [x] Reject malformed choice questions whose "answers" are actually labels
+  for separate questions. Agents must post each concrete question separately
+  or infer a default; Thread should not render topic labels like `Extension
+  ownership` / `Knit integration` as choose-one answers.
+- [x] Suppress expected research-budget refusal tool results from Thread live
+  activity. The durable-progress guard still nudges agents to stop reading and
+  write a brief/spec/question/escalation, but it should not appear as repeated
+  `Failed glob` / `Failed file read` errors.
+- [x] Make imported-draft cards name the actual artifact and add a compact
+  operations mode for crowded Thread phases. Thread, Current task, project
+  summaries, inbox titles, and task drawer copy now say `Needs task brief` /
+  `Draft task brief`, and expanded phases with eight or more turns render as
+  two-line operation rows with a `Show cards` escape hatch.
+- [x] Add the missing high-volume operations summary and priority ordering for
+  crowded Thread phases. Thread now leads with compact counts for `need you`,
+  `working`, `blocked`, `queued`, and `drafts`, and crowded rows sort by
+  attention / live work / blockers / queued work instead of becoming a raw
+  chronological wall.
+- [x] Reconcile the current `0.6.0` release note against the older planning
+  target. The release candidate now explicitly claims the construction/policy
+  substrate and leaves the full project-manager release-shaping layer as
+  carry-forward work instead of pretending active tranche selection is done.
+- [x] Add the missing `pnpm model:bakeoff` gate to the GitHub release workflow
+  so tagged release packaging enforces the same validation claimed in the
+  `0.6.0` note.
+- [x] Re-check the coverage release bar. A release-readiness run on
+  `2026-05-19` is back over 90% for statements, lines, and functions
+  (`90.20%` statements/lines, `90.15%` functions). The stricter future
+  `pnpm test:coverage:90` gate still fails branches at `77.46%`, so the
+  all-dimension target remains a larger branch-coverage hardening project
+  rather than a blocker for a statements/lines/functions 90% release bar.
+- [x] Improve task-scoped question handling after live Looma + Knit testing
+  showed jargon-heavy questions (`M6 queue`, migration-status ownership) with
+  no context path. Thread now lets the user ask for missing question context
+  without marking the question answered, keeps staged answer submission after
+  the question stack, and renders imported source references as clickable
+  source links on both imported-draft and question cards. Agent/tool guidance
+  now requires self-contained owner questions that explain the source fact,
+  why the answer matters, and what happens next.
+- [x] Re-run the release-readiness sweep after the coverage nudge:
+  `pnpm test` passed `2,497` tests, `pnpm typecheck`, `pnpm docs:check-help-sync`,
+  `pnpm docs:build`, `pnpm lint:deps`, `pnpm model:bakeoff`, `pnpm build`,
+  `pnpm test:ui`, and `git diff --check` all exited cleanly. Known non-blocking
+  output: dependency-cruiser orphan warnings and third-party Svelte warnings
+  from `svelte-sonner` / `runed`.
+- [x] Do a fresh live project walkthrough after the release sweep. Projects home
+  loads and scrolls; `fair-labor-license` and `t-minus-t` both show caught-up
+  done states. `looma-knit` is not runnable without user input because Thread
+  reports six pending answers, including still-jargony task questions. `font-
+  something` eventually surfaces a real bootstrap blocker: `cd model && pixi
+  install` fails because `pixi` is not on the path; the route also lingers on
+  `Loading...` for several seconds before the blocker appears.
+- [x] Fix the project Thread `Loading...` hang found on `font-something`.
+  Root cause was the project SSE stream opening before route-local data loads,
+  which could starve the initial `/api/project/thread` request in the browser.
+  Router now closes/debounces the stream on route changes and reconnects after
+  initial data gets a lane; Thread also receives the explicit route project id
+  instead of falling back through ambient selected-project state. Verified in
+  the installed local app: `font-something` now renders its setup/intake/done
+  sections instead of hanging, while the remaining `pixi` bootstrap blocker is
+  real project state.
+- [x] Add a project memory check-in to direction and existing-work review
+  without turning temporary evidence into permanent truth. Thread now shows
+  "What Guildhall knows right now" as a recomputed snapshot from files, setup
+  state, coordinator areas, bootstrap state, and task counts; the editable
+  direction remains the durable owner input that guides future task shaping and
+  can be revised when project facts change.
+- [x] Clean up the readiness language and unblock the current `font-something`
+  bootstrap. The confusing `Open Ready` action now says `Open readiness
+  checks`; after `pixi` was installed, rerunning bootstrap showed the stale
+  failure was replaced by a bad app gate, so `font-something/guildhall.yaml`
+  now uses `cd app && pnpm run build` instead of the nonexistent
+  `cd app && pnpm run typecheck`. The latest readiness run passed all install
+  commands and gates.
 - [x] Normalize dirty-repo setup blockers in Thread so the user sees the repo
   name and the concrete commit/stash recovery action instead of raw setup
   prose.
@@ -60,6 +185,39 @@ screen.
   backlog management surface keeps the full content width. Live browser check
   on `http://127.0.0.1:7777/projects/looma-knit/work` confirmed the Work list
   renders without `Live activity` and the project-level ticker remains visible.
+- [x] Make Thread the primary path for imported-task shaping and task-scoped
+  questions. Imported notes now show their starting point and source reference
+  on the Thread card, expose `Add context` and `Let Guildhall shape this`
+  inline, and nest active questions under the task instead of rendering a
+  separate peer card. The details pane remains an optional inspection path, not
+  the required place to keep a task moving.
+- [x] Fix the new-project setup regression where `/setup?step=3` attempted to
+  seed meta-intake through `/api/project/meta-intake` without a `projectId`.
+  The setup wizard now keeps an explicit project id after identity creation,
+  moves the URL to `/projects/:id/setup?...`, and scopes setup follow-up API
+  calls before the route has fully caught up. A route-helper regression test
+  covers the `/setup` page posting a project mutation for the newly-created
+  project id.
+- [x] Tighten project routing after the `font-something` project surfaced from
+  the legacy selected-project path. Project pages now pass the route project id
+  into project API refresh/start/stop/inbox calls and build top-bar links from
+  that explicit id. Legacy `/project/...` pages canonicalize to
+  `/projects/:id/...` as soon as the loaded project id is known, so a visible
+  project cannot keep using unscoped navigation that falls back to the project
+  list or mutable foreground project. The routing setup card also now starts
+  meta-intake inline instead of showing a generic `Open` button to `/`.
+- [x] Add deterministic route coverage for this failure class. Vitest now
+  checks that project action hrefs from runtime payloads normalize into
+  `/projects/:id/...` routes, and that every active onboard setup step has a
+  real submit endpoint or project-safe href instead of falling through to `/`.
+- [x] Add coverage guardrails for the 0.5.1 hardening path. The default
+  `pnpm test:coverage` command now enforces the current honest floor
+  (`83%` statements/lines/functions, `75%` branches), while
+  `pnpm test:coverage:90` and the PR workflow document the future 90% gate.
+  New happy-dom coverage protects real user flows across Thread inline setup,
+  imported-draft shaping, task-scoped question batching, Current task states,
+  provider/global-model settings, workspace import review, and routing-slice
+  coordinator screens.
 - [x] Run the final focused test/build sweep and push the release-hardening
   batch.
 - [x] Prove the `0.6.0` policy/learning loop compounds on the real Looma +
@@ -640,6 +798,31 @@ screen.
   debugging and Looma/Knit testing.
 
 ## Latest Progress
+
+- Merged `origin/main` into `feature/coverage-hardening-90` without rewriting
+  the published branch history. The merge brought in the policy/learning and
+  model-bakeoff work, then the branch restored the release gate with real
+  regression coverage: Settings now exercises the Learning controls, policy
+  tests cover decision-packet revival, bounded recovery playbooks, and
+  user-facing classification copy, and model-bakeoff tests cover markdown
+  report rendering. Verification on `2026-05-19`: `pnpm typecheck` passed and
+  `pnpm test:coverage` passed with `2,457` tests and `90.06%` line coverage.
+  Next live pass should walk the three registered projects again and check that
+  project advancement follows the emerging "outline first, then fill" process:
+  structure/requirements as an inspectable deliverable, followed by bounded
+  implementation against that accepted structure.
+- Live Looma + Knit walkthrough on `2026-05-19` answered the three active
+  shaping clusters (`Block menu / block side menu`, `Floating toolbar`, and
+  `Link editing UI`) with conservative Looma-library defaults, then started
+  the project. The run exposed a real intake-progress bug: after answers were
+  present, the spec agent narrated that it would write the brief/spec and
+  appended transcript text, but Guildhall counted transcript-only narration as
+  progress even though no product brief, spec, acceptance criteria, or question
+  changed. The orchestrator now treats transcript-only intake narration as
+  no-progress so the agent must produce a skeleton artifact or the task
+  escalates honestly. Focused and full verification passed afterward:
+  `pnpm typecheck`, focused orchestrator/policy/model/settings tests, and
+  `pnpm test:coverage` (`2,458` tests, `90.07%` line coverage).
 
 - Started the `0.6.0` policy/learning implementation in
   `/Users/matthew/git/worktrees/guildhall-0.6-policy-learning` on
@@ -2960,6 +3143,59 @@ screen.
   now frames intake/meta-intake as dashboard-driven flows, and the pinned
   installer example/test now follows the package version so the release docs
   do not drift during the next patch release.
+- Coverage baseline on `2026-05-18`: `pnpm test:coverage` now measures
+  `src/**/*.{ts,svelte}` only, excluding test files and declarations. The
+  current honest baseline is intentionally low because browser-rendered Svelte
+  surfaces are counted but not covered by Vitest yet; the gate now prevents
+  regression from that baseline instead of reporting packaged artifacts or
+  pretending the repo already meets an 80% source-wide floor.
+- Rendered UI coverage on `2026-05-18`: added the first repo-owned Playwright
+  suite for the dashboard. It boots deterministic fixture projects on an
+  isolated home/port, then checks mobile Projects scrolling, explicit project
+  route opening, legacy `/project/thread` canonicalization, task-scoped
+  questions, and answer-control vertical centering. The option rows now center
+  the checkbox/radio mark with the option text instead of pinning the mark to
+  the top of tall choices.
+- Component coverage split on `2026-05-19`: Svelte components now mount inside
+  Vitest through `@testing-library/svelte` and `happy-dom`, so UI components
+  contribute real executed lines to `pnpm test:coverage` instead of only
+  appearing in the denominator. The first component-level coverage targets the
+  task-question affordance in `AgentQuestion.svelte`; browser-only truths such
+  as scroll behavior and visual centering remain in Playwright.
+- Guild coverage policy on `2026-05-19`: the Test Engineer persona now treats
+  coverage as an explicit guild contract. Specs must name the declared coverage
+  floor, the command that enforces it, and any intentional exemptions; UI work
+  must split component-level state tests from real-browser layout/routing tests
+  instead of hiding behind vague "best practices."
+- PR gates on `2026-05-19`: added a minimal GitHub PR workflow for install,
+  typecheck, help-doc sync, dependency-boundary linting, unit/integration
+  tests, build, and rendered UI checks. The 90% source-wide coverage gate is
+  represented by `pnpm test:coverage:90` and documented in the workflow as the
+  command to swap in once the current 82.4% baseline reaches the guild target.
+- Coverage push on `2026-05-19`: `pnpm test:coverage` now reaches the 90%
+  source-wide line target with real added coverage around setup/provider flows, task-drawer
+  approvals, Thread inline approvals/questions/load errors, project event
+  streams, project-scoped fetch wrapping, search/gate helpers, intake modal
+  creation and bug filing, project provider/model overrides, Settings
+  bootstrap/identity/levers/design-system flows, Inbox agent-handled/dismiss
+  flows, Projects start/stop/attach failure handling, Workspace Import source
+  and task narrowing, ProjectView bootstrap/mobile/uninitialized states,
+  drawer provenance/history/transcript/experts audit trails, SetupWizard
+  validation/provider/meta-intake approval states, TaskCard navigation/status
+  summaries, and the agent settings persistence tool. The last stretch added
+  real endpoint, provider, session-storage, network/web guard, drawer checklist,
+  suggestion, and tooltip behavior coverage instead of inert line-touching.
+  The new IntakeModal tests caught a real shared `Select`
+  binding bug; `Select.svelte` now updates its bound value in its explicit
+  change handler. The expanded Thread tests also caught a real meta-intake
+  control-flow bug where a "Create split proposal" button could render while
+  still calling the generic project start endpoint; Thread now routes that
+  completed meta-intake path to `/api/project/meta-intake/synthesize`.
+  The `DoThisNext.svelte` coverage caught another real UI flow bug: when the
+  highest-priority inbox item pointed at the current page, the banner hid all
+  actions instead of showing the next actionable item. Latest verification:
+  `pnpm test:coverage` passed with 2,415 tests and 90.00% lines, and
+  `pnpm typecheck` passed.
 
 ## Active Path Display Audit
 
@@ -3023,3 +3259,19 @@ Content polish follow-up on `2026-05-19`: public docs copy was swept for
 meta-explanatory scaffolding such as "this page exists" and "use this path."
 Guide, first-run, app, dashboard, and workspace intros now lead with the
 product behavior or user job instead of explaining the page's purpose.
+
+Release-prep follow-up on `2026-05-20`: 0.6.0 docs were reconciled with the
+current runtime surface before release. `docs/releases/0.6.0.md` now names the
+construction substrate that actually landed in this line: clearer imported-task
+brief language, compact crowded Thread rows, task-scoped context follow-ups,
+the project memory check-in, readiness-label cleanup, and release packaging
+proof. The construction manifesto now treats the larger planning/release-shaping
+layer as 0.6.x follow-up instead of claiming it is fully landed in 0.6.0. The
+pinned macOS installer examples in README and Quick Start now point at
+`GUILDHALL_VERSION=0.6.0`, matching `package.json`. Verification completed:
+`pnpm docs:check-help-sync`, `pnpm docs:build`, `pnpm typecheck`,
+`pnpm model:bakeoff`, `pnpm lint:deps`, `pnpm test`, `pnpm build`,
+`pnpm test:ui`, `git diff --check`, and
+`pnpm release:dry 0.6.0 --allow-branch --allow-dirty` all passed. The dry run
+built the npm tarball and macOS package artifact; it used the branch/dirty
+overrides only because this was a release-prep branch with pending changes.

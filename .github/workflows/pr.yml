@@ -1,0 +1,60 @@
+name: PR checks
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Check generated help docs
+        run: pnpm docs:check-help-sync
+
+      - name: Check dependency boundaries
+        run: pnpm lint:deps
+
+      - name: Unit and integration tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Install browser for rendered UI checks
+        run: pnpm test:ui:install
+
+      - name: Rendered UI checks
+        run: pnpm test:ui
+
+      # Coverage is intentionally not a PR gate until the source-wide suite is
+      # lifted to the Guildhall target. Once `pnpm test:coverage:90` passes
+      # locally, replace the "Unit and integration tests" step above with that
+      # command so PRs enforce the 90% floor.

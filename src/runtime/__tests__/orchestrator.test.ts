@@ -727,6 +727,34 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.escalations[0]!.reason).toBe('human_judgment_required')
   })
 
+  it('does not count transcript-only intake narration as spec progress', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      'I have the answers now and will write the product brief and full spec next.',
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const first = await orch.tick()
+    const second = await orch.tick()
+    const third = await orch.tick()
+
+    expect(first.kind).toBe('processed')
+    expect(second.kind).toBe('processed')
+    expect(third.kind).toBe('escalated')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('blocked')
+    expect(task.blockReason).toMatch(/no visible progress/i)
+    expect(task.productBrief).toBeUndefined()
+    expect(task.spec).toBeUndefined()
+  })
+
   it('persists plain-text spec-agent questions to transcript and openQuestions', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
     const spec = stubAgent(
@@ -1240,6 +1268,31 @@ describe('Orchestrator.tick — routing', () => {
     })
   })
 
+  it('does not promote topic labels into fallback choice answers when prose says questions remain', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Mentions' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'Spec updated with inline chip + CSS confirmed. Two questions remain:',
+        '',
+        '- Extension ownership',
+        '- Knit integration',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions ?? []).toHaveLength(0)
+  })
+
   it('preserves fallback brief and question state when a spec turn hits the max turn limit after plain-text output', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Collections coverage' })])
     const spec = {
@@ -1510,6 +1563,93 @@ describe('Orchestrator.tick — routing', () => {
       agentId: 'task-claimer',
       role: 'orchestrator',
     })
+  })
+
+  it('records a blueprint sanity review before claiming ready work', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: 'approved spec' })])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('in_progress')
+    expect(q.tasks[0]!.notes.some((note) =>
+      note.agentId === 'blueprint-sanity-review' &&
+      note.role === 'blueprint-review' &&
+      note.content.includes('approve_blueprint'),
+    )).toBe(true)
+    expect(q.tasks[0]!.notes.at(-1)?.content).toBe('Claimed ready task for worker-agent.')
+    expect(worker.calls).toHaveLength(0)
+  })
+
+  it('routes ready tasks without a usable blueprint back to exploring', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: '' })])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('blueprint-sanity-review')
+      expect(out.beforeStatus).toBe('ready')
+      expect(out.afterStatus).toBe('exploring')
+      expect(out.transitioned).toBe(true)
+    }
+    expect(worker.calls).toHaveLength(0)
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('exploring')
+    expect(q.tasks[0]!.assignedTo).toBeNull()
+    expect(q.tasks[0]!.notes.at(-1)).toMatchObject({
+      agentId: 'blueprint-sanity-review',
+      role: 'blueprint-review',
+    })
+    expect(q.tasks[0]!.notes.at(-1)?.content).toContain('revise_blueprint')
+  })
+
+  it('revalidates ready task blueprints even when an earlier blueprint review note exists', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'ready',
+        domain: 'ghost',
+        spec: '',
+        notes: [
+          {
+            agentId: 'blueprint-sanity-review',
+            role: 'blueprint-review',
+            content: 'approve_blueprint: Task had a usable blueprint/spec before a later edit.',
+            timestamp: '2026-05-20T00:00:00.000Z',
+          },
+        ],
+      }),
+    ])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('blueprint-sanity-review')
+      expect(out.afterStatus).toBe('exploring')
+    }
+    expect(worker.calls).toHaveLength(0)
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('exploring')
+    expect(q.tasks[0]!.notes.filter(note => note.role === 'blueprint-review')).toHaveLength(2)
+    expect(q.tasks[0]!.notes.at(-1)?.content).toContain('revise_blueprint')
   })
 
   it('dispatches drafted spec_review tasks to the owning coordinator and clears stale ownership', async () => {

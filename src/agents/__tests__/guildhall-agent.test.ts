@@ -278,7 +278,7 @@ describe('FR-17 skill composition', () => {
     expect(sys).toContain('Use tabs not spaces.')
   })
 
-  it('GuildhallAgent with no skills sends the base prompt unmodified', async () => {
+  it('GuildhallAgent with no skills still inherits engineering defaults', async () => {
     const client = new ScriptedApiClient([{ message: assistantMsg('ok') }])
     const agent = new GuildhallAgent({
       name: 'plain',
@@ -288,7 +288,9 @@ describe('FR-17 skill composition', () => {
     })
     await agent.generate('go')
     const sys = client.requests[0]?.system_prompt ?? ''
-    expect(sys).toBe('BASE ONLY')
+    expect(sys).toContain('BASE ONLY')
+    expect(sys).toContain('# Engineering defaults')
+    expect(sys).not.toContain('## Skills')
   })
 
   it('factory functions forward skills into the composed prompt', async () => {
@@ -382,6 +384,17 @@ describe('agent factories', () => {
     expect(prompt).toContain('Treat imported source notes as evidence')
   })
 
+  it('createSpecAgent frames specs as proportional blueprints, not owner-question dumps', () => {
+    const a = createSpecAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('Construction mode: blueprint')
+    expect(prompt).toContain('Process serves the project and the product')
+    expect(prompt).toContain('Infer routine implementation choices from the repo')
+    expect(prompt).toContain('Ask the owner only when the answer changes product intent')
+    expect(prompt).toContain('recommend the strongest default')
+    expect(prompt).toContain('Do not invent product requirements')
+  })
+
   it('createWorkerAgent registers shell + file tools', async () => {
     const a = createWorkerAgent(llm)
     expect(a.name).toBe('worker-agent')
@@ -448,9 +461,31 @@ describe('agent factories', () => {
     expect(prompt).toContain('restore the prior code')
   })
 
+  it('createWorkerAgent frames worker execution as trade work against a blueprint', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('trade work against an accepted')
+    expect(prompt).toContain('Treat the spec as the blueprint')
+    expect(prompt).toContain('repo-consistent default')
+    expect(prompt).toContain('Treat that as a change-order request')
+    expect(prompt).toContain('old blueprint')
+    expect(prompt).toContain('new evidence')
+  })
+
   it('createReviewerAgent', () => {
     const a = createReviewerAgent(llm)
     expect(a.name).toBe('reviewer-agent')
+  })
+
+  it('createReviewerAgent frames review as inspection against the blueprint', () => {
+    const a = createReviewerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('you are an inspector')
+    expect(prompt).toContain('accepted blueprint')
+    expect(prompt).toContain('Do not reject')
+    expect(prompt).toContain('correct task-local work')
+    expect(prompt).toContain('change-order-style')
+    expect(prompt).toContain('what assumption changed')
   })
 
   it('createGateCheckerAgent', () => {
@@ -665,6 +700,30 @@ describe('agent factories', () => {
       expect(engine.noProgressToolNames).toContain('update-task')
       expect(engine.noProgressToolNames).toContain('log-decision')
       expect(engine.noProgressTurnNudge).toContain('record the decision durably')
+    })
+
+    it('createCoordinatorAgent frames coordination as general-contractor work with proportional escalation', () => {
+      const domain: CoordinatorDomain = {
+        id: 'looma',
+        name: 'Looma',
+        mandate: 'UI quality.',
+        projectPaths: [],
+        concerns: [],
+        autonomousDecisions: [],
+        escalationTriggers: [],
+      }
+      const agent = createCoordinatorAgent(
+        domain,
+        { apiClient: new ScriptedApiClient([]), modelId: 'm' },
+      )
+      const prompt = (agent as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+      expect(prompt).toContain('general contractor')
+      expect(prompt).toContain('Review specs (tasks in')
+      expect(prompt).toContain('as task blueprints')
+      expect(prompt).toContain('Keep process proportional')
+      expect(prompt).toContain('routine')
+      expect(prompt).toContain('implementation mechanics')
+      expect(prompt).toContain('owner intent and product risk')
     })
   })
 

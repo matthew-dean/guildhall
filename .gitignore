@@ -141,3 +141,8 @@ vite.config.ts.timestamp-*
 
 # Local Codex/Superpowers brainstorm artifacts
 .superpowers/
+
+# Playwright rendered UI fixtures and failure artifacts
+.playwright-fixtures/
+test-results/
+playwright-report/

@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest'
 import {
   appendFailureClassificationNote,
   appendRecoveryPlaybookNote,
+  buildAgentDecisionPacket,
   classifyAgentFailure,
   describeFailureClassification,
+  failureClassificationFromNote,
+  latestFailureClassificationFromNotes,
+  renderAgentDecisionPacket,
   resolveRecoveryPlan,
 } from '../policy.js'
+import type { FailureClassification, RecoveryPlaybookId } from '../policy.js'
 import type { ReviewVerdict, Task } from '@guildhall/core'
 import {
   checkpointEvidence,
@@ -284,5 +289,173 @@ describe('policy failure classifier', () => {
       maxTurns: 2,
       allowedPaths: ['web/app/composables/use-presence.ts'],
     })
+  })
+
+  it('revives policy notes into a compact decision packet for the next agent', () => {
+    const task = {
+      id: 'task-stale-edit',
+      notes: [
+        { agentId: 'worker-agent', role: 'progress', timestamp: '2026-05-18T20:00:00.000Z', content: 'old context' },
+        { agentId: 'coordinator-agent', role: 'policy-classification', timestamp: '2026-05-18T20:01:00.000Z', content: '{bad json' },
+      ],
+    } as Pick<Task, 'id' | 'notes'>
+    const classification = classifyAgentFailure({
+      taskId: task.id,
+      lastToolError: {
+        toolName: 'edit-file',
+        filePath: 'src/runtime/policy.ts',
+        message: 'oldString was not found in the file.',
+      },
+      touchedFiles: ['src/runtime/policy.ts'],
+    })
+    appendFailureClassificationNote(task, classification, {
+      agentId: 'coordinator-agent',
+      timestamp: '2026-05-18T20:02:00.000Z',
+    })
+
+    expect(failureClassificationFromNote(task.notes[0]!)).toBeNull()
+    expect(failureClassificationFromNote(task.notes[1]!)).toBeNull()
+    expect(latestFailureClassificationFromNotes(task.notes)).toMatchObject({
+      class: 'stale_context',
+      summary:
+        'The agent tried to edit stale file contents; Guildhall should refresh the exact target before another mutation.',
+    })
+
+    const packet = buildAgentDecisionPacket({
+      taskId: task.id,
+      role: 'worker',
+      notes: task.notes,
+      touchedFiles: ['src/runtime/policy.ts'],
+      lastCommand: commandEvidence({
+        command: 'pnpm typecheck',
+        passed: false,
+        summary: 'stale edit target',
+      }),
+    })
+
+    expect(packet).toMatchObject({
+      taskId: task.id,
+      role: 'worker',
+      needsHuman: false,
+      nextAction: 'Use policy playbook(s): refresh_stale_edit_target, reread_focused_file.',
+      touchedFiles: ['src/runtime/policy.ts'],
+    })
+    expect(renderAgentDecisionPacket(packet)).toEqual(
+      expect.arrayContaining([
+        '- Class: stale_context',
+        '- Confidence: high',
+        '- Safe playbooks: refresh_stale_edit_target, reread_focused_file',
+        '  - tool_error: edit-file missed oldString in touched file src/runtime/policy.ts. (src/runtime/policy.ts)',
+      ]),
+    )
+  })
+
+  it('falls back to an explicit human decision packet when no classification exists', () => {
+    const packet = buildAgentDecisionPacket({
+      taskId: 'task-no-policy',
+      role: 'coordinator',
+    })
+
+    expect(packet.nextAction).toBe('Continue from the current task state.')
+    expect(packet.needsHuman).toBe(false)
+    expect(renderAgentDecisionPacket(packet)).toEqual(['- No policy classification recorded.'])
+  })
+
+  it('keeps every recovery playbook bounded and explainable', () => {
+    const baseClassification: FailureClassification = {
+      class: 'environment_unavailable',
+      confidence: 'medium',
+      evidence: [],
+      scope: 'task',
+      safePlaybooks: ['rebootstrap_project'],
+      needsHuman: false,
+    }
+    const planFor = (playbook: RecoveryPlaybookId) =>
+      resolveRecoveryPlan({
+        taskId: 'task-policy',
+        classification: {
+          ...baseClassification,
+          safePlaybooks: [playbook],
+        },
+        touchedFiles: ['web/package.json'],
+        verification: [
+          commandEvidence({
+            command: 'cd web && pnpm install',
+            passed: false,
+            summary: 'dependency install failed',
+          }),
+        ],
+      })
+
+    expect(planFor('reread_focused_file')).toMatchObject({
+      allowedTools: ['read-file', 'write-checkpoint', 'raise-escalation'],
+      maxTurns: 1,
+      stopSignals: ['same_playbook_failed', 'broad_exploration_attempted'],
+    })
+    expect(planFor('resume_from_checkpoint')).toMatchObject({
+      command: 'cd web && pnpm install',
+      maxTurns: 2,
+      stopSignals: ['same_playbook_failed', 'checkpoint_invalid'],
+    })
+    expect(planFor('rebootstrap_project')).toMatchObject({
+      command: 'cd web && pnpm install',
+      successSignals: ['checkpoint_next_action_completed'],
+    })
+    expect(planFor('package_owned_dirty_work')).toMatchObject({
+      allowedTools: ['run-shell-command', 'write-checkpoint', 'raise-escalation'],
+      successSignals: ['owned_dirty_work_packaged'],
+    })
+    expect(planFor('stop_with_external_setup_action')).toMatchObject({
+      allowedTools: ['raise-escalation'],
+      successSignals: ['external_setup_action_recorded'],
+    })
+    expect(planFor('rerun_authoritative_command')).toMatchObject({
+      command: 'cd web && pnpm install',
+      successSignals: ['authoritative_command_reran'],
+    })
+    expect(planFor('route_to_review')).toMatchObject({
+      allowedTools: ['write-checkpoint', 'raise-escalation'],
+      successSignals: ['review_rerouted'],
+    })
+    expect(planFor('route_to_gate_check')).toMatchObject({
+      allowedTools: ['write-checkpoint', 'raise-escalation'],
+      successSignals: ['gate_check_rerouted'],
+    })
+    expect(planFor('ask_concrete_human_question')).toMatchObject({
+      allowedTools: ['raise-escalation'],
+      stopSignals: ['human_question_required'],
+    })
+    expect(
+      resolveRecoveryPlan({
+        taskId: 'task-policy',
+        classification: { ...baseClassification, safePlaybooks: [] },
+      }),
+    ).toMatchObject({
+      playbook: 'ask_concrete_human_question',
+      reason: 'No safe recovery playbook was available for this blocker.',
+    })
+  })
+
+  it('describes policy classes in user-facing language', () => {
+    const summarize = (failureClass: FailureClassification['class']) =>
+      describeFailureClassification({
+        class: failureClass,
+        confidence: 'low',
+        evidence: [],
+        scope: 'task',
+        safePlaybooks: ['ask_concrete_human_question'],
+        needsHuman: true,
+      })
+
+    expect(summarize('dirty_checkout_owned')).toContain('owns the dirty checkout')
+    expect(summarize('dirty_checkout_external')).toContain('external changes')
+    expect(summarize('environment_unavailable')).toContain('environment is unavailable')
+    expect(summarize('provider_unavailable')).toContain('model provider is unavailable')
+    expect(summarize('missing_target_evidence')).toContain('target-file evidence')
+    expect(summarize('authoritative_command_unknown')).toContain('authoritative verification command')
+    expect(summarize('scope_boundary_unclear')).toContain('scope is unclear')
+    expect(summarize('model_tool_use_failure')).toContain('usable tool call')
+    expect(summarize('review_packet_insufficient')).toContain('review handoff packet')
+    expect(summarize('human_product_decision')).toContain('concrete human decision')
   })
 })

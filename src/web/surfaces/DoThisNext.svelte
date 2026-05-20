@@ -11,7 +11,7 @@
   import Button from '../lib/Button.svelte'
   import { onEvent } from '../lib/events.js'
   import { nav, path } from '../lib/nav.svelte.js'
-  import { projectFetch } from '../lib/project-routes.js'
+  import { projectActionHref, projectFetch } from '../lib/project-routes.js'
 
   interface InboxItem {
     kind: string
@@ -72,7 +72,7 @@
         return {
           verb: 'Verify your bootstrap commands',
           why: 'Agents won’t dispatch until install + gate commands are verified.',
-          button: 'Open Ready',
+          button: 'Open readiness checks',
           href: item.actionHref ?? '/settings/ready',
         }
       case 'setup_pending':
@@ -163,15 +163,8 @@
   }
 
   const prescribedItems = $derived.by(() => items.map(item => ({ item, prescription: prescribe(item) })))
-  const topItemIsCurrentPage = $derived(
-    prescribedItems[0]
-      ? routeOnly(prescribedItems[0].prescription.href) === path.value
-      : false,
-  )
   const visibleItems = $derived.by(() =>
-    topItemIsCurrentPage
-      ? []
-      : prescribedItems.filter(({ prescription }) => routeOnly(prescription.href) !== path.value),
+    prescribedItems.filter(({ prescription }) => routeOnly(projectActionHref(prescription.href)) !== path.value),
   )
   const actionableItems = $derived.by(() =>
     visibleItems.filter(({ item }) => item.severity !== 'low'),
@@ -184,10 +177,10 @@
               verb: top.prescription.verb,
               why: top.prescription.why,
               button: top.prescription.button,
-              href: top.prescription.href,
+            href: projectActionHref(top.prescription.href),
               severity: top.item.severity,
               moreLabel: `${visibleItems.length - 1} more in Inbox ›`,
-              moreHref: '/inbox',
+              moreHref: projectActionHref('/inbox'),
             }
           })()
         : null,
@@ -202,7 +195,7 @@
   const moreCount = $derived(visibleItems.length - 1)
 
   function go(href: string) {
-    nav(href)
+    nav(projectActionHref(href))
   }
 </script>
 
@@ -221,7 +214,7 @@
           {source.button} →
         </Button>
         {#if moreCount > 0}
-          <button type="button" class="more" onclick={() => go('/inbox')}>
+          <button type="button" class="more" onclick={() => go(projectActionHref('/inbox'))}>
             {moreCount} more in Inbox ›
           </button>
         {/if}

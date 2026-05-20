@@ -45,7 +45,7 @@ function stageLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['
   if (runStatus === 'stopping') return 'Stopping'
   if (runStatus === 'running') return 'Running'
   if (counts.blocked > 0) return 'Needs attention'
-  if (counts.draftReview > 0 && counts.active === 0) return 'Needs shaping'
+  if (counts.draftReview > 0 && counts.active === 0) return 'Needs task briefs'
   if (counts.active > 0) return 'Paused'
   if (counts.total === 0) return 'Ready'
   if (counts.done > 0 && counts.active === 0 && counts.blocked === 0) return 'Stable'
@@ -71,8 +71,8 @@ function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummar
   }
   if (counts.draftReview > 0 && counts.active === 0) {
     return counts.draftReview === 1
-      ? '1 imported draft needs shaping.'
-      : `${counts.draftReview} imported drafts need shaping.`
+      ? '1 imported draft needs a task brief.'
+      : `${counts.draftReview} imported drafts need task briefs.`
   }
   if (counts.active > 0) {
     return counts.active === 1

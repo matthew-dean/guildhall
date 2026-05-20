@@ -3,8 +3,9 @@ import { existsSync } from 'node:fs'
 import { execFile, execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import type { Checkpoint, Task } from '@guildhall/core'
+import type { Checkpoint, ConstructionMode, Task } from '@guildhall/core'
 import {
+  constructionModeForTask,
   summarizeDesignSystem,
   selectApplicableReviewRubrics,
   renderRubricSelection,
@@ -403,6 +404,25 @@ function clipContextBlock(value: string, maxChars: number): string {
   return `${trimmed.slice(0, Math.max(0, maxChars - 19)).trimEnd()}\n...[truncated]`
 }
 
+function constructionResponsibility(mode: ConstructionMode): string {
+  switch (mode) {
+    case 'survey':
+      return 'Gather project facts, constraints, and evidence before proposing work.'
+    case 'blueprint':
+      return 'Draft or revise the task blueprint with enough detail for build and inspection.'
+    case 'frame':
+      return 'Sequence and prepare the accepted blueprint into runnable work.'
+    case 'build':
+      return 'Implement against the accepted blueprint, using repo conventions for routine choices.'
+    case 'inspect':
+      return 'Inspect completed work against the blueprint, standards, and verification evidence.'
+    case 'change_order':
+      return 'Explain the changed assumption or scope evidence before asking for an owner decision.'
+    case 'punch_list':
+      return 'Finish, verify, or explicitly defer small remaining work without reopening broad scope.'
+  }
+}
+
 function renderSpecOverview(task: Task): string {
   const raw = task.spec?.trim()
   if (!raw) return ''
@@ -750,12 +770,18 @@ export async function buildContext(
       `**${note.agentId} (${note.role})** ${note.timestamp}:\n${clipContextBlock(note.content, MAX_AGENT_NOTE_CHARS)}`,
     )
   const specOverview = renderSpecOverview(task)
+  const constructionMode = constructionModeForTask({
+    status: task.status,
+    blocker: task.blockReason,
+  })
 
   const taskSummary = [
     `## Current Task: ${task.id}`,
     `**Title:** ${task.title}`,
     `**Domain:** ${task.domain}`,
     `**Status:** ${task.status}`,
+    `**Construction mode:** ${constructionMode}`,
+    `**Construction responsibility:** ${constructionResponsibility(constructionMode)}`,
     `**Priority:** ${task.priority}`,
     task.blockReason
       ? `**Current blocker:** ${task.blockReason}`
