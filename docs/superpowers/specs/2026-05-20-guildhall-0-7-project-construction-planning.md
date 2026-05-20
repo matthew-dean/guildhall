@@ -113,6 +113,43 @@ why.
    tranche to task specs to implementation.
 7. **Treat plan changes as normal.** Change orders update the construction plan,
    not just a task note.
+8. **Keep the machinery optional.** Construction planning should appear when it
+   helps the owner understand a large or risky job. It should not become
+   cognitive overhead for small tasks, direct fixes, or obvious follow-ups.
+
+## Proportional Visibility
+
+The construction plan should be available detail, not mandatory ceremony.
+
+Guildhall should adapt the visible planning surface to the size and ambiguity of
+the work:
+
+| Work Shape | Default Experience | Construction Detail |
+| --- | --- | --- |
+| Tiny fix | normal task flow | hidden unless requested |
+| Single clear feature | task spec + optional parent slice | collapsed summary |
+| Feature family | lightweight area/slice grouping | visible in Work and drawer |
+| Large product build | full construction plan | Build Map, active tranche, decisions |
+| High-risk change | plan/checklist focused on risk | surfaced near affected action |
+
+The owner should be able to ask for the Build Map or plan detail at any time,
+but Guildhall should not force them to think about phases, slices, areas,
+change orders, and perspective levels when the work does not need them.
+
+Rules:
+
+- no Build Map prompt for simple direct tasks unless the owner asks
+- no construction-plan approval step for tiny fixes
+- no extra navigation item if a project has no construction plan
+- show only the at-a-glance summary when a plan exists but has no active owner
+  decision
+- collapse construction metadata inside task cards unless it explains "why now"
+  or "why blocked"
+- let users hide or minimize the construction summary band per project
+- preserve direct commands such as "fix this bug" and "run this check"
+
+The product should feel like it has a powerful planning layer behind the work,
+not like the user must operate that layer before any work can happen.
 
 ## Core Artifact: Construction Plan
 
@@ -328,6 +365,7 @@ Rules:
 - prefer counts and state chips over paragraphs
 - keep "why now?" visible for active work
 - keep "why not now?" available for queued/deferred work
+- keep construction detail collapsed unless it changes the next action
 
 Status language:
 
@@ -660,6 +698,8 @@ It must not:
 - say "this is too large"
 - ask the owner to manually decompose the whole product
 - create dozens of ready tasks before a construction plan exists
+- route simple bug fixes, chores, or direct manual tasks through full
+  construction planning
 - bury the plan in a transcript
 - expose private product validation context in public docs
 
@@ -1087,13 +1127,17 @@ Acceptance:
 10. Public Guildhall docs and examples do not reveal private dogfood product
     details.
 11. Existing projects without construction plans continue to work.
-12. Verification covers typecheck, unit tests, docs build, and at least one
+12. Small/direct tasks continue through the lightweight task flow without forcing
+    the owner to manage a Build Map.
+13. Verification covers typecheck, unit tests, docs build, and at least one
     scenario test for ambitious-product intake.
 
 ## Non-Goals
 
 - Do not build a full Jira/Gantt/roadmap suite.
 - Do not require every small task to have a construction plan.
+- Do not make construction planning visible by default when it adds no
+  immediate user value.
 - Do not block direct manual tasks when the owner explicitly asks for them.
 - Do not expose private dogfood products in bundled examples.
 - Do not force the owner to approve every coordinator sequencing decision.
