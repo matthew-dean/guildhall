@@ -24,5 +24,4 @@ title: Reference
 ## System reference
 
 - [Levers](../levers/) — tuning knobs for autonomy, review, and recovery.
-- [Subsystems](../subsystems/) — implementation architecture.
 - [Releases](../releases/) — release notes.

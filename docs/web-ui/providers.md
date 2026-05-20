@@ -42,4 +42,3 @@ The page only reveals credentials that are explicitly in config — it will neve
 ## Related
 
 - [Environment variables](../reference/env) that override credential sources.
-- [Providers subsystem](../subsystems/providers) for the client-side details.

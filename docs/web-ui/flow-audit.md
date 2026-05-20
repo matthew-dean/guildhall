@@ -40,6 +40,11 @@ screen.
 
 ## Current Follow-Ups
 
+- [x] Remove maintainer-only implementation pages from the public VitePress
+  surface. The public docs build now excludes `docs/subsystems/**`,
+  `docs/web-ui/design-tokens.md`, and `docs/web-ui/help-system.md`; sidebar,
+  README, guide, reference, and generated help-topic links were cleaned so
+  user docs no longer route people into "how Guildhall is built" internals.
 - [x] Split the "agents need to be smarter" work into immediate `0.5.x`
   decision-point unblockers versus `0.6.0` policy/runtime architecture.
   The 0.6.0 note now combines bounded improvisation, typed recovery playbooks,

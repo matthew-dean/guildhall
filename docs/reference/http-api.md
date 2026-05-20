@@ -102,4 +102,4 @@ project-route helpers when it is operating under `/projects/:id/...`.
 
 ## Wire format
 
-Most responses are plain JSON. `GET /api/project/events` is `text/event-stream`; each event has a `type` field matching one of the types in [`src/backend-host/wire.ts`](../subsystems/backend-host).
+Most responses are plain JSON. `GET /api/project/events` is `text/event-stream`; each event includes a `type` field so clients can route live updates.

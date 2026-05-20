@@ -51,4 +51,3 @@ next guild member knows what they are building into.
 - Tour the operating surface: [dashboard](./dashboard).
 - Understand the vocabulary: [Core concepts](./concepts).
 - Tune behavior: [Levers](../levers/).
-- Dive into internals: [Architecture](../subsystems/).

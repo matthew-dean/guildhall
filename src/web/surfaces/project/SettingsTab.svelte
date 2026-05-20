@@ -914,7 +914,7 @@
               density="dense"
             >
               {#snippet meta()}
-                <Help topic="subsystem.levers" />
+                <Help topic="lever.index" />
               {/snippet}
             </SectionHeader>
           {/snippet}

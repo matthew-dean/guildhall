@@ -53,16 +53,14 @@ advance and keeps the local plan coherent; see
 A stateful, tool-using conversation. Five built-in roles: **spec**,
 **coordinator**, **worker**, **reviewer**, **gateChecker**. Each role maps to
 a model and provider choice, with machine-wide defaults and optional
-project-level overrides. See [Agents & models](./agents-and-models) and the
-[agents subsystem](../subsystems/agents).
+project-level overrides. See [Agents & models](./agents-and-models).
 
 ## Guild
 
 A persona with principles, a review rubric, and deterministic checks that sits
 at the table for relevant tasks. Examples: *Accessibility Specialist*, *Color
 Theorist*, *Frontend Engineer*. Guilds attach to tasks via an applicability
-predicate; multiple guilds can inspect one task (fan-out). See
-[Guilds](../subsystems/guilds).
+predicate; multiple guilds can inspect one task (fan-out).
 
 ## Change order
 
@@ -82,24 +80,24 @@ A named decision point — e.g. `merge_policy`, `reviewer_mode`, `worktree_isola
 
 ## Hard gate / soft gate
 
-**Hard gates** are deterministic checks a task must pass before it can complete (lint, typecheck, test, custom shell). **Soft gates** are rubric items scored by a reviewer. Together they form the completeness bar. See [Subsystems → Core → Gates](../subsystems/core#gates).
+**Hard gates** are deterministic checks a task must pass before it can complete (lint, typecheck, test, custom shell). **Soft gates** are rubric items scored by a reviewer. Together they form the completeness bar.
 
 ## Business envelope
 
-The project-level `Goals` + `Guardrails` document that defines what the guild is allowed to do and what it isn't. `business_envelope_strictness` controls enforcement mode. See [Subsystems → Runtime](../subsystems/runtime#business-envelope).
+The project-level `Goals` + `Guardrails` document that defines what the guild is allowed to do and what it isn't. `business_envelope_strictness` controls enforcement mode.
 
 ## Skill
 
-A bundled instruction set (markdown + YAML frontmatter) an agent can invoke. Skills are how you teach the guild reusable procedures without baking them into prompts. See [Skills](../subsystems/skills).
+A bundled instruction set an agent can invoke. Skills are how you teach the guild reusable procedures without baking them into prompts.
 
 ## Hook
 
-A user-defined command, prompt, HTTP call, or agent invocation that fires at lifecycle events (`session_start`, `pre_tool_use`, `post_tool_use`, etc.). Hooks let you plug in audit loggers, external approvals, and custom side effects. See [Hooks](../subsystems/hooks).
+A user-defined command, prompt, HTTP call, or agent invocation that fires at lifecycle events (`session_start`, `pre_tool_use`, etc.). Hooks let you plug in audit loggers, external approvals, and custom side effects.
 
 ## MCP server
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server — stdio, HTTP, or WebSocket — whose tools become agent-callable. See [MCP](../subsystems/mcp).
+A [Model Context Protocol](https://modelcontextprotocol.io) server — stdio, HTTP, or WebSocket — whose tools become agent-callable.
 
 ## Session
 
-A persisted snapshot of an agent's conversation: messages, model, usage, tool metadata. Enables **warm resume** — you can interrupt an agent and it will pick up from the last snapshot. See [Sessions](../subsystems/sessions).
+A persisted snapshot of an agent's conversation: messages, model, usage, tool metadata. Enables **warm resume** — you can interrupt an agent and it will pick up from the last snapshot.

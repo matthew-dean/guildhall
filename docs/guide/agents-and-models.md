@@ -28,7 +28,7 @@ models:
   gateChecker: qwen2.5-coder-7b-instruct
 ```
 
-Model IDs resolve against the catalog in `src/core/models.ts`.
+Model IDs resolve against Guildhall's bundled model catalog.
 
 ## Cognitive profiles
 
@@ -36,7 +36,7 @@ Each role has a `CognitiveProfile` declaring what it needs from a model — cont
 
 ## Permission modes
 
-Agents run under a [`PermissionMode`](../subsystems/engine#permission-modes):
+Agents run under a permission mode:
 
 - `plan` — no side effects; agents can read but not write.
 - `default` — standard allow-list; destructive operations prompt.
@@ -46,4 +46,4 @@ Agents run under a [`PermissionMode`](../subsystems/engine#permission-modes):
 
 ## Persistence
 
-Every agent conversation is snapshotted to `memory/sessions/` per project. You can resume any agent from its last snapshot — see [Sessions](../subsystems/sessions).
+Every agent conversation is snapshotted to `memory/sessions/` per project. You can resume any agent from its last snapshot.

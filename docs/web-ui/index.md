@@ -36,10 +36,5 @@ under `~/.guildhall/`.
 - [Task drawer](./task-drawer) — task detail pane.
 - [Providers page](./providers) — credential management.
 
-## Implementation reference
-
-Guildhall maintainers can inspect the [design tokens](./design-tokens) and
-[in-UI help system](./help-system) behind the app surface.
-
 If the UI does something weird, the receipts are usually sitting in plain files
 that can be inspected directly.

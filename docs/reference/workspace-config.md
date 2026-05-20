@@ -91,7 +91,7 @@ The `gates` map resolves the builtin hard-gate names to project-specific command
 
 ## `hooks`
 
-Per-event hook lists. See [Hooks](../subsystems/hooks).
+Per-event hook lists for custom automation around Guildhall lifecycle events.
 
 ```yaml
 hooks:
@@ -103,7 +103,7 @@ hooks:
 
 ## `mcp.servers`
 
-See [MCP](../subsystems/mcp).
+External MCP servers whose tools should become available to Guildhall agents.
 
 ```yaml
 mcp:

@@ -61,8 +61,7 @@ Project-local settings override user-global local settings where appropriate.
 Provider secrets are no longer expected in the project-local file. Machine-wide
 provider choice belongs in `~/.guildhall/config.yaml`; the project-local file
 only overrides that when a single project truly needs different behavior, and
-it still holds local runtime selections such as `landingBranch`. See
-[`src/config`](../subsystems/config).
+it still holds local runtime selections such as `landingBranch`.
 
 ## Project settings on disk
 

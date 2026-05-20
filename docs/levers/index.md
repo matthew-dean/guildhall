@@ -1,5 +1,10 @@
 ---
 title: Levers
+help_topic: lever.index
+help_summary: |
+  Explains Guildhall's named behavioral settings: how autonomy, review,
+  worktree isolation, recovery, and other project policies are stored and
+  adjusted.
 ---
 
 # Levers

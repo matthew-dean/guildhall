@@ -78,4 +78,5 @@ Each tick:
 4. For any tasks in `gate_check`: run hard gates.
 5. Persist state; emit events.
 
-See [`src/runtime`](../subsystems/runtime) for the full state machine.
+The Thread, Work, and Release views show the same state machine without needing
+to read Guildhall's source code.

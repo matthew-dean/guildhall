@@ -29,4 +29,4 @@ Controls enforcement of the project's business envelope — `memory/business-env
 
 ## See also
 
-- [Runtime → business envelope](../subsystems/runtime#business-envelope) for how evaluation works.
+- [Core concepts](../guide/concepts#business-envelope) for the product-level meaning.

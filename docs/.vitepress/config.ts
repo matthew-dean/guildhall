@@ -76,13 +76,6 @@ const referenceSidebarSections = [
     ],
   },
   {
-    text: 'Implementation reference',
-    items: [
-      { text: 'Design tokens', link: '/web-ui/design-tokens' },
-      { text: 'In-UI help', link: '/web-ui/help-system' },
-    ],
-  },
-  {
     text: 'Command line',
     items: [
       { text: 'CLI overview', link: '/cli/' },
@@ -103,7 +96,6 @@ const referenceSidebarSections = [
     text: 'System reference',
     items: [
       { text: 'Levers ↗', link: '/levers/' },
-      { text: 'Subsystems ↗', link: '/subsystems/' },
       { text: 'Releases ↗', link: '/releases/' },
     ],
   },
@@ -115,7 +107,14 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   base: '/guildhall/',
-  srcExclude: ['design/**', 'superpowers/**', 'web-ui/flow-audit.md'],
+  srcExclude: [
+    'design/**',
+    'superpowers/**',
+    'subsystems/**',
+    'web-ui/flow-audit.md',
+    'web-ui/design-tokens.md',
+    'web-ui/help-system.md',
+  ],
   appearance: 'dark',
   head: [
     ['link', { rel: 'icon', href: '/guildhall/favicon.svg' }],
@@ -125,7 +124,7 @@ export default defineConfig({
     nav: [
       { text: 'Get started', link: '/guide/quick-start', activeMatch: '^/guide/(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects)' },
       { text: 'Guide', link: '/guide/', activeMatch: '^/guide/(?!(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects))' },
-      { text: 'Reference', link: '/reference/', activeMatch: '^/(reference|cli|web-ui|levers|subsystems|releases)/' },
+      { text: 'Reference', link: '/reference/', activeMatch: '^/(reference|cli|web-ui|levers|releases)/' },
     ],
     sidebar: {
       '/guide/quick-start': getStartedSidebarSections,
@@ -135,50 +134,6 @@ export default defineConfig({
       '/guide/first-tasks': getStartedSidebarSections,
       '/guide/managing-projects': getStartedSidebarSections,
       '/guide/': guideSidebarSections,
-      '/subsystems/': [
-        {
-          text: 'Subsystems',
-          items: [{ text: 'Architecture', link: '/subsystems/' }],
-        },
-        {
-          text: 'Orchestration',
-          items: [
-            { text: 'Runtime', link: '/subsystems/runtime' },
-            { text: 'Runtime bundle', link: '/subsystems/runtime-bundle' },
-            { text: 'Engine', link: '/subsystems/engine' },
-            { text: 'Core', link: '/subsystems/core' },
-            { text: 'Sessions', link: '/subsystems/sessions' },
-            { text: 'Compaction', link: '/subsystems/compaction' },
-          ],
-        },
-        {
-          text: 'Policy & personas',
-          items: [
-            { text: 'Levers', link: '/subsystems/levers' },
-            { text: 'Guilds', link: '/subsystems/guilds' },
-            { text: 'Agents', link: '/subsystems/agents' },
-            { text: 'Engineering defaults', link: '/subsystems/engineering-defaults' },
-            { text: 'Skills', link: '/subsystems/skills' },
-          ],
-        },
-        {
-          text: 'Integrations',
-          items: [
-            { text: 'Providers', link: '/subsystems/providers' },
-            { text: 'MCP', link: '/subsystems/mcp' },
-            { text: 'Hooks', link: '/subsystems/hooks' },
-            { text: 'Tools', link: '/subsystems/tools' },
-          ],
-        },
-        {
-          text: 'Wire & config',
-          items: [
-            { text: 'Protocol', link: '/subsystems/protocol' },
-            { text: 'Backend host', link: '/subsystems/backend-host' },
-            { text: 'Config loader', link: '/subsystems/config' },
-          ],
-        },
-      ],
       '/levers/': [
         {
           text: 'Levers',

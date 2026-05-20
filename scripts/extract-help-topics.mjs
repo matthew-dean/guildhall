@@ -27,6 +27,14 @@ const OUT_DIR = resolve(ROOT, 'src/web/generated')
 const OUT_JSON = join(OUT_DIR, 'help-topics.json')
 const OUT_DTS = join(OUT_DIR, 'help-topics.d.ts')
 const DOCS_BASE_URL = '/guildhall/'
+const PUBLIC_HELP_EXCLUDES = [
+  /^design\//,
+  /^superpowers\//,
+  /^subsystems\//,
+  /^web-ui\/flow-audit\.md$/,
+  /^web-ui\/design-tokens\.md$/,
+  /^web-ui\/help-system\.md$/,
+]
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
 
@@ -68,6 +76,7 @@ async function main() {
 
   for (const abs of files) {
     const rel = relative(DOCS_DIR, abs)
+    if (PUBLIC_HELP_EXCLUDES.some((pattern) => pattern.test(rel))) continue
     const raw = await readFile(abs, 'utf8')
     const fm = parseFrontmatter(raw, rel)
     if (!fm || !fm.help_topic) continue

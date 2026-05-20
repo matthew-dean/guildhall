@@ -196,13 +196,6 @@ For the full CLI reference, see [docs/cli/reference.md](./docs/cli/reference.md)
 - [Workspace config reference](./docs/reference/workspace-config.md)
 - [0.5.0 release note](./docs/releases/0.5.0.md)
 
-If you want the architecture and internal subsystem detail, the docs still have
-that too:
-
-- [Subsystems](./docs/subsystems/index.md)
-- [Levers](./docs/levers/index.md)
-- [Design notes](./docs/design/index.md)
-
 ## Contributing
 
 This repo is spec-first for non-trivial changes:
