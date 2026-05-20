@@ -13,6 +13,7 @@ description: Local service where a guild of AI helpers plans, builds, reviews, a
       <h1>Let the guild carry the work.</h1>
       <p class="gh-home-subhead">As unattended as you want. As auditable as you need.</p>
       <p class="gh-home-lede">Guildhall runs over your projects from a local service. It surveys the repo, drafts plans, frames tasks, assigns workers, inspects the results, and keeps every important decision attached to the work.</p>
+      <p class="gh-home-version">Docs for the current public release: <a href="/guildhall/releases/0.6.0">Guildhall 0.6.0</a>.</p>
       <div class="gh-home-hero__actions">
         <div class="gh-cta-row">
           <a class="gh-cta gh-cta-primary" href="/guildhall/guide/quick-start">Get started</a>

@@ -45,6 +45,10 @@ screen.
   `docs/web-ui/design-tokens.md`, and `docs/web-ui/help-system.md`; sidebar,
   README, guide, reference, and generated help-topic links were cleaned so
   user docs no longer route people into "how Guildhall is built" internals.
+- [x] Make docs version posture visible. The VitePress nav now links the
+  current package version to its release note, and the release index states
+  that the public docs track the current release from `main` rather than
+  version-pinned historical docs.
 - [x] Split the "agents need to be smarter" work into immediate `0.5.x`
   decision-point unblockers versus `0.6.0` policy/runtime architecture.
   The 0.6.0 note now combines bounded improvisation, typed recovery playbooks,

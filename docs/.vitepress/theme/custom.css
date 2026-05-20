@@ -465,6 +465,18 @@
   text-wrap: pretty;
 }
 
+.gh-home-version {
+  max-inline-size: max-content;
+  color: var(--gh-color-text-muted);
+  font-size: var(--gh-type-size-1);
+  line-height: var(--gh-type-line-height-normal);
+}
+
+.gh-home-version a {
+  color: var(--gh-color-link);
+  font-weight: var(--gh-type-weight-strong);
+}
+
 .gh-home-hero__actions {
   grid-auto-flow: row;
 }

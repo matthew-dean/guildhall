@@ -1,4 +1,8 @@
 import { defineConfig } from 'vitepress'
+import { readFileSync } from 'node:fs'
+
+const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }
+const currentVersion = pkg.version
 
 const guideStartItems = [
   { text: 'Start here', link: '/guide/quick-start' },
@@ -125,6 +129,7 @@ export default defineConfig({
       { text: 'Get started', link: '/guide/quick-start', activeMatch: '^/guide/(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects)' },
       { text: 'Guide', link: '/guide/', activeMatch: '^/guide/(?!(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects))' },
       { text: 'Reference', link: '/reference/', activeMatch: '^/(reference|cli|web-ui|levers|releases)/' },
+      { text: `v${currentVersion}`, link: `/releases/${currentVersion}` },
     ],
     sidebar: {
       '/guide/quick-start': getStartedSidebarSections,
