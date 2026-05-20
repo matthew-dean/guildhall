@@ -100,6 +100,10 @@ screen.
   for separate questions. Agents must post each concrete question separately
   or infer a default; Thread should not render topic labels like `Extension
   ownership` / `Knit integration` as choose-one answers.
+- [x] Suppress expected research-budget refusal tool results from Thread live
+  activity. The durable-progress guard still nudges agents to stop reading and
+  write a brief/spec/question/escalation, but it should not appear as repeated
+  `Failed glob` / `Failed file read` errors.
 - [x] Normalize dirty-repo setup blockers in Thread so the user sees the repo
   name and the concrete commit/stash recovery action instead of raw setup
   prose.

@@ -1412,6 +1412,84 @@ coordinators:
     }
   })
 
+  it('suppresses expected research-budget refusals from live activity', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Inspect the repo',
+              status: 'exploring',
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'core', name: 'Core' }],
+        },
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [
+          {
+            at: new Date(Date.now() - 3_000).toISOString(),
+            event: {
+              type: 'agent_started',
+              task_id: 'task-1',
+              agent_name: 'spec-agent',
+            },
+          },
+          {
+            at: new Date(Date.now() - 2_000).toISOString(),
+            event: {
+              type: 'tool_completed',
+              task_id: 'task-1',
+              agent_name: 'spec-agent',
+              tool_name: 'glob',
+              is_error: true,
+              output: 'Research budget exhausted for this intake turn. Do not call more read-only tools now.',
+            },
+          },
+          {
+            at: new Date(Date.now() - 1_000).toISOString(),
+            event: {
+              type: 'line_complete',
+              task_id: 'task-1',
+              agent_name: 'spec-agent',
+              message: 'Assistant kept researching after an explicit durable-progress nudge; refusing more read-only tool calls for this turn.',
+            },
+          },
+        ],
+      })
+
+      const turn = thread.turns.find(t => t.kind === 'inflight')
+      if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
+      expect(turn.liveAgent?.lastEventLabel).not.toBe('Failed glob')
+      expect(turn.activity?.some(item => item.label === 'Failed glob')).toBe(false)
+      expect(turn.activity?.some(item => item.label.includes('refusing more read-only'))).toBe(true)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('shows recent failed activity on blocked escalation turns', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

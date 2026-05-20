@@ -824,6 +824,8 @@ function liveAgentsByTask(
       ev?.type === 'error'
     ) {
       live.delete(taskId)
+    } else if (isExpectedResearchBudgetRefusal(ev)) {
+      continue
     } else if (live.has(taskId)) {
       const current = live.get(taskId)!
       live.set(taskId, {
@@ -872,6 +874,14 @@ function liveEventLabel(
     return ev.message.trim()
   }
   return type ? type.replace(/_/g, ' ') : 'Working'
+}
+
+function isExpectedResearchBudgetRefusal(
+  ev: NonNullable<BuildThreadOptions['recentEvents']>[number]['event'],
+): boolean {
+  if (ev?.type !== 'tool_completed' || !ev.is_error) return false
+  const output = String(ev.output ?? ev.message ?? '')
+  return /research budget exhausted|refusing more read-only tool calls|do not call more read-only tools now/i.test(output)
 }
 
 function friendlyToolName(tool: string): string {
@@ -987,6 +997,7 @@ function activityByTask(
     const ev = envelope.event
     const taskId = typeof ev?.task_id === 'string' ? ev.task_id : null
     if (!taskId) continue
+    if (isExpectedResearchBudgetRefusal(ev)) continue
     const cutoff = cutoffs.get(taskId)
     if (cutoff && envelope.at && Date.parse(envelope.at) < cutoff) continue
     const type = ev?.type ?? ''
