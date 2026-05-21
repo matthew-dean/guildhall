@@ -98,6 +98,13 @@ export function escalationPrimaryAction(
       resolution: 'Reopening intake so the spec can be clarified.',
     }
   }
+  if (reason === 'human_judgment_required' && agentId === 'spec-agent') {
+    return {
+      label: 'Retry spec from transcript',
+      nextStatus: 'exploring',
+      resolution: 'Retry intake from the useful transcript notes and save a durable draft before continuing.',
+    }
+  }
   return {
     label: 'Resume task',
     nextStatus: 'ready',

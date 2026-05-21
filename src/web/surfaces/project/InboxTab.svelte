@@ -273,12 +273,14 @@
   .wrap {
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
+    gap: var(--s-4);
+    padding-block-start: var(--s-3);
   }
   .head {
     display: flex;
     align-items: baseline;
     gap: var(--s-2);
+    margin-block-end: var(--s-1);
   }
   .head h2 {
     margin: 0;

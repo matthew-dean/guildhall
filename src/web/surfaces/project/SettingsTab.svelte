@@ -367,6 +367,109 @@
     return [...out.entries()]
   })
 
+  const leverNameLabels: Record<string, string> = {
+    agent_health_strictness: 'Stuck-agent detection',
+    business_envelope_strictness: 'Product-risk strictness',
+    completion_approval: 'Completion approval',
+    concurrent_task_dispatch: 'Task dispatch',
+    crash_recovery_default: 'Crash recovery',
+    escalation_on_ambiguity: 'Ambiguity handling',
+    landing_strategy: 'Where work lands',
+    max_revisions: 'Revision limit',
+    pre_rejection_policy: 'Pre-rejection handling',
+    rejection_dampening: 'Review strictness',
+    remediation_autonomy: 'Recovery autonomy',
+    reviewer_fanout_policy: 'Reviewer agreement',
+    reviewer_mode: 'Review style',
+    runtime_isolation: 'Runtime isolation',
+    spec_completeness: 'Spec detail level',
+    task_origination: 'Who can create tasks',
+    workspace_import_autonomy: 'Existing-work import',
+    worktree_isolation: 'Worktree isolation',
+  }
+  const leverPositionLabels: Record<string, string> = {
+    auto_if_safe: 'Automatic when safe',
+    automatic: 'Automatic',
+    conservative: 'Conservative',
+    default: 'Default',
+    fail_fast: 'Stop on first problem',
+    fanout_2: 'Two reviewers',
+    fanout_4: 'Four reviewers',
+    first_pass: 'First pass only',
+    gated: 'Ask first',
+    high: 'High',
+    human: 'Human only',
+    isolated: 'Isolated',
+    lenient: 'Lenient',
+    local: 'Local only',
+    manual: 'Manual',
+    medium: 'Medium',
+    minimal: 'Minimal',
+    normal: 'Normal',
+    off: 'Off',
+    one_at_a_time: 'One at a time',
+    project: 'Project',
+    required: 'Required',
+    same_as_global: 'Same as global setting',
+    serial: 'Serial',
+    shared: 'Shared',
+    strict: 'Strict',
+    thorough: 'Thorough',
+    user: 'User',
+  }
+  const leverOptions: Record<string, string[]> = {
+    agent_health_strictness: ['lenient', 'normal', 'strict'],
+    business_envelope_strictness: ['lenient', 'normal', 'strict'],
+    completion_approval: ['automatic', 'gated', 'human'],
+    concurrent_task_dispatch: ['one_at_a_time', 'auto_if_safe', 'automatic'],
+    crash_recovery_default: ['manual', 'automatic'],
+    escalation_on_ambiguity: ['lenient', 'normal', 'strict'],
+    landing_strategy: ['shared', 'isolated'],
+    max_revisions: ['1', '2', '3', '4', '5'],
+    pre_rejection_policy: ['off', 'first_pass', 'required'],
+    rejection_dampening: ['lenient', 'normal', 'strict'],
+    remediation_autonomy: ['manual', 'gated', 'automatic'],
+    reviewer_fanout_policy: ['serial', 'fanout_2', 'fanout_4'],
+    reviewer_mode: ['minimal', 'normal', 'thorough'],
+    runtime_isolation: ['shared', 'isolated'],
+    spec_completeness: ['minimal', 'normal', 'thorough'],
+    task_origination: ['human', 'gated', 'automatic'],
+    workspace_import_autonomy: ['manual', 'gated', 'automatic'],
+    worktree_isolation: ['shared', 'isolated'],
+  }
+
+  function humanizeLeverName(name: string): string {
+    return leverNameLabels[name] ?? name.replace(/[_.-]+/g, ' ').replace(/\b\w/g, char => char.toUpperCase())
+  }
+
+  function leverScopeLabel(scope: string): string {
+    if (scope === 'project') return 'Project behavior'
+    if (scope === 'domain:default') return 'Default task behavior'
+    if (scope.startsWith('domain:')) return `${scope.slice('domain:'.length)} task behavior`
+    return scope.replaceAll('_', ' ')
+  }
+
+  function leverPositionLabel(position: string): string {
+    return leverPositionLabels[position] ?? position.replaceAll('_', ' ')
+  }
+
+  function leverSetByLabel(setBy: string): string {
+    switch (setBy) {
+      case 'system-default':
+        return 'Same as global setting'
+      case 'user-direct':
+        return 'Project override'
+      case 'inferred':
+        return 'Learned from this project'
+      default:
+        return setBy.replaceAll('_', ' ').replaceAll('-', ' ')
+    }
+  }
+
+  function optionsForLever(lever: Lever): string[] {
+    return leverOptions[lever.name] ?? [lever.position]
+  }
+
   const dsTokenCount = $derived(
     designSystem
       ? (designSystem.tokens?.color?.length ?? 0) +
@@ -869,7 +972,7 @@
       <SectionHeader
         eyebrow="Settings"
         title="Advanced settings"
-        description="Identity, levers, and design-system controls that shape how Guildhall operates."
+        description="Project identity, defaults, and operating style. Most projects can leave this alone."
         headingTag="h2"
         density="compact"
       />
@@ -905,11 +1008,11 @@
           </Stack>
         </FrameCard>
 
-        <FrameCard class="advanced-card">
+        <FrameCard class="advanced-card advanced-card-wide">
           {#snippet header()}
             <SectionHeader
-              title="Levers"
-              description="Every behavioral knob should stay explicit, named, and explainable."
+              title="Behavior defaults"
+              description="These shape how Guildhall works on this project. Use the global defaults unless this project genuinely needs a different operating style."
               headingTag="h3"
               density="dense"
             >
@@ -936,25 +1039,41 @@
                 <p>This project is currently using defaults only.</p>
               </NoticeBand>
             {:else}
+              <NoticeBand tone="neutral" role="note" label="Defaults" title="Most projects should not need overrides" density="compact">
+                <p>Settings below show the active behavior and where it came from. Project-specific changes should stay narrow and intentional.</p>
+              </NoticeBand>
               {#each leversByScope as [scope, entries] (scope)}
-                <div class="lever-scope">{scope}</div>
-                <table class="lever-table">
-                  <tbody>
+                <section class="lever-scope">
+                  <header class="lever-scope-head">
+                    <h4>{leverScopeLabel(scope)}</h4>
+                    <span>{entries.length} setting{entries.length === 1 ? '' : 's'}</span>
+                  </header>
+                  <div class="lever-list">
                     {#each entries as lever, i (lever.name + i)}
-                      <tr>
-                        <td>
-                          <code>{lever.name}</code>
-                          <Help topic={`lever.${lever.name}`} size={12} />
-                        </td>
-                        <td><strong>{lever.position}</strong></td>
-                        <td class="lever-by">{lever.setBy}</td>
-                      </tr>
-                      <tr class="lever-rationale">
-                        <td colspan="3">{lever.rationale}</td>
-                      </tr>
+                      <article class="lever-card">
+                        <header class="lever-card-head">
+                          <div class="lever-title-block">
+                            <div class="lever-title-row">
+                              <strong>{humanizeLeverName(lever.name)}</strong>
+                              <Help topic={`lever.${lever.name}`} size={12} />
+                            </div>
+                          </div>
+                          <StatusPill label={leverSetByLabel(lever.setBy)} tone={lever.setBy === 'user-direct' ? 'warn' : 'neutral'} density="dense" />
+                        </header>
+                        <div class="lever-options" role="group" aria-label={`${humanizeLeverName(lever.name)} options`}>
+                          {#each optionsForLever(lever) as option (option)}
+                            <span class:active={option === lever.position} class="lever-option">
+                              {leverPositionLabel(option)}
+                            </span>
+                          {/each}
+                        </div>
+                        {#if lever.rationale}
+                          <p class="lever-rationale">{lever.rationale}</p>
+                        {/if}
+                      </article>
                     {/each}
-                  </tbody>
-                </table>
+                  </div>
+                </section>
               {/each}
             {/if}
           </Stack>
@@ -1058,14 +1177,6 @@
   .status.error,
   .row-error {
     color: var(--danger);
-  }
-
-  code {
-    font-family: 'SF Mono', monospace;
-    background: var(--bg-raised-2);
-    padding: 0 4px;
-    border-radius: var(--r-1);
-    font-size: var(--fs-1);
   }
 
   .checklist {
@@ -1250,41 +1361,101 @@
   }
 
   .lever-scope {
-    text-transform: uppercase;
-    letter-spacing: 0;
-    color: var(--text-muted);
-    font-weight: 700;
-    font-size: var(--fs-0);
+    display: grid;
+    gap: 12px;
   }
 
-  .lever-table {
-    width: 100%;
-    border-collapse: collapse;
+  .lever-scope-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    padding-block-start: 8px;
+  }
+
+  .lever-scope-head h4 {
+    margin: 0;
+    color: var(--text);
+    font-size: var(--fs-2);
+    font-weight: 700;
+    line-height: var(--lh-tight);
+  }
+
+  .lever-scope-head span {
+    color: var(--text-muted);
     font-size: var(--fs-1);
   }
 
-  .lever-table td {
-    padding: var(--gh-space-2) var(--gh-space-2);
-    border-top: 1px solid var(--border);
-    vertical-align: top;
+  .lever-list {
+    display: grid;
+    gap: 12px;
   }
 
-  .lever-table tbody tr:first-child td {
-    border-top: none;
+  .lever-card {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
   }
 
-  .lever-by {
+  .lever-card-head {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: 16px;
+    min-inline-size: 0;
+    flex-wrap: wrap;
+  }
+
+  .lever-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-inline-size: 0;
+  }
+
+  .lever-title-row strong {
+    font-size: var(--fs-2);
+    line-height: var(--lh-tight);
+  }
+
+  .lever-title-block {
+    min-inline-size: min(100%, 18rem);
+  }
+
+  .lever-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .lever-option {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: var(--bg-raised);
     color: var(--text-muted);
-    text-transform: uppercase;
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--fs-1);
+    font-weight: 600;
+    line-height: 1;
   }
 
-  .lever-rationale td {
+  .lever-option.active {
+    border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
+    background: color-mix(in srgb, var(--accent) 12%, var(--bg-raised));
+    color: var(--text);
+  }
+
+  .lever-rationale {
+    margin: 0;
     color: var(--text-muted);
-    font-style: italic;
-    padding-top: 0;
-    border-top: none;
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
   }
 
   .ds-head {

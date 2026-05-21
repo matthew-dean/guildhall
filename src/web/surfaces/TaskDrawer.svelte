@@ -26,6 +26,7 @@
   import { project } from '../lib/project.svelte.js'
   import { onMount, onDestroy } from 'svelte'
   import { toast } from 'svelte-sonner'
+  import { activeEscalations } from '../lib/escalation.js'
 
   interface Props {
     taskId: string
@@ -213,6 +214,21 @@
     await runProject('start', taskId)
   }
 
+  async function handleShelve() {
+    if (!confirmed('Shelve')) return
+    if (!(await post('shelve'))) return
+    await project.refresh()
+    toast.success('Task put aside.')
+    onClose()
+  }
+
+  async function handleUnshelve() {
+    if (!confirmed('Unshelve')) return
+    if (!(await post('unshelve'))) return
+    await project.refresh()
+    toast.success('Task returned to the queue.')
+  }
+
   async function handleAddAcceptance(description: string) {
     await post('add-acceptance', { description })
   }
@@ -242,6 +258,8 @@
   const canPause = $derived(task && task.status !== 'done' && task.status !== 'shelved')
   const canShelve = $derived(task && task.status !== 'done')
   const isShelved = $derived(task?.status === 'shelved')
+  const openEscalations = $derived(task ? activeEscalations(task) : [])
+  const firstOpenEscalation = $derived(openEscalations[0] ?? null)
   const displayTaskTitle = $derived.by(() => {
     if (!task) return taskId
     const raw = typeof task.title === 'string' ? task.title.trim() : ''
@@ -475,6 +493,24 @@
           {/if}
         {/if}
       </div>
+      {#if firstOpenEscalation}
+      <Button
+        variant="primary"
+        size="sm"
+        disabled={busy}
+        onclick={() => handleResolveEscalation(firstOpenEscalation, 'retry')}
+      >
+        Retry blocker
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
+        disabled={busy}
+        onclick={() => handleResolveEscalation(firstOpenEscalation, 'resolve')}
+      >
+        Resolve blocker
+      </Button>
+      {/if}
       {#if canPause}
         {#if stageRerun}
           <Button
@@ -500,7 +536,7 @@
           variant="secondary"
           size="sm"
           disabled={busy}
-          onclick={() => confirmed('Unshelve') && post('unshelve')}
+          onclick={handleUnshelve}
         >
           Unshelve
         </Button>
@@ -509,7 +545,7 @@
           variant="danger"
           size="sm"
           disabled={busy}
-          onclick={() => confirmed('Shelve') && post('shelve')}
+          onclick={handleShelve}
         >
           Put aside
         </Button>

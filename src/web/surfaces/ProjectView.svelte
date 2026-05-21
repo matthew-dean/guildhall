@@ -678,7 +678,7 @@
   )
   const newTaskDisabledReason = $derived(
     needsMeta
-      ? 'Bootstrap the project first'
+      ? 'Finish project setup before adding tasks'
       : blockers.bootstrap
         ? failedBootstrapStep
           ? 'Fix the bootstrap failure before adding tasks'
@@ -958,6 +958,16 @@
           {/if}
         </div>
         <div class="topbar-actions">
+          {#if newTaskDisabledReason || (runStatus !== 'running' && startDisabledReason)}
+            <button
+              type="button"
+              class="toolbar-blocker"
+              onclick={() => go(currentProjectHref(needsMeta ? '/setup' : '/settings/ready', activeProjectId))}
+              title={newTaskDisabledReason ?? startDisabledReason ?? ''}
+            >
+              {needsMeta ? 'Project setup needs attention' : 'Readiness checks need attention'}
+            </button>
+          {/if}
           <Button
             variant="secondary"
             size="sm"
@@ -1472,6 +1482,26 @@
     min-width: 40px;
     padding: 0;
     border-radius: 999px;
+  }
+  .toolbar-blocker {
+    max-width: 30ch;
+    min-height: 32px;
+    padding: 0 var(--s-3);
+    border: 1px solid color-mix(in srgb, var(--warn) 58%, var(--border));
+    border-radius: var(--r-1);
+    background: color-mix(in srgb, var(--warn) 10%, transparent);
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--fs-1);
+    line-height: 1.15;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .toolbar-blocker:hover {
+    border-color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 16%, transparent);
   }
   .toolbar-btn--menu-open {
     background: var(--bg-elevated);

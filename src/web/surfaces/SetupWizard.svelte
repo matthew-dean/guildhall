@@ -95,8 +95,11 @@
   let destroyed = false
 
   const launchStopped = $derived(Boolean(bootstrapLive && launchActivity && launchActivity.runStatus !== 'running'))
+  const launchBlocked = $derived(launchActivity?.taskStatus === 'blocked')
   const launchStatusLabel = $derived(
-    launchStopped
+    launchBlocked
+      ? 'Meta-intake is blocked'
+      : launchStopped
       ? 'Coordinator paused'
       : launchActivity?.taskStatus === 'spec_review' && launchActivity.specLength === 0
         ? 'Recovering missing draft'
@@ -523,11 +526,21 @@
               </strong>
             </Row>
             {#if launchStopped}
-              <p class="muted">The task is saved. Resume the coordinator to continue meta-intake.</p>
+              <p class="muted">
+                {launchBlocked
+                  ? 'The setup task needs a recovery decision before Guildhall can continue.'
+                  : 'The task is saved. Resume the coordinator to continue meta-intake.'}
+              </p>
               <Row justify="start">
-                <Button variant="primary" disabled={bootstrapBusy} onclick={resumeBootstrap}>
-                  {bootstrapBusy ? 'Resuming...' : 'Resume'}
-                </Button>
+                {#if launchBlocked && launchActivity?.taskId}
+                  <Button variant="primary" onclick={() => nav(currentProjectHref(`/task/${launchActivity?.taskId}`))}>
+                    Open recovery
+                  </Button>
+                {:else}
+                  <Button variant="primary" disabled={bootstrapBusy} onclick={resumeBootstrap}>
+                    {bootstrapBusy ? 'Resuming...' : 'Resume'}
+                  </Button>
+                {/if}
               </Row>
             {:else}
               <p class="muted">

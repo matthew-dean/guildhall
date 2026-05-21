@@ -200,7 +200,7 @@ describe('SettingsTab', () => {
 
     await screen.findByText('Lever file is malformed.')
     await userEvent.click(screen.getByRole('button', { name: /reset to defaults/i }))
-    await screen.findByText('worker.autonomy')
+    await screen.findByText('Worker Autonomy')
 
     await screen.findByText('Revision 2')
     await userEvent.click(screen.getByRole('button', { name: /approve current draft/i }))

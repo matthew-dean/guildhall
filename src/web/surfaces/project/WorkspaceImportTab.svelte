@@ -10,7 +10,7 @@
   import WizardStepper from '../../lib/WizardStepper.svelte'
   import { project } from '../../lib/project.svelte.js'
   import { nav } from '../../lib/nav.svelte.js'
-  import { projectFetch } from '../../lib/project-routes.js'
+  import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { toast } from 'svelte-sonner'
 
   interface DetectedGoal {
@@ -296,6 +296,26 @@
     currentAreaIndex = 0
   }
 
+  function selectAreas(keys: string[]) {
+    for (const key of keys) {
+      const area = areaGroups.find(item => item.key === key)
+      if (!area || selectedAreaKeys.includes(key)) continue
+      selectedAreaKeys = [...selectedAreaKeys, key]
+      const taskBearingSourceKeys = groups
+        .filter(group => group.areaKey === key && group.taskCount > 0)
+        .map(group => group.key)
+      selectedSourceKeys = [...new Set([...selectedSourceKeys, ...taskBearingSourceKeys])]
+      const taskIdsToAdd = groups
+        .filter(group => group.areaKey === key && group.taskCount > 0)
+        .flatMap(group => group.taskIds)
+      selectedTaskIds = [...new Set([...selectedTaskIds, ...taskIdsToAdd])]
+    }
+  }
+
+  function clearAreas(keys: string[]) {
+    for (const key of keys) removeArea(key)
+  }
+
   function toggleSource(key: string) {
     if (selectedSourceKeys.includes(key)) {
       selectedSourceKeys = selectedSourceKeys.filter(value => value !== key)
@@ -310,6 +330,30 @@
     if (group) {
       selectedTaskIds = [...new Set([...selectedTaskIds, ...group.taskIds])]
     }
+  }
+
+  function selectSources(keys: string[]) {
+    selectedSourceKeys = [...new Set([...selectedSourceKeys, ...keys])]
+    const taskIds = groups
+      .filter(group => keys.includes(group.key))
+      .flatMap(group => group.taskIds)
+    if (taskIds.length > 0) {
+      selectedTaskIds = [...new Set([...selectedTaskIds, ...taskIds])]
+    }
+  }
+
+  function clearSources(keys: string[]) {
+    selectedSourceKeys = selectedSourceKeys.filter(value => !keys.includes(value))
+    const taskIdsToRemove = groups
+      .filter(group => keys.includes(group.key))
+      .flatMap(group => group.taskIds)
+    if (taskIdsToRemove.length > 0) {
+      selectedTaskIds = selectedTaskIds.filter(id => !taskIdsToRemove.includes(id))
+    }
+  }
+
+  function sourceBulkLabel(count: number): string {
+    return `Use all ${count} source${count === 1 ? '' : 's'}`
   }
 
   function focusArea(key: string) {
@@ -619,12 +663,19 @@
             <Chip label="Import complete" tone="accent" />
             <span>Next up</span>
           </div>
-          <h3 class="section-title">
-            Guildhall created {completedImport.tasksAdded} draft task{completedImport.tasksAdded === 1 ? '' : 's'}.
-          </h3>
-          <p class="section-copy">
-            Nothing starts automatically. These new tasks are paused drafts until you shape them in Thread.
-          </p>
+          {#if completedImport.tasksAdded > 0}
+            <h3 class="section-title">
+              Guildhall created {completedImport.tasksAdded} draft task{completedImport.tasksAdded === 1 ? '' : 's'}.
+            </h3>
+            <p class="section-copy">
+              Nothing starts automatically. These new tasks are paused drafts until you shape them in Thread.
+            </p>
+          {:else}
+            <h3 class="section-title">Guildhall saved project context.</h3>
+            <p class="section-copy">
+              Guildhall did not infer draft tasks from this pass, but it recorded the sources and goals so the next task can start from real context.
+            </p>
+          {/if}
         </div>
         <div class="metric-row">
           <Chip label={`${completedImport.sourceCount} source${completedImport.sourceCount === 1 ? '' : 's'}`} tone="neutral" />
@@ -637,11 +688,11 @@
           {/if}
         </div>
         <Row justify="end" gap="3" wrap>
-          <Button variant="secondary" onclick={() => nav('/work')}>
+          <Button variant="secondary" onclick={() => nav(projectActionHref('/work'))}>
             See all tasks in Work
           </Button>
-          <Button variant="primary" onclick={() => nav('/thread')}>
-            Shape imported drafts in Thread
+          <Button variant="primary" onclick={() => nav(projectActionHref('/thread'))}>
+            {completedImport.tasksAdded > 0 ? 'Shape imported drafts in Thread' : 'Use this context in Thread'}
           </Button>
         </Row>
       </Stack>
@@ -757,6 +808,7 @@
             <p class="section-copy">
               Nothing is being imported yet. Select the parts you want Guildhall to review.
               Next, Guildhall will walk through their notes one part at a time.
+              Reference-only parts can still be useful context; they just do not contain task candidates yet.
             </p>
             <div class="metric-row" aria-label="Part selection summary">
               <Chip label={`${selectedAreaKeys.length} selected`} tone="accent" />
@@ -803,8 +855,22 @@
           {/each}
           </Stack>
           {#if secondaryAreas.length > 0}
-            <details class="secondary-summary">
+            <details class="secondary-summary" open={primaryAreas.length === 0}>
               <summary>Optional reference-only parts</summary>
+              <p class="secondary-help">
+                These parts contain goals, specs, or context rather than obvious task lists. Add them when you want Guildhall to remember the product direction before shaping work.
+              </p>
+              <div class="bulk-row">
+                <span class="bulk-label">{secondaryAreas.length} reference-only part{secondaryAreas.length === 1 ? '' : 's'} available</span>
+                <Row gap="2" wrap>
+                  <Button variant="secondary" size="sm" onclick={() => selectAreas(secondaryAreas.map(area => area.key))}>
+                    Add all parts
+                  </Button>
+                  <Button variant="secondary" size="sm" onclick={() => clearAreas(secondaryAreas.map(area => area.key))}>
+                    Remove all
+                  </Button>
+                </Row>
+              </div>
               <Stack gap="4">
               {#each secondaryAreas as area (area.key)}
                 <div class:selected={selectedAreaKeys.includes(area.key)} class="source-card secondary">
@@ -866,6 +932,7 @@
             <p class="section-copy">
             These are the planning notes Guildhall found inside this part of the project.
             Keep the notes you want to use in this pass, then move on.
+            Reference notes become project context; task-bearing notes can also create draft tasks.
             </p>
             <div class="metric-row" aria-label="Source review summary">
               <Chip label={`Part ${Math.min(currentAreaIndex + 1, Math.max(selectedAreas.length, 1))} of ${Math.max(selectedAreas.length, 1)}`} tone="accent" />
@@ -911,8 +978,21 @@
             {/each}
           </Stack>
           {#if currentAreaSecondarySources.length > 0}
-            <details class="secondary-summary">
+            <details class="secondary-summary" open={currentAreaPrimarySources.length === 0}>
               <summary>Optional milestone and reference notes in {currentArea.label}</summary>
+              <div class="bulk-row">
+                <p class="secondary-help">
+                  These notes may not create tasks by themselves, but they preserve goals, decisions, and product framing for the next work pass.
+                </p>
+                <Row gap="2" wrap>
+                  <Button variant="secondary" size="sm" onclick={() => selectSources(currentAreaSecondarySources.map(group => group.key))}>
+                    {sourceBulkLabel(currentAreaSecondarySources.length)}
+                  </Button>
+                  <Button variant="secondary" size="sm" onclick={() => clearSources(currentAreaSecondarySources.map(group => group.key))}>
+                    Leave all out
+                  </Button>
+                </Row>
+              </div>
               <Stack gap="4">
                 {#each currentAreaSecondarySources as group (group.key)}
                   <div class:selected={selectedSourceKeys.includes(group.key)} class="source-card secondary">
@@ -1409,6 +1489,29 @@
   }
   .secondary-summary {
     margin-top: var(--s-4);
+  }
+  .secondary-help {
+    margin: var(--s-3) 0;
+    color: var(--text-muted);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+    max-width: 72ch;
+  }
+  .bulk-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+    flex-wrap: wrap;
+    margin-block: var(--s-3);
+  }
+  .bulk-row .secondary-help {
+    margin: 0;
+    flex: 1 1 28rem;
+  }
+  .bulk-label {
+    color: var(--text-muted);
+    font-size: var(--fs-2);
   }
   .source-card {
     border: 1px solid var(--border);

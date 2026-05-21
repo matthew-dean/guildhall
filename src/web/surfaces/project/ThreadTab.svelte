@@ -1382,16 +1382,25 @@
       <Row justify="between" align="center" gap="3" wrap>
         <div class="handoff-copy">
           <strong>Import complete.</strong>
-          <span>
-            Guildhall created {importHandoff.tasksAdded} draft task{importHandoff.tasksAdded === 1 ? '' : 's'}
-            from {importHandoff.sourceCount} selected source{importHandoff.sourceCount === 1 ? '' : 's'}.
-            These drafts still need shaping before any worker starts.
-          </span>
+          {#if importHandoff.tasksAdded > 0}
+            <span>
+              Guildhall created {importHandoff.tasksAdded} draft task{importHandoff.tasksAdded === 1 ? '' : 's'}
+              from {importHandoff.sourceCount} selected source{importHandoff.sourceCount === 1 ? '' : 's'}.
+              These drafts still need shaping before any worker starts.
+            </span>
+          {:else}
+            <span>
+              Guildhall saved {importHandoff.sourceCount} selected source{importHandoff.sourceCount === 1 ? '' : 's'} as project context.
+              No draft tasks were created, so the next task can start from the recorded notes instead of a blank slate.
+            </span>
+          {/if}
         </div>
         <Row gap="2" wrap>
-          <Button variant="secondary" size="sm" onclick={revealImportedDrafts}>
-            Jump to first draft
-          </Button>
+          {#if importHandoff.tasksAdded > 0}
+            <Button variant="secondary" size="sm" onclick={revealImportedDrafts}>
+              Jump to first draft
+            </Button>
+          {/if}
           <Button variant="ghost" size="sm" onclick={() => (importHandoff = null)}>
             Dismiss
           </Button>

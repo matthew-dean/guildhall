@@ -200,7 +200,8 @@
 </script>
 
 {#if loaded && source}
-  <Card {tone}>
+  <div class="next-wrap">
+    <Card {tone}>
     <div class="row">
       <div class="text">
         <div class="eyebrow">Do this next</div>
@@ -220,10 +221,14 @@
         {/if}
       </div>
     </div>
-  </Card>
+    </Card>
+  </div>
 {/if}
 
 <style>
+  .next-wrap {
+    margin-block: var(--s-3) var(--s-4);
+  }
   .row {
     display: flex;
     align-items: center;
