@@ -3331,3 +3331,103 @@ green underlined link treatment because they open readable source content,
 while task-title buttons no longer use a dotted underline hover. They now use a
 subtle chip hover so navigation controls and document links do not look like
 competing hyperlink systems.
+
+## Narrative Harness Product Walkthrough — 2026-05-20
+
+Test target: `/Users/matthew/git/oss/narrative-harness`, opened through the
+local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-harness/thread`.
+
+- [ ] App header still shows `v0.6.0` while testing the 0.7 release candidate.
+  This may be technically correct because `package.json` is not bumped until
+  publish, but it makes the test session feel stale. Consider an RC/dev build
+  indicator when running from an unpublished branch.
+- [ ] The setup checklist initially reads well, but after `Run checks` passes
+  the next visible item becomes a blocked imported/setup task. The transition
+  from successful environment verification to "Worker is stuck" feels abrupt
+  and does not explain what Guildhall actually accomplished.
+- [ ] Blocked task copy is too implementation-shaped for a product user:
+  "Spec agent made no visible progress after 3 passes" and "Task remained in
+  exploring with no saved spec, note, or status transition" are useful audit
+  facts, but the card should lead with a plain recovery explanation and keep
+  the internal reason secondary.
+- [ ] The blocked task drawer has no recovery path beyond `Pause task` and
+  `Put aside`. For setup/import failures it needs an obvious next action such
+  as retry, ask for context, continue with a simpler scan, or convert the
+  partial context into a manually editable brief.
+- [ ] The remaining setup cards ("Let Guildhall inspect the repo", "Give the
+  project direction", "Review existing work", "Create the first task") show no
+  visible action controls. Clicking the card title did nothing. The cards need
+  explicit buttons or a clearly clickable card treatment.
+- [ ] The top-level `Start` button appears clickable in the blocked/setup
+  state, but produced no visible state change or explanation. If blocked tasks
+  prevent starting, the button should explain that; if it starts a background
+  attempt, the page should show the attempt.
+- [ ] `New task` is disabled in this state, but the UI does not say why. This
+  removes the obvious escape hatch when setup/import is blocked.
+- [ ] After import, `New task` remains disabled with only hidden title/aria
+  copy: "Bootstrap the project first." The visible UI should explain what
+  bootstrap step is required and offer a direct path to do it, especially when
+  the bootstrap/setup lane is blocked.
+- [ ] The project setup route has the real recovery action (`Resume`
+  meta-intake because the coordinator is paused), but Thread and Work do not
+  route the user there. Disabled `New task`, blocked setup cards, and
+  escalation banners should link to this setup recovery state when bootstrap is
+  the blocker.
+- [ ] Clicking `Resume` on the setup route did not visibly change the
+  meta-intake state after several seconds. The page still showed
+  "Coordinator paused", the same `LAST UPDATE`, and the same `No draft yet`
+  output. Resume needs immediate feedback, error surfacing, or a visible
+  running state if work was actually restarted.
+- [ ] The setup route labels the blocked meta-intake state as "Coordinator
+  paused" and offers `Resume`, but backend state shows an unresolved
+  `human_judgment_required` escalation. The page should name the actual blocker
+  and route to escalation resolution or retry, not frame it as a paused
+  coordinator.
+- [ ] Inbox `RESOLVE` for the meta-intake escalation only opens the task
+  drawer. The drawer still has no resolve, retry, explain, or continue action,
+  so the `RESOLVE` label overpromises and leaves the user stuck.
+- [ ] The escalation summary says the spec agent made "no visible progress",
+  but the Transcript shows useful analysis: it identified Narrative Harness as
+  a docs-only project and named the library-first / harness-prototype staging.
+  The UI should distinguish "agent made useful observations but failed to save
+  a durable draft" from "no progress", and offer to convert the transcript into
+  a draft or retry from the last useful note.
+- [ ] `Put aside` on the blocked meta-intake drawer appeared to do nothing:
+  the drawer stayed open, the task remained blocked, and no toast/error/saved
+  state appeared. Destructive or state-changing controls need immediate
+  confirmation, failure messages, or disabled-state rationale.
+- [ ] The Inbox housekeeping item `18 levers at system defaults` routes
+  straight to dense Advanced settings. The page is useful for power users, but
+  the review entry point should offer a digestible summary first: what matters,
+  which defaults are likely fine, and which few levers might need attention for
+  this project.
+- [ ] Advanced settings currently reads like a raw control panel: monospace
+  lever keys, many rows, and `SYSTEM-DEFAULT` tags dominate the view. This may
+  be acceptable behind an Advanced label, but the normal setup/review flow
+  should not make users process all of it.
+- [ ] The `Needs you` page header and the `Do this next` banner do not have
+  enough whitespace clearance from surrounding chrome/content. In the
+  workspace-import flow the alert stack crowds the page title, making the top
+  of the page feel visually jammed instead of calm and scannable.
+- [ ] Workspace import makes including reference notes tedious and hard to
+  discover. Narrative Harness had 18 useful spec notes hidden under
+  "Optional milestone and reference notes", and the only path was clicking
+  `Use this source` one at a time. Add a bulk action such as `Use all 18
+  sources`, make the optional/reference distinction explain itself, and clarify
+  what including those sources changes in the import.
+- [ ] Import completion has contradictory next-step copy when no tasks were
+  created. It says "Guildhall created 0 draft tasks" but still offers
+  `Shape imported drafts in Thread`. When zero drafts exist, the primary next
+  action should be something like `Use this context to create a first task` or
+  `Go to Thread`, not shape nonexistent drafts.
+- [ ] Clicking `Shape imported drafts in Thread` from project-scoped import
+  completion navigated to `/thread` instead of
+  `/projects/narrative-harness/thread`, dropping the project name from the
+  header. Project-scoped navigation must preserve the current project route.
+- [ ] The Thread import-complete banner repeats the zero-draft contradiction:
+  "Guildhall created 0 draft tasks" is followed by "These drafts still need
+  shaping" and a `Jump to first draft` button. Zero-result states need their
+  own copy and controls.
+- [ ] `Jump to first draft` is a no-op when the import created zero drafts.
+  Disabled or impossible actions should not be rendered as primary recovery
+  actions.
