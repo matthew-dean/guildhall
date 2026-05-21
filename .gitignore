@@ -105,6 +105,9 @@ dist
 # vitepress cache directory
 **/.vitepress/cache
 
+# Generated versioned docs snapshots
+docs/next/
+
 # Docusaurus cache and generated files
 .docusaurus
 

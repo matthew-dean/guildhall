@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { resolve, join } from 'node:path'
+import { dirname, resolve, join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { runOrchestrator } from './orchestrator.js'
+import { renderBakeoffMarkdown, runModelBakeoff } from './model-bakeoff.js'
 import { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
 import { runInit } from './init.js'
 import { runServe } from './serve.js'
@@ -250,6 +251,7 @@ export function resolveServiceLifecycleIntent(
 //   guildhall serve                     — start the web dashboard (all workspaces)
 //     --port <n>                    — override the dashboard port (default: 7777)
 //   guildhall config [id|path]          — re-run the init wizard on an existing workspace
+//   guildhall model-bakeoff [output]    — write replay model bakeoff JSON + Markdown
 // ---------------------------------------------------------------------------
 
 export const SHIPPED_CLI_COMMANDS = [
@@ -263,6 +265,7 @@ export const SHIPPED_CLI_COMMANDS = [
   'stop',
   'open',
   'config',
+  'model-bakeoff',
 ] as const
 
 const [command = 'help', ...args] = process.argv.slice(2)
@@ -319,6 +322,7 @@ Usage:
   guildhall open [path]              Open the running service (starts it if needed)
 
   guildhall config [id|path]         Re-run the init wizard on an existing workspace
+  guildhall model-bakeoff [output]   Write replay model bakeoff JSON + Markdown
 
 Options:
   --help, -h                     Show this help
@@ -327,6 +331,7 @@ Examples:
   guildhall init ~/projects/my-app
   guildhall run looma
   guildhall serve
+  guildhall model-bakeoff artifacts/model-bakeoff/report.json
 `.trim()
 }
 
@@ -588,6 +593,33 @@ async function cmdConfig() {
   await runInit({ targetDir: targetDir ?? process.cwd(), reconfigure: true })
 }
 
+export function writeModelBakeoffReport(outputPath: string): {
+  jsonPath: string
+  markdownPath: string
+} {
+  const jsonPath = resolve(expandPath(outputPath))
+  const markdownPath = /\.json$/i.test(jsonPath)
+    ? jsonPath.replace(/\.json$/i, '.md')
+    : `${jsonPath}.md`
+  const report = runModelBakeoff()
+
+  mkdirSync(dirname(jsonPath), { recursive: true })
+  mkdirSync(dirname(markdownPath), { recursive: true })
+  writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+  writeFileSync(markdownPath, renderBakeoffMarkdown(report), 'utf8')
+
+  return { jsonPath, markdownPath }
+}
+
+function cmdModelBakeoff() {
+  const pos = positionals()
+  const { jsonPath, markdownPath } = writeModelBakeoffReport(
+    pos[0] ?? 'artifacts/model-bakeoff/model-bakeoff-report.json',
+  )
+  console.log(`[guildhall] Model bakeoff report: ${jsonPath}`)
+  console.log(`[guildhall] Model bakeoff summary: ${markdownPath}`)
+}
+
 async function main() {
   if (command === '--help' || command === '-h' || command === 'help') {
     printHelp()
@@ -606,6 +638,7 @@ async function main() {
     case 'open':    return cmdOpen()
     case 'serve-internal': return cmdServeInternal()
     case 'config':  return cmdConfig()
+    case 'model-bakeoff': return cmdModelBakeoff()
     default:
       console.error(`[guildhall] Unknown command: ${command}`)
       console.error(`[guildhall] Run "guildhall help" for usage.`)

@@ -2481,10 +2481,11 @@
     display: inline-flex;
     min-width: 0;
     max-width: 100%;
-    border: none;
+    border: 1px solid transparent;
     background: transparent;
     color: var(--text);
-    padding: 0;
+    padding: 1px var(--s-1);
+    margin: -1px calc(-1 * var(--s-1));
     border-radius: var(--r-1);
     cursor: pointer;
     font: inherit;
@@ -2495,8 +2496,8 @@
   }
   .task-chip:hover {
     color: var(--text);
-    text-decoration: underline dotted;
-    text-underline-offset: 3px;
+    background: var(--bg-raised-2);
+    border-color: var(--border);
   }
   .task-chip-text {
     display: block;

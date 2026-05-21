@@ -72,6 +72,16 @@ export function resolveLikelyTaskFiles(task: Task, checkpointFilesTouched: reado
   const root = task.worktreePath?.trim() || task.projectPath?.trim() || ''
   const out: string[] = []
   const seen = new Set<string>()
+  const importedSourceHints = task.notes
+    .flatMap((note) => {
+      const content = typeof note.content === 'string' ? note.content.trim() : ''
+      const match = content.match(/^Imported from:\s*(.+)$/i)
+      if (!match?.[1]) return []
+      return match[1]
+        .split(',')
+        .map((candidate) => candidate.trim())
+        .filter(isActionableFileCandidate)
+    })
   const reviewerFeedbackText = task.notes
     .filter((note) => note.role === 'reviewer' || note.agentId === 'reviewer-fanout' || note.agentId === 'reviewer-agent')
     .slice(-3)
@@ -183,10 +193,21 @@ ${reviewerFeedbackText}`
       existsSync(path.join(root, 'web', withPrefix.split('/')[0]!))
         ? `web/${withPrefix}`
         : withPrefix
+    const rootBasename = path.basename(root)
+    const deprojectedPath =
+      rootBasename &&
+      nuxtWebPrefixed.startsWith(`${rootBasename}/`)
+        ? nuxtWebPrefixed.slice(rootBasename.length + 1)
+        : ''
+    if (deprojectedPath) {
+      const candidate = path.resolve(root, deprojectedPath)
+      if (existsSync(candidate)) return candidate
+    }
     const rootedPath = path.resolve(root, nuxtWebPrefixed)
     if (existsSync(rootedPath)) return rootedPath
     return (
       resolveRepoSuffixMatch(root, nuxtWebPrefixed) ??
+      (deprojectedPath ? resolveRepoSuffixMatch(root, deprojectedPath) : null) ??
       resolveRepoSuffixMatch(root, withPrefix) ??
       resolveRepoSuffixMatch(root, trimmed) ??
       rootedPath
@@ -202,6 +223,9 @@ ${reviewerFeedbackText}`
     out.push(normalized)
   }
 
+  for (const candidate of importedSourceHints) {
+    push(candidate)
+  }
   for (const candidate of rootedHints) {
     push(candidate)
   }

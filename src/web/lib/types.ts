@@ -192,6 +192,11 @@ export interface DrawerPayload {
   recentEvents?: unknown[]
   contextDebug?: ContextDebugRecord[]
   threadTurns?: TaskThreadTurn[]
+  exploringTranscript?: {
+    content: string | null
+    path: string
+    error?: string
+  }
 }
 
 export type DrawerTab = 'current' | 'spec' | 'transcript' | 'experts' | 'history' | 'provenance'

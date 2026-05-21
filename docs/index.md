@@ -13,12 +13,13 @@ description: Local service where a guild of AI helpers plans, builds, reviews, a
       <h1>Let the guild carry the work.</h1>
       <p class="gh-home-subhead">As unattended as you want. As auditable as you need.</p>
       <p class="gh-home-lede">Guildhall runs over your projects from a local service. It surveys the repo, drafts plans, frames tasks, assigns workers, inspects the results, and keeps every important decision attached to the work.</p>
-      <p class="gh-home-version">Docs for the current public release: <a href="/guildhall/releases/0.6.0">Guildhall 0.6.0</a>.</p>
+      <p class="gh-home-version">Docs default to the latest public release: <a href="/guildhall/versions/0.6.0/releases/0.6.0">Guildhall 0.6.0</a>. Unreleased main-branch docs live under <a href="/guildhall/next/guide/">Next</a>.</p>
       <div class="gh-home-hero__actions">
         <div class="gh-cta-row">
-          <a class="gh-cta gh-cta-primary" href="/guildhall/guide/quick-start">Get started</a>
-          <a class="gh-cta gh-cta-secondary" href="/guildhall/guide/new-project">New project</a>
-          <a class="gh-cta gh-cta-secondary" href="/guildhall/guide/existing-project">Existing project</a>
+          <a class="gh-cta gh-cta-primary" href="/guildhall/versions/0.6.0/guide/quick-start">Get started</a>
+          <a class="gh-cta gh-cta-secondary" href="/guildhall/versions/0.6.0/guide/new-project">New project</a>
+          <a class="gh-cta gh-cta-secondary" href="/guildhall/versions/0.6.0/guide/existing-project">Existing project</a>
+          <a class="gh-cta gh-cta-secondary" href="/guildhall/next/guide/">Next docs</a>
           <a class="gh-cta gh-cta-secondary" href="https://github.com/matthew-dean/guildhall">Read the code</a>
         </div>
         <ul class="gh-home-hero__badges" aria-label="Guildhall strengths">

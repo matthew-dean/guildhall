@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -18,6 +18,7 @@ import {
   serviceStatePath,
   serviceUrlForPort,
   SHIPPED_CLI_COMMANDS,
+  writeModelBakeoffReport,
 } from '../cli.js'
 
 const tmpHomes: string[] = []
@@ -200,6 +201,7 @@ describe('Guildhall CLI surface', () => {
       'stop',
       'open',
       'config',
+      'model-bakeoff',
     ])
   })
 
@@ -215,5 +217,22 @@ describe('Guildhall CLI surface', () => {
     expect(help).not.toContain('guildhall resume')
     expect(help).not.toContain('guildhall meta-intake')
     expect(help).not.toContain('guildhall approve-meta-intake')
+  })
+
+  it('writes a model bakeoff report as json plus markdown', () => {
+    const dir = tmpHome()
+    const jsonPath = join(dir, 'reports', 'bakeoff.json')
+
+    const result = writeModelBakeoffReport(jsonPath)
+
+    expect(result.jsonPath).toBe(jsonPath)
+    expect(result.markdownPath).toBe(join(dir, 'reports', 'bakeoff.md'))
+    expect(existsSync(result.jsonPath)).toBe(true)
+    expect(existsSync(result.markdownPath)).toBe(true)
+    expect(JSON.parse(readFileSync(result.jsonPath, 'utf8'))).toMatchObject({
+      scenarioCount: expect.any(Number),
+      recommendation: expect.stringContaining('Recommend'),
+    })
+    expect(readFileSync(result.markdownPath, 'utf8')).toContain('# Guildhall Model Bakeoff')
   })
 })

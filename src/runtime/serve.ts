@@ -54,6 +54,7 @@ import {
   activeEscalations,
   latestResolvedRetryEscalationAt,
   readCheckpoint,
+  readExploringTranscript,
   resolveEscalation,
   updateDesignSystem,
 } from '@guildhall/tools'
@@ -3247,7 +3248,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
       const recent = filterEventsForTask(supervisor.recent(project.id, undefined, project.path), id)
-      const contextDebug = await readContextDebugForTask(join(project.path, 'memory'), id)
+      const memoryDir = join(project.path, 'memory')
+      const contextDebug = await readContextDebugForTask(memoryDir, id)
+      const exploringTranscript = await readExploringTranscript({ memoryDir, taskId: id })
       const snapshot = buildSnapshot({ projectPath: project.path })
       const thread = buildThread({
         projectPath: project.path,
@@ -3263,6 +3266,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task: await enrichTaskForServe(project.path, task as Record<string, unknown>),
         recentEvents: recent,
         contextDebug,
+        exploringTranscript,
         threadTurns,
       })
     } catch (err) {

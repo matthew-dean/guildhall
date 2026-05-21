@@ -140,7 +140,36 @@ describe('drawer task detail tabs', () => {
     expect(screen.getByText('Worker is stuck.')).toBeInTheDocument()
   })
 
-  it('renders transcript notes and escapes placeholder-like file references', () => {
+  it('renders exploring transcript entries before task notes', () => {
+    render(TranscriptTab, {
+      task: task(),
+      exploringTranscript: {
+        path: '/tmp/project/memory/exploring/task-link-editor.md',
+        content: [
+          '# Exploring transcript: task-link-editor',
+          '',
+          '## [2026-05-19T15:01:00.000Z] system',
+          '',
+          'Draft a complete task brief.',
+          '',
+          '---',
+          '## [2026-05-19T15:02:00.000Z] spec-agent',
+          '',
+          'Let me inspect `PROJECT_STATE.md` before drafting.',
+          '',
+          '---',
+        ].join('\n'),
+      },
+    })
+
+    expect(screen.getByText('system')).toBeInTheDocument()
+    expect(screen.getByText('spec-agent')).toBeInTheDocument()
+    expect(screen.getByText(/Let me inspect/)).toHaveTextContent('Let me inspect PROJECT_STATE.md before drafting.')
+    expect(screen.getByText('Task notes')).toBeInTheDocument()
+    expect(screen.getByText(/Read/)).toHaveTextContent('Read <Editor.vue> and found the toolbar adapter.')
+  })
+
+  it('falls back to task notes when no exploring transcript exists', () => {
     render(TranscriptTab, { task: task() })
 
     expect(screen.getByText('worker-agent')).toBeInTheDocument()

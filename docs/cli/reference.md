@@ -3,7 +3,8 @@ title: CLI reference
 help_topic: reference.cli
 help_summary: |
   Every shipped `guildhall` subcommand — init, register, unregister, list,
-  run, serve, start, open, stop, and config — with flags and examples.
+  run, serve, start, open, stop, config, and model-bakeoff — with flags and
+  examples.
 ---
 
 # CLI reference
@@ -87,10 +88,25 @@ Stop the background Guildhall service.
 
 Re-run the setup wizard against an existing project.
 
+## `guildhall model-bakeoff [output.json]`
+
+Write a deterministic model bakeoff replay report. The command currently uses
+saved replay scenarios and simulated lanes so it can validate Guildhall's
+scoring/reporting path without spending provider credits.
+
+Default output:
+
+- `artifacts/model-bakeoff/model-bakeoff-report.json`
+- `artifacts/model-bakeoff/model-bakeoff-report.md`
+
+The optional positional argument chooses the JSON path. Guildhall writes the
+Markdown summary beside it.
+
 ## Examples
 
 ```bash
 guildhall init ~/projects/my-app
 guildhall run my-app --domain ui
 guildhall serve
+guildhall model-bakeoff artifacts/model-bakeoff/report.json
 ```

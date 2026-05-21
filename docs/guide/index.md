@@ -33,6 +33,7 @@ Setting up your first project? Start with [Get started](./quick-start).
 - [Onboarding and levers](./onboarding-and-levers) — how policy gets proposed and approved.
 - [Internal routing](./coordinators) — how Guildhall routes work without making you manage a steward roster.
 - [Agents and models](./agents-and-models) — roles and provider assignments.
+- [Open model recommendations](./open-models) — tested open-model lanes and how to run bakeoffs.
 
 ## Concepts
 

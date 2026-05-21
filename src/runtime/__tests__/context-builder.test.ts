@@ -235,6 +235,31 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('/projects/knit/.guildhall/worktrees/task-001/web/tests/unit/composables/use-presence.test.ts')
   })
 
+  it('does not duplicate the project folder when an imported source path is workspace-relative', async () => {
+    const projectRoot = path.join(tmpDir, 'looma-knit', 'looma')
+    await fs.mkdir(path.join(projectRoot, 'docs'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'docs', 'editor-roadmap.md'), '# Roadmap\n', 'utf8')
+    const taskWithImportedSource: Task = {
+      ...baseTask,
+      title: 'Emoji',
+      description: 'looma/docs/editor-roadmap.md: - **Emoji**',
+      projectPath: projectRoot,
+      spec: '',
+      notes: [
+        {
+          agentId: 'workspace-importer',
+          role: 'importer',
+          content: `Imported from: ${path.join(projectRoot, 'docs', 'editor-roadmap.md')}`,
+          timestamp: '2026-05-19T00:00:00.000Z',
+        },
+      ],
+    }
+
+    const files = resolveLikelyTaskFiles(taskWithImportedSource)
+    expect(files).toContain(path.join(projectRoot, 'docs', 'editor-roadmap.md'))
+    expect(files).not.toContain(path.join(projectRoot, 'looma', 'docs', 'editor-roadmap.md'))
+  })
+
   it('resolves Nuxt server hints under web/server when the task root is the app project', async () => {
     const worktree = path.join(tmpDir, '.guildhall', 'worktrees', 'task-invite')
     await fs.mkdir(path.join(worktree, 'web', 'server', 'api', 'workspaces'), { recursive: true })

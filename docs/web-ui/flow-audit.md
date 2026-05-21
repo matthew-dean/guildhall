@@ -134,6 +134,25 @@ screen.
 - [x] Add the missing `pnpm model:bakeoff` gate to the GitHub release workflow
   so tagged release packaging enforces the same validation claimed in the
   `0.6.0` note.
+- [x] Add a public open-model recommendations page and CLI entrypoint for the
+  model bakeoff replay harness. The docs now separate current tested
+  development recommendations from the planned live provider-backed evaluator,
+  and `guildhall model-bakeoff` writes JSON plus Markdown replay reports.
+- [x] Add the live bakeoff result summary to public docs without cost columns,
+  link it from setup/workspace guidance, and verify project-local model
+  overrides are absent so the machine-wide DeepSeek/Qwen split remains the
+  active source of truth.
+- [x] Switch public docs to a stable-by-default version posture. `docs:build`
+  now materializes `/versions/0.6.0/` from the published `v0.6.0` tag and
+  `/next/` from the current working docs, with root navigation pointing at the
+  stable release and Next kept explicit for unreleased main-branch material.
+- [x] Add release-script support for docs versioning. Real publishes now bump
+  `package.json`, update public docs pointers, cut `docs/versions/<version>`
+  from the current docs, run the publish gates, then commit the versioned docs;
+  dry runs skip docs versioning and restore the manifest. The standalone
+  versioning script can also bootstrap an already-published version from a git
+  ref, which keeps `0.6.0` pinned to the npm-shipped release instead of current
+  Next docs.
 - [x] Re-check the coverage release bar. A release-readiness run on
   `2026-05-19` is back over 90% for statements, lines, and functions
   (`90.20%` statements/lines, `90.15%` functions). The stricter future
@@ -3295,3 +3314,16 @@ Thread cards now open an in-app Source note preview instead of pretending a
 and rejects paths outside the project. The question context affordance is now a
 visible secondary action with explicit copy about asking Guildhall to explain
 the source note/current assumption before the human answers.
+
+Task transcript follow-up on `2026-05-20`: task drawer Transcript now means the
+actual exploring conversation, not just durable task notes. `/api/project/task`
+returns `memory/exploring/<task>.md`, the drawer renders those system/agent
+entries above task notes, and likely-target inference now avoids duplicating a
+subproject folder when imported workspace-relative source paths already include
+the project area name (for example `looma/docs/...` inside the Looma project).
+
+Thread affordance polish on `2026-05-20`: source-note references keep the
+green underlined link treatment because they open readable source content,
+while task-title buttons no longer use a dotted underline hover. They now use a
+subtle chip hover so navigation controls and document links do not look like
+competing hyperlink systems.

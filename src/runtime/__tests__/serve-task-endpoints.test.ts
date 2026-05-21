@@ -124,6 +124,36 @@ describe('GET /api/project/task/:id', () => {
     ])
   })
 
+  it('returns the exploring transcript artifact for the task drawer', async () => {
+    await seedTask('task-1')
+    await fs.mkdir(path.join(memoryDir, 'exploring'), { recursive: true })
+    await fs.writeFile(
+      path.join(memoryDir, 'exploring', 'task-1.md'),
+      [
+        '# Exploring transcript: task-1',
+        '',
+        '## [2026-05-19T23:48:34.395Z] system',
+        '',
+        'Imported from project notes. Turn this into a complete task.',
+        '',
+        '---',
+        '## [2026-05-19T23:49:39.164Z] spec-agent',
+        '',
+        'Let me find the source note first.',
+        '',
+        '---',
+      ].join('\n'),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.exploringTranscript?.path).toBe(path.join(memoryDir, 'exploring', 'task-1.md'))
+    expect(body.exploringTranscript?.content).toContain('Let me find the source note first.')
+  })
+
   it('filters stale acceptance-note transcript entries that no longer match canonical criteria', async () => {
     await seedTask('task-1', {
       acceptanceCriteria: [

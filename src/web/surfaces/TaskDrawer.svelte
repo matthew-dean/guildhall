@@ -437,7 +437,7 @@
         onAddAcceptance={handleAddAcceptance}
       />
     {:else if activeTab === 'transcript'}
-      <TranscriptTab task={payload.task} />
+      <TranscriptTab task={payload.task} exploringTranscript={payload.exploringTranscript} />
     {:else if activeTab === 'experts'}
       <ExpertsTab taskId={taskId} />
     {:else if activeTab === 'history'}

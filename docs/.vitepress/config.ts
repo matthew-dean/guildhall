@@ -1,8 +1,53 @@
 import { defineConfig } from 'vitepress'
-import { readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }
 const currentVersion = pkg.version
+const stableVersion = resolveStableVersion(currentVersion)
+const stableBase = `/versions/${stableVersion}`
+const nextBase = '/next'
+
+type SidebarSection = {
+  text: string
+  items: Array<{ text: string; link: string }>
+}
+
+function prefixSections(sections: SidebarSection[], prefix: string): SidebarSection[] {
+  return sections.map((section) => ({
+    ...section,
+    items: section.items.map((item) => ({
+      ...item,
+      link: item.link.startsWith('/') ? `${prefix}${item.link}` : item.link,
+    })),
+  }))
+}
+
+function git(args: string[]): string {
+  const result = spawnSync('git', args, {
+    cwd: new URL('../..', import.meta.url),
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  })
+  return result.status === 0 ? result.stdout.trim() : ''
+}
+
+function resolveStableVersion(version: string): string {
+  if (existsSync(new URL(`../versions/${version}`, import.meta.url))) return version
+  if (git(['rev-parse', '--verify', '--quiet', `v${version}`])) return version
+  const versionDir = new URL('../versions', import.meta.url)
+  if (existsSync(versionDir)) {
+    const latestDir = readdirSync(versionDir)
+      .filter((name) => /^\d+\.\d+\.\d+(-[\w.]+)?$/.test(name))
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+      [0]
+    if (latestDir) return latestDir
+  }
+  const latest = git(['tag', '--sort=-version:refname'])
+    .split(/\r?\n/)
+    .find((tag) => /^v\d+\.\d+\.\d+$/.test(tag))
+  return latest ? latest.slice(1) : version
+}
 
 const guideStartItems = [
   { text: 'Start here', link: '/guide/quick-start' },
@@ -29,6 +74,7 @@ const guideSpecItems = [
   { text: 'Onboarding and levers', link: '/guide/onboarding-and-levers' },
   { text: 'Internal routing', link: '/guide/coordinators' },
   { text: 'Agents & models', link: '/guide/agents-and-models' },
+  { text: 'Open model recommendations', link: '/guide/open-models' },
 ]
 
 const guideConceptItems = [
@@ -59,6 +105,13 @@ const guideSidebarSections = [
     items: guideConceptItems,
   },
 ]
+
+const stableGuideSidebarSections = guideSidebarSections.map((section) => section.text === 'Specs & policy'
+  ? {
+      ...section,
+      items: section.items.filter((item) => item.link !== '/guide/open-models'),
+    }
+  : section)
 
 const getStartedSidebarSections = [
   {
@@ -105,6 +158,86 @@ const referenceSidebarSections = [
   },
 ]
 
+const leverSidebarSections = [
+  {
+    text: 'Levers',
+    items: [
+      { text: 'How levers work', link: '/levers/' },
+      { text: 'Provenance', link: '/levers/provenance' },
+    ],
+  },
+  {
+    text: 'Project levers',
+    items: [
+      { text: 'concurrent_task_dispatch', link: '/levers/concurrent-task-dispatch' },
+      { text: 'worktree_isolation', link: '/levers/worktree-isolation' },
+      { text: 'merge_policy', link: '/levers/merge-policy' },
+      { text: 'rejection_dampening', link: '/levers/rejection-dampening' },
+      { text: 'business_envelope_strictness', link: '/levers/business-envelope-strictness' },
+      { text: 'agent_health_strictness', link: '/levers/agent-health-strictness' },
+      { text: 'remediation_autonomy', link: '/levers/remediation-autonomy' },
+      { text: 'runtime_isolation', link: '/levers/runtime-isolation' },
+      { text: 'workspace_import_autonomy', link: '/levers/workspace-import-autonomy' },
+    ],
+  },
+  {
+    text: 'Domain levers',
+    items: [
+      { text: 'task_origination', link: '/levers/task-origination' },
+      { text: 'spec_completeness', link: '/levers/spec-completeness' },
+      { text: 'pre_rejection_policy', link: '/levers/pre-rejection-policy' },
+      { text: 'completion_approval', link: '/levers/completion-approval' },
+      { text: 'reviewer_mode', link: '/levers/reviewer-mode' },
+      { text: 'reviewer_fanout_policy', link: '/levers/reviewer-fanout-policy' },
+      { text: 'max_revisions', link: '/levers/max-revisions' },
+      { text: 'escalation_on_ambiguity', link: '/levers/escalation-on-ambiguity' },
+      { text: 'crash_recovery_default', link: '/levers/crash-recovery-default' },
+    ],
+  },
+]
+
+const releaseSidebarSections = [
+  {
+    text: 'Releases',
+    items: [
+      { text: 'Overview', link: '/releases/' },
+      { text: '0.6.0', link: '/releases/0.6.0' },
+      { text: '0.5.1', link: '/releases/0.5.1' },
+      { text: '0.5.0', link: '/releases/0.5.0' },
+      { text: '0.4.0', link: '/releases/0.4.0' },
+    ],
+  },
+]
+
+function addVersionedSidebars(
+  prefix: string,
+  options: { includeStarted?: boolean; includeNextOnlyPages?: boolean } = {},
+): Record<string, SidebarSection[]> {
+  const includeStarted = options.includeStarted ?? true
+  const guideSections = options.includeNextOnlyPages ? guideSidebarSections : stableGuideSidebarSections
+  const sidebars: Record<string, SidebarSection[]> = {
+    [`${prefix}/guide/`]: prefixSections(guideSections, prefix),
+    [`${prefix}/cli/`]: prefixSections(referenceSidebarSections, prefix),
+    [`${prefix}/web-ui/`]: prefixSections(referenceSidebarSections, prefix),
+    [`${prefix}/reference/`]: prefixSections(referenceSidebarSections, prefix),
+    [`${prefix}/levers/`]: prefixSections(leverSidebarSections, prefix),
+    [`${prefix}/releases/`]: prefixSections(releaseSidebarSections, prefix),
+  }
+  if (includeStarted) {
+    for (const path of [
+      '/guide/quick-start',
+      '/guide/how-guildhall-builds',
+      '/guide/new-project',
+      '/guide/existing-project',
+      '/guide/first-tasks',
+      '/guide/managing-projects',
+    ]) {
+      sidebars[`${prefix}${path}`] = prefixSections(getStartedSidebarSections, prefix)
+    }
+  }
+  return sidebars
+}
+
 export default defineConfig({
   title: 'Guildhall',
   description: 'Local service for unattended software work with visible state, reviewer guardrails, and inspectable transcripts.',
@@ -112,12 +245,15 @@ export default defineConfig({
   lastUpdated: true,
   base: '/guildhall/',
   srcExclude: [
+    'cli/**',
     'design/**',
+    'guide/**',
+    'levers/**',
+    'reference/**',
+    'releases/**',
     'superpowers/**',
     'subsystems/**',
-    'web-ui/flow-audit.md',
-    'web-ui/design-tokens.md',
-    'web-ui/help-system.md',
+    'web-ui/**',
   ],
   appearance: 'dark',
   head: [
@@ -126,71 +262,15 @@ export default defineConfig({
   ],
   themeConfig: {
     nav: [
-      { text: 'Get started', link: '/guide/quick-start', activeMatch: '^/guide/(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects)' },
-      { text: 'Guide', link: '/guide/', activeMatch: '^/guide/(?!(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects))' },
-      { text: 'Reference', link: '/reference/', activeMatch: '^/(reference|cli|web-ui|levers|releases)/' },
-      { text: `v${currentVersion}`, link: `/releases/${currentVersion}` },
+      { text: 'Get started', link: `${stableBase}/guide/quick-start`, activeMatch: `^${stableBase}/guide/(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects)` },
+      { text: 'Guide', link: `${stableBase}/guide/`, activeMatch: `^${stableBase}/guide/(?!(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects))` },
+      { text: 'Reference', link: `${stableBase}/reference/`, activeMatch: `^${stableBase}/(reference|cli|web-ui|levers|releases)/` },
+      { text: `v${stableVersion}`, link: `${stableBase}/releases/${stableVersion}` },
+      { text: 'Next', link: `${nextBase}/guide/`, activeMatch: `^${nextBase}/` },
     ],
     sidebar: {
-      '/guide/quick-start': getStartedSidebarSections,
-      '/guide/how-guildhall-builds': getStartedSidebarSections,
-      '/guide/new-project': getStartedSidebarSections,
-      '/guide/existing-project': getStartedSidebarSections,
-      '/guide/first-tasks': getStartedSidebarSections,
-      '/guide/managing-projects': getStartedSidebarSections,
-      '/guide/': guideSidebarSections,
-      '/levers/': [
-        {
-          text: 'Levers',
-          items: [
-            { text: 'How levers work', link: '/levers/' },
-            { text: 'Provenance', link: '/levers/provenance' },
-          ],
-        },
-        {
-          text: 'Project levers',
-          items: [
-            { text: 'concurrent_task_dispatch', link: '/levers/concurrent-task-dispatch' },
-            { text: 'worktree_isolation', link: '/levers/worktree-isolation' },
-            { text: 'merge_policy', link: '/levers/merge-policy' },
-            { text: 'rejection_dampening', link: '/levers/rejection-dampening' },
-            { text: 'business_envelope_strictness', link: '/levers/business-envelope-strictness' },
-            { text: 'agent_health_strictness', link: '/levers/agent-health-strictness' },
-            { text: 'remediation_autonomy', link: '/levers/remediation-autonomy' },
-            { text: 'runtime_isolation', link: '/levers/runtime-isolation' },
-            { text: 'workspace_import_autonomy', link: '/levers/workspace-import-autonomy' },
-          ],
-        },
-        {
-          text: 'Domain levers',
-          items: [
-            { text: 'task_origination', link: '/levers/task-origination' },
-            { text: 'spec_completeness', link: '/levers/spec-completeness' },
-            { text: 'pre_rejection_policy', link: '/levers/pre-rejection-policy' },
-            { text: 'completion_approval', link: '/levers/completion-approval' },
-            { text: 'reviewer_mode', link: '/levers/reviewer-mode' },
-            { text: 'reviewer_fanout_policy', link: '/levers/reviewer-fanout-policy' },
-            { text: 'max_revisions', link: '/levers/max-revisions' },
-            { text: 'escalation_on_ambiguity', link: '/levers/escalation-on-ambiguity' },
-            { text: 'crash_recovery_default', link: '/levers/crash-recovery-default' },
-          ],
-        },
-      ],
-      '/cli/': referenceSidebarSections,
-      '/web-ui/': referenceSidebarSections,
-      '/reference/': referenceSidebarSections,
-      '/releases/': [
-        {
-          text: 'Releases',
-          items: [
-            { text: 'Overview', link: '/releases/' },
-            { text: '0.6.0', link: '/releases/0.6.0' },
-            { text: '0.5.1', link: '/releases/0.5.1' },
-            { text: '0.5.0', link: '/releases/0.5.0' },
-            { text: '0.4.0', link: '/releases/0.4.0' },
-          ],
-        },
-      ],
+      ...addVersionedSidebars(stableBase),
+      ...addVersionedSidebars(nextBase, { includeNextOnlyPages: true }),
     },
     socialLinks: [{ icon: 'github', link: 'https://github.com/matthew-dean/guildhall' }],
     search: { provider: 'local' },

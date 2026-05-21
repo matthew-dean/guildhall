@@ -30,6 +30,11 @@ models:
 
 Model IDs resolve against Guildhall's bundled model catalog.
 
+Guildhall's public open-model recommendations live in
+[Open model recommendations](./open-models). Those notes are based on saved
+development replay prompts and should be treated as a starting point, not a
+permanent ranking.
+
 ## Cognitive profiles
 
 Each role has a `CognitiveProfile` declaring what it needs from a model — context window, tool use, reasoning. The coordinator uses these to validate model assignments at boot.

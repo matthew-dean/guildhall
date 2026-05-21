@@ -114,6 +114,13 @@ const watch = process.argv.includes('--watch')
 // Extract help-topic metadata from docs/ into src/web/generated/ before the
 // svelte bundle reads it. Fails the build on malformed frontmatter.
 function extractHelpTopics() {
+  const prepare = spawnSync('node', ['scripts/prepare-versioned-docs.mjs'], {
+    cwd: ROOT,
+    stdio: 'inherit',
+  })
+  if (prepare.status !== 0) {
+    throw new Error('[guildhall build] docs version preparation failed')
+  }
   const result = spawnSync('node', ['scripts/extract-help-topics.mjs'], {
     cwd: ROOT,
     stdio: 'inherit',

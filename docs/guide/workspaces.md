@@ -59,9 +59,11 @@ These layers can coexist, and they do different jobs:
 The config loader merges them instead of treating them as alternatives.
 Project-local settings override user-global local settings where appropriate.
 Provider secrets are no longer expected in the project-local file. Machine-wide
-provider choice belongs in `~/.guildhall/config.yaml`; the project-local file
-only overrides that when a single project truly needs different behavior, and
-it still holds local runtime selections such as `landingBranch`.
+provider choice and model-lane defaults belong in `~/.guildhall/config.yaml`;
+see [Open model recommendations](./open-models) for the currently tested
+open-model split. The project-local file only overrides those defaults when a
+single project truly needs different behavior, and it still holds local runtime
+selections such as `landingBranch`.
 
 ## Project settings on disk
 
