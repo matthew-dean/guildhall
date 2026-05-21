@@ -493,7 +493,8 @@ describe('ProjectView', () => {
     await renderProjectView('thread', null, 'looma-knit', brokenBootstrap)
 
     expect(screen.getByText('pnpm test exited 1: Cannot find module ./Button.svelte')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /fix the bootstrap failure before adding tasks/i })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: /new task/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /readiness checks need attention/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /fix the bootstrap failure before starting/i })).toBeDisabled()
 
     await user.click(screen.getByRole('link', { name: /open readiness checks/i }))

@@ -53,6 +53,10 @@ screen.
 - [x] Restore readable secondary button contrast. The shared secondary button
   now uses a visibly distinct neutral fill and consistent border instead of a
   near-transparent overlay that disappeared into dark raised panels.
+- [x] Reduce top-bar button clutter. Project navigation, work count, inbox,
+  provider, and readiness affordances now share one quiet link treatment;
+  disabled New Task no longer occupies toolbar space; Start/Stop remains the
+  only high-emphasis command and overflow uses a single quiet icon control.
 - [x] Remove maintainer-only implementation pages from the public VitePress
   surface. The public docs build now excludes `docs/subsystems/**`,
   `docs/web-ui/design-tokens.md`, and `docs/web-ui/help-system.md`; sidebar,

@@ -759,17 +759,16 @@
     {#snippet topbar()}
       <header class="topbar topbar--uninitialized">
         <div class="topbar-start">
-          <Button
-            variant="secondary"
-            size="sm"
-            className="toolbar-btn toolbar-btn--back"
+          <button
+            type="button"
+            class="topbar-link topbar-link--back"
             onclick={() => go('/')}
-            ariaLabel="Back to Projects"
+            aria-label="Back to Projects"
             title="Back to Projects"
           >
             <Icon name="chevron-left" size={16} />
-            <span class="toolbar-btn-label">Projects</span>
-          </Button>
+            <span>Projects</span>
+          </button>
         </div>
         <div class="topbar-leading"></div>
         <div class="topbar-actions"></div>
@@ -896,24 +895,23 @@
     {#snippet topbar()}
       <header class="topbar">
         <div class="topbar-start">
-          <Button
-            variant="secondary"
-            size="sm"
-            className="toolbar-btn toolbar-btn--back"
+          <button
+            type="button"
+            class="topbar-link topbar-link--back"
             onclick={() => go('/')}
-            ariaLabel="Back to Projects"
+            aria-label="Back to Projects"
             title="Back to Projects"
           >
             <Icon name="chevron-left" size={16} />
-            <span class="toolbar-btn-label">Projects</span>
-          </Button>
+            <span>Projects</span>
+          </button>
         </div>
         <div class="topbar-leading">
           {#if activeCount > 0 || awaitingApprovalCount > 0 || stuckCount > 0}
             <button
               type="button"
-              class="tasks-indicator"
-              class:has-stuck={stuckCount > 0}
+              class="topbar-link topbar-status-link"
+              class:is-warning={stuckCount > 0}
               onclick={() => go(currentProjectHref('/work', activeProjectId))}
               title="Jump to Work"
               aria-label="{activeCount} {activeCountLabel}, {awaitingApprovalCount} awaiting approval, {stuckCount} stuck"
@@ -930,8 +928,9 @@
           {#if inboxActionableCount > 0}
             <button
               type="button"
-              class="inbox-indicator"
-              class:warn-only={!inboxHasHighSeverity}
+              class="topbar-link topbar-icon-status"
+              class:is-warning={!inboxHasHighSeverity}
+              class:is-danger={inboxHasHighSeverity}
               onclick={() => go(currentProjectHref('/notifications', activeProjectId))}
               title="Jump to Notifications"
               aria-label="{inboxActionableCount} notifications need you"
@@ -943,8 +942,8 @@
           {#if providerHeaderLabel}
             <button
               type="button"
-              class="provider-indicator"
-              class:fallback={providerStatus?.fallback}
+              class="topbar-link provider-indicator"
+              class:is-warning={providerStatus?.fallback}
               onclick={() => go('/providers')}
               title={providerTitle}
               aria-label={providerTitle}
@@ -961,25 +960,28 @@
           {#if newTaskDisabledReason || (runStatus !== 'running' && startDisabledReason)}
             <button
               type="button"
-              class="toolbar-blocker"
+              class="topbar-link topbar-setup-link"
               onclick={() => go(currentProjectHref(needsMeta ? '/setup' : '/settings/ready', activeProjectId))}
               title={newTaskDisabledReason ?? startDisabledReason ?? ''}
             >
+              <Icon name="alert-triangle" size={14} />
               {needsMeta ? 'Project setup needs attention' : 'Readiness checks need attention'}
             </button>
           {/if}
-          <Button
-            variant="secondary"
-            size="sm"
-            className="toolbar-btn toolbar-btn--new-task"
-            disabled={busy || newTaskDisabledReason !== null}
-            onclick={newTask}
-            ariaLabel={newTaskDisabledReason ?? 'New task'}
-            title={newTaskDisabledReason ?? 'New task'}
-          >
-            <Icon name="plus" size={16} />
-            <span class="toolbar-btn-label">New task</span>
-          </Button>
+          {#if newTaskDisabledReason === null}
+            <Button
+              variant="secondary"
+              size="sm"
+              className="toolbar-btn toolbar-btn--new-task"
+              disabled={busy}
+              onclick={newTask}
+              ariaLabel="New task"
+              title="New task"
+            >
+              <Icon name="plus" size={16} />
+              <span class="toolbar-btn-label">New task</span>
+            </Button>
+          {/if}
           <Button
             variant={runStatus === 'running' ? 'danger' : 'primary'}
             size="sm"
@@ -1004,9 +1006,9 @@
           </Button>
           <div class="actions-menu" bind:this={actionsMenuEl}>
             <Button
-              variant="secondary"
+              variant="ghost"
               size="sm"
-              className={`toolbar-btn toolbar-btn--icon ${actionsMenuOpen ? 'toolbar-btn--menu-open' : ''}`}
+              className={`toolbar-icon-button ${actionsMenuOpen ? 'toolbar-icon-button--open' : ''}`}
               ariaLabel="Open actions menu"
               title="Open actions menu"
               onclick={toggleActionsMenu}
@@ -1402,52 +1404,55 @@
   .rail-status {
     display: flex;
   }
-  .tasks-indicator,
-  .inbox-indicator,
-  .provider-indicator {
+  .topbar-link {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--s-2);
     background: transparent;
-    border: 1px solid var(--border);
+    border: 1px solid transparent;
     border-radius: var(--r-1);
     color: var(--text-muted);
     font-size: var(--fs-1);
-    padding: 2px 8px;
+    padding: 5px 8px;
     cursor: pointer;
     font: inherit;
     line-height: 1;
-  }
-  .tasks-indicator:hover,
-  .inbox-indicator:hover,
-  .provider-indicator:hover {
-    color: var(--text);
-    border-color: var(--border-strong);
-    background: var(--bg-raised-2);
-  }
-  .tasks-indicator.has-stuck {
-    color: var(--warn);
-    border-color: var(--warn);
-  }
-  .tasks-stuck { font-weight: 600; }
-  .inbox-indicator {
-    color: var(--danger);
-    border-color: var(--danger);
-    font-weight: 600;
-  }
-  .inbox-indicator.warn-only {
-    color: var(--warn);
-    border-color: var(--warn);
-  }
-  .provider-indicator {
-    color: var(--text-muted);
-    max-width: min(100%, 42ch);
+    min-height: 30px;
     min-width: 0;
   }
-  .provider-indicator.fallback {
+  .topbar-link:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--bg-raised-2) 70%, transparent);
+  }
+  .topbar-link:focus-visible {
+    color: var(--text);
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+  .topbar-link.is-warning {
     color: var(--warn);
-    border-color: var(--warn);
-    font-weight: 600;
+  }
+  .topbar-link.is-danger {
+    color: var(--danger);
+  }
+  .topbar-link--back {
+    font-weight: 650;
+  }
+  .topbar-status-link {
+    max-width: 34ch;
+  }
+  .topbar-icon-status {
+    font-weight: 700;
+  }
+  .topbar-setup-link {
+    max-width: 32ch;
+    color: var(--warn);
+    font-weight: 650;
+  }
+  .tasks-stuck { font-weight: 600; }
+  .provider-indicator {
+    max-width: min(100%, 42ch);
   }
   .provider-summary {
     overflow: hidden;
@@ -1477,35 +1482,16 @@
   .toolbar-btn--new-task {
     min-width: 118px;
   }
-  .toolbar-btn--icon {
+  .toolbar-icon-button {
     width: 40px;
     min-width: 40px;
+    min-height: 40px;
     padding: 0;
-    border-radius: 999px;
+    border-radius: 10px;
   }
-  .toolbar-blocker {
-    max-width: 30ch;
-    min-height: 32px;
-    padding: 0 var(--s-3);
-    border: 1px solid color-mix(in srgb, var(--warn) 58%, var(--border));
-    border-radius: var(--r-1);
-    background: color-mix(in srgb, var(--warn) 10%, transparent);
+  .toolbar-icon-button--open {
+    background: var(--bg-raised-2);
     color: var(--text);
-    cursor: pointer;
-    font: inherit;
-    font-size: var(--fs-1);
-    line-height: 1.15;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .toolbar-blocker:hover {
-    border-color: var(--warn);
-    background: color-mix(in srgb, var(--warn) 16%, transparent);
-  }
-  .toolbar-btn--menu-open {
-    background: var(--bg-elevated);
-    border-color: var(--border-strong);
   }
   .actions-menu {
     position: relative;
