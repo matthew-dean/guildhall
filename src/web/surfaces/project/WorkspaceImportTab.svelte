@@ -272,7 +272,16 @@
     return 'Details'
   })
   const selectedSourceCount = $derived(
-    selectedTaskGroups.length + secondaryGroups.filter(group => selectedSourceKeys.includes(group.key)).length,
+    selectedGroups.filter(group => selectedAreaKeys.includes(group.areaKey)).length,
+  )
+  const currentAreaSelectedSourceCount = $derived(
+    currentAreaSources.filter(group => selectedSourceKeys.includes(group.key)).length,
+  )
+  const currentAreaSelectedTaskCount = $derived(
+    currentAreaSources
+      .filter(group => selectedSourceKeys.includes(group.key))
+      .flatMap(group => group.taskIds)
+      .filter(id => selectedTaskIds.includes(id)).length,
   )
   const selectedTasks = $derived(
     allTasks.filter(
@@ -285,6 +294,16 @@
     selectedTaskGroups[Math.min(currentGroupIndex, Math.max(0, selectedTaskGroups.length - 1))] ?? null,
   )
   const hasTaskCandidates = $derived(totalTaskCandidates > 0)
+  const visibleJourneySteps = $derived(
+    hasTaskCandidates
+      ? journeySteps
+      : [
+          { id: 'found', label: '1. Found' },
+          { id: 'parts', label: '2. Parts' },
+          { id: 'sources', label: '3. Notes' },
+          { id: 'confirm', label: '4. Save' },
+        ] satisfies Array<{ id: Step; label: string }>,
+  )
   const canConfirmReferenceImport = $derived(
     selectedAreaKeys.length > 0 &&
     selectedSourceKeys.length > 0 &&
@@ -412,14 +431,17 @@
     if (area.taskCount > 0) {
       parts.push(`${area.taskCount} possible task${area.taskCount === 1 ? '' : 's'}`)
     }
+    if (area.goalCount > 0) {
+      parts.push(`${area.goalCount} goal${area.goalCount === 1 ? '' : 's'}`)
+    }
+    if (area.milestoneCount > 0) {
+      parts.push(`${area.milestoneCount} milestone${area.milestoneCount === 1 ? '' : 's'}`)
+    }
+    if (area.contextCount > 0) {
+      parts.push(`${area.contextCount} reference note${area.contextCount === 1 ? '' : 's'}`)
+    }
     if (area.sourceCount > 0) {
       parts.push(`${area.sourceCount} planning source${area.sourceCount === 1 ? '' : 's'}`)
-    }
-    if (area.taskCount === 0 && area.milestoneCount > 0) {
-      parts.push(`${area.milestoneCount} milestone note${area.milestoneCount === 1 ? '' : 's'}`)
-    }
-    if (area.taskCount === 0 && area.contextCount > 0) {
-      parts.push(`${area.contextCount} reference note${area.contextCount === 1 ? '' : 's'}`)
     }
     return parts.join(' · ')
   }
@@ -432,31 +454,38 @@
     if (group.milestoneCount > 0) {
       parts.push(`${group.milestoneCount} milestone note${group.milestoneCount === 1 ? '' : 's'}`)
     }
+    if (group.goalCount > 0) {
+      parts.push(`${group.goalCount} goal${group.goalCount === 1 ? '' : 's'}`)
+    }
     if (group.contextCount > 0) {
       parts.push(`${group.contextCount} reference note${group.contextCount === 1 ? '' : 's'}`)
     }
+    if (parts.length === 0) return 'Source'
     return parts.join(' · ')
   }
 
   function sourcePreview(area: AreaGroup): string {
     const names = groups
-      .filter(group => group.areaKey === area.key && group.taskCount > 0)
+      .filter(group => group.areaKey === area.key)
       .slice(0, 3)
       .map(group => group.label)
-    if (names.length === 0) return 'Reference notes only'
+    if (names.length === 0) return area.summary || 'Project context'
     const preview = names.join(', ')
     const remaining = area.sourceCount - names.length
     return remaining > 0 ? `${preview}, and ${remaining} more` : preview
   }
 
   function areaKindLabel(area: AreaGroup): string {
-    return area.taskCount > 0 ? 'Task-bearing part' : 'Reference-only part'
+    if (area.taskCount > 0) return 'Task-bearing part'
+    if (area.goalCount > 0) return 'Goal context'
+    return 'Context part'
   }
 
   function sourceKindLabel(group: SourceGroup): string {
     if (group.kind === 'tasks') return 'Task list'
     if (group.kind === 'mixed') return 'Mixed source'
     if (group.kind === 'milestones') return 'Milestone notes'
+    if (group.goalCount > 0) return 'Goal context'
     return 'Reference notes'
   }
 
@@ -482,10 +511,20 @@
   function sourceEvidence(group: SourceGroup): Array<{ label: string; text: string }> {
     const evidence: Array<{ label: string; text: string }> = []
     for (const goal of data?.detected?.goals ?? []) {
-      if (sourceMatches(goal.source, group)) evidence.push({ label: 'Goal', text: displayText(goal.rationale || goal.title) })
+      if (
+        sourceMatches(goal.source, group) ||
+        (goal.references ?? []).some(ref => sourceMatches(ref, group))
+      ) {
+        evidence.push({ label: 'Goal', text: displayText(goal.rationale || goal.title) })
+      }
     }
     for (const milestone of data?.detected?.milestones ?? []) {
-      if (sourceMatches(milestone.source, group)) evidence.push({ label: 'Milestone', text: displayText(milestone.evidence || milestone.title) })
+      if (
+        sourceMatches(milestone.source, group) ||
+        (milestone.references ?? []).some(ref => sourceMatches(ref, group))
+      ) {
+        evidence.push({ label: 'Milestone', text: displayText(milestone.evidence || milestone.title) })
+      }
     }
     for (const context of data?.detected?.context ?? []) {
       if (
@@ -508,13 +547,23 @@
   function displayPath(value: string | null): string {
     if (!value) return ''
     const normalized = value.replaceAll('\\', '/')
-    const marker = '/looma-knit/'
-    const fromProject = normalized.includes(marker)
-      ? normalized.split(marker).at(-1) ?? normalized
+    const projectPath = project.detail?.project?.path?.replaceAll('\\', '/')
+    const fromProject = projectPath && normalized.startsWith(`${projectPath}/`)
+      ? normalized.slice(projectPath.length + 1)
       : normalized
     const parts = fromProject.split('/').filter(Boolean)
     if (parts.length <= 4) return fromProject
     return parts.slice(-4).join('/')
+  }
+
+  async function copySourcePath(path: string | null) {
+    if (!path) return
+    try {
+      await navigator.clipboard?.writeText(path)
+      toast.success('Source path copied')
+    } catch {
+      toast.message(path)
+    }
   }
 
   function taskSupportingText(task: DetectedTask): string {
@@ -753,14 +802,14 @@
       </Stack>
     </Card>
   {:else}
-    <WizardStepper steps={journeySteps} activeId={step} />
+    <WizardStepper steps={visibleJourneySteps} activeId={step} />
 
     {#if step === 'found'}
       <Card>
         <Stack gap="5">
           <div class="section-intro">
             <div class="section-kicker">
-              <Chip label="Step 1 of 5" tone="accent" />
+              <Chip label={hasTaskCandidates ? 'Step 1 of 5' : 'Step 1 of 4'} tone="accent" />
               <span>Found</span>
             </div>
             <h3 class="section-title">
@@ -829,12 +878,12 @@
                           <strong>{area.label}</strong>
                         </div>
                         <div class="metric-row">
-                          <Chip label={`${area.milestoneCount || area.contextCount} reference notes`} tone="neutral" />
+                          <Chip label={areaSummary(area)} tone="neutral" />
                           <Chip label={`${area.sourceCount} sources`} tone="neutral" />
                         </div>
                       </div>
                       <div class="summary-side">
-                        <span class="summary-label">Reference notes</span>
+                        <span class="summary-label">Project context</span>
                         <span class="summary-preview">{sourcePreview(area)}</span>
                       </div>
                       <Button variant="ghost" size="sm" onclick={() => focusArea(area.key)}>
@@ -863,18 +912,18 @@
         <Stack gap="5">
           <div class="section-intro">
             <div class="section-kicker">
-              <Chip label="Step 2 of 5" tone="accent" />
+              <Chip label={hasTaskCandidates ? 'Step 2 of 5' : 'Step 2 of 4'} tone="accent" />
               <span>Project parts</span>
             </div>
             <h3 class="section-title">Choose the parts for this pass</h3>
             <p class="section-copy">
               Nothing is being imported yet. Select the parts you want Guildhall to review.
               Next, Guildhall will walk through their notes one part at a time.
-              Reference-only parts can still be useful context; they just do not contain task candidates yet.
+              Context-only parts can still be useful: they preserve goals, decisions, and framing even when they do not contain task candidates.
             </p>
             <div class="metric-row" aria-label="Part selection summary">
               <Chip label={`${selectedAreaKeys.length} selected`} tone="accent" />
-              <Chip label={`${primaryAreas.length} task-bearing parts`} tone="ok" />
+              <Chip label={hasTaskCandidates ? `${primaryAreas.length} task-bearing parts` : 'Context import'} tone={hasTaskCandidates ? 'ok' : 'neutral'} />
             </div>
           </div>
           <Stack gap="4">
@@ -947,11 +996,11 @@
                           {#if selectedAreaKeys.includes(area.key)}
                             <Chip label="Queued" tone="accent" />
                           {/if}
-                          <span class="kind-label reference">Reference-only part</span>
+                          <span class="kind-label reference">{areaKindLabel(area)}</span>
                         </div>
                         <div class="metric-row">
                           <Chip label={`${area.sourceCount} sources`} tone="neutral" />
-                          <Chip label={`${area.milestoneCount || area.contextCount} notes`} tone="neutral" />
+                          <Chip label={areaSummary(area)} tone="neutral" />
                         </div>
                         <div class="source-path">{sourcePreview(area)}</div>
                       </Stack>
@@ -993,7 +1042,7 @@
         <Stack gap="5">
           <div class="section-intro">
             <div class="section-kicker">
-              <Chip label="Step 3 of 5" tone="accent" />
+              <Chip label={hasTaskCandidates ? 'Step 3 of 5' : 'Step 3 of 4'} tone="accent" />
               <span>Notes</span>
             </div>
             <h3 class="section-title">{currentArea ? `Review notes in ${currentArea.label}` : 'Review notes'}</h3>
@@ -1004,8 +1053,11 @@
             </p>
             <div class="metric-row" aria-label="Source review summary">
               <Chip label={`Part ${Math.min(currentAreaIndex + 1, Math.max(selectedAreas.length, 1))} of ${Math.max(selectedAreas.length, 1)}`} tone="accent" />
-              <Chip label={`${selectedSourceCount} notes in this pass`} tone="neutral" />
-              <Chip label={`${selectedTasks.length} tasks currently kept`} tone="ok" />
+              <Chip label={`${currentAreaSelectedSourceCount} of ${currentAreaSources.length} notes selected here`} tone="neutral" />
+              <Chip label={`${selectedSourceCount} total selected`} tone="neutral" />
+              {#if hasTaskCandidates}
+                <Chip label={`${currentAreaSelectedTaskCount} tasks kept here`} tone="ok" />
+              {/if}
             </div>
           </div>
         {#if currentArea}
@@ -1031,7 +1083,7 @@
                         {#if group.milestoneCount > 0}
                           <Chip label={`${group.milestoneCount} milestones`} tone="warn" />
                         {/if}
-                        <Chip label={group.contextCount > 0 ? `${group.contextCount} notes` : 'source'} tone="neutral" />
+                        <Chip label={sourceSummary(group)} tone="neutral" />
                       </div>
                       {#if group.path}
                         <div class="source-path">{displayPath(group.path)}</div>
@@ -1219,7 +1271,7 @@
         <Stack gap="5">
           <div class="section-intro">
             <div class="section-kicker">
-              <Chip label="Step 5 of 5" tone="accent" />
+              <Chip label={hasTaskCandidates ? 'Step 5 of 5' : 'Step 4 of 4'} tone="accent" />
               <span>Create</span>
             </div>
             {#if selectedTasks.length > 0}
@@ -1419,6 +1471,44 @@
             </div>
           {/if}
         </Stack>
+      {/if}
+    {/snippet}
+    {#snippet footer()}
+      {#if focusedArea}
+        {#if selectedAreaKeys.includes(focusedArea.key)}
+          <Button variant="secondary" size="sm" onclick={() => removeArea(focusedArea.key)}>
+            Exclude part
+          </Button>
+        {:else}
+          <Button variant="primary" size="sm" onclick={() => selectArea(focusedArea.key)}>
+            Include part
+          </Button>
+        {/if}
+      {:else if focusedSource}
+        {#if focusedSource.path}
+          <Button variant="secondary" size="sm" onclick={() => copySourcePath(focusedSource.path)}>
+            Copy path
+          </Button>
+        {/if}
+        {#if selectedSourceKeys.includes(focusedSource.key)}
+          <Button variant="secondary" size="sm" onclick={() => toggleSource(focusedSource.key)}>
+            Exclude note
+          </Button>
+        {:else}
+          <Button variant="primary" size="sm" onclick={() => toggleSource(focusedSource.key)}>
+            Include note
+          </Button>
+        {/if}
+      {:else if focusedTask}
+        {#if selectedTaskIds.includes(focusedTask.suggestedId)}
+          <Button variant="secondary" size="sm" onclick={() => toggleTask(focusedTask.suggestedId)}>
+            Exclude task
+          </Button>
+        {:else}
+          <Button variant="primary" size="sm" onclick={() => toggleTask(focusedTask.suggestedId)}>
+            Include task
+          </Button>
+        {/if}
       {/if}
     {/snippet}
   </SideDrawer>

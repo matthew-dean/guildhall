@@ -6,6 +6,8 @@
     uninitialized?: boolean
     railCollapsed?: boolean
     railPreviewOpen?: boolean
+    mobileRailMode?: boolean
+    railOverlayOpen?: boolean
     rail?: Snippet
     topbar?: Snippet
     band?: Snippet
@@ -17,6 +19,8 @@
     uninitialized = false,
     railCollapsed = false,
     railPreviewOpen = false,
+    mobileRailMode = false,
+    railOverlayOpen = false,
     rail: railContent,
     topbar: topbarContent,
     band: bandContent,
@@ -34,6 +38,8 @@
   pageClass="page"
   {railCollapsed}
   {railPreviewOpen}
+  {mobileRailMode}
+  {railOverlayOpen}
 >
   {#snippet rail()}
     {@render railContent?.()}

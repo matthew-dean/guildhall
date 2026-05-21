@@ -10,6 +10,8 @@
     pageClass?: string
     railCollapsed?: boolean
     railPreviewOpen?: boolean
+    mobileRailMode?: boolean
+    railOverlayOpen?: boolean
     rail?: Snippet
     topbar?: Snippet
     band?: Snippet
@@ -26,6 +28,8 @@
     pageClass = '',
     railCollapsed = false,
     railPreviewOpen = false,
+    mobileRailMode = false,
+    railOverlayOpen = false,
     rail,
     topbar,
     band,
@@ -35,8 +39,8 @@
 
 </script>
 
-<div class={`app-shell ${railCollapsed ? 'rail-collapsed' : ''} ${railPreviewOpen ? 'rail-preview-open' : ''} ${shellClass}`.trim()}>
-  <aside class={`app-shell-rail ${railClass}`.trim()}>
+<div class={`app-shell ${railCollapsed ? 'rail-collapsed' : ''} ${railPreviewOpen ? 'rail-preview-open' : ''} ${mobileRailMode ? 'mobile-rail-mode' : ''} ${railOverlayOpen ? 'rail-overlay-open' : ''} ${shellClass}`.trim()}>
+  <aside class={`app-shell-rail ${railClass}`.trim()} aria-hidden={mobileRailMode && !railOverlayOpen}>
     {@render rail?.()}
   </aside>
   <div class={`app-shell-main ${mainClass}`.trim()}>
@@ -123,13 +127,33 @@
   }
   @media (max-width: 920px) {
     .app-shell {
-      grid-template-columns: 56px minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1fr);
     }
     .app-shell-rail {
-      width: 56px;
+      display: none;
+      width: 0;
+    }
+    .app-shell.rail-overlay-open .app-shell-rail {
+      display: block;
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      z-index: calc(var(--z-drawer) + 1);
+      pointer-events: none;
+    }
+    .app-shell.rail-overlay-open .app-shell-rail :global(*) {
+      pointer-events: auto;
+    }
+    .app-shell-main {
+      grid-column: 1;
     }
     .app-shell-page {
       padding: 0 var(--s-4) var(--s-4);
+    }
+  }
+  @media (max-width: 520px) {
+    .app-shell-page {
+      padding: 0 var(--s-2) var(--s-4);
     }
   }
 </style>

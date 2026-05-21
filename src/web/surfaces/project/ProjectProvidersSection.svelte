@@ -171,7 +171,7 @@
             <span class="body">
               <span class="label">{meta.label}</span>
               <span class="detail">
-                {disabled ? 'Not configured globally — set up in /providers first.' : meta.detail}
+                {disabled ? 'Not configured globally — set up credentials in global Providers first.' : meta.detail}
               </span>
             </span>
             {#if meta.verifiedAt}

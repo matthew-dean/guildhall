@@ -428,8 +428,8 @@ describe('ProjectView', () => {
     await user.click(screen.getByRole('button', { name: /^start$/i }))
 
     await screen.findByText('Provider is not configured.')
-    await user.click(screen.getByRole('link', { name: /open providers/i }))
-    expect(path.value).toBe('/providers')
+    await user.click(screen.getByRole('link', { name: /open project providers/i }))
+    expect(path.value).toBe('/projects/looma-knit/settings/providers')
   })
 
   it('renders loading, error, and uninitialized project states without a stale project shell', async () => {
@@ -506,21 +506,32 @@ describe('ProjectView', () => {
     installMobileBrowserFakes()
 
     await renderProjectView('thread')
+    const shell = document.querySelector('.app-shell')
+    const shellRail = document.querySelector('.app-shell-rail')
+    expect(shell).toHaveClass('mobile-rail-mode')
+    expect(shell).not.toHaveClass('rail-overlay-open')
+    expect(shellRail).toHaveAttribute('aria-hidden', 'true')
     expect(screen.queryByRole('button', { name: /close project navigation/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Work$/ })).not.toBeInTheDocument()
 
     window.dispatchEvent(new Event('guildhall:toggle-project-nav'))
     await waitFor(() => {
-      expect(screen.getAllByRole('button', { name: /close project navigation/i })).toHaveLength(2)
+      expect(screen.getAllByRole('button', { name: /close project navigation/i })).toHaveLength(1)
     })
+    expect(shell).toHaveClass('rail-overlay-open')
+    expect(shellRail).toHaveAttribute('aria-hidden', 'false')
+    expect(screen.getByRole('button', { name: /^Work$/ })).toBeInTheDocument()
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /close project navigation/i })).not.toBeInTheDocument()
     })
+    expect(shell).not.toHaveClass('rail-overlay-open')
+    expect(shellRail).toHaveAttribute('aria-hidden', 'true')
 
     window.dispatchEvent(new Event('guildhall:toggle-project-nav'))
     await waitFor(() => {
-      expect(screen.getAllByRole('button', { name: /close project navigation/i })).toHaveLength(2)
+      expect(screen.getAllByRole('button', { name: /close project navigation/i })).toHaveLength(1)
     })
     await user.click(screen.getByRole('button', { name: /^Work$/ }))
 
@@ -539,6 +550,6 @@ describe('ProjectView', () => {
     expect(screen.getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Release' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Providers' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Project provider settings' })).toBeInTheDocument()
   })
 })

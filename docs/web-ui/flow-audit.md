@@ -55,82 +55,117 @@ babysit setup/import/provider/release states across multiple pages.
   drawers, direct project routes, Release / Providers / Timeline, and shell
   button / rail behavior. Completed reports were folded into the current
   checklist with concrete repro routes and larger IA questions.
-- [ ] Decide whether workspace import is a context-import flow, a task-import
+- [x] Decide whether workspace import is a context-import flow, a task-import
   flow, or an adaptive blend. Second-pass testing on Narrative Harness found
   the live import has `19` sources, `18` reference notes, `1` goal, and `0`
   task candidates, but the wizard still promises a `Tasks` step and speaks in
   task-import terms. If a pass has no task candidates, either hide/skip the
   Tasks step with a clear reason or reframe the whole pass as "remember this
-  project context."
-- [ ] Fix workspace-import counts and artifact labels. In the Narrative
+  project context. The wizard now adapts to a context-only pass by showing
+  `Found -> Parts -> Notes -> Save`, using context-first labels, and skipping
+  the empty task-review step.
+- [x] Fix workspace-import counts and artifact labels. In the Narrative
   Harness notes review, `Docs` says `19 notes in this pass` while the current
   part has `18`, and excluding that part can leave the page saying `1 notes in
   this pass` beside `0 of 18 selected`. The `Project-wide` part also reads as
   `0 reference notes` even though it contains a goal from `README.md`; goals
-  need to be first-class review artifacts, not invisible metadata.
-- [ ] Decide whether workspace-import details are an inspector or the primary
+  need to be first-class review artifacts, not invisible metadata. Counts now
+  separate current-area selections from total selected sources, and goals are
+  surfaced as review artifacts instead of disappearing behind note counts.
+- [x] Decide whether workspace-import details are an inspector or the primary
   review workspace. The source detail drawer now exposes useful summaries, but
   it blocks the underlying review controls and offers no Include/Exclude,
   next/previous, or open-source action of its own. If the drawer is modal, it
   should carry the decision controls; if it is only an inspector, the default
-  notes step should keep the source list and provenance easier to scan.
+  notes step should keep the source list and provenance easier to scan. The
+  drawer now acts as a modal inspector with local Include/Exclude controls and
+  a copy-path action, while the default notes step keeps the source list visible
+  for scan-and-select review.
 - [ ] Unify the `Needs you` count model. Second-pass testing found Narrative
   Harness reading as `5 need you` in Thread, `Needs you 2` in the rail/top bar,
   `Needs you (2 items)` plus `Housekeeping (1)` in Notifications, and `2 more
   in Inbox` on Work. The UI needs one count contract, or explicit buckets such
-  as decisions, housekeeping, imported drafts, and blocked tasks.
+  as decisions, housekeeping, imported drafts, and blocked tasks. First pass:
+  Thread now labels its number as `thread cards need you` so it no longer
+  presents itself as the same unit as the Inbox/Needs You count. The deeper
+  count contract still needs a shared model.
 - [ ] Preserve task-route context or make task details a true focused page.
   Opening a task from Work changes the active rail item to Thread and shows the
   task under repeated Thread content. Either task drawers should preserve the
   originating surface through the background route, or `/task/:id` should
-  become a focused task page where the selected task appears first.
-- [ ] Collapse the split workspace-import routing model. `Review next draft`
+  become a focused task page where the selected task appears first. First pass:
+  Work, Inbox, and `Do this next` now preserve the originating background path
+  when they open task drawers. Directly pasted `/task/:id` URLs still need a
+  focused-page decision.
+- [x] Collapse the split workspace-import routing model. `Review next draft`
   opens `task-workspace-import`, then the real work lives behind `Open import
   review` on `/workspace-import`. The product needs one canonical entry point:
   either workspace import is a setup/review surface, an inbox item, or a normal
-  task with a task-focused review UI.
+  task with a task-focused review UI. Reserved import work now routes directly
+  to `/workspace-import` from Work, Inbox, and runtime inbox actions, with
+  `Open import review` language instead of a generic task handoff.
 - [ ] Separate human next actions from worker runnable state. Narrative Harness
   can show `DO THIS NEXT` for an escalation, `0 active`, `1 imported draft`,
   and "No runnable tasks remain right now" at the same time. This is accurate
   internally, but the user needs a simple queue: what they should do now, what
-  becomes runnable afterward, and what is merely waiting.
-- [ ] Make narrow project screens usable or explicitly unsupported. At
+  becomes runnable afterward, and what is merely waiting. First pass: reserved
+  import work points at the import review, and escalation copy leads with
+  recovery review instead of raw agent diagnosis. The broader queue model still
+  needs a shared source of truth.
+- [x] Make narrow project screens usable or explicitly unsupported. At
   `390px` wide, the collapsed rail still consumes layout width, Thread content
   starts too far right, and primary actions can clip off the viewport. Looma +
   Knit also showed top-bar controls colliding and task titles collapsing into
   unreadable columns. If mobile/narrow is supported, the rail should become
   drawer-only and lower-priority top-bar controls should move into overflow.
-- [ ] Clarify the project/global provider boundary. Project Settings and the
+  Corrected fix: mobile no longer reserves any rail column. The project rail is
+  hidden from layout and accessibility until the hamburger opens the full-screen
+  navigation overlay, while medium desktop can still use the collapsed rail.
+  Component regression coverage now guards the closed/mobile hidden-rail state,
+  open overlay state, Escape close, and navigation close.
+- [x] Clarify the project/global provider boundary. Project Settings and the
   project rail can route to global `/providers`, dropping the user out of the
   project shell, while project settings also exposes provider choices locally.
   The UI should distinguish global machine credentials from project provider
-  readiness and project model defaults before navigation.
-- [ ] Make Timeline an operator activity feed by default. Hiding provider
+  readiness and project model defaults before navigation. Project provider
+  controls now stay in the project shell, disabled-provider copy names global
+  credentials explicitly, and readiness links distinguish project provider
+  choice from global setup.
+- [x] Make Timeline an operator activity feed by default. Hiding provider
   health chatter helped, but Looma + Knit and Narrative Harness still expose
   raw `assistant_delta`, `assistant_complete`, JSON payloads, tool inputs,
   token fragments, and internal task ids in the main feed. Raw traces should be
-  expandable beneath grouped human-scale state changes.
-- [ ] Reframe blocker copy around the user's recovery action. Release, Thread,
+  expandable beneath grouped human-scale state changes. The default Timeline
+  now hides raw assistant/tool/line trace events behind an expandable raw-trace
+  disclosure, leaving the feed focused on human-scale project activity.
+- [x] Reframe blocker copy around the user's recovery action. Release, Thread,
   and Timeline prominently say "Spec agent made no visible progress after 3
   passes." Keep that as diagnostic detail, but lead with the action the user
-  can take, such as reviewing or refining the draft task brief.
-- [ ] Make readiness `Configure` controls consistent and safe. Direct testing
+  can take, such as reviewing or refining the draft task brief. `Do this next`
+  now frames open escalations as recovery review and keeps the detailed agent
+  diagnosis as supporting evidence.
+- [x] Make readiness `Configure` controls consistent and safe. Direct testing
   found bootstrap `Configure` starts running work in place, coordinator
   `Configure` can route to the project list, and provider `Configure` routes
   globally. Readiness should be either a passive checklist with links or an
   operations panel with explicitly labeled side effects like `Run bootstrap`.
-- [ ] Decide what `/setup` means after initialization. Direct visits to
+  Readiness actions now use explicit verbs (`Run bootstrap`, `Open
+  coordinators`, `Choose provider`) and route to project-scoped settings where
+  appropriate.
+- [x] Decide what `/setup` means after initialization. Direct visits to
   `/projects/{project}/setup` can re-offer first-run bootstrap on projects
   with existing tasks or completed runs. Initialized projects should either
   redirect to readiness/dashboard or show a repair/resume mode instead of
-  first-run onboarding.
+  first-run onboarding. Initialized projects that land on `/setup` without an
+  explicit setup step now redirect to project readiness; explicit setup steps
+  still render for active onboarding/test flows.
 - [x] Run a five-agent cross-project UI/user-testing sweep. Started a
   read-only parallel pass across the available non-Narrative Guildhall
   projects to capture blockers, state contradictions, unclear CTAs, import
   traps, and UI rhythm problems without mutating project state. Completed
   passes covered `looma-knit`, `t-minus-t`, `fair-labor-license`, and
   `font-something` import / non-import surfaces.
-- [ ] Fix direct project-route blank screens. Parallel testing found direct
+- [x] Fix direct project-route blank screens. Parallel testing found direct
   navigation to routes such as `looma-knit/settings/ready`,
   `fair-labor-license/settings`, and `font-something/workspace-import` can
   render an empty or stuck page even though the server and backing APIs still
@@ -138,6 +173,8 @@ babysit setup/import/provider/release states across multiple pages.
   legacy aliases such as `/projects/{project}/routing/agents` and
   `/projects/{project}/coordinators/setup`; the named `/settings/ready` routes
   now render, but the legacy aliases need redirect, content, or removal.
+  Legacy `/routing/*` and `/coordinators/*` aliases now resolve to the
+  project-scoped coordinator settings surface instead of an unrendered subroute.
 - [x] Fix project subpages that hang despite healthy API responses. Parallel
   testing found Release, Providers, and project provider settings can stay on
   `Loading...` states while their backing endpoints return usable data.

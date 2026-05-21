@@ -1425,7 +1425,7 @@
   {:else}
     <Stack gap="3">
       <div class="operation-summary" aria-label="Thread operations summary">
-        <span>{operationCountLabel(operationSummary.needsYou, 'needs you', 'need you')}</span>
+        <span>{operationCountLabel(operationSummary.needsYou, 'thread card needs you', 'thread cards need you')}</span>
         <span>{operationCountLabel(operationSummary.working, 'working', 'working')}</span>
         <span>{operationCountLabel(operationSummary.blocked, 'blocked', 'blocked')}</span>
         <span>{operationCountLabel(operationSummary.queued, 'queued', 'queued')}</span>

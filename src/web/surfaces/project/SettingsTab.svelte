@@ -22,7 +22,7 @@
   import Help from '../../lib/Help.svelte'
   import { nav } from '../../lib/nav.svelte.js'
   import { project } from '../../lib/project.svelte.js'
-  import { projectFetch } from '../../lib/project-routes.js'
+  import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { buildProductFeedbackIssueUrl } from '../../lib/product-feedback.js'
 
   interface Props {
@@ -616,7 +616,7 @@
             />
             {#if !bootstrapReady}
               <button type="button" class="linkbtn" onclick={runBootstrap} disabled={bootstrapRunning}>
-                {bootstrapRunning ? 'Running…' : 'Configure'}
+                {bootstrapRunning ? 'Running…' : 'Run bootstrap'}
               </button>
             {/if}
             {#if bootstrapError}
@@ -634,7 +634,7 @@
               tone={coordinatorsReady ? 'ok' : 'warn'}
             />
             {#if !coordinatorsReady}
-              <button type="button" class="linkbtn" onclick={() => nav('/')}>Configure</button>
+              <button type="button" class="linkbtn" onclick={() => nav(projectActionHref('/settings/coordinators'))}>Open coordinators</button>
             {/if}
           </li>
 
@@ -648,8 +648,8 @@
               tone={providerReady ? 'ok' : 'warn'}
             />
             {#if !providerReady}
-              <button type="button" class="linkbtn" onclick={() => nav('/providers')}>
-                Configure
+              <button type="button" class="linkbtn" onclick={() => nav(projectActionHref('/settings/providers'))}>
+                Choose provider
               </button>
             {/if}
           </li>

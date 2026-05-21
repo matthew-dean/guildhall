@@ -159,6 +159,9 @@
           step = 1
         } else if (!identity.providerConfigured) {
           step = 2
+        } else if (routeProjectId) {
+          nav(projectHref(routeProjectId, '/settings/ready'))
+          return
         } else {
           step = 3
         }

@@ -1,6 +1,7 @@
 <!--
   Project root view. Shell layout:
-    · Left rail (220px, collapses to 56px icon-only under 1100px viewport):
+    · Left rail (220px, collapses to 56px icon-only on medium viewports;
+      mobile hides the rail until the hamburger opens a full-screen menu):
       primary nav entries + accordion sub-nav + Providers link pinned
       to the bottom.
     · Top bar (slim): workspace name chip + run-status chip + Start/Stop
@@ -638,7 +639,7 @@
           ? 'warn'
           : 'neutral',
   )
-  const providersActive = $derived(path.value === '/providers')
+  const providersActive = $derived(path.value === currentProjectHref('/settings/providers', activeProjectId))
 
   // Task counts for the top-bar indicator. Stuck = has at least one open
   // escalation. Active = running/in-progress-like statuses.
@@ -696,10 +697,12 @@
     uninitialized
     railCollapsed={railCollapsed && !railOverlayOpen}
     railPreviewOpen={railPreviewOpen}
+    mobileRailMode={railForcedCollapsed}
+    railOverlayOpen={railOverlayOpen}
   >
     {#snippet rail()}
     {#if railOverlayOpen}
-      <button type="button" class="rail-scrim" aria-label="Close project navigation" onclick={closeMobileRail}></button>
+      <button type="button" class="rail-scrim" aria-hidden="true" tabindex="-1" onclick={closeMobileRail}></button>
     {/if}
     <aside
       class="rail"
@@ -793,10 +796,12 @@
   <ProjectShell
     railCollapsed={railCollapsed && !railOverlayOpen}
     railPreviewOpen={railPreviewOpen}
+    mobileRailMode={railForcedCollapsed}
+    railOverlayOpen={railOverlayOpen}
   >
     {#snippet rail()}
     {#if railOverlayOpen}
-      <button type="button" class="rail-scrim" aria-label="Close project navigation" onclick={closeMobileRail}></button>
+      <button type="button" class="rail-scrim" aria-hidden="true" tabindex="-1" onclick={closeMobileRail}></button>
     {/if}
     <aside
       class="rail"
@@ -885,8 +890,8 @@
             type="button"
             class="rail-item"
             class:active={providersActive}
-            onclick={() => go('/providers')}
-            aria-label="Providers"
+            onclick={() => go(currentProjectHref('/settings/providers', activeProjectId))}
+            aria-label="Project provider settings"
           >
             <span class="rail-stripe"></span>
             <Icon name="plug" size={18} />
@@ -926,7 +931,7 @@
               tone="warn"
               icon="plug"
               label="Provider"
-              onclick={() => go('/providers')}
+              onclick={() => go(currentProjectHref('/settings/providers', activeProjectId))}
               title={providerTitle}
               ariaLabel={providerTitle}
             />
@@ -1034,7 +1039,7 @@
             <strong>{runError}</strong>
             {#snippet actions()}
             {#if /provider/i.test(runError)}
-              <a href="/providers" onclick={(e) => { e.preventDefault(); nav('/providers') }}>Open Providers</a>
+              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>Open project providers</a>
             {/if}
             <button class="dismiss" onclick={() => (runError = null)} aria-label="Dismiss">×</button>
             {/snippet}
@@ -1056,7 +1061,7 @@
           >
             <strong>{providerNoticeText}</strong>
             {#snippet actions()}
-              <a href="/providers" onclick={(e) => { e.preventDefault(); nav('/providers') }}>Open Providers</a>
+              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>Open project providers</a>
             {/snippet}
           </NoticeBand>
         {/if}
@@ -1571,14 +1576,12 @@
     .rail-pin {
       display: none;
     }
+    .rail:not(.rail-mobile-open) {
+      display: none;
+    }
     .rail.rail-mobile-open .rail-close {
       display: inline-flex;
     }
-    .rail:not(.rail-mobile-open) .rail-label { display: none; }
-    .rail:not(.rail-mobile-open) .rail-subs { display: none; }
-    .rail:not(.rail-mobile-open) .rail-item { justify-content: center; padding: var(--s-2); }
-    .rail:not(.rail-mobile-open) .rail-project { display: none; }
-    .rail:not(.rail-mobile-open) .rail-head { padding: var(--s-2); align-items: center; }
     .rail.rail-mobile-open {
       width: 100vw;
       padding: var(--s-4) 0;
@@ -1622,6 +1625,27 @@
     }
     .project-ticker-message {
       white-space: normal;
+    }
+  }
+  @media (max-width: 520px) {
+    .topbar {
+      padding: var(--s-2);
+      gap: var(--s-2);
+    }
+    .topbar-start :global(.btn span:not(.ic)) {
+      display: none;
+    }
+    .topbar-actions {
+      max-width: 100%;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .topbar-actions::-webkit-scrollbar {
+      display: none;
+    }
+    .page {
+      gap: var(--s-3);
+      padding-top: var(--s-3);
     }
   }
 </style>

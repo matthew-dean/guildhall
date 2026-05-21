@@ -37,11 +37,11 @@ describe('parseRoute', () => {
     })
     expect(parseRoute('/projects/looma-knit/routing/agents')).toMatchObject({
       view: 'settings',
-      sub: 'routing',
+      sub: 'coordinators',
     })
     expect(parseRoute('/projects/looma-knit/coordinators/knit')).toMatchObject({
       view: 'settings',
-      sub: 'routing',
+      sub: 'coordinators',
     })
     expect(parseRoute('/projects/looma-knit/planner')).toMatchObject({ view: 'planner' })
     expect(parseRoute('/projects/looma-knit/facts')).toMatchObject({ view: 'facts' })
@@ -90,7 +90,7 @@ describe('parseRoute', () => {
     })
     expect(parseRoute('/project/coordinators')).toMatchObject({
       view: 'settings',
-      sub: 'routing',
+      sub: 'coordinators',
     })
     expect(parseRoute('/project/planner')).toMatchObject({ view: 'planner' })
     expect(parseRoute('/project/facts')).toMatchObject({ view: 'facts' })

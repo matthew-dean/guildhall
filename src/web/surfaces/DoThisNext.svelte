@@ -84,9 +84,9 @@
         }
       case 'open_escalation':
         return {
-          verb: `Resolve the escalation${id}`,
-          why: item.detail ?? 'An agent needs a human decision to continue.',
-          button: 'Open task',
+          verb: `Review the blocked task${id}`,
+          why: item.detail ? `Recovery needed. Detail: ${item.detail}` : 'Choose the next recovery action so Guildhall can continue.',
+          button: 'Review recovery',
           href: item.actionHref ?? '/work',
         }
       case 'agent_question_pending':
@@ -100,7 +100,7 @@
         return {
           verb: 'Shape the imported drafts',
           why: item.detail ?? 'Guildhall imported planning work that still needs a quick shaping pass.',
-          button: 'Review next draft',
+          button: item.taskId === 'task-workspace-import' ? 'Open import review' : 'Review next draft',
           href: item.actionHref ?? '/thread',
         }
       case 'brief_approval':
@@ -195,7 +195,9 @@
   const moreCount = $derived(visibleItems.length - 1)
 
   function go(href: string) {
-    nav(projectActionHref(href))
+    const next = projectActionHref(href)
+    const route = next.split('?')[0]?.split('#')[0] ?? next
+    nav(next, route.includes('/task/') ? { backgroundPath: path.value } : undefined)
   }
 </script>
 

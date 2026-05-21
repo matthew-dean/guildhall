@@ -7,7 +7,7 @@
   import Card from '../../lib/Card.svelte'
   import Icon, { type IconName } from '../../lib/Icon.svelte'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
-  import { nav } from '../../lib/nav.svelte.js'
+  import { nav, path } from '../../lib/nav.svelte.js'
   import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
 
   interface Props {
@@ -147,7 +147,11 @@
       nav(projectActionHref('/thread'))
       return
     }
-    if (item.actionHref) nav(projectActionHref(item.actionHref))
+    if (item.actionHref) {
+      const href = projectActionHref(item.actionHref)
+      const route = href.split('?')[0]?.split('#')[0] ?? href
+      nav(href, route.includes('/task/') ? { backgroundPath: path.value } : undefined)
+    }
   }
 
   const priorityItems = $derived(items.filter(item => item.severity !== 'low'))

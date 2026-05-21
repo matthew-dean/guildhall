@@ -386,7 +386,9 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
             ? '1 imported draft needs a task brief'
             : `${importDrafts.length} imported drafts need task briefs`,
         detail: queuedDetail,
-        actionHref: '/task/' + encodeURIComponent(nextDraftId),
+        actionHref: nextDraftId === 'task-workspace-import'
+          ? '/workspace-import'
+          : '/task/' + encodeURIComponent(nextDraftId),
       })
     }
   }

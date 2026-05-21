@@ -126,6 +126,14 @@
     nav(currentTaskHref(task.id), { backgroundPath: path.value })
   }
 
+  function openImportedDraft(task: Task): void {
+    if (task.id === 'task-workspace-import') {
+      nav(currentProjectHref('/workspace-import'))
+      return
+    }
+    openTask(task)
+  }
+
   function onTaskKey(event: KeyboardEvent, task: Task): void {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
@@ -280,8 +288,8 @@
               {/if}
             </p>
           </div>
-          <Button variant="secondary" size="sm" onclick={() => openTask(nextImportDraft)}>
-            Review next draft
+          <Button variant="secondary" size="sm" onclick={() => openImportedDraft(nextImportDraft)}>
+            {nextImportDraft.id === 'task-workspace-import' ? 'Open import review' : 'Review next draft'}
           </Button>
         </div>
       {/if}
