@@ -40,3 +40,28 @@ test('thread keeps task questions inside the task card and centers answer contro
   const markCenter = markBox!.y + markBox!.height / 2
   expect(Math.abs(choiceCenter - markCenter)).toBeLessThanOrEqual(3)
 })
+
+test('pinned project rail reserves layout width at medium desktop sizes', async ({ page }) => {
+  await page.setViewportSize({ width: 960, height: 700 })
+  await page.goto('/projects/looma-knit/work')
+
+  const pin = page.getByRole('button', { name: 'Pin project navigation open' })
+  await expect(pin).toBeVisible()
+
+  const collapsedRail = await page.locator('.app-shell-rail').boundingBox()
+  const collapsedMain = await page.locator('.app-shell-main').boundingBox()
+  expect(collapsedRail).not.toBeNull()
+  expect(collapsedMain).not.toBeNull()
+  expect(collapsedRail!.width).toBeLessThanOrEqual(70)
+  expect(collapsedMain!.x).toBeLessThanOrEqual(70)
+
+  await pin.click()
+  await expect(page.getByRole('button', { name: 'Collapse project navigation' })).toBeVisible()
+
+  const expandedRail = await page.locator('.app-shell-rail').boundingBox()
+  const expandedMain = await page.locator('.app-shell-main').boundingBox()
+  expect(expandedRail).not.toBeNull()
+  expect(expandedMain).not.toBeNull()
+  expect(expandedRail!.width).toBeGreaterThanOrEqual(230)
+  expect(expandedMain!.x).toBeGreaterThanOrEqual(expandedRail!.width - 1)
+})

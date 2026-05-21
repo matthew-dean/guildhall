@@ -42,6 +42,53 @@ screen.
 
 ## Current Follow-Ups
 
+- [x] Run a five-agent cross-project UI/user-testing sweep. Started a
+  read-only parallel pass across the available non-Narrative Guildhall
+  projects to capture blockers, state contradictions, unclear CTAs, import
+  traps, and UI rhythm problems without mutating project state. Completed
+  passes covered `looma-knit`, `t-minus-t`, `fair-labor-license`, and
+  `font-something` import / non-import surfaces.
+- [ ] Fix direct project-route blank screens. Parallel testing found direct
+  navigation to routes such as `looma-knit/settings/ready`,
+  `fair-labor-license/settings`, and `font-something/workspace-import` can
+  render an empty or stuck page even though the server and backing APIs still
+  respond.
+- [ ] Fix project subpages that hang despite healthy API responses. Parallel
+  testing found Release, Providers, and project provider settings can stay on
+  `Loading...` states while their backing endpoints return usable data.
+- [ ] Make run-state labels distinguish connection health from execution
+  state. Parallel testing found projects simultaneously reading as `LIVE`,
+  `CONNECTING...`, `PAUSED`, `stopped`, and `Start`-able, which makes it
+  impossible to know whether Guildhall is running or merely connected.
+- [ ] Elevate hard release blockers into the release verdict. Parallel testing
+  found `t-minus-t` showing `Blocked`, `3/3 done`, `0 items waiting on you`,
+  and `Human blockers 0`, while the real release blocker was `Design system
+  not drafted` deeper in criteria detail.
+- [ ] Make task drawers explain shelved and checkpointed outcomes. Parallel
+  testing found `fair-labor-license` task details stuck on `Loading...` for a
+  shelved task, and `t-minus-t` completed tasks using checkpoint / no-merge
+  language that leaves the user unsure whether anything remains to do.
+- [ ] Consolidate duplicate workspace-import entry points. Parallel testing
+  found `font-something` surfacing `Review existing work`, `Existing repo
+  detected`, and `Review existing project work` as separate-looking CTAs that
+  all point at the same import/review lane.
+- [ ] Clarify workspace-import reversibility and commit point. Parallel
+  testing found Step 1 explains context vs backlog tasks well, but does not say
+  whether skipping can be resumed, when selected notes become durable project
+  memory, or whether task creation only happens on the final step.
+- [ ] Add accessible names to collapsed project navigation buttons. Parallel
+  testing found icon-only rail buttons can appear without useful accessible
+  labels when the project rail is collapsed.
+- [ ] Reduce always-visible mutating controls in read/inspect drawers. Parallel
+  testing found task drawers visually crowded by controls like `Pause task`,
+  `Put aside`, and `Continue drafting spec` when the user is only trying to
+  inspect state.
+- [x] Fix pinned project navigation layout at medium desktop widths. Live
+  Narrative Harness testing found that pinning the left rail opens the menu,
+  but the rest of the app frame can keep the collapsed 56px column instead of
+  reserving the expanded rail width. `AppShell` now uses the same 920px
+  breakpoint as the rail behavior, and a Playwright regression guards the
+  pinned layout at 960px.
 - [ ] Fix tiny inbox overflow action in `Do this next`. Live Narrative Harness
   testing found `1 more in Inbox ›` rendering as an 18px-high button beside the
   primary task action, so it feels like inline text instead of a control and

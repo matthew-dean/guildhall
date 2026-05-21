@@ -122,7 +122,7 @@
     min-height: 0;
     z-index: var(--z-sticky-local);
   }
-  @media (max-width: 1100px) {
+  @media (max-width: 920px) {
     .app-shell {
       grid-template-columns: 56px minmax(0, 1fr);
     }
