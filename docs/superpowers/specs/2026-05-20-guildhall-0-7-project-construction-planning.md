@@ -231,8 +231,10 @@ decisions:
       reason: "Offline/local guarantees are central to the first slice"
   inferred:
     - id: "component-layer"
-      decision: "Use existing UI component stack where available"
-      evidence: "Repo already depends on it"
+      decision: "Use existing abstractions wherever a fitting primitive exists"
+      evidence: "Repo already contains component, token, helper, module, service, schema, route, and test patterns"
+      enforcement: "Spec, worker, and reviewer prompts should steer work toward shared primitives first. A one-off helper, class, file, module, button, chip, card, color, spacing rule, border radius, route, schema, or interaction treatment is a defect unless the task explicitly adds or extends a shared primitive."
+      repetitionRule: "Two similar ideas should trigger an abstraction decision: reuse or extend an existing primitive, introduce the smallest shared primitive, or intentionally keep duplication because the pattern is not stable yet."
 
 tasks:
   generated:

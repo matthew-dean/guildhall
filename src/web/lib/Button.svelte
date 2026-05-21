@@ -101,14 +101,14 @@
     filter: none;
   }
   .v-secondary {
-    background: color-mix(in srgb, var(--bg-raised-2) 84%, var(--text) 16%);
+    background: var(--button-secondary-bg);
     color: var(--text);
-    border-color: color-mix(in srgb, var(--text) 24%, var(--bg-raised-2) 76%);
+    border-color: var(--button-secondary-border);
     box-shadow: inset 0 1px 0 color-mix(in srgb, white 6%, transparent);
   }
   .v-secondary:not(:disabled):hover {
-    background: color-mix(in srgb, var(--bg-raised-2) 76%, var(--text) 24%);
-    border-color: color-mix(in srgb, var(--text) 34%, var(--bg-raised-2) 66%);
+    background: var(--button-secondary-bg-hover);
+    border-color: var(--button-secondary-border-hover);
     filter: none;
   }
   .v-danger {

@@ -43,6 +43,14 @@
   --surface-danger: #351d22;
   --surface-danger-strong: #4b252d;
 
+  /* shared controls
+     Neutral command buttons use one gray treatment whether they are icon-only
+     or labeled. */
+  --button-secondary-bg: #34343b;
+  --button-secondary-bg-hover: #3c3c45;
+  --button-secondary-border: #4c4c56;
+  --button-secondary-border-hover: #5a5a65;
+
   /* chip tokens
      Chips are the compact expression of the same semantic palette. */
   --chip-neutral-bg: #383844;

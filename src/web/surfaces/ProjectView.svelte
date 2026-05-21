@@ -719,25 +719,29 @@
         <div class="rail-head-top">
           <div class="rail-project">{projectDisplayName}</div>
           <div class="rail-head-actions">
-            <button
-              type="button"
-              class="rail-pin"
+            <Button
+              variant="secondary"
+              size="sm"
+              iconOnly
+              className="rail-pin"
               onclick={toggleRail}
-              aria-label={railCollapsed ? 'Pin project navigation open' : 'Collapse project navigation'}
+              ariaLabel={railCollapsed ? 'Pin project navigation open' : 'Collapse project navigation'}
               title={railCollapsed ? 'Pin navigation open' : 'Collapse navigation'}
             >
               <Icon name={railCollapsed ? 'panel-left-open' : 'panel-left-close'} size={16} />
-            </button>
+            </Button>
           {#if railOverlayOpen}
-              <button
-                type="button"
-                class="rail-close"
+              <Button
+                variant="secondary"
+                size="sm"
+                iconOnly
+                className="rail-close"
                 onclick={closeMobileRail}
-                aria-label="Close project navigation"
+                ariaLabel="Close project navigation"
                 title="Close navigation"
               >
                 <Icon name="x" size={16} />
-              </button>
+              </Button>
             {/if}
           </div>
         </div>
@@ -818,25 +822,29 @@
         <div class="rail-head-top">
           <div class="rail-project">{projectDisplayName}</div>
           <div class="rail-head-actions">
-            <button
-              type="button"
-              class="rail-pin"
+            <Button
+              variant="secondary"
+              size="sm"
+              iconOnly
+              className="rail-pin"
               onclick={toggleRail}
-              aria-label={railCollapsed ? 'Pin project navigation open' : 'Collapse project navigation'}
+              ariaLabel={railCollapsed ? 'Pin project navigation open' : 'Collapse project navigation'}
               title={railCollapsed ? 'Pin navigation open' : 'Collapse navigation'}
             >
               <Icon name={railCollapsed ? 'panel-left-open' : 'panel-left-close'} size={16} />
-            </button>
+            </Button>
             {#if railOverlayOpen}
-              <button
-                type="button"
-                class="rail-close"
+              <Button
+                variant="secondary"
+                size="sm"
+                iconOnly
+                className="rail-close"
                 onclick={closeMobileRail}
-                aria-label="Close project navigation"
+                ariaLabel="Close project navigation"
                 title="Close navigation"
               >
                 <Icon name="x" size={16} />
-              </button>
+              </Button>
             {/if}
           </div>
         </div>
@@ -1333,44 +1341,13 @@
     gap: var(--s-1);
     flex: 0 0 auto;
   }
-  .rail-pin {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 30px;
-    flex: 0 0 30px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: var(--bg-elevated);
-    color: var(--text-muted);
-    cursor: pointer;
-    padding: 0;
+  :global(.rail-pin),
+  :global(.rail-close) {
+    flex: 0 0 28px;
   }
-  .rail-close {
+  :global(.rail-close) {
     display: none;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 30px;
-    flex: 0 0 30px;
     margin-left: auto;
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: var(--bg-elevated);
-    color: var(--text-muted);
-    cursor: pointer;
-    padding: 0;
-  }
-  .rail-close:hover {
-    color: var(--text);
-    border-color: var(--border-strong);
-    background: var(--bg-raised-2);
-  }
-  .rail-pin:hover {
-    color: var(--text);
-    border-color: var(--border-strong);
-    background: var(--bg-raised-2);
   }
   .rail.rail-collapsed:not(.rail-preview-open) .rail-head {
     padding-inline: calc((56px - 30px) / 2);
@@ -1453,7 +1430,7 @@
   }
 
   @media (max-width: 900px) {
-    .rail-pin {
+    :global(.rail-pin) {
       display: none;
     }
     .topbar {
@@ -1573,13 +1550,13 @@
   .rail.rail-collapsed:not(.rail-preview-open) .rail-head { padding: var(--s-2); align-items: center; }
 
   @media (max-width: 920px) {
-    .rail-pin {
+    :global(.rail-pin) {
       display: none;
     }
     .rail:not(.rail-mobile-open) {
       display: none;
     }
-    .rail.rail-mobile-open .rail-close {
+    .rail.rail-mobile-open :global(.rail-close) {
       display: inline-flex;
     }
     .rail.rail-mobile-open {

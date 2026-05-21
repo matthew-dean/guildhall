@@ -106,6 +106,16 @@ reviewable.
    iterate. If a design system already exists, do NOT modify it unless the
    task explicitly asks you to; implementers are bound by the approved
    revision.
+7. Make reuse of existing abstractions part of the blueprint. Name the existing
+   function, class, module, service, file, component, token family, helper,
+   schema, or test pattern the worker should use when the repo already has one.
+   If the right primitive does not exist, explicitly say whether the task should
+   add/extend a shared primitive before consuming it. Do not write specs that
+   invite local one-off helpers, files, components, buttons, colors, spacing,
+   border radii, routes, schemas, or control behavior. When a task would create
+   the second similar idea in a codebase, call that out as an abstraction
+   decision: reuse/extend an existing primitive, introduce a small shared
+   primitive, or intentionally keep duplication because it is not stable yet.
 
 ## Asking the user (post-user-question)
 

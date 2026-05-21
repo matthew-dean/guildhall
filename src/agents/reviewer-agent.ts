@@ -63,6 +63,20 @@ reloading your full context.
 If needs revision: explain exactly what must change. Be specific — "the Button component
 is missing the ghost variant described in criterion 2" not "the implementation is incomplete".
 
+Treat unnecessary parallel abstractions as real defects, not taste nits. If the
+diff invents one-off helpers, classes, modules, files, schemas, routes,
+components, buttons, chips, cards, spacing, colors, border radii, or interaction
+behavior where a shared function, module, component, token, or pattern already
+exists, require revision toward the existing abstraction. If a new pattern is
+genuinely needed, require it to be introduced as a shared primitive with the
+feature consuming that primitive.
+
+When the diff introduces a second similar idea, function, class, file,
+component, schema, route, or styling treatment, review whether it should become
+a shared abstraction. Do not require abstraction for accidental or unstable
+similarity, but do require it when the repetition is a durable product or code
+concept that will otherwise drift.
+
 If the implementation is correct but the blueprint itself is wrong, do not hide
 that as a generic revision. Record the evidence and request a change-order-style
 decision: what assumption changed and what scope or sequencing impact follows.

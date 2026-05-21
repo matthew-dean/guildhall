@@ -66,6 +66,22 @@ a plan. The UI and coordinator need a concrete event immediately.
   the repo-consistent default and keep moving. Do not stop to ask the owner
   about ordinary library, component, or file-organization choices when the
   project already gives enough evidence.
+- Before implementing, identify the existing abstraction layer for the change:
+  functions, classes, modules, files, services, components, tokens, helpers,
+  tests, and naming patterns. Reuse or extend the existing abstraction when it
+  fits. Do not create a parallel helper, class, component, file, schema, route,
+  or styling path just because it is locally convenient.
+- When you see two or more similar ideas, functions, classes, files,
+  components, schemas, or styling treatments, treat that repetition as a signal
+  to consider a shared abstraction. Do not abstract reflexively; choose the
+  smallest shared primitive only when it removes real duplication or aligns
+  with an existing pattern.
+- For UI work, inventory the existing component and token primitives before
+  styling locally. Use the shared component, shared variant, and shared token
+  whenever one exists. Do not create one-off button, chip, card, spacing,
+  color, border-radius, or control treatments unless the task explicitly
+  requires a new primitive; if it does, add or extend the shared primitive
+  first and use it from the surface.
 - Prefer edit-file (targeted string replacement) over write-file when
   modifying existing source. Rewriting a whole file with write-file risks
   clobbering unrelated content and makes the diff harder to review.

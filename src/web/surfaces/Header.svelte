@@ -5,6 +5,7 @@
   moved to the bottom of the left rail.
 -->
 <script lang="ts">
+  import Button from '../lib/Button.svelte'
   import Icon from '../lib/Icon.svelte'
   import { nav, path } from '../lib/nav.svelte.js'
   import { onStatus, type SseStatus } from '../lib/events.js'
@@ -68,9 +69,17 @@
 <header class="app-header">
   <div class="header-left">
     {#if showProjectMenu}
-      <button type="button" class="project-menu" onclick={toggleProjectNav} aria-label="Open project navigation">
+      <Button
+        variant="secondary"
+        size="sm"
+        iconOnly
+        onclick={toggleProjectNav}
+        ariaLabel="Open project navigation"
+        title="Open project navigation"
+        className="project-menu"
+      >
         <Icon name="menu" size={18} />
-      </button>
+      </Button>
     {/if}
     <button type="button" class="brand" onclick={goHome} aria-label="Projects home">
       Guildhall
@@ -147,21 +156,8 @@
   .brand:hover {
     color: var(--accent);
   }
-  .project-menu {
+  :global(.project-menu) {
     display: none;
-    align-items: center;
-    justify-content: center;
-    width: 34px;
-    height: 34px;
-    border: 1px solid var(--border-strong);
-    border-radius: var(--r-1);
-    background: var(--bg-elevated);
-    color: var(--text);
-    cursor: pointer;
-    padding: 0;
-  }
-  .project-menu:hover {
-    background: var(--bg-raised-2);
   }
   .version {
     font-size: var(--fs-0);
@@ -181,7 +177,7 @@
     color: var(--text-muted);
   }
   @media (max-width: 1100px) {
-    .project-menu {
+    :global(.project-menu) {
       display: inline-flex;
     }
   }
