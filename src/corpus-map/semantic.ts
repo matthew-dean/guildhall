@@ -44,7 +44,7 @@ export async function enrichCodebaseMapSemantics(
 ): Promise<CodebaseMap> {
   const prompt = buildSemanticIndexPrompt(map)
   const raw = await indexer.completeJson({ prompt, map })
-  const parsed = SemanticResponseSchema.parse(parseJsonObject(raw))
+  const parsed = await parseSemanticResponse(raw, map, indexer)
   const semantic: CorpusSemanticSummary = {
     generatedAt: now.toISOString(),
     modelId: indexer.modelId,
@@ -60,6 +60,26 @@ export async function enrichCodebaseMapSemantics(
     needsBroaderRead: parsed.needsBroaderRead,
   }
   return { ...map, semantic }
+}
+
+async function parseSemanticResponse(
+  raw: string,
+  map: CodebaseMap,
+  indexer: CorpusSemanticIndexer,
+): Promise<z.infer<typeof SemanticResponseSchema>> {
+  try {
+    return SemanticResponseSchema.parse(parseSemanticJsonObject(raw))
+  } catch (err) {
+    if (!indexer.repairJson) throw err
+    const message = err instanceof Error ? err.message : String(err)
+    const repaired = await indexer.repairJson({
+      raw,
+      error: message,
+      schemaHint: semanticResponseSchemaHint(),
+      map,
+    })
+    return SemanticResponseSchema.parse(parseSemanticJsonObject(repaired))
+  }
 }
 
 export function buildSemanticIndexPrompt(map: CodebaseMap): string {
@@ -127,18 +147,43 @@ function summarizeFiles(files: CorpusFileEntry[], limit: number): Array<{
   }))
 }
 
-function parseJsonObject(raw: string): unknown {
+export function parseSemanticJsonObject(raw: string): unknown {
   try {
     return JSON.parse(raw)
   } catch {
     // Continue to tolerant extraction below.
   }
   const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/)
-  if (fence?.[1]) return JSON.parse(fence[1])
+  if (fence?.[1]) return JSON.parse(repairJsonText(fence[1]))
   const start = raw.indexOf('{')
   const end = raw.lastIndexOf('}')
   if (start === -1 || end <= start) {
     throw new Error('Context indexer returned no JSON object.')
   }
-  return JSON.parse(raw.slice(start, end + 1))
+  return JSON.parse(repairJsonText(raw.slice(start, end + 1)))
+}
+
+function repairJsonText(raw: string): string {
+  return raw
+    .trim()
+    .replace(/,\s*([}\]])/g, '$1')
+}
+
+function semanticResponseSchemaHint(): string {
+  return [
+    'Return ONLY valid JSON matching this schema:',
+    '{',
+    '  "corpusKind": "documentation" | "code" | "mixed" | "unknown",',
+    '  "confidence": number from 0 to 1,',
+    '  "projectPurpose": string,',
+    '  "currentTruth": string[],',
+    '  "architectureAreas": [{"name": string, "purpose": string, "canonicalFiles": string[]}],',
+    '  "canonicalAbstractions": [{"name": string, "purpose": string, "canonicalFiles": string[], "reuseRule": string}],',
+    '  "gapsOrRisks": string[],',
+    '  "readNext": [{"path": string, "reason": string}],',
+    '  "workerGuidance": string[],',
+    '  "needsBroaderRead": boolean',
+    '}',
+    'Preserve the same substance; only repair JSON syntax or schema shape.',
+  ].join('\n')
 }

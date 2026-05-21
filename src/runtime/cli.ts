@@ -652,6 +652,7 @@ function createSemanticIndexer(projectPath: string): CorpusSemanticIndexer {
   const modelId =
     openAiModels.contextIndexer ??
     'zai-org/GLM-4.6'
+  const repairModelId = 'deepseek-ai/DeepSeek-V4-Flash'
   const client = new OpenAICompatibleClient({
     baseUrl: openai.baseUrl || 'https://api.openai.com/v1',
     apiKey: openai.apiKey,
@@ -660,23 +661,59 @@ function createSemanticIndexer(projectPath: string): CorpusSemanticIndexer {
   return {
     modelId,
     async completeJson({ prompt }) {
-      let text = ''
-      for await (const event of client.streamMessage({
-        model: modelId,
-        system_prompt: 'You produce compact, valid JSON for codebase/documentation orientation. Do not include markdown.',
-        messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-        max_tokens: 2200,
-        temperature: 0,
-        tools: [],
-      })) {
-        if (event.type === 'text_delta') text += event.text
-      }
+      const text = await completeOpenAiCompatibleJson(client, {
+        modelId,
+        systemPrompt: 'You produce compact, valid JSON for codebase/documentation orientation. Do not include markdown.',
+        prompt,
+        maxTokens: 2200,
+      })
       if (text.trim().length === 0) {
         throw new Error(`Context indexer model ${modelId} returned no text for ${projectPath}.`)
       }
       return text
     },
+    async repairJson({ raw, error, schemaHint }) {
+      return completeOpenAiCompatibleJson(client, {
+        modelId: repairModelId,
+        systemPrompt: 'You repair malformed or schema-invalid JSON. Return only valid JSON. Preserve substance; fix syntax and schema shape.',
+        prompt: [
+          'Repair this context-indexer response.',
+          '',
+          'Error:',
+          error,
+          '',
+          schemaHint,
+          '',
+          'Raw response:',
+          raw,
+        ].join('\n'),
+        maxTokens: 1800,
+      })
+    },
   }
+}
+
+async function completeOpenAiCompatibleJson(
+  client: OpenAICompatibleClient,
+  input: {
+    modelId: string
+    systemPrompt: string
+    prompt: string
+    maxTokens: number
+  },
+): Promise<string> {
+  let text = ''
+  for await (const event of client.streamMessage({
+    model: input.modelId,
+    system_prompt: input.systemPrompt,
+    messages: [{ role: 'user', content: [{ type: 'text', text: input.prompt }] }],
+    max_tokens: input.maxTokens,
+    temperature: 0,
+    tools: [],
+  })) {
+    if (event.type === 'text_delta') text += event.text
+  }
+  return text
 }
 
 export function writeModelBakeoffReport(outputPath: string, opts: {

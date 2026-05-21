@@ -109,6 +109,12 @@ export interface CorpusSemanticIndexer {
     prompt: string
     map: CodebaseMap
   }): Promise<string>
+  repairJson?(input: {
+    raw: string
+    error: string
+    schemaHint: string
+    map: CodebaseMap
+  }): Promise<string>
 }
 
 export interface CorpusOverrides {

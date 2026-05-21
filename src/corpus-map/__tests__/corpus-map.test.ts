@@ -10,6 +10,7 @@ import {
   codebaseMapHistoryPath,
   codebaseMapPath,
   enrichCodebaseMapSemantics,
+  parseSemanticJsonObject,
   findExistingAbstraction,
   loadCodebaseMap,
   refreshCodebaseMap,
@@ -264,6 +265,100 @@ describe('corpus map', () => {
       modelId: 'semantic-test-model',
     })
     expect(enriched.files).toBe(map.files)
+  })
+
+  it('repairs obvious malformed semantic JSON deterministically before retrying the model', () => {
+    const repaired = parseSemanticJsonObject([
+      'Here is the JSON:',
+      '{',
+      '  "corpusKind": "code",',
+      '  "confidence": 0.8,',
+      '  "projectPurpose": "Fixture",',
+      '  "currentTruth": ["A",],',
+      '  "architectureAreas": [],',
+      '  "canonicalAbstractions": [],',
+      '  "gapsOrRisks": [],',
+      '  "readNext": [],',
+      '  "workerGuidance": [],',
+      '  "needsBroaderRead": false,',
+      '}',
+    ].join('\n'))
+
+    expect(repaired).toMatchObject({
+      corpusKind: 'code',
+      currentTruth: ['A'],
+      needsBroaderRead: false,
+    })
+  })
+
+  it('uses the semantic repair model when deterministic cleanup cannot parse the response', async () => {
+    const { map } = await refreshCodebaseMap({ projectRoot, memoryDir, reason: 'manual' })
+    const calls: string[] = []
+    const enriched = await enrichCodebaseMapSemantics(map, {
+      modelId: 'semantic-test-model',
+      async completeJson() {
+        calls.push('main')
+        return '{ "corpusKind": "code", "projectPurpose": '
+      },
+      async repairJson({ raw, schemaHint }) {
+        calls.push(`repair:${raw.length}:${schemaHint.includes('canonicalAbstractions')}`)
+        return JSON.stringify({
+          corpusKind: 'code',
+          confidence: 0.81,
+          projectPurpose: 'Repaired fixture purpose.',
+          currentTruth: [],
+          architectureAreas: [],
+          canonicalAbstractions: [],
+          gapsOrRisks: [],
+          readNext: [],
+          workerGuidance: ['Use repaired JSON.'],
+          needsBroaderRead: false,
+        })
+      },
+    })
+
+    expect(calls).toEqual(['main', expect.stringMatching(/^repair:/)])
+    expect(enriched.semantic).toMatchObject({
+      modelId: 'semantic-test-model',
+      projectPurpose: 'Repaired fixture purpose.',
+      workerGuidance: ['Use repaired JSON.'],
+    })
+  })
+
+  it('uses the semantic repair model when JSON parses but violates the schema', async () => {
+    const { map } = await refreshCodebaseMap({ projectRoot, memoryDir, reason: 'manual' })
+    const enriched = await enrichCodebaseMapSemantics(map, {
+      modelId: 'semantic-test-model',
+      async completeJson() {
+        return JSON.stringify({
+          corpusKind: 'code',
+          confidence: 'high',
+          currentTruth: 'not an array',
+        })
+      },
+      async repairJson({ error, schemaHint }) {
+        expect(error).toContain('Expected number')
+        expect(schemaHint).toContain('currentTruth')
+        return JSON.stringify({
+          corpusKind: 'code',
+          confidence: 0.84,
+          projectPurpose: 'Schema repaired fixture purpose.',
+          currentTruth: ['Schema now matches.'],
+          architectureAreas: [],
+          canonicalAbstractions: [],
+          gapsOrRisks: [],
+          readNext: [],
+          workerGuidance: [],
+          needsBroaderRead: false,
+        })
+      },
+    })
+
+    expect(enriched.semantic).toMatchObject({
+      confidence: 0.84,
+      projectPurpose: 'Schema repaired fixture purpose.',
+      currentTruth: ['Schema now matches.'],
+    })
   })
 })
 

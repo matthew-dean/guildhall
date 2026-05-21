@@ -68,6 +68,13 @@ canonical abstractions, risks, read-next guidance, and worker guidance. The
 model output is validated as structured JSON and stored under the map's
 `semantic` section.
 
+Semantic refresh has a repair ladder. Guildhall first attempts strict parsing,
+then deterministic cleanup for obvious JSON issues such as fenced output and
+trailing commas. If the response still cannot parse, or if it parses but does
+not match the required schema, Guildhall performs one repair pass with a fast
+OpenAI-compatible model and asks it to preserve the substance while returning
+valid schema-shaped JSON.
+
 Guildhall also wires this into the normal agent lifecycle. If no map exists
 when an agent context is being built, the context builder creates one lazily
 from the task project or active worktree before rendering the prompt. After a
