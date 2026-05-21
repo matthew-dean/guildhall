@@ -50,6 +50,24 @@ export interface CorpusAbstraction {
   related: string[]
 }
 
+export interface CorpusDesignSystemSummary {
+  sourcePath?: string
+  revision?: number
+  approved: boolean
+  tokenCounts: {
+    color: number
+    spacing: number
+    typography: number
+    radius: number
+    shadow: number
+  }
+  tokenSamples: string[]
+  primitives: Array<{ name: string; usage: string }>
+  componentFiles: string[]
+  maturity: 'absent' | 'thin' | 'emerging' | 'established'
+  recommendations: string[]
+}
+
 export interface CorpusOverrides {
   conventions?: Array<{
     areaId?: string
@@ -73,6 +91,7 @@ export interface CodebaseMap {
   entrypoints: CorpusEntrypoint[]
   areas: CorpusArea[]
   abstractions: CorpusAbstraction[]
+  designSystem?: CorpusDesignSystemSummary
   verification: { commands: string[] }
   overrides?: CorpusOverrides
 }

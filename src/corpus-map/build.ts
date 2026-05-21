@@ -1,5 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { parse as parseYaml } from 'yaml'
+import { DesignSystem } from '@guildhall/core'
 import {
   discoverProjectFiles,
   indexFile,
@@ -19,6 +21,7 @@ import type {
   CodebaseMap,
   CorpusAbstraction,
   CorpusArea,
+  CorpusDesignSystemSummary,
   CorpusFileEntry,
   CorpusOverrides,
   RefreshCodebaseMapInput,
@@ -34,10 +37,12 @@ export async function buildCodebaseMap(input: BuildCodebaseMapInput): Promise<Co
     if (entry) entries[file] = entry
   }
   const overrides = input.memoryDir ? await loadCorpusOverrides(input.memoryDir) : undefined
+  const designSystem = input.memoryDir ? await loadDesignSystemSummary(input.memoryDir, entries) : undefined
   return synthesizeMap({
     projectRoot,
     files: entries,
     overrides,
+    designSystem,
     now: input.now ?? new Date(),
   })
 }
@@ -81,7 +86,8 @@ export async function refreshCodebaseMap(input: RefreshCodebaseMapInput): Promis
           changedFiles.push(file)
         }
       }
-      map = synthesizeMap({ projectRoot, files, overrides, now })
+      const refreshedDesignSystem = await loadDesignSystemSummary(memoryDir, files)
+      map = synthesizeMap({ projectRoot, files, overrides, designSystem: refreshedDesignSystem, now })
     }
 
     await saveCodebaseMap(memoryDir, map)
@@ -121,6 +127,7 @@ function synthesizeMap(input: {
   projectRoot: string
   files: Record<string, CorpusFileEntry>
   overrides?: CorpusOverrides
+  designSystem?: CorpusDesignSystemSummary
   now: Date
 }): CodebaseMap {
   const fileList = Object.values(input.files)
@@ -138,7 +145,8 @@ function synthesizeMap(input: {
     files: input.files,
     entrypoints: buildEntrypoints(input.files),
     areas: applyAreaOverrides(buildAreas(fileList), overrides),
-    abstractions: applyAbstractionOverrides(buildAbstractions(fileList), overrides),
+    abstractions: applyAbstractionOverrides(buildAbstractions(fileList, input.designSystem), overrides),
+    ...(input.designSystem ? { designSystem: input.designSystem } : {}),
     verification: { commands: detectVerificationCommands(input.files) },
     ...(overrides ? { overrides } : {}),
   }
@@ -190,7 +198,7 @@ function buildAreas(files: CorpusFileEntry[]): CorpusArea[] {
     }))
 }
 
-function buildAbstractions(files: CorpusFileEntry[]): CorpusAbstraction[] {
+function buildAbstractions(files: CorpusFileEntry[], designSystem?: CorpusDesignSystemSummary): CorpusAbstraction[] {
   const byPath = new Map(files.map((file) => [file.path, file]))
   const abstractions: CorpusAbstraction[] = []
   const addIfPresent = (input: CorpusAbstraction) => {
@@ -232,7 +240,126 @@ function buildAbstractions(files: CorpusFileEntry[]): CorpusAbstraction[] {
     avoid: ['Do not render enum choices as inert individual buttons.'],
     related: ['src/web/surfaces/project/SettingsTab.svelte'],
   })
+  if (designSystem) {
+    abstractions.push({
+      id: 'design-system',
+      title: 'Design system tokens and primitives',
+      kind: 'design-system',
+      canonicalPath: designSystem.sourcePath ?? 'memory/design-system.yaml',
+      useWhen: [
+        'A UI change introduces color, spacing, typography, radius, shadow, copy voice, accessibility, or reusable component behavior.',
+        'Use just-in-time systemization: extend shared tokens or primitives when repetition is stable or the same UI idea appears in multiple places.',
+      ],
+      avoid: [
+        'Do not invent local colors, radii, spacing, or button/card/select treatments when an approved token or primitive exists.',
+        'Do not expand the design system for one-off details that are unlikely to repeat.',
+      ],
+      related: [
+        ...designSystem.componentFiles.slice(0, 8),
+        ...designSystem.primitives.map((primitive) => primitive.name),
+      ],
+    })
+  }
   return abstractions
+}
+
+async function loadDesignSystemSummary(
+  memoryDir: string,
+  files: Record<string, CorpusFileEntry>,
+): Promise<CorpusDesignSystemSummary | undefined> {
+  const sourcePath = path.join(memoryDir, 'design-system.yaml')
+  const componentFiles = Object.keys(files)
+    .filter((file) =>
+      (file.endsWith('.svelte') || file.endsWith('.vue') || file.endsWith('.tsx')) &&
+      (file.includes('/lib/') || file.includes('/components/') || file.includes('/ui/')),
+    )
+    .sort()
+    .slice(0, 30)
+  try {
+    const raw = await fs.readFile(sourcePath, 'utf-8')
+    const ds = DesignSystem.parse(parseYaml(raw) ?? {})
+    const tokenCounts = {
+      color: ds.tokens.color.length,
+      spacing: ds.tokens.spacing.length,
+      typography: ds.tokens.typography.length,
+      radius: ds.tokens.radius.length,
+      shadow: ds.tokens.shadow.length,
+    }
+    const tokenSamples = [
+      ...ds.tokens.color.map((token) => `color.${token.name}=${token.value}`),
+      ...ds.tokens.spacing.map((token) => `spacing.${token.name}=${token.value}`),
+      ...ds.tokens.typography.map((token) => `type.${token.name}=${token.value}`),
+      ...ds.tokens.radius.map((token) => `radius.${token.name}=${token.value}`),
+      ...ds.tokens.shadow.map((token) => `shadow.${token.name}=${token.value}`),
+    ].slice(0, 16)
+    const summary: CorpusDesignSystemSummary = {
+      sourcePath: 'memory/design-system.yaml',
+      revision: ds.revision,
+      approved: Boolean(ds.approvedAt),
+      tokenCounts,
+      tokenSamples,
+      primitives: ds.primitives.slice(0, 20).map((primitive) => ({
+        name: primitive.name,
+        usage: primitive.usage,
+      })),
+      componentFiles,
+      maturity: assessDesignSystemMaturity({
+        tokenTotal: Object.values(tokenCounts).reduce((sum, value) => sum + value, 0),
+        primitiveCount: ds.primitives.length,
+        componentCount: componentFiles.length,
+      }),
+      recommendations: [],
+    }
+    summary.recommendations = designSystemRecommendations(summary)
+    return summary
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    if (componentFiles.length < 4) return undefined
+    const summary: CorpusDesignSystemSummary = {
+      sourcePath: undefined,
+      approved: false,
+      tokenCounts: { color: 0, spacing: 0, typography: 0, radius: 0, shadow: 0 },
+      tokenSamples: [],
+      primitives: [],
+      componentFiles,
+      maturity: 'absent',
+      recommendations: [],
+    }
+    summary.recommendations = designSystemRecommendations(summary)
+    return summary
+  }
+}
+
+function assessDesignSystemMaturity(input: {
+  tokenTotal: number
+  primitiveCount: number
+  componentCount: number
+}): CorpusDesignSystemSummary['maturity'] {
+  if (input.tokenTotal === 0 && input.primitiveCount === 0) return 'absent'
+  if (input.componentCount >= 8 && (input.tokenTotal < 8 || input.primitiveCount < 3)) return 'thin'
+  if (input.tokenTotal >= 8 && input.primitiveCount >= 3) return 'established'
+  return 'emerging'
+}
+
+function designSystemRecommendations(summary: CorpusDesignSystemSummary): string[] {
+  const tokenTotal = Object.values(summary.tokenCounts).reduce((sum, value) => sum + value, 0)
+  const recommendations: string[] = []
+  if (summary.maturity === 'absent') {
+    recommendations.push('No design-system document found; if UI work repeats colors, spacing, controls, or interaction rules, propose a small starter design system before adding more local styles.')
+  }
+  if (summary.maturity === 'thin') {
+    recommendations.push('UI surface area is larger than the captured token/primitive set; prefer extending the design system when a second repeated treatment appears.')
+  }
+  if (summary.componentFiles.length >= 6 && summary.primitives.length < 3) {
+    recommendations.push('Several component files exist but few primitives are documented; check whether common controls should be named as shared primitives.')
+  }
+  if (summary.componentFiles.length >= 4 && tokenTotal < 6) {
+    recommendations.push('Component count suggests tokens may be under-specified; avoid adding raw color, spacing, radius, or shadow values unless they become named tokens.')
+  }
+  if (summary.approved) {
+    recommendations.push('Approved design-system values are binding for UI work; extend them deliberately instead of bypassing them locally.')
+  }
+  return recommendations.slice(0, 5)
 }
 
 function applyAreaOverrides(areas: CorpusArea[], overrides?: CorpusOverrides): CorpusArea[] {

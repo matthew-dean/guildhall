@@ -44,6 +44,7 @@ function codebaseMapStatus(overrides: Record<string, unknown> = {}) {
     generatedAt: null,
     stale: null,
     counts: { files: 0, areas: 0, abstractions: 0 },
+    designSystem: null,
     frameworks: [],
     packageManagers: [],
     ...overrides,
@@ -219,6 +220,13 @@ describe('SettingsTab', () => {
           configured: true,
           generatedAt: now,
           counts: { files: 121, areas: 8, abstractions: 5 },
+          designSystem: {
+            maturity: 'thin',
+            approved: true,
+            tokenCounts: { color: 2, spacing: 2, typography: 0, radius: 1, shadow: 0 },
+            primitives: 1,
+            recommendations: ['UI surface area is larger than the captured token/primitive set.'],
+          },
           frameworks: ['svelte'],
           packageManagers: ['pnpm'],
         }))
@@ -271,6 +279,8 @@ describe('SettingsTab', () => {
     expect(screen.getByText('121')).toBeInTheDocument()
     expect(screen.getByText('8')).toBeInTheDocument()
     expect(screen.getByText('5')).toBeInTheDocument()
+    expect(screen.getByText('thin')).toBeInTheDocument()
+    expect(screen.getByText('UI surface area is larger than the captured token/primitive set.')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /refresh map/i }))
     await screen.findByText('122')
 

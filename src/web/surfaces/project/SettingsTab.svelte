@@ -108,6 +108,13 @@
     generatedAt: string | null
     stale: { stale: true; at: string; reason: string; error: string } | null
     counts: { files: number; areas: number; abstractions: number }
+    designSystem?: {
+      maturity: 'absent' | 'thin' | 'emerging' | 'established'
+      approved: boolean
+      tokenCounts: { color: number; spacing: number; typography: number; radius: number; shadow: number }
+      primitives: number
+      recommendations: string[]
+    } | null
     frameworks?: string[]
     packageManagers?: string[]
   }
@@ -1288,7 +1295,15 @@
                 <div><span class="muted">Files</span><strong>{codebaseMapStatus.counts.files}</strong></div>
                 <div><span class="muted">Areas</span><strong>{codebaseMapStatus.counts.areas}</strong></div>
                 <div><span class="muted">Abstractions</span><strong>{codebaseMapStatus.counts.abstractions}</strong></div>
+                <div><span class="muted">Design system</span><strong>{codebaseMapStatus.designSystem?.maturity ?? '—'}</strong></div>
               </div>
+              {#if codebaseMapStatus.designSystem?.recommendations?.length}
+                <ul class="map-recommendations">
+                  {#each codebaseMapStatus.designSystem.recommendations.slice(0, 2) as recommendation, i (`ds-rec-${i}`)}
+                    <li>{recommendation}</li>
+                  {/each}
+                </ul>
+              {/if}
               {#if codebaseMapStatus.generatedAt}
                 <Byline verb="Last built" at={codebaseMapStatus.generatedAt} />
               {/if}
@@ -1724,6 +1739,14 @@
     gap: var(--gh-space-1);
   }
 
+  .map-recommendations {
+    margin: 0;
+    padding-inline-start: var(--gh-space-4);
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+
   .ds-prims {
     list-style: none;
     display: grid;
@@ -1755,9 +1778,6 @@
       grid-template-columns: repeat(4, minmax(0, 1fr));
     }
 
-    .map-facts {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
   }
 
   @container (min-width: 84rem) {

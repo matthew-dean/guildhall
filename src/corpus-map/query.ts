@@ -141,6 +141,22 @@ export function buildWorkerCorpusContext(
   if (map.project.primaryFrameworks.length > 0) {
     lines.push(`Frameworks: ${map.project.primaryFrameworks.join(', ')}`)
   }
+  if (map.designSystem) {
+    lines.push('', 'Design system:')
+    lines.push(
+      `- Maturity: ${map.designSystem.maturity}${map.designSystem.approved ? ', approved' : ', not approved'}`,
+    )
+    const tokenSummary = Object.entries(map.designSystem.tokenCounts)
+      .map(([name, count]) => `${name} ${count}`)
+      .join(', ')
+    lines.push(`- Tokens: ${tokenSummary}`)
+    if (map.designSystem.primitives.length > 0) {
+      lines.push(`- Primitives: ${map.designSystem.primitives.map((primitive) => primitive.name).slice(0, 8).join(', ')}`)
+    }
+    for (const recommendation of map.designSystem.recommendations.slice(0, 1)) {
+      lines.push(`- ${recommendation}`)
+    }
+  }
   if (result.areas.length > 0) {
     lines.push('', 'Mapped area:')
     for (const item of result.areas.slice(0, 2)) {
@@ -162,13 +178,13 @@ export function buildWorkerCorpusContext(
     lines.push('', 'Read next:')
     for (const item of result.readNext.slice(0, readNextLimit)) lines.push(`- ${item.path}: ${item.reason}`)
   }
-  lines.push(
-    '',
-    'Corpus fit required: before editing, name the existing primitive, helper, package, or area you are extending; if two similar ideas already exist, consider consolidation before adding a third.',
-  )
+  const corpusFitRequirement = 'Corpus fit required: before editing, name the existing primitive, helper, package, design token, component, or area you are extending; if two similar ideas already exist, consider consolidation before adding a third. For design-system gaps, systemize just in time when repetition is stable enough to outweigh the maintenance cost.'
+  lines.push('', corpusFitRequirement)
   const rendered = lines.join('\n')
   if (rendered.length <= maxChars) return rendered
-  return `${rendered.slice(0, Math.max(0, maxChars - 28)).trimEnd()}\n... [corpus map clipped]`
+  const suffix = `\n... [corpus map clipped]\n\n${corpusFitRequirement}`
+  const prefixLength = Math.max(0, maxChars - suffix.length)
+  return `${rendered.slice(0, prefixLength).trimEnd()}${suffix}`
 }
 
 function tokenize(value: string): string[] {

@@ -51,11 +51,18 @@ function resolveStableVersion(version: string): string {
 
 const guideStartItems = [
   { text: 'Start here', link: '/guide/quick-start' },
-  { text: 'How Guildhall builds', link: '/guide/how-guildhall-builds' },
+  { text: 'How Guildhall works', link: '/guide/how-guildhall-works' },
   { text: 'New project', link: '/guide/new-project' },
   { text: 'Existing project', link: '/guide/existing-project' },
   { text: 'First task set', link: '/guide/first-tasks' },
   { text: 'Many projects', link: '/guide/managing-projects' },
+]
+
+const guideWorksItems = [
+  { text: 'How Guildhall works', link: '/guide/how-guildhall-works' },
+  { text: 'How Guildhall builds', link: '/guide/how-guildhall-builds' },
+  { text: 'Agent context', link: '/guide/agent-context' },
+  { text: 'Corpus Map', link: '/guide/corpus-map' },
 ]
 
 const guideOperateItems = [
@@ -93,6 +100,10 @@ const guideSidebarSections = [
     items: guideOperateItems,
   },
   {
+    text: 'How it works',
+    items: guideWorksItems,
+  },
+  {
     text: 'Tasks',
     items: guideTaskItems,
   },
@@ -111,6 +122,14 @@ const stableGuideSidebarSections = guideSidebarSections.map((section) => section
       ...section,
       items: section.items.filter((item) => item.link !== '/guide/open-models'),
     }
+  : section.text === 'How it works'
+    ? {
+        ...section,
+        items: section.items.filter((item) =>
+          item.link !== '/guide/how-guildhall-works' &&
+          item.link !== '/guide/agent-context' &&
+          item.link !== '/guide/corpus-map'),
+      }
   : section)
 
 const getStartedSidebarSections = [
@@ -226,7 +245,7 @@ function addVersionedSidebars(
   if (includeStarted) {
     for (const path of [
       '/guide/quick-start',
-      '/guide/how-guildhall-builds',
+      '/guide/how-guildhall-works',
       '/guide/new-project',
       '/guide/existing-project',
       '/guide/first-tasks',

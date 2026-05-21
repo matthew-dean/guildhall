@@ -2263,6 +2263,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         areas: map?.areas.length ?? 0,
         abstractions: map?.abstractions.length ?? 0,
       },
+      designSystem: map?.designSystem
+        ? {
+            maturity: map.designSystem.maturity,
+            approved: map.designSystem.approved,
+            tokenCounts: map.designSystem.tokenCounts,
+            primitives: map.designSystem.primitives.length,
+            recommendations: map.designSystem.recommendations,
+          }
+        : null,
       frameworks: map?.project.primaryFrameworks ?? [],
       packageManagers: map?.project.packageManagers ?? [],
     }

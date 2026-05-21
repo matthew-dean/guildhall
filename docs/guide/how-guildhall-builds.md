@@ -106,6 +106,8 @@ When a worker starts, it should already know:
 
 - the accepted task blueprint
 - what files or surfaces are likely in scope
+- what existing abstraction, helper, component, or area convention should be
+  reused
 - what verification command matters
 - what has already been tried
 - what counts as a normal repair
@@ -121,6 +123,10 @@ strategy onto the human operator.
 ## Where to go next
 
 - [Start here](./quick-start) for the first browser run.
+- [How Guildhall works](./how-guildhall-works) for the system model behind
+  context, agents, Corpus Map, and inspections.
+- [Agent context](./agent-context) for what agents receive before they act.
+- [Corpus Map](./corpus-map) for how Guildhall indexes codebase structure.
 - [New project](./new-project) for a clean or early repo.
 - [Existing project](./existing-project) for importing notes and plans.
 - [First task set](./first-tasks) for choosing work that can actually move.

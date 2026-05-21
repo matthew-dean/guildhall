@@ -23,6 +23,13 @@ Setting up your first project? Start with [Get started](./quick-start).
 - [Running Guildhall](./running) — browser controls first, CLI commands when you need them.
 - [Guildhall app reference](../web-ui/) — screen-by-screen details when you need a specific app page.
 
+## How Guildhall Works
+
+- [How Guildhall works](./how-guildhall-works) — the system model: survey, blueprint, context, workers, reviewers, gates, and memory.
+- [How Guildhall builds](./how-guildhall-builds) — the construction model behind planning, implementation, review, and release.
+- [Agent context](./agent-context) — what agents receive before they act.
+- [Corpus Map](./corpus-map) — how Guildhall indexes a project without dumping the whole repo into every prompt.
+
 ## Tasks
 
 - [Task lifecycle](./task-lifecycle) — how a task moves from idea to done.
@@ -38,5 +45,4 @@ Setting up your first project? Start with [Get started](./quick-start).
 ## Concepts
 
 - [Introduction](./introduction) — what kind of tool Guildhall is.
-- [How Guildhall builds](./how-guildhall-builds) — the construction model behind planning, implementation, review, and release.
 - [Core concepts](./concepts) — vocabulary tour.

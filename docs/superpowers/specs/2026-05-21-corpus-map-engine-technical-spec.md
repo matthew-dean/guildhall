@@ -45,6 +45,8 @@ All artifacts are project-local and live in the project `memory/` directory.
 - `memory/codebase-map.history.jsonl`: append-only refresh history.
 - `memory/codebase-map.stale.json`: optional stale/error marker.
 - `memory/codebase-map.overrides.yaml`: optional human/reviewer corrections.
+- `memory/design-system.yaml`: project-scoped design-system source summarized
+  into the map when present.
 
 Human overrides always win. Refresh must never overwrite the overrides file.
 
@@ -112,6 +114,7 @@ interface CodebaseMap {
   entrypoints: CorpusEntrypoint[]
   areas: CorpusArea[]
   abstractions: CorpusAbstraction[]
+  designSystem?: CorpusDesignSystemSummary
   verification: { commands: string[] }
   overrides?: CorpusOverrides
 }
@@ -128,9 +131,65 @@ interface CorpusFileEntry {
   imports: string[]
   summary: string
 }
+
+interface CorpusDesignSystemSummary {
+  sourcePath?: string
+  revision?: number
+  approved: boolean
+  tokenCounts: {
+    color: number
+    spacing: number
+    typography: number
+    radius: number
+    shadow: number
+  }
+  tokenSamples: string[]
+  primitives: Array<{ name: string; usage: string }>
+  componentFiles: string[]
+  maturity: 'absent' | 'thin' | 'emerging' | 'established'
+  recommendations: string[]
+}
 ```
 
 The map intentionally stores summaries and references, not full file contents.
+
+## Design-system summary
+
+The Corpus Map treats design-system knowledge as codebase orientation. UI
+workers need to know whether a project already has approved tokens and
+component language before they invent local controls.
+
+When `memory/design-system.yaml` exists, refresh reads it through the
+`DesignSystem` schema and stores a compact summary:
+
+- token counts by category: color, spacing, typography, radius, shadow
+- a small sample of named token values for orientation
+- documented primitives with usage summaries
+- candidate component files under common UI locations such as `lib`,
+  `components`, and `ui`
+- approval state and revision
+- maturity: `absent`, `thin`, `emerging`, or `established`
+- recommendations for reuse and just-in-time systemization
+
+If the design-system file is missing but the repo has several UI component
+files, the map should still record an `absent` design-system summary. That lets
+workers and reviewers see the risk without requiring every small project to
+author design-system documents up front.
+
+Maturity is intentionally heuristic:
+
+- `absent`: no token/primitives source is available
+- `thin`: the UI surface is larger than the captured token/primitive set
+- `emerging`: some tokens or primitives exist, but not enough to be binding for
+  most UI work
+- `established`: enough tokens and primitives exist that UI work should strongly
+  prefer extension over local invention
+
+Recommendations are advisory, not automatic blockers. The agent contract is
+just-in-time systemization: when the same button, card, color, radius, spacing,
+interaction, or component idea appears a second time, the agent should consider
+a shared token or primitive. It should not expand the design system for a
+one-off detail that has not proven stable.
 
 ## Discovery Strategy
 
@@ -191,6 +250,7 @@ Force full refresh when touched files include:
 - `.gitignore`
 - `AGENTS.md`
 - `guildhall.yaml`
+- `memory/design-system.yaml`
 - codebase-map schema version change
 - more than 100 touched files
 - missing/corrupt prior map
@@ -203,8 +263,8 @@ Partial refresh algorithm:
 4. Otherwise, remove deleted touched files.
 5. Re-index changed touched files.
 6. Preserve untouched file entries.
-7. Recompute `areas`, `abstractions`, `entrypoints`, and verification commands
-   from current file entries.
+7. Recompute `areas`, `abstractions`, `entrypoints`, design-system summary, and
+   verification commands from current file entries.
 8. Apply overrides.
 9. Save map.
 10. Append a history event listing changed files, refresh mode, and affected
@@ -252,6 +312,13 @@ Required sections:
 ## Corpus Map
 
 Project: <summary>
+
+Design system:
+- Maturity: <absent/thin/emerging/established>, <approved/not approved>
+- Tokens: color <n>, spacing <n>, typography <n>, radius <n>, shadow <n>
+- Primitives: <top primitive names, when any>
+- <top reuse/systemization recommendation>
+
 Mapped area: <area or "no known area">
 
 Reuse / Extend:
@@ -265,7 +332,8 @@ Read next:
 
 Corpus fit required:
 - Name the area you used.
-- Name the abstraction you reused, extended, or intentionally did not use.
+- Name the abstraction, design token, or component you reused, extended, or
+  intentionally did not use.
 - Name supporting files read before editing.
 ```
 
@@ -284,6 +352,8 @@ Worker Agent:
 
 - before editing, identify mapped area, likely files, reused abstraction, and
   supporting context read
+- for UI work, identify the existing token/component/primitive path, or explain
+  why a just-in-time design-system addition is now justified
 - avoid broad repo spelunking when the map gives focused read-next files
 - treat second similar concept as an abstraction decision
 
@@ -292,6 +362,10 @@ Reviewer Agent:
 - check whether the worker used the map slice
 - reject local one-off helpers/components/styles when a canonical abstraction
   exists
+- reject ad hoc UI treatment when approved design-system tokens/primitives
+  cover the need
+- accept a new primitive only when the worker explains the repeated concept and
+  why the maintenance benefit now outweighs the overhead
 - record a correction when the map is wrong or stale
 
 Worker self-critique must include:
@@ -300,6 +374,7 @@ Worker self-critique must include:
 Corpus fit:
 - Area: <mapped area>
 - Reused abstraction: <file/symbol or "none found">
+- Design-system fit: <token/primitive reused, new shared primitive, local-only because...>
 - Supporting context read: <file(s)>
 - New abstraction decision: <reuse / extend / add shared primitive / keep local because...>
 ```
@@ -316,7 +391,8 @@ MVP integration points:
 - `GET /api/project/codebase-map/status` returns map status for Settings.
 - `POST /api/project/codebase-map/refresh` triggers manual refresh.
 - Settings -> Advanced shows a read-only Codebase Map panel with last refresh,
-  file/area/abstraction counts, stale state, and a refresh action.
+  file/area/abstraction counts, design-system maturity, stale state, and a
+  refresh action.
 
 ## Failure Handling
 
@@ -337,10 +413,12 @@ On failure:
 3. Partial refresh re-indexes touched files without rescanning unchanged file
    contents.
 4. Manifest/config changes force a full refresh.
-5. Querying for "button", "provider settings", or a path returns canonical
+5. Design-system changes force a full refresh and update the design-system
+   summary.
+6. Querying for "button", "provider settings", or a path returns canonical
    files before leaf files in Guildhall itself.
-6. `buildContext` injects a compact Corpus Map block when a map exists.
-7. Worker/spec/reviewer prompts include corpus-fit requirements.
-8. Settings shows map status and supports manual refresh.
-9. Unit tests cover discovery, partial refresh, query ranking, context budget,
-   and missing/stale map behavior.
+7. `buildContext` injects a compact Corpus Map block when a map exists.
+8. Worker/spec/reviewer prompts include corpus-fit requirements.
+9. Settings shows map status and supports manual refresh.
+10. Unit tests cover discovery, partial refresh, design-system summarization,
+    query ranking, context budget, and missing/stale map behavior.

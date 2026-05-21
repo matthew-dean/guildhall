@@ -43,6 +43,14 @@ describe('corpus map', () => {
     expect(result.map.files['src/web/lib/Button.svelte']?.symbols).toContain('Button')
     expect(result.map.areas.map((area) => area.id)).toContain('web-ui')
     expect(result.map.abstractions.map((abstraction) => abstraction.id)).toContain('button')
+    expect(result.map.abstractions.map((abstraction) => abstraction.id)).toContain('design-system')
+    expect(result.map.designSystem).toMatchObject({
+      sourcePath: 'memory/design-system.yaml',
+      approved: true,
+      maturity: 'thin',
+      tokenCounts: { color: 1, spacing: 1, typography: 0, radius: 0, shadow: 0 },
+    })
+    expect(result.map.designSystem?.recommendations.join('\n')).toContain('UI surface area is larger')
 
     const saved = await fs.readFile(codebaseMapPath(memoryDir), 'utf-8')
     const parsed = parseYaml(saved) as { project?: { primaryFrameworks?: string[] } }
@@ -101,6 +109,40 @@ describe('corpus map', () => {
     expect(Object.keys(next.map.files)).toContain('src/runtime/serve.ts')
   })
 
+  it('forces a full refresh when the project design system changes', async () => {
+    await refreshCodebaseMap({ projectRoot, memoryDir, reason: 'manual' })
+    await fs.writeFile(
+      path.join(memoryDir, 'design-system.yaml'),
+      [
+        'revision: 2',
+        'tokens:',
+        '  color:',
+        '    - name: accent',
+        '      value: "#7c3aed"',
+        '  spacing: []',
+        '  typography: []',
+        '  radius: []',
+        '  shadow: []',
+        'primitives:',
+        '  - name: Button',
+        '    usage: Shared command buttons.',
+        'approvedAt: 2026-05-21T00:00:00.000Z',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const next = await refreshCodebaseMap({
+      projectRoot,
+      memoryDir,
+      reason: 'worker-completion',
+      touchedFiles: ['memory/design-system.yaml'],
+    })
+
+    expect(next.mode).toBe('full')
+    expect(next.map.designSystem?.revision).toBe(2)
+    expect(next.map.designSystem?.primitives.map((primitive) => primitive.name)).toContain('Button')
+  })
+
   it('finds existing abstractions before leaf files and renders bounded worker context', async () => {
     const { map } = await refreshCodebaseMap({ projectRoot, memoryDir, reason: 'manual' })
 
@@ -116,6 +158,8 @@ describe('corpus map', () => {
 
     expect(context.length).toBeLessThanOrEqual(1200)
     expect(context).toContain('## Corpus Map')
+    expect(context).toContain('Design system:')
+    expect(context).toContain('Maturity: thin, approved')
     expect(context).toContain('Reuse / Extend')
     expect(context).toContain('Corpus fit required')
   })
@@ -126,6 +170,7 @@ async function writeFixtureProject(root: string): Promise<void> {
   await fs.mkdir(path.join(root, 'src/web/surfaces/project'), { recursive: true })
   await fs.mkdir(path.join(root, 'src/runtime'), { recursive: true })
   await fs.mkdir(path.join(root, 'docs'), { recursive: true })
+  await fs.mkdir(path.join(root, 'memory'), { recursive: true })
   await fs.writeFile(
     path.join(root, 'package.json'),
     JSON.stringify({ name: 'fixture', scripts: { test: 'vitest' }, dependencies: { svelte: '5.0.0' } }, null, 2),
@@ -143,9 +188,35 @@ async function writeFixtureProject(root: string): Promise<void> {
     `<script lang="ts">\n  import Button from '../../lib/Button.svelte'\n</script>\n<Button>Save</Button>\n`,
     'utf-8',
   )
+  for (const name of ['Input', 'Select', 'Card', 'Notice', 'Toolbar', 'Badge', 'Tabs']) {
+    await fs.writeFile(
+      path.join(root, 'src/web/lib', `${name}.svelte`),
+      `<div class="${name.toLowerCase()}"><slot /></div>\n`,
+      'utf-8',
+    )
+  }
   await fs.writeFile(
     path.join(root, 'src/runtime/serve.ts'),
     `export function createServer() {\n  return { ok: true }\n}\n`,
+    'utf-8',
+  )
+  await fs.writeFile(
+    path.join(root, 'memory/design-system.yaml'),
+    [
+      'revision: 1',
+      'tokens:',
+      '  color:',
+      '    - name: accent',
+      '      value: "#7c3aed"',
+      '  spacing:',
+      '    - name: sm',
+      '      value: 8px',
+      '  typography: []',
+      '  radius: []',
+      '  shadow: []',
+      'primitives: []',
+      'approvedAt: 2026-05-21T00:00:00.000Z',
+    ].join('\n'),
     'utf-8',
   )
   await execFileP('git', ['init'], { cwd: root })
