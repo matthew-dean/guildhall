@@ -271,10 +271,10 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     contextWindow: 128_000,
     reasoning: 3,
     codegen: 2,
-    structuredOutput: 2,
+    structuredOutput: 3,
     speed: 2,
     recommendedRoles: ['contextIndexer', 'coordinator', 'reviewer'],
-    notes: 'Reasoning-heavy DeepInfra candidate for semantic architecture summaries; include in bakeoffs to see whether extra reasoning beats cheaper fast lanes.',
+    notes: 'Recommended DeepInfra context-indexer model from Guildhall live bakeoffs. Strong semantic architecture summaries; keep schema repair enabled for occasional malformed JSON.',
   },
 ]
 

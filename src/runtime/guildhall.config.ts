@@ -50,7 +50,7 @@ export const forgeConfig: ForgeConfig = {
     // worker: 'qwen2.5-coder-14b-instruct',        // stronger, if resident
     // reviewer: 'qwen2.5-coder-7b-instruct',       // fast reviewer
     // gateChecker: 'qwen2.5-coder-7b-instruct',    // minimal, just runs commands
-    // contextIndexer: 'qwen2.5-coder-7b-instruct', // cheap semantic Corpus Map summaries
+    // contextIndexer: 'zai-org/GLM-4.6', // recommended semantic Corpus Map summaries
   },
 
   maxRevisions: 3,

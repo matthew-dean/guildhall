@@ -43,7 +43,7 @@ models:
   worker: qwen2.5-coder-32b-instruct
   reviewer: qwen2.5-coder-14b-instruct
   gateChecker: qwen2.5-coder-7b-instruct
-  contextIndexer: deepseek-ai/DeepSeek-V4-Flash
+  contextIndexer: zai-org/GLM-4.6
 ```
 
 Each model role must resolve against the model catalog in `src/core/models.ts`.

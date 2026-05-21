@@ -130,8 +130,10 @@ describe('recommendModelsForRole', () => {
 
   it('recommends DeepInfra candidates for context indexing', () => {
     const results = recommendModelsForRole('contextIndexer')
+    expect(results[0]?.id).toBe('zai-org/GLM-4.6')
     expect(results.map(m => m.id)).toEqual(
       expect.arrayContaining([
+        'zai-org/GLM-4.6',
         'deepseek-ai/DeepSeek-V4-Flash',
         'Qwen/Qwen3.6-35B-A3B',
       ]),
