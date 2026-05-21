@@ -67,6 +67,9 @@ screen.
   the shared `Button` component, and semantic state affordances use the shared
   `StatusButton` component for the outlined warn/danger treatment with count
   badges; project-local CSS handles layout, not one-off button padding.
+- [x] Restore count badges as corner overlays rather than inline label content.
+  `StatusButton` now owns the filled red count badge treatment while retaining
+  the yellow/red outlined state control colors.
 - [x] Clarify the button-system boundary from live review: toolbar and command
   actions should use shared `Button` sizing/variants; larger button-card
   treatments are allowed when they are navigation or choice cards, such as the

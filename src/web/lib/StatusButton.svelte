@@ -36,6 +36,7 @@
 <button
   type="button"
   class="status-button tone-{tone}"
+  class:has-count={typeof count === 'number'}
   {disabled}
   {onclick}
   aria-label={ariaLabel}
@@ -44,7 +45,7 @@
   <Icon name={icon} size={16} />
   <span>{label}</span>
   {#if typeof count === 'number'}
-    <span class="status-count">{count}</span>
+    <span class="status-count" aria-hidden="true">{count}</span>
   {/if}
   {@render children?.()}
 </button>
@@ -67,6 +68,10 @@
     line-height: 1;
     white-space: nowrap;
     cursor: pointer;
+    position: relative;
+  }
+  .has-count {
+    padding-left: calc(var(--s-3) + var(--s-4));
   }
   .status-button :global(svg) {
     display: block;
@@ -96,16 +101,18 @@
     background: color-mix(in srgb, var(--surface-danger) 34%, var(--bg-raised-2) 66%);
   }
   .status-count {
+    position: absolute;
+    top: var(--s-1);
+    left: var(--s-1);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: calc(var(--s-3) + var(--s-1));
-    height: calc(var(--s-3) + var(--s-1));
-    padding: 0 var(--s-1);
-    border: 1px solid currentColor;
-    border-radius: var(--r-1);
-    background: color-mix(in srgb, currentColor 16%, transparent);
-    color: currentColor;
+    min-width: var(--s-4);
+    height: var(--s-4);
+    padding: 0;
+    border-radius: 50%;
+    background: var(--danger);
+    color: white;
     font-size: var(--fs-0);
     font-weight: 750;
     line-height: 1;
