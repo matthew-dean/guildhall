@@ -13,6 +13,7 @@
   import Chip from '../lib/Chip.svelte'
   import Icon, { type IconName } from '../lib/Icon.svelte'
   import NoticeBand from '../lib/NoticeBand.svelte'
+  import StatusButton from '../lib/StatusButton.svelte'
   import StatusDot from '../lib/StatusDot.svelte'
   import ProjectShell from '../lib/layout/ProjectShell.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
@@ -762,13 +763,12 @@
           <Button
             variant="secondary"
             size="sm"
-            className="toolbar-btn toolbar-btn--back"
             onclick={() => go('/')}
             ariaLabel="Back to Projects"
             title="Back to Projects"
           >
             <Icon name="chevron-left" size={16} />
-            <span class="toolbar-btn-label">Projects</span>
+            <span>Projects</span>
           </Button>
         </div>
         <div class="topbar-leading"></div>
@@ -899,76 +899,66 @@
           <Button
             variant="secondary"
             size="sm"
-            className="toolbar-btn toolbar-btn--back"
             onclick={() => go('/')}
             ariaLabel="Back to Projects"
             title="Back to Projects"
           >
             <Icon name="chevron-left" size={16} />
-            <span class="toolbar-btn-label">Projects</span>
+            <span>Projects</span>
           </Button>
         </div>
         <div class="topbar-leading">
           {#if newTaskDisabledReason || (runStatus !== 'running' && startDisabledReason)}
-            <button
-              type="button"
-              class="topbar-link topbar-icon-status topbar-setup-link"
+            <StatusButton
+              tone="warn"
+              icon="alert-triangle"
+              label="Setup"
               onclick={() => go(currentProjectHref(needsMeta ? '/setup' : '/settings/ready', activeProjectId))}
               title={newTaskDisabledReason ?? startDisabledReason ?? ''}
-              aria-label={`${needsMeta ? 'Project setup needs attention' : 'Readiness checks need attention'}: ${newTaskDisabledReason ?? startDisabledReason ?? 'Review required'}`}
-            >
-              <Icon name="alert-triangle" size={14} />
-            </button>
+              ariaLabel={`${needsMeta ? 'Project setup needs attention' : 'Readiness checks need attention'}: ${newTaskDisabledReason ?? startDisabledReason ?? 'Review required'}`}
+            />
           {/if}
           {#if providerStatus?.fallback && providerHeaderLabel}
-            <button
-              type="button"
-              class="topbar-link topbar-icon-status provider-indicator is-warning"
+            <StatusButton
+              tone="warn"
+              icon="plug"
+              label="Provider"
               onclick={() => go('/providers')}
               title={providerTitle}
-              aria-label={providerTitle}
-            >
-              <Icon name="plug" size={14} />
-            </button>
+              ariaLabel={providerTitle}
+            />
           {/if}
           {#if stuckCount > 0}
-            <button
-              type="button"
-              class="topbar-link topbar-icon-status topbar-status-link"
-              class:is-warning={true}
+            <StatusButton
+              tone="warn"
+              icon="alert-triangle"
+              label="Stuck"
+              count={stuckCount}
               onclick={() => go(currentProjectHref('/work', activeProjectId))}
               title="Jump to Work"
-              aria-label="{activeCount} {activeCountLabel}, {awaitingApprovalCount} awaiting approval, {stuckCount} stuck"
-            >
-              <Icon name="alert-triangle" size={14} />
-              <span class="topbar-status-badge">{stuckCount}</span>
-            </button>
+              ariaLabel={`${activeCount} ${activeCountLabel}, ${awaitingApprovalCount} awaiting approval, ${stuckCount} stuck`}
+            />
           {/if}
           {#if inboxActionableCount > 0}
-            <button
-              type="button"
-              class="topbar-link topbar-icon-status topbar-status-link"
-              class:is-warning={!inboxHasHighSeverity}
-              class:is-danger={inboxHasHighSeverity}
+            <StatusButton
+              tone={inboxHasHighSeverity ? 'danger' : 'warn'}
+              icon="inbox"
+              label="Needs you"
+              count={inboxActionableCount}
               onclick={() => go(currentProjectHref('/notifications', activeProjectId))}
               title="Jump to Notifications"
-              aria-label="{inboxActionableCount} notifications need you"
-            >
-              <Icon name="inbox" size={14} />
-              <span class="topbar-status-badge">{inboxActionableCount}</span>
-            </button>
+              ariaLabel={`${inboxActionableCount} notifications need you`}
+            />
           {/if}
           {#if stuckCount === 0 && inboxActionableCount === 0 && (activeCount > 0 || awaitingApprovalCount > 0)}
-            <button
-              type="button"
-              class="topbar-link topbar-icon-status topbar-status-link"
+            <StatusButton
+              icon={awaitingApprovalCount > 0 ? 'check-circle-2' : 'list-checks'}
+              label={awaitingApprovalCount > 0 ? 'Review' : 'Work'}
+              count={awaitingApprovalCount > 0 ? awaitingApprovalCount : activeCount}
               onclick={() => go(currentProjectHref('/work', activeProjectId))}
               title="Jump to Work"
-              aria-label="{activeCount} {activeCountLabel}, {awaitingApprovalCount} awaiting approval"
-            >
-              <Icon name={awaitingApprovalCount > 0 ? 'check-circle-2' : 'list-checks'} size={14} />
-              <span class="topbar-status-badge">{awaitingApprovalCount > 0 ? awaitingApprovalCount : activeCount}</span>
-            </button>
+              ariaLabel={`${activeCount} ${activeCountLabel}, ${awaitingApprovalCount} awaiting approval`}
+            />
           {/if}
         </div>
         <div class="topbar-actions">
@@ -976,20 +966,18 @@
             <Button
               variant="secondary"
               size="sm"
-              className="toolbar-btn toolbar-btn--new-task"
               disabled={busy}
               onclick={newTask}
               ariaLabel="New task"
               title="New task"
             >
               <Icon name="plus" size={16} />
-              <span class="toolbar-btn-label">New task</span>
+              <span>New task</span>
             </Button>
           {/if}
           <Button
             variant={runStatus === 'running' ? 'danger' : 'primary'}
             size="sm"
-            className="toolbar-btn toolbar-btn--primary"
             disabled={busy || (runStatus !== 'running' && (runStatus === 'stopping' || startDisabledReason !== null))}
             onclick={runStatus === 'running' ? stop : () => start('continuous')}
             ariaLabel={
@@ -1012,7 +1000,7 @@
             <Button
               variant="ghost"
               size="sm"
-              className={`toolbar-icon-button ${actionsMenuOpen ? 'toolbar-icon-button--open' : ''}`}
+              iconOnly
               ariaLabel="Open actions menu"
               title="Open actions menu"
               onclick={toggleActionsMenu}
@@ -1408,110 +1396,10 @@
   .rail-status {
     display: flex;
   }
-  .topbar-link {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--s-2);
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: var(--r-1);
-    color: var(--text-muted);
-    font-size: var(--fs-1);
-    padding: 5px 8px;
-    cursor: pointer;
-    font: inherit;
-    line-height: 1;
-    min-height: 30px;
-    min-width: 0;
-  }
-  .topbar-link:hover {
-    color: var(--text);
-    background: color-mix(in srgb, var(--bg-raised-2) 70%, transparent);
-  }
-  .topbar-link:focus-visible {
-    color: var(--text);
-    outline: none;
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
-  }
-  .topbar-link.is-warning {
-    color: var(--warn);
-  }
-  .topbar-link.is-danger {
-    color: var(--danger);
-  }
-  .topbar-status-link {
-    position: relative;
-  }
-  .topbar-icon-status {
-    justify-content: center;
-    font-weight: 700;
-    min-width: 36px;
-    width: 36px;
-    min-height: 36px;
-    padding: 0;
-    border-radius: 10px;
-  }
-  .topbar-setup-link {
-    color: var(--warn);
-    font-weight: 650;
-  }
-  .topbar-status-badge {
-    position: absolute;
-    top: -5px;
-    right: -5px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 17px;
-    height: 17px;
-    padding: 0 5px;
-    border: 1px solid var(--bg);
-    border-radius: 999px;
-    background: var(--accent);
-    color: var(--accent-contrast);
-    font-size: 10px;
-    font-weight: 750;
-    line-height: 1;
-  }
-  .topbar-link.is-warning .topbar-status-badge {
-    background: var(--warn);
-    color: var(--bg);
-  }
-  .topbar-link.is-danger .topbar-status-badge {
-    background: var(--danger);
-    color: var(--bg);
-  }
-  .provider-indicator {
-    max-width: min(100%, 42ch);
-  }
   .btn-inner {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-  }
-  .toolbar-btn {
-    min-height: 40px;
-    padding: 0 14px;
-    border-radius: 10px;
-    flex: none;
-  }
-  .toolbar-btn--primary {
-    min-width: 116px;
-  }
-  .toolbar-btn--new-task {
-    min-width: 118px;
-  }
-  .toolbar-icon-button {
-    width: 40px;
-    min-width: 40px;
-    min-height: 40px;
-    padding: 0;
-    border-radius: 10px;
-  }
-  .toolbar-icon-button--open {
-    background: var(--bg-raised-2);
-    color: var(--text);
   }
   .actions-menu {
     position: relative;
@@ -1556,24 +1444,9 @@
     cursor: not-allowed;
   }
 
-  @media (max-width: 1180px) {
-    .toolbar-btn--back .toolbar-btn-label {
-      display: none;
-    }
-  }
-
   @media (max-width: 900px) {
     .rail-pin {
       display: none;
-    }
-    .toolbar-btn-label {
-      display: none;
-    }
-    .toolbar-btn--new-task {
-      width: 40px;
-      min-width: 40px;
-      padding: 0;
-      border-radius: 999px;
     }
     .topbar {
       grid-template-columns: auto auto;

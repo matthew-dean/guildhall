@@ -51,17 +51,26 @@ screen.
   the card itself changes selection; card bodies are static content, `Details`
   is an explicit action, and Include/Exclude/checkbox controls own selection.
 - [x] Restore readable secondary button contrast. The shared secondary button
-  now uses a visibly distinct neutral fill and consistent border instead of a
-  near-transparent overlay that disappeared into dark raised panels.
+  now uses a distinct but restrained neutral fill and consistent border instead
+  of either disappearing into dark raised panels or overcorrecting into a heavy
+  high-contrast slab.
 - [x] Reduce top-bar button clutter. Project navigation, work count, inbox,
   provider, and readiness affordances now share one quiet link treatment;
   disabled New Task no longer occupies toolbar space; Start/Stop remains the
   only high-emphasis command and overflow uses a single quiet icon control.
 - [x] Condense the project top bar further after live Narrative Harness review.
-  `Projects` is a real secondary button again, setup/readiness is an icon-only
+  `Projects` is a real secondary button again, setup/readiness is a compact
   attention affordance, normal provider text stays out of the bar, and queued
-  work / inbox / stuck states use a compact icon-button cluster with number
-  badges instead of full text labels.
+  work / inbox / stuck states use a compact icon-and-label cluster with small
+  number badges instead of full prose labels or abstract icon-only controls.
+- [x] Remove bespoke top-bar button sizing. Top-bar command actions now rely on
+  the shared `Button` component, and semantic state affordances use the shared
+  `StatusButton` component for the outlined warn/danger treatment with count
+  badges; project-local CSS handles layout, not one-off button padding.
+- [x] Clarify the button-system boundary from live review: toolbar and command
+  actions should use shared `Button` sizing/variants; larger button-card
+  treatments are allowed when they are navigation or choice cards, such as the
+  workspace-import step cards, because that is a distinct component concept.
 - [x] Remove maintainer-only implementation pages from the public VitePress
   surface. The public docs build now excludes `docs/subsystems/**`,
   `docs/web-ui/design-tokens.md`, and `docs/web-ui/help-system.md`; sidebar,

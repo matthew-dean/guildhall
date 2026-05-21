@@ -12,6 +12,7 @@
     variant?: Variant
     size?: Size
     disabled?: boolean
+    iconOnly?: boolean
     type?: 'button' | 'submit'
     ariaLabel?: string
     title?: string
@@ -24,6 +25,7 @@
     variant = 'primary',
     size = 'md',
     disabled = false,
+    iconOnly = false,
     type = 'button',
     ariaLabel,
     title,
@@ -34,7 +36,7 @@
 </script>
 
 <button
-  class={`btn v-${variant} s-${size} ${className}`.trim()}
+  class={`btn v-${variant} s-${size} ${iconOnly ? 'icon-only' : ''} ${className}`.trim()}
   {type}
   {disabled}
   {onclick}
@@ -99,14 +101,14 @@
     filter: none;
   }
   .v-secondary {
-    background: color-mix(in srgb, var(--bg-raised-2) 68%, var(--text) 32%);
+    background: color-mix(in srgb, var(--bg-raised-2) 84%, var(--text) 16%);
     color: var(--text);
-    border-color: color-mix(in srgb, var(--text) 42%, var(--bg-raised-2) 58%);
-    box-shadow: inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
+    border-color: color-mix(in srgb, var(--text) 24%, var(--bg-raised-2) 76%);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, white 6%, transparent);
   }
   .v-secondary:not(:disabled):hover {
-    background: color-mix(in srgb, var(--bg-raised-2) 58%, var(--text) 42%);
-    border-color: color-mix(in srgb, var(--text) 56%, var(--bg-raised-2) 44%);
+    background: color-mix(in srgb, var(--bg-raised-2) 76%, var(--text) 24%);
+    border-color: color-mix(in srgb, var(--text) 34%, var(--bg-raised-2) 66%);
     filter: none;
   }
   .v-danger {
@@ -126,11 +128,20 @@
   }
 
   .s-sm {
-    padding: 4px var(--s-3);
+    padding: var(--control-pad-y) var(--s-3);
     font-size: var(--fs-1);
     min-height: 28px;
   }
   .s-md {
     padding: var(--control-pad-y) var(--control-pad-x);
+  }
+  .icon-only {
+    width: var(--control-h);
+    min-width: var(--control-h);
+    padding-inline: 0;
+  }
+  .s-sm.icon-only {
+    width: 28px;
+    min-width: 28px;
   }
 </style>
