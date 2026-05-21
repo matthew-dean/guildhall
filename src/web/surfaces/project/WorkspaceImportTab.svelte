@@ -41,6 +41,7 @@
     label: string
     excerpt: string
     source: string
+    references?: readonly string[]
   }
   interface SourceGroup {
     key: string
@@ -145,6 +146,7 @@
   let detailFocus = $state<DetailFocus | null>(null)
   let detailOpen = $state(false)
   let completedImport = $state<CompletedImportSummary | null>(null)
+  let individualSourceReviewOpen = $state(false)
 
   function displayText(value: string): string {
     return value
@@ -165,7 +167,17 @@
       }
       data = j
       const defaults = j.detected?.learning?.defaults
-      if (defaults) {
+      const review = j.detected?.review
+      if (
+        defaults &&
+        review?.totalTaskCandidates === 0 &&
+        defaults.selectedAreaKeys.length === 0 &&
+        defaults.selectedSourceKeys.length === 0
+      ) {
+        selectedAreaKeys = (review.areaGroups ?? []).map(area => area.key)
+        selectedSourceKeys = (review.sourceGroups ?? []).map(group => group.key)
+        selectedTaskIds = []
+      } else if (defaults) {
         selectedAreaKeys = [...defaults.selectedAreaKeys]
         selectedSourceKeys = [...defaults.selectedSourceKeys]
         selectedTaskIds = [...defaults.selectedTaskIds]
@@ -173,9 +185,15 @@
         const defaultAreas = (j.detected?.review?.areaGroups ?? []).filter(
           area => area.taskCount > 0,
         )
-        selectedAreaKeys = defaultAreas.map(area => area.key)
+        const fallbackReferenceAreas = (j.detected?.review?.totalTaskCandidates ?? 0) === 0
+          ? (j.detected?.review?.areaGroups ?? [])
+          : []
+        const selectedDefaults = defaultAreas.length > 0 ? defaultAreas : fallbackReferenceAreas
+        selectedAreaKeys = selectedDefaults.map(area => area.key)
         const defaultSources = (j.detected?.review?.sourceGroups ?? []).filter(
-          group => defaultAreas.some(area => area.key === group.areaKey) && group.taskCount > 0,
+          group =>
+            selectedDefaults.some(area => area.key === group.areaKey) &&
+            (defaultAreas.length > 0 ? group.taskCount > 0 : true),
         )
         selectedSourceKeys = defaultSources.map(group => group.key)
         selectedTaskIds = (j.detected?.tasks ?? [])
@@ -187,6 +205,7 @@
       currentGroupIndex = 0
       detailFocus = null
       detailOpen = false
+      individualSourceReviewOpen = false
       completedImport = null
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
@@ -227,6 +246,9 @@
   )
   const currentAreaSecondarySources = $derived(
     currentAreaSources.filter(group => group.taskCount === 0),
+  )
+  const selectedCurrentAreaSecondaryCount = $derived(
+    currentAreaSecondarySources.filter(group => selectedSourceKeys.includes(group.key)).length,
   )
   const focusedArea = $derived(
     detailFocus?.kind === 'area'
@@ -273,10 +295,10 @@
     const area = areaGroups.find(item => item.key === key)
     if (!area || selectedAreaKeys.includes(key)) return
     selectedAreaKeys = [...selectedAreaKeys, key]
-    const taskBearingSourceKeys = groups
-      .filter(group => group.areaKey === key && group.taskCount > 0)
+    const defaultSourceKeys = groups
+      .filter(group => group.areaKey === key && (area.taskCount === 0 || group.taskCount > 0))
       .map(group => group.key)
-    selectedSourceKeys = [...new Set([...selectedSourceKeys, ...taskBearingSourceKeys])]
+    selectedSourceKeys = [...new Set([...selectedSourceKeys, ...defaultSourceKeys])]
     const taskIdsToAdd = groups
       .filter(group => group.areaKey === key && group.taskCount > 0)
       .flatMap(group => group.taskIds)
@@ -301,10 +323,10 @@
       const area = areaGroups.find(item => item.key === key)
       if (!area || selectedAreaKeys.includes(key)) continue
       selectedAreaKeys = [...selectedAreaKeys, key]
-      const taskBearingSourceKeys = groups
-        .filter(group => group.areaKey === key && group.taskCount > 0)
+      const defaultSourceKeys = groups
+        .filter(group => group.areaKey === key && (area.taskCount === 0 || group.taskCount > 0))
         .map(group => group.key)
-      selectedSourceKeys = [...new Set([...selectedSourceKeys, ...taskBearingSourceKeys])]
+      selectedSourceKeys = [...new Set([...selectedSourceKeys, ...defaultSourceKeys])]
       const taskIdsToAdd = groups
         .filter(group => group.areaKey === key && group.taskCount > 0)
         .flatMap(group => group.taskIds)
@@ -350,10 +372,6 @@
     if (taskIdsToRemove.length > 0) {
       selectedTaskIds = selectedTaskIds.filter(id => !taskIdsToRemove.includes(id))
     }
-  }
-
-  function sourceBulkLabel(count: number): string {
-    return `Use all ${count} source${count === 1 ? '' : 's'}`
   }
 
   function focusArea(key: string) {
@@ -453,6 +471,40 @@
     return tasksForGroup(group).slice(0, 8)
   }
 
+  function sourceMatches(value: string | undefined, group: SourceGroup): boolean {
+    if (!value) return false
+    const normalized = value.replaceAll('\\', '/').toLowerCase()
+    const groupPath = group.path?.replaceAll('\\', '/').toLowerCase()
+    return normalized === group.label.toLowerCase() ||
+      Boolean(groupPath && (normalized === groupPath || normalized.endsWith(groupPath) || groupPath.endsWith(normalized)))
+  }
+
+  function sourceEvidence(group: SourceGroup): Array<{ label: string; text: string }> {
+    const evidence: Array<{ label: string; text: string }> = []
+    for (const goal of data?.detected?.goals ?? []) {
+      if (sourceMatches(goal.source, group)) evidence.push({ label: 'Goal', text: displayText(goal.rationale || goal.title) })
+    }
+    for (const milestone of data?.detected?.milestones ?? []) {
+      if (sourceMatches(milestone.source, group)) evidence.push({ label: 'Milestone', text: displayText(milestone.evidence || milestone.title) })
+    }
+    for (const context of data?.detected?.context ?? []) {
+      if (
+        sourceMatches(context.source, group) ||
+        (context.references ?? []).some(ref => sourceMatches(ref, group))
+      ) {
+        evidence.push({ label: context.label || 'Context', text: displayText(context.excerpt) })
+      }
+    }
+    return evidence.slice(0, 3)
+  }
+
+  function usefulSourceSummary(group: SourceGroup): string {
+    const evidence = sourceEvidence(group)[0]?.text
+    if (evidence && !/^[\w./-]+\.md$/i.test(evidence)) return evidence
+    if (group.summary && !/^\d+\s+(reference note|reference notes|source|sources)$/i.test(group.summary)) return group.summary
+    return evidence || group.summary
+  }
+
   function displayPath(value: string | null): string {
     if (!value) return ''
     const normalized = value.replaceAll('\\', '/')
@@ -480,6 +532,7 @@
     currentAreaIndex = 0
     detailFocus = null
     detailOpen = false
+    individualSourceReviewOpen = false
   }
 
   function openTaskReview() {
@@ -520,12 +573,14 @@
       currentAreaIndex += 1
       detailFocus = null
       detailOpen = false
+      individualSourceReviewOpen = false
       return
     }
     if (selectedTaskGroups.length === 0) {
       step = 'confirm'
       detailFocus = null
       detailOpen = false
+      individualSourceReviewOpen = false
       return
     }
     openTaskReview()
@@ -633,7 +688,7 @@
     <h2>Review existing project work</h2>
     <p class="sub">
       Guildhall has already scanned the notes, roadmaps, and project docs it found here.
-      You are confirming what should become backlog tasks.
+      You are confirming what should be remembered as context and what should become backlog tasks.
     </p>
   </header>
 
@@ -841,12 +896,12 @@
                   {#if selectedAreaKeys.includes(area.key)}
                     <Button variant="secondary" size="sm" onclick={() => removeArea(area.key)}>
                       <Icon name="x" size={14} />
-                      Remove from this pass
+                      Exclude
                     </Button>
                   {:else}
                     <Button variant="secondary" size="sm" onclick={() => selectArea(area.key)}>
                       <Icon name="plus" size={14} />
-                      Add to this pass
+                      Include
                     </Button>
                   {/if}
                 </div>
@@ -856,18 +911,18 @@
           </Stack>
           {#if secondaryAreas.length > 0}
             <details class="secondary-summary" open={primaryAreas.length === 0}>
-              <summary>Optional reference-only parts</summary>
+              <summary>Included project context</summary>
               <p class="secondary-help">
-                These parts contain goals, specs, or context rather than obvious task lists. Add them when you want Guildhall to remember the product direction before shaping work.
+                These parts contain goals, specs, or context rather than obvious task lists. Guildhall includes project docs by default so future work starts from the project’s actual direction. Exclude a part only when it is stale, noisy, or unrelated.
               </p>
               <div class="bulk-row">
                 <span class="bulk-label">{secondaryAreas.length} reference-only part{secondaryAreas.length === 1 ? '' : 's'} available</span>
                 <Row gap="2" wrap>
                   <Button variant="secondary" size="sm" onclick={() => selectAreas(secondaryAreas.map(area => area.key))}>
-                    Add all parts
+                    Restore
                   </Button>
                   <Button variant="secondary" size="sm" onclick={() => clearAreas(secondaryAreas.map(area => area.key))}>
-                    Remove all
+                    Exclude all
                   </Button>
                 </Row>
               </div>
@@ -895,12 +950,12 @@
                       {#if selectedAreaKeys.includes(area.key)}
                         <Button variant="secondary" size="sm" onclick={() => removeArea(area.key)}>
                           <Icon name="x" size={14} />
-                          Remove from this pass
+                          Exclude
                         </Button>
                       {:else}
                         <Button variant="secondary" size="sm" onclick={() => selectArea(area.key)}>
                           <Icon name="plus" size={14} />
-                          Add to this pass
+                          Include
                         </Button>
                       {/if}
                     </div>
@@ -965,11 +1020,14 @@
                       {/if}
                       <Chip label={group.contextCount > 0 ? `${group.contextCount} notes` : 'source'} tone="neutral" />
                     </div>
-                    {#if group.path}
-                      <div class="source-path">{displayPath(group.path)}</div>
-                    {/if}
-                  </Stack>
-                  </button>
+                        {#if group.path}
+                          <div class="source-path">{displayPath(group.path)}</div>
+                        {/if}
+                        {#if usefulSourceSummary(group)}
+                          <p class="source-summary-copy">{usefulSourceSummary(group)}</p>
+                        {/if}
+                      </Stack>
+                      </button>
                   <Button variant={selectedSourceKeys.includes(group.key) ? 'secondary' : 'primary'} onclick={() => toggleSource(group.key)}>
                     {selectedSourceKeys.includes(group.key) ? 'Leave out' : 'Use this source'}
                   </Button>
@@ -979,48 +1037,74 @@
           </Stack>
           {#if currentAreaSecondarySources.length > 0}
             <details class="secondary-summary" open={currentAreaPrimarySources.length === 0}>
-              <summary>Optional milestone and reference notes in {currentArea.label}</summary>
+              <summary>Included context notes in {currentArea.label}</summary>
               <div class="bulk-row">
                 <p class="secondary-help">
-                  These notes may not create tasks by themselves, but they preserve goals, decisions, and product framing for the next work pass.
+                  These notes may not create tasks by themselves, but they preserve goals, decisions, and product framing for the next work pass. Keep them selected unless a note is stale, misleading, or outside this project.
                 </p>
                 <Row gap="2" wrap>
-                  <Button variant="secondary" size="sm" onclick={() => selectSources(currentAreaSecondarySources.map(group => group.key))}>
-                    {sourceBulkLabel(currentAreaSecondarySources.length)}
-                  </Button>
-                  <Button variant="secondary" size="sm" onclick={() => clearSources(currentAreaSecondarySources.map(group => group.key))}>
-                    Leave all out
-                  </Button>
+                  <Chip
+                    label={`${selectedCurrentAreaSecondaryCount} of ${currentAreaSecondarySources.length} selected`}
+                    tone={selectedCurrentAreaSecondaryCount === currentAreaSecondarySources.length ? 'accent' : 'neutral'}
+                  />
+                  {#if selectedCurrentAreaSecondaryCount < currentAreaSecondarySources.length}
+                    <Button variant="secondary" size="sm" onclick={() => selectSources(currentAreaSecondarySources.map(group => group.key))}>
+                      Restore
+                    </Button>
+                  {/if}
+                  {#if selectedCurrentAreaSecondaryCount > 0}
+                    <Button variant="secondary" size="sm" onclick={() => clearSources(currentAreaSecondarySources.map(group => group.key))}>
+                      Exclude selected
+                    </Button>
+                  {/if}
                 </Row>
               </div>
-              <Stack gap="4">
-                {#each currentAreaSecondarySources as group (group.key)}
-                  <div class:selected={selectedSourceKeys.includes(group.key)} class="source-card secondary">
-                    <Row justify="between" align="start" gap="4" wrap>
-                      <button type="button" class="inspect-card" onclick={() => focusSource(group.key)}>
-                      <Stack gap="3">
-                        <div class="source-title-row">
-                          <strong>{group.label}</strong>
-                          {#if selectedSourceKeys.includes(group.key)}
-                            <Chip label="In this pass" tone="accent" />
+              <div class="individual-source-list">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onclick={() => (individualSourceReviewOpen = !individualSourceReviewOpen)}
+                >
+                  {individualSourceReviewOpen ? 'Hide individual notes' : 'Review individual notes'}
+                </Button>
+                {#if individualSourceReviewOpen}
+                <Stack gap="4">
+                  {#each currentAreaSecondarySources as group (group.key)}
+                    <div class:selected={selectedSourceKeys.includes(group.key)} class="source-card secondary">
+                      <Row justify="between" align="start" gap="4" wrap>
+                        <label class="source-check">
+                          <input
+                            type="checkbox"
+                            checked={selectedSourceKeys.includes(group.key)}
+                            onchange={() => toggleSource(group.key)}
+                          />
+                        </label>
+                        <button type="button" class="inspect-card" onclick={() => focusSource(group.key)}>
+                        <Stack gap="3">
+                          <div class="source-title-row">
+                            <strong>{group.label}</strong>
+                            {#if selectedSourceKeys.includes(group.key)}
+                              <Chip label="In this pass" tone="accent" />
+                            {/if}
+                            <span class="kind-label reference">{sourceKindLabel(group)}</span>
+                          </div>
+                          <div class="metric-row">
+                            <Chip label={sourceSummary(group)} tone="neutral" />
+                          </div>
+                          {#if group.path}
+                            <div class="source-path">{displayPath(group.path)}</div>
                           {/if}
-                          <span class="kind-label reference">{sourceKindLabel(group)}</span>
-                        </div>
-                        <div class="metric-row">
-                          <Chip label={sourceSummary(group)} tone="neutral" />
-                        </div>
-                        {#if group.path}
-                          <div class="source-path">{displayPath(group.path)}</div>
-                        {/if}
-                      </Stack>
-                      </button>
-                      <Button variant={selectedSourceKeys.includes(group.key) ? 'secondary' : 'primary'} onclick={() => toggleSource(group.key)}>
-                        {selectedSourceKeys.includes(group.key) ? 'Leave out' : 'Use this source'}
-                      </Button>
-                    </Row>
-                  </div>
-                {/each}
-              </Stack>
+                          {#if usefulSourceSummary(group)}
+                            <p class="source-summary-copy">{usefulSourceSummary(group)}</p>
+                          {/if}
+                        </Stack>
+                        </button>
+                      </Row>
+                    </div>
+                  {/each}
+                </Stack>
+                {/if}
+              </div>
             </details>
           {/if}
         {/if}
@@ -1244,7 +1328,17 @@
               <div class="detail-code">{displayPath(focusedSource.path)}</div>
             </div>
           {/if}
-          <p class="detail-copy">{focusedSource.summary}</p>
+          <p class="detail-copy">{usefulSourceSummary(focusedSource)}</p>
+          {#if sourceEvidence(focusedSource).length > 0}
+            <div class="detail-block">
+              <div class="detail-label">Useful signals</div>
+              <ul class="detail-list">
+                {#each sourceEvidence(focusedSource) as item}
+                  <li><strong>{item.label}:</strong> {item.text}</li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
           <div class="detail-block">
             <div class="detail-label">What Guildhall found here</div>
             <div class="metric-row">
@@ -1513,6 +1607,13 @@
     color: var(--text-muted);
     font-size: var(--fs-2);
   }
+  .individual-source-list {
+    margin-block-start: var(--s-3);
+    border-top: 1px solid var(--border);
+    padding-block-start: var(--s-3);
+    display: grid;
+    gap: var(--s-3);
+  }
   .source-card {
     border: 1px solid var(--border);
     border-radius: var(--r-1);
@@ -1551,6 +1652,23 @@
     color: var(--text-muted);
     line-height: var(--lh-body);
     max-width: 64ch;
+  }
+  .source-summary-copy {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+    max-width: 72ch;
+  }
+  .source-check {
+    display: inline-flex;
+    align-items: start;
+    padding-top: 2px;
+  }
+  .source-check input {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
   }
   .card-actions-inline {
     display: flex;

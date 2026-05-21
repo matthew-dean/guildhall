@@ -237,7 +237,7 @@ describe('WorkspaceImportTab', () => {
     expect(screen.getByText(/Guildhall created 2 draft tasks/)).toBeTruthy()
   })
 
-  it('opens optional details without making the drawer a required path', async () => {
+  it('opens extra details without making the drawer a required path', async () => {
     installFetchFakes()
 
     render(WorkspaceImportTab)
@@ -259,13 +259,13 @@ describe('WorkspaceImportTab', () => {
     await screen.findByText(/Guildhall found planning notes/)
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
-    await userEvent.click(screen.getByRole('button', { name: /remove from this pass/i }))
-    await userEvent.click(screen.getByText('Optional reference-only parts'))
-    await userEvent.click(screen.getAllByRole('button', { name: /add to this pass/i })[1]!)
+    await userEvent.click(screen.getAllByRole('button', { name: /^exclude$/i })[0]!)
+    await userEvent.click(screen.getByText('Included project context'))
+    await userEvent.click(screen.getAllByRole('button', { name: /^include$/i })[1]!)
     await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
 
     await screen.findByText('Review notes in Looma')
-    await userEvent.click(screen.getByRole('button', { name: /use this source/i }))
+    expect(screen.queryByRole('button', { name: /use this source/i })).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: /review import summary/i }))
 
     await screen.findByText('Import the project notes and goals?')

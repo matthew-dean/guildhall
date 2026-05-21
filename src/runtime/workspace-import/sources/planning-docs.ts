@@ -80,6 +80,25 @@ function cleanSpecTitle(text: string): string {
   return cleanHeading(text).replace(/^spec:\s*/i, '').trim()
 }
 
+function summarizeMarkdownAfterTitle(raw: string): string {
+  const withoutTitle = raw.replace(/^#\s+.+?\s*$/m, '').trim()
+  const lines: string[] = []
+  for (const line of withoutTitle.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) {
+      if (lines.length > 0) break
+      continue
+    }
+    if (/^#{1,6}\s+/.test(trimmed)) {
+      if (lines.length > 0) break
+      continue
+    }
+    lines.push(trimmed.replace(/^[-*]\s+/, ''))
+    if (lines.join(' ').length >= 220) break
+  }
+  return cleanHeading(lines.join(' ')).slice(0, 240).trim()
+}
+
 function fileLooksLikeTaskList(fileBase: string, rel: string): boolean {
   if (/^PROJECT_STATE\.md$/i.test(fileBase)) return true
   if (/\/specs\/[^/]+\.md$/i.test(rel)) return false
@@ -160,7 +179,7 @@ export const planningDocsSource: TaskSource = {
             source: 'planning-docs',
             kind: 'context',
             title: `Spec: ${specTitle}`,
-            evidence: rel,
+            evidence: summarizeMarkdownAfterTitle(raw) || rel,
             references: [abs],
             ...(domainHint ? { domainHint } : {}),
             confidence: 'medium',

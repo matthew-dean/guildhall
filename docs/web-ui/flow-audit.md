@@ -40,6 +40,12 @@ screen.
 
 ## Current Follow-Ups
 
+- [x] Reframe workspace-import project docs as included context rather than
+  optional sources. Reference-only docs are selected by default, individual
+  note review is tucked behind a disclosure, each note card shows a useful
+  excerpt, and source/part actions now use calmer `Include` / `Exclude`
+  language instead of process-heavy "Use this source" / "Remove from this
+  pass" controls.
 - [x] Remove maintainer-only implementation pages from the public VitePress
   surface. The public docs build now excludes `docs/subsystems/**`,
   `docs/web-ui/design-tokens.md`, and `docs/web-ui/help-system.md`; sidebar,

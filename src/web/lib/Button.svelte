@@ -99,16 +99,14 @@
     filter: none;
   }
   .v-secondary {
-    background: var(--bg-raised-2);
+    background: color-mix(in srgb, var(--text) 8%, transparent);
     color: var(--text);
-    border-color: var(--border-strong);
-    box-shadow:
-      inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
-      0 1px 0 color-mix(in srgb, black 22%, transparent);
+    border-color: transparent;
+    box-shadow: none;
   }
   .v-secondary:not(:disabled):hover {
-    background: color-mix(in srgb, var(--bg-raised-2) 82%, white 18%);
-    border-color: color-mix(in srgb, var(--border-strong) 68%, var(--text) 32%);
+    background: color-mix(in srgb, var(--text) 12%, transparent);
+    border-color: color-mix(in srgb, var(--text) 14%, transparent);
     filter: none;
   }
   .v-danger {
@@ -128,9 +126,9 @@
   }
 
   .s-sm {
-    padding: 2px var(--s-2);
+    padding: 4px var(--s-3);
     font-size: var(--fs-1);
-    min-height: 22px;
+    min-height: 28px;
   }
   .s-md {
     padding: var(--control-pad-y) var(--control-pad-x);
