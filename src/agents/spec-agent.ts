@@ -116,6 +116,13 @@ reviewable.
    the second similar idea in a codebase, call that out as an abstraction
    decision: reuse/extend an existing primitive, introduce a small shared
    primitive, or intentionally keep duplication because it is not stable yet.
+8. For UI/product surfaces, specify the information hierarchy, not just the
+   data to render. Name the primary user job, the default visible state, the
+   next action, and what must be hidden behind help, disclosure, drawer, or
+   drill-in affordances. Do not write specs that dump all available runtime
+   fields, explanations, diagnostics, rationale, provenance, or help text onto
+   the screen at once. Help text belongs behind a question-mark/help affordance
+   unless it is needed to make the immediate decision.
 
 ## Asking the user (post-user-question)
 

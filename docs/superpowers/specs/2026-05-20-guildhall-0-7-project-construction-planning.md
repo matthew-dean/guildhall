@@ -716,16 +716,21 @@ Every major surface should preserve both context and focus:
 Rules:
 
 - show a one-screen summary before detailed lists
-- use progressive disclosure for dependency details
+- use progressive disclosure for help text, dependency details, provenance,
+  raw diagnostics, and rationale
 - group by active tranche before status
 - show later work as muted and collapsed by default
 - show only the top owner decisions in Needs You
 - avoid duplicating the same alert across Thread, Needs You, and Work
 - make every dense view answer one primary question
-- prefer counts and state chips over paragraphs
+- prefer counts, state chips, and direct controls over paragraphs
 - keep "why now?" visible for active work
 - keep "why not now?" available for queued/deferred work
 - keep construction detail collapsed unless it changes the next action
+- hide tutorial/explanatory copy behind question-mark help once the user has a
+  real object or decision on screen
+- never show every available field just because the runtime has it; default
+  surfaces should expose the minimum state needed to decide or act
 
 Status language:
 

@@ -77,6 +77,14 @@ a shared abstraction. Do not require abstraction for accidental or unstable
 similarity, but do require it when the repetition is a durable product or code
 concept that will otherwise drift.
 
+For UI/product surfaces, review information hierarchy as a first-class quality
+gate. A screen that dumps runtime state, explanatory copy, help text, raw
+diagnostics, provenance, and secondary controls into the default view should
+need revision even if the data is correct. The default view should answer one
+primary user question, show the next action, and hide supporting explanation
+behind help, disclosure, drawer, or drill-in affordances unless that detail is
+required for the immediate decision.
+
 If the implementation is correct but the blueprint itself is wrong, do not hide
 that as a generic revision. Record the evidence and request a change-order-style
 decision: what assumption changed and what scope or sequencing impact follows.

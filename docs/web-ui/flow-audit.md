@@ -40,6 +40,13 @@ a time. Source discovery, source selection, candidate-task review, and final
 task creation are different user jobs and should not be collapsed into one
 screen.
 
+Screens should reveal the right information at the right time. Default views
+should lead with the user's current job, the current state, and the next action;
+explanatory copy, implementation detail, rationale, provenance, and edge-case
+help should sit behind question-mark help, disclosures, drawers, or drill-in
+panels unless that detail changes the decision in front of the user. A dense
+screen is a design failure even when all of the text is technically accurate.
+
 Systemic flow note from re-reading the older audit trail: repeated bugs are
 not just local copy/control bugs. The same pattern keeps appearing: Guildhall
 knows a more specific next surface or remediation path, but renders a generic
@@ -314,6 +321,12 @@ babysit setup/import/provider/release states across multiple pages.
   now use real select controls with `Same as global setting` as the first
   option, show the current inherited or overridden value below the control, and
   write audited `user-direct` overrides through `/api/config/levers`.
+- [ ] Audit major project screens for information density. Several views are
+  drifting back toward internal-state dumps: too much explanatory text, too
+  many parallel counts, and too many secondary details visible by default.
+  Each surface needs a primary user job, a one-screen default, and progressive
+  disclosure for help text, rationale, provenance, raw diagnostics, and
+  rarely-used controls.
 - [ ] Add a project corpus map for worker context. Current worker prompts
   receive focused task memory, likely target files, checkpoints, design
   summaries, and recent decisions rather than a full source dump, but there is
