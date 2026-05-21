@@ -27,6 +27,7 @@ import { writeCheckpoint } from '@guildhall/tools'
 import { appendFailureClassificationNote, classifyAgentFailure } from '../policy.js'
 import { commandEvidence, touchedFiles } from './policy-fixtures.js'
 import { readProjectLearning } from '../learning.js'
+import { loadCodebaseMap } from '@guildhall/corpus-map'
 
 // ---------------------------------------------------------------------------
 // Orchestrator feedback-loop tests
@@ -245,6 +246,45 @@ describe('context debug records', () => {
       .map((line) => JSON.parse(line) as Record<string, any>)
     expect(records.some((record) => record.taskId === 'task-context')).toBe(true)
     expect(records.some((record) => typeof record.promptPreview === 'string' && record.promptPreview.length > 0)).toBe(true)
+  })
+
+  it('refreshes the corpus map after a worker changes files', async () => {
+    await fs.mkdir(path.join(tmpDir, 'src'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'corpus-refresh-test' }), 'utf8')
+    await fs.writeFile(path.join(tmpDir, 'src', 'feature.ts'), 'export const value = 1\n', 'utf8')
+    execFileSync('git', ['add', 'package.json', 'src/feature.ts'], { cwd: tmpDir, stdio: 'ignore' })
+    execFileSync('git', ['commit', '--no-verify', '-m', 'seed project files'], { cwd: tmpDir, stdio: 'ignore' })
+
+    await writeQueue([
+      mkTask({
+        id: 'task-corpus-refresh',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        title: 'Update feature value',
+        description: 'Edit `src/feature.ts`.',
+        spec: 'Update `src/feature.ts` and hand off to review.',
+      }),
+    ])
+    const worker = stubAgent('worker-agent', async () => {
+      await fs.writeFile(path.join(tmpDir, 'src', 'feature.ts'), 'export const value = 2\n', 'utf8')
+      await mutateTask('task-corpus-refresh', { status: 'review' })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver(),
+    })
+
+    await orch.tick()
+
+    const map = await loadCodebaseMap(memoryDir)
+    const history = await fs.readFile(path.join(memoryDir, 'codebase-map.history.jsonl'), 'utf8')
+    const events = history.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>)
+
+    expect(map?.files['src/feature.ts']?.summary).toContain('feature.ts')
+    expect(events.map((event) => event.reason)).toContain('setup')
+    expect(events.map((event) => event.reason)).toContain('worker-completion')
+    expect(events.find((event) => event.reason === 'worker-completion')?.changedFiles).toContain('src/feature.ts')
   })
 })
 

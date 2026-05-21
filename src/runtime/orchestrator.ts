@@ -120,6 +120,7 @@ import {
   type Slot,
   type RuntimeIsolationConfig,
 } from './slot-allocator.js'
+import { refreshCodebaseMap } from '@guildhall/corpus-map'
 import {
   NodeGitDriver,
   type GitDriver,
@@ -935,6 +936,10 @@ interface FallbackBriefDraft {
 }
 
 const MAX_FALLBACK_QUESTIONS = 3
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values)]
+}
 
 function cleanFallbackOptionLabel(raw: string): string {
   const trimmed = raw.trim()
@@ -3195,6 +3200,10 @@ export class Orchestrator {
           successfulAgentMetadata,
           taskRepoRootAfter,
         )
+        const corpusRefreshTouchedFiles = uniqueStrings([
+          ...dirtyTaskFilesAfter,
+          ...checkpointTouchedFiles,
+        ])
         const hasCheckpointScopedVerifiedProgress =
           beforeStatus === 'in_progress' &&
           this.hasDurableWorkerHandoffEvidence(successfulAgentMetadata, task.id) &&
@@ -3722,6 +3731,18 @@ export class Orchestrator {
         })
       }
       await this.maybeWriteReviewPacket(taskAfter)
+      if (
+        agent.name === 'worker-agent' &&
+        beforeStatus === 'in_progress' &&
+        corpusRefreshTouchedFiles.length > 0
+      ) {
+        await this.refreshCorpusMapForTask({
+          task: taskAfter,
+          projectRoot: activeTaskWorktreeProjectPath,
+          touchedFiles: corpusRefreshTouchedFiles,
+          reason: 'worker-completion',
+        })
+      }
 
       // FR-24: teardown on terminal transitions. `pending_pr` is preserved —
       // the human still needs the branch alive to merge the PR externally.
@@ -6793,6 +6814,37 @@ export class Orchestrator {
         .slice(0, 12)
     } catch {
       return []
+    }
+  }
+
+  private async refreshCorpusMapForTask(input: {
+    task: Task
+    projectRoot: string
+    touchedFiles: readonly string[]
+    reason: 'worker-completion'
+  }): Promise<void> {
+    const touchedFiles = uniqueStrings(
+      input.touchedFiles
+        .map((file) => file.trim())
+        .filter((file) => file.length > 0 && !isIgnorableCheckpointPath(file)),
+    )
+    if (touchedFiles.length === 0) return
+    try {
+      await refreshCodebaseMap({
+        projectRoot: input.projectRoot,
+        memoryDir: this.opts.config.memoryDir,
+        reason: input.reason,
+        touchedFiles,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      await this.emitBackendEvent({
+        type: 'line_complete',
+        task_id: input.task.id,
+        agent_name: 'corpus-map',
+        is_error: true,
+        message: `Corpus Map refresh failed after worker completion: ${message}`,
+      })
     }
   }
 

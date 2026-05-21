@@ -18,6 +18,11 @@ answer:
 - What verification or review standard applies?
 - What decisions or blockers must not be reopened?
 
+If the project does not have a Corpus Map yet, Guildhall creates one during
+context assembly from the task project or active worktree. The map is therefore
+available from the first meaningful agent pass in a normal project, not only
+after a manual setup command.
+
 ## What the context builder includes
 
 A typical worker or reviewer prompt can include these blocks:
@@ -85,6 +90,11 @@ package, design token, component, area, or file pattern it is extending. If no
 abstraction fits, it should explain whether the change should stay local or
 become a just-in-time shared primitive because the same idea is now appearing
 in multiple places.
+
+After the worker changes files and hands the task forward, the orchestrator
+refreshes the Corpus Map from the touched-file evidence it has. That keeps the
+next reviewer or worker oriented around what actually changed without forcing a
+full repo scan every time.
 
 ### Reviewer
 

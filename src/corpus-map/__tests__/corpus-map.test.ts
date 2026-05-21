@@ -12,6 +12,7 @@ import {
   findExistingAbstraction,
   loadCodebaseMap,
   refreshCodebaseMap,
+  shouldIndexPath,
 } from '../index.js'
 
 const execFileP = promisify(execFile)
@@ -19,6 +20,11 @@ const execFileP = promisify(execFile)
 describe('corpus map', () => {
   let projectRoot: string
   let memoryDir: string
+
+  it('ignores command-shaped path segments instead of turning shell snippets into files', () => {
+    expect(shouldIndexPath('pnpm --filter @knit-app test -- tests/unit/junk.test.ts')).toBe(false)
+    expect(shouldIndexPath('src/web/lib/Button.svelte')).toBe(true)
+  })
 
   beforeEach(async () => {
     projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-corpus-map-'))

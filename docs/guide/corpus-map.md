@@ -47,16 +47,29 @@ The builder starts with a Git-aware file list:
 1. Prefer `git ls-files --cached --others --exclude-standard`.
 2. Fall back to a recursive walk when Git is not available.
 3. Skip generated, binary, dependency, and noisy memory paths.
-4. Fingerprint text files and classify them by path and extension.
-5. Extract lightweight symbols and imports.
-6. Group files into areas.
-7. Detect reusable abstractions.
-8. Summarize the project design system when `memory/design-system.yaml`
+4. Skip command-shaped path fragments that may appear in agent notes or
+   checkpoint metadata.
+5. Fingerprint text files and classify them by path and extension.
+6. Extract lightweight symbols and imports.
+7. Group files into areas.
+8. Detect reusable abstractions.
+9. Summarize the project design system when `memory/design-system.yaml`
    exists.
-9. Apply any overrides.
-10. Save the map and append a history event.
+10. Apply any overrides.
+11. Save the map and append a history event.
 
 The first refresh is a full build. Later refreshes can be partial.
+
+Guildhall also wires this into the normal agent lifecycle. If no map exists
+when an agent context is being built, the context builder creates one lazily
+from the task project or active worktree before rendering the prompt. After a
+worker changes files and hands work forward, the orchestrator refreshes the map
+from dirty files and checkpoint-touched files it can prove.
+
+Manual refresh remains available for debugging, repair, or explicit operator
+control, but normal projects should not need to remember to build the map first.
+If refresh fails, Guildhall keeps running and records stale status instead of
+blocking the task.
 
 ## Partial refresh
 

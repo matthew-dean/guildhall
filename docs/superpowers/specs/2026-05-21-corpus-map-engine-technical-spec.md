@@ -199,6 +199,8 @@ Use cheap deterministic discovery first:
 2. fallback recursive walk if the project is not a git repo
 3. exclude `.git`, `node_modules`, `dist`, `build`, `coverage`, generated
    snapshots, logs, and `.guildhall`
+4. filter command-shaped path fragments such as package-manager invocations so
+   agent notes and checkpoint commands cannot become fake indexed files
 
 The MVP indexes:
 
@@ -337,7 +339,9 @@ Corpus fit required:
 - Name supporting files read before editing.
 ```
 
-If no map exists, context builder should not fail. It should omit the block or
+If no map exists, context builder should create it lazily from the task project
+or active worktree, then render the block from that freshly built map. If that
+setup refresh fails, context builder should fail closed: omit the block or
 include a short "Corpus map missing" note when the task is likely to need repo
 structure.
 
@@ -383,9 +387,11 @@ Corpus fit:
 
 MVP integration points:
 
-- `buildContext` loads `memory/codebase-map.yaml` and injects a compact packet.
-- Orchestrator refreshes after worker completion using `filesTouched` from
-  checkpoints/self-critique where available.
+- `buildContext` loads `memory/codebase-map.yaml`; when the map is missing, it
+  runs a setup refresh from the task project or active worktree before injecting
+  the compact packet.
+- Orchestrator refreshes after worker completion using dirty files and
+  checkpoint-touched files where available.
 - `guildhall corpus-map refresh [path]` refreshes the current or supplied
   project.
 - `GET /api/project/codebase-map/status` returns map status for Settings.
@@ -417,8 +423,12 @@ On failure:
    summary.
 6. Querying for "button", "provider settings", or a path returns canonical
    files before leaf files in Guildhall itself.
-7. `buildContext` injects a compact Corpus Map block when a map exists.
-8. Worker/spec/reviewer prompts include corpus-fit requirements.
-9. Settings shows map status and supports manual refresh.
-10. Unit tests cover discovery, partial refresh, design-system summarization,
-    query ranking, context budget, and missing/stale map behavior.
+7. `buildContext` creates a missing map lazily and injects a compact Corpus Map
+   block in the same context pass.
+8. Worker completion refreshes the map from touched-file evidence and records a
+   `worker-completion` history event.
+9. Worker/spec/reviewer prompts include corpus-fit requirements.
+10. Settings shows map status and supports manual refresh.
+11. Unit tests cover discovery, command-shaped path filtering, partial refresh,
+    design-system summarization, query ranking, context budget, missing-map
+    setup, and worker-completion refresh behavior.

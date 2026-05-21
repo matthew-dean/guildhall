@@ -4,7 +4,7 @@ import { execFile, execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import type { Checkpoint, ConstructionMode, Task } from '@guildhall/core'
-import { buildWorkerCorpusContext, loadCodebaseMap } from '@guildhall/corpus-map'
+import { buildWorkerCorpusContext, loadCodebaseMap, refreshCodebaseMap } from '@guildhall/corpus-map'
 import {
   constructionModeForTask,
   summarizeDesignSystem,
@@ -60,6 +60,21 @@ const repoFileCache = new Map<string, string[]>()
 const ACTIONABLE_FILE_HINT_RE = /^\s*(?:[-*]\s*|\d+\.\s*)?(edit|update|modify|create|write|verify|check|test|open|remove|delete|rename|trim|clean)\b/i
 const SHELLISH_CANDIDATE_RE = /^(pnpm|npm|yarn|bun|cd|node)\b|--|&&|\|\|/
 const GLOB_CANDIDATE_RE = /[*?{}]/
+
+async function loadOrCreateCodebaseMap(memoryDir: string, task: Task) {
+  const projectRoot = (task.worktreePath?.trim() || task.projectPath?.trim())
+  const existing = await loadCodebaseMap(memoryDir)
+  if (existing) {
+    if (!projectRoot || path.resolve(existing.project.root) === path.resolve(projectRoot)) return existing
+  }
+  if (!projectRoot) return null
+  const result = await refreshCodebaseMap({
+    projectRoot,
+    memoryDir,
+    reason: 'setup',
+  })
+  return result.map
+}
 
 function isActionableFileCandidate(candidate: string): boolean {
   const trimmed = candidate.trim()
@@ -689,7 +704,7 @@ export async function buildContext(
           .then((checkpoint) => shouldUseCheckpointForTask(task, checkpoint) ? checkpoint : null)
           .catch(() => null)
       : Promise.resolve(null),
-    loadCodebaseMap(memoryDir).catch(() => null),
+    loadOrCreateCodebaseMap(memoryDir, task).catch(() => null),
   ])
   const reviewPacket =
     task.status === 'review' || task.status === 'gate_check'

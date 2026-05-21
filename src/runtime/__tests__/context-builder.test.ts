@@ -8,7 +8,7 @@ import { buildContext, resolveLikelyTaskFiles } from '../context-builder.js'
 import type { Task } from '@guildhall/core'
 import { writeCheckpoint } from '@guildhall/tools'
 import { proposeProjectSkill, activateProjectSkillProposal } from '@guildhall/skills'
-import { saveCodebaseMap, type CodebaseMap } from '@guildhall/corpus-map'
+import { loadCodebaseMap, saveCodebaseMap, type CodebaseMap } from '@guildhall/corpus-map'
 
 // ---------------------------------------------------------------------------
 // Context builder tests (AC-04)
@@ -307,6 +307,46 @@ describe('buildContext — task summary', () => {
     expect(ctx.formatted).toContain('Reuse / Extend')
     expect(ctx.formatted).toContain('Command buttons')
     expect(ctx.formatted).toContain('Corpus fit required')
+  })
+
+  it('creates the corpus map lazily before building agent context when it is missing', async () => {
+    const projectRoot = path.join(tmpDir, 'project')
+    await fs.mkdir(path.join(projectRoot, 'src', 'web', 'lib'), { recursive: true })
+    await fs.writeFile(
+      path.join(projectRoot, 'package.json'),
+      JSON.stringify({ name: 'ctx-project', dependencies: { svelte: '5.0.0' } }, null, 2),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(projectRoot, 'src', 'web', 'lib', 'Button.svelte'),
+      '<button><slot /></button>\n',
+      'utf8',
+    )
+
+    const ctx = await buildContext({ ...baseTask, projectPath: projectRoot }, tmpDir)
+    const map = await loadCodebaseMap(tmpDir)
+
+    expect(map?.project.root).toBe(projectRoot)
+    expect(ctx.corpusMap).toContain('## Corpus Map')
+    expect(ctx.formatted).toContain('Corpus fit required')
+  })
+
+  it('refreshes a stale corpus map when the active task root changes', async () => {
+    const oldRoot = path.join(tmpDir, 'old-project')
+    const projectRoot = path.join(tmpDir, 'new-project')
+    await fs.mkdir(path.join(projectRoot, 'src'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, 'package.json'), JSON.stringify({ name: 'new-project' }), 'utf8')
+    await fs.writeFile(path.join(projectRoot, 'src', 'feature.ts'), 'export const value = 1\n', 'utf8')
+    await saveCodebaseMap(tmpDir, minimalCodebaseMap({
+      root: oldRoot,
+      generatedAt: '2026-05-21T12:00:00.000Z',
+    }))
+
+    await buildContext({ ...baseTask, projectPath: projectRoot }, tmpDir)
+
+    const map = await loadCodebaseMap(tmpDir)
+    expect(map?.project.root).toBe(projectRoot)
+    expect(map?.files['src/feature.ts']?.summary).toContain('feature.ts')
   })
 
   it('does not duplicate the project folder when an imported source path is workspace-relative', async () => {

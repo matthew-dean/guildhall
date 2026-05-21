@@ -82,6 +82,7 @@ async function walk(root: string, dir: string, out: string[]): Promise<void> {
 export function shouldIndexPath(relativePath: string): boolean {
   const segments = relativePath.split('/')
   if (segments.some((segment) => EXCLUDED_DIRS.has(segment))) return false
+  if (segments.some((segment) => looksLikeShellCommandSegment(segment))) return false
   if (relativePath.includes('__snapshots__/')) return false
   if (/\.(png|jpg|jpeg|gif|webp|ico|pdf|zip|tar|gz|map|lockb)$/i.test(relativePath)) return false
   const basename = path.basename(relativePath)
@@ -94,6 +95,10 @@ export function shouldIndexPath(relativePath: string): boolean {
   ) return false
   const ext = path.extname(relativePath).toLowerCase()
   return TEXT_EXTENSIONS.has(ext) || isManifest(relativePath) || basename === 'AGENTS.md' || basename.startsWith('README')
+}
+
+function looksLikeShellCommandSegment(segment: string): boolean {
+  return /\s(?:--|&&|\|\||\|)\s|\b(?:pnpm|npm|yarn|bun|node|npx)\s/.test(segment)
 }
 
 export async function indexFile(projectRoot: string, relativePath: string): Promise<CorpusFileEntry | null> {
