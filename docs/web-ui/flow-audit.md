@@ -225,6 +225,10 @@ screen.
   the required place to keep a task moving.
 - [x] Fix the new-project setup regression where `/setup?step=3` attempted to
   seed meta-intake through `/api/project/meta-intake` without a `projectId`.
+- [x] Fix `guildhall serve` hanging after Ctrl+C while the dashboard has live
+  HTTP connections open. Shutdown now closes idle connections, force-closes
+  lingering active connections such as SSE streams, and has a final timeout so
+  the terminal can always finish after printing the shutdown message.
   The setup wizard now keeps an explicit project id after identity creation,
   moves the URL to `/projects/:id/setup?...`, and scopes setup follow-up API
   calls before the route has fully caught up. A route-helper regression test

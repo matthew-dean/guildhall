@@ -226,6 +226,46 @@ export interface ServeOptions {
   pickProjectFolder?: () => Promise<string | null>
 }
 
+export interface ShutdownHttpServer {
+  close(callback?: (err?: Error) => void): unknown
+  closeIdleConnections?: () => void
+  closeAllConnections?: () => void
+}
+
+export async function closeHttpServerForShutdown(
+  server: ShutdownHttpServer,
+  opts: { forceCloseAfterMs?: number; timeoutMs?: number } = {},
+): Promise<void> {
+  const forceCloseAfterMs = opts.forceCloseAfterMs ?? 250
+  const timeoutMs = opts.timeoutMs ?? 3000
+
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(forceTimer)
+      clearTimeout(timeoutTimer)
+      resolve()
+    }
+
+    const forceTimer = setTimeout(() => {
+      server.closeAllConnections?.()
+    }, forceCloseAfterMs)
+    forceTimer.unref?.()
+
+    const timeoutTimer = setTimeout(finish, timeoutMs)
+    timeoutTimer.unref?.()
+
+    try {
+      server.close(() => finish())
+      server.closeIdleConnections?.()
+    } catch {
+      finish()
+    }
+  })
+}
+
 interface ResolvedProject {
   path: string
   id: string
@@ -4890,7 +4930,7 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
       console.warn(`[guildhall serve] stopAll error: ${err instanceof Error ? err.message : String(err)}`)
     }
     await removeServiceStateIfOwned()
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeHttpServerForShutdown(server)
     console.log('[guildhall serve] Shutdown complete.')
     process.exit(0)
   }
