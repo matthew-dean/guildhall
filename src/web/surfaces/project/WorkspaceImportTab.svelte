@@ -842,32 +842,34 @@
           {#if data.detected?.learning?.defaults?.note}
             <p class="learned-note">{data.detected.learning.defaults.note}</p>
           {/if}
-          <ul class="source-summary">
-            {#each primaryAreas as area (area.key)}
-              <li>
-                <Row justify="between" align="start" gap="4" wrap>
-                  <div class="summary-main">
-                    <div class="summary-title-row">
-                      <strong>{area.label}</strong>
+          {#if primaryAreas.length > 0}
+            <ul class="source-summary">
+              {#each primaryAreas as area (area.key)}
+                <li>
+                  <Row justify="between" align="start" gap="4" wrap>
+                    <div class="summary-main">
+                      <div class="summary-title-row">
+                        <strong>{area.label}</strong>
+                      </div>
+                      <div class="metric-row">
+                        <Chip label={`${area.taskCount} tasks`} tone="ok" />
+                        <Chip label={`${area.sourceCount} sources`} tone="neutral" />
+                      </div>
                     </div>
-                    <div class="metric-row">
-                      <Chip label={`${area.taskCount} tasks`} tone="ok" />
-                      <Chip label={`${area.sourceCount} sources`} tone="neutral" />
+                    <div class="summary-side">
+                      <span class="summary-label">Planning sources</span>
+                      <span class="summary-preview">{sourcePreview(area)}</span>
                     </div>
-                  </div>
-                  <div class="summary-side">
-                    <span class="summary-label">Planning sources</span>
-                    <span class="summary-preview">{sourcePreview(area)}</span>
-                  </div>
-                  <Button variant="ghost" size="sm" onclick={() => focusArea(area.key)}>
-                    Details
-                  </Button>
-                </Row>
-              </li>
-            {/each}
-          </ul>
+                    <Button variant="ghost" size="sm" onclick={() => focusArea(area.key)}>
+                      Details
+                    </Button>
+                  </Row>
+                </li>
+              {/each}
+            </ul>
+          {/if}
           {#if secondaryAreas.length > 0}
-            <details class="secondary-summary">
+            <details class:reference-only={primaryAreas.length === 0} class="secondary-summary">
               <summary>Show reference-only parts</summary>
               <ul class="source-summary nested">
                 {#each secondaryAreas as area (area.key)}
@@ -1713,6 +1715,9 @@
   }
   .secondary-summary {
     margin-top: var(--s-4);
+  }
+  .secondary-summary.reference-only {
+    margin-top: 0;
   }
   .secondary-help {
     margin: var(--s-3) 0;

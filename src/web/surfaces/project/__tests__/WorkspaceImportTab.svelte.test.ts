@@ -267,6 +267,37 @@ describe('WorkspaceImportTab', () => {
     expect(screen.getByText('Roadmap items for editor linking.')).toBeTruthy()
   })
 
+  it('does not reserve blank summary space when every found part is reference-only', async () => {
+    const referenceOnlyDraft = structuredClone(detectedDraft)
+    referenceOnlyDraft.detected.tasks = []
+    referenceOnlyDraft.detected.stats = { inputSignals: 4, drafted: 0, deduped: 0 }
+    referenceOnlyDraft.detected.review.totalTaskCandidates = 0
+    referenceOnlyDraft.detected.review.areaGroups = referenceOnlyDraft.detected.review.areaGroups.map(area => ({
+      ...area,
+      taskCount: 0,
+    }))
+    referenceOnlyDraft.detected.review.sourceGroups = referenceOnlyDraft.detected.review.sourceGroups.map(group => ({
+      ...group,
+      taskCount: 0,
+      kind: 'reference',
+      taskIds: [],
+    }))
+    referenceOnlyDraft.detected.learning.defaults = {
+      selectedAreaKeys: [],
+      selectedSourceKeys: [],
+      selectedTaskIds: [],
+      taskSelectionMode: 'all',
+      note: null,
+    }
+    installFetchFakes(referenceOnlyDraft)
+
+    const { container } = render(WorkspaceImportTab)
+    await screen.findByText(/Guildhall found planning notes in 2 project parts/)
+
+    expect(container.querySelectorAll('ul.source-summary:not(.nested)')).toHaveLength(0)
+    expect(screen.getByText('Show reference-only parts')).toBeTruthy()
+  })
+
   it('can import reference-only project context without creating draft tasks', async () => {
     const { calls } = installFetchFakes()
 

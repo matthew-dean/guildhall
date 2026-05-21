@@ -3728,6 +3728,11 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
   `Use this source` one at a time. Add a bulk action such as `Use all 18
   sources`, make the optional/reference distinction explain itself, and clarify
   what including those sources changes in the import.
+- [x] Workspace import Step 1 rendered an empty primary-source summary block
+  when a project only had reference-only parts, leaving a large dead gap before
+  `Show reference-only parts`. Empty layout sections should not reserve space;
+  show the reference-only details directly after the intro when there are no
+  task-bearing parts.
 - [x] Import completion has contradictory next-step copy when no tasks were
   created. It says "Guildhall created 0 draft tasks" but still offers
   `Shape imported drafts in Thread`. When zero drafts exist, the primary next
