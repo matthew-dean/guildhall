@@ -9,16 +9,18 @@ help_summary: |
 # Web UI flow audit
 
 This is the active browser test plan for the Guildhall project surface. Keep it
-updated while auditing `t-minus-t` so another agent can resume without guessing.
+updated while auditing the active test project so another agent can resume
+without guessing.
 
 ## Test workspace
 
 - Guildhall repo: `/Users/matthew/git/oss/guildhall`
-- Test project: `/Users/matthew/git/oss/looma-knit`
-- Browser target: `http://localhost:7777/project`
-- Expected project shape: a two-subproject workspace containing Looma and
-  Knit, with a large existing planning corpus that should import into a real
-  task backlog instead of a tiny or confusing placeholder set.
+- Test project: `/Users/matthew/git/oss/narrative-harness`
+- Browser target: `http://localhost:7777/projects/narrative-harness`
+- Expected project shape: a serious product-planning corpus for a commercial
+  narrative editor, with specs and reference notes that should import as useful
+  project context and task-shaping material instead of being hidden or framed
+  as low-value optional sources.
 
 ## Current Principle
 
@@ -40,6 +42,39 @@ screen.
 
 ## Current Follow-Ups
 
+- [ ] Fix tiny inbox overflow action in `Do this next`. Live Narrative Harness
+  testing found `1 more in Inbox ›` rendering as an 18px-high button beside the
+  primary task action, so it feels like inline text instead of a control and
+  misses the shared button target rhythm.
+- [ ] Make workspace-import Details drawers inspectable. Live Narrative
+  Harness testing on Step 2 found the part drawer lists source titles as dense
+  text only; source rows are not clickable and do not expose summaries, paths,
+  or a way to inspect the referenced note from the drawer.
+- [ ] Make `Needs you` counts match actual actionable blockers. Parallel
+  testing found Thread / Needs you showing stale or incomplete counts across
+  `t-minus-t`, `fair-labor-license`, `looma-knit`, and `font-something`;
+  release blockers, shelved tasks, and import-review work can be hidden even
+  when the top bar claims the project needs attention.
+- [ ] Replace contradictory idle copy with a concrete next step. Parallel
+  testing found projects showing combinations like `0 working`, `0 blocked`,
+  `All caught up — agents are working`, `LIVE`, `Paused`, and `Start` without
+  explaining whether the user should answer a question, finish import, draft a
+  missing design system, or simply wait.
+- [ ] Filter default Timeline noise. Parallel testing found repeated provider
+  health events dominating timelines in multiple projects, burying the events
+  that explain current state or project progress.
+- [ ] Route reserved workspace-import tasks to the import wizard. Parallel
+  testing found task drawers and Thread CTAs offering generic actions like
+  `Continue drafting spec` or `Create the first task` when the real next step
+  is reviewing and approving existing project work.
+- [ ] Fix workspace-import task-review detail trapping. Parallel testing on
+  `font-something` found Step 4 could reopen the same task detail after
+  closing it and clicking `Review next source`, making the import review feel
+  non-advancable.
+- [x] Fix workspace-import Details drawer close behavior. Live Narrative
+  Harness testing opened the Docs part drawer and verified the `Close` button
+  now dismisses the drawer. The shared `SideDrawer` now sits above the app
+  rail/menu layer instead of underneath it.
 - [x] Reframe workspace-import project docs as included context rather than
   optional sources. Reference-only docs are selected by default, individual
   note review is tucked behind a disclosure, each note card shows a useful

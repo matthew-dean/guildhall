@@ -45,7 +45,7 @@
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.5);
-    z-index: var(--z-drawer-backdrop);
+    z-index: calc(var(--z-drawer) + 1);
   }
 
   .gh-side-drawer {
@@ -56,7 +56,7 @@
     height: 100vh;
     background: var(--bg-raised);
     border-left: 1px solid var(--border);
-    z-index: var(--z-drawer);
+    z-index: calc(var(--z-drawer) + 2);
     display: flex;
     flex-direction: column;
     box-shadow: -16px 0 48px rgba(0, 0, 0, 0.35);
