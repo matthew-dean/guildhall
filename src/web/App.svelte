@@ -57,6 +57,8 @@
     overflow: hidden;
   }
   .app-main {
+    position: relative;
+    z-index: var(--z-drawer);
     flex: 1 1 auto;
     block-size: 0;
     min-height: 0;

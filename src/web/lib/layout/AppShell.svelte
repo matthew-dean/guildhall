@@ -94,7 +94,6 @@
     block-size: 100%;
     align-self: stretch;
     position: relative;
-    z-index: 1;
     grid-column: 2;
     overflow: hidden;
   }
