@@ -57,6 +57,11 @@ screen.
   provider, and readiness affordances now share one quiet link treatment;
   disabled New Task no longer occupies toolbar space; Start/Stop remains the
   only high-emphasis command and overflow uses a single quiet icon control.
+- [x] Condense the project top bar further after live Narrative Harness review.
+  `Projects` is a real secondary button again, setup/readiness is an icon-only
+  attention affordance, normal provider text stays out of the bar, and queued
+  work / inbox / stuck states use a compact icon-button cluster with number
+  badges instead of full text labels.
 - [x] Remove maintainer-only implementation pages from the public VitePress
   surface. The public docs build now excludes `docs/subsystems/**`,
   `docs/web-ui/design-tokens.md`, and `docs/web-ui/help-system.md`; sidebar,

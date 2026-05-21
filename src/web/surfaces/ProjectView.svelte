@@ -759,16 +759,17 @@
     {#snippet topbar()}
       <header class="topbar topbar--uninitialized">
         <div class="topbar-start">
-          <button
-            type="button"
-            class="topbar-link topbar-link--back"
+          <Button
+            variant="secondary"
+            size="sm"
+            className="toolbar-btn toolbar-btn--back"
             onclick={() => go('/')}
-            aria-label="Back to Projects"
+            ariaLabel="Back to Projects"
             title="Back to Projects"
           >
             <Icon name="chevron-left" size={16} />
-            <span>Projects</span>
-          </button>
+            <span class="toolbar-btn-label">Projects</span>
+          </Button>
         </div>
         <div class="topbar-leading"></div>
         <div class="topbar-actions"></div>
@@ -895,40 +896,58 @@
     {#snippet topbar()}
       <header class="topbar">
         <div class="topbar-start">
-          <button
-            type="button"
-            class="topbar-link topbar-link--back"
+          <Button
+            variant="secondary"
+            size="sm"
+            className="toolbar-btn toolbar-btn--back"
             onclick={() => go('/')}
-            aria-label="Back to Projects"
+            ariaLabel="Back to Projects"
             title="Back to Projects"
           >
             <Icon name="chevron-left" size={16} />
-            <span>Projects</span>
-          </button>
+            <span class="toolbar-btn-label">Projects</span>
+          </Button>
         </div>
         <div class="topbar-leading">
-          {#if activeCount > 0 || awaitingApprovalCount > 0 || stuckCount > 0}
+          {#if newTaskDisabledReason || (runStatus !== 'running' && startDisabledReason)}
             <button
               type="button"
-              class="topbar-link topbar-status-link"
-              class:is-warning={stuckCount > 0}
+              class="topbar-link topbar-icon-status topbar-setup-link"
+              onclick={() => go(currentProjectHref(needsMeta ? '/setup' : '/settings/ready', activeProjectId))}
+              title={newTaskDisabledReason ?? startDisabledReason ?? ''}
+              aria-label={`${needsMeta ? 'Project setup needs attention' : 'Readiness checks need attention'}: ${newTaskDisabledReason ?? startDisabledReason ?? 'Review required'}`}
+            >
+              <Icon name="alert-triangle" size={14} />
+            </button>
+          {/if}
+          {#if providerStatus?.fallback && providerHeaderLabel}
+            <button
+              type="button"
+              class="topbar-link topbar-icon-status provider-indicator is-warning"
+              onclick={() => go('/providers')}
+              title={providerTitle}
+              aria-label={providerTitle}
+            >
+              <Icon name="plug" size={14} />
+            </button>
+          {/if}
+          {#if stuckCount > 0}
+            <button
+              type="button"
+              class="topbar-link topbar-icon-status topbar-status-link"
+              class:is-warning={true}
               onclick={() => go(currentProjectHref('/work', activeProjectId))}
               title="Jump to Work"
               aria-label="{activeCount} {activeCountLabel}, {awaitingApprovalCount} awaiting approval, {stuckCount} stuck"
             >
-              <span class="tasks-count">{activeCount} {activeCountLabel}</span>
-              {#if awaitingApprovalCount > 0}
-                <span class="tasks-approval">· {awaitingApprovalCount} awaiting approval</span>
-              {/if}
-              {#if stuckCount > 0}
-                <span class="tasks-stuck">· {stuckCount} stuck</span>
-              {/if}
+              <Icon name="alert-triangle" size={14} />
+              <span class="topbar-status-badge">{stuckCount}</span>
             </button>
           {/if}
           {#if inboxActionableCount > 0}
             <button
               type="button"
-              class="topbar-link topbar-icon-status"
+              class="topbar-link topbar-icon-status topbar-status-link"
               class:is-warning={!inboxHasHighSeverity}
               class:is-danger={inboxHasHighSeverity}
               onclick={() => go(currentProjectHref('/notifications', activeProjectId))}
@@ -936,38 +955,23 @@
               aria-label="{inboxActionableCount} notifications need you"
             >
               <Icon name="inbox" size={14} />
-              <span>{inboxActionableCount}</span>
+              <span class="topbar-status-badge">{inboxActionableCount}</span>
             </button>
           {/if}
-          {#if providerHeaderLabel}
+          {#if stuckCount === 0 && inboxActionableCount === 0 && (activeCount > 0 || awaitingApprovalCount > 0)}
             <button
               type="button"
-              class="topbar-link provider-indicator"
-              class:is-warning={providerStatus?.fallback}
-              onclick={() => go('/providers')}
-              title={providerTitle}
-              aria-label={providerTitle}
+              class="topbar-link topbar-icon-status topbar-status-link"
+              onclick={() => go(currentProjectHref('/work', activeProjectId))}
+              title="Jump to Work"
+              aria-label="{activeCount} {activeCountLabel}, {awaitingApprovalCount} awaiting approval"
             >
-              <Icon name="plug" size={14} />
-              <span class="provider-summary">{providerHeaderLabel}</span>
-              {#if providerStatus?.fallback}
-                <span class="provider-fallback">fallback</span>
-              {/if}
+              <Icon name={awaitingApprovalCount > 0 ? 'check-circle-2' : 'list-checks'} size={14} />
+              <span class="topbar-status-badge">{awaitingApprovalCount > 0 ? awaitingApprovalCount : activeCount}</span>
             </button>
           {/if}
         </div>
         <div class="topbar-actions">
-          {#if newTaskDisabledReason || (runStatus !== 'running' && startDisabledReason)}
-            <button
-              type="button"
-              class="topbar-link topbar-setup-link"
-              onclick={() => go(currentProjectHref(needsMeta ? '/setup' : '/settings/ready', activeProjectId))}
-              title={newTaskDisabledReason ?? startDisabledReason ?? ''}
-            >
-              <Icon name="alert-triangle" size={14} />
-              {needsMeta ? 'Project setup needs attention' : 'Readiness checks need attention'}
-            </button>
-          {/if}
           {#if newTaskDisabledReason === null}
             <Button
               variant="secondary"
@@ -1013,7 +1017,7 @@
               title="Open actions menu"
               onclick={toggleActionsMenu}
             >
-              ...
+              <Icon name="ellipsis" size={18} />
             </Button>
             {#if actionsMenuOpen}
               <div class="actions-menu-panel">
@@ -1436,34 +1440,50 @@
   .topbar-link.is-danger {
     color: var(--danger);
   }
-  .topbar-link--back {
-    font-weight: 650;
-  }
   .topbar-status-link {
-    max-width: 34ch;
+    position: relative;
   }
   .topbar-icon-status {
+    justify-content: center;
     font-weight: 700;
+    min-width: 36px;
+    width: 36px;
+    min-height: 36px;
+    padding: 0;
+    border-radius: 10px;
   }
   .topbar-setup-link {
-    max-width: 32ch;
     color: var(--warn);
     font-weight: 650;
   }
-  .tasks-stuck { font-weight: 600; }
+  .topbar-status-badge {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 5px;
+    border: 1px solid var(--bg);
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-contrast);
+    font-size: 10px;
+    font-weight: 750;
+    line-height: 1;
+  }
+  .topbar-link.is-warning .topbar-status-badge {
+    background: var(--warn);
+    color: var(--bg);
+  }
+  .topbar-link.is-danger .topbar-status-badge {
+    background: var(--danger);
+    color: var(--bg);
+  }
   .provider-indicator {
     max-width: min(100%, 42ch);
-  }
-  .provider-summary {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
-  .provider-fallback {
-    font-size: var(--fs-0);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
   }
   .btn-inner {
     display: inline-flex;
@@ -1537,11 +1557,6 @@
   }
 
   @media (max-width: 1180px) {
-    .tasks-approval,
-    .tasks-stuck,
-    .provider-fallback {
-      display: none;
-    }
     .toolbar-btn--back .toolbar-btn-label {
       display: none;
     }
