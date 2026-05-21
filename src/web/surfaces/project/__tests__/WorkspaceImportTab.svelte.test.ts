@@ -204,6 +204,8 @@ describe('WorkspaceImportTab', () => {
     render(WorkspaceImportTab)
     await screen.findByText(/Guildhall found planning notes in 2 project parts/)
     expect(screen.getByText(/Using the same import defaults/)).toBeTruthy()
+    expect(screen.getByText(/Nothing is saved until the final step/)).toBeTruthy()
+    expect(screen.getByText(/You can resume this review later/)).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
     await screen.findByText('Choose the parts for this pass')
@@ -250,6 +252,19 @@ describe('WorkspaceImportTab', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
     expect(screen.getByText('Choose the parts for this pass')).toBeTruthy()
+  })
+
+  it('lets users inspect source summaries from a part details drawer', async () => {
+    installFetchFakes()
+
+    render(WorkspaceImportTab)
+    await screen.findByText(/Guildhall found planning notes in 2 project parts/)
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Details' })[0]!)
+
+    expect(await screen.findByText('Sources in this part')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Roadmap/ })).toBeTruthy()
+    expect(screen.getByText('Roadmap items for editor linking.')).toBeTruthy()
   })
 
   it('can import reference-only project context without creating draft tasks', async () => {

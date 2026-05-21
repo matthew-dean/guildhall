@@ -500,8 +500,8 @@
 
   function usefulSourceSummary(group: SourceGroup): string {
     const evidence = sourceEvidence(group)[0]?.text
-    if (evidence && !/^[\w./-]+\.md$/i.test(evidence)) return evidence
     if (group.summary && !/^\d+\s+(reference note|reference notes|source|sources)$/i.test(group.summary)) return group.summary
+    if (evidence && !/^[\w./-]+\.md$/i.test(evidence)) return evidence
     return evidence || group.summary
   }
 
@@ -774,6 +774,9 @@
                 Confirm the parts first. Guildhall found planning notes and goals here, but it did not infer any draft tasks yet.
                 You can still review the sources and import the project context it found.
               {/if}
+            </p>
+            <p class="section-copy">
+              Nothing is saved until the final step. You can resume this review later from Needs you or the import page.
             </p>
             <div class="metric-row" aria-label="Import summary">
               <Chip label={`${areaGroups.length} parts`} tone="accent" />
@@ -1319,7 +1322,17 @@
             <div class="detail-label">Sources in this part</div>
             <ul class="detail-list">
               {#each groups.filter(group => group.areaKey === focusedArea.key).slice(0, 6) as group (group.key)}
-                <li>{group.label}</li>
+                <li>
+                  <button type="button" class="detail-source" onclick={() => focusSource(group.key)}>
+                    <span class="detail-source-title">{group.label}</span>
+                    {#if group.path}
+                      <span class="detail-source-path">{displayPath(group.path)}</span>
+                    {/if}
+                    {#if usefulSourceSummary(group)}
+                      <span class="detail-source-summary">{usefulSourceSummary(group)}</span>
+                    {/if}
+                  </button>
+                </li>
               {/each}
             </ul>
           </div>
@@ -1480,6 +1493,32 @@
     margin: 0;
     padding-left: 1.1rem;
     color: var(--text);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+  .detail-source {
+    width: 100%;
+    display: grid;
+    gap: var(--s-1);
+    padding: var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: var(--bg-raised);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .detail-source:hover {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised));
+  }
+  .detail-source-title {
+    font-weight: 700;
+  }
+  .detail-source-path,
+  .detail-source-summary {
+    color: var(--text-muted);
     font-size: var(--fs-1);
     line-height: var(--lh-body);
   }

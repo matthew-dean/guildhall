@@ -48,6 +48,7 @@
 
   let providers = $state<Record<string, ProviderMeta> | null>(null)
   let models = $state<ModelConfig | null>(null)
+  let modelsError = $state<string | null>(null)
   let preferred = $state<string | null>(null)
   let originalPreferred = $state<string | null>(null)
   let loadError = $state<string | null>(null)
@@ -75,9 +76,11 @@
     const modelRes = await projectFetch('/api/config/models')
     const modelJson = await modelRes.json().catch(() => ({}))
     if (!modelRes.ok || modelJson.error) {
-      flash(modelJson.error ?? `Model reload failed (HTTP ${modelRes.status})`, true)
+      modelsError = modelJson.error ?? `Model reload failed (HTTP ${modelRes.status})`
+      flash(modelsError, true)
       return false
     }
+    modelsError = null
     models = modelJson as ModelConfig
     return true
   }
@@ -209,7 +212,9 @@
       </div>
     {/if}
 
-    {#if !models}
+    {#if modelsError}
+      <p class="error">{modelsError}</p>
+    {:else if !models}
       <p class="muted">Loading...</p>
     {:else}
       <div class="model-list">

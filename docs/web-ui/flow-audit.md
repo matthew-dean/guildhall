@@ -40,6 +40,14 @@ a time. Source discovery, source selection, candidate-task review, and final
 task creation are different user jobs and should not be collapsed into one
 screen.
 
+Systemic flow note from re-reading the older audit trail: repeated bugs are
+not just local copy/control bugs. The same pattern keeps appearing: Guildhall
+knows a more specific next surface or remediation path, but renders a generic
+task/action and asks the user to infer the route. Prefer coordinator-owned
+routing to the right review surface, unified action-queue counts, and
+exception-based questions ("this looks stale; exclude it?") over making users
+babysit setup/import/provider/release states across multiple pages.
+
 ## Current Follow-Ups
 
 - [x] Run a five-agent cross-project UI/user-testing sweep. Started a
@@ -53,32 +61,44 @@ screen.
   `fair-labor-license/settings`, and `font-something/workspace-import` can
   render an empty or stuck page even though the server and backing APIs still
   respond.
-- [ ] Fix project subpages that hang despite healthy API responses. Parallel
+- [x] Fix project subpages that hang despite healthy API responses. Parallel
   testing found Release, Providers, and project provider settings can stay on
   `Loading...` states while their backing endpoints return usable data.
-- [ ] Make run-state labels distinguish connection health from execution
+  Release now uses project-scoped reads, and provider/model surfaces render
+  explicit model-load errors instead of indefinite loading when the model
+  endpoint fails.
+- [x] Make run-state labels distinguish connection health from execution
   state. Parallel testing found projects simultaneously reading as `LIVE`,
   `CONNECTING...`, `PAUSED`, `stopped`, and `Start`-able, which makes it
-  impossible to know whether Guildhall is running or merely connected.
-- [ ] Elevate hard release blockers into the release verdict. Parallel testing
+  impossible to know whether Guildhall is running or merely connected. The app
+  header now reports transport state as `connected` / `connecting`, while the
+  project top bar reports open work separately from running agents.
+- [x] Elevate hard release blockers into the release verdict. Parallel testing
   found `t-minus-t` showing `Blocked`, `3/3 done`, `0 items waiting on you`,
   and `Human blockers 0`, while the real release blocker was `Design system
-  not drafted` deeper in criteria detail.
+  not drafted` deeper in criteria detail. The release verdict now treats an
+  undrafted or unapproved design system as the named hard blocker even when no
+  human-task blocker count exists.
 - [ ] Make task drawers explain shelved and checkpointed outcomes. Parallel
   testing found `fair-labor-license` task details stuck on `Loading...` for a
   shelved task, and `t-minus-t` completed tasks using checkpoint / no-merge
   language that leaves the user unsure whether anything remains to do.
-- [ ] Consolidate duplicate workspace-import entry points. Parallel testing
+- [x] Consolidate duplicate workspace-import entry points. Parallel testing
   found `font-something` surfacing `Review existing work`, `Existing repo
   detected`, and `Review existing project work` as separate-looking CTAs that
-  all point at the same import/review lane.
-- [ ] Clarify workspace-import reversibility and commit point. Parallel
+  all point at the same import/review lane. Reserved workspace-import work now
+  emits one `Review existing project work` action routed to `/workspace-import`
+  instead of also surfacing generic setup/spec-fill nags for the same lane.
+- [x] Clarify workspace-import reversibility and commit point. Parallel
   testing found Step 1 explains context vs backlog tasks well, but does not say
   whether skipping can be resumed, when selected notes become durable project
-  memory, or whether task creation only happens on the final step.
-- [ ] Add accessible names to collapsed project navigation buttons. Parallel
+  memory, or whether task creation only happens on the final step. Step 1 now
+  states that nothing is saved until the final step and the review can be
+  resumed later from Needs you or the import page.
+- [x] Add accessible names to collapsed project navigation buttons. Parallel
   testing found icon-only rail buttons can appear without useful accessible
-  labels when the project rail is collapsed.
+  labels when the project rail is collapsed. Collapsed rail items now carry
+  explicit accessible labels for project sections and Providers.
 - [ ] Reduce always-visible mutating controls in read/inspect drawers. Parallel
   testing found task drawers visually crowded by controls like `Pause task`,
   `Put aside`, and `Continue drafting spec` when the user is only trying to
@@ -89,31 +109,41 @@ screen.
   reserving the expanded rail width. `AppShell` now uses the same 920px
   breakpoint as the rail behavior, and a Playwright regression guards the
   pinned layout at 960px.
-- [ ] Fix tiny inbox overflow action in `Do this next`. Live Narrative Harness
+- [x] Fix tiny inbox overflow action in `Do this next`. Live Narrative Harness
   testing found `1 more in Inbox ›` rendering as an 18px-high button beside the
   primary task action, so it feels like inline text instead of a control and
-  misses the shared button target rhythm.
-- [ ] Make workspace-import Details drawers inspectable. Live Narrative
+  misses the shared button target rhythm. The overflow action now uses the
+  shared `Button` component and inherits the same target rhythm as other
+  secondary actions.
+- [x] Make workspace-import Details drawers inspectable. Live Narrative
   Harness testing on Step 2 found the part drawer lists source titles as dense
   text only; source rows are not clickable and do not expose summaries, paths,
-  or a way to inspect the referenced note from the drawer.
+  or a way to inspect the referenced note from the drawer. Part drawers now
+  render each source as an inspectable row with title, path, and useful summary
+  and clicking a source switches the drawer to that source's detail.
 - [ ] Make `Needs you` counts match actual actionable blockers. Parallel
   testing found Thread / Needs you showing stale or incomplete counts across
   `t-minus-t`, `fair-labor-license`, `looma-knit`, and `font-something`;
   release blockers, shelved tasks, and import-review work can be hidden even
   when the top bar claims the project needs attention.
-- [ ] Replace contradictory idle copy with a concrete next step. Parallel
+- [x] Replace contradictory idle copy with a concrete next step. Parallel
   testing found projects showing combinations like `0 working`, `0 blocked`,
   `All caught up — agents are working`, `LIVE`, `Paused`, and `Start` without
   explaining whether the user should answer a question, finish import, draft a
-  missing design system, or simply wait.
-- [ ] Filter default Timeline noise. Parallel testing found repeated provider
+  missing design system, or simply wait. Thread now distinguishes needs-input,
+  working, queued, and genuinely idle states in the caught-up copy.
+- [x] Filter default Timeline noise. Parallel testing found repeated provider
   health events dominating timelines in multiple projects, burying the events
-  that explain current state or project progress.
-- [ ] Route reserved workspace-import tasks to the import wizard. Parallel
+  that explain current state or project progress. The default Timeline hides
+  provider health chatter behind a compact connection-check count so project
+  events stay legible.
+- [x] Route reserved workspace-import tasks to the import wizard. Parallel
   testing found task drawers and Thread CTAs offering generic actions like
   `Continue drafting spec` or `Create the first task` when the real next step
-  is reviewing and approving existing project work.
+  is reviewing and approving existing project work. Reserved import work now
+  routes to `/workspace-import`, and the task drawer primary action for
+  `task-workspace-import` opens the import review instead of presenting normal
+  worker-task controls.
 - [ ] Fix workspace-import task-review detail trapping. Parallel testing on
   `font-something` found Step 4 could reopen the same task detail after
   closing it and clicking `Review next source`, making the import review feel

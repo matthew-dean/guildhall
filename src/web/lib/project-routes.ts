@@ -121,15 +121,16 @@ export function withProjectQuery(href: string, projectId: string | null): string
 }
 
 export function projectFetch(input: string, init?: RequestInit, explicitProjectId?: string | null): Promise<Response> {
+  const callFetch = (href: string) => init === undefined ? fetch(href) : fetch(href, init)
   const projectId = normalizedProjectId(explicitProjectId) ?? currentProjectId()
   const href = projectId ? withProjectQuery(input, projectId) : withCurrentProjectQuery(input)
-  if (!projectId || typeof input !== 'string') return fetch(href, init)
+  if (!projectId || typeof input !== 'string') return callFetch(href)
 
   let url: URL
   try {
     url = new URL(href, typeof window !== 'undefined' ? window.location.origin : 'http://localhost')
   } catch {
-    return fetch(href, init)
+    return callFetch(href)
   }
 
   const method = (init?.method ?? 'GET').toUpperCase()
@@ -139,11 +140,11 @@ export function projectFetch(input: string, init?: RequestInit, explicitProjectI
     url.pathname === '/api/config' ||
     url.pathname.startsWith('/api/config/')
   const mutating = !['GET', 'HEAD'].includes(method)
-  if (!projectScoped || !mutating) return fetch(href, init)
+  if (!projectScoped || !mutating) return callFetch(href)
 
   const headers = new Headers(init?.headers)
   const contentType = headers.get('content-type') ?? ''
-  if (!contentType.includes('application/json')) return fetch(href, init)
+  if (!contentType.includes('application/json')) return callFetch(href)
 
   let bodyObject: Record<string, unknown> = {}
   if (typeof init?.body === 'string' && init.body.trim().length > 0) {
@@ -152,10 +153,10 @@ export function projectFetch(input: string, init?: RequestInit, explicitProjectI
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         bodyObject = parsed as Record<string, unknown>
       } else {
-        return fetch(href, init)
+        return callFetch(href)
       }
     } catch {
-      return fetch(href, init)
+      return callFetch(href)
     }
   }
   if (typeof bodyObject.projectId !== 'string' || bodyObject.projectId.trim().length === 0) {

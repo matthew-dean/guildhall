@@ -22,7 +22,7 @@
   import ResolveEscalationModal from './drawer/ResolveEscalationModal.svelte'
   import type { DrawerPayload, DrawerTab, Escalation } from '../lib/types.js'
   import { onEvent, eventTaskId } from '../lib/events.js'
-  import { currentTaskHref, projectFetch } from '../lib/project-routes.js'
+  import { currentProjectHref, currentTaskHref, projectFetch } from '../lib/project-routes.js'
   import { project } from '../lib/project.svelte.js'
   import { onMount, onDestroy } from 'svelte'
   import { toast } from 'svelte-sonner'
@@ -258,6 +258,7 @@
   const canPause = $derived(task && task.status !== 'done' && task.status !== 'shelved')
   const canShelve = $derived(task && task.status !== 'done')
   const isShelved = $derived(task?.status === 'shelved')
+  const isWorkspaceImportTask = $derived(task?.id === 'task-workspace-import')
   const openEscalations = $derived(task ? activeEscalations(task) : [])
   const firstOpenEscalation = $derived(openEscalations[0] ?? null)
   const displayTaskTitle = $derived.by(() => {
@@ -467,6 +468,19 @@
 
   {#if payload && task}
     <footer class="gh-drawer-foot">
+      {#if isWorkspaceImportTask}
+        <Button
+          variant="primary"
+          size="sm"
+          onclick={() => {
+            window.history.pushState({}, '', currentProjectHref('/workspace-import'))
+            window.dispatchEvent(new PopStateEvent('popstate'))
+          }}
+        >
+          Open import review
+        </Button>
+        <a class="copy-link" href={currentTaskHref(task.id)}>copy link</a>
+      {:else}
       <div class="run-controls">
         {#if runError}
           <span class="run-error">{runError}</span>
@@ -551,6 +565,7 @@
         </Button>
       {/if}
       <a class="copy-link" href={currentTaskHref(task.id)}>copy link</a>
+      {/if}
     </footer>
   {/if}
 </aside>

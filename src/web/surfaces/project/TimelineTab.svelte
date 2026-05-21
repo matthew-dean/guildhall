@@ -34,14 +34,29 @@
     const id = eventTaskId(ev)
     if (id) nav(currentTaskHref(id), { backgroundPath: path.value })
   }
+
+  function isProviderHealthEvent(ev: EventEnvelope): boolean {
+    return (ev.event?.type ?? '') === 'provider_health_changed'
+  }
+
+  const visibleEvents = $derived(events.filter(ev => !isProviderHealthEvent(ev)))
+  const hiddenProviderHealthCount = $derived(events.length - visibleEvents.length)
 </script>
 
 <Card title="Coordinator timeline">
   {#if events.length === 0}
     <p class="muted">No events recorded yet. Start the coordinator to populate the timeline.</p>
+  {:else if visibleEvents.length === 0}
+    <p class="muted">
+      Only provider health updates are hidden. Project activity will appear here when tasks move.
+    </p>
+    <p class="muted compact">{hiddenProviderHealthCount} connection checks hidden.</p>
   {:else}
+    {#if hiddenProviderHealthCount > 0}
+      <p class="muted compact">{hiddenProviderHealthCount} connection checks hidden.</p>
+    {/if}
     <div class="feed">
-      {#each events as ev, i (i)}
+      {#each visibleEvents as ev, i (i)}
         {@const text = summarizeEvent(ev)}
         {#if text}
           {@const tid = eventTaskId(ev)}
@@ -66,6 +81,10 @@
   .muted {
     color: var(--text-muted);
     font-size: var(--fs-2);
+  }
+  .compact {
+    margin: 0 0 var(--s-3);
+    font-size: var(--fs-1);
   }
   .feed {
     display: flex;

@@ -33,6 +33,7 @@
 
   let providers = $state<Record<string, ProviderMeta> | null>(null)
   let models = $state<ModelConfig | null>(null)
+  let modelsError = $state<string | null>(null)
   let status = $state<{ text: string; error: boolean } | null>(null)
   let loadError = $state<string | null>(null)
   let testing = $state<string | null>(null)
@@ -62,12 +63,18 @@
         loadError = j.error
         return
       }
-      providers = j.providers as Record<string, ProviderMeta>
-      if (providers['llama-cpp']?.url && !llamaUrl) llamaUrl = providers['llama-cpp'].url
-      openaiBaseUrl = providers['openai-api']?.baseUrl ?? ''
+      const nextProviders = j.providers as Record<string, ProviderMeta>
       const modelRes = await fetch('/api/config/models')
-      const modelJson = await modelRes.json()
-      if (!modelJson.error) models = modelJson as ModelConfig
+      const modelJson = await modelRes.json().catch(() => ({}))
+      if (!modelRes.ok || modelJson.error) {
+        modelsError = modelJson.error ?? `Model settings failed to load (HTTP ${modelRes.status})`
+      } else {
+        modelsError = null
+        models = modelJson as ModelConfig
+      }
+      providers = nextProviders
+      if (nextProviders['llama-cpp']?.url && !llamaUrl) llamaUrl = nextProviders['llama-cpp'].url
+      openaiBaseUrl = nextProviders['openai-api']?.baseUrl ?? ''
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err)
     }
@@ -332,7 +339,9 @@
             </span>
           </div>
         {/if}
-        {#if !models}
+        {#if modelsError}
+          <p class="error">{modelsError}</p>
+        {:else if !models}
           <p class="muted">Loading models...</p>
         {:else}
           <div class="model-list">

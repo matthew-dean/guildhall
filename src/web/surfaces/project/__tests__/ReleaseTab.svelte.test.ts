@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
 import ReleaseTab from '../ReleaseTab.svelte'
+import { path } from '../../../lib/nav.svelte.js'
 
 function json(data: unknown): Response {
   return new Response(JSON.stringify(data), {
@@ -96,5 +97,38 @@ describe('ReleaseTab', () => {
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith('/api/project/release-readiness')
     })
+  })
+
+  it('uses the current project route when loading release readiness', async () => {
+    window.history.replaceState({}, '', '/projects/t-minus-t/release')
+    path.value = '/projects/t-minus-t/release'
+    const fetchMock = vi.fn(async () => json(readyPayload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ReleaseTab)
+
+    await screen.findByText('Release readiness')
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/project/release-readiness?projectId=t-minus-t')
+    })
+  })
+
+  it('names design-system readiness as the hard release blocker', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          designSystem: { drafted: false, approved: false },
+          totals: { blockingCount: 0, tasks: 3, done: 3 },
+        }),
+      ),
+    )
+
+    render(ReleaseTab)
+
+    expect(await screen.findByText('Release readiness')).toBeTruthy()
+    expect(screen.getAllByText('Blocked')).toHaveLength(2)
+    expect(screen.getByText('Design system is not drafted yet.')).toBeTruthy()
   })
 })

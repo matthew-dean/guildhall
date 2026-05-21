@@ -529,4 +529,16 @@ describe('ProjectView', () => {
       expect(screen.queryByRole('button', { name: /close project navigation/i })).not.toBeInTheDocument()
     })
   })
+
+  it('keeps collapsed rail navigation accessible by name', async () => {
+    await renderProjectView('work')
+
+    expect(screen.getByRole('button', { name: 'Thread' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Work' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Release' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Providers' })).toBeInTheDocument()
+  })
 })

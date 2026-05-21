@@ -215,9 +215,9 @@
           {source.button} →
         </Button>
         {#if moreCount > 0}
-          <button type="button" class="more" onclick={() => go(projectActionHref('/inbox'))}>
+          <Button variant="secondary" size="sm" onclick={() => go(projectActionHref('/inbox'))}>
             {moreCount} more in Inbox ›
-          </button>
+          </Button>
         {/if}
       </div>
     </div>
@@ -261,15 +261,4 @@
     gap: var(--s-3);
     flex-wrap: wrap;
   }
-  .more {
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    font: inherit;
-    font-size: var(--fs-1);
-    cursor: pointer;
-    padding: 0;
-    text-decoration: underline;
-  }
-  .more:hover { color: var(--text); }
 </style>

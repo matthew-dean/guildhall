@@ -653,11 +653,11 @@
   const activeCount = $derived(
     taskList.filter(t => {
       const s = (t as { status?: string }).status
-      return s && !['done', 'blocked', 'cancelled', 'archived', 'spec_review'].includes(s)
+      return s && !['done', 'blocked', 'cancelled', 'archived', 'spec_review', 'shelved'].includes(s)
     }).length,
   )
   const activeCountLabel = $derived(
-    runStatus === 'running' || runStatus === 'stopping' ? 'active' : 'paused',
+    runStatus === 'running' || runStatus === 'stopping' ? 'active' : 'open',
   )
   const awaitingApprovalCount = $derived(
     taskList.filter(t => (t as { status?: string }).status === 'spec_review').length,
@@ -748,6 +748,7 @@
             type="button"
             class="rail-item active"
             onclick={() => go('/')}
+            aria-label="Projects"
           >
             <span class="rail-stripe"></span>
             <Icon name="folder" size={18} />
@@ -847,6 +848,7 @@
               class="rail-item"
               class:active
               onclick={() => go(e.path)}
+              aria-label={e.label}
               aria-current={active ? 'page' : undefined}
             >
               <span class="rail-stripe"></span>
@@ -884,6 +886,7 @@
             class="rail-item"
             class:active={providersActive}
             onclick={() => go('/providers')}
+            aria-label="Providers"
           >
             <span class="rail-stripe"></span>
             <Icon name="plug" size={18} />

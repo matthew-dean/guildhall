@@ -79,4 +79,41 @@ describe('TimelineTab', () => {
     expect(path.value).toBe('/projects/looma-knit/task/task-a')
     expect(path.state).toEqual({ backgroundPath: '/projects/looma-knit/timeline' })
   })
+
+  it('hides provider health noise from the default timeline', () => {
+    render(TimelineTab, {
+      props: {
+        detail: {
+          id: 'looma-knit',
+          name: 'Looma + Knit',
+          path: '/repo/looma-knit',
+          tasks: [],
+          recentEvents: [
+            {
+              at: '2026-05-19T15:00:00.000Z',
+              event: { type: 'provider_health_changed', message: 'OpenAI-compatible API is now healthy' },
+            },
+            {
+              at: '2026-05-19T15:01:00.000Z',
+              event: { type: 'provider_health_changed', message: 'OpenAI-compatible API is now healthy' },
+            },
+            {
+              at: '2026-05-19T15:02:00.000Z',
+              event: {
+                type: 'task_transition',
+                task_id: 'task-a',
+                from_status: 'ready',
+                to_status: 'in_progress',
+                agent_name: 'worker-agent',
+              },
+            },
+          ],
+        },
+      },
+    })
+
+    expect(screen.getByText(/task-a ready/)).toBeTruthy()
+    expect(screen.queryByText(/provider health/i)).toBeNull()
+    expect(screen.getByText('2 connection checks hidden.')).toBeTruthy()
+  })
 })

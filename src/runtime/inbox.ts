@@ -310,9 +310,20 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     }
   }
 
+  const tasksPath = join(projectPath, 'memory', 'TASKS.json')
+  const tasks = tasksArray(readJsonSafe(tasksPath))
+  const workspaceImportTask = tasks.find(t => t?.id === 'task-workspace-import')
+  const workspaceImportTaskStatus =
+    workspaceImportTask && typeof workspaceImportTask.status === 'string'
+      ? workspaceImportTask.status
+      : ''
+  const workspaceImportTaskOpen =
+    workspaceImportTask != null &&
+    !['done', 'cancelled', 'archived'].includes(workspaceImportTaskStatus)
+
   const setupProgress = progressFor(onboardWizard, buildSnapshot({ projectPath, ...(snapshotOptions ?? {}) }))
   const activeSetupStep = setupProgress.steps.find(step => step.id === setupProgress.activeStepId)
-  if (activeSetupStep && ['direction', 'workspaceImport', 'firstTask'].includes(activeSetupStep.id)) {
+  if (activeSetupStep && ['direction', 'firstTask'].includes(activeSetupStep.id)) {
     items.push({
       kind: 'setup_pending',
       severity: 'medium',
@@ -334,27 +345,27 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     anchors.includes('packages') ||
     anchors.includes('skills') ||
     anchors.includes('ROADMAP.md')
-  if (!hasGoals && hasReadme && hasAnchor) {
+  if (workspaceImportTaskOpen || (!hasGoals && hasReadme && hasAnchor)) {
+    const signals = anchors.length > 0 ? anchors : ['workspace import']
     items.push({
       kind: 'workspace_import_pending',
       severity: 'medium',
-      title: 'Existing repo detected',
-      detail: `Anchors found (${anchors.slice(0, 3).join(', ')}${anchors.length > 3 ? '...' : ''}). Open to see what the detector extracts — or dismiss.`,
-      signals: anchors,
+      title: workspaceImportTaskOpen ? 'Review existing project work' : 'Existing repo detected',
+      detail: workspaceImportTaskOpen
+        ? 'Review the sources and possible backlog tasks Guildhall found.'
+        : `Anchors found (${anchors.slice(0, 3).join(', ')}${anchors.length > 3 ? '...' : ''}). Open to see what the detector extracts — or dismiss.`,
+      signals,
       actionHref: '/workspace-import',
       dismissEndpoint: '/api/project/workspace-import/dismiss',
     })
   }
 
   // --- tasks: briefs / specs / escalations / spec-fill gaps ----------------
-  const tasksPath = join(projectPath, 'memory', 'TASKS.json')
-  const tasks = tasksArray(readJsonSafe(tasksPath))
-  const workspaceImportTask = tasks.find(t => t?.id === 'task-workspace-import')
   const workspaceImportNeedsAnswer = workspaceImportTask
     ? unresolvedVisibleQuestions(workspaceImportTask).length > 0
     : false
   const importDrafts = tasks.filter(t => t && typeof t === 'object' && t.status === 'import_draft')
-  const setupStillOwnsNextAction = activeSetupStep != null
+  const setupStillOwnsNextAction = activeSetupStep != null && activeSetupStep.id !== 'workspaceImport'
   if (importDrafts.length > 0 && !workspaceImportNeedsAnswer && !setupStillOwnsNextAction) {
     const nextDraft = importDrafts[0]!
     const nextDraftId = typeof nextDraft.id === 'string' ? nextDraft.id : ''
@@ -447,7 +458,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     const briefDraftPending =
       brief && typeof brief === 'object' && !brief.approvedAt
     const specInReview = t.status === 'spec_review'
-    if (specFillEmitted < SPEC_FILL_EMIT_CAP && !briefDraftPending && !specInReview) {
+    if (id !== 'task-workspace-import' && specFillEmitted < SPEC_FILL_EMIT_CAP && !briefDraftPending && !specInReview) {
       const snap = buildTaskSnapshot({
         projectPath,
         task: t as Parameters<typeof buildTaskSnapshot>[0]['task'],

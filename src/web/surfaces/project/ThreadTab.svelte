@@ -2249,7 +2249,17 @@
       {/each}
 
       {#if caughtUp}
-        <p class="muted caught-up">All caught up — agents are working.</p>
+        <p class="muted caught-up">
+          {#if operationSummary.needsYou > 0}
+            Needs your input before Guildhall can continue.
+          {:else if operationSummary.working > 0}
+            Agents are working.
+          {:else if operationSummary.queued > 0 || operationSummary.drafts > 0}
+            Guildhall has queued work ready for the next run.
+          {:else}
+            All caught up — nothing is running right now.
+          {/if}
+        </p>
       {/if}
     </Stack>
   {/if}

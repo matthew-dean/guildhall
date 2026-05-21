@@ -10,6 +10,7 @@
   import SectionHeader from '../../../../packages/ui/src/components/SectionHeader.svelte'
   import StatusPill from '../../../../packages/ui/src/components/StatusPill.svelte'
   import { nav } from '../../lib/nav.svelte.js'
+  import { projectFetch } from '../../lib/project-routes.js'
 
   interface ReleaseItem {
     id?: string
@@ -53,7 +54,7 @@
   let initNeeded = $state(false)
 
   $effect(() => {
-    fetch('/api/project/release-readiness')
+    projectFetch('/api/project/release-readiness')
       .then(r => r.json())
       .then(j => {
         if (j?.initializationNeeded) {
@@ -155,6 +156,15 @@
         label: 'Ready to ship',
         tone: 'ok' as const,
         reason: `${data.totals.done}/${data.totals.tasks} tasks done · no human blockers.`,
+      }
+    }
+    if (!dsLabel().clear) {
+      return {
+        label: 'Blocked',
+        tone: 'warn' as const,
+        reason: data.designSystem?.drafted
+          ? 'Design system is drafted but not approved yet.'
+          : 'Design system is not drafted yet.',
       }
     }
     return {
