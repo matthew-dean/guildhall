@@ -5,6 +5,7 @@ import {
   DETERMINISTIC_BASELINE_LANE,
   aggregateBakeoffReport,
   contextIndexerScenarios,
+  contextIndexerTestLadder,
   deepInfraContextIndexerLanes,
   historicalFailureScenarios,
   learningCandidatesFromBakeoffReport,
@@ -218,6 +219,23 @@ describe('model bakeoff harness', () => {
     expect(contextIndexerScenarios.every((scenario) => scenario.origin === 'context-indexer')).toBe(true)
   })
 
+  it('defines the real-project context-indexer test ladder', () => {
+    expect(contextIndexerTestLadder.map((track) => track.id)).toEqual([
+      'docs-intent-narrative-harness',
+      'code-corpus-linecraft',
+      'design-system-guildhall-ui',
+      'hard-architecture-jess',
+    ])
+    expect(contextIndexerTestLadder[0]).toMatchObject({
+      repo: 'narrative-harness',
+      corpusKind: 'documentation',
+    })
+    expect(contextIndexerTestLadder[1]).toMatchObject({
+      repo: 'linecraft',
+      corpusKind: 'code',
+    })
+  })
+
   it('ships DeepInfra candidate lanes for the contextIndexer role', () => {
     expect(deepInfraContextIndexerLanes.map((lane) => lane.model)).toEqual(
       expect.arrayContaining([
@@ -233,8 +251,13 @@ describe('model bakeoff harness', () => {
     const report = runContextIndexerBakeoff()
 
     expect(report.scenarioCount).toBe(contextIndexerScenarios.length)
+    expect(report.evaluationLadder?.map((track) => track.id)).toEqual(
+      contextIndexerTestLadder.map((track) => track.id),
+    )
     expect(report.lanes.every((lane) => lane.laneId.startsWith('deepinfra-'))).toBe(true)
     expect(report.recommendation).toContain('deepinfra-')
+    expect(renderBakeoffMarkdown(report)).toContain('Evaluation ladder')
+    expect(renderBakeoffMarkdown(report)).toContain('linecraft')
     expect(renderBakeoffMarkdown(report)).toContain('Context indexer')
   })
 

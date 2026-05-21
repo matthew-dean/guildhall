@@ -102,7 +102,10 @@ Default output:
 Use `--context-indexer` to run the semantic Corpus Map bakeoff. That writes
 `artifacts/model-bakeoff/context-indexer-report.json` and a Markdown summary by
 default, using DeepInfra candidate lanes for choosing a cheap, fast indexing
-model.
+model. The report includes the real-project evaluation ladder:
+`narrative-harness` for documentation/product intent, `linecraft` for the first
+small-to-medium code corpus, the Guildhall UI slice for design-system reuse,
+and `jess` for hard architecture.
 
 The optional positional argument chooses the JSON path. Guildhall writes the
 Markdown summary beside it.

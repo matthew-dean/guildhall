@@ -20,6 +20,16 @@ export interface ModelLaneConfig {
   role?: 'spec' | 'coordinator' | 'worker' | 'reviewer' | 'gateChecker' | 'contextIndexer'
 }
 
+export interface EvaluationLadderTrack {
+  id: string
+  label: string
+  repo: string
+  corpusKind: 'documentation' | 'code' | 'design-system' | 'hard-architecture'
+  pathHint: string
+  purpose: string
+  expectedSignals: string[]
+}
+
 export interface ReplayRunRecord {
   scenarioId: string
   laneId: string
@@ -69,6 +79,7 @@ export interface BakeoffReport {
   generatedAt: string
   scenarioCount: number
   scenarios: ReplayScenario[]
+  evaluationLadder?: EvaluationLadderTrack[]
   lanes: LaneReport[]
   runs: ReplayRunRecord[]
   recommendation: string
@@ -222,6 +233,65 @@ export const deepInfraContextIndexerLanes: ModelLaneConfig[] = [
     kind: 'model',
     role: 'contextIndexer',
     model: 'zai-org/GLM-4.6',
+  },
+]
+
+export const contextIndexerTestLadder: EvaluationLadderTrack[] = [
+  {
+    id: 'docs-intent-narrative-harness',
+    label: 'Documentation and product-intent corpus',
+    repo: 'narrative-harness',
+    corpusKind: 'documentation',
+    pathHint: '/Users/matthew/git/oss/narrative-harness',
+    purpose:
+      'Check whether the context indexer can summarize product theory, specs, decisions, and future architecture intent without inventing implementation details.',
+    expectedSignals: [
+      'documentation-first corpus classified',
+      'implementation gaps named',
+      'product intent summarized without code claims',
+    ],
+  },
+  {
+    id: 'code-corpus-linecraft',
+    label: 'Small-to-medium real code corpus',
+    repo: 'linecraft',
+    corpusKind: 'code',
+    pathHint: '/Users/matthew/git/oss/linecraft',
+    purpose:
+      'Check whether the context indexer can map a real code architecture, identify canonical modules, and give useful read-next guidance at modest cost.',
+    expectedSignals: [
+      'source areas mapped',
+      'canonical abstractions identified',
+      'verification entrypoints named',
+    ],
+  },
+  {
+    id: 'design-system-guildhall-ui',
+    label: 'Design-system reuse stress slice',
+    repo: 'guildhall',
+    corpusKind: 'design-system',
+    pathHint: '/Users/matthew/git/oss/guildhall/src/web + /Users/matthew/git/oss/guildhall/packages/ui',
+    purpose:
+      'Check whether the context indexer can steer workers toward existing UI primitives and flag one-off styling or component drift.',
+    expectedSignals: [
+      'shared UI primitives named',
+      'design-system gaps summarized',
+      'one-off duplication risks flagged',
+    ],
+  },
+  {
+    id: 'hard-architecture-jess',
+    label: 'Hard compiler/parser architecture corpus',
+    repo: 'jess',
+    corpusKind: 'hard-architecture',
+    pathHint: '/Users/matthew/git/oss/jess',
+    purpose:
+      'Check whether the context indexer still produces useful orientation when architecture is deeper, more coupled, and easier to summarize incorrectly.',
+    expectedSignals: [
+      'deep architecture boundaries preserved',
+      'stale or misleading paths avoided',
+      'read-next guidance stays bounded',
+    ],
   },
 ]
 
@@ -393,11 +463,15 @@ export function runModelBakeoff(input: {
 export function runContextIndexerBakeoff(input: {
   generatedAt?: string
 } = {}): BakeoffReport {
-  return runModelBakeoff({
+  const report = runModelBakeoff({
     scenarios: contextIndexerScenarios,
     lanes: deepInfraContextIndexerLanes,
     generatedAt: input.generatedAt,
   })
+  return {
+    ...report,
+    evaluationLadder: contextIndexerTestLadder,
+  }
 }
 
 export function learningCandidatesFromBakeoffReport(report: BakeoffReport): LearningCandidate[] {
@@ -470,6 +544,23 @@ export function renderBakeoffMarkdown(report: BakeoffReport): string {
         lane.averagePacketQuality === null ? 'n/a' : lane.averagePacketQuality.toFixed(2),
       ].join(' | '),
     )
+  }
+  if (report.evaluationLadder?.length) {
+    lines.push(
+      '',
+      '## Evaluation ladder',
+      '',
+      '| Track | Repo | Corpus | Purpose |',
+      '|---|---|---|---|',
+    )
+    for (const track of report.evaluationLadder) {
+      lines.push([
+        track.label,
+        track.repo,
+        track.corpusKind,
+        track.purpose,
+      ].join(' | '))
+    }
   }
   return `${lines.join('\n')}\n`
 }

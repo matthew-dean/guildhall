@@ -102,6 +102,16 @@ abstraction selection, legacy/current path detection, design-system drift, and
 module contract summaries. Current DeepInfra candidate lanes are
 `deepseek-ai/DeepSeek-V4-Flash`, `Qwen/Qwen3.6-35B-A3B`, and `zai-org/GLM-4.6`.
 
+The context-indexer report also records the real-project test ladder Guildhall
+uses when moving from replay checks to provider-backed evaluation:
+
+| Track | Project | What it tests |
+|---|---|---|
+| Documentation corpus | `narrative-harness` | Product theory, specs, decisions, and architecture intent without claiming code exists where it does not. |
+| Code corpus | `linecraft` | A small-to-medium real codebase with enough structure to compare architecture summaries and read-next guidance. |
+| Design-system slice | `guildhall/src/web` and `guildhall/packages/ui` | Whether the indexer steers workers toward shared primitives instead of one-off controls or styling. |
+| Hard architecture | `jess` | Whether summaries stay bounded and correct in a deeper compiler/parser architecture. |
+
 ## Planned live bakeoff mode
 
 The live version should add provider-backed candidate runs:

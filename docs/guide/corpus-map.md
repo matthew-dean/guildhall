@@ -130,6 +130,22 @@ That block is intentionally small. It points the agent toward the right
 starting files and abstractions; it does not ask the model to trust the map
 blindly.
 
+## Evaluation ladder
+
+Guildhall tests context-indexer models against a ladder rather than a single
+repository. Each rung isolates a different failure mode:
+
+| Rung | Project | Corpus | Why |
+|---|---|---|---|
+| 1 | `narrative-harness` | Documentation and product intent | Proves the indexer can summarize specs, decisions, and future architecture without inventing implementation details. |
+| 2 | `linecraft` | Small-to-medium code | Proves the indexer can map real source structure, canonical modules, and verification entrypoints at practical cost. |
+| 3 | Guildhall UI slice | Design-system reuse | Proves the indexer can identify shared UI primitives and warn when repeated one-off styles should become a small abstraction. |
+| 4 | `jess` | Hard architecture | Proves the indexer still gives bounded, accurate guidance in a deeper compiler/parser codebase. |
+
+The first two rungs are deliberately different. `narrative-harness` is mostly
+documentation, so it is a product-intent test. `linecraft` is the first real
+code-corpus test.
+
 ## CLI and Settings
 
 You can rebuild the map manually:
