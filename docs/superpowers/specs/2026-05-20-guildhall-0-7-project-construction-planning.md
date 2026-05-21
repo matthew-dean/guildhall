@@ -262,6 +262,47 @@ First implementation should store the construction plan under project memory:
 Later, this can move into a typed runtime store. The first slice should avoid a
 large migration if project memory is enough.
 
+## Project Corpus Map
+
+Workers should function like modern coding agents: they receive enough
+architecture context to make the first good move, but Guildhall must not dump
+the entire repository into every prompt.
+
+0.7.0 should add a durable, task-queryable project corpus map:
+
+- generated during setup/import and refreshed after meaningful code changes
+- stored under project memory, for example `memory/codebase-map.yaml` and
+  `memory/codebase-map.history.jsonl`
+- summarized by reference, not by copying full file contents
+- organized around modules, public surfaces, shared abstractions, UI
+  primitives, tokens, services, schemas, routes, tests, scripts, and known
+  conventions
+- explicit about "use this first" primitives, such as the shared button
+  component, routing helpers, persistence utilities, or test harnesses
+- explicit about boundaries where new files/classes/components should not be
+  invented without extending an existing layer
+
+The worker prompt should receive only the relevant slice:
+
+- likely target files and nearby companion files
+- matching architecture-map entries
+- known shared primitives for that domain
+- test and verification conventions for that area
+- recent decisions or change orders touching the same module
+
+Agents should also be able to ask focused questions against the map:
+
+- "What shared components exist for this UI control?"
+- "Where is the canonical persistence helper?"
+- "Which tests cover this route?"
+- "What naming pattern do similar modules use?"
+- "Is this a new abstraction, or does the project already have one?"
+
+Reviewers should treat missing corpus-map consultation as a real defect when a
+worker creates a parallel helper, class, component, route, schema, token, or
+style treatment. The acceptance bar is not "the diff compiles"; it is "the
+diff fits the project the way a competent local developer would fit it."
+
 ## Public UI: Build Map
 
 Add a project-level Build Map view or section.

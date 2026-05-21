@@ -603,22 +603,24 @@
         {/snippet}
       </SectionHeader>
 
-      <FrameCard class="readiness-card">
+      <FrameCard class="readiness-card" density="compact">
         <ul class="checklist">
           <li class="check-row">
             <div class="check-copy">
               <span class="check-label">Bootstrap</span>
               <span class="check-detail">Project bootstrap commands and success gates.</span>
             </div>
-            <StatusPill
-              label={bootstrapReady ? 'passed' : bootstrapInfo?.configured ? 'failed' : 'not set'}
-              tone={bootstrapReady ? 'ok' : bootstrapInfo?.configured ? 'danger' : 'warn'}
-            />
-            {#if !bootstrapReady}
-              <button type="button" class="linkbtn" onclick={runBootstrap} disabled={bootstrapRunning}>
-                {bootstrapRunning ? 'Running…' : 'Run bootstrap'}
-              </button>
-            {/if}
+            <div class="check-actions">
+              <StatusPill
+                label={bootstrapReady ? 'passed' : bootstrapInfo?.configured ? 'failed' : 'not set'}
+                tone={bootstrapReady ? 'ok' : bootstrapInfo?.configured ? 'danger' : 'warn'}
+              />
+              {#if !bootstrapReady}
+                <Button variant="secondary" size="sm" onclick={runBootstrap} disabled={bootstrapRunning}>
+                  {bootstrapRunning ? 'Running…' : 'Run bootstrap'}
+                </Button>
+              {/if}
+            </div>
             {#if bootstrapError}
               <div class="row-error">{bootstrapError}</div>
             {/if}
@@ -629,13 +631,17 @@
               <span class="check-label">Coordinators</span>
               <span class="check-detail">Routing roles that own planning and task execution.</span>
             </div>
-            <StatusPill
-              label={coordinatorsReady ? `${coordinators.length} defined` : 'none'}
-              tone={coordinatorsReady ? 'ok' : 'warn'}
-            />
-            {#if !coordinatorsReady}
-              <button type="button" class="linkbtn" onclick={() => nav(projectActionHref('/settings/coordinators'))}>Open coordinators</button>
-            {/if}
+            <div class="check-actions">
+              <StatusPill
+                label={coordinatorsReady ? `${coordinators.length} defined` : 'none'}
+                tone={coordinatorsReady ? 'ok' : 'warn'}
+              />
+              {#if !coordinatorsReady}
+                <Button variant="secondary" size="sm" onclick={() => nav(projectActionHref('/settings/coordinators'))}>
+                  Open coordinators
+                </Button>
+              {/if}
+            </div>
           </li>
 
           <li class="check-row">
@@ -643,15 +649,17 @@
               <span class="check-label">LLM provider</span>
               <span class="check-detail">Active model host and runtime selection for this project.</span>
             </div>
-            <StatusPill
-              label={providerReady ? (providerStatus?.active ?? 'configured') : 'not configured'}
-              tone={providerReady ? 'ok' : 'warn'}
-            />
-            {#if !providerReady}
-              <button type="button" class="linkbtn" onclick={() => nav(projectActionHref('/settings/providers'))}>
-                Choose provider
-              </button>
-            {/if}
+            <div class="check-actions">
+              <StatusPill
+                label={providerReady ? (providerStatus?.active ?? 'configured') : 'not configured'}
+                tone={providerReady ? 'ok' : 'warn'}
+              />
+              {#if !providerReady}
+                <Button variant="secondary" size="sm" onclick={() => nav(projectActionHref('/settings/providers'))}>
+                  Choose provider
+                </Button>
+              {/if}
+            </div>
           </li>
         </ul>
       </FrameCard>
@@ -978,7 +986,7 @@
       />
 
       <div class="advanced-grid">
-        <FrameCard class="advanced-card">
+        <FrameCard class="advanced-card" density="compact">
           {#snippet header()}
             <SectionHeader
               title="Workspace identity"
@@ -997,7 +1005,7 @@
               <span>Workspace ID (slug)</span>
               <Input bind:value={id} />
             </label>
-            <Row justify="end" gap="2" align="center">
+            <Row justify="start" gap="2" align="center" wrap>
               {#if identityStatus}
                 <span class="status" class:error={identityStatus.error}>{identityStatus.text}</span>
               {/if}
@@ -1008,7 +1016,7 @@
           </Stack>
         </FrameCard>
 
-        <FrameCard class="advanced-card advanced-card-wide">
+        <FrameCard class="advanced-card advanced-card-wide" density="compact">
           {#snippet header()}
             <SectionHeader
               title="Behavior defaults"
@@ -1079,7 +1087,7 @@
           </Stack>
         </FrameCard>
 
-        <FrameCard class="advanced-card advanced-card-wide">
+        <FrameCard class="advanced-card advanced-card-wide" density="compact">
           {#snippet header()}
             <SectionHeader
               title="Design system"
@@ -1190,7 +1198,7 @@
     display: grid;
     gap: var(--gh-space-3);
     align-items: start;
-    padding: var(--gh-space-3) 0;
+    padding: var(--gh-space-4) 0;
     border-top: 1px solid var(--border);
   }
 
@@ -1217,25 +1225,13 @@
     line-height: var(--lh-body);
   }
 
-  .linkbtn {
-    justify-self: start;
-    background: transparent;
-    border: 1px solid var(--gh-color-border-strong);
-    border-radius: var(--gh-radius-full);
-    color: var(--gh-color-text-primary);
-    cursor: pointer;
-    font: inherit;
-    min-height: var(--gh-control-height-default);
-    padding: var(--gh-control-padding-block) var(--gh-control-padding-inline);
-  }
-
-  .linkbtn:hover {
-    background: color-mix(in srgb, var(--gh-color-feedback-accent) 12%, transparent);
-  }
-
-  .linkbtn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+  .check-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    align-items: center;
+    justify-content: flex-start;
+    min-inline-size: 0;
   }
 
   .row-error {
@@ -1266,6 +1262,11 @@
   .advanced-grid {
     display: grid;
     gap: var(--gh-space-4);
+    max-inline-size: 78rem;
+  }
+
+  :global(.advanced-card) {
+    align-self: start;
   }
 
   .learning-grid {
@@ -1489,8 +1490,12 @@
 
   @container (min-width: 42rem) {
     .check-row {
-      grid-template-columns: minmax(0, 1fr) auto auto;
+      grid-template-columns: minmax(0, 1fr) minmax(16rem, auto);
       align-items: center;
+    }
+
+    .check-actions {
+      justify-content: flex-end;
     }
 
     .row-error {
@@ -1504,11 +1509,11 @@
 
   @container (min-width: 60rem) {
     .advanced-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: minmax(20rem, 0.75fr) minmax(0, 1.25fr);
     }
 
     :global(.advanced-card-wide) {
-      grid-column: 1 / -1;
+      grid-column: 2;
     }
   }
 

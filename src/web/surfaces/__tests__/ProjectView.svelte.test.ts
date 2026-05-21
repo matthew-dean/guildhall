@@ -550,6 +550,6 @@ describe('ProjectView', () => {
     expect(screen.getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Release' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Project provider settings' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Project provider settings' })).not.toBeInTheDocument()
   })
 })

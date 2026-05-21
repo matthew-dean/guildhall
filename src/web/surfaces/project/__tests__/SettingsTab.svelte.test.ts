@@ -92,7 +92,7 @@ describe('SettingsTab', () => {
     render(SettingsTab, { subView: 'ready' })
 
     await screen.findByRole('heading', { name: /ready to start/i })
-    await userEvent.click(screen.getAllByRole('button', { name: /configure/i })[0]!)
+    await userEvent.click(screen.getByRole('button', { name: /^run bootstrap$/i }))
 
     await screen.findByText('Bootstrap verified (pnpm): test, build')
     expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/bootstrap/run'))).toBe(true)
@@ -116,7 +116,7 @@ describe('SettingsTab', () => {
     render(SettingsTab, { subView: 'ready' })
 
     await screen.findByRole('heading', { name: /ready to start/i })
-    await userEvent.click(screen.getAllByRole('button', { name: /configure/i })[0]!)
+    await userEvent.click(screen.getByRole('button', { name: /^run bootstrap$/i }))
 
     await screen.findByText('Bootstrap failed: pnpm install failed')
     expect(screen.getByText('pnpm install failed')).toBeInTheDocument()

@@ -301,6 +301,21 @@ babysit setup/import/provider/release states across multiple pages.
   actions should use shared `Button` sizing/variants; larger button-card
   treatments are allowed when they are navigation or choice cards, such as the
   workspace-import step cards, because that is a distinct component concept.
+- [x] Fix Settings IA and readiness layout. Live Narrative Harness testing
+  found the Settings readiness rows jammed status pills and actions together,
+  Advanced settings reading like unstructured text, and a bottom-rail
+  `Providers` button promoting a Settings subsection as a top-level project
+  destination. Readiness now uses shared `Button` actions in a structured
+  status/action column, Advanced settings uses compact grouped cards, and
+  Providers stays under Settings instead of the project rail.
+- [ ] Add a project corpus map for worker context. Current worker prompts
+  receive focused task memory, likely target files, checkpoints, design
+  summaries, and recent decisions rather than a full source dump, but there is
+  no durable architecture/component/function inventory that workers can query
+  before editing. Guildhall should build and maintain a codebase map with
+  shared primitives, module boundaries, APIs, tests, and known patterns, then
+  inject only the task-relevant slice while letting agents ask follow-up
+  questions.
 - [x] Remove maintainer-only implementation pages from the public VitePress
   surface. The public docs build now excludes `docs/subsystems/**`,
   `docs/web-ui/design-tokens.md`, and `docs/web-ui/help-system.md`; sidebar,

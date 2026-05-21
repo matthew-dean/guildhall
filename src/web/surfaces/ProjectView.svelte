@@ -639,8 +639,6 @@
           ? 'warn'
           : 'neutral',
   )
-  const providersActive = $derived(path.value === currentProjectHref('/settings/providers', activeProjectId))
-
   // Task counts for the top-bar indicator. Stuck = has at least one open
   // escalation. Active = running/in-progress-like statuses.
   const taskList = $derived(detail?.tasks ?? [])
@@ -892,21 +890,6 @@
           {/if}
         {/each}
       </nav>
-      <div class="rail-bottom">
-        <Tooltip text="Providers" placement="right" className="rail-tooltip" disabled={railLabelsVisible}>
-          <button
-            type="button"
-            class="rail-item"
-            class:active={providersActive}
-            onclick={() => go(currentProjectHref('/settings/providers', activeProjectId))}
-            aria-label="Project provider settings"
-          >
-            <span class="rail-stripe"></span>
-            <Icon name="plug" size={18} />
-            <span class="rail-label">Providers</span>
-          </button>
-        </Tooltip>
-      </div>
     </aside>
     {/snippet}
     {#snippet topbar()}
