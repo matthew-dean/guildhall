@@ -53,6 +53,7 @@ function mkContext(overrides: Partial<BuiltContext> = {}): BuiltContext {
     envelope: 'Goal envelope',
     designSystem: '',
     reviewRubrics: 'Review rubric',
+    corpusMap: '',
     formatted: 'Full formatted context',
     ...overrides,
   }

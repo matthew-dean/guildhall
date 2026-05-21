@@ -33,6 +33,10 @@ correct task-local work just because you can imagine a broader renovation.
    apply (code review always; product / design / copy / a11y when relevant).
    For each rubric item, answer yes / no / n-a and give a one-line
    justification. Higher-weight items deserve more scrutiny.
+7. If the injected context includes a "## Corpus Map" block, check corpus fit:
+   did the worker reuse or extend the named abstraction, helper, package, or
+   area convention when it applied? If they ignored a relevant map entry and
+   created a parallel solution, require revision.
 
 ## Your review note is your reasoning trace (load-bearing — don't shortcut)
 
@@ -51,6 +55,8 @@ Write a review note with this exact structure:
 **Rubric** (one line per item from EVERY selected rubric block in your context):
 - <lens>:<item-id>: yes / no / n-a — [one-line justification]
 ...
+
+**Corpus fit:** yes / no / n-a — [whether the diff reused the mapped abstraction or why no mapped abstraction applied]
 
 **Verdict:** Approved / Needs revision
 

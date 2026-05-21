@@ -13,6 +13,7 @@ evidence, not promises about what ships next.
 - [Beads and one-task pivot](./beads-and-one-task-pivot) — what Guildhall borrows from Beads/Ralph loops and the first one-task finisher slice.
 - [Provider abstraction and throughput](./provider-abstraction-and-throughput) — protocol-first provider taxonomy, shared client pooling, bounded lane scheduling, and the path from one-task autonomy to queue throughput.
 - [Project construction manifesto](./project-construction-manifesto) — the internal guild/construction model for planning, framing, building, inspecting, changing, and shipping software work.
+- [HTML artifacts and agent UI protocol](./html-artifacts-and-agent-ui-protocol) — 0.8.0 exploration of richer agent-produced planning/review artifacts, why raw HTML should not replace Markdown everywhere, and how a constrained component protocol could work.
 - Guildhall 0.7.0 project construction planning — internal target spec at `docs/superpowers/specs/2026-05-20-guildhall-0-7-project-construction-planning.md` for turning ambitious product goals into a durable Build Map, active tranche, slices, tasks, and change orders.
 - [Agent policy, learning, and model bakeoff](./agent-policy-and-model-bakeoff) — the split between 0.5.x decision-point unblockers and the 0.6.0 policy, bounded-improvisation, learning, and model-evaluation work.
 - [UI structural audit](./ui-audit) — where the live shell is strong, where it still drifts, and what the component layer needs next.

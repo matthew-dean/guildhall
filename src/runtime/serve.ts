@@ -44,6 +44,11 @@ import {
   type ModelAssignmentConfig,
 } from '@guildhall/core'
 import {
+  loadCodebaseMap,
+  loadCodebaseMapStaleState,
+  refreshCodebaseMap,
+} from '@guildhall/corpus-map'
+import {
   loadLeverSettings,
   saveLeverSettings,
   defaultAgentSettingsPath,
@@ -2237,6 +2242,61 @@ export function buildServeApp(opts: ServeOptions = {}): {
         success: detected.ok,
         detected: detected.bootstrap,
         logs: detected.logs,
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  async function renderCodebaseMapStatus(projectPath: string) {
+    const memoryDir = join(projectPath, 'memory')
+    const [map, stale] = await Promise.all([
+      loadCodebaseMap(memoryDir),
+      loadCodebaseMapStaleState(memoryDir),
+    ])
+    return {
+      configured: Boolean(map),
+      generatedAt: map?.generatedAt ?? null,
+      stale,
+      counts: {
+        files: map ? Object.keys(map.files).length : 0,
+        areas: map?.areas.length ?? 0,
+        abstractions: map?.abstractions.length ?? 0,
+      },
+      frameworks: map?.project.primaryFrameworks ?? [],
+      packageManagers: map?.project.packageManagers ?? [],
+    }
+  }
+
+  app.get('/api/project/codebase-map/status', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ configured: false, generatedAt: null, stale: null })
+      }
+      return c.json(await renderCodebaseMapStatus(project.path))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/codebase-map/refresh', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const result = await refreshCodebaseMap({
+        projectRoot: project.path,
+        memoryDir: join(project.path, 'memory'),
+        reason: 'manual',
+      })
+      return c.json({
+        ok: true,
+        mode: result.mode,
+        changedFiles: result.changedFiles.length,
+        removedFiles: result.removedFiles.length,
+        affectedAreas: result.affectedAreas,
+        affectedAbstractions: result.affectedAbstractions,
+        status: await renderCodebaseMapStatus(project.path),
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)

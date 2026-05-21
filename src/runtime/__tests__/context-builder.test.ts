@@ -8,6 +8,7 @@ import { buildContext, resolveLikelyTaskFiles } from '../context-builder.js'
 import type { Task } from '@guildhall/core'
 import { writeCheckpoint } from '@guildhall/tools'
 import { proposeProjectSkill, activateProjectSkillProposal } from '@guildhall/skills'
+import { saveCodebaseMap, type CodebaseMap } from '@guildhall/corpus-map'
 
 // ---------------------------------------------------------------------------
 // Context builder tests (AC-04)
@@ -63,6 +64,64 @@ async function writeProgress(content: string) {
 }
 async function writeDecisions(content: string) {
   await fs.writeFile(path.join(tmpDir, 'DECISIONS.md'), content, 'utf-8')
+}
+
+function minimalCodebaseMap(input: { root: string; generatedAt: string }): CodebaseMap {
+  return {
+    version: 1,
+    generatedAt: input.generatedAt,
+    project: {
+      root: input.root,
+      summary: 'Local Svelte project with shared UI primitives.',
+      languages: ['svelte', 'typescript'],
+      packageManagers: ['pnpm'],
+      primaryFrameworks: ['svelte'],
+    },
+    files: {
+      'src/web/lib/Button.svelte': {
+        path: 'src/web/lib/Button.svelte',
+        mtimeMs: 1,
+        size: 42,
+        sha256: 'a'.repeat(64),
+        language: 'svelte',
+        kind: 'source',
+        areaIds: ['web-ui'],
+        symbols: ['Button'],
+        imports: [],
+        summary: 'Button.svelte: shared command button.',
+      },
+    },
+    entrypoints: [],
+    areas: [
+      {
+        id: 'web-ui',
+        title: 'Web UI',
+        summary: 'Web UI area with shared Svelte controls.',
+        owns: ['src/web/**'],
+        canonicalFiles: [
+          {
+            path: 'src/web/lib/Button.svelte',
+            symbols: ['Button'],
+            summary: 'Button.svelte: shared command button.',
+          },
+        ],
+        conventions: ['Use shared Button before adding surface-local button styles.'],
+        tests: [],
+      },
+    ],
+    abstractions: [
+      {
+        id: 'button',
+        title: 'Command buttons',
+        kind: 'ui-component',
+        canonicalPath: 'src/web/lib/Button.svelte',
+        useWhen: ['A user triggers an action from a toolbar, form, panel, drawer, or wizard.'],
+        avoid: ['Do not add local button padding, radius, neutral backgrounds, or one-off action styles.'],
+        related: [],
+      },
+    ],
+    verification: { commands: ['pnpm test'] },
+  }
 }
 
 describe('buildContext — task summary', () => {
@@ -233,6 +292,21 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('### Likely Target Files')
     expect(ctx.taskSummary).toContain('/projects/knit/.guildhall/worktrees/task-001/web/app/composables/use-presence.ts')
     expect(ctx.taskSummary).toContain('/projects/knit/.guildhall/worktrees/task-001/web/tests/unit/composables/use-presence.test.ts')
+  })
+
+  it('injects compact corpus map guidance when a codebase map exists', async () => {
+    await saveCodebaseMap(tmpDir, minimalCodebaseMap({
+      root: '/projects/looma',
+      generatedAt: '2026-05-21T12:00:00.000Z',
+    }))
+
+    const ctx = await buildContext(baseTask, tmpDir)
+
+    expect(ctx.corpusMap).toContain('## Corpus Map')
+    expect(ctx.formatted).toContain('## Corpus Map')
+    expect(ctx.formatted).toContain('Reuse / Extend')
+    expect(ctx.formatted).toContain('Command buttons')
+    expect(ctx.formatted).toContain('Corpus fit required')
   })
 
   it('does not duplicate the project folder when an imported source path is workspace-relative', async () => {

@@ -268,6 +268,10 @@ Workers should function like modern coding agents: they receive enough
 architecture context to make the first good move, but Guildhall must not dump
 the entire repository into every prompt.
 
+Detailed module, partial-refresh, and runtime integration requirements live in
+[`2026-05-21-corpus-map-engine-technical-spec.md`](./2026-05-21-corpus-map-engine-technical-spec.md).
+That technical spec is authoritative for the 0.7.0 Corpus Map MVP.
+
 This is a distinct 0.7.0 workstream. The existing context builder already
 injects focused task memory, likely target files, checkpoints, recent progress,
 and decisions. That is useful, but it is not the same thing as understanding

@@ -103,6 +103,14 @@
     effective: { productSuggestions: ProductSuggestion[] } | null
     projectSkillProposals: ProjectSkillProposal[]
   }
+  interface CodebaseMapStatus {
+    configured: boolean
+    generatedAt: string | null
+    stale: { stale: true; at: string; reason: string; error: string } | null
+    counts: { files: number; areas: number; abstractions: number }
+    frameworks?: string[]
+    packageManagers?: string[]
+  }
 
   let initialized = $state<boolean | null>(null)
   let name = $state('')
@@ -114,6 +122,9 @@
   let leversError = $state<string | null>(null)
   let savingLever = $state<string | null>(null)
   let designSystem = $state<DesignSystem | null | undefined>(undefined)
+  let codebaseMapStatus = $state<CodebaseMapStatus | null>(null)
+  let codebaseMapBusy = $state(false)
+  let codebaseMapError = $state<string | null>(null)
   let learning = $state<LearningSnapshot | null>(null)
   let learningError = $state<string | null>(null)
   let learningBusy = $state<string | null>(null)
@@ -176,6 +187,7 @@
       .then(r => r.json())
       .then(j => (designSystem = j?.designSystem ?? null))
       .catch(() => (designSystem = null))
+    void loadCodebaseMapStatus()
     fetch('/api/providers/status')
       .then(r => (r.ok ? r.json() : null))
       .then(j => {
@@ -222,6 +234,48 @@
       }
     } catch (err) {
       learningError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  async function loadCodebaseMapStatus() {
+    try {
+      codebaseMapError = null
+      const r = await projectFetch('/api/project/codebase-map/status')
+      const j = await r.json().catch(() => null)
+      if (!r.ok || !j || typeof j !== 'object') {
+        codebaseMapError = j && typeof j === 'object' && 'error' in j
+          ? String(j.error)
+          : `HTTP ${r.status}`
+        return
+      }
+      if ('error' in j && j.error) {
+        codebaseMapError = String(j.error)
+        return
+      }
+      codebaseMapStatus = j as CodebaseMapStatus
+    } catch (err) {
+      codebaseMapError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  async function refreshCodebaseMap() {
+    if (codebaseMapBusy) return
+    codebaseMapBusy = true
+    codebaseMapError = null
+    try {
+      const r = await projectFetch('/api/project/codebase-map/refresh', { method: 'POST' })
+      const j = await r.json().catch(() => null)
+      if (!r.ok || !j || typeof j !== 'object' || ('error' in j && j.error)) {
+        codebaseMapError = j && typeof j === 'object' && 'error' in j
+          ? String(j.error)
+          : `HTTP ${r.status}`
+        return
+      }
+      codebaseMapStatus = (j as { status?: CodebaseMapStatus }).status ?? null
+    } catch (err) {
+      codebaseMapError = err instanceof Error ? err.message : String(err)
+    } finally {
+      codebaseMapBusy = false
     }
   }
 
@@ -1204,6 +1258,57 @@
         <FrameCard class="advanced-card advanced-card-wide" density="compact">
           {#snippet header()}
             <SectionHeader
+              title="Codebase map"
+              description="Compact architecture context workers use to find existing primitives before editing."
+              headingTag="h3"
+              density="dense"
+            >
+              {#snippet meta()}
+                {#if codebaseMapStatus}
+                  <StatusPill
+                    label={codebaseMapStatus.stale ? 'stale' : codebaseMapStatus.configured ? 'ready' : 'not built'}
+                    tone={codebaseMapStatus.stale ? 'warn' : codebaseMapStatus.configured ? 'ok' : 'neutral'}
+                  />
+                {/if}
+              {/snippet}
+            </SectionHeader>
+          {/snippet}
+
+          <Stack gap="3">
+            {#if codebaseMapError}
+              <NoticeBand tone="danger" role="alert" label="Codebase map" title="Could not read map" density="compact">
+                <p>{codebaseMapError}</p>
+              </NoticeBand>
+            {:else if !codebaseMapStatus}
+              <NoticeBand tone="neutral" role="status" label="Codebase map" title="Loading map status" density="compact">
+                <p>Checking the compact architecture index…</p>
+              </NoticeBand>
+            {:else}
+              <div class="map-facts">
+                <div><span class="muted">Files</span><strong>{codebaseMapStatus.counts.files}</strong></div>
+                <div><span class="muted">Areas</span><strong>{codebaseMapStatus.counts.areas}</strong></div>
+                <div><span class="muted">Abstractions</span><strong>{codebaseMapStatus.counts.abstractions}</strong></div>
+              </div>
+              {#if codebaseMapStatus.generatedAt}
+                <Byline verb="Last built" at={codebaseMapStatus.generatedAt} />
+              {/if}
+              {#if codebaseMapStatus.stale}
+                <NoticeBand tone="warn" role="note" label="Codebase map" title="Map needs refresh" density="compact">
+                  <p>{codebaseMapStatus.stale.error}</p>
+                </NoticeBand>
+              {/if}
+              <Row justify="end">
+                <Button variant="secondary" onclick={refreshCodebaseMap} disabled={codebaseMapBusy}>
+                  {codebaseMapBusy ? 'Refreshing…' : codebaseMapStatus.configured ? 'Refresh map' : 'Build map'}
+                </Button>
+              </Row>
+            {/if}
+          </Stack>
+        </FrameCard>
+
+        <FrameCard class="advanced-card advanced-card-wide" density="compact">
+          {#snippet header()}
+            <SectionHeader
               title="Design system"
               description="Current draft state for the operator-facing shared UI primitives."
               headingTag="h3"
@@ -1607,12 +1712,14 @@
     align-items: center;
   }
 
-  .ds-facts {
+  .ds-facts,
+  .map-facts {
     display: grid;
     gap: var(--gh-space-3);
   }
 
-  .ds-facts > div {
+  .ds-facts > div,
+  .map-facts > div {
     display: grid;
     gap: var(--gh-space-1);
   }
@@ -1643,8 +1750,13 @@
       grid-column: 1 / -1;
     }
 
-    .ds-facts {
+    .ds-facts,
+    .map-facts {
       grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .map-facts {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
   }
 

@@ -18,6 +18,7 @@ import {
 } from '@guildhall/config'
 import { exec, spawn } from 'node:child_process'
 import { platform } from 'node:os'
+import { refreshCodebaseMap } from '@guildhall/corpus-map'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`
@@ -251,6 +252,7 @@ export function resolveServiceLifecycleIntent(
 //   guildhall serve                     — start the web dashboard (all workspaces)
 //     --port <n>                    — override the dashboard port (default: 7777)
 //   guildhall config [id|path]          — re-run the init wizard on an existing workspace
+//   guildhall corpus-map refresh [path] — rebuild memory/codebase-map.yaml for a workspace
 //   guildhall model-bakeoff [output]    — write replay model bakeoff JSON + Markdown
 // ---------------------------------------------------------------------------
 
@@ -265,6 +267,7 @@ export const SHIPPED_CLI_COMMANDS = [
   'stop',
   'open',
   'config',
+  'corpus-map',
   'model-bakeoff',
 ] as const
 
@@ -322,6 +325,7 @@ Usage:
   guildhall open [path]              Open the running service (starts it if needed)
 
   guildhall config [id|path]         Re-run the init wizard on an existing workspace
+  guildhall corpus-map refresh [path] Rebuild compact codebase map context
   guildhall model-bakeoff [output]   Write replay model bakeoff JSON + Markdown
 
 Options:
@@ -593,6 +597,33 @@ async function cmdConfig() {
   await runInit({ targetDir: targetDir ?? process.cwd(), reconfigure: true })
 }
 
+async function cmdCorpusMap() {
+  const pos = positionals()
+  const subcommand = pos[0] ?? 'refresh'
+  if (subcommand !== 'refresh') {
+    console.error('[guildhall] Usage: guildhall corpus-map refresh [id|path]')
+    process.exit(1)
+  }
+  const idOrPath = pos[1]
+  let projectPath: string
+  if (idOrPath) {
+    const entry = findWorkspace(idOrPath)
+    projectPath = resolve(expandPath(entry?.path ?? idOrPath))
+  } else {
+    projectPath = process.cwd()
+  }
+  const result = await refreshCodebaseMap({
+    projectRoot: projectPath,
+    memoryDir: join(projectPath, 'memory'),
+    reason: 'manual',
+  })
+  console.log(`[guildhall] Codebase map refreshed (${result.mode}).`)
+  console.log(`[guildhall] Files: ${Object.keys(result.map.files).length}`)
+  console.log(`[guildhall] Areas: ${result.map.areas.length}`)
+  console.log(`[guildhall] Abstractions: ${result.map.abstractions.length}`)
+  console.log(`[guildhall] Written: ${join(projectPath, 'memory', 'codebase-map.yaml')}`)
+}
+
 export function writeModelBakeoffReport(outputPath: string): {
   jsonPath: string
   markdownPath: string
@@ -638,6 +669,7 @@ async function main() {
     case 'open':    return cmdOpen()
     case 'serve-internal': return cmdServeInternal()
     case 'config':  return cmdConfig()
+    case 'corpus-map': return cmdCorpusMap()
     case 'model-bakeoff': return cmdModelBakeoff()
     default:
       console.error(`[guildhall] Unknown command: ${command}`)

@@ -639,7 +639,7 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await screen.findByLabelText('Thread operations summary')
-    expect(screen.getByText('7 need you')).toBeTruthy()
+    expect(screen.getByText('7 thread cards need you')).toBeTruthy()
     expect(screen.getByText('1 working')).toBeTruthy()
     expect(screen.getByText('1 blocked')).toBeTruthy()
     expect(screen.getByText('2 queued')).toBeTruthy()

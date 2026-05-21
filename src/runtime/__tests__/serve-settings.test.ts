@@ -170,6 +170,44 @@ describe('POST /api/config/levers', () => {
 })
 
 describe('general project status endpoints', () => {
+  it('reports and refreshes the project codebase map', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'settings-test', scripts: { test: 'vitest' }, dependencies: { svelte: '5.0.0' } }, null, 2),
+      'utf8',
+    )
+    await fs.mkdir(path.join(tmpDir, 'src/web/lib'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'src/web/lib/Button.svelte'), '<button><slot /></button>\n', 'utf8')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const empty = await app.fetch(new Request(scoped('/api/project/codebase-map/status')))
+    expect(empty.status).toBe(200)
+    expect(await empty.json()).toMatchObject({
+      configured: false,
+      generatedAt: null,
+      counts: { files: 0, areas: 0, abstractions: 0 },
+    })
+
+    const refresh = await app.fetch(new Request(scoped('/api/project/codebase-map/refresh'), { method: 'POST' }))
+    expect(refresh.status).toBe(200)
+    const refreshBody = await refresh.json() as Record<string, any>
+    expect(refreshBody).toMatchObject({
+      ok: true,
+      mode: 'full',
+      status: {
+        configured: true,
+        counts: { abstractions: 1 },
+      },
+    })
+
+    const status = await app.fetch(new Request(scoped('/api/project/codebase-map/status')))
+    expect(status.status).toBe(200)
+    const body = await status.json() as Record<string, any>
+    expect(body.configured).toBe(true)
+    expect(body.counts.files).toBeGreaterThan(0)
+    expect(body.frameworks).toContain('svelte')
+  })
+
   it('reports setup status and generated setup defaults for the selected project', async () => {
     writeWorkspaceConfig(tmpDir, {
       ...readWorkspaceConfig(tmpDir),

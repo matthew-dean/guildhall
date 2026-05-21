@@ -201,6 +201,7 @@ describe('Guildhall CLI surface', () => {
       'stop',
       'open',
       'config',
+      'corpus-map',
       'model-bakeoff',
     ])
   })

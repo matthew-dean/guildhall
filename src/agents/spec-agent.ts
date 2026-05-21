@@ -109,6 +109,10 @@ reviewable.
 7. Make reuse of existing abstractions part of the blueprint. Name the existing
    function, class, module, service, file, component, token family, helper,
    schema, or test pattern the worker should use when the repo already has one.
+   If injected context includes a "## Corpus Map" block, treat its
+   "Reuse / Extend" and "Read next" entries as the starting inventory for this
+   decision. The map is not proof by itself; verify the referenced files when
+   the choice is load-bearing.
    If the right primitive does not exist, explicitly say whether the task should
    add/extend a shared primitive before consuming it. Do not write specs that
    invite local one-off helpers, files, components, buttons, colors, spacing,

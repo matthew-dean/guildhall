@@ -38,6 +38,18 @@ function installProjectState() {
   }
 }
 
+function codebaseMapStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    configured: false,
+    generatedAt: null,
+    stale: null,
+    counts: { files: 0, areas: 0, abstractions: 0 },
+    frameworks: [],
+    packageManagers: [],
+    ...overrides,
+  }
+}
+
 describe('SettingsTab', () => {
   beforeEach(() => {
     installProjectState()
@@ -58,6 +70,7 @@ describe('SettingsTab', () => {
       }
       if (url.pathname === '/api/config/levers') return json({ levers: [] })
       if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
       if (url.pathname === '/api/providers/status') return json({ configured: true, active: 'OpenAI-compatible API' })
       if (url.pathname === '/api/project/bootstrap/status') {
         return json({
@@ -110,6 +123,7 @@ describe('SettingsTab', () => {
       if (url.pathname === '/api/setup/status') return json({ initialized: true, name: 'Looma + Knit', id: 'looma-knit' })
       if (url.pathname === '/api/config/levers') return json({ levers: [] })
       if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
       if (url.pathname === '/api/providers/status') return json({ configured: false })
       if (url.pathname === '/api/project/bootstrap/status') {
         return json({ configured: true, needed: true, status: null, bootstrap: { commands: [], successGates: [], timeoutMs: 0 } })
@@ -200,6 +214,27 @@ describe('SettingsTab', () => {
         expect(init?.method).toBe('POST')
         return json({ ok: true })
       }
+      if (url.pathname === '/api/project/codebase-map/status') {
+        return json(codebaseMapStatus({
+          configured: true,
+          generatedAt: now,
+          counts: { files: 121, areas: 8, abstractions: 5 },
+          frameworks: ['svelte'],
+          packageManagers: ['pnpm'],
+        }))
+      }
+      if (url.pathname === '/api/project/codebase-map/refresh') {
+        expect(init?.method).toBe('POST')
+        return json({
+          ok: true,
+          mode: 'full',
+          status: codebaseMapStatus({
+            configured: true,
+            generatedAt: now,
+            counts: { files: 122, areas: 8, abstractions: 6 },
+          }),
+        })
+      }
       if (url.pathname === '/api/providers/status') return json({ configured: true, active: 'OpenAI-compatible API' })
       if (url.pathname === '/api/project/bootstrap/status') return json({ configured: false, needed: true, status: null })
       if (url.pathname === '/api/setup/identity') {
@@ -232,6 +267,13 @@ describe('SettingsTab', () => {
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /worktree isolation setting/i }), 'per_attempt')
     await screen.findByText(/Current: Per attempt/)
 
+    await screen.findByText('Codebase map')
+    expect(screen.getByText('121')).toBeInTheDocument()
+    expect(screen.getByText('8')).toBeInTheDocument()
+    expect(screen.getByText('5')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /refresh map/i }))
+    await screen.findByText('122')
+
     await screen.findByText('Revision 2')
     await userEvent.click(screen.getByRole('button', { name: /approve current draft/i }))
     await screen.findByText('approved')
@@ -245,6 +287,7 @@ describe('SettingsTab', () => {
       }
       if (url.pathname === '/api/config/levers') return json({ levers: [] })
       if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
       if (url.pathname === '/api/providers/status') return json({ configured: true, active: 'OpenAI-compatible API' })
       if (url.pathname === '/api/project/bootstrap/status') return json({ configured: false, needed: true, status: null })
       if (url.pathname === '/api/project/learning/action') {

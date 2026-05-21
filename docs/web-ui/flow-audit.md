@@ -3629,6 +3629,14 @@ while task-title buttons no longer use a dotted underline hover. They now use a
 subtle chip hover so navigation controls and document links do not look like
 competing hyperlink systems.
 
+0.8.0 rich artifact exploration on `2026-05-21`: captured the HTML-vs-Markdown
+idea in `docs/design/html-artifacts-and-agent-ui-protocol.md`. The conclusion:
+do not replace ordinary Thread/task prose with raw HTML, but do explore a
+validated rich artifact lane for blueprints, design-system views, review
+dashboards, diagrams, and bounded micro-editors. While auditing this, the
+Markdown renderer was hardened because `marked` preserves raw HTML; current
+plain Markdown now sanitizes generated HTML before Svelte renders it.
+
 ## Narrative Harness Product Walkthrough — 2026-05-20
 
 Test target: `/Users/matthew/git/oss/narrative-harness`, opened through the

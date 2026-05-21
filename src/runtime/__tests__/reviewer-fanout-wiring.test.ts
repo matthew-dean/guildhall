@@ -214,6 +214,7 @@ function builtContextStub() {
     envelope: '',
     designSystem: '',
     reviewRubrics: '',
+    corpusMap: '',
     formatted: '',
   }
 }

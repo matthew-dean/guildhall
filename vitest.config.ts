@@ -22,6 +22,7 @@ export default defineConfig({
       'backend-host',
       'compaction',
       'config',
+      'corpus-map',
       'core',
       'engine',
       'engineering-defaults',
