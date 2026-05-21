@@ -98,6 +98,7 @@ function baseConfig(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
       worker: 'm',
       reviewer: 'm',
       gateChecker: 'm',
+      contextIndexer: 'm',
     },
     coordinators: [],
     maxRevisions: 3,

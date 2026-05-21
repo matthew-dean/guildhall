@@ -30,6 +30,9 @@ guildhall register ~/projects/my-app
 
 # Write a model bakeoff replay report
 guildhall model-bakeoff
+
+# Compare context-indexer candidates
+guildhall model-bakeoff --context-indexer
 ```
 
 ## Command reference

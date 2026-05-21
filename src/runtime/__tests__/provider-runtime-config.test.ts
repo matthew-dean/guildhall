@@ -60,6 +60,7 @@ describe('getRuntimeProviderConfig', () => {
         worker: 'qwen/qwen3.5-122b-a10b',
         reviewer: 'qwen/qwen3.5-122b-a10b',
         gateChecker: 'qwen/qwen3.5-122b-a10b',
+        contextIndexer: 'qwen/qwen3.5-122b-a10b',
       },
     })
 
@@ -91,6 +92,7 @@ describe('getRuntimeProviderConfig', () => {
         worker: 'gpt-5.3-codex',
         reviewer: 'gpt-5.3-codex',
         gateChecker: 'gpt-5.3-codex',
+        contextIndexer: 'gpt-5.3-codex',
       },
     })
 
@@ -113,6 +115,7 @@ describe('getRuntimeProviderConfig', () => {
         worker: 'qwen/qwen3.5-122b-a10b',
         reviewer: 'qwen/qwen3.5-122b-a10b',
         gateChecker: 'qwen/qwen3.5-122b-a10b',
+        contextIndexer: 'qwen/qwen3.5-122b-a10b',
       },
     })
 
@@ -132,6 +135,7 @@ describe('getRuntimeProviderConfig', () => {
         worker: 'qwen/qwen3.5-122b-a10b',
         reviewer: 'qwen/qwen3.5-122b-a10b',
         gateChecker: 'qwen/qwen3.5-122b-a10b',
+        contextIndexer: 'qwen/qwen3.5-122b-a10b',
       },
     })
 

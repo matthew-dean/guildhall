@@ -197,6 +197,7 @@ export function roleForAgentName(agentName: string): string {
   if (agentName === 'worker-agent') return 'worker'
   if (agentName === 'reviewer-agent') return 'reviewer'
   if (agentName === 'gate-checker-agent') return 'gateChecker'
+  if (agentName === 'context-indexer-agent' || agentName === 'corpus-map') return 'contextIndexer'
   if (agentName.startsWith('coordinator-')) return 'coordinator'
   if (agentName.startsWith('reviewer-persona-')) return 'reviewer'
   return agentName
@@ -208,6 +209,7 @@ export function modelForAgentName(agentName: string, models: {
   worker: string
   reviewer: string
   gateChecker: string
+  contextIndexer: string
 }): string {
   const role = roleForAgentName(agentName)
   switch (role) {
@@ -215,6 +217,7 @@ export function modelForAgentName(agentName: string, models: {
     case 'worker': return models.worker
     case 'reviewer': return models.reviewer
     case 'gateChecker': return models.gateChecker
+    case 'contextIndexer': return models.contextIndexer
     case 'coordinator': return models.coordinator
     default: return models.worker
   }

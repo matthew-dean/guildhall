@@ -25,6 +25,7 @@ export interface ModelSet {
   worker: AgentLLM
   reviewer: AgentLLM
   gateChecker: AgentLLM
+  contextIndexer: AgentLLM
 }
 
 export function temperatureForRole(role: AgentRole): number {
@@ -33,6 +34,7 @@ export function temperatureForRole(role: AgentRole): number {
       return 0.1
     case 'reviewer':
     case 'gateChecker':
+    case 'contextIndexer':
       return 0
     case 'spec':
     case 'coordinator':
@@ -54,6 +56,7 @@ export function buildModelSet(
     worker: { apiClient, modelId: assignment.worker, temperature: temperatureForRole('worker') },
     reviewer: { apiClient, modelId: assignment.reviewer, temperature: temperatureForRole('reviewer') },
     gateChecker: { apiClient, modelId: assignment.gateChecker, temperature: temperatureForRole('gateChecker') },
+    contextIndexer: { apiClient, modelId: assignment.contextIndexer, temperature: temperatureForRole('contextIndexer') },
   }
 }
 
@@ -64,6 +67,7 @@ export function modelForRole(role: AgentRole, models: ModelSet): AgentLLM {
     worker: models.worker,
     reviewer: models.reviewer,
     gateChecker: models.gateChecker,
+    contextIndexer: models.contextIndexer,
   }
   return map[role]
 }

@@ -88,7 +88,7 @@ Stop the background Guildhall service.
 
 Re-run the setup wizard against an existing project.
 
-## `guildhall model-bakeoff [output.json]`
+## `guildhall model-bakeoff [--context-indexer] [output.json]`
 
 Write a deterministic model bakeoff replay report. The command currently uses
 saved replay scenarios and simulated lanes so it can validate Guildhall's
@@ -98,6 +98,11 @@ Default output:
 
 - `artifacts/model-bakeoff/model-bakeoff-report.json`
 - `artifacts/model-bakeoff/model-bakeoff-report.md`
+
+Use `--context-indexer` to run the semantic Corpus Map bakeoff. That writes
+`artifacts/model-bakeoff/context-indexer-report.json` and a Markdown summary by
+default, using DeepInfra candidate lanes for choosing a cheap, fast indexing
+model.
 
 The optional positional argument chooses the JSON path. Guildhall writes the
 Markdown summary beside it.
@@ -109,4 +114,5 @@ guildhall init ~/projects/my-app
 guildhall run my-app --domain ui
 guildhall serve
 guildhall model-bakeoff artifacts/model-bakeoff/report.json
+guildhall model-bakeoff --context-indexer
 ```

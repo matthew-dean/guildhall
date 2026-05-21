@@ -451,6 +451,7 @@ export interface ProviderStatus {
     worker?: string
     reviewer?: string
     gateChecker?: string
+    contextIndexer?: string
   } | null
 }
 

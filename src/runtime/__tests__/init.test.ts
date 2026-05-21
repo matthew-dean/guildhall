@@ -156,6 +156,7 @@ describe('runInit', () => {
           worker: 'qwen2.5-coder-7b-instruct',
           reviewer: 'qwen2.5-coder-7b-instruct',
           gateChecker: 'qwen2.5-coder-7b-instruct',
+          contextIndexer: 'qwen2.5-coder-7b-instruct',
           spec: 'claude-sonnet-4-6',
           coordinator: 'claude-sonnet-4-6',
         }),
@@ -193,6 +194,7 @@ describe('runInit', () => {
           worker: 'claude-sonnet-4-6',
           reviewer: 'claude-haiku-4-5',
           gateChecker: 'claude-haiku-4-5',
+          contextIndexer: 'claude-haiku-4-5',
         }),
       }),
     )

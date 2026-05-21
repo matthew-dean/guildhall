@@ -15,6 +15,7 @@ describe('buildProviderIndicator', () => {
         worker: 'gpt-5.3-codex',
         reviewer: 'qwen/review',
         gateChecker: 'qwen/gate',
+        contextIndexer: 'qwen/gate',
       },
     }
 
@@ -28,6 +29,7 @@ describe('buildProviderIndicator', () => {
         'Worker: gpt-5.3-codex',
         'Reviewer: qwen/review',
         'Gate: qwen/gate',
+        'Context: qwen/gate',
       ].join('\n'),
     })
   })

@@ -53,6 +53,7 @@
     { id: 'worker', label: 'Worker' },
     { id: 'reviewer', label: 'Reviewer' },
     { id: 'gateChecker', label: 'Gate checker' },
+    { id: 'contextIndexer', label: 'Context indexer' },
   ]
 
   async function load() {

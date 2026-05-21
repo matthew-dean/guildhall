@@ -4,10 +4,11 @@ title: Agents & models
 
 # Agents & models
 
-Five agent roles exist, each backed by a different system prompt and tool set.
+Six model roles exist, each backed by a different system prompt, tool set, or
+runtime lane.
 The construction model is the simplest way to understand the split: one role
 drafts the blueprint, one keeps the job coherent, one performs trade work, one
-inspects, and one enforces deterministic checks.
+inspects, one enforces deterministic checks, and one enriches project context.
 
 | Role | Responsibility | Typical model tier |
 |---|---|---|
@@ -16,6 +17,7 @@ inspects, and one enforces deterministic checks.
 | `worker` | Performs bounded trade work against the accepted blueprint. | Mid-to-high — coding-specific. |
 | `reviewer` | Inspects completed work against the blueprint + rubric. | Mid. |
 | `gateChecker` | Runs deterministic checks and custom gates. | Low — mostly shell/parse. |
+| `contextIndexer` | Summarizes code purpose, contracts, canonical abstractions, and read-next guidance for the Corpus Map. | Low-to-mid — cheap, fast, structured, code-aware. |
 
 ## Assigning models
 
@@ -26,6 +28,7 @@ models:
   worker: qwen2.5-coder-32b-instruct
   reviewer: qwen2.5-coder-14b-instruct
   gateChecker: qwen2.5-coder-7b-instruct
+  contextIndexer: deepseek-ai/DeepSeek-V4-Flash
 ```
 
 Model IDs resolve against Guildhall's bundled model catalog.

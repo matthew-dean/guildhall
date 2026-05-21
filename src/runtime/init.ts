@@ -126,6 +126,7 @@ export async function runInit(opts: InitOptions): Promise<void> {
       })
       selectedModels.reviewer = reviewerModel
       selectedModels.gateChecker = reviewerModel
+      selectedModels.contextIndexer = reviewerModel
     }
 
     if (modelStrategy === 'mixed') {
@@ -155,6 +156,7 @@ export async function runInit(opts: InitOptions): Promise<void> {
       })
       selectedModels.reviewer = fastModel
       selectedModels.gateChecker = fastModel
+      selectedModels.contextIndexer = fastModel
     }
     models = selectedModels
   }

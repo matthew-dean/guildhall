@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { runOrchestrator } from './orchestrator.js'
-import { renderBakeoffMarkdown, runModelBakeoff } from './model-bakeoff.js'
+import { renderBakeoffMarkdown, runContextIndexerBakeoff, runModelBakeoff } from './model-bakeoff.js'
 import { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
 import { runInit } from './init.js'
 import { runServe } from './serve.js'
@@ -253,7 +253,8 @@ export function resolveServiceLifecycleIntent(
 //     --port <n>                    — override the dashboard port (default: 7777)
 //   guildhall config [id|path]          — re-run the init wizard on an existing workspace
 //   guildhall corpus-map refresh [path] — rebuild memory/codebase-map.yaml for a workspace
-//   guildhall model-bakeoff [output]    — write replay model bakeoff JSON + Markdown
+//   guildhall model-bakeoff [--context-indexer] [output]
+//                                      — write replay model bakeoff JSON + Markdown
 // ---------------------------------------------------------------------------
 
 export const SHIPPED_CLI_COMMANDS = [
@@ -326,7 +327,8 @@ Usage:
 
   guildhall config [id|path]         Re-run the init wizard on an existing workspace
   guildhall corpus-map refresh [path] Rebuild compact codebase map context
-  guildhall model-bakeoff [output]   Write replay model bakeoff JSON + Markdown
+  guildhall model-bakeoff [--context-indexer] [output]
+                                  Write replay model bakeoff JSON + Markdown
 
 Options:
   --help, -h                     Show this help
@@ -336,6 +338,7 @@ Examples:
   guildhall run looma
   guildhall serve
   guildhall model-bakeoff artifacts/model-bakeoff/report.json
+  guildhall model-bakeoff --context-indexer
 `.trim()
 }
 
@@ -624,7 +627,9 @@ async function cmdCorpusMap() {
   console.log(`[guildhall] Written: ${join(projectPath, 'memory', 'codebase-map.yaml')}`)
 }
 
-export function writeModelBakeoffReport(outputPath: string): {
+export function writeModelBakeoffReport(outputPath: string, opts: {
+  contextIndexer?: boolean
+} = {}): {
   jsonPath: string
   markdownPath: string
 } {
@@ -632,7 +637,7 @@ export function writeModelBakeoffReport(outputPath: string): {
   const markdownPath = /\.json$/i.test(jsonPath)
     ? jsonPath.replace(/\.json$/i, '.md')
     : `${jsonPath}.md`
-  const report = runModelBakeoff()
+  const report = opts.contextIndexer ? runContextIndexerBakeoff() : runModelBakeoff()
 
   mkdirSync(dirname(jsonPath), { recursive: true })
   mkdirSync(dirname(markdownPath), { recursive: true })
@@ -644,8 +649,14 @@ export function writeModelBakeoffReport(outputPath: string): {
 
 function cmdModelBakeoff() {
   const pos = positionals()
+  const contextIndexer = args.includes('--context-indexer')
   const { jsonPath, markdownPath } = writeModelBakeoffReport(
-    pos[0] ?? 'artifacts/model-bakeoff/model-bakeoff-report.json',
+    pos[0] ?? (
+      contextIndexer
+        ? 'artifacts/model-bakeoff/context-indexer-report.json'
+        : 'artifacts/model-bakeoff/model-bakeoff-report.json'
+    ),
+    { contextIndexer },
   )
   console.log(`[guildhall] Model bakeoff report: ${jsonPath}`)
   console.log(`[guildhall] Model bakeoff summary: ${markdownPath}`)

@@ -236,4 +236,17 @@ describe('Guildhall CLI surface', () => {
     })
     expect(readFileSync(result.markdownPath, 'utf8')).toContain('# Guildhall Model Bakeoff')
   })
+
+  it('writes the context-indexer bakeoff report when requested', () => {
+    const dir = tmpHome()
+    const jsonPath = join(dir, 'reports', 'context-indexer.json')
+
+    const result = writeModelBakeoffReport(jsonPath, { contextIndexer: true })
+    const report = JSON.parse(readFileSync(result.jsonPath, 'utf8'))
+
+    expect(report.scenarioCount).toBe(4)
+    expect(report.recommendation).toContain('deepinfra-deepseek-v4-flash-context')
+    expect(report.scenarios.every((scenario: { origin: string }) => scenario.origin === 'context-indexer')).toBe(true)
+    expect(readFileSync(result.markdownPath, 'utf8')).toContain('Context indexer')
+  })
 })

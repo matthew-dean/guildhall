@@ -413,6 +413,7 @@ describe('inferPreferredProvider', () => {
       worker: 'qwen2.5-coder-32b-instruct',
       reviewer: 'qwen2.5-coder-14b-instruct',
       gateChecker: 'qwen2.5-coder-7b-instruct',
+      contextIndexer: 'qwen2.5-coder-7b-instruct',
     })
     expect(result).toBe('llama-cpp')
   })
@@ -424,6 +425,7 @@ describe('inferPreferredProvider', () => {
       worker: 'qwen/qwen3.6-35b-a3b',
       reviewer: 'qwen/qwen3.6-35b-a3b',
       gateChecker: 'qwen/qwen3.6-35b-a3b',
+      contextIndexer: 'qwen/qwen3.6-35b-a3b',
     })
     expect(result).toBe('llama-cpp')
   })
@@ -435,6 +437,7 @@ describe('inferPreferredProvider', () => {
       worker: 'claude-sonnet-4-6',
       reviewer: 'claude-haiku-4-5-20251001',
       gateChecker: 'claude-haiku-4-5-20251001',
+      contextIndexer: 'claude-haiku-4-5-20251001',
     })
     expect(result).toBe('claude-oauth')
   })
@@ -446,6 +449,7 @@ describe('inferPreferredProvider', () => {
       worker: 'gpt-4o',
       reviewer: 'gpt-4o-mini',
       gateChecker: 'gpt-4o-mini',
+      contextIndexer: 'gpt-4o-mini',
     })
     expect(result).toBe('openai-api')
   })
@@ -457,6 +461,7 @@ describe('inferPreferredProvider', () => {
       worker: 'qwen2.5-coder-32b-instruct',
       reviewer: 'claude-haiku-4-5-20251001',
       gateChecker: 'qwen2.5-coder-7b-instruct',
+      contextIndexer: 'qwen2.5-coder-7b-instruct',
     })
     expect(result).toBeUndefined()
   })
@@ -468,6 +473,7 @@ describe('inferPreferredProvider', () => {
       worker: 'mystery-model',
       reviewer: 'mystery-model',
       gateChecker: 'mystery-model',
+      contextIndexer: 'mystery-model',
     })
     expect(result).toBeUndefined()
   })

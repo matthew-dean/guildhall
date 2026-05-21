@@ -7137,6 +7137,7 @@ export class Orchestrator {
     console.log(`  worker:      ${c.models.worker}`)
     console.log(`  reviewer:    ${c.models.reviewer}`)
     console.log(`  gateChecker: ${c.models.gateChecker}`)
+    console.log(`  contextIndexer: ${c.models.contextIndexer}`)
     console.log('[guildhall] Coordinator started.')
   }
 }

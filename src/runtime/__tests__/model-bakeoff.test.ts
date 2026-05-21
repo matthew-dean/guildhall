@@ -4,9 +4,12 @@ import path from 'node:path'
 import {
   DETERMINISTIC_BASELINE_LANE,
   aggregateBakeoffReport,
+  contextIndexerScenarios,
+  deepInfraContextIndexerLanes,
   historicalFailureScenarios,
   learningCandidatesFromBakeoffReport,
   renderBakeoffMarkdown,
+  runContextIndexerBakeoff,
   runModelBakeoff,
 } from '../model-bakeoff.js'
 
@@ -204,6 +207,37 @@ describe('model bakeoff harness', () => {
     expect(report.lanes.every((lane) => lane.costPerRecoveryLoopUsd !== null)).toBe(true)
   })
 
+  it('includes context-indexer scenarios for semantic corpus-map evaluation', () => {
+    expect(contextIndexerScenarios.map((scenario) => scenario.id)).toEqual(
+      expect.arrayContaining([
+        'canonical-abstraction-purpose',
+        'legacy-versus-current-path',
+        'design-system-drift-summary',
+      ]),
+    )
+    expect(contextIndexerScenarios.every((scenario) => scenario.origin === 'context-indexer')).toBe(true)
+  })
+
+  it('ships DeepInfra candidate lanes for the contextIndexer role', () => {
+    expect(deepInfraContextIndexerLanes.map((lane) => lane.model)).toEqual(
+      expect.arrayContaining([
+        'deepseek-ai/DeepSeek-V4-Flash',
+        'Qwen/Qwen3.6-35B-A3B',
+        'zai-org/GLM-4.6',
+      ]),
+    )
+    expect(deepInfraContextIndexerLanes.every((lane) => lane.role === 'contextIndexer')).toBe(true)
+  })
+
+  it('can run a context-indexer bakeoff against DeepInfra candidate lanes', () => {
+    const report = runContextIndexerBakeoff()
+
+    expect(report.scenarioCount).toBe(contextIndexerScenarios.length)
+    expect(report.lanes.every((lane) => lane.laneId.startsWith('deepinfra-'))).toBe(true)
+    expect(report.recommendation).toContain('deepinfra-')
+    expect(renderBakeoffMarkdown(report)).toContain('Context indexer')
+  })
+
   it('renders a markdown report with cost and packet-quality columns', () => {
     const report = runModelBakeoff({
       generatedAt: '2026-05-19T20:00:00.000Z',
@@ -216,8 +250,8 @@ describe('model bakeoff harness', () => {
 
     expect(renderBakeoffMarkdown(report)).toContain('# Guildhall Model Bakeoff')
     expect(renderBakeoffMarkdown(report)).toContain('Generated: 2026-05-19T20:00:00.000Z')
-    expect(renderBakeoffMarkdown(report)).toContain('deterministic-baseline | 0/1 | 1')
-    expect(renderBakeoffMarkdown(report)).toContain('strong-worker | 1/1 | 0')
+    expect(renderBakeoffMarkdown(report)).toContain('deterministic-baseline) | 0/1 | 1')
+    expect(renderBakeoffMarkdown(report)).toContain('strong-worker) | 1/1 | 0')
     expect(renderBakeoffMarkdown(report)).toContain('| Lane | Completed | Failed | False escalations')
   })
 })
@@ -231,6 +265,8 @@ describe('model bakeoff script', () => {
 
     expect(manifest.scripts['model:bakeoff']).toContain('scripts/model-bakeoff.mjs')
     expect(script).toContain('runModelBakeoff')
+    expect(script).toContain('runContextIndexerBakeoff')
+    expect(script).toContain('--context-indexer')
     expect(script).toContain('model-bakeoff-report.json')
   })
 })

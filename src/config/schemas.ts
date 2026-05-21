@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { ModelAssignmentConfig, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
 import { mcpServerConfigSchema } from '@guildhall/mcp'
 
-const MODEL_ROLE_KEYS = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker'] as const
+const MODEL_ROLE_KEYS = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker', 'contextIndexer'] as const
 const MODEL_PROVIDER_KEYS = [
   'claude-oauth',
   'anthropic-api',
@@ -25,6 +25,7 @@ const ProviderModelShortcutSchema = z.object({
   worker: z.string().optional(),
   reviewer: z.string().optional(),
   gateChecker: z.string().optional(),
+  contextIndexer: z.string().optional(),
 })
 
 const ProviderModelAssignmentsSchema = z.object({
@@ -537,6 +538,7 @@ function expandProviderShortcut(
     out.worker = shortcut.workhorse
     out.reviewer = shortcut.workhorse
     out.gateChecker = shortcut.workhorse
+    out.contextIndexer = shortcut.workhorse
   }
   for (const role of MODEL_ROLE_KEYS) {
     const value = shortcut[role]

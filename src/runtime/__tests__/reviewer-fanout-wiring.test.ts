@@ -56,6 +56,7 @@ function baseConfig(): ResolvedConfig {
       worker: 'm',
       reviewer: 'm',
       gateChecker: 'm',
+      contextIndexer: 'm',
     },
     coordinators: [],
     maxRevisions: 3,

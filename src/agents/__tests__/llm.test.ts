@@ -27,6 +27,7 @@ describe('llm role temperatures', () => {
         worker: 'worker-model',
         reviewer: 'review-model',
         gateChecker: 'gate-model',
+        contextIndexer: 'gate-model',
       },
       noopClient,
     )

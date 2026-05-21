@@ -79,6 +79,7 @@ describe('resolveModelsForProvider', () => {
       worker: 'steady-hand',
       reviewer: 'steady-hand',
       gateChecker: 'steady-hand',
+      contextIndexer: 'steady-hand',
     })
   })
 
@@ -120,6 +121,7 @@ describe('writeModelsForProvider', () => {
       worker: 'qwen/qwen3.5-122b-a10b',
       reviewer: 'qwen/qwen3.5-122b-a10b',
       gateChecker: 'qwen/qwen3.5-122b-a10b',
+      contextIndexer: 'deepseek-ai/DeepSeek-V4-Flash',
     })
     expect(result).toEqual({
       'openai-api': {
@@ -128,6 +130,7 @@ describe('writeModelsForProvider', () => {
         worker: 'qwen/qwen3.5-122b-a10b',
         reviewer: 'qwen/qwen3.5-122b-a10b',
         gateChecker: 'qwen/qwen3.5-122b-a10b',
+        contextIndexer: 'deepseek-ai/DeepSeek-V4-Flash',
       },
     })
   })

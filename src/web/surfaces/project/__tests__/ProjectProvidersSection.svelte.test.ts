@@ -45,6 +45,7 @@ const modelsPayload = {
     worker: 'gpt-5.3-codex',
     reviewer: 'gpt-5.3-codex',
     gateChecker: 'gpt-5.3-codex',
+    contextIndexer: 'gpt-5.3-codex',
   },
   projectModels: {
     worker: 'claude-sonnet-4-6',
@@ -55,6 +56,7 @@ const modelsPayload = {
     worker: 'claude-sonnet-4-6',
     reviewer: 'gpt-5.3-codex',
     gateChecker: 'gpt-5.3-codex',
+    contextIndexer: 'gpt-5.3-codex',
   },
   loadedModels: ['gpt-5.3-codex'],
   missingModels: ['claude-sonnet-4-6'],

@@ -1394,6 +1394,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       worker: modelId,
       reviewer: modelId,
       gateChecker: modelId,
+      contextIndexer: modelId,
     }
   }
 
@@ -1403,6 +1404,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     worker: 'gpt-4o',
     reviewer: 'gpt-4o-mini',
     gateChecker: 'gpt-4o-mini',
+    contextIndexer: 'gpt-4o-mini',
   }
 
   const DEFAULT_CODEX_MODEL_ASSIGNMENT: ModelAssignmentConfig = {
@@ -1411,6 +1413,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     worker: 'gpt-5.3-codex',
     reviewer: 'gpt-5.3-codex',
     gateChecker: 'gpt-5.3-codex',
+    contextIndexer: 'gpt-5.3-codex',
   }
 
   function modelLooksCompatibleWithProvider(provider: ProviderName, modelId: string): boolean {
@@ -1441,6 +1444,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       assignment.worker,
       assignment.reviewer,
       assignment.gateChecker,
+      assignment.contextIndexer,
     ].every(modelId => modelLooksCompatibleWithProvider(provider, modelId))
   }
 
@@ -1724,6 +1728,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         assignment.worker,
         assignment.reviewer,
         assignment.gateChecker,
+        assignment.contextIndexer,
       ].filter(model => !loaded.has(model))),
     ]
   }
@@ -4707,7 +4712,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         model?: string
         models?: Partial<ModelAssignmentConfig>
       }
-      const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker']
+      const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker', 'contextIndexer']
       if (!body.scope) return c.json({ error: 'Missing "scope"' }, 400)
       const workspacePath = currentProjectPath()
       const projectCfg = readProjectConfig(workspacePath)

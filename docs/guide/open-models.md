@@ -23,6 +23,7 @@ tool support, and output behavior.
 | `worker` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | Best strict pass rate in the current worker-lane replay set, with reliable JSON formatting. | It is slower than some flash models, so use lane-specific routing instead of making every role use the worker model. |
 | `reviewer` | `deepseek-ai/DeepSeek-V4-Flash` | Good fit for critique and acceptance checks when paired with deterministic gate evidence. | Reviewers should cite concrete files, commands, and acceptance criteria rather than giving vibes. |
 | `gateChecker` | `deepseek-ai/DeepSeek-V4-Flash` or a deterministic path | Gate checks should mostly run commands and parse evidence. A model is useful only when it summarizes failures or chooses the next recovery playbook. | Do not let model judgment replace command exit codes or explicit policy checks. |
+| `contextIndexer` | `deepseek-ai/DeepSeek-V4-Flash` | Best fit for high-volume semantic Corpus Map enrichment in the current replay: long context, fast enough, and low enough cost for frequent refreshes. | Re-test on real repositories; this lane should summarize architecture, not make product or implementation decisions. |
 
 Premium or experimental lanes:
 
@@ -58,7 +59,8 @@ treating it as a permanent benchmark.
 | Model | What we saw | Recommendation |
 |---|---|---|
 | `Qwen/Qwen3-235B-A22B-Instruct-2507` | Best strict pass rate and strongest structured-output reliability in the worker-style cases. | Use for `worker` by default. |
-| `deepseek-ai/DeepSeek-V4-Flash` | Strong general decision quality across coordinator/reviewer-style cases, with acceptable structured output. | Use for `spec`, `coordinator`, `reviewer`, and model-assisted `gateChecker` work. |
+| `deepseek-ai/DeepSeek-V4-Flash` | Strong general decision quality across coordinator/reviewer-style cases, with acceptable structured output. Context-indexer replay also favored it on cost and speed. | Use for `spec`, `coordinator`, `reviewer`, `contextIndexer`, and model-assisted `gateChecker` work. |
+| `Qwen/Qwen3.6-35B-A3B` | Good context-indexer candidate when code understanding matters; slower and costlier than DeepSeek V4 Flash in the replay model. | Keep in the context-indexer bakeoff set as the main code-understanding challenger. |
 | `openai/gpt-oss-120b` | Promising decisions, but weak format reliability in the current harness. | Retest after schema repair before recommending. |
 | `Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo` | Strong decisions, but poor strict-format reliability in the current harness. | Keep as a premium worker experiment, not a default. |
 | `zai-org/GLM-4.6` | Strong decisions, but poor strict-format reliability in the current harness. | Retest only if output repair improves. |
@@ -85,9 +87,20 @@ You can choose another JSON output path:
 guildhall model-bakeoff artifacts/model-bakeoff/my-report.json
 ```
 
+To run the context-indexer replay specifically:
+
+```bash
+guildhall model-bakeoff --context-indexer
+```
+
 The current command uses saved replay scenarios and simulated model lanes. It
 is useful for checking Guildhall's reporting, scoring, and learning-candidate
 pipeline without spending provider credits.
+
+The context-indexer replay set covers semantic code orientation: canonical
+abstraction selection, legacy/current path detection, design-system drift, and
+module contract summaries. Current DeepInfra candidate lanes are
+`deepseek-ai/DeepSeek-V4-Flash`, `Qwen/Qwen3.6-35B-A3B`, and `zai-org/GLM-4.6`.
 
 ## Planned live bakeoff mode
 
