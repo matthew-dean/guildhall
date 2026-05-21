@@ -98,8 +98,8 @@
   }
   .status-count {
     position: absolute;
-    top: calc(-1 * var(--s-1));
-    right: calc(-1 * var(--s-1));
+    top: calc(-1 * var(--s-2));
+    right: calc(-1 * var(--s-2));
     display: inline-flex;
     align-items: center;
     justify-content: center;
