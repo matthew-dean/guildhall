@@ -94,6 +94,81 @@ describe('GET /api/config/levers', () => {
   })
 })
 
+describe('POST /api/config/levers', () => {
+  it('writes a project override and can return the lever to the global default', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const set = await app.fetch(new Request(scoped('/api/config/levers'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        scope: 'project',
+        name: 'worktree_isolation',
+        position: 'per_attempt',
+      }),
+    }))
+    expect(set.status).toBe(200)
+    const setBody = await set.json() as { levers: Array<Record<string, any>> }
+    const overridden = setBody.levers.find(l => l.scope === 'project' && l.name === 'worktree_isolation')
+    expect(overridden).toMatchObject({
+      position: 'per_attempt',
+      defaultPosition: 'per_task',
+      setBy: 'user-direct',
+    })
+
+    let settings = await loadLeverSettings({
+      path: defaultAgentSettingsPath(tmpDir),
+    })
+    expect(settings.project.worktree_isolation.position).toBe('per_attempt')
+    expect(settings.project.worktree_isolation.setBy).toBe('user-direct')
+
+    const inherit = await app.fetch(new Request(scoped('/api/config/levers'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        scope: 'project',
+        name: 'worktree_isolation',
+        position: null,
+      }),
+    }))
+    expect(inherit.status).toBe(200)
+    const inheritBody = await inherit.json() as { levers: Array<Record<string, any>> }
+    const inherited = inheritBody.levers.find(l => l.scope === 'project' && l.name === 'worktree_isolation')
+    expect(inherited).toMatchObject({
+      position: 'per_task',
+      defaultPosition: 'per_task',
+      setBy: 'system-default',
+    })
+
+    settings = await loadLeverSettings({
+      path: defaultAgentSettingsPath(tmpDir),
+    })
+    expect(settings.project.worktree_isolation.position).toBe('per_task')
+    expect(settings.project.worktree_isolation.setBy).toBe('system-default')
+  })
+
+  it('writes parameterized lever positions from UI option values', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(scoped('/api/config/levers'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        scope: 'project',
+        name: 'concurrent_task_dispatch',
+        position: 'fanout_2',
+      }),
+    }))
+    expect(res.status).toBe(200)
+
+    const settings = await loadLeverSettings({
+      path: defaultAgentSettingsPath(tmpDir),
+    })
+    expect(settings.project.concurrent_task_dispatch.position).toEqual({ kind: 'fanout', n: 2 })
+    expect(settings.project.concurrent_task_dispatch.setBy).toBe('user-direct')
+  })
+})
+
 describe('general project status endpoints', () => {
   it('reports setup status and generated setup defaults for the selected project', async () => {
     writeWorkspaceConfig(tmpDir, {

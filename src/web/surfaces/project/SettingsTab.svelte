@@ -13,6 +13,7 @@
   import Row from '../../lib/Row.svelte'
   import Button from '../../lib/Button.svelte'
   import Input from '../../lib/Input.svelte'
+  import Select from '../../lib/Select.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import Byline from '../../lib/Byline.svelte'
   import LogViewer from '../../lib/LogViewer.svelte'
@@ -37,6 +38,7 @@
     setBy: string
     rationale: string
     scope: string
+    defaultPosition?: string
   }
   interface DesignSystem {
     revision?: number
@@ -96,6 +98,7 @@
 
   let levers = $state<Lever[] | null>(null)
   let leversError = $state<string | null>(null)
+  let savingLever = $state<string | null>(null)
   let designSystem = $state<DesignSystem | null | undefined>(undefined)
   let learning = $state<LearningSnapshot | null>(null)
   let learningError = $state<string | null>(null)
@@ -271,6 +274,33 @@
     }
   }
 
+  async function saveLever(lever: Lever, nextValue: string) {
+    const key = `${lever.scope}:${lever.name}`
+    savingLever = key
+    leversError = null
+    try {
+      const r = await projectFetch('/api/config/levers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: lever.scope,
+          name: lever.name,
+          position: nextValue === 'same_as_global' ? null : nextValue,
+        }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j?.error) {
+        leversError = j?.error ?? `HTTP ${r.status}`
+        return
+      }
+      levers = j.levers ?? []
+    } catch (err) {
+      leversError = err instanceof Error ? err.message : String(err)
+    } finally {
+      savingLever = null
+    }
+  }
+
   async function runLearningAction(kind: string, scope: 'project' | 'user_global', id?: string) {
     learningBusy = `${kind}:${scope}:${id ?? 'all'}`
     try {
@@ -388,54 +418,81 @@
     worktree_isolation: 'Worktree isolation',
   }
   const leverPositionLabels: Record<string, string> = {
-    auto_if_safe: 'Automatic when safe',
-    automatic: 'Automatic',
-    conservative: 'Conservative',
-    default: 'Default',
-    fail_fast: 'Stop on first problem',
-    fanout_2: 'Two reviewers',
-    fanout_4: 'Four reviewers',
+    advisory: 'Advisory',
+    agent_autonomous: 'Agent autonomous',
+    agent_proposed_coordinator_approved: 'Agent proposes, coordinator approves',
+    agent_proposed_human_approved: 'Agent proposes, human approves',
+    always: 'Always',
+    auto: 'Automatic',
+    cherry_pick_local: 'Land locally',
+    cherry_pick_with_push: 'Land and push',
+    confirm_all: 'Confirm all recovery',
+    confirm_destructive: 'Confirm destructive recovery',
+    coordinator_adjudicates_on_conflict: 'Coordinator adjudicates conflicts',
+    coordinator_first: 'Coordinator first',
+    coordinator_sufficient: 'Coordinator approval',
+    deterministic_only: 'Deterministic only',
+    emergent: 'Emergent',
+    fanout_2: 'Two at a time',
+    fanout_4: 'Four at a time',
+    fanout_2_reviewers: 'Two reviewers',
+    fanout_4_reviewers: 'Four reviewers',
+    full_upfront: 'Full upfront',
+    gates_sufficient: 'Verification gates',
+    hard_suppress_after_2: 'Hard suppress after 2',
+    hard_suppress_after_3: 'Hard suppress after 3',
     first_pass: 'First pass only',
-    gated: 'Ask first',
-    high: 'High',
-    human: 'Human only',
-    isolated: 'Isolated',
+    human_only: 'Human only',
+    human_required: 'Human approval',
+    lax: 'Lax',
     lenient: 'Lenient',
-    local: 'Local only',
-    manual: 'Manual',
-    medium: 'Medium',
+    llm_only: 'LLM only',
+    llm_with_deterministic_fallback: 'LLM with deterministic fallback',
+    majority: 'Majority',
+    manual_pr: 'Manual PR',
     minimal: 'Minimal',
-    normal: 'Normal',
+    never: 'Never',
+    none: 'None',
     off: 'Off',
-    one_at_a_time: 'One at a time',
-    project: 'Project',
-    required: 'Required',
+    pause_all_on_issue: 'Pause all on issue',
+    pause_for_review: 'Pause for review',
+    per_attempt: 'Per attempt',
+    per_task: 'Per task',
+    prefer_restart_clean: 'Prefer clean restart',
+    prefer_resume: 'Prefer resume',
+    requeue_lower_priority: 'Requeue lower priority',
+    requeue_with_dampening: 'Requeue with dampening',
     same_as_global: 'Same as global setting',
     serial: 'Serial',
-    shared: 'Shared',
+    soft_penalty_after_2: 'Soft penalty after 2',
+    soft_penalty_after_3: 'Soft penalty after 3',
+    slot_allocation: 'Slot allocation',
+    stage_appropriate: 'Stage appropriate',
+    standard: 'Standard',
     strict: 'Strict',
+    suggest: 'Suggest',
+    terminal_shelved: 'Shelve terminal failures',
     thorough: 'Thorough',
-    user: 'User',
   }
   const leverOptions: Record<string, string[]> = {
-    agent_health_strictness: ['lenient', 'normal', 'strict'],
-    business_envelope_strictness: ['lenient', 'normal', 'strict'],
-    completion_approval: ['automatic', 'gated', 'human'],
-    concurrent_task_dispatch: ['one_at_a_time', 'auto_if_safe', 'automatic'],
-    crash_recovery_default: ['manual', 'automatic'],
-    escalation_on_ambiguity: ['lenient', 'normal', 'strict'],
-    landing_strategy: ['shared', 'isolated'],
+    agent_health_strictness: ['lax', 'standard', 'strict'],
+    business_envelope_strictness: ['strict', 'advisory', 'off'],
+    completion_approval: ['human_required', 'coordinator_sufficient', 'gates_sufficient'],
+    concurrent_task_dispatch: ['serial', 'fanout_2', 'fanout_4'],
+    crash_recovery_default: ['prefer_resume', 'prefer_restart_clean', 'pause_for_review'],
+    escalation_on_ambiguity: ['always', 'coordinator_first', 'never'],
+    landing_strategy: ['cherry_pick_local', 'cherry_pick_with_push', 'manual_pr'],
     max_revisions: ['1', '2', '3', '4', '5'],
-    pre_rejection_policy: ['off', 'first_pass', 'required'],
-    rejection_dampening: ['lenient', 'normal', 'strict'],
-    remediation_autonomy: ['manual', 'gated', 'automatic'],
-    reviewer_fanout_policy: ['serial', 'fanout_2', 'fanout_4'],
-    reviewer_mode: ['minimal', 'normal', 'thorough'],
-    runtime_isolation: ['shared', 'isolated'],
-    spec_completeness: ['minimal', 'normal', 'thorough'],
-    task_origination: ['human', 'gated', 'automatic'],
-    workspace_import_autonomy: ['manual', 'gated', 'automatic'],
-    worktree_isolation: ['shared', 'isolated'],
+    pre_rejection_policy: ['terminal_shelved', 'requeue_lower_priority', 'requeue_with_dampening'],
+    rejection_dampening: ['off', 'soft_penalty_after_2', 'soft_penalty_after_3', 'hard_suppress_after_2', 'hard_suppress_after_3'],
+    remediation_autonomy: ['auto', 'confirm_destructive', 'confirm_all', 'pause_all_on_issue'],
+    reviewer_fanout_policy: ['strict', 'coordinator_adjudicates_on_conflict', 'advisory', 'majority'],
+    reviewer_mode: ['llm_only', 'deterministic_only', 'llm_with_deterministic_fallback'],
+    runtime_isolation: ['none', 'slot_allocation'],
+    spec_completeness: ['full_upfront', 'stage_appropriate', 'emergent'],
+    task_origination: ['human_only', 'agent_proposed_human_approved', 'agent_proposed_coordinator_approved', 'agent_autonomous'],
+    workspace_import_autonomy: ['off', 'suggest', 'apply'],
+    worktree_isolation: ['none', 'per_task', 'per_attempt'],
   }
 
   function humanizeLeverName(name: string): string {
@@ -468,6 +525,20 @@
 
   function optionsForLever(lever: Lever): string[] {
     return leverOptions[lever.name] ?? [lever.position]
+  }
+
+  function selectValueForLever(lever: Lever): string {
+    return lever.setBy === 'system-default' ? 'same_as_global' : lever.position
+  }
+
+  function selectOptionsForLever(lever: Lever): Array<{ value: string; label: string }> {
+    const values = new Set(optionsForLever(lever))
+    if (lever.position && lever.setBy !== 'system-default') values.add(lever.position)
+    if (lever.defaultPosition) values.add(lever.defaultPosition)
+    return [
+      { value: 'same_as_global', label: `Same as global setting${lever.defaultPosition ? ` (${leverPositionLabel(lever.defaultPosition)})` : ''}` },
+      ...[...values].map(value => ({ value, label: leverPositionLabel(value) })),
+    ]
   }
 
   const dsTokenCount = $derived(
@@ -1066,14 +1137,28 @@
                               <Help topic={`lever.${lever.name}`} size={12} />
                             </div>
                           </div>
-                          <StatusPill label={leverSetByLabel(lever.setBy)} tone={lever.setBy === 'user-direct' ? 'warn' : 'neutral'} density="dense" />
+                          {#if savingLever === `${lever.scope}:${lever.name}`}
+                            <StatusPill label="Saving" tone="info" density="dense" />
+                          {:else if lever.setBy !== 'system-default'}
+                            <StatusPill label={leverSetByLabel(lever.setBy)} tone={lever.setBy === 'user-direct' ? 'warn' : 'neutral'} density="dense" />
+                          {/if}
                         </header>
-                        <div class="lever-options" role="group" aria-label={`${humanizeLeverName(lever.name)} options`}>
-                          {#each optionsForLever(lever) as option (option)}
-                            <span class:active={option === lever.position} class="lever-option">
-                              {leverPositionLabel(option)}
-                            </span>
-                          {/each}
+                        <div class="lever-control">
+                          <Select
+                            value={selectValueForLever(lever)}
+                            options={selectOptionsForLever(lever)}
+                            ariaLabel={`${humanizeLeverName(lever.name)} setting`}
+                            disabled={savingLever === `${lever.scope}:${lever.name}`}
+                            onchange={(value) => saveLever(lever, value)}
+                          />
+                          <p class="lever-current">
+                            Current: {leverPositionLabel(lever.position)}
+                            {#if lever.setBy === 'system-default'}
+                              · inherited from global defaults
+                            {:else}
+                              · {leverSetByLabel(lever.setBy)}
+                            {/if}
+                          </p>
                         </div>
                         {#if lever.rationale}
                           <p class="lever-rationale">{lever.rationale}</p>
@@ -1426,30 +1511,17 @@
     min-inline-size: min(100%, 18rem);
   }
 
-  .lever-options {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
+  .lever-control {
+    display: grid;
+    gap: var(--gh-space-2);
+    max-inline-size: 28rem;
   }
 
-  .lever-option {
-    display: inline-flex;
-    align-items: center;
-    min-height: 28px;
-    padding: 0 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: var(--bg-raised);
+  .lever-current {
+    margin: 0;
     color: var(--text-muted);
     font-size: var(--fs-1);
-    font-weight: 600;
-    line-height: 1;
-  }
-
-  .lever-option.active {
-    border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
-    background: color-mix(in srgb, var(--accent) 12%, var(--bg-raised));
-    color: var(--text);
+    line-height: var(--lh-body);
   }
 
   .lever-rationale {

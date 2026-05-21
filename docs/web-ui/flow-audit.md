@@ -308,6 +308,12 @@ babysit setup/import/provider/release states across multiple pages.
   destination. Readiness now uses shared `Button` actions in a structured
   status/action column, Advanced settings uses compact grouped cards, and
   Providers stays under Settings instead of the project rail.
+- [x] Replace fake lever buttons with real settings controls. Live Narrative
+  Harness testing found project behavior "settings" rendered as inert enum
+  chips with "Same as global setting" as a separate status label. Lever rows
+  now use real select controls with `Same as global setting` as the first
+  option, show the current inherited or overridden value below the control, and
+  write audited `user-direct` overrides through `/api/config/levers`.
 - [ ] Add a project corpus map for worker context. Current worker prompts
   receive focused task memory, likely target files, checkpoints, design
   summaries, and recent decisions rather than a full source dump, but there is

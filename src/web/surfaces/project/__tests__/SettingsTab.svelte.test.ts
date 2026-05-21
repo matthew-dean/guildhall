@@ -124,6 +124,7 @@ describe('SettingsTab', () => {
 
   it('saves advanced identity, resets lever errors, and approves a design-system draft', async () => {
     const refresh = vi.spyOn(project, 'refresh').mockResolvedValue()
+    let leverOverride = false
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), 'http://localhost')
       if (url.pathname === '/api/setup/status') {
@@ -137,11 +138,12 @@ describe('SettingsTab', () => {
           levers: fetchMock.mock.calls.some(([prior]) => String(prior).includes('/api/config/levers/reset'))
             ? [
                 {
-                  name: 'worker.autonomy',
-                  position: 'high',
-                  setBy: 'defaults',
-                  rationale: 'Let workers inspect nearby context before escalating.',
-                  scope: 'default',
+                  name: 'worktree_isolation',
+                  position: 'per_task',
+                  defaultPosition: 'per_task',
+                  setBy: leverOverride ? 'user-direct' : 'system-default',
+                  rationale: 'Use one isolated worktree per task.',
+                  scope: 'project',
                 },
               ]
             : undefined,
@@ -150,6 +152,26 @@ describe('SettingsTab', () => {
       if (url.pathname === '/api/config/levers/reset') {
         expect(init?.method).toBe('POST')
         return json({ ok: true })
+      }
+      if (url.pathname === '/api/config/levers' && init?.method === 'POST') {
+        leverOverride = true
+        expect(JSON.parse(String(init.body))).toMatchObject({
+          scope: 'project',
+          name: 'worktree_isolation',
+          position: 'per_attempt',
+        })
+        return json({
+          levers: [
+            {
+              name: 'worktree_isolation',
+              position: 'per_attempt',
+              defaultPosition: 'per_task',
+              setBy: 'user-direct',
+              rationale: 'Set from project settings.',
+              scope: 'project',
+            },
+          ],
+        })
       }
       if (url.pathname === '/api/project/design-system') {
         return json({
@@ -200,7 +222,9 @@ describe('SettingsTab', () => {
 
     await screen.findByText('Lever file is malformed.')
     await userEvent.click(screen.getByRole('button', { name: /reset to defaults/i }))
-    await screen.findByText('Worker Autonomy')
+    await screen.findByText(/Worktree isolation/i)
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /worktree isolation setting/i }), 'per_attempt')
+    await screen.findByText(/Current: Per attempt/)
 
     await screen.findByText('Revision 2')
     await userEvent.click(screen.getByRole('button', { name: /approve current draft/i }))

@@ -49,6 +49,11 @@ import {
   defaultAgentSettingsPath,
   makeDefaultSettings,
   projectLeverInvariantError,
+  PROJECT_LEVER_NAMES,
+  DOMAIN_LEVER_NAMES,
+  validateLeverSettings,
+  type DomainLeverName,
+  type ProjectLeverName,
 } from '@guildhall/levers'
 import {
   activeEscalations,
@@ -3936,45 +3941,135 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
-  // GET /api/config/levers — flatten project + default-domain lever positions
-  // into a shape the settings UI can render without knowing the schema details.
-  // Read-only for now; editing arrives once we wire lever writes to an audited
-  // setBy: 'user-direct' path.
-  app.get('/api/config/levers', async c => {
-    try {
-      const settings = await loadLeverSettings({
-        path: defaultAgentSettingsPath(currentProjectPath()),
-      })
-      const renderPos = (pos: unknown): string => {
-        if (typeof pos === 'string' || typeof pos === 'number') return String(pos)
-        if (pos && typeof pos === 'object' && 'kind' in pos) {
-          const k = (pos as { kind: string }).kind
-          const parts: string[] = [k]
-          for (const [key, val] of Object.entries(pos as Record<string, unknown>)) {
-            if (key === 'kind') continue
-            parts.push(`${key}=${String(val)}`)
-          }
-          return parts.join(' ')
-        }
-        return JSON.stringify(pos)
+  const renderLeverPosition = (pos: unknown): string => {
+    if (typeof pos === 'string' || typeof pos === 'number') return String(pos)
+    if (pos && typeof pos === 'object' && 'kind' in pos) {
+      const record = pos as Record<string, unknown>
+      const k = String(record.kind)
+      if (k === 'fanout' && typeof record.n === 'number') {
+        return `fanout_${String(record.n)}`
       }
-      const project = Object.entries(settings.project)
-        .filter(([name]) => name !== 'merge_policy')
-        .map(([name, entry]) => ({
-          scope: 'project' as const,
-          name,
-          position: renderPos(entry.position),
-          rationale: entry.rationale,
-          setBy: entry.setBy,
-        }))
-      const domain = Object.entries(settings.domains.default).map(([name, entry]) => ({
-        scope: 'domain:default' as const,
+      if (k === 'soft_penalty' && typeof record.after === 'number') {
+        return `soft_penalty_after_${String(record.after)}`
+      }
+      if (k === 'hard_suppress' && typeof record.after === 'number') {
+        return `hard_suppress_after_${String(record.after)}`
+      }
+      const parts: string[] = [k]
+      for (const [key, val] of Object.entries(record)) {
+        if (key === 'kind') continue
+        parts.push(`${key}=${String(val)}`)
+      }
+      return parts.join(' ')
+    }
+    return JSON.stringify(pos)
+  }
+
+  const parseLeverPosition = (name: string, raw: unknown): unknown => {
+    if (raw === null || raw === undefined) return null
+    const value = String(raw)
+    switch (name) {
+      case 'concurrent_task_dispatch':
+        if (value === 'serial') return { kind: 'serial' }
+        if (value.startsWith('fanout_')) return { kind: 'fanout', n: Number(value.slice('fanout_'.length)) }
+        break
+      case 'rejection_dampening':
+        if (value === 'off') return { kind: 'off' }
+        if (value.startsWith('soft_penalty_after_')) {
+          return { kind: 'soft_penalty', after: Number(value.slice('soft_penalty_after_'.length)) }
+        }
+        if (value.startsWith('hard_suppress_after_')) {
+          return { kind: 'hard_suppress', after: Number(value.slice('hard_suppress_after_'.length)) }
+        }
+        break
+      case 'max_revisions':
+        return Number(value)
+    }
+    return value
+  }
+
+  const renderLeversForSettings = async (projectPath: string) => {
+    const settings = await loadLeverSettings({
+      path: defaultAgentSettingsPath(projectPath),
+    })
+    const defaults = makeDefaultSettings()
+    const project = Object.entries(settings.project)
+      .filter(([name]) => name !== 'merge_policy')
+      .map(([name, entry]) => ({
+        scope: 'project' as const,
         name,
-        position: renderPos(entry.position),
+        position: renderLeverPosition(entry.position),
+        defaultPosition: renderLeverPosition(defaults.project[name as keyof typeof defaults.project]?.position),
         rationale: entry.rationale,
         setBy: entry.setBy,
       }))
-      return c.json({ levers: [...project, ...domain] })
+    const domain = Object.entries(settings.domains.default).map(([name, entry]) => ({
+      scope: 'domain:default' as const,
+      name,
+      position: renderLeverPosition(entry.position),
+      defaultPosition: renderLeverPosition(defaults.domains.default[name as keyof typeof defaults.domains.default]?.position),
+      rationale: entry.rationale,
+      setBy: entry.setBy,
+    }))
+    return { levers: [...project, ...domain] }
+  }
+
+  // GET /api/config/levers — flatten project + default-domain lever positions
+  // into a shape the settings UI can render without knowing the schema details.
+  app.get('/api/config/levers', async c => {
+    try {
+      return c.json(await renderLeversForSettings(currentProjectPath()))
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  app.post('/api/config/levers', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        scope?: string
+        name?: string
+        position?: unknown
+      }
+      const scope = String(body.scope ?? '')
+      const name = String(body.name ?? '')
+      if (scope !== 'project' && scope !== 'domain:default') {
+        return c.json({ error: 'Unsupported lever scope.' }, 400)
+      }
+      const projectName = PROJECT_LEVER_NAMES.includes(name as ProjectLeverName)
+      const domainName = DOMAIN_LEVER_NAMES.includes(name as DomainLeverName)
+      if ((scope === 'project' && !projectName) || (scope === 'domain:default' && !domainName)) {
+        return c.json({ error: 'Unknown lever.' }, 400)
+      }
+
+      const projectPath = currentProjectPath()
+      const settingsPath = defaultAgentSettingsPath(projectPath)
+      const settings = await loadLeverSettings({ path: settingsPath })
+      const defaults = makeDefaultSettings()
+      const now = new Date().toISOString()
+      const position = parseLeverPosition(name, body.position)
+      const target =
+        scope === 'project'
+          ? settings.project[name as ProjectLeverName]
+          : settings.domains.default[name as DomainLeverName]
+      const defaultEntry =
+        scope === 'project'
+          ? defaults.project[name as ProjectLeverName]
+          : defaults.domains.default[name as DomainLeverName]
+
+      if (position === null) {
+        Object.assign(target, defaultEntry)
+      } else {
+        Object.assign(target, {
+          position,
+          rationale: 'Set from project settings.',
+          setAt: now,
+          setBy: 'user-direct',
+        })
+      }
+
+      await saveLeverSettings({ path: settingsPath, settings: validateLeverSettings(settings) })
+      return c.json(await renderLeversForSettings(projectPath))
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
