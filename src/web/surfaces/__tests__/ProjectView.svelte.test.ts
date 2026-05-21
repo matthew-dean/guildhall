@@ -552,4 +552,13 @@ describe('ProjectView', () => {
     expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Project provider settings' })).not.toBeInTheDocument()
   })
+
+  it('keeps Settings pinned in the rail utility section instead of expanding settings subsections there', async () => {
+    await renderProjectView('settings', 'providers')
+
+    const railBottom = document.querySelector('.rail-bottom')
+    expect(railBottom).not.toBeNull()
+    expect(railBottom).toContainElement(screen.getByRole('button', { name: 'Settings' }))
+    expect(document.querySelector('.rail-subs')).toBeNull()
+  })
 })

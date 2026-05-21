@@ -92,6 +92,12 @@ describe('SettingsTab', () => {
     render(SettingsTab, { subView: 'ready' })
 
     await screen.findByRole('heading', { name: /ready to start/i })
+    expect(screen.getByRole('navigation', { name: /settings sections/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ready' })).toHaveAttribute('aria-current', 'page')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Providers' }))
+    expect(path.value).toBe('/projects/looma-knit/settings/providers')
+
     await userEvent.click(screen.getByRole('button', { name: /^run bootstrap$/i }))
 
     await screen.findByText('Bootstrap verified (pnpm): test, build')

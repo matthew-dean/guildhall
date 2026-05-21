@@ -2,7 +2,7 @@
   Project root view. Shell layout:
     · Left rail (220px, collapses to 56px icon-only on medium viewports;
       mobile hides the rail until the hamburger opens a full-screen menu):
-      primary nav entries + accordion sub-nav + Providers link pinned
+      primary nav entries + accordion sub-nav + Settings pinned as a utility
       to the bottom.
     · Top bar (slim): workspace name chip + run-status chip + Start/Stop
       + New Task. No tab strip.
@@ -284,20 +284,8 @@
         { id: 'criteria', label: 'Criteria', path: currentProjectHref('/release/criteria', activeProjectId) },
       ],
     },
-    {
-      id: 'settings',
-      label: 'Settings',
-      icon: 'settings',
-      path: currentProjectHref('/settings', activeProjectId),
-      subs: [
-        { id: 'ready', label: 'Ready', path: currentProjectHref('/settings', activeProjectId) },
-        { id: 'providers', label: 'Providers', path: currentProjectHref('/settings/providers', activeProjectId) },
-        { id: 'facts', label: 'Facts', path: currentProjectHref('/settings/facts', activeProjectId) },
-        { id: 'learning', label: 'Learning', path: currentProjectHref('/settings/learning', activeProjectId) },
-        { id: 'advanced', label: 'Advanced', path: currentProjectHref('/settings/advanced', activeProjectId) },
-      ],
-    },
   ])
+  const settingsPath = $derived(currentProjectHref('/settings', activeProjectId))
 
   function go(href: string) {
     closeMobileRail()
@@ -890,6 +878,22 @@
           {/if}
         {/each}
       </nav>
+      <div class="rail-bottom">
+        <Tooltip text="Settings" placement="right" className="rail-tooltip" disabled={railLabelsVisible}>
+          <button
+            type="button"
+            class="rail-item"
+            class:active={currentView === 'settings'}
+            onclick={() => go(settingsPath)}
+            aria-label="Settings"
+            aria-current={currentView === 'settings' ? 'page' : undefined}
+          >
+            <span class="rail-stripe"></span>
+            <Icon name="settings" size={18} />
+            <span class="rail-label">Settings</span>
+          </button>
+        </Tooltip>
+      </div>
     </aside>
     {/snippet}
     {#snippet topbar()}

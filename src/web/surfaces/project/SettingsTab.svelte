@@ -30,7 +30,21 @@
     subView?: string | null
   }
   let { subView = null }: Props = $props()
-  const section = $derived(subView ?? 'ready')
+  type SettingSection = 'ready' | 'providers' | 'facts' | 'coordinators' | 'learning' | 'advanced'
+  const KNOWN_SECTIONS = new Set<SettingSection>(['ready', 'providers', 'facts', 'coordinators', 'learning', 'advanced'])
+  const section = $derived(KNOWN_SECTIONS.has(subView as SettingSection) ? subView as SettingSection : 'ready')
+  const settingsSections: Array<{ id: SettingSection; label: string }> = [
+    { id: 'ready', label: 'Ready' },
+    { id: 'providers', label: 'Providers' },
+    { id: 'coordinators', label: 'Coordinators' },
+    { id: 'facts', label: 'Facts' },
+    { id: 'learning', label: 'Memory' },
+    { id: 'advanced', label: 'Advanced' },
+  ]
+
+  function settingsSectionHref(id: SettingSection): string {
+    return projectActionHref(id === 'ready' ? '/settings/ready' : `/settings/${id}`)
+  }
 
   interface Lever {
     name: string
@@ -653,6 +667,21 @@
       </NoticeBand>
     {/if}
 
+    <nav class="settings-section-nav" aria-label="Settings sections">
+      {#each settingsSections as item (item.id)}
+        {@const active = section === item.id}
+        <button
+          type="button"
+          class="settings-section-button"
+          class:active
+          aria-current={active ? 'page' : undefined}
+          onclick={() => nav(settingsSectionHref(item.id))}
+        >
+          {item.label}
+        </button>
+      {/each}
+    </nav>
+
     {#if section === 'facts'}
       <FactsTab />
     {:else if section === 'providers'}
@@ -1248,6 +1277,46 @@
     display: grid;
     gap: var(--gh-space-4);
     container-type: inline-size;
+    max-inline-size: 72rem;
+  }
+
+  .settings-section-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    align-items: center;
+    padding: var(--gh-space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg-raised);
+    inline-size: min(100%, 62rem);
+  }
+
+  .settings-section-button {
+    appearance: none;
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: var(--bg);
+    color: var(--text-muted);
+    cursor: pointer;
+    flex: 1 1 8rem;
+    font: inherit;
+    font-size: var(--fs-1);
+    font-weight: 650;
+    line-height: var(--lh-tight);
+    min-block-size: 34px;
+    padding: var(--gh-space-2) var(--gh-space-3);
+  }
+
+  .settings-section-button:hover {
+    color: var(--text);
+    background: var(--bg-raised-2);
+  }
+
+  .settings-section-button.active {
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--accent) 64%, var(--border-strong));
+    background: var(--bg-elevated);
   }
 
   .field {
@@ -1347,7 +1416,7 @@
   .advanced-grid {
     display: grid;
     gap: var(--gh-space-4);
-    max-inline-size: 78rem;
+    max-inline-size: 62rem;
   }
 
   :global(.advanced-card) {
@@ -1576,16 +1645,6 @@
 
     .ds-facts {
       grid-template-columns: repeat(4, minmax(0, 1fr));
-    }
-  }
-
-  @container (min-width: 60rem) {
-    .advanced-grid {
-      grid-template-columns: minmax(20rem, 0.75fr) minmax(0, 1.25fr);
-    }
-
-    :global(.advanced-card-wide) {
-      grid-column: 2;
     }
   }
 

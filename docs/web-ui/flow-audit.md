@@ -3708,6 +3708,11 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
   and rows of `SYSTEM-DEFAULT` tags. The page needs real setting groups,
   human-readable labels, short descriptions, current-value summaries, and
   friendly enum controls instead of making the user parse implementation keys.
+- [x] Settings drifted back into primary project navigation and exposed its
+  subsections in the rail. Settings is a utility destination: keep it pinned at
+  the bottom of the project rail with a separator, and put Ready / Providers /
+  Coordinators / Facts / Memory / Advanced navigation inside the Settings view
+  where it can wrap naturally on mobile.
 - [x] Lever settings need purpose-built controls. Enum values should render as
   segmented controls, selects, radios, or menus depending on option count;
   global/project inheritance should be a clear state ("Same as global" versus
