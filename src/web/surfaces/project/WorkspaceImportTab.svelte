@@ -793,7 +793,6 @@
           <ul class="source-summary">
             {#each primaryAreas as area (area.key)}
               <li>
-                <button type="button" class="inspect-row" onclick={() => focusArea(area.key)}>
                 <Row justify="between" align="start" gap="4" wrap>
                   <div class="summary-main">
                     <div class="summary-title-row">
@@ -808,8 +807,10 @@
                     <span class="summary-label">Planning sources</span>
                     <span class="summary-preview">{sourcePreview(area)}</span>
                   </div>
+                  <Button variant="ghost" size="sm" onclick={() => focusArea(area.key)}>
+                    Details
+                  </Button>
                 </Row>
-                </button>
               </li>
             {/each}
           </ul>
@@ -833,6 +834,9 @@
                         <span class="summary-label">Reference notes</span>
                         <span class="summary-preview">{sourcePreview(area)}</span>
                       </div>
+                      <Button variant="ghost" size="sm" onclick={() => focusArea(area.key)}>
+                        Details
+                      </Button>
                     </Row>
                   </li>
                 {/each}
@@ -874,25 +878,28 @@
           {#each primaryAreas as area (area.key)}
             <div class:selected={selectedAreaKeys.includes(area.key)} class="source-card">
               <Row justify="between" align="start" gap="4" wrap>
-                <button type="button" class="inspect-card" onclick={() => focusArea(area.key)}>
-                <Stack gap="3">
-                  <div class="source-title-row">
-                    <strong>{area.label}</strong>
-                    {#if selectedAreaKeys.includes(area.key)}
-                      <Chip label="Queued" tone="accent" />
-                    {/if}
-                    <span class:reference={area.taskCount === 0} class="kind-label">
-                      {areaKindLabel(area)}
-                    </span>
-                  </div>
-                  <div class="metric-row">
-                    <Chip label={`${area.taskCount} tasks`} tone="ok" />
-                    <Chip label={`${area.sourceCount} sources`} tone="neutral" />
-                  </div>
-                  <div class="source-path">{sourcePreview(area)}</div>
-                </Stack>
-                </button>
+                <div class="card-main">
+                  <Stack gap="3">
+                    <div class="source-title-row">
+                      <strong>{area.label}</strong>
+                      {#if selectedAreaKeys.includes(area.key)}
+                        <Chip label="Queued" tone="accent" />
+                      {/if}
+                      <span class:reference={area.taskCount === 0} class="kind-label">
+                        {areaKindLabel(area)}
+                      </span>
+                    </div>
+                    <div class="metric-row">
+                      <Chip label={`${area.taskCount} tasks`} tone="ok" />
+                      <Chip label={`${area.sourceCount} sources`} tone="neutral" />
+                    </div>
+                    <div class="source-path">{sourcePreview(area)}</div>
+                  </Stack>
+                </div>
                 <div class="card-actions-inline">
+                  <Button variant="ghost" size="sm" onclick={() => focusArea(area.key)}>
+                    Details
+                  </Button>
                   {#if selectedAreaKeys.includes(area.key)}
                     <Button variant="secondary" size="sm" onclick={() => removeArea(area.key)}>
                       <Icon name="x" size={14} />
@@ -930,23 +937,26 @@
               {#each secondaryAreas as area (area.key)}
                 <div class:selected={selectedAreaKeys.includes(area.key)} class="source-card secondary">
                   <Row justify="between" align="start" gap="4" wrap>
-                    <button type="button" class="inspect-card" onclick={() => focusArea(area.key)}>
-                    <Stack gap="3">
-                      <div class="source-title-row">
-                        <strong>{area.label}</strong>
-                        {#if selectedAreaKeys.includes(area.key)}
-                          <Chip label="Queued" tone="accent" />
-                        {/if}
-                        <span class="kind-label reference">Reference-only part</span>
-                      </div>
-                      <div class="metric-row">
-                        <Chip label={`${area.sourceCount} sources`} tone="neutral" />
-                        <Chip label={`${area.milestoneCount || area.contextCount} notes`} tone="neutral" />
-                      </div>
-                      <div class="source-path">{sourcePreview(area)}</div>
-                    </Stack>
-                    </button>
+                    <div class="card-main">
+                      <Stack gap="3">
+                        <div class="source-title-row">
+                          <strong>{area.label}</strong>
+                          {#if selectedAreaKeys.includes(area.key)}
+                            <Chip label="Queued" tone="accent" />
+                          {/if}
+                          <span class="kind-label reference">Reference-only part</span>
+                        </div>
+                        <div class="metric-row">
+                          <Chip label={`${area.sourceCount} sources`} tone="neutral" />
+                          <Chip label={`${area.milestoneCount || area.contextCount} notes`} tone="neutral" />
+                        </div>
+                        <div class="source-path">{sourcePreview(area)}</div>
+                      </Stack>
+                    </div>
                     <div class="card-actions-inline">
+                      <Button variant="ghost" size="sm" onclick={() => focusArea(area.key)}>
+                        Details
+                      </Button>
                       {#if selectedAreaKeys.includes(area.key)}
                         <Button variant="secondary" size="sm" onclick={() => removeArea(area.key)}>
                           <Icon name="x" size={14} />
@@ -1000,37 +1010,42 @@
             {#each currentAreaPrimarySources as group (group.key)}
               <div class:selected={selectedSourceKeys.includes(group.key)} class="source-card">
                 <Row justify="between" align="start" gap="4" wrap>
-                  <button type="button" class="inspect-card" onclick={() => focusSource(group.key)}>
-                  <Stack gap="3">
-                    <div class="source-title-row">
-                      <strong>{group.label}</strong>
-                      {#if selectedSourceKeys.includes(group.key)}
-                        <Chip label="In this pass" tone="accent" />
-                      {/if}
-                      <span class:reference={group.kind === 'reference' || group.kind === 'milestones'} class="kind-label">
-                        {sourceKindLabel(group)}
-                      </span>
-                    </div>
-                    <div class="metric-row">
-                      {#if group.taskCount > 0}
-                        <Chip label={`${group.taskCount} tasks`} tone="ok" />
-                      {/if}
-                      {#if group.milestoneCount > 0}
-                        <Chip label={`${group.milestoneCount} milestones`} tone="warn" />
-                      {/if}
-                      <Chip label={group.contextCount > 0 ? `${group.contextCount} notes` : 'source'} tone="neutral" />
-                    </div>
-                        {#if group.path}
-                          <div class="source-path">{displayPath(group.path)}</div>
+                  <div class="card-main">
+                    <Stack gap="3">
+                      <div class="source-title-row">
+                        <strong>{group.label}</strong>
+                        {#if selectedSourceKeys.includes(group.key)}
+                          <Chip label="In this pass" tone="accent" />
                         {/if}
-                        {#if usefulSourceSummary(group)}
-                          <p class="source-summary-copy">{usefulSourceSummary(group)}</p>
+                        <span class:reference={group.kind === 'reference' || group.kind === 'milestones'} class="kind-label">
+                          {sourceKindLabel(group)}
+                        </span>
+                      </div>
+                      <div class="metric-row">
+                        {#if group.taskCount > 0}
+                          <Chip label={`${group.taskCount} tasks`} tone="ok" />
                         {/if}
-                      </Stack>
-                      </button>
-                  <Button variant={selectedSourceKeys.includes(group.key) ? 'secondary' : 'primary'} onclick={() => toggleSource(group.key)}>
-                    {selectedSourceKeys.includes(group.key) ? 'Leave out' : 'Use this source'}
-                  </Button>
+                        {#if group.milestoneCount > 0}
+                          <Chip label={`${group.milestoneCount} milestones`} tone="warn" />
+                        {/if}
+                        <Chip label={group.contextCount > 0 ? `${group.contextCount} notes` : 'source'} tone="neutral" />
+                      </div>
+                      {#if group.path}
+                        <div class="source-path">{displayPath(group.path)}</div>
+                      {/if}
+                      {#if usefulSourceSummary(group)}
+                        <p class="source-summary-copy">{usefulSourceSummary(group)}</p>
+                      {/if}
+                    </Stack>
+                  </div>
+                  <div class="card-actions-inline">
+                    <Button variant="ghost" size="sm" onclick={() => focusSource(group.key)}>
+                      Details
+                    </Button>
+                    <Button variant={selectedSourceKeys.includes(group.key) ? 'secondary' : 'primary'} size="sm" onclick={() => toggleSource(group.key)}>
+                      {selectedSourceKeys.includes(group.key) ? 'Exclude' : 'Include'}
+                    </Button>
+                  </div>
                 </Row>
               </div>
             {/each}
@@ -1079,26 +1094,29 @@
                             onchange={() => toggleSource(group.key)}
                           />
                         </label>
-                        <button type="button" class="inspect-card" onclick={() => focusSource(group.key)}>
-                        <Stack gap="3">
-                          <div class="source-title-row">
-                            <strong>{group.label}</strong>
-                            {#if selectedSourceKeys.includes(group.key)}
-                              <Chip label="In this pass" tone="accent" />
+                        <div class="card-main">
+                          <Stack gap="3">
+                            <div class="source-title-row">
+                              <strong>{group.label}</strong>
+                              {#if selectedSourceKeys.includes(group.key)}
+                                <Chip label="In this pass" tone="accent" />
+                              {/if}
+                              <span class="kind-label reference">{sourceKindLabel(group)}</span>
+                            </div>
+                            <div class="metric-row">
+                              <Chip label={sourceSummary(group)} tone="neutral" />
+                            </div>
+                            {#if group.path}
+                              <div class="source-path">{displayPath(group.path)}</div>
                             {/if}
-                            <span class="kind-label reference">{sourceKindLabel(group)}</span>
-                          </div>
-                          <div class="metric-row">
-                            <Chip label={sourceSummary(group)} tone="neutral" />
-                          </div>
-                          {#if group.path}
-                            <div class="source-path">{displayPath(group.path)}</div>
-                          {/if}
-                          {#if usefulSourceSummary(group)}
-                            <p class="source-summary-copy">{usefulSourceSummary(group)}</p>
-                          {/if}
-                        </Stack>
-                        </button>
+                            {#if usefulSourceSummary(group)}
+                              <p class="source-summary-copy">{usefulSourceSummary(group)}</p>
+                            {/if}
+                          </Stack>
+                        </div>
+                        <Button variant="ghost" size="sm" onclick={() => focusSource(group.key)}>
+                          Details
+                        </Button>
                       </Row>
                     </div>
                   {/each}
@@ -1538,8 +1556,6 @@
     font-size: var(--fs-2);
     line-height: var(--lh-body);
   }
-  .inspect-row,
-  .inspect-card,
   .inspect-task {
     appearance: none;
     border: 0;
@@ -1550,30 +1566,15 @@
     text-align: left;
     cursor: pointer;
   }
-  .inspect-row {
-    width: 100%;
-    border-radius: var(--r-1);
-    transition: background-color 140ms ease, box-shadow 140ms ease;
-  }
-  .inspect-card {
-    flex: 1;
-    min-width: 0;
-    border-radius: var(--r-1);
-    transition: background-color 140ms ease, box-shadow 140ms ease;
-  }
   .inspect-task {
     flex: 1;
     min-width: 0;
     border-radius: var(--r-1);
     transition: background-color 140ms ease, box-shadow 140ms ease;
   }
-  .inspect-row:hover,
-  .inspect-card:hover,
   .inspect-task:hover {
     background: color-mix(in srgb, var(--accent) 8%, transparent);
   }
-  .inspect-row:focus-visible,
-  .inspect-card:focus-visible,
   .inspect-task:focus-visible {
     background: color-mix(in srgb, var(--accent) 10%, transparent);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
@@ -1613,6 +1614,10 @@
     padding-block-start: var(--s-3);
     display: grid;
     gap: var(--s-3);
+  }
+  .card-main {
+    flex: 1;
+    min-width: 0;
   }
   .source-card {
     border: 1px solid var(--border);

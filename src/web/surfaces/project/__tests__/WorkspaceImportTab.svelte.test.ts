@@ -243,7 +243,7 @@ describe('WorkspaceImportTab', () => {
     render(WorkspaceImportTab)
     await screen.findByText(/Guildhall found planning notes/)
 
-    await userEvent.click(screen.getByRole('button', { name: /Knit 2 tasks 2 sources/i }))
+    await userEvent.click(screen.getAllByRole('button', { name: /details/i })[0]!)
     expect(screen.getByRole('complementary', { name: 'Knit' })).toBeTruthy()
     expect(screen.getByText('Editor planning and implementation notes.')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /close/i }))
@@ -297,7 +297,7 @@ describe('WorkspaceImportTab', () => {
     await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
     await screen.findByText('Review notes in Knit')
 
-    await userEvent.click(screen.getAllByRole('button', { name: /leave out/i })[0]!)
+    await userEvent.click(screen.getAllByRole('button', { name: /^exclude$/i })[0]!)
     await userEvent.click(screen.getByRole('button', { name: /review selected tasks/i }))
     await screen.findByText('Review tasks from Editor notes')
     expect(screen.queryByText('Review tasks from Roadmap')).toBeNull()
