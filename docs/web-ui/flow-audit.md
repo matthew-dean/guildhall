@@ -315,7 +315,9 @@ babysit setup/import/provider/release states across multiple pages.
   before editing. Guildhall should build and maintain a codebase map with
   shared primitives, module boundaries, APIs, tests, and known patterns, then
   inject only the task-relevant slice while letting agents ask follow-up
-  questions.
+  questions. The 0.7 construction spec now defines the artifact shape, indexed
+  inputs, context-budget rules, worker tools, spec/worker/reviewer contracts,
+  refresh triggers, UI placement, and 0.7 implementation cut.
 - [x] Remove maintainer-only implementation pages from the public VitePress
   surface. The public docs build now excludes `docs/subsystems/**`,
   `docs/web-ui/design-tokens.md`, and `docs/web-ui/help-system.md`; sidebar,

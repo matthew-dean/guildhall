@@ -268,40 +268,357 @@ Workers should function like modern coding agents: they receive enough
 architecture context to make the first good move, but Guildhall must not dump
 the entire repository into every prompt.
 
-0.7.0 should add a durable, task-queryable project corpus map:
+This is a distinct 0.7.0 workstream. The existing context builder already
+injects focused task memory, likely target files, checkpoints, recent progress,
+and decisions. That is useful, but it is not the same thing as understanding
+the codebase. Workers also need a durable map of "what already exists here,
+what should be reused, and where to read next."
 
-- generated during setup/import and refreshed after meaningful code changes
-- stored under project memory, for example `memory/codebase-map.yaml` and
-  `memory/codebase-map.history.jsonl`
-- summarized by reference, not by copying full file contents
-- organized around modules, public surfaces, shared abstractions, UI
-  primitives, tokens, services, schemas, routes, tests, scripts, and known
-  conventions
-- explicit about "use this first" primitives, such as the shared button
-  component, routing helpers, persistence utilities, or test harnesses
-- explicit about boundaries where new files/classes/components should not be
-  invented without extending an existing layer
+### Product Contract
 
-The worker prompt should receive only the relevant slice:
+Guildhall should create and maintain a project-local corpus map that lets
+agents answer these questions without broad repo spelunking:
 
-- likely target files and nearby companion files
-- matching architecture-map entries
-- known shared primitives for that domain
-- test and verification conventions for that area
-- recent decisions or change orders touching the same module
+- What kind of project is this?
+- What are the major areas/modules/packages?
+- What shared primitives, helpers, services, schemas, tests, and conventions
+  already exist?
+- Which files are canonical entry points vs. leaf implementations?
+- Which packages own which behaviors?
+- Which existing abstraction should a worker reuse for this task?
+- Which nearby files should the worker read if the summary is not enough?
+- When is a new abstraction justified?
 
-Agents should also be able to ask focused questions against the map:
+The corpus map is not a search index that copies every file into memory. It is
+an architecture guide with references. It should point agents to the right
+files, symbols, commands, and conventions, then let them open the supporting
+files they actually need.
 
-- "What shared components exist for this UI control?"
-- "Where is the canonical persistence helper?"
-- "Which tests cover this route?"
-- "What naming pattern do similar modules use?"
-- "Is this a new abstraction, or does the project already have one?"
+### Artifacts
 
-Reviewers should treat missing corpus-map consultation as a real defect when a
-worker creates a parallel helper, class, component, route, schema, token, or
-style treatment. The acceptance bar is not "the diff compiles"; it is "the
-diff fits the project the way a competent local developer would fit it."
+0.7.0 should add durable project memory artifacts:
+
+- `memory/codebase-map.yaml` — current summarized map
+- `memory/codebase-map.history.jsonl` — append-only map refresh events
+- `memory/codebase-map.stale.json` — optional stale/failed refresh state
+- `memory/codebase-map.overrides.yaml` — optional human-authored corrections
+
+The map should be valid structured data, but readable in a text editor. Human
+overrides win over generated summaries and should never be overwritten by a
+refresh.
+
+Suggested top-level shape:
+
+```yaml
+version: 1
+generatedAt: "2026-05-21T00:00:00.000Z"
+project:
+  root: "/path/to/project"
+  languages: ["typescript", "svelte"]
+  packageManagers: ["pnpm"]
+  primaryFrameworks: ["svelte", "vite"]
+  summary: "Guildhall is a local multi-agent project orchestration app..."
+
+entrypoints:
+  - kind: "cli"
+    path: "src/cli.ts"
+    summary: "Command dispatch and serve entrypoint."
+  - kind: "web-app"
+    path: "src/web/main.ts"
+    summary: "Browser UI bootstrap."
+
+areas:
+  - id: "web-ui"
+    title: "Web UI"
+    summary: "Svelte project shell, task surfaces, settings, and workspace import."
+    owns:
+      - "src/web/**"
+      - "packages/ui/**"
+    canonicalFiles:
+      - path: "src/web/lib/Button.svelte"
+        symbols: ["Button"]
+        summary: "Shared command button component. Use this for toolbar and form actions."
+      - path: "packages/ui/src/components/FrameCard.svelte"
+        symbols: ["FrameCard"]
+        summary: "Shared framed card primitive for grouped content."
+    conventions:
+      - "Use shared Button variants before adding local button CSS."
+      - "Use token variables for radius, color, and spacing."
+    tests:
+      - "src/web/surfaces/__tests__/*.test.ts"
+      - "src/web/surfaces/project/__tests__/*.test.ts"
+
+abstractions:
+  - id: "button"
+    title: "Command buttons"
+    kind: "ui-component"
+    canonicalPath: "src/web/lib/Button.svelte"
+    useWhen:
+      - "A user triggers an action from a toolbar, form, panel, or drawer."
+    avoid:
+      - "Do not add local button padding, radius, or neutral backgrounds."
+    related:
+      - "src/web/lib/StatusButton.svelte"
+      - "src/web/tokens.css"
+
+verification:
+  commands:
+    - "pnpm test <focused test file>"
+    - "pnpm typecheck"
+    - "pnpm build"
+```
+
+### What Gets Indexed
+
+The first implementation should index enough to guide implementation, not
+enough to recreate the repository.
+
+Required inputs:
+
+- package manifests and workspace definitions
+- top-level README and repo-local agent guidance
+- docs or memory files that describe architecture/conventions
+- source tree shape from tracked and untracked non-ignored files
+- exported symbols for TypeScript/JavaScript where cheap to parse
+- Svelte/Vue/React component filenames, props, and obvious exports
+- test file locations and naming patterns
+- scripts and common verification commands
+- route files, API handlers, CLI commands, schemas, and persistence modules
+- design-system artifacts, UI tokens, and shared component primitives
+
+Optional later inputs:
+
+- dependency graph edges from imports
+- TypeScript language-service symbol metadata
+- ripgrep-derived symbol references
+- recent git history to identify hot/canonical files
+- reviewer decisions that mark a pattern canonical or forbidden
+
+Excluded from the map:
+
+- full file contents
+- generated files unless they are the only source of truth
+- vendored dependencies
+- large fixtures and snapshots
+- secrets and env files
+- raw logs
+- transcripts except for short decisions promoted into memory
+
+### Context Budgeting
+
+The context builder should treat the corpus map as a retrieval layer, not a
+prompt blob.
+
+Always include:
+
+- project summary
+- active task area if known
+- likely target files
+- matching shared abstractions
+- matching conventions
+- focused verification commands
+- "read next" supporting files
+
+Include only when relevant:
+
+- neighboring area summaries
+- design-system primitives for UI work
+- persistence/schema conventions for data work
+- route/API conventions for endpoint work
+- packaging/build conventions for tooling work
+- prior reviewer warnings for the same abstraction
+
+Never include by default:
+
+- every area in the project
+- every symbol in a package
+- full source excerpts
+- long generated docs
+- full transcripts
+
+Hard budget targets:
+
+- corpus context block: 1,500 to 4,000 characters by default
+- max fallback block: 8,000 characters when task scope is genuinely unclear
+- each file/abstraction summary: 1 to 4 sentences
+- "read next" list: 3 to 8 files
+
+### Relevance Decision Tree
+
+When building context for a worker:
+
+1. If the task names files, routes, components, commands, or packages, use
+   those as the primary retrieval anchors.
+2. Else if the task belongs to a construction slice, use the slice's area,
+   product surface, and generated task metadata.
+3. Else if the task domain/guild is clear, map the domain to corpus areas
+   such as UI, runtime, CLI, docs, persistence, tests, or release.
+4. Else use top-level project summary, entrypoints, and the smallest likely
+   area set; instruct the worker to ask a focused map question before editing.
+5. For each candidate file, include the nearest canonical abstraction before
+   leaf files. Example: `Button.svelte` and tokens before a one-off toolbar
+   surface.
+6. If two or more similar concepts appear in the task or map, add an
+   "abstraction decision" note that asks the worker to reuse, extend, or
+   intentionally keep duplication.
+7. If no map entry fits, include "no known abstraction found" explicitly so the
+   worker knows this is an evidence gap, not permission to invent locally.
+
+### Worker Tools
+
+Agents should not need to parse the whole map manually. Add focused tools:
+
+- `read-codebase-map` — returns the project summary, areas, and entrypoints.
+- `query-codebase-map` — accepts text plus optional `area`, `kind`, `paths`,
+  and returns ranked map entries.
+- `find-existing-abstraction` — asks "what should I reuse for X?" and returns
+  canonical files, use/avoid guidance, and supporting files.
+- `read-supporting-context` — opens one map-referenced supporting file or a
+  small group of companion files with an explicit reason.
+- `record-corpus-note` — lets reviewers/coordinators promote a discovered
+  convention or correction into map overrides.
+- `refresh-codebase-map` — refreshes generated entries after imports, setup,
+  or meaningful changes.
+
+Tool responses should be short and structured. A worker asking about button
+styling should get "use `src/web/lib/Button.svelte`, `StatusButton.svelte`,
+and `src/web/tokens.css`" with one-paragraph rationale, not a pasted file.
+
+### Worker Prompt Contract
+
+Before editing, the worker must be able to name:
+
+- the task's mapped area
+- the likely target files
+- the shared abstraction or convention it is reusing
+- the supporting file it read when the summary was not enough
+- whether the work creates a second similar concept
+
+If it cannot name those from injected context, its first action should be a map
+query or focused supporting-file read, not a broad `ls`/`rg` sweep and not a
+new local implementation.
+
+For implementation handoff, worker self-critique should include:
+
+```text
+Corpus fit:
+- Area: <mapped area>
+- Reused abstraction: <file/symbol or "none found">
+- Supporting context read: <file(s)>
+- New abstraction decision: <reuse / extend / add shared primitive / keep local because...>
+```
+
+### Spec Agent Contract
+
+Specs should stop saying "make a button" or "add a helper" when the repo has a
+known primitive. The spec agent should query the corpus map while drafting and
+include a "Reuse / Extend" section:
+
+```text
+Reuse / Extend:
+- Use `src/web/lib/Button.svelte` for command actions.
+- Use `src/web/lib/StatusButton.svelte` for outlined state controls with
+  count badges.
+- Do not add local button padding/radius/color CSS in the surface.
+- If the existing variant cannot express the needed state, extend `Button`
+  first and consume that variant from the surface.
+```
+
+If the map is stale or absent, the spec should say that explicitly and add a
+setup task to refresh or seed it before dispatching implementation work that
+depends on local conventions.
+
+### Reviewer Contract
+
+Reviewers should inspect both behavior and corpus fit.
+
+Required reviewer questions:
+
+- Did the worker consult the corpus map or relevant injected map slice?
+- Did the diff reuse the canonical abstraction named by the map?
+- Did the worker invent a local helper/component/style where a shared one
+  exists?
+- Did the worker add a shared primitive when the task genuinely needed a new
+  concept?
+- Did repeated concepts become an explicit abstraction decision?
+- Did the worker read enough supporting context to avoid guessing?
+
+Review verdicts should use specific language:
+
+- Approve: "Fits corpus map: reused `Button` and tokens."
+- Needs revision: "Parallel abstraction: local `.toolbar-btn` duplicates
+  `Button` sizing."
+- Change order: "Corpus map says provider settings are global, but product
+  flow now needs project-scoped provider selection."
+
+### Refresh Strategy
+
+Map refresh should be cheap and incremental.
+
+Refresh triggers:
+
+- project setup/import completes
+- package manifests change
+- files are added/removed under source roots
+- design-system files change
+- reviewer records a corpus correction
+- user manually asks to refresh
+
+The refresh should:
+
+- preserve human overrides
+- mark stale sections instead of deleting uncertain entries immediately
+- avoid blocking normal work if indexing fails
+- log failures to `codebase-map.history.jsonl`
+- surface "map stale" as a quiet warning in agent context and Settings, not as
+  a loud blocker unless the task depends on a stale area
+
+### UI Surface
+
+The map should be available without becoming another mandatory dashboard.
+
+Suggested locations:
+
+- Settings -> Advanced -> Codebase map: status, last refresh, refresh action,
+  stale areas, and human overrides
+- Task drawer -> Context fit: mapped area, reused abstraction, read-next files
+- Review drawer -> Corpus fit checklist
+- Thread -> only when Guildhall needs the user to decide whether a pattern
+  should become canonical
+
+Small projects should not have to think about this. If the map contains only a
+few entries, the UI should stay quiet and simply feed the right context to
+agents.
+
+### Failure Modes
+
+Avoid these designs:
+
+- dumping all file summaries into every worker prompt
+- treating the map as always correct when recent changes contradict it
+- making the user curate the map before Guildhall can run
+- adding a vector database as the first implementation when structured files
+  and targeted search are enough
+- letting generated summaries override human corrections
+- scoring relevance only by keyword overlap when routes/components/packages
+  give stronger anchors
+- asking workers to "follow existing patterns" without naming the patterns
+  and the files that embody them
+
+### Implementation Cut
+
+For 0.7.0, build the smallest useful version:
+
+- generate `memory/codebase-map.yaml` from manifests, file tree, docs, and
+  obvious source symbols
+- add a loader/query API with deterministic scoring
+- inject a compact corpus slice into `buildContext`
+- add worker/spec/reviewer prompt requirements around corpus fit
+- add a read-only Settings status panel
+- add unit tests for relevance selection and context budgeting
+
+Do not build semantic embeddings, a live language-server daemon, or a rich map
+editor in 0.7.0. Those can follow once the structured map proves useful.
 
 ## Public UI: Build Map
 
