@@ -9,6 +9,7 @@ import {
   buildWorkerCorpusContext,
   codebaseMapHistoryPath,
   codebaseMapPath,
+  enrichCodebaseMapSemantics,
   findExistingAbstraction,
   loadCodebaseMap,
   refreshCodebaseMap,
@@ -168,6 +169,101 @@ describe('corpus map', () => {
     expect(context).toContain('Maturity: thin, approved')
     expect(context).toContain('Reuse / Extend')
     expect(context).toContain('Corpus fit required')
+  })
+
+  it('adds model-assisted semantic orientation without replacing deterministic indexing', async () => {
+    const result = await refreshCodebaseMap({
+      projectRoot,
+      memoryDir,
+      reason: 'manual',
+      now: new Date('2026-05-21T12:00:00.000Z'),
+      semanticIndexer: {
+        modelId: 'semantic-test-model',
+        async completeJson({ prompt }) {
+          expect(prompt).toContain('src/web/lib/Button.svelte')
+          expect(prompt).toContain('Return ONLY valid JSON')
+          return JSON.stringify({
+            corpusKind: 'code',
+            confidence: 0.92,
+            projectPurpose: 'Fixture app for testing shared UI primitives.',
+            currentTruth: ['Button.svelte is the canonical command button.'],
+            architectureAreas: [
+              {
+                name: 'Web UI',
+                purpose: 'Shared Svelte controls and project surfaces.',
+                canonicalFiles: ['src/web/lib/Button.svelte', 'src/web/surfaces/project/SettingsTab.svelte'],
+              },
+            ],
+            canonicalAbstractions: [
+              {
+                name: 'Command Button',
+                purpose: 'Shared action control.',
+                canonicalFiles: ['src/web/lib/Button.svelte'],
+                reuseRule: 'Reuse before adding local button styles.',
+              },
+            ],
+            gapsOrRisks: ['The deterministic map is thin for UI semantics.'],
+            readNext: [
+              { path: 'src/web/lib/Button.svelte', reason: 'Canonical action primitive.' },
+            ],
+            workerGuidance: ['Name the primitive before editing.', 'Read sibling controls when the map is thin.'],
+            needsBroaderRead: true,
+          })
+        },
+      },
+    })
+
+    expect(result.map.semantic).toMatchObject({
+      modelId: 'semantic-test-model',
+      corpusKind: 'code',
+      confidence: 0.92,
+      projectPurpose: 'Fixture app for testing shared UI primitives.',
+      needsBroaderRead: true,
+    })
+    expect(result.map.files['src/web/lib/Button.svelte']).toBeDefined()
+
+    const saved = await loadCodebaseMap(memoryDir)
+    expect(saved?.semantic?.canonicalAbstractions[0]).toMatchObject({
+      name: 'Command Button',
+      canonicalFiles: ['src/web/lib/Button.svelte'],
+    })
+
+    const context = buildWorkerCorpusContext(result.map, {
+      id: 'task-semantic',
+      title: 'Add a settings button',
+      description: 'Use the existing button treatment.',
+    }, { maxChars: 2000 })
+    expect(context).toContain('Semantic orientation:')
+    expect(context).toContain('Fixture app for testing shared UI primitives.')
+    expect(context).toContain('Read sibling controls when the map is thin.')
+  })
+
+  it('can enrich an already-built map with a model-assisted semantic pass', async () => {
+    const { map } = await refreshCodebaseMap({ projectRoot, memoryDir, reason: 'manual' })
+    const enriched = await enrichCodebaseMapSemantics(map, {
+      modelId: 'semantic-test-model',
+      async completeJson() {
+        return JSON.stringify({
+          corpusKind: 'mixed',
+          confidence: 0.7,
+          projectPurpose: 'Updated purpose.',
+          currentTruth: [],
+          architectureAreas: [],
+          canonicalAbstractions: [],
+          gapsOrRisks: [],
+          readNext: [],
+          workerGuidance: [],
+          needsBroaderRead: false,
+        })
+      },
+    })
+
+    expect(enriched.semantic).toMatchObject({
+      corpusKind: 'mixed',
+      projectPurpose: 'Updated purpose.',
+      modelId: 'semantic-test-model',
+    })
+    expect(enriched.files).toBe(map.files)
   })
 })
 

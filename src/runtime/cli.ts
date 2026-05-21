@@ -14,11 +14,15 @@ import {
   registerWorkspace,
   unregisterWorkspace,
   readWorkspaceConfig,
+  readGlobalConfig,
+  readGlobalProviders,
+  resolveModelsForProvider,
   slugify,
 } from '@guildhall/config'
 import { exec, spawn } from 'node:child_process'
 import { platform } from 'node:os'
-import { refreshCodebaseMap } from '@guildhall/corpus-map'
+import { refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
+import { OpenAICompatibleClient } from '@guildhall/providers'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`
@@ -252,7 +256,8 @@ export function resolveServiceLifecycleIntent(
 //   guildhall serve                     — start the web dashboard (all workspaces)
 //     --port <n>                    — override the dashboard port (default: 7777)
 //   guildhall config [id|path]          — re-run the init wizard on an existing workspace
-//   guildhall corpus-map refresh [path] — rebuild memory/codebase-map.yaml for a workspace
+//   guildhall corpus-map refresh [--semantic] [path]
+//                                      — rebuild memory/codebase-map.yaml for a workspace
 //   guildhall model-bakeoff [--context-indexer] [output]
 //                                      — write replay model bakeoff JSON + Markdown
 // ---------------------------------------------------------------------------
@@ -284,13 +289,14 @@ function getFlag(flag: string): string | undefined {
 // another flag — otherwise boolean flags like `--no-browser` would eat the
 // following positional by mistake.
 function positionals(): string[] {
+  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state'])
   const result: string[] = []
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
     if (a === undefined) continue
     if (a.startsWith('--')) {
       const next = args[i + 1]
-      if (next !== undefined && !next.startsWith('--')) {
+      if (valueFlags.has(a) && next !== undefined && !next.startsWith('--')) {
         i++ // consume the value
       }
       continue
@@ -326,7 +332,8 @@ Usage:
   guildhall open [path]              Open the running service (starts it if needed)
 
   guildhall config [id|path]         Re-run the init wizard on an existing workspace
-  guildhall corpus-map refresh [path] Rebuild compact codebase map context
+  guildhall corpus-map refresh [--semantic] [path]
+                                  Rebuild compact codebase map context
   guildhall model-bakeoff [--context-indexer] [output]
                                   Write replay model bakeoff JSON + Markdown
 
@@ -337,6 +344,7 @@ Examples:
   guildhall init ~/projects/my-app
   guildhall run looma
   guildhall serve
+  guildhall corpus-map refresh --semantic .
   guildhall model-bakeoff artifacts/model-bakeoff/report.json
   guildhall model-bakeoff --context-indexer
 `.trim()
@@ -604,7 +612,7 @@ async function cmdCorpusMap() {
   const pos = positionals()
   const subcommand = pos[0] ?? 'refresh'
   if (subcommand !== 'refresh') {
-    console.error('[guildhall] Usage: guildhall corpus-map refresh [id|path]')
+    console.error('[guildhall] Usage: guildhall corpus-map refresh [--semantic] [id|path]')
     process.exit(1)
   }
   const idOrPath = pos[1]
@@ -615,16 +623,60 @@ async function cmdCorpusMap() {
   } else {
     projectPath = process.cwd()
   }
+  const semantic = args.includes('--semantic')
+  const semanticIndexer = semantic ? createSemanticIndexer(projectPath) : undefined
   const result = await refreshCodebaseMap({
     projectRoot: projectPath,
     memoryDir: join(projectPath, 'memory'),
     reason: 'manual',
+    ...(semanticIndexer ? { semanticIndexer } : {}),
   })
   console.log(`[guildhall] Codebase map refreshed (${result.mode}).`)
   console.log(`[guildhall] Files: ${Object.keys(result.map.files).length}`)
   console.log(`[guildhall] Areas: ${result.map.areas.length}`)
   console.log(`[guildhall] Abstractions: ${result.map.abstractions.length}`)
+  if (result.map.semantic) {
+    console.log(`[guildhall] Semantic: ${result.map.semantic.corpusKind} via ${result.map.semantic.modelId}`)
+  }
   console.log(`[guildhall] Written: ${join(projectPath, 'memory', 'codebase-map.yaml')}`)
+}
+
+function createSemanticIndexer(projectPath: string): CorpusSemanticIndexer {
+  const providers = readGlobalProviders().providers
+  const openai = providers['openai-api']
+  if (!openai?.apiKey) {
+    throw new Error('Semantic Corpus Map refresh requires an OpenAI-compatible provider key in ~/.guildhall/providers.yaml.')
+  }
+  const global = readGlobalConfig()
+  const openAiModels = resolveModelsForProvider(global.models, 'openai-api')
+  const modelId =
+    openAiModels.contextIndexer ??
+    'zai-org/GLM-4.6'
+  const client = new OpenAICompatibleClient({
+    baseUrl: openai.baseUrl || 'https://api.openai.com/v1',
+    apiKey: openai.apiKey,
+    requestTimeoutMs: 180_000,
+  })
+  return {
+    modelId,
+    async completeJson({ prompt }) {
+      let text = ''
+      for await (const event of client.streamMessage({
+        model: modelId,
+        system_prompt: 'You produce compact, valid JSON for codebase/documentation orientation. Do not include markdown.',
+        messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+        max_tokens: 2200,
+        temperature: 0,
+        tools: [],
+      })) {
+        if (event.type === 'text_delta') text += event.text
+      }
+      if (text.trim().length === 0) {
+        throw new Error(`Context indexer model ${modelId} returned no text for ${projectPath}.`)
+      }
+      return text
+    },
+  }
 }
 
 export function writeModelBakeoffReport(outputPath: string, opts: {

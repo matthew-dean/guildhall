@@ -3,8 +3,8 @@ title: CLI reference
 help_topic: reference.cli
 help_summary: |
   Every shipped `guildhall` subcommand — init, register, unregister, list,
-  run, serve, start, open, stop, config, and model-bakeoff — with flags and
-  examples.
+  run, serve, start, open, stop, config, corpus-map, and model-bakeoff — with
+  flags and examples.
 ---
 
 # CLI reference
@@ -88,6 +88,22 @@ Stop the background Guildhall service.
 
 Re-run the setup wizard against an existing project.
 
+## `guildhall corpus-map refresh [--semantic] [path]`
+
+Rebuild the compact Corpus Map for a workspace. This is mostly a debugging or
+repair command; Guildhall also creates and refreshes maps during normal agent
+context assembly.
+
+```bash
+guildhall corpus-map refresh .
+guildhall corpus-map refresh --semantic .
+```
+
+Use `--semantic` to run the model-assisted `contextIndexer` enrichment pass
+after the deterministic map is built. That pass writes purpose, architecture,
+canonical abstraction, risk, and read-next guidance into the map's `semantic`
+section.
+
 ## `guildhall model-bakeoff [--context-indexer] [output.json]`
 
 Write a deterministic model bakeoff replay report. The command currently uses
@@ -116,6 +132,7 @@ Markdown summary beside it.
 guildhall init ~/projects/my-app
 guildhall run my-app --domain ui
 guildhall serve
+guildhall corpus-map refresh --semantic .
 guildhall model-bakeoff artifacts/model-bakeoff/report.json
 guildhall model-bakeoff --context-indexer
 ```

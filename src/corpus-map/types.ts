@@ -68,6 +68,49 @@ export interface CorpusDesignSystemSummary {
   recommendations: string[]
 }
 
+export type CorpusSemanticKind = 'documentation' | 'code' | 'mixed' | 'unknown'
+
+export interface CorpusSemanticArea {
+  name: string
+  purpose: string
+  canonicalFiles: string[]
+}
+
+export interface CorpusSemanticAbstraction {
+  name: string
+  purpose: string
+  canonicalFiles: string[]
+  reuseRule: string
+}
+
+export interface CorpusSemanticReadNext {
+  path: string
+  reason: string
+}
+
+export interface CorpusSemanticSummary {
+  generatedAt: string
+  modelId: string
+  corpusKind: CorpusSemanticKind
+  confidence: number
+  projectPurpose: string
+  currentTruth: string[]
+  architectureAreas: CorpusSemanticArea[]
+  canonicalAbstractions: CorpusSemanticAbstraction[]
+  gapsOrRisks: string[]
+  readNext: CorpusSemanticReadNext[]
+  workerGuidance: string[]
+  needsBroaderRead: boolean
+}
+
+export interface CorpusSemanticIndexer {
+  modelId: string
+  completeJson(input: {
+    prompt: string
+    map: CodebaseMap
+  }): Promise<string>
+}
+
 export interface CorpusOverrides {
   conventions?: Array<{
     areaId?: string
@@ -92,6 +135,7 @@ export interface CodebaseMap {
   areas: CorpusArea[]
   abstractions: CorpusAbstraction[]
   designSystem?: CorpusDesignSystemSummary
+  semantic?: CorpusSemanticSummary
   verification: { commands: string[] }
   overrides?: CorpusOverrides
 }
@@ -108,6 +152,7 @@ export interface BuildCodebaseMapInput {
   projectRoot: string
   memoryDir?: string
   now?: Date
+  semanticIndexer?: CorpusSemanticIndexer
 }
 
 export interface RefreshCodebaseMapInput extends BuildCodebaseMapInput {

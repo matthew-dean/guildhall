@@ -1,5 +1,6 @@
 export * from './build.js'
 export * from './discovery.js'
 export * from './query.js'
+export * from './semantic.js'
 export * from './storage.js'
 export * from './types.js'

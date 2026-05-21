@@ -141,6 +141,14 @@ export function buildWorkerCorpusContext(
   if (map.project.primaryFrameworks.length > 0) {
     lines.push(`Frameworks: ${map.project.primaryFrameworks.join(', ')}`)
   }
+  if (map.semantic) {
+    lines.push('', 'Semantic orientation:')
+    lines.push(`- Corpus kind: ${map.semantic.corpusKind}; confidence ${map.semantic.confidence.toFixed(2)}`)
+    lines.push(`- Purpose: ${map.semantic.projectPurpose}`)
+    for (const truth of map.semantic.currentTruth.slice(0, 3)) lines.push(`- Current truth: ${truth}`)
+    for (const risk of map.semantic.gapsOrRisks.slice(0, 2)) lines.push(`- Risk/gap: ${risk}`)
+    for (const guidance of map.semantic.workerGuidance.slice(0, 3)) lines.push(`- Worker guidance: ${guidance}`)
+  }
   if (map.designSystem) {
     lines.push('', 'Design system:')
     lines.push(
@@ -176,6 +184,9 @@ export function buildWorkerCorpusContext(
   }
   if (result.readNext.length > 0) {
     lines.push('', 'Read next:')
+    for (const item of map.semantic?.readNext.slice(0, readNextLimit) ?? []) {
+      lines.push(`- ${item.path}: ${item.reason}`)
+    }
     for (const item of result.readNext.slice(0, readNextLimit)) lines.push(`- ${item.path}: ${item.reason}`)
   }
   const corpusFitRequirement = 'Corpus fit required: before editing, name the existing primitive, helper, package, design token, component, or area you are extending; if two similar ideas already exist, consider consolidation before adding a third. For design-system gaps, systemize just in time when repetition is stable enough to outweigh the maintenance cost.'

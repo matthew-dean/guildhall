@@ -60,6 +60,14 @@ The builder starts with a Git-aware file list:
 
 The first refresh is a full build. Later refreshes can be partial.
 
+Semantic enrichment is optional and explicit. A normal refresh builds the
+deterministic map without spending model tokens. When the operator runs a
+semantic refresh, Guildhall first builds the deterministic map, then asks the
+`contextIndexer` model to add purpose, current-truth notes, architecture areas,
+canonical abstractions, risks, read-next guidance, and worker guidance. The
+model output is validated as structured JSON and stored under the map's
+`semantic` section.
+
 Guildhall also wires this into the normal agent lifecycle. If no map exists
 when an agent context is being built, the context builder creates one lazily
 from the task project or active worktree before rendering the prompt. After a
@@ -153,6 +161,17 @@ You can rebuild the map manually:
 ```sh
 guildhall corpus-map refresh [path]
 ```
+
+You can also run the model-assisted semantic pass:
+
+```sh
+guildhall corpus-map refresh --semantic [path]
+```
+
+This uses the OpenAI-compatible provider configured in Guildhall and the
+`contextIndexer` model assignment when present. If no explicit context-indexer
+model is configured for that provider, Guildhall uses the current live-ladder
+fallback for semantic enrichment.
 
 The project Settings screen also has a compact Codebase Map panel showing file,
 area, abstraction, and design-system maturity counts plus the last build time.

@@ -8,6 +8,7 @@ import {
   normalizeRelativePath,
   requiresFullRefresh,
 } from './discovery.js'
+import { enrichCodebaseMapSemantics } from './semantic.js'
 import {
   appendCodebaseMapHistory,
   clearCodebaseMapStaleState,
@@ -38,13 +39,16 @@ export async function buildCodebaseMap(input: BuildCodebaseMapInput): Promise<Co
   }
   const overrides = input.memoryDir ? await loadCorpusOverrides(input.memoryDir) : undefined
   const designSystem = input.memoryDir ? await loadDesignSystemSummary(input.memoryDir, entries) : undefined
-  return synthesizeMap({
+  const map = synthesizeMap({
     projectRoot,
     files: entries,
     overrides,
     designSystem,
     now: input.now ?? new Date(),
   })
+  return input.semanticIndexer
+    ? enrichCodebaseMapSemantics(map, input.semanticIndexer, input.now ?? new Date())
+    : map
 }
 
 export async function refreshCodebaseMap(input: RefreshCodebaseMapInput): Promise<RefreshCodebaseMapResult> {
@@ -61,7 +65,7 @@ export async function refreshCodebaseMap(input: RefreshCodebaseMapInput): Promis
     let map: CodebaseMap
 
     if (mode === 'full') {
-      map = await buildCodebaseMap({ projectRoot, memoryDir, now })
+      map = await buildCodebaseMap({ projectRoot, memoryDir, now, semanticIndexer: input.semanticIndexer })
       changedFiles = Object.keys(map.files)
     } else {
       const previousMap = previous
@@ -88,6 +92,9 @@ export async function refreshCodebaseMap(input: RefreshCodebaseMapInput): Promis
       }
       const refreshedDesignSystem = await loadDesignSystemSummary(memoryDir, files)
       map = synthesizeMap({ projectRoot, files, overrides, designSystem: refreshedDesignSystem, now })
+      if (input.semanticIndexer) {
+        map = await enrichCodebaseMapSemantics(map, input.semanticIndexer, now)
+      }
     }
 
     await saveCodebaseMap(memoryDir, map)
