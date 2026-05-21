@@ -1293,7 +1293,7 @@
     flex-wrap: nowrap;
     gap: var(--s-2);
     min-width: 0;
-    overflow: hidden;
+    overflow: visible;
     justify-self: start;
   }
   .topbar-actions {

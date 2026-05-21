@@ -36,7 +36,6 @@
 <button
   type="button"
   class="status-button tone-{tone}"
-  class:has-count={typeof count === 'number'}
   {disabled}
   {onclick}
   aria-label={ariaLabel}
@@ -70,9 +69,6 @@
     cursor: pointer;
     position: relative;
   }
-  .has-count {
-    padding-left: calc(var(--s-3) + var(--s-4));
-  }
   .status-button :global(svg) {
     display: block;
     flex: none;
@@ -102,8 +98,8 @@
   }
   .status-count {
     position: absolute;
-    top: var(--s-1);
-    left: var(--s-1);
+    top: calc(-1 * var(--s-1));
+    right: calc(-1 * var(--s-1));
     display: inline-flex;
     align-items: center;
     justify-content: center;
