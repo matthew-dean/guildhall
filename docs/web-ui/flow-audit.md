@@ -50,6 +50,9 @@ screen.
   Import cards no longer use hoverable whole-card buttons for details unless
   the card itself changes selection; card bodies are static content, `Details`
   is an explicit action, and Include/Exclude/checkbox controls own selection.
+- [x] Restore readable secondary button contrast. The shared secondary button
+  now uses a visibly distinct neutral fill and consistent border instead of a
+  near-transparent overlay that disappeared into dark raised panels.
 - [x] Remove maintainer-only implementation pages from the public VitePress
   surface. The public docs build now excludes `docs/subsystems/**`,
   `docs/web-ui/design-tokens.md`, and `docs/web-ui/help-system.md`; sidebar,

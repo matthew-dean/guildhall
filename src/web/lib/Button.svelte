@@ -99,14 +99,14 @@
     filter: none;
   }
   .v-secondary {
-    background: color-mix(in srgb, var(--text) 8%, transparent);
+    background: color-mix(in srgb, var(--bg-raised-2) 68%, var(--text) 32%);
     color: var(--text);
-    border-color: transparent;
-    box-shadow: none;
+    border-color: color-mix(in srgb, var(--text) 42%, var(--bg-raised-2) 58%);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
   }
   .v-secondary:not(:disabled):hover {
-    background: color-mix(in srgb, var(--text) 12%, transparent);
-    border-color: color-mix(in srgb, var(--text) 14%, transparent);
+    background: color-mix(in srgb, var(--bg-raised-2) 58%, var(--text) 42%);
+    border-color: color-mix(in srgb, var(--text) 56%, var(--bg-raised-2) 44%);
     filter: none;
   }
   .v-danger {
