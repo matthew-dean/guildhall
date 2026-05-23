@@ -39,4 +39,4 @@ A missing topic renders a `?` in warning color and surfaces the missing-id messa
 | `web.<page>` | A web UI surface. |
 | `guide.<topic>` | A concept introduced in the guide section. |
 
-See the [`scripts/extract-help-topics.mjs`](https://github.com/anthropics/guildhall/blob/main/scripts/extract-help-topics.mjs) source for validation rules.
+See the [`scripts/extract-help-topics.mjs`](https://github.com/matthew-dean/guildhall/blob/main/scripts/extract-help-topics.mjs) source for validation rules.

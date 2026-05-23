@@ -30,9 +30,11 @@ async function createDocsFixture(tmp: string, marker = 'current docs'): Promise<
     [
       '# Releases',
       '',
-      'The published docs root defaults to Guildhall 0.9.0, matching the current npm package.',
+      'Guildhall release notes capture the product claim each version can honestly make, the proof behind that claim, and the limits that still remain.',
       '',
-      'Historical release notes stay versioned, while the current docs are available at [Quick start](/guide/quick-start).',
+      'The published docs root defaults to the latest public release. Main-branch docs',
+      'are published separately under [Next](/next/guide/) so unreleased work can be',
+      'documented without promising it to users who installed the current npm package.',
       '',
     ].join('\n'),
   )
@@ -55,6 +57,7 @@ describe('docs versioning script', () => {
       expect(home).toContain('/guildhall/versions/1.2.3/guide/quick-start')
       expect(quickStart).toContain('/versions/1.2.3/web-ui/project-view')
       expect(releaseIndex).toContain('version-pinned docs snapshot for Guildhall 1.2.3')
+      expect(releaseIndex).not.toContain('Main-branch docs')
     } finally {
       await fs.rm(tmp, { recursive: true, force: true })
     }

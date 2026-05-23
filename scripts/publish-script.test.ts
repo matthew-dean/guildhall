@@ -84,10 +84,15 @@ describe('release publish script', () => {
       )
 
       const manifest = JSON.parse(await fs.readFile(path.join(tmp, 'package.json'), 'utf8'))
+      const docsHome = await fs.readFile(path.join(tmp, 'docs/index.md'), 'utf8')
+      const releasesIndex = await fs.readFile(path.join(tmp, 'docs/releases/index.md'), 'utf8')
       expect(result.status).not.toBe(0)
       expect(result.output).toContain('Bumped package.json to 0.5.0')
       expect(result.output).toContain('Command failed: pnpm typecheck')
       expect(manifest.version).toBe('0.4.0')
+      expect(docsHome).toContain('Guildhall 0.4.0')
+      expect(releasesIndex).toContain('Guildhall 0.4.0')
+      await expect(fs.stat(path.join(tmp, 'docs/versions/0.5.0'))).rejects.toThrow()
     } finally {
       await fs.rm(tmp, { recursive: true, force: true })
     }

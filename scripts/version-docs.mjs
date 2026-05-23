@@ -103,9 +103,10 @@ async function rewriteStableReleaseIndex(root) {
   const file = join(root, 'releases', 'index.md')
   if (!existsSync(file)) return
   const raw = await readFile(file, 'utf8')
+  const snapshotNotice = `This is the version-pinned docs snapshot for Guildhall ${version}. The public docs root defaults to this latest published release; unreleased main-branch docs live under [Next](/next/guide/).`
   let next = raw.replace(
-    /The published docs root defaults[\s\S]*?current npm package\./,
-    `This is the version-pinned docs snapshot for Guildhall ${version}. The public docs root defaults to this latest published release; unreleased main-branch docs live under [Next](/next/guide/).`,
+    /The published docs root defaults[^\n]*(?:\nMain-branch docs[^\n]*(?:\nare published[^\n]*)?)?/,
+    snapshotNotice,
   )
   next = next.replace(
     /Historical release notes stay versioned[\s\S]*?\/guide\/quick-start\)\./,
@@ -114,7 +115,7 @@ async function rewriteStableReleaseIndex(root) {
   if (!next.includes('version-pinned docs snapshot')) {
     next = next.replace(
       'Guildhall release notes capture the product claim each version can honestly make, the proof behind that claim, and the limits that still remain.',
-      `Guildhall release notes capture the product claim each version can honestly make, the proof behind that claim, and the limits that still remain.\n\nThis is the version-pinned docs snapshot for Guildhall ${version}. The public docs root defaults to this latest published release; unreleased main-branch docs live under [Next](/next/guide/).`,
+      `Guildhall release notes capture the product claim each version can honestly make, the proof behind that claim, and the limits that still remain.\n\n${snapshotNotice}`,
     )
   }
   await writeFile(file, next, 'utf8')
