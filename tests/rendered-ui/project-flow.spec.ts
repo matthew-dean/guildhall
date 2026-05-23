@@ -4,7 +4,7 @@ test('projects home scrolls at mobile size and opens explicit project routes', a
   await page.setViewportSize({ width: 390, height: 560 })
   await page.goto('/projects')
 
-  await expect(page.getByRole('heading', { name: 'Your local Guildhall service' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Projects & Workspaces' })).toBeVisible()
   await expect(page.getByText('Tiny demo')).toBeVisible()
 
   await page
