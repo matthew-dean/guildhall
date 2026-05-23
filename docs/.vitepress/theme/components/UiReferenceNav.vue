@@ -17,14 +17,23 @@ const items = [
 ]
 
 const currentPath = computed(() => route.path.replace(/\/$/, '') || '/')
+const versionPrefix = computed(() => {
+  const match = currentPath.value.match(/^\/guildhall(\/next|\/versions\/[^/]+)?\//)
+  return match?.[1] ?? ''
+})
+const unversionedPath = computed(() => {
+  const prefix = versionPrefix.value
+  return prefix ? currentPath.value.replace(`/guildhall${prefix}`, '') : currentPath.value.replace('/guildhall', '')
+})
 
 const normalizedItems = computed(() =>
   items.map((item) => {
     const normalizedLink = item.link.replace(/\/$/, '') || '/'
+    const href = versionPrefix.value ? `${versionPrefix.value}${normalizedLink}` : normalizedLink
     return {
       ...item,
-      href: withBase(normalizedLink),
-      isActive: currentPath.value === normalizedLink,
+      href: withBase(href),
+      isActive: unversionedPath.value === normalizedLink,
     }
   }),
 )

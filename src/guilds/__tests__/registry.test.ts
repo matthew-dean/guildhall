@@ -178,6 +178,35 @@ describe('selectApplicableGuilds', () => {
     expect(slugs).toContain('accessibility-specialist')
     expect(slugs).toContain('color-theorist')
   })
+  it('seats the Copywriter for UI surface work even when the task does not literally say copy', () => {
+    const sel = selectApplicableGuilds({
+      task: {
+        ...baseTask,
+        title: 'Clean up settings layout rhythm',
+        description: 'Rework the settings screen controls and section structure.',
+        domain: 'ui',
+      },
+      memoryDir: '/tmp',
+      projectPath: '/nonexistent-directory-should-not-be-a-ts-project',
+    })
+
+    expect(sel.some((g) => g.slug === 'copywriter')).toBe(true)
+  })
+  it('seats the Copywriter for public docs work', () => {
+    const sel = selectApplicableGuilds({
+      task: {
+        ...baseTask,
+        title: 'Rewrite the build guide',
+        description:
+          'Update docs/guide/how-guildhall-builds.md so the VitePress guide reads clearly.',
+        domain: 'docs',
+      },
+      memoryDir: '/tmp',
+      projectPath: '/nonexistent-directory-should-not-be-a-ts-project',
+    })
+
+    expect(sel.some((g) => g.slug === 'copywriter')).toBe(true)
+  })
   it('omits TS engineer for a non-TS project', () => {
     const sel = selectApplicableGuilds({
       task: { ...baseTask, title: 'Paint the bikeshed', description: 'no tech keywords' },

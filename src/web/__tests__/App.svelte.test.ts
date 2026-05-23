@@ -28,6 +28,7 @@ const modelsPayload = {
     worker: 'qwen/qwen3.6-35b-a3b',
     reviewer: 'qwen/qwen3.6-35b-a3b',
     gateChecker: 'qwen/qwen3.6-35b-a3b',
+    contextIndexer: 'qwen/qwen3.6-35b-a3b',
   },
   effectiveModels: {},
   loadedModels: ['qwen/qwen3.6-35b-a3b'],

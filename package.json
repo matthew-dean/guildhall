@@ -1,6 +1,6 @@
 {
   "name": "guildhall",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "A general-purpose multi-agent operating system for software projects.",
   "license": "LicenseRef-FLL-1.2",
   "licenses": [
@@ -37,11 +37,14 @@
     "clean": "rm -rf dist",
     "release": "node scripts/publish.mjs",
     "release:dry": "node scripts/publish.mjs --dry-run",
+    "smoke:release": "node scripts/release-smoke.mjs",
     "model:bakeoff": "node scripts/model-bakeoff.mjs",
-    "docs:extract-help": "node scripts/extract-help-topics.mjs",
+    "docs:prepare-versions": "node scripts/prepare-versioned-docs.mjs",
+    "docs:check-copy": "node scripts/check-public-copy-voice.mjs",
+    "docs:extract-help": "pnpm docs:prepare-versions && node scripts/extract-help-topics.mjs",
     "docs:check-help-sync": "node scripts/check-help-sync.mjs",
     "docs:dev": "npm run docs:extract-help && vitepress dev docs",
-    "docs:build": "npm run docs:extract-help && vitepress build docs",
+    "docs:build": "npm run docs:check-copy && npm run docs:extract-help && vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "service:install": "node ./scripts/install-launch-agent.mjs",
     "service:uninstall": "node ./scripts/uninstall-launch-agent.mjs"

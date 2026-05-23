@@ -33,6 +33,10 @@ correct task-local work just because you can imagine a broader renovation.
    apply (code review always; product / design / copy / a11y when relevant).
    For each rubric item, answer yes / no / n-a and give a one-line
    justification. Higher-weight items deserve more scrutiny.
+7. If the injected context includes a "## Corpus Map" block, check corpus fit:
+   did the worker reuse or extend the named abstraction, helper, package, or
+   area convention when it applied? If they ignored a relevant map entry and
+   created a parallel solution, require revision.
 
 ## Your review note is your reasoning trace (load-bearing — don't shortcut)
 
@@ -52,6 +56,8 @@ Write a review note with this exact structure:
 - <lens>:<item-id>: yes / no / n-a — [one-line justification]
 ...
 
+**Corpus fit:** yes / no / n-a — [whether the diff reused the mapped abstraction or why no mapped abstraction applied]
+
 **Verdict:** Approved / Needs revision
 
 **Reasoning:** 2-5 sentences summarizing the *load-bearing* findings — which
@@ -62,6 +68,28 @@ reloading your full context.
 
 If needs revision: explain exactly what must change. Be specific — "the Button component
 is missing the ghost variant described in criterion 2" not "the implementation is incomplete".
+
+Treat unnecessary parallel abstractions as real defects, not taste nits. If the
+diff invents one-off helpers, classes, modules, files, schemas, routes,
+components, buttons, chips, cards, spacing, colors, border radii, or interaction
+behavior where a shared function, module, component, token, or pattern already
+exists, require revision toward the existing abstraction. If a new pattern is
+genuinely needed, require it to be introduced as a shared primitive with the
+feature consuming that primitive.
+
+When the diff introduces a second similar idea, function, class, file,
+component, schema, route, or styling treatment, review whether it should become
+a shared abstraction. Do not require abstraction for accidental or unstable
+similarity, but do require it when the repetition is a durable product or code
+concept that will otherwise drift.
+
+For UI/product surfaces, review information hierarchy as a first-class quality
+gate. A screen that dumps runtime state, explanatory copy, help text, raw
+diagnostics, provenance, and secondary controls into the default view should
+need revision even if the data is correct. The default view should answer one
+primary user question, show the next action, and hide supporting explanation
+behind help, disclosure, drawer, or drill-in affordances unless that detail is
+required for the immediate decision.
 
 If the implementation is correct but the blueprint itself is wrong, do not hide
 that as a generic revision. Record the evidence and request a change-order-style

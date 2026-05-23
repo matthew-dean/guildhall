@@ -10,6 +10,7 @@
   import SectionHeader from '../../../../packages/ui/src/components/SectionHeader.svelte'
   import StatusPill from '../../../../packages/ui/src/components/StatusPill.svelte'
   import { nav } from '../../lib/nav.svelte.js'
+  import { projectFetch } from '../../lib/project-routes.js'
 
   interface ReleaseItem {
     id?: string
@@ -34,9 +35,18 @@
       approved: boolean
       revision?: number
     }
+    dirtyCheckout?: {
+      ownedCount: number
+      files: string[]
+      error?: string
+    }
     statusCounts: Record<string, number>
     totals: {
       blockingCount: number
+      humanBlockingCount?: number
+      unfinishedCount?: number
+      designSystemBlockingCount?: number
+      dirtyCheckoutBlockingCount?: number
       tasks: number
       done: number
     }
@@ -53,7 +63,7 @@
   let initNeeded = $state(false)
 
   $effect(() => {
-    fetch('/api/project/release-readiness')
+    projectFetch('/api/project/release-readiness')
       .then(r => r.json())
       .then(j => {
         if (j?.initializationNeeded) {
@@ -141,6 +151,15 @@
     return { label: `draft · rev ${ds.revision ?? 0}`, tone: 'warn' as const, clear: false }
   })
 
+  const unfinishedCount = $derived.by(() => {
+    if (!data) return 0
+    const terminal = new Set(['done', 'shelved', 'cancelled', 'archived', 'pending_pr'])
+    return Object.entries(data.statusCounts).reduce((total, [status, count]) => {
+      return terminal.has(status) ? total : total + count
+    }, 0)
+  })
+  const dirtyCheckoutCount = $derived(data?.dirtyCheckout?.ownedCount ?? 0)
+
   const verdict = $derived.by(() => {
     if (!data) return { label: 'Loading', tone: 'neutral' as const, reason: '' }
     if (data.totals.tasks === 0) {
@@ -150,11 +169,34 @@
         reason: 'No tasks in this project.',
       }
     }
-    if (data.totals.blockingCount === 0 && dsLabel().clear) {
+    if (data.totals.blockingCount === 0 && unfinishedCount === 0 && dirtyCheckoutCount === 0 && dsLabel().clear) {
       return {
         label: 'Ready to ship',
         tone: 'ok' as const,
         reason: `${data.totals.done}/${data.totals.tasks} tasks done · no human blockers.`,
+      }
+    }
+    if (unfinishedCount > 0) {
+      return {
+        label: 'Blocked',
+        tone: 'warn' as const,
+        reason: `${unfinishedCount} task${unfinishedCount === 1 ? '' : 's'} still need shaping, worker execution, review, or recovery.`,
+      }
+    }
+    if (dirtyCheckoutCount > 0) {
+      return {
+        label: 'Blocked',
+        tone: 'warn' as const,
+        reason: `${dirtyCheckoutCount} Guildhall-owned project file${dirtyCheckoutCount === 1 ? '' : 's'} still need cleanup or landing.`,
+      }
+    }
+    if (!dsLabel().clear) {
+      return {
+        label: 'Blocked',
+        tone: 'warn' as const,
+        reason: data.designSystem?.drafted
+          ? 'Design system is drafted but not approved yet.'
+          : 'Design system is not drafted yet.',
       }
     }
     return {
@@ -172,12 +214,17 @@
         }
       : {
           title: 'Release readiness',
-          description: 'Operator summary of whether this project is ready to ship right now.',
+          description: 'A quick read on whether this project is ready to ship right now.',
         },
   )
 
   const statusRows = $derived(
     data ? Object.entries(data.statusCounts).sort((a, b) => b[1] - a[1]) : [],
+  )
+  const releaseBlockerLabel = $derived(
+    data
+      ? `${data.totals.blockingCount} release blocker${data.totals.blockingCount === 1 ? '' : 's'}`
+      : '0 release blockers',
   )
 </script>
 
@@ -234,10 +281,7 @@
             density="dense"
           >
             {#snippet meta()}
-              <StatusPill
-                label={`${data.totals.blockingCount} waiting`}
-                tone={data.totals.blockingCount === 0 ? 'ok' : 'warn'}
-              />
+              <StatusPill label={releaseBlockerLabel} tone={data.totals.blockingCount === 0 ? 'ok' : 'warn'} />
             {/snippet}
           </SectionHeader>
         {/snippet}
@@ -248,14 +292,33 @@
             <strong>{data.totals.done}/{data.totals.tasks}</strong>
           </div>
           <div class="summary-stat">
-            <span class="summary-label">Human blockers</span>
+            <span class="summary-label">Total release blockers</span>
             <strong>{data.totals.blockingCount}</strong>
+          </div>
+          <div class="summary-stat">
+            <span class="summary-label">Unfinished tasks</span>
+            <strong>{data.totals.unfinishedCount ?? unfinishedCount}</strong>
           </div>
           <div class="summary-stat">
             <span class="summary-label">Design system</span>
             <StatusPill label={dsLabel().label} tone={dsLabel().tone} />
           </div>
+          {#if data.dirtyCheckout}
+            <div class="summary-stat">
+              <span class="summary-label">Project checkout</span>
+              <StatusPill
+                label={dirtyCheckoutCount > 0 ? `${dirtyCheckoutCount} Guildhall files dirty` : 'clean'}
+                tone={dirtyCheckoutCount > 0 ? 'warn' : 'ok'}
+              />
+            </div>
+          {/if}
         </div>
+        {#if data.dirtyCheckout && dirtyCheckoutCount > 0}
+          <p class="dirty-detail">
+            Guildhall-owned metadata is still present in the project checkout:
+            {data.dirtyCheckout.files.slice(0, 4).join(', ')}{dirtyCheckoutCount > 4 ? ', …' : ''}.
+          </p>
+        {/if}
       </FrameCard>
     {/if}
 
@@ -382,6 +445,13 @@
   .summary-stat strong {
     font-size: var(--fs-4);
     line-height: var(--lh-tight);
+  }
+
+  .dirty-detail {
+    margin: var(--gh-space-3) 0 0;
+    color: var(--text-muted);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
   }
 
   .criteria {

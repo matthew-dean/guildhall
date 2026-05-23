@@ -2,23 +2,23 @@
 title: agent-settings.yaml
 help_topic: reference.agent_settings
 help_summary: |
-  The lever-storage file at memory/agent-settings.yaml. Records every
+  The lever-storage file at ./memory/agent-settings.yaml. Records every
   project and domain lever position with provenance. Seeded with system
   defaults on project init.
 ---
 
-# `memory/agent-settings.yaml`
+# `./memory/agent-settings.yaml`
 
 The lever-storage file. Seeded by `makeDefaultSettings()` on first read and edited from then on by the Settings tab, the Spec Agent during meta-intake/exploring, or by hand.
 
 During onboarding, meta-intake may infer initial positions from your project-guidance answers. Approved inferences are written here with `setBy: spec-agent-intake`; defaults that were not inferred remain `setBy: system-default`.
 
-Learned behavior is stored separately. `memory/learning.json` holds
-project-scoped learned defaults and suggestions, `memory/project-skills.json`
+Learned behavior is stored separately. `./memory/learning.json` holds
+project-scoped learned defaults and suggestions, `./memory/project-skills.json`
 holds project skill proposals, and `~/.guildhall/learning.json` holds
-user/global preferences. Use Settings → Learning to inspect project memories,
+user/global preferences. Use Settings → Memory to inspect project memories,
 cross-project preferences, project playbooks, and product ideas. Suggested
-records stay off until you choose to use them; `agent-settings.yaml` remains
+records stay off until you choose to use them; `./memory/agent-settings.yaml` remains
 the explicit lever file.
 
 ## Shape

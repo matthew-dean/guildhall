@@ -5,6 +5,7 @@
   moved to the bottom of the left rail.
 -->
 <script lang="ts">
+  import Button from '../lib/Button.svelte'
   import Icon from '../lib/Icon.svelte'
   import { nav, path } from '../lib/nav.svelte.js'
   import { onStatus, type SseStatus } from '../lib/events.js'
@@ -31,10 +32,10 @@
   })
 
   const sseTone = $derived<'active' | 'warn' | 'idle'>(
-    sseStatus === 'live' ? 'active' : sseStatus === 'error' ? 'warn' : 'idle',
+    sseStatus === 'live' ? 'active' : sseStatus === 'reconnecting' ? 'warn' : 'idle',
   )
   const sseLabel = $derived(
-    sseStatus === 'live' ? 'live' : sseStatus === 'error' ? 'reconnecting...' : 'connecting...',
+    sseStatus === 'live' ? 'connected' : sseStatus === 'reconnecting' ? 'reconnecting' : 'connecting',
   )
   const parsedRoute = $derived(parseProjectRoute(path.value))
   const showProjectMenu = $derived(path.value.startsWith('/project') || parsedRoute.projectScoped)
@@ -68,12 +69,23 @@
 <header class="app-header">
   <div class="header-left">
     {#if showProjectMenu}
-      <button type="button" class="project-menu" onclick={toggleProjectNav} aria-label="Open project navigation">
+      <Button
+        variant="secondary"
+        size="sm"
+        iconOnly
+        onclick={toggleProjectNav}
+        ariaLabel="Open project navigation"
+        title="Open project navigation"
+        className="project-menu"
+      >
         <Icon name="menu" size={18} />
-      </button>
+      </Button>
     {/if}
     <button type="button" class="brand" onclick={goHome} aria-label="Projects home">
-      Guildhall
+      <span class="brand-mark" aria-hidden="true">
+        <img src="/icons/genfavicon-64.png" alt="" />
+      </span>
+      <span class="brand-word">Guildhall</span>
     </button>
     {#if version}
       <span class="version" title="Guildhall runtime version">v{version}</span>
@@ -100,8 +112,15 @@
     gap: var(--s-3);
     padding: var(--s-2) var(--s-4);
     min-height: var(--app-header-h);
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-raised);
+    border-bottom: 1px solid color-mix(in srgb, var(--glass-border) 82%, var(--border));
+    background:
+      linear-gradient(135deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 32%),
+      color-mix(in srgb, var(--glass-bg-strong) 92%, var(--bg-raised));
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, white 7%, transparent),
+      0 8px 24px color-mix(in srgb, black 18%, transparent);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     z-index: var(--z-app-header);
   }
   .header-left,
@@ -120,7 +139,7 @@
     padding-inline: var(--s-3);
   }
   .project-title {
-    display: inline-block;
+    display: inline-flex;
     max-width: min(52vw, 40ch);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -133,9 +152,13 @@
     letter-spacing: 0;
   }
   .brand {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-2);
     font-size: var(--fs-3);
     font-weight: 700;
-    letter-spacing: -0.3px;
+    letter-spacing: 0;
     line-height: var(--lh-tight);
     background: transparent;
     border: none;
@@ -144,24 +167,54 @@
     padding: 0;
     font-family: inherit;
   }
+  .brand-mark {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 8px;
+    isolation: isolate;
+  }
+  .brand-mark::before {
+    content: "";
+    position: absolute;
+    inset: -8px;
+    border-radius: 999px;
+    background:
+      radial-gradient(circle, color-mix(in srgb, var(--accent) 38%, transparent) 0%, transparent 66%);
+    filter: blur(7px);
+    opacity: 0.78;
+    z-index: -1;
+  }
+  .brand-mark::after {
+    content: "";
+    position: absolute;
+    inset: 2px;
+    border-radius: 7px;
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, white 26%, transparent),
+      0 0 18px color-mix(in srgb, var(--accent) 34%, transparent);
+    pointer-events: none;
+  }
+  .brand-mark img {
+    display: block;
+    width: 22px;
+    height: 22px;
+    border-radius: 7px;
+  }
+  .brand-word {
+    display: inline-flex;
+  }
   .brand:hover {
-    color: var(--accent);
+    color: var(--light-violet-warm);
+    text-shadow: 0 0 16px color-mix(in srgb, var(--accent) 20%, transparent);
   }
-  .project-menu {
+  .brand:hover .brand-mark::before {
+    opacity: 1;
+  }
+  :global(.project-menu) {
     display: none;
-    align-items: center;
-    justify-content: center;
-    width: 34px;
-    height: 34px;
-    border: 1px solid var(--border-strong);
-    border-radius: var(--r-1);
-    background: var(--bg-elevated);
-    color: var(--text);
-    cursor: pointer;
-    padding: 0;
-  }
-  .project-menu:hover {
-    background: var(--bg-raised-2);
   }
   .version {
     font-size: var(--fs-0);
@@ -181,7 +234,7 @@
     color: var(--text-muted);
   }
   @media (max-width: 1100px) {
-    .project-menu {
+    :global(.project-menu) {
       display: inline-flex;
     }
   }

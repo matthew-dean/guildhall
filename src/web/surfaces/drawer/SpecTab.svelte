@@ -16,6 +16,7 @@
   import Markdown from '../../lib/Markdown.svelte'
   import Textarea from '../../lib/Textarea.svelte'
   import Byline from '../../lib/Byline.svelte'
+  import { briefDoneWhenForReaders, briefScopeForReaders } from '../../lib/brief-display.js'
   import { parseReviewerSummarySections, type ReviewerAdvisoryScores } from '../../lib/reviewer-summary.js'
   import WhyStuck from './WhyStuck.svelte'
   import SpecFillChecklist from './SpecFillChecklist.svelte'
@@ -257,21 +258,19 @@
         />
       {/snippet}
       <Stack gap="3">
-        <h3>Guildhall's draft of your task</h3>
+        {@const briefScope = briefScopeForReaders(brief, task.title)}
+        {@const briefDoneWhen = briefDoneWhenForReaders(brief)}
+        <h3>Task brief</h3>
         <p class="explainer">
-          You wrote a task. Before any code gets written, Guildhall wrote
-          down what it <em>thinks</em> you want and how it'll know it's done.
-          If that matches your intent, approve and the worker starts. If it
-          misread you, correct it below.
+          Guildhall writes a short brief before workers start. Review it in
+          Thread if the scope or finish line is wrong.
         </p>
-        {#if brief.userJob}
-          <Field label="What it thinks you want"><Markdown source={brief.userJob} /></Field>
-        {/if}
-        {#if brief.successMetric || brief.successCriteria}
-          <Field label="How it'll know it's done"><Markdown source={brief.successMetric ?? brief.successCriteria} /></Field>
+        <Field label="Scope"><Markdown source={briefScope} /></Field>
+        {#if briefDoneWhen}
+          <Field label="Done when"><Markdown source={briefDoneWhen} /></Field>
         {/if}
         {#if brief.antiPatterns && brief.antiPatterns.length > 0}
-          <Field label="Explicitly NOT">
+          <Field label="Out of scope">
             <ul class="bullet">
               {#each brief.antiPatterns as p}<li><Markdown source={p} inline /></li>{/each}
             </ul>
@@ -432,9 +431,5 @@
     background: var(--bg-raised-2);
     border-left: 2px solid var(--warn, #d0a146);
     border-radius: var(--r-1);
-  }
-  .explainer em {
-    font-style: italic;
-    color: var(--text);
   }
 </style>

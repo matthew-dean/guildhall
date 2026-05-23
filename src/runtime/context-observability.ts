@@ -35,6 +35,11 @@ export interface ContextDebugRecord {
   promptPreview: string
   snapshotPath: string
   sections: ContextSectionStat[]
+  corpusMap?: {
+    included: boolean
+    chars: number
+    readNext: string[]
+  }
   health: ContextHealthWarning[]
   reasons: string[]
   applicableGuildSlugs: string[]
@@ -65,6 +70,7 @@ function sectionStats(ctx: BuiltContext): ContextSectionStat[] {
     ['envelope', 'Business envelope', ctx.envelope],
     ['designSystem', 'Design system', ctx.designSystem],
     ['reviewRubrics', 'Review rubrics', ctx.reviewRubrics],
+    ['corpusMap', 'Corpus map', ctx.corpusMap],
     ['projectMemory', 'Project memory', ctx.projectMemory],
     ['recentProgress', 'Recent progress', ctx.recentProgress],
     ['recentDecisions', 'Recent decisions', ctx.recentDecisions],
@@ -76,6 +82,29 @@ function sectionStats(ctx: BuiltContext): ContextSectionStat[] {
     chars: text.length,
     included: text.trim().length > 0,
   }))
+}
+
+function corpusMapEvidence(corpusMap: string): ContextDebugRecord['corpusMap'] | undefined {
+  const text = corpusMap.trim()
+  if (!text) return undefined
+  const readNext: string[] = []
+  for (const line of text.split('\n')) {
+    const match = line.match(/^\s*-\s+([^:]+):\s+/)
+    if (!match?.[1]) continue
+    const candidate = match[1].trim()
+    if (candidate.includes('/')) readNext.push(candidate)
+  }
+  return {
+    included: true,
+    chars: corpusMap.length,
+    readNext: [...new Set(readNext)].slice(0, 12),
+  }
+}
+
+function isTaskScopedWorktree(activeWorktreePath: string | undefined, task: Task): boolean {
+  if (!activeWorktreePath) return false
+  const normalized = activeWorktreePath.split(path.sep).filter(Boolean)
+  return normalized.includes(task.id)
 }
 
 function healthChecks(input: {
@@ -146,7 +175,8 @@ function healthChecks(input: {
   if (
     input.task.projectPath &&
     input.task.projectPath !== input.workspacePath &&
-    !input.activeWorktreePath?.startsWith(input.task.projectPath)
+    !input.activeWorktreePath?.startsWith(input.task.projectPath) &&
+    !isTaskScopedWorktree(input.activeWorktreePath, input.task)
   ) {
     warnings.push({
       code: 'subproject_scope_mismatch',
@@ -188,6 +218,7 @@ function explainContext(input: {
   if (input.ctx.personaPrompt.trim()) reasons.push('Role/persona guidance was injected.')
   if (input.ctx.exploringTranscript.trim()) reasons.push('Exploring transcript tail was injected.')
   if (input.ctx.reviewRubrics.trim()) reasons.push('Review rubrics were injected.')
+  if (input.ctx.corpusMap.trim()) reasons.push('Corpus map guidance was injected.')
   if (input.ctx.projectMemory.trim()) reasons.push('Relevant project memory excerpts were injected.')
   return reasons
 }
@@ -197,6 +228,7 @@ export function roleForAgentName(agentName: string): string {
   if (agentName === 'worker-agent') return 'worker'
   if (agentName === 'reviewer-agent') return 'reviewer'
   if (agentName === 'gate-checker-agent') return 'gateChecker'
+  if (agentName === 'context-indexer-agent' || agentName === 'corpus-map') return 'contextIndexer'
   if (agentName.startsWith('coordinator-')) return 'coordinator'
   if (agentName.startsWith('reviewer-persona-')) return 'reviewer'
   return agentName
@@ -208,6 +240,7 @@ export function modelForAgentName(agentName: string, models: {
   worker: string
   reviewer: string
   gateChecker: string
+  contextIndexer: string
 }): string {
   const role = roleForAgentName(agentName)
   switch (role) {
@@ -215,6 +248,7 @@ export function modelForAgentName(agentName: string, models: {
     case 'worker': return models.worker
     case 'reviewer': return models.reviewer
     case 'gateChecker': return models.gateChecker
+    case 'contextIndexer': return models.contextIndexer
     case 'coordinator': return models.coordinator
     default: return models.worker
   }
@@ -235,6 +269,7 @@ export async function writeContextDebugRecord(input: {
   const id = `${at.replace(/[:.]/g, '-')}-${sanitize(input.agentName)}`
   const agentRole = roleForAgentName(input.agentName)
   const sections = sectionStats(input.ctx)
+  const corpusMap = corpusMapEvidence(input.ctx.corpusMap)
   const contextChars = input.ctx.formatted.length
   const promptChars = input.prompt.length
   const taskProjectPath = input.task.projectPath || input.workspacePath
@@ -311,6 +346,7 @@ export async function writeContextDebugRecord(input: {
     promptPreview: preview(input.prompt, MAX_PROMPT_PREVIEW_CHARS),
     snapshotPath,
     sections,
+    ...(corpusMap ? { corpusMap } : {}),
     health,
     reasons,
     applicableGuildSlugs: input.ctx.applicableGuildSlugs,

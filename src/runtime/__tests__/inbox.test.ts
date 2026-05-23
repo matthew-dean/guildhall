@@ -318,7 +318,40 @@ describe('buildInbox', () => {
     expect(hit).toBeDefined()
     if (!hit || hit.kind !== 'brief_approval') throw new Error('unreachable')
     expect(hit.taskId).toBe('task-a')
-    expect(hit.actionHref).toBe('/task/task-a')
+    expect(hit.actionHref).toBe('/task/task-a?tab=current')
+  })
+
+  it('brief_approval: suppressed while the same task has an unanswered question', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-a',
+          title: 'Pick color palette',
+          status: 'exploring',
+          productBrief: {
+            userJob: 'choose a palette',
+            successMetric: 'palette chosen',
+          },
+          openQuestions: [
+            {
+              id: 'q-1',
+              kind: 'confirm',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-11T00:00:00.000Z',
+              restatement: 'Should this palette target a warm editorial feel?',
+            },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInboxWithProviderSetup()
+    expect(items.find(i => i.kind === 'agent_question_pending' && i.taskId === 'task-a')).toBeDefined()
+    expect(items.find(i => i.kind === 'brief_approval' && i.taskId === 'task-a')).toBeUndefined()
   })
 
   it('agent_question_pending: emitted when a task has an unanswered agent question', async () => {
@@ -351,7 +384,113 @@ describe('buildInbox', () => {
     if (!hit || hit.kind !== 'agent_question_pending') throw new Error('unreachable')
     expect(hit.taskId).toBe('task-q')
     expect(hit.detail).toContain('right split')
-    expect(hit.actionHref).toBe('/task/task-q')
+    expect(hit.actionHref).toBe('/task/task-q?tab=current')
+  })
+
+  it('agent_question_pending: ignores operational receipt prose mistaken for a question', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-db-bootstrap',
+          title: 'Bootstrap database — run migrations, verify schema',
+          status: 'exploring',
+          openQuestions: [
+            {
+              id: 'q-fallback-task-db-bootstrap',
+              kind: 'choice',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-22T20:56:21.883Z',
+              prompt: 'Done — I took the durable blueprint steps:',
+              selectionMode: 'single',
+              choices: [
+                'Updated the **product brief**',
+                'Revised and strengthened the **spec**',
+                'Set task status to **`spec_review`**',
+                'Appended this turn to the exploring transcript',
+                'Logged a milestone in `PROGRESS.md`',
+              ],
+            },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.some(i => i.kind === 'agent_question_pending' && i.taskId === 'task-db-bootstrap')).toBe(false)
+  })
+
+  it('agent_question_pending: ignores operational receipt questions', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-db-bootstrap',
+          title: 'Bootstrap database',
+          status: 'exploring',
+          openQuestions: [
+            {
+              id: 'q-receipt',
+              kind: 'choice',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-11T00:00:00.000Z',
+              prompt: 'Done — I took the durable blueprint steps:',
+              selectionMode: 'single',
+              choices: [
+                'Updated the product brief',
+                'Revised and strengthened the spec',
+                'Set task status to `spec_review`',
+                'Appended this turn to the exploring transcript',
+                'Logged a milestone in `PROGRESS.md`',
+              ],
+            },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.some(i => i.kind === 'agent_question_pending')).toBe(false)
+  })
+
+  it('agent_question_pending: ignores output-promise choices', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-blueprint',
+          title: 'Draft the blueprint',
+          status: 'exploring',
+          openQuestions: [
+            {
+              id: 'q-promise',
+              kind: 'choice',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-23T00:00:00.000Z',
+              prompt: 'Next, pick the output path:',
+              selectionMode: 'single',
+              choices: [
+                'I will draft the blueprint',
+                'I will update the product brief',
+                'I will persist progress with tools',
+              ],
+            },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.some(i => i.kind === 'agent_question_pending')).toBe(false)
   })
 
   it('import_draft_queue: emitted when imported drafts are waiting to be shaped', async () => {
@@ -726,6 +865,31 @@ coordinators:
     expect(first.detail).toMatch(/scope/i)
   })
 
+  it('open_escalation: surfaces blocked tasks that only have a block reason', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-blockreason',
+          title: 'Fix bootstrap',
+          status: 'blocked',
+          blockReason: 'worktree bootstrap failed on command `pixi install`.',
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    const hit = items.find(i => i.kind === 'open_escalation')
+    expect(hit).toBeDefined()
+    if (!hit || hit.kind !== 'open_escalation') throw new Error('unreachable')
+    expect(hit.taskId).toBe('task-blockreason')
+    expect(hit.escalationId).toBe('block-reason')
+    expect(hit.detail).toContain('pixi install')
+  })
+
   it('lever_questions: single summary item when any lever is system-default', async () => {
     await writeCompleteBootstrap()
     await writeJson('memory/workspace-goals.json', { goals: [] })
@@ -772,7 +936,43 @@ coordinators:
     expect(hit.missingSteps).toContain('acceptance')
     expect(hit.detail).toMatch(/acceptance/i)
     expect(hit.severity).toBe('low')
-    expect(hit.actionHref).toBe('/task/task-sf')
+    expect(hit.actionHref).toBe('/task/task-sf?tab=spec')
+  })
+
+  it('spec_fill_pending: NOT emitted while the same task has an unanswered question', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('memory/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-question-first',
+          title: 'Choose migration source of truth',
+          description: 'Decide which migration status signal matters.',
+          productBrief: {
+            userJob: 'operators',
+            successCriteria: 'clear source of truth',
+            approvedAt: '2026-01-01T00:00:00Z',
+          },
+          status: 'ready',
+          acceptanceCriteria: [],
+          openQuestions: [
+            {
+              id: 'q-migration-source',
+              kind: 'text',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-23T00:00:00.000Z',
+              prompt: 'Which migration status should be authoritative?',
+            },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.find(i => i.kind === 'agent_question_pending' && i.taskId === 'task-question-first')).toBeDefined()
+    expect(items.find(i => i.kind === 'spec_fill_pending' && i.taskId === 'task-question-first')).toBeUndefined()
   })
 
   it('spec_fill_pending: NOT emitted when brief is awaiting approval (dedupe)', async () => {

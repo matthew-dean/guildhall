@@ -9,13 +9,13 @@ help_summary: |
 
 # Task lifecycle
 
-Every task in `memory/TASKS.json` has a `status` field that tracks where it
-sits in the build pipeline. Statuses are enumerated in `src/core/task.ts` as
+Every task in `./memory/TASKS.json` has a `status` field that tracks where it
+sits in the build pipeline. Statuses are enumerated in `./src/core/task.ts` as
 `TaskStatus`.
 
-The construction model is the human mental model; the status is the runtime
-state. A task should move from idea, to blueprint, to worker slot, to trade
-work, to inspection, to hard gates, to done.
+The construction model is the friendly mental model; the status is the runtime
+state. A task moves from idea, to blueprint, to worker slot, to trade work, to
+inspection, to hard gates, to done.
 
 ## The eight statuses
 
@@ -44,16 +44,19 @@ The [`spec_completeness`](../levers/spec-completeness) lever controls how comple
 - `stage_appropriate` (default) — acceptance criteria by `ready`, test plan by `review`, etc.
 - `emergent` — high tolerance for incomplete specs; coordinator fills gaps mid-task.
 
-Even in `emergent` mode, progress should leave a durable artifact. A transcript
-line that says the agent will write the blueprint later is not enough.
+Even in `emergent` mode, progress leaves durable evidence. A transcript line
+that says the agent will write the blueprint later is not enough.
 
 ## Revisions
 
-When a reviewer rejects, the task returns to `in_progress` with the review verdict attached. A revision counter increments. When it hits [`max_revisions`](../levers/max-revisions), the task is marked `blocked` and surfaces in the coordinator inbox for human intervention.
+When a reviewer rejects, the task returns to `in_progress` with the review
+verdict attached. A revision counter increments. When it hits
+[`max_revisions`](../levers/max-revisions), the task is marked `blocked` and
+lands in the inbox with the reason it needs attention.
 
-If review discovers that the plan itself was wrong, the right next artifact is
-a change order: what assumption changed, what evidence caused the change, and
-how scope or sequencing should move.
+If review discovers that the plan itself was wrong, the next step is a change
+order: what assumption changed, what evidence caused the change, and how scope
+or sequencing changes.
 
 ## Pre-rejection
 

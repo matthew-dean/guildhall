@@ -15,6 +15,12 @@ const ROOT = resolve(__dirname, '..')
 const WEB_DIR = resolve(ROOT, 'src/web')
 const GENERATED = resolve(ROOT, 'src/web/generated/help-topics.json')
 
+const prepare = spawnSync('node', ['scripts/prepare-versioned-docs.mjs'], {
+  cwd: ROOT,
+  stdio: 'inherit',
+})
+if (prepare.status !== 0) process.exit(prepare.status ?? 1)
+
 const extract = spawnSync('node', ['scripts/extract-help-topics.mjs'], {
   cwd: ROOT,
   stdio: 'inherit',

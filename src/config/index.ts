@@ -51,20 +51,33 @@ export {
   updateAgentSettings,
 } from './workspace-config.js'
 
-// Project-local config (<project>/.guildhall/config.yaml) — preferred over
-// ~/.guildhall/ for single-project installs. The global config + registry
-// remain available for guild-pro.
+// Project-local private overrides (<project>/.guildhall/config.yaml) plus the
+// shared `.guildhall/*.yaml` metadata file policy.
 export {
   ProjectGuildhallConfig,
   PROJECT_CONFIG_DIRNAME,
   PROJECT_CONFIG_FILENAME,
+  SHARED_PROJECT_METADATA_GITIGNORE_ENTRIES,
+  LOCAL_PROJECT_STATE_GITIGNORE_ENTRIES,
   projectConfigDir,
   projectConfigPath,
+  ensureProjectGuildhallFilePolicy,
   ensureProjectLocalStateIgnored,
   readProjectConfig,
   writeProjectConfig,
   updateProjectConfig,
 } from './project-config.js'
+
+export {
+  ARTIFACT_REGISTRY_FILENAME,
+  ProjectArtifact,
+  ProjectArtifactRegistry,
+  artifactRegistryPath,
+  readArtifactRegistry,
+  writeArtifactRegistry,
+  resolveArtifact,
+  ensureArtifactRegistryTrackable,
+} from './artifacts.js'
 
 // Global providers store (~/.guildhall/providers.yaml)
 export {

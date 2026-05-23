@@ -10,7 +10,7 @@ help_summary: |
 
 # Providers
 
-**Source:** `src/providers/`
+**Source:** `./src/providers/`
 
 All provider clients implement a shared `SupportsStreamingMessages` interface so the engine is agnostic to which provider is backing the current role.
 
@@ -22,7 +22,7 @@ All provider clients implement a shared `SupportsStreamingMessages` interface so
 | `OpenAICompatibleClient` | OpenAI-shaped APIs — OpenAI itself, hosted OpenAI-compatible providers, and local OpenAI-compatible servers such as LM Studio or llama.cpp. Includes `stripThinkBlocks()` for models that emit `<think>` fenced output. |
 | `CodexClient` | ChatGPT (Codex) API. |
 
-All stream through an SSE parser (`src/providers/sse.ts`).
+All stream through an SSE parser (`./src/providers/sse.ts`).
 
 ## Authentication
 
@@ -93,4 +93,4 @@ Typed exceptions for each provider let callers distinguish transient from fatal:
 
 ## Session & version headers
 
-The Claude client tags requests with a session id and client version so Anthropic-side logs correlate with GuildHall sessions; see `src/providers/claude-client.ts`.
+The Claude client tags requests with a session id and client version so Anthropic-side logs correlate with Guildhall sessions; see `./src/providers/claude-client.ts`.

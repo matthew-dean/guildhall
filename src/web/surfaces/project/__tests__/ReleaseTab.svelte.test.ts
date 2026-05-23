@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
 import ReleaseTab from '../ReleaseTab.svelte'
+import { path } from '../../../lib/nav.svelte.js'
 
 function json(data: unknown): Response {
   return new Response(JSON.stringify(data), {
@@ -17,8 +18,8 @@ const readyPayload = {
   shelvedUnclaimed: [],
   blockedByAgent: [],
   designSystem: { drafted: true, approved: true, revision: 4 },
-  statusCounts: { done: 3, ready: 1 },
-  totals: { blockingCount: 0, tasks: 4, done: 3 },
+  statusCounts: { done: 4 },
+  totals: { blockingCount: 0, tasks: 4, done: 4 },
 }
 
 describe('ReleaseTab', () => {
@@ -53,9 +54,10 @@ describe('ReleaseTab', () => {
 
     expect(await screen.findByText('Release readiness')).toBeTruthy()
     expect(screen.getAllByText('Ready to ship')).toHaveLength(2)
-    expect(screen.getByText('3/4 tasks done · no human blockers.')).toBeTruthy()
+    expect(screen.getByText('4/4 tasks done · no human blockers.')).toBeTruthy()
     expect(screen.getByText('Current counts')).toBeTruthy()
-    expect(screen.getByText('Human blockers')).toBeTruthy()
+    expect(screen.getByText('Total release blockers')).toBeTruthy()
+    expect(screen.getByText('Unfinished tasks')).toBeTruthy()
     expect(screen.getByText('approved · rev 4')).toBeTruthy()
   })
 
@@ -96,5 +98,81 @@ describe('ReleaseTab', () => {
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith('/api/project/release-readiness')
     })
+  })
+
+  it('uses the current project route when loading release readiness', async () => {
+    window.history.replaceState({}, '', '/projects/t-minus-t/release')
+    path.value = '/projects/t-minus-t/release'
+    const fetchMock = vi.fn(async () => json(readyPayload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ReleaseTab)
+
+    await screen.findByText('Release readiness')
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/project/release-readiness?projectId=t-minus-t')
+    })
+  })
+
+  it('names design-system readiness as the hard release blocker', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          designSystem: { drafted: false, approved: false },
+          totals: { blockingCount: 0, tasks: 3, done: 3 },
+        }),
+      ),
+    )
+
+    render(ReleaseTab)
+
+    expect(await screen.findByText('Release readiness')).toBeTruthy()
+    expect(screen.getAllByText('Blocked')).toHaveLength(2)
+    expect(screen.getByText('Design system is not drafted yet.')).toBeTruthy()
+  })
+
+  it('prioritizes unfinished work over design-system readiness', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          designSystem: { drafted: false, approved: false },
+          statusCounts: { done: 18, ready: 33, exploring: 4, in_progress: 1, shelved: 40 },
+          totals: { blockingCount: 0, tasks: 96, done: 18 },
+        }),
+      ),
+    )
+
+    render(ReleaseTab)
+
+    expect(await screen.findByText('Release readiness')).toBeTruthy()
+    expect(screen.getAllByText('Blocked')).toHaveLength(2)
+    expect(screen.getByText('38 tasks still need shaping, worker execution, review, or recovery.')).toBeTruthy()
+  })
+
+  it('blocks release readiness on Guildhall-owned dirty checkout residue', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          dirtyCheckout: {
+            ownedCount: 3,
+            files: ['.gitignore', 'guildhall.yaml', 'memory/TASKS.json'],
+          },
+        }),
+      ),
+    )
+
+    render(ReleaseTab)
+
+    expect(await screen.findByText('Release readiness')).toBeTruthy()
+    expect(screen.getAllByText('Blocked')).toHaveLength(2)
+    expect(screen.getByText('3 Guildhall-owned project files still need cleanup or landing.')).toBeTruthy()
+    expect(screen.getByText('3 Guildhall files dirty')).toBeTruthy()
+    expect(screen.getByText(/.gitignore, guildhall.yaml, memory\/TASKS.json/)).toBeTruthy()
   })
 })

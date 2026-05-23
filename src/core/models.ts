@@ -23,6 +23,7 @@ export const AgentRole = z.enum([
   'worker',       // Worker: code generation, file editing, following conventions precisely
   'reviewer',     // Reviewer: rubric-based evaluation, structured output, catching regressions
   'gateChecker',  // Gate checker: runs shell commands, parses output, records results
+  'contextIndexer', // Context indexer: summarizes code purpose/contracts cheaply for Corpus Map
 ])
 export type AgentRole = z.infer<typeof AgentRole>
 
@@ -70,6 +71,12 @@ export const ROLE_PROFILES: Record<AgentRole, CognitiveProfile> = {
     structuredOutput: 3, // Must produce structured pass/fail records
     preferSpeed: true,
   },
+  contextIndexer: {
+    reasoning: 2,        // Infers purpose/contracts but should not make product decisions
+    codegen: 2,          // Must understand code well enough to summarize architecture
+    structuredOutput: 3, // Must write compact, machine-usable summaries
+    preferSpeed: true,   // Runs often and may touch high-token inputs
+  },
 }
 
 // ---------------------------------------------------------------------------
@@ -81,7 +88,7 @@ export const ROLE_PROFILES: Record<AgentRole, CognitiveProfile> = {
 // Ratings are 0–3: 0 = poor, 1 = adequate, 2 = good, 3 = excellent
 // ---------------------------------------------------------------------------
 
-export const ModelProvider = z.enum(['lm-studio', 'anthropic', 'openai', 'google'])
+export const ModelProvider = z.enum(['lm-studio', 'anthropic', 'openai', 'google', 'deepinfra'])
 export type ModelProvider = z.infer<typeof ModelProvider>
 
 export const ModelCatalogEntry = z.object({
@@ -114,7 +121,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     structuredOutput: 2,
     speed: 1,
     ramGb: 20,
-    recommendedRoles: ['worker', 'spec', 'coordinator'],
+    recommendedRoles: ['worker', 'spec', 'coordinator', 'contextIndexer'],
     notes: 'Best all-round local model for coding tasks. Strong instruction following. Good first choice if you have ≥24GB VRAM.',
   },
   {
@@ -127,7 +134,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     structuredOutput: 2,
     speed: 2,
     ramGb: 10,
-    recommendedRoles: ['worker', 'reviewer', 'gateChecker'],
+    recommendedRoles: ['worker', 'reviewer', 'gateChecker', 'contextIndexer'],
     notes: 'Good balance of capability and speed. Recommended as the fast model for reviewer/gate-checker roles.',
   },
   {
@@ -140,7 +147,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     structuredOutput: 2,
     speed: 3,
     ramGb: 5,
-    recommendedRoles: ['reviewer', 'gateChecker'],
+    recommendedRoles: ['reviewer', 'gateChecker', 'contextIndexer'],
     notes: 'Fast and small. Best suited for structured evaluation tasks (reviewer rubric, gate recording). Not recommended for spec or coordinator roles.',
   },
   {
@@ -206,7 +213,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     codegen: 2,
     structuredOutput: 3,
     speed: 3,
-    recommendedRoles: ['reviewer', 'gateChecker'],
+    recommendedRoles: ['reviewer', 'gateChecker', 'contextIndexer'],
     notes: 'Fast and cheap. Ideal fast model for reviewer and gate-checker roles in cloud setups.',
   },
   {
@@ -233,6 +240,54 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     recommendedRoles: ['reviewer', 'gateChecker'],
     notes: 'Fast and cheap. Good fast model for reviewer/gate-checker in OpenAI setups.',
   },
+  {
+    id: 'deepseek-ai/DeepSeek-V4-Flash',
+    displayName: 'DeepSeek V4 Flash',
+    provider: 'deepinfra',
+    contextWindow: 1_000_000,
+    reasoning: 2,
+    codegen: 2,
+    structuredOutput: 3,
+    speed: 3,
+    recommendedRoles: ['spec', 'coordinator', 'contextIndexer', 'reviewer', 'gateChecker'],
+    notes: 'Recommended DeepInfra general lane from Guildhall replay work: strong structured coordination/review output, very long context, and useful cheap context-indexer challenger.',
+  },
+  {
+    id: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+    displayName: 'Qwen 3 235B A22B Instruct 2507',
+    provider: 'deepinfra',
+    contextWindow: 262_000,
+    reasoning: 3,
+    codegen: 3,
+    structuredOutput: 3,
+    speed: 1,
+    recommendedRoles: ['worker'],
+    notes: 'Recommended DeepInfra worker lane from Guildhall replay work. Best strict worker pass rate and structured-output reliability in the current open-model set; slower than flash lanes, so keep it role-scoped.',
+  },
+  {
+    id: 'Qwen/Qwen3.6-35B-A3B',
+    displayName: 'Qwen 3.6 35B A3B',
+    provider: 'deepinfra',
+    contextWindow: 262_000,
+    reasoning: 2,
+    codegen: 3,
+    structuredOutput: 2,
+    speed: 2,
+    recommendedRoles: ['contextIndexer', 'worker', 'reviewer'],
+    notes: 'DeepInfra/open-model candidate when code understanding matters more than raw speed. Good bakeoff comparison against DeepSeek V4 Flash.',
+  },
+  {
+    id: 'zai-org/GLM-4.6',
+    displayName: 'GLM 4.6',
+    provider: 'deepinfra',
+    contextWindow: 128_000,
+    reasoning: 3,
+    codegen: 2,
+    structuredOutput: 3,
+    speed: 2,
+    recommendedRoles: ['contextIndexer', 'coordinator', 'reviewer'],
+    notes: 'Recommended DeepInfra context-indexer model from Guildhall live bakeoffs. Strong semantic architecture summaries; keep schema repair enabled for occasional malformed JSON.',
+  },
 ]
 
 // ---------------------------------------------------------------------------
@@ -250,6 +305,7 @@ export const ModelAssignmentConfig = z.object({
   worker: z.string(),
   reviewer: z.string(),
   gateChecker: z.string(),
+  contextIndexer: z.string(),
 })
 export type ModelAssignmentConfig = z.infer<typeof ModelAssignmentConfig>
 
@@ -262,6 +318,7 @@ export const DEFAULT_LOCAL_MODEL_ASSIGNMENT: ModelAssignmentConfig = {
   worker: 'qwen2.5-coder-7b-instruct',
   reviewer: 'qwen2.5-coder-7b-instruct',
   gateChecker: 'qwen2.5-coder-7b-instruct',
+  contextIndexer: 'qwen2.5-coder-7b-instruct',
 }
 
 // Defaults for a hybrid setup: cloud for reasoning, local for code
@@ -271,6 +328,7 @@ export const DEFAULT_HYBRID_MODEL_ASSIGNMENT: ModelAssignmentConfig = {
   worker: 'qwen2.5-coder-7b-instruct',
   reviewer: 'claude-haiku-4-5-20251001',
   gateChecker: 'qwen2.5-coder-7b-instruct',
+  contextIndexer: 'qwen2.5-coder-14b-instruct',
 }
 
 // Defaults for a cloud-only setup
@@ -280,6 +338,7 @@ export const DEFAULT_CLOUD_MODEL_ASSIGNMENT: ModelAssignmentConfig = {
   worker: 'claude-sonnet-4-6',
   reviewer: 'claude-haiku-4-5-20251001',
   gateChecker: 'claude-haiku-4-5-20251001',
+  contextIndexer: 'claude-haiku-4-5-20251001',
 }
 
 // ---------------------------------------------------------------------------

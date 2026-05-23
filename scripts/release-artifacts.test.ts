@@ -45,4 +45,15 @@ describe('release artifact contract', () => {
     expect(quickStart).toContain(`GUILDHALL_VERSION=${manifest.version}`)
     expect(quickStart).toContain('guildhall-macos.tar.gz.sha256')
   })
+
+  it('exposes a release smoke command that checks served bundle freshness', () => {
+    const manifest = JSON.parse(read('package.json')) as { scripts?: Record<string, string> }
+    const script = read('scripts/release-smoke.mjs')
+
+    expect(manifest.scripts?.['smoke:release']).toBe('node scripts/release-smoke.mjs')
+    expect(script).toContain('/api/stale-server')
+    expect(script).toContain('/api/version')
+    expect(script).toContain('GUILDHALL_SMOKE_URL')
+    expect(script).toContain('process.exitCode = 1')
+  })
 })

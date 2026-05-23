@@ -5,6 +5,8 @@
  * Source of truth for the enum values is src/core/task.ts:EscalationReason.
  * Keep in sync.
  */
+import { labelForIdentifier } from './identifier-labels.js'
+
 export type EscalationReasonCode =
   | 'spec_ambiguous'
   | 'max_revisions_exceeded'
@@ -24,7 +26,7 @@ const REASON_LABEL: Record<EscalationReasonCode, string> = {
 
 export function escalationReasonLabel(code: string | undefined | null): string {
   if (!code) return 'Unknown'
-  return REASON_LABEL[code as EscalationReasonCode] ?? code
+  return REASON_LABEL[code as EscalationReasonCode] ?? labelForIdentifier('status', code).label
 }
 
 /**
@@ -32,6 +34,7 @@ export function escalationReasonLabel(code: string | undefined | null): string {
  * roles wired into the orchestrator. Unknown ids pass through unchanged.
  */
 const ROLE_LABEL: Record<string, string> = {
+  'coordinator': 'Coordinator',
   'worker-agent': 'Worker',
   'spec-agent': 'Spec author',
   'reviewer-agent': 'Reviewer',
@@ -43,7 +46,7 @@ const ROLE_LABEL: Record<string, string> = {
 
 export function roleLabel(agentId: string | undefined | null): string {
   if (!agentId) return 'Unknown'
-  return ROLE_LABEL[agentId] ?? agentId
+  return ROLE_LABEL[agentId] ?? labelForIdentifier('agent', agentId).label
 }
 
 const ROLE_BLURB: Record<string, string> = {
@@ -64,6 +67,34 @@ export type EscalationAction = {
   label: string
   nextStatus: 'ready' | 'gate_check' | 'in_progress' | 'exploring' | 'spec_review' | 'review'
   resolution: string
+}
+
+export type EscalationRecoveryCopy = {
+  headline: string
+  detail: string
+}
+
+export function escalationRecoveryCopy(
+  escalation: {
+    summary?: string | undefined
+    details?: string | undefined
+    agentId?: string | undefined
+  } | undefined | null,
+): EscalationRecoveryCopy {
+  const text = `${escalation?.summary ?? ''}\n${escalation?.details ?? ''}`
+  if (/no visible progress|made no visible progress|no saved (?:spec|draft)|no durable (?:draft|update)/i.test(text)) {
+    return {
+      headline: 'Guildhall found context but did not save the next draft.',
+      detail: 'The transcript may contain useful observations. Retry from those notes or resolve the blocker after reviewing them.',
+    }
+  }
+  const role = roleLabel(escalation?.agentId)
+  return {
+    headline: escalation?.summary ?? 'This task needs attention.',
+    detail: role === 'Unknown'
+      ? 'Open the task to review the blocker and choose the next step.'
+      : `${role} needs a recovery decision before this task can continue.`,
+  }
 }
 
 export function escalationPrimaryAction(
@@ -96,6 +127,13 @@ export function escalationPrimaryAction(
       label: 'Rework spec',
       nextStatus: 'exploring',
       resolution: 'Reopening intake so the spec can be clarified.',
+    }
+  }
+  if (reason === 'human_judgment_required' && agentId === 'spec-agent') {
+    return {
+      label: 'Retry spec from transcript',
+      nextStatus: 'exploring',
+      resolution: 'Retry intake from the useful transcript notes and save a durable draft before continuing.',
     }
   }
   return {

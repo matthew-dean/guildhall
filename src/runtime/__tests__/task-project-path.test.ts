@@ -15,6 +15,27 @@ describe('resolveTaskProjectPath', () => {
     ).toBe('/workspace/knit')
   })
 
+  it('prefers first-class workspace project paths over coordinator paths', () => {
+    expect(
+      resolveTaskProjectPath({
+        workspaceProjectPath: '/workspace',
+        domain: 'looma',
+        coordinators: [{ domain: 'looma', path: 'old-looma' }],
+        projects: [{ id: 'looma', path: 'looma', coordinator: 'looma' }],
+      }),
+    ).toBe('/workspace/looma')
+  })
+
+  it('matches workspace projects by coordinator id', () => {
+    expect(
+      resolveTaskProjectPath({
+        workspaceProjectPath: '/workspace',
+        domain: 'design-system',
+        projects: [{ id: 'looma', path: '/repos/looma', coordinator: 'design-system' }],
+      }),
+    ).toBe('/repos/looma')
+  })
+
   it('falls back to the workspace project path when no coordinator path exists', () => {
     expect(
       resolveTaskProjectPath({
@@ -36,6 +57,20 @@ describe('buildCoordinatorProjectPathMap', () => {
     ).toEqual({
       knit: '/workspace/knit',
       looma: '/repos/looma',
+    })
+  })
+
+  it('maps first-class workspace projects and coordinator aliases', () => {
+    expect(
+      buildCoordinatorProjectPathMap(
+        '/workspace',
+        [{ domain: 'legacy', path: 'legacy' }],
+        [{ id: 'looma', path: 'looma', coordinator: 'design-system' }],
+      ),
+    ).toEqual({
+      looma: '/workspace/looma',
+      'design-system': '/workspace/looma',
+      legacy: '/workspace/legacy',
     })
   })
 })

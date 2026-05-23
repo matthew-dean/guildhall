@@ -87,12 +87,10 @@
   }
 
   function choiceLabel(value: string): string {
-    const role = roleLabel(value)
-    return role !== value
-      ? role
-      : looksLikeCodeLabel(value)
-        ? titleizeSlug(value)
-        : value
+    if (/^(?:coordinator|human|(?:spec|worker|reviewer|gate-checker|coordinator)-agent)$/.test(value.trim())) {
+      return roleLabel(value)
+    }
+    return looksLikeCodeLabel(value) ? titleizeSlug(value) : value
   }
 
   function answerChoice(value: string): string {
@@ -298,6 +296,13 @@
     min-width: 0;
     display: grid;
     gap: var(--s-3);
+    padding: var(--s-3);
+    border: 1px solid var(--glass-inset-border);
+    border-radius: var(--r-3);
+    background:
+      radial-gradient(circle at 88% 10%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 28%),
+      var(--glass-inset-bg);
+    box-shadow: var(--glass-inset-etch), var(--glass-inset-shadow);
   }
   .question-head {
     display: flex;
@@ -323,9 +328,9 @@
   .prompt {
     margin: 0;
     font-size: var(--fs-2);
-    font-weight: 500;
-    line-height: 1.28;
-    color: var(--text);
+    font-weight: 400;
+    line-height: 1.42;
+    color: var(--text-readable);
   }
   .choices {
     display: grid;
@@ -333,9 +338,11 @@
     gap: var(--s-2);
   }
   .choice {
-    background: var(--bg-raised);
-    color: var(--text);
-    border: 1px solid var(--border);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 4%, transparent), transparent 54%),
+      var(--glass-inset-bg-strong);
+    color: var(--text-readable);
+    border: 1px solid var(--glass-inset-border);
     border-radius: var(--r-2);
     padding: var(--s-2) var(--s-3);
     font: inherit;
@@ -347,17 +354,23 @@
     gap: var(--s-2);
     align-items: center;
     text-align: left;
+    text-transform: none;
     width: 100%;
     min-height: 42px;
+    box-shadow: var(--glass-inset-etch);
   }
   .choice:hover:not(:disabled) {
     border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 5%, var(--bg-raised));
+    background:
+      radial-gradient(circle at 96% 16%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 26%),
+      color-mix(in srgb, var(--accent) 5%, var(--glass-inset-bg-strong));
   }
   .choice.selected {
     border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised));
-    color: var(--text);
+    background:
+      radial-gradient(circle at 96% 16%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 28%),
+      color-mix(in srgb, var(--accent) 9%, var(--glass-inset-bg-strong));
+    color: var(--text-strong);
   }
   .choice-mark {
     width: 18px;
@@ -405,8 +418,9 @@
     gap: 2px;
   }
   .choice-title {
-    font-weight: 600;
-    line-height: var(--lh-tight);
+    font-weight: 550;
+    line-height: 1.3;
+    text-transform: none;
   }
   .choice-title :global(strong),
   .choice-detail :global(strong),
@@ -421,7 +435,7 @@
     line-height: inherit;
   }
   .choice-detail {
-    color: var(--text-muted);
+    color: var(--text-soft);
     font-size: var(--fs-1);
     line-height: var(--lh-body);
   }
@@ -429,7 +443,9 @@
   .choice-other {
     border-style: dashed;
     color: var(--text-muted);
-    background: transparent;
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 2%, transparent), transparent 52%),
+      color-mix(in srgb, var(--glass-inset-bg) 72%, transparent);
   }
   .inferred-list {
     display: grid;
@@ -441,9 +457,12 @@
     gap: var(--s-2);
     align-items: start;
     padding: var(--s-2) var(--s-3);
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-inset-border);
     border-radius: var(--r-2);
-    background: color-mix(in srgb, var(--bg-elevated) 82%, var(--bg));
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 3%, transparent), transparent 54%),
+      var(--glass-inset-bg-strong);
+    box-shadow: var(--glass-inset-etch);
   }
   .inferred-check {
     width: 18px;

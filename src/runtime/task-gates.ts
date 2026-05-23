@@ -6,6 +6,7 @@ import { detectGateCommands, detectPackageManager, type PackageManager } from '.
 import { detectBootstrapHypothesis } from './detect-bootstrap.js'
 
 type BootstrapBlock = NonNullable<ResolvedConfig['bootstrap']>
+type WorkspaceProjectBlock = NonNullable<ResolvedConfig['projects']>[number]
 
 function hasBootstrapSignal(bootstrap: BootstrapBlock | undefined): boolean {
   if (!bootstrap) return false
@@ -104,6 +105,97 @@ function rewriteWorkspaceScopedCommandForTask(
   }
 
   return normalized
+}
+
+function rewriteWorkspaceScopedBootstrapCommandForTask(
+  command: string,
+  workspaceProjectPath: string,
+  taskProjectPath: string,
+): string | null {
+  const normalized = normalizeCommand(command)
+  if (!normalized || path.resolve(taskProjectPath) === path.resolve(workspaceProjectPath)) {
+    return normalized
+  }
+
+  const rewriteTargetedCommand = (rawDir: string, rest: string, format: (relative: string, rest: string) => string) => {
+    const absoluteTarget = path.resolve(workspaceProjectPath, rawDir)
+    if (isWithin(taskProjectPath, absoluteTarget)) {
+      const relativeFromTask = normalizeCommand(path.relative(taskProjectPath, absoluteTarget))
+      return relativeFromTask === '' || relativeFromTask === '.'
+        ? normalizeCommand(rest)
+        : normalizeCommand(format(relativeFromTask, rest))
+    }
+    if (isWithin(workspaceProjectPath, absoluteTarget)) return null
+    return normalized
+  }
+
+  const cdMatch = /^cd\s+(\S+)\s*&&\s*(.+)$/i.exec(normalized)
+  if (cdMatch) {
+    const [, rawDir, rest] = cdMatch
+    return rewriteTargetedCommand(rawDir!, rest!, (relative, rewrittenRest) => `cd ${relative} && ${rewrittenRest}`)
+  }
+
+  const dirMatch = /^pnpm\s+--dir\s+(\S+)\s+(.+)$/i.exec(normalized)
+  if (dirMatch) {
+    const [, rawDir, rest] = dirMatch
+    return rewriteTargetedCommand(rawDir!, rest!, (relative, rewrittenRest) => `pnpm --dir ${relative} ${rewrittenRest}`)
+  }
+
+  return normalized
+}
+
+function installCommandForProject(projectPath: string, fallbackPackageManager: PackageManager): string[] {
+  const detected = detectPackageManager(projectPath)
+  const packageManager = detected === 'none' ? fallbackPackageManager : detected
+  return packageManager === 'none' ? [] : [`${packageManager} install`]
+}
+
+function rewriteBootstrapCommandsForTask(input: {
+  commands: readonly string[]
+  workspaceProjectPath: string
+  taskProjectPath: string
+  fallbackPackageManager: PackageManager
+}): string[] {
+  const rewritten = input.commands
+    .map((command) =>
+      rewriteWorkspaceScopedBootstrapCommandForTask(
+        command,
+        input.workspaceProjectPath,
+        input.taskProjectPath,
+      ),
+    )
+    .filter((command): command is string => typeof command === 'string' && command.length > 0)
+
+  if (rewritten.length > 0 || path.resolve(input.taskProjectPath) === path.resolve(input.workspaceProjectPath)) {
+    return rewritten
+  }
+
+  return installCommandForProject(input.taskProjectPath, input.fallbackPackageManager)
+}
+
+function rewriteBootstrapGatesForTask(input: {
+  commands: readonly string[]
+  workspaceProjectPath: string
+  taskProjectPath: string
+  fallbackPackageManager: PackageManager
+}): string[] {
+  const rewritten = input.commands
+    .map((command) =>
+      rewriteWorkspaceScopedBootstrapCommandForTask(
+        command,
+        input.workspaceProjectPath,
+        input.taskProjectPath,
+      ),
+    )
+    .filter((command): command is string => typeof command === 'string' && command.length > 0)
+
+  if (rewritten.length > 0 || path.resolve(input.taskProjectPath) === path.resolve(input.workspaceProjectPath)) {
+    return rewritten
+  }
+
+  const requestedKinds = new Set(input.commands.map(classifyGateCommand))
+  return detectProjectGateCommands(input.taskProjectPath, input.fallbackPackageManager)
+    .filter((command) => requestedKinds.has(classifyGateCommand(command)))
 }
 
 function rewriteTaskProjectCommandForWorkspace(
@@ -801,17 +893,28 @@ export function resolveEffectiveTaskBootstrapBlock(input: {
   task: Pick<Task, 'projectPath'>
   workspaceProjectPath: string
   workspaceBootstrap?: BootstrapBlock
+  workspaceProjects?: readonly WorkspaceProjectBlock[]
 }): { commands: readonly string[]; successGates: readonly string[]; timeoutMs: number } | null {
-  const bootstrap = input.workspaceBootstrap
-  if (!bootstrap) return null
   const taskProjectPath = resolveEffectiveTaskProjectPath(input.task, input.workspaceProjectPath)
+  const projectBootstrap = input.workspaceProjects
+    ?.find((project) => path.resolve(project.path) === path.resolve(taskProjectPath))
+    ?.bootstrap
+  const bootstrap = projectBootstrap ?? input.workspaceBootstrap
+  if (!bootstrap) return null
+  const fallbackPackageManager = detectPackageManager(input.workspaceProjectPath)
   return {
-    commands: bootstrap.commands.map((command) =>
-      rewriteWorkspaceScopedCommandForTask(command, input.workspaceProjectPath, taskProjectPath),
-    ),
-    successGates: effectiveBootstrapGateCommands(bootstrap).map((command) =>
-      rewriteWorkspaceScopedCommandForTask(command, input.workspaceProjectPath, taskProjectPath),
-    ),
+    commands: rewriteBootstrapCommandsForTask({
+      commands: bootstrap.commands,
+      workspaceProjectPath: input.workspaceProjectPath,
+      taskProjectPath,
+      fallbackPackageManager,
+    }),
+    successGates: rewriteBootstrapGatesForTask({
+      commands: effectiveBootstrapGateCommands(bootstrap),
+      workspaceProjectPath: input.workspaceProjectPath,
+      taskProjectPath,
+      fallbackPackageManager,
+    }),
     timeoutMs: bootstrap.timeoutMs,
   }
 }

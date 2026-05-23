@@ -89,7 +89,7 @@ describe('CoordinatorsTab', () => {
     render(CoordinatorsTab, { detail: detail() })
 
     expect(screen.getByText('Internal routing')).toBeTruthy()
-    expect(screen.getByText('Domain: frontend')).toBeTruthy()
+    expect(screen.getByText('Part: Frontend')).toBeTruthy()
     expect(screen.getByText('Scope: web/app')).toBeTruthy()
     expect(screen.getByText(/1 active/)).toBeTruthy()
     expect(screen.getByText(/1 blocked/)).toBeTruthy()

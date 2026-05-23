@@ -4,19 +4,19 @@ help_topic: subsystem.mcp
 help_summary: |
   Connect Model Context Protocol servers (stdio, HTTP, WebSocket) and expose
   their tools and resources to agents. Configured under mcp.servers in
-  guildhall.yaml.
+  ./guildhall.yaml.
 ---
 
 # MCP
 
-**Source:** `src/mcp/`
+**Source:** `./src/mcp/`
 
-GuildHall consumes [Model Context Protocol](https://modelcontextprotocol.io) servers. Any server you configure becomes available to agents as tools (and, for resources, as `list_mcp_resources` / `read_mcp_resource`).
+Guildhall consumes [Model Context Protocol](https://modelcontextprotocol.io) servers. Any server you configure becomes available to agents as tools (and, for resources, as `list_mcp_resources` / `read_mcp_resource`).
 
 ## Configuration
 
 ```yaml
-# guildhall.yaml
+# ./guildhall.yaml
 mcp:
   servers:
     github:
@@ -59,7 +59,7 @@ Manages connection lifecycle: auto-reconnect on disconnect, status tracking (`co
 
 ## Status in the UI
 
-The dashboard surfaces `McpConnectionStatus` per server so you can see at a glance whether a configured server is up. Failed servers show the last error.
+The browser UI surfaces `McpConnectionStatus` per server so you can see at a glance whether a configured server is up. Failed servers show the last error.
 
 ## Security notes
 

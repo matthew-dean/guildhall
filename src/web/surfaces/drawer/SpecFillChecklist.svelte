@@ -156,6 +156,7 @@
               <button
                 type="button"
                 class="linky"
+                aria-label={`Skip ${step.title}`}
                 onclick={(e) => {
                   e.stopPropagation()
                   void skip(step.id)
@@ -167,6 +168,7 @@
               <button
                 type="button"
                 class="linky"
+                aria-label={`Resume ${step.title}`}
                 onclick={(e) => {
                   e.stopPropagation()
                   void unskip(step.id)

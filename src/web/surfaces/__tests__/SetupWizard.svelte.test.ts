@@ -230,6 +230,7 @@ describe('SetupWizard', () => {
     await screen.findByText('Coordinator paused')
 
     await userEvent.click(screen.getByRole('button', { name: /resume/i }))
+    expect(await screen.findByText('Coordinator restarted. Watching for the next setup update.')).toBeInTheDocument()
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/start'))).toBe(true)

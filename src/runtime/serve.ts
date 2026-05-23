@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, mkdirSync, statSync, writeFileSync, readdirSync, type Dirent, promises as fsp } from 'node:fs'
-import { dirname, join, resolve, basename, relative, isAbsolute, sep as pathSeparator } from 'node:path'
+import { dirname, join, resolve, basename, relative, isAbsolute, sep as pathSeparator, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
@@ -44,20 +44,31 @@ import {
   type ModelAssignmentConfig,
 } from '@guildhall/core'
 import {
+  loadCodebaseMap,
+  loadCodebaseMapStaleState,
+  refreshCodebaseMap,
+} from '@guildhall/corpus-map'
+import {
   loadLeverSettings,
   saveLeverSettings,
   defaultAgentSettingsPath,
   makeDefaultSettings,
   projectLeverInvariantError,
+  PROJECT_LEVER_NAMES,
+  DOMAIN_LEVER_NAMES,
+  validateLeverSettings,
+  type DomainLeverName,
+  type ProjectLeverName,
 } from '@guildhall/levers'
 import {
   activeEscalations,
   latestResolvedRetryEscalationAt,
   readCheckpoint,
+  readExploringTranscript,
   resolveEscalation,
   updateDesignSystem,
 } from '@guildhall/tools'
-import { DesignSystem, summarizeDesignSystem } from '@guildhall/core'
+import { DesignSystem, summarizeDesignSystem, type Task } from '@guildhall/core'
 import {
   loadProjectGuildRoster,
   selectApplicableGuilds,
@@ -152,6 +163,8 @@ import {
 import { normalizeImportedDraftTask } from './import-drafts.js'
 import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
 import { buildThread } from './thread.js'
+import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
+import { repairStaleBlockersForProject } from './stale-blocker-repair.js'
 import {
   buildCoordinatorProjectPathMap,
   resolveTaskProjectPath,
@@ -225,6 +238,46 @@ export interface ServeOptions {
   pickProjectFolder?: () => Promise<string | null>
 }
 
+export interface ShutdownHttpServer {
+  close(callback?: (err?: Error) => void): unknown
+  closeIdleConnections?: () => void
+  closeAllConnections?: () => void
+}
+
+export async function closeHttpServerForShutdown(
+  server: ShutdownHttpServer,
+  opts: { forceCloseAfterMs?: number; timeoutMs?: number } = {},
+): Promise<void> {
+  const forceCloseAfterMs = opts.forceCloseAfterMs ?? 250
+  const timeoutMs = opts.timeoutMs ?? 3000
+
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(forceTimer)
+      clearTimeout(timeoutTimer)
+      resolve()
+    }
+
+    const forceTimer = setTimeout(() => {
+      server.closeAllConnections?.()
+    }, forceCloseAfterMs)
+    forceTimer.unref?.()
+
+    const timeoutTimer = setTimeout(finish, timeoutMs)
+    timeoutTimer.unref?.()
+
+    try {
+      server.close(() => finish())
+      server.closeIdleConnections?.()
+    } catch {
+      finish()
+    }
+  })
+}
+
 interface ResolvedProject {
   path: string
   id: string
@@ -253,6 +306,14 @@ interface ServiceProjectSummary {
     activeTaskTitle?: string | null
     blockedTaskTitle?: string | null
     recentCompletedTaskTitle?: string | null
+  }
+  taskActivity?: {
+    windowLabel: string
+    max: number
+    bars: Array<{
+      value: number
+      label: string
+    }>
   }
   run?: {
     status?: string
@@ -338,6 +399,144 @@ function detectProjectPackageManagers(projectPath: string): string[] {
 
   visit(projectPath, 0)
   return found.size > 0 ? [...found] : ['unknown']
+}
+
+async function resolveSourceNoteCandidate(projectRoot: string, requested: string): Promise<{ candidate: string; requestedRel: string }> {
+  const candidate = requested.startsWith('/')
+    ? resolve(requested)
+    : resolve(projectRoot, requested)
+  const requestedRel = relative(projectRoot, candidate)
+  let stat = await fsp.stat(candidate).catch((err: unknown) => {
+    if ((err as { code?: string })?.code === 'ENOENT') return null
+    throw err
+  })
+  if (stat) return { candidate, requestedRel }
+
+  // Imported source references can go stale when a project is rearranged. If a
+  // path was moved by dropping a leading folder, recover the nearest existing
+  // suffix inside the same project instead of dead-ending the Thread card.
+  const parts = requestedRel.split(/[\\/]+/).filter(Boolean)
+  for (let start = 1; start < parts.length; start += 1) {
+    const suffixCandidate = resolve(projectRoot, parts.slice(start).join(pathSeparator))
+    const suffixRel = relative(projectRoot, suffixCandidate)
+    if (suffixRel === '..' || suffixRel.startsWith(`..${pathSeparator}`) || isAbsolute(suffixRel)) continue
+    stat = await fsp.stat(suffixCandidate).catch((err: unknown) => {
+      if ((err as { code?: string })?.code === 'ENOENT') return null
+      throw err
+    })
+    if (stat) return { candidate: suffixCandidate, requestedRel }
+  }
+
+  return { candidate, requestedRel }
+}
+
+async function directorySourcePreview(dir: string, projectRoot: string, requestedRel: string): Promise<{ content: string; truncated: boolean }> {
+  const maxEntries = 80
+  const maxDepth = 2
+  const lines: string[] = []
+  let count = 0
+  let truncated = false
+
+  async function walk(current: string, depth: number): Promise<void> {
+    if (depth > maxDepth || count >= maxEntries) {
+      truncated = true
+      return
+    }
+    let entries: Dirent[]
+    try {
+      entries = await fsp.readdir(current, { withFileTypes: true })
+    } catch {
+      return
+    }
+    entries = entries
+      .filter(entry => !['.git', '.guildhall', 'node_modules'].includes(entry.name))
+      .sort((a, b) => {
+        if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
+        return a.name.localeCompare(b.name)
+      })
+    for (const entry of entries) {
+      if (count >= maxEntries) {
+        truncated = true
+        return
+      }
+      const next = join(current, entry.name)
+      const suffix = entry.isDirectory() ? '/' : ''
+      lines.push(`${'  '.repeat(depth + 1)}- ${entry.name}${suffix}`)
+      count += 1
+      if (entry.isDirectory()) await walk(next, depth + 1)
+    }
+  }
+
+  const displayPath = relative(projectRoot, dir) || basename(dir)
+  lines.push(`${displayPath}/`)
+  await walk(dir, 0)
+  if (truncated) lines.push(`  - ...`)
+  const movedNote = requestedRel && requestedRel !== displayPath
+    ? `\n\nRequested path: \`${requestedRel}\`\nResolved current path: \`${displayPath}\``
+    : ''
+  return {
+    content: [
+      `# Directory: ${displayPath}`,
+      '',
+      'This source reference points to a folder. Showing the folder tree so you can inspect the files Guildhall meant to cite.',
+      movedNote.trim(),
+      '',
+      '```text',
+      ...lines,
+      '```',
+    ].filter(Boolean).join('\n'),
+    truncated,
+  }
+}
+
+async function missingSourcePreview(candidate: string, projectRoot: string, requestedRel: string): Promise<{ content: string; truncated: boolean }> {
+  const parent = dirname(candidate)
+  const parentRel = relative(projectRoot, parent)
+  const nearby: string[] = []
+  if (parentRel !== '..' && !parentRel.startsWith(`..${pathSeparator}`) && !isAbsolute(parentRel)) {
+    const entries = await fsp.readdir(parent, { withFileTypes: true }).catch(() => [])
+    for (const entry of entries
+      .filter(item => !['.git', '.guildhall', 'node_modules'].includes(item.name))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, 20)) {
+      nearby.push(`${entry.name}${entry.isDirectory() ? '/' : ''}`)
+    }
+  }
+  const content = [
+    `# Source not found: ${basename(candidate)}`,
+    '',
+    'Guildhall recorded this source reference, but the file or folder is not present at that path anymore.',
+    '',
+    `Requested path: \`${requestedRel || basename(candidate)}\``,
+    nearby.length > 0 ? `\nNearby files in \`${parentRel || '.'}\`:\n${nearby.map(item => `- ${item}`).join('\n')}` : '',
+    '',
+    'This usually means the project moved or renamed the source after the task was imported. Add a note or update the task brief with the current source if this reference matters.',
+  ].filter(Boolean).join('\n')
+  return { content, truncated: false }
+}
+
+function markdownForFile(raw: string, displayPath: string): string {
+  const ext = extname(displayPath).toLowerCase()
+  if (['.md', '.markdown', '.mdx'].includes(ext)) return raw
+  const langByExt: Record<string, string> = {
+    '.cjs': 'js',
+    '.css': 'css',
+    '.html': 'html',
+    '.js': 'js',
+    '.json': 'json',
+    '.jsx': 'jsx',
+    '.mjs': 'js',
+    '.sql': 'sql',
+    '.svelte': 'svelte',
+    '.ts': 'ts',
+    '.tsx': 'tsx',
+    '.vue': 'vue',
+    '.yaml': 'yaml',
+    '.yml': 'yaml',
+  }
+  const lang = langByExt[ext] ?? ''
+  const safe = raw.replaceAll('```', '``\\`')
+  return [`# File: ${displayPath}`, '', `\`\`\`${lang}`, safe, '```'].join('\n')
 }
 
 function readDirents(dir: string): Array<Dirent> {
@@ -462,6 +661,11 @@ async function buildProjectInboxSnapshot(input: {
     }
   } catch {
     /* never let self-healing break an inbox read */
+  }
+  try {
+    repairStaleBlockersForProject(input.projectPath)
+  } catch {
+    /* never let stale-blocker repair break an inbox read */
   }
   const items = buildInbox({ projectPath: input.projectPath })
   const blockers = buildInboxBlockers(items)
@@ -673,6 +877,52 @@ function summarizeTaskCounts(tasks: Array<Record<string, unknown>>): ServiceProj
   }
 }
 
+function summarizeTaskActivity(
+  tasks: Array<Record<string, unknown>>,
+  now = new Date(),
+): NonNullable<ServiceProjectSummary['taskActivity']> {
+  const days = 30
+  const barCount = 18
+  const windowMs = days * 24 * 60 * 60 * 1000
+  const binMs = windowMs / barCount
+  const startMs = now.getTime() - windowMs
+  const values = Array.from({ length: barCount }, () => 0)
+
+  for (const task of tasks) {
+    const candidate =
+      typeof task.completedAt === 'string'
+        ? task.completedAt
+        : typeof task.updatedAt === 'string'
+          ? task.updatedAt
+          : typeof task.createdAt === 'string'
+            ? task.createdAt
+            : null
+    if (!candidate) continue
+    const ts = Date.parse(candidate)
+    if (!Number.isFinite(ts) || ts < startMs || ts > now.getTime()) continue
+    const index = Math.min(barCount - 1, Math.max(0, Math.floor((ts - startMs) / binMs)))
+    values[index] = (values[index] ?? 0) + 1
+  }
+
+  const max = Math.max(0, ...values)
+  return {
+    windowLabel: 'Last 30 days',
+    max,
+    bars: values.map((value, index) => {
+      const binStart = new Date(startMs + index * binMs)
+      const binEnd = new Date(Math.min(now.getTime(), startMs + (index + 1) * binMs))
+      const startLabel = binStart.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+      const endLabel = binEnd.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+      return {
+        value,
+        label: value === 1
+          ? `1 task update, ${startLabel}-${endLabel}`
+          : `${value} task updates, ${startLabel}-${endLabel}`,
+      }
+    }),
+  }
+}
+
 function summarizeProjectText(project: ResolvedProject): string | null {
   if (project.initializationNeeded) {
     return 'Attached to this folder. Initialize Guildhall here to inspect the repo, configure providers, and start task flow.'
@@ -687,7 +937,7 @@ function summarizeProjectText(project: ResolvedProject): string | null {
       .replace(/\s+/g, ' ')
       .trim()
     if (brief.length > 0) {
-      return brief.length > 180 ? `${brief.slice(0, 177).trimEnd()}...` : brief
+      return brief.length > 1200 ? `${brief.slice(0, 1197).trimEnd()}...` : brief
     }
   }
   const mandates = (project.config?.coordinators ?? [])
@@ -695,7 +945,7 @@ function summarizeProjectText(project: ResolvedProject): string | null {
     .filter((mandate): mandate is string => Boolean(mandate))
   if (mandates.length > 0) {
     const combined = mandates.join(' ')
-    return combined.length > 180 ? `${combined.slice(0, 177).trimEnd()}...` : combined
+    return combined.length > 1200 ? `${combined.slice(0, 1197).trimEnd()}...` : combined
   }
   if ((project.config?.tags ?? []).length > 0) {
     return `Tagged ${project.config?.tags?.join(', ')}.`
@@ -723,6 +973,7 @@ function resolveTaskPathForDomain(
     workspaceProjectPath: project.path,
     domain,
     coordinators: project.config?.coordinators ?? [],
+    projects: project.config?.projects ?? [],
   })
 }
 
@@ -744,6 +995,41 @@ export function filterEventsForTask<T extends { event?: unknown }>(
     const t = inner?.task_id ?? inner?.taskId
     return t === taskId
   })
+}
+
+function friendlyProjectEventToolName(tool: string): string {
+  switch (tool) {
+    case 'read-file': return 'file read'
+    case 'edit-file': return 'file edit'
+    case 'run-command': return 'command'
+    case 'search-files': return 'file search'
+    case 'list-files': return 'file list'
+    default: return tool.replace(/[-_]/g, ' ')
+  }
+}
+
+function summarizeProjectEvent(ev: Record<string, unknown> | undefined): string {
+  const type = String(ev?.type ?? '')
+  const tool = friendlyProjectEventToolName(typeof ev?.tool_name === 'string' ? ev.tool_name : '')
+  if ((type === 'tool_started' || type === 'tool_execution_started') && tool) return `Started ${tool}`
+  if ((type === 'tool_completed' || type === 'tool_execution_completed') && ev?.is_error && tool) return `Failed ${tool}`
+  if ((type === 'tool_completed' || type === 'tool_execution_completed') && tool) return `Finished ${tool}`
+  if (type === 'error') return String(ev?.message ?? 'Agent error')
+  if (type === 'line_complete') return String(ev?.message ?? 'Agent update')
+  return type.replace(/_/g, ' ') || 'Agent activity'
+}
+
+function toneForProjectEvent(
+  ev: Record<string, unknown> | undefined,
+): 'neutral' | 'running' | 'ok' | 'warn' | 'danger' {
+  const type = String(ev?.type ?? '')
+  if (type === 'error') {
+    return /empty assistant/i.test(String(ev?.message ?? '')) ? 'warn' : 'danger'
+  }
+  if (type === 'tool_completed' || type === 'tool_execution_completed') return ev?.is_error ? 'danger' : 'ok'
+  if (type === 'tool_started' || type === 'tool_execution_started') return 'running'
+  if (type === 'line_complete') return 'running'
+  return 'neutral'
 }
 
 function noteMatchesCanonicalAcceptance(
@@ -1091,9 +1377,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
           shelved: 0,
         }
         let highlights: ServiceProjectSummary['highlights'] = undefined
+        let taskActivity: ServiceProjectSummary['taskActivity'] = undefined
         try {
           const tasks = await readTasksFileNormalized(join(entry.path, 'memory', 'TASKS.json'))
           taskCounts = summarizeTaskCounts(tasks)
+          taskActivity = summarizeTaskActivity(tasks)
           highlights = {
             activeTaskTitle: latestTaskTitleByStatus(tasks, ['in_progress', 'review', 'gate_check', 'exploring']),
             blockedTaskTitle: latestTaskTitleByStatus(tasks, ['blocked']),
@@ -1108,6 +1396,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           summary: summarizeProjectText(resolved),
           selected: resolved.path === resolve(selectedProjectPath),
           taskCounts,
+          ...(taskActivity ? { taskActivity } : {}),
           ...(highlights ? { highlights } : {}),
           ...(run
             ? {
@@ -1207,7 +1496,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
   }
   const processStartedAt = new Date().toISOString()
 
-  app.get('/api/build-info', c => {
+  function servedBundleFreshnessPayload(): {
+    pid: number
+    processStartedAt: string
+    bootBuildMtimeMs: number
+    currentBuildMtimeMs: number
+    stale: boolean
+    distPath: string | null
+  } {
     let currentBuildMtimeMs = bootBuildMtimeMs
     try {
       if (distEntryPath) {
@@ -1216,14 +1512,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
     } catch {
       /* keep boot value */
     }
-    return c.json({
+    return {
       pid: process.pid,
       processStartedAt,
       bootBuildMtimeMs,
       currentBuildMtimeMs,
       stale: currentBuildMtimeMs > bootBuildMtimeMs,
       distPath: distEntryPath,
-    })
+    }
+  }
+
+  app.get('/api/build-info', c => {
+    return c.json(servedBundleFreshnessPayload())
+  })
+
+  app.get('/api/stale-server', c => {
+    return c.json(servedBundleFreshnessPayload())
   })
 
   // -------------------------------------------------------------------------
@@ -1343,6 +1647,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       worker: modelId,
       reviewer: modelId,
       gateChecker: modelId,
+      contextIndexer: modelId,
     }
   }
 
@@ -1352,6 +1657,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     worker: 'gpt-4o',
     reviewer: 'gpt-4o-mini',
     gateChecker: 'gpt-4o-mini',
+    contextIndexer: 'gpt-4o-mini',
   }
 
   const DEFAULT_CODEX_MODEL_ASSIGNMENT: ModelAssignmentConfig = {
@@ -1360,6 +1666,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     worker: 'gpt-5.3-codex',
     reviewer: 'gpt-5.3-codex',
     gateChecker: 'gpt-5.3-codex',
+    contextIndexer: 'gpt-5.3-codex',
   }
 
   function modelLooksCompatibleWithProvider(provider: ProviderName, modelId: string): boolean {
@@ -1390,6 +1697,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       assignment.worker,
       assignment.reviewer,
       assignment.gateChecker,
+      assignment.contextIndexer,
     ].every(modelId => modelLooksCompatibleWithProvider(provider, modelId))
   }
 
@@ -1673,6 +1981,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         assignment.worker,
         assignment.reviewer,
         assignment.gateChecker,
+        assignment.contextIndexer,
       ].filter(model => !loaded.has(model))),
     ]
   }
@@ -1688,6 +1997,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
     message?: string
     actionHref?: string
   }> {
+    const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath)
+    if (importDraftBlocker) return importDraftBlocker
+
+    const terminal = terminalStartState(input.projectPath)
+    if (terminal) {
+      return {
+        canStart: false,
+        code: terminal.code,
+        message: terminal.message,
+      }
+    }
+
     try {
       const settings = await loadLeverSettings({
         path: defaultAgentSettingsPath(input.projectPath),
@@ -1768,10 +2089,159 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  function terminalStartState(projectPath: string): {
+    canStart: false
+    code: 'all_terminal'
+    message: string
+    stopSummary: {
+      reason: 'all_terminal'
+      message: string
+      counts: {
+        total: number
+        done: number
+        blocked: number
+        shelved: number
+        actionable: number
+        terminal: number
+      }
+    }
+  } | null {
+    const tasksPath = join(projectPath, 'memory', 'TASKS.json')
+    if (!existsSync(tasksPath)) return null
+    let raw: unknown
+    try {
+      raw = JSON.parse(readFileSync(tasksPath, 'utf-8'))
+    } catch {
+      return null
+    }
+    const tasks = Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === 'object' && Array.isArray((raw as { tasks?: unknown }).tasks)
+        ? (raw as { tasks: unknown[] }).tasks
+        : []
+    if (tasks.length === 0) return null
+
+    let done = 0
+    let blocked = 0
+    let shelved = 0
+    let terminal = 0
+    for (const task of tasks) {
+      if (!task || typeof task !== 'object') return null
+      const status = String((task as { status?: unknown }).status ?? '')
+      if (status === 'done') {
+        done += 1
+        terminal += 1
+      } else if (status === 'blocked') {
+        blocked += 1
+        terminal += 1
+      } else if (status === 'shelved') {
+        shelved += 1
+        terminal += 1
+      }
+    }
+    const actionable = tasks.length - terminal
+    if (actionable > 0) return null
+
+    const detailMessage = `No actionable tasks remain: ${done} done, ${blocked} blocked, ${shelved} shelved.`
+    const message = done === tasks.length
+      ? 'All tasks are already finished.'
+      : detailMessage
+
+    return {
+      canStart: false,
+      code: 'all_terminal',
+      message,
+      stopSummary: {
+        reason: 'all_terminal',
+        message: detailMessage,
+        counts: {
+          total: tasks.length,
+          done,
+          blocked,
+          shelved,
+          actionable,
+          terminal,
+        },
+      },
+    }
+  }
+
+  async function startBlockerForImportDrafts(projectPath: string): Promise<{
+    canStart: false
+    code: 'import_drafts_waiting'
+    message: string
+    actionHref: string
+  } | null> {
+    const tasksPath = join(projectPath, 'memory', 'TASKS.json')
+    if (!existsSync(tasksPath)) return null
+    const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+      | { tasks?: Array<Record<string, unknown>> }
+      | Array<Record<string, unknown>>
+    const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
+    const importDrafts = tasks.filter(t => t && typeof t === 'object' && (t as { status?: unknown }).status === 'import_draft')
+    if (importDrafts.length === 0) return null
+    const runnable = tasks.some(t => {
+      if (!t || typeof t !== 'object') return false
+      const status = String((t as { status?: unknown }).status ?? '')
+      return ['proposed', 'ready', 'exploring', 'in_progress', 'review', 'gate_check', 'spec_review'].includes(status)
+    })
+    if (runnable) return null
+    const first = importDrafts[0] as { id?: unknown; title?: unknown }
+    const title = typeof first.title === 'string' && first.title.trim() ? first.title.trim() : 'the first imported draft'
+    const id = typeof first.id === 'string' ? first.id : ''
+    return {
+      canStart: false,
+      code: 'import_drafts_waiting',
+      message:
+        importDrafts.length === 1
+          ? `Review the imported draft "${title}" and turn it into a task brief before starting Guildhall.`
+          : `Review ${importDrafts.length} imported drafts before starting Guildhall. Start with "${title}".`,
+      actionHref: id ? `/task/${encodeURIComponent(id)}` : '/notifications',
+    }
+  }
+
   app.post('/api/project/start', async c => {
     try {
+      const body = await c.req.json().catch(() => ({})) as {
+        mode?: string
+        stopAfterOneTask?: boolean
+        taskId?: string
+      }
+      const existingRun = supervisor.get(project.id)
+      if (body.taskId && existingRun && (existingRun.status === 'running' || existingRun.status === 'stopping')) {
+        return c.json(
+          {
+            error: existingRun.status === 'running'
+              ? 'Guildhall is already running for this project. This task remains queued; stop the current run first if you need Guildhall to restart on this exact task.'
+              : 'Guildhall is stopping. Wait for it to stop before starting this specific task.',
+            code: 'run_already_active',
+            status: existingRun.status,
+          },
+          409,
+        )
+      }
       if (project.initializationNeeded) {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const importDraftBlocker = await startBlockerForImportDrafts(project.path)
+      if (importDraftBlocker) {
+        return c.json(
+          {
+            error: importDraftBlocker.message,
+            code: importDraftBlocker.code,
+            actionHref: importDraftBlocker.actionHref,
+          },
+          400,
+        )
+      }
+      const terminal = terminalStartState(project.path)
+      if (terminal) {
+        return c.json({
+          status: 'stopped',
+          mode: 'continuous',
+          code: terminal.code,
+          stopSummary: terminal.stopSummary,
+        })
       }
       try {
         const settings = await loadLeverSettings({
@@ -1928,11 +2398,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
               `Guildhall swapped to models that ${providerLabelForAnyKey(effectiveProvider)} can actually serve for this run.`,
           })
         }
-      }
-      const body = await c.req.json().catch(() => ({})) as {
-        mode?: string
-        stopAfterOneTask?: boolean
-        taskId?: string
       }
       const stopAfterOneTask =
         body.stopAfterOneTask === true || body.mode === 'one_task'
@@ -2130,12 +2595,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // -------------------------------------------------------------------------
   app.get('/api/project/bootstrap/status', c => {
     try {
+      const workspaceProjects = (project.config?.projects ?? []).map((child) => ({
+        id: child.id,
+        label: child.label ?? child.id,
+        path: child.path,
+        bootstrap: child.bootstrap
+          ? {
+              commands: child.bootstrap.commands ?? [],
+              successGates: child.bootstrap.successGates ?? [],
+              timeoutMs: child.bootstrap.timeoutMs,
+            }
+          : null,
+      }))
       if (project.initializationNeeded) {
-        return c.json({ configured: false, needed: false, status: null })
+        return c.json({ configured: false, needed: false, status: null, workspaceProjects })
       }
       const bootstrap = project.config?.bootstrap
       if (!bootstrap || bootstrap.commands.length === 0) {
-        return c.json({ configured: false, needed: false, status: null })
+        return c.json({ configured: false, needed: false, status: null, workspaceProjects })
       }
       const memoryDir = join(project.path, 'memory')
       const status = readBootstrapStatus(memoryDir)
@@ -2155,6 +2632,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           timeoutMs: bootstrap.timeoutMs,
           provenance: bootstrap.provenance ?? null,
         },
+        workspaceProjects,
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -2191,6 +2669,81 @@ export function buildServeApp(opts: ServeOptions = {}): {
         success: detected.ok,
         detected: detected.bootstrap,
         logs: detected.logs,
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  async function renderCodebaseMapStatus(projectPath: string) {
+    const memoryDir = join(projectPath, 'memory')
+    const [map, stale] = await Promise.all([
+      loadCodebaseMap(memoryDir),
+      loadCodebaseMapStaleState(memoryDir),
+    ])
+    return {
+      configured: Boolean(map),
+      generatedAt: map?.generatedAt ?? null,
+      stale,
+      counts: {
+        files: map ? Object.keys(map.files).length : 0,
+        areas: map?.areas.length ?? 0,
+        abstractions: map?.abstractions.length ?? 0,
+      },
+      designSystem: map?.designSystem
+        ? {
+            maturity: map.designSystem.maturity,
+            approved: map.designSystem.approved,
+            tokenCounts: map.designSystem.tokenCounts,
+            primitives: map.designSystem.primitives.length,
+            recommendations: map.designSystem.recommendations,
+          }
+        : null,
+      semantic: map?.semantic
+        ? {
+            modelId: map.semantic.modelId,
+            corpusKind: map.semantic.corpusKind,
+            confidence: map.semantic.confidence,
+            projectPurpose: map.semantic.projectPurpose,
+            readNext: map.semantic.readNext.slice(0, 4),
+            workerGuidance: map.semantic.workerGuidance.slice(0, 4),
+            needsBroaderRead: map.semantic.needsBroaderRead,
+          }
+        : null,
+      frameworks: map?.project.primaryFrameworks ?? [],
+      packageManagers: map?.project.packageManagers ?? [],
+    }
+  }
+
+  app.get('/api/project/codebase-map/status', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ configured: false, generatedAt: null, stale: null })
+      }
+      return c.json(await renderCodebaseMapStatus(project.path))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/codebase-map/refresh', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const result = await refreshCodebaseMap({
+        projectRoot: project.path,
+        memoryDir: join(project.path, 'memory'),
+        reason: 'manual',
+      })
+      return c.json({
+        ok: true,
+        mode: result.mode,
+        changedFiles: result.changedFiles.length,
+        removedFiles: result.removedFiles.length,
+        affectedAreas: result.affectedAreas,
+        affectedAbstractions: result.affectedAbstractions,
+        status: await renderCodebaseMapStatus(project.path),
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -2350,6 +2903,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasksPath = join(memoryDir, 'TASKS.json')
       let taskStatus: string | null = null
       let specPresent = false
+      let parsedSpecDraft: ReturnType<typeof parseWorkspaceImport> | null = null
       if (existsSync(tasksPath)) {
         const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
           | { tasks?: Array<Record<string, unknown>> }
@@ -2362,6 +2916,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
           taskStatus = task.status ?? null
           specPresent =
             typeof task.spec === 'string' && task.spec.trim().length > 0
+          if (specPresent && typeof task.spec === 'string') {
+            parsedSpecDraft = parseWorkspaceImport(task.spec)
+          }
         }
       }
 
@@ -2372,9 +2929,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         specPresent,
         leverPosition,
         draft: {
-          goals: need.draft.goals.length,
-          tasks: need.draft.tasks.length,
-          milestones: need.draft.milestones.length,
+          goals: parsedSpecDraft?.goals.length ?? need.draft.goals.length,
+          tasks: parsedSpecDraft?.tasks.length ?? need.draft.tasks.length,
+          milestones: parsedSpecDraft?.milestones.length ?? need.draft.milestones.length,
         },
         inventory: {
           ran: need.inventory.ran,
@@ -2592,6 +3149,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         sourceKeys?: string[]
         taskIds?: string[]
       }
+      let importerTaskHasSpec = false
 
       // Fallback: if the reserved task is missing or has no agent-authored
       // spec yet, create the task (idempotent) and seed the spec from the
@@ -2639,6 +3197,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         } else {
           const task = list[idx] as { spec?: string }
           const specEmpty = !task.spec || task.spec.trim().length === 0
+          importerTaskHasSpec = !specEmpty
           if (specEmpty) {
             const inventory = await detectWorkspaceSignals({ projectPath: project.path })
             const draft = formWorkspaceHypothesis(inventory)
@@ -2647,6 +3206,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               task.spec = spec
               const next = Array.isArray(raw) ? list : { ...raw, tasks: list }
               await fsp.writeFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
+              importerTaskHasSpec = true
             }
           }
         }
@@ -2663,6 +3223,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const inventory = await detectWorkspaceSignals({ projectPath: project.path })
       const fullDraft = formWorkspaceHypothesis(inventory)
       const review = buildWorkspaceImportReview(fullDraft, [], project.path)
+      const hasExplicitNarrowing =
+        Array.isArray(body.areaKeys) ||
+        Array.isArray(body.sourceKeys) ||
+        Array.isArray(body.taskIds)
       const selectedSourceKeys = Array.isArray(body.sourceKeys)
         ? body.sourceKeys
         : review.sourceGroups.filter(group => group.taskCount > 0).map(group => group.key)
@@ -2689,8 +3253,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         coordinatorProjectPaths: buildCoordinatorProjectPathMap(
           project.path,
           project.config?.coordinators ?? [],
+          project.config?.projects ?? [],
         ),
-        draftOverride: filteredDraft,
+        ...(!hasExplicitNarrowing && importerTaskHasSpec
+          ? {}
+          : { draftOverride: filteredDraft }),
       })
       if (!result.success) {
         return c.json({ error: result.error ?? 'Approval failed' }, 400)
@@ -2771,6 +3338,36 @@ export function buildServeApp(opts: ServeOptions = {}): {
           }
         } catch {
           /* leave null */
+        }
+      }
+      const tasksPath = join(memoryDir, 'TASKS.json')
+      if (existsSync(tasksPath)) {
+        try {
+          const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+            | { tasks?: Array<Record<string, unknown>> }
+            | Array<Record<string, unknown>>
+          const list = Array.isArray(raw) ? raw : raw.tasks ?? []
+          const importTask = list.find(t => (t as { id?: string }).id === WORKSPACE_IMPORT_TASK_ID) as
+            | { status?: string; spec?: string }
+            | undefined
+          const spec = typeof importTask?.spec === 'string' ? importTask.spec : ''
+          if (importTask && spec.trim().length > 0 && importTask.status !== 'shelved') {
+            const parsed = parseWorkspaceImport(spec)
+            const parsedCounts = {
+              goalCount: parsed.goals.length,
+              taskCount: parsed.tasks.length,
+              milestoneCount: parsed.milestones.length,
+            }
+            workspaceGoals = {
+              imported: true,
+              dismissed: false,
+              goalCount: Math.max(workspaceGoals?.goalCount ?? 0, parsedCounts.goalCount),
+              taskCount: Math.max(workspaceGoals?.taskCount ?? 0, parsedCounts.taskCount),
+              milestoneCount: Math.max(workspaceGoals?.milestoneCount ?? 0, parsedCounts.milestoneCount),
+            }
+          }
+        } catch {
+          /* leave workspaceGoals as-is */
         }
       }
 
@@ -2973,6 +3570,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ turns: [], activeTurnId: null, caughtUp: false })
       }
+      try {
+        repairStaleBlockersForProject(project.path)
+      } catch {
+        /* never let stale-blocker repair break a thread read */
+      }
       const thread = buildThread({
         projectPath: project.path,
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
@@ -2991,9 +3593,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!requested) return c.json({ error: 'path is required' }, 400)
 
       const projectRoot = resolve(project.path)
-      const candidate = requested.startsWith('/')
+      const initialCandidate = requested.startsWith('/')
         ? resolve(requested)
         : resolve(projectRoot, requested)
+      const initialRel = relative(projectRoot, initialCandidate)
+      if (initialRel === '..' || initialRel.startsWith(`..${pathSeparator}`) || isAbsolute(initialRel)) {
+        return c.json({ error: 'Source note path must stay inside the project.' }, 403)
+      }
+
+      const { candidate, requestedRel } = await resolveSourceNoteCandidate(projectRoot, requested)
       const rel = relative(projectRoot, candidate)
       if (rel === '..' || rel.startsWith(`..${pathSeparator}`) || isAbsolute(rel)) {
         return c.json({ error: 'Source note path must stay inside the project.' }, 403)
@@ -3003,7 +3611,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if ((err as { code?: string })?.code === 'ENOENT') return null
         throw err
       })
-      if (!stat || !stat.isFile()) return c.json({ error: 'Source note not found.' }, 404)
+      if (!stat) {
+        const preview = await missingSourcePreview(candidate, projectRoot, requestedRel)
+        return c.json({
+          path: candidate,
+          displayPath: requestedRel || basename(candidate),
+          content: preview.content,
+          truncated: preview.truncated,
+          missing: true,
+        })
+      }
       const [realProjectRoot, realCandidate] = await Promise.all([
         fsp.realpath(projectRoot),
         fsp.realpath(candidate),
@@ -3012,6 +3629,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (realRel === '..' || realRel.startsWith(`..${pathSeparator}`) || isAbsolute(realRel)) {
         return c.json({ error: 'Source note path must stay inside the project.' }, 403)
       }
+      if (stat.isDirectory()) {
+        const preview = await directorySourcePreview(candidate, projectRoot, requestedRel)
+        return c.json({
+          path: candidate,
+          displayPath: realRel || rel || basename(candidate),
+          content: preview.content,
+          truncated: preview.truncated,
+          kind: 'directory',
+        })
+      }
+      if (!stat.isFile()) return c.json({ error: 'Source note not found.' }, 404)
 
       const maxChars = 96_000
       const raw = await fsp.readFile(candidate, 'utf8')
@@ -3019,7 +3647,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return c.json({
         path: candidate,
         displayPath: realRel || rel || basename(candidate),
-        content: truncated ? raw.slice(0, maxChars) : raw,
+        content: markdownForFile(truncated ? raw.slice(0, maxChars) : raw, realRel || rel || basename(candidate)),
         truncated,
       })
     } catch (err) {
@@ -3247,7 +3875,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
       const recent = filterEventsForTask(supervisor.recent(project.id, undefined, project.path), id)
-      const contextDebug = await readContextDebugForTask(join(project.path, 'memory'), id)
+      const memoryDir = join(project.path, 'memory')
+      const contextDebug = await readContextDebugForTask(memoryDir, id)
+      const exploringTranscript = await readExploringTranscript({ memoryDir, taskId: id })
       const snapshot = buildSnapshot({ projectPath: project.path })
       const thread = buildThread({
         projectPath: project.path,
@@ -3263,6 +3893,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task: await enrichTaskForServe(project.path, task as Record<string, unknown>),
         recentEvents: recent,
         contextDebug,
+        exploringTranscript,
         threadTurns,
       })
     } catch (err) {
@@ -3535,11 +4166,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         brief.approvedBy = 'human'
         brief.approvedAt = now
         task.productBrief = brief
-        const questions = Array.isArray(task.openQuestions) ? task.openQuestions : []
-        const hasUnansweredQuestions = questions.some((question) => {
-          if (!question || typeof question !== 'object') return false
-          return typeof (question as { answeredAt?: unknown }).answeredAt !== 'string'
-        })
+        const hasUnansweredQuestions = taskHasUnansweredVisibleQuestion(task as unknown as Task)
         const hasConcreteSpecDraft =
           typeof task.spec === 'string' &&
           task.spec.trim().length > 0 &&
@@ -3823,16 +4450,45 @@ export function buildServeApp(opts: ServeOptions = {}): {
         | Array<Record<string, unknown>>
       const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
       const counts: Record<string, number> = {}
-      const inFlight: Array<{ id: string; title: string; status: string; domain: string }> = []
+      const recentByTask = new Map<string, { at?: string; label?: string; tone?: 'neutral' | 'running' | 'ok' | 'warn' | 'danger' }>()
+      for (const envelope of supervisor.recent(project.id, undefined, project.path)) {
+        const event = envelope.event as Record<string, unknown> | undefined
+        const taskId = typeof event?.task_id === 'string'
+          ? event.task_id
+          : typeof event?.taskId === 'string'
+            ? event.taskId
+            : null
+        if (!taskId) continue
+        const label = summarizeProjectEvent(event)
+        recentByTask.set(taskId, {
+          ...(envelope.at ? { at: envelope.at } : {}),
+          ...(label ? { label } : {}),
+          tone: toneForProjectEvent(event),
+        })
+      }
+      const inFlight: Array<{
+        id: string
+        title: string
+        status: string
+        domain: string
+        lastActivityAt?: string
+        lastActivityLabel?: string
+        lastActivityTone?: 'neutral' | 'running' | 'ok' | 'warn' | 'danger'
+      }> = []
       for (const t of tasks) {
         const st = String((t as { status?: string }).status ?? 'unknown')
         counts[st] = (counts[st] ?? 0) + 1
         if (['in_progress', 'review', 'gate_check', 'spec_review', 'exploring'].includes(st)) {
+          const id = String((t as { id?: string }).id ?? '')
+          const recent = recentByTask.get(id)
           inFlight.push({
-            id: String((t as { id?: string }).id ?? ''),
+            id,
             title: String((t as { title?: string }).title ?? ''),
             status: st,
             domain: String((t as { domain?: string }).domain ?? ''),
+            ...(recent?.at ? { lastActivityAt: recent.at } : {}),
+            ...(recent?.label ? { lastActivityLabel: recent.label } : {}),
+            ...(recent?.tone ? { lastActivityTone: recent.tone } : {}),
           })
         }
       }
@@ -3892,45 +4548,135 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
-  // GET /api/config/levers — flatten project + default-domain lever positions
-  // into a shape the settings UI can render without knowing the schema details.
-  // Read-only for now; editing arrives once we wire lever writes to an audited
-  // setBy: 'user-direct' path.
-  app.get('/api/config/levers', async c => {
-    try {
-      const settings = await loadLeverSettings({
-        path: defaultAgentSettingsPath(currentProjectPath()),
-      })
-      const renderPos = (pos: unknown): string => {
-        if (typeof pos === 'string' || typeof pos === 'number') return String(pos)
-        if (pos && typeof pos === 'object' && 'kind' in pos) {
-          const k = (pos as { kind: string }).kind
-          const parts: string[] = [k]
-          for (const [key, val] of Object.entries(pos as Record<string, unknown>)) {
-            if (key === 'kind') continue
-            parts.push(`${key}=${String(val)}`)
-          }
-          return parts.join(' ')
-        }
-        return JSON.stringify(pos)
+  const renderLeverPosition = (pos: unknown): string => {
+    if (typeof pos === 'string' || typeof pos === 'number') return String(pos)
+    if (pos && typeof pos === 'object' && 'kind' in pos) {
+      const record = pos as Record<string, unknown>
+      const k = String(record.kind)
+      if (k === 'fanout' && typeof record.n === 'number') {
+        return `fanout_${String(record.n)}`
       }
-      const project = Object.entries(settings.project)
-        .filter(([name]) => name !== 'merge_policy')
-        .map(([name, entry]) => ({
-          scope: 'project' as const,
-          name,
-          position: renderPos(entry.position),
-          rationale: entry.rationale,
-          setBy: entry.setBy,
-        }))
-      const domain = Object.entries(settings.domains.default).map(([name, entry]) => ({
-        scope: 'domain:default' as const,
+      if (k === 'soft_penalty' && typeof record.after === 'number') {
+        return `soft_penalty_after_${String(record.after)}`
+      }
+      if (k === 'hard_suppress' && typeof record.after === 'number') {
+        return `hard_suppress_after_${String(record.after)}`
+      }
+      const parts: string[] = [k]
+      for (const [key, val] of Object.entries(record)) {
+        if (key === 'kind') continue
+        parts.push(`${key}=${String(val)}`)
+      }
+      return parts.join(' ')
+    }
+    return JSON.stringify(pos)
+  }
+
+  const parseLeverPosition = (name: string, raw: unknown): unknown => {
+    if (raw === null || raw === undefined) return null
+    const value = String(raw)
+    switch (name) {
+      case 'concurrent_task_dispatch':
+        if (value === 'serial') return { kind: 'serial' }
+        if (value.startsWith('fanout_')) return { kind: 'fanout', n: Number(value.slice('fanout_'.length)) }
+        break
+      case 'rejection_dampening':
+        if (value === 'off') return { kind: 'off' }
+        if (value.startsWith('soft_penalty_after_')) {
+          return { kind: 'soft_penalty', after: Number(value.slice('soft_penalty_after_'.length)) }
+        }
+        if (value.startsWith('hard_suppress_after_')) {
+          return { kind: 'hard_suppress', after: Number(value.slice('hard_suppress_after_'.length)) }
+        }
+        break
+      case 'max_revisions':
+        return Number(value)
+    }
+    return value
+  }
+
+  const renderLeversForSettings = async (projectPath: string) => {
+    const settings = await loadLeverSettings({
+      path: defaultAgentSettingsPath(projectPath),
+    })
+    const defaults = makeDefaultSettings()
+    const project = Object.entries(settings.project)
+      .filter(([name]) => name !== 'merge_policy')
+      .map(([name, entry]) => ({
+        scope: 'project' as const,
         name,
-        position: renderPos(entry.position),
+        position: renderLeverPosition(entry.position),
+        defaultPosition: renderLeverPosition(defaults.project[name as keyof typeof defaults.project]?.position),
         rationale: entry.rationale,
         setBy: entry.setBy,
       }))
-      return c.json({ levers: [...project, ...domain] })
+    const domain = Object.entries(settings.domains.default).map(([name, entry]) => ({
+      scope: 'domain:default' as const,
+      name,
+      position: renderLeverPosition(entry.position),
+      defaultPosition: renderLeverPosition(defaults.domains.default[name as keyof typeof defaults.domains.default]?.position),
+      rationale: entry.rationale,
+      setBy: entry.setBy,
+    }))
+    return { levers: [...project, ...domain] }
+  }
+
+  // GET /api/config/levers — flatten project + default-domain lever positions
+  // into a shape the settings UI can render without knowing the schema details.
+  app.get('/api/config/levers', async c => {
+    try {
+      return c.json(await renderLeversForSettings(currentProjectPath()))
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  app.post('/api/config/levers', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        scope?: string
+        name?: string
+        position?: unknown
+      }
+      const scope = String(body.scope ?? '')
+      const name = String(body.name ?? '')
+      if (scope !== 'project' && scope !== 'domain:default') {
+        return c.json({ error: 'Unsupported lever scope.' }, 400)
+      }
+      const projectName = PROJECT_LEVER_NAMES.includes(name as ProjectLeverName)
+      const domainName = DOMAIN_LEVER_NAMES.includes(name as DomainLeverName)
+      if ((scope === 'project' && !projectName) || (scope === 'domain:default' && !domainName)) {
+        return c.json({ error: 'Unknown lever.' }, 400)
+      }
+
+      const projectPath = currentProjectPath()
+      const settingsPath = defaultAgentSettingsPath(projectPath)
+      const settings = await loadLeverSettings({ path: settingsPath })
+      const defaults = makeDefaultSettings()
+      const now = new Date().toISOString()
+      const position = parseLeverPosition(name, body.position)
+      const target =
+        scope === 'project'
+          ? settings.project[name as ProjectLeverName]
+          : settings.domains.default[name as DomainLeverName]
+      const defaultEntry =
+        scope === 'project'
+          ? defaults.project[name as ProjectLeverName]
+          : defaults.domains.default[name as DomainLeverName]
+
+      if (position === null) {
+        Object.assign(target, defaultEntry)
+      } else {
+        Object.assign(target, {
+          position,
+          rationale: 'Set from project settings.',
+          setAt: now,
+          setBy: 'user-direct',
+        })
+      }
+
+      await saveLeverSettings({ path: settingsPath, settings: validateLeverSettings(settings) })
+      return c.json(await renderLeversForSettings(projectPath))
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
@@ -4031,6 +4777,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return Array.isArray(raw) ? raw : raw.tasks ?? []
       })()
       const ds = await loadDesignSystem(memoryDir).catch(() => undefined)
+      const dirtyCheckout = await guildhallOwnedDirtyCheckout(project.path)
 
       const statusCounts: Record<string, number> = {}
       const openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }> = []
@@ -4038,14 +4785,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const unapprovedSpecs: Array<{ id: string; title: string }> = []
       const shelvedUnclaimed: Array<{ id: string; title: string; detail?: string }> = []
       const blockedByAgent: Array<{ id: string; title: string; reason?: string }> = []
+      const terminalStatuses = new Set(['done', 'shelved', 'cancelled', 'archived', 'pending_pr'])
+      let unfinishedCount = 0
 
       for (const t of tasks) {
         const status = String((t as { status?: string }).status ?? 'unknown')
         statusCounts[status] = (statusCounts[status] ?? 0) + 1
+        if (!terminalStatuses.has(status)) unfinishedCount += 1
         const id = String((t as { id?: string }).id ?? '')
         const title = String((t as { title?: string }).title ?? id)
         const brief = (t as { productBrief?: { approvedAt?: string } }).productBrief
-        if (brief && !brief.approvedAt) unapprovedBriefs.push({ id, title })
+        const terminal = terminalStatuses.has(status)
+        const reservedImportTask = id === WORKSPACE_IMPORT_TASK_ID
+        const approvalPendingStatus = status === 'proposed'
+        if (brief && !brief.approvedAt && approvalPendingStatus && !terminal && !reservedImportTask) {
+          unapprovedBriefs.push({ id, title })
+        }
         if (status === 'spec_review') unapprovedSpecs.push({ id, title })
         if (status === 'shelved') {
           const reason = (t as { shelveReason?: { detail?: string } }).shelveReason
@@ -4069,17 +4824,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const designSystemApproved = Boolean(ds?.approvedAt)
       const designSystemDrafted = Boolean(ds)
 
-      // "Blocking" = something a human almost certainly needs to act on.
-      // Everything else is informational.
-      const blockingCount =
+      const humanBlockingCount =
         openEscalations.length
         + unapprovedBriefs.length
         + unapprovedSpecs.length
-        + shelvedUnclaimed.length
         + blockedByAgent.length
+      const designSystemBlockingCount = tasks.length > 0 && !designSystemApproved ? 1 : 0
+      const dirtyCheckoutBlockingCount = dirtyCheckout.ownedCount > 0 ? 1 : 0
+      const blockingCount =
+        humanBlockingCount
+        + unfinishedCount
+        + designSystemBlockingCount
+        + dirtyCheckoutBlockingCount
 
       return c.json({
-        ready: blockingCount === 0 && statusCounts['exploring'] === undefined && statusCounts['in_progress'] === undefined && statusCounts['review'] === undefined && statusCounts['gate_check'] === undefined,
+        ready: blockingCount === 0,
         statusCounts,
         openEscalations,
         unapprovedBriefs,
@@ -4091,9 +4850,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
           approved: designSystemApproved,
           revision: ds?.revision ?? 0,
         },
+        dirtyCheckout,
         totals: {
           tasks: tasks.length,
           blockingCount,
+          humanBlockingCount,
+          unfinishedCount,
+          designSystemBlockingCount,
+          dirtyCheckoutBlockingCount,
           done: statusCounts['done'] ?? 0,
         },
       })
@@ -4101,6 +4865,32 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return c.json({ error: String(err) }, 500)
     }
   })
+
+  async function guildhallOwnedDirtyCheckout(projectPath: string): Promise<{
+    ownedCount: number
+    files: string[]
+    error?: string
+  }> {
+    try {
+      const { stdout } = await execFileP('git', ['status', '--short', '--untracked-files=all', '--', 'guildhall.yaml', 'memory', '.gitignore'], {
+        cwd: projectPath,
+        timeout: 2000,
+      })
+      const files = stdout
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean)
+        .map(line => line.replace(/^[ MADRCU?!]{1,2}\s+/, '').trim())
+        .filter(Boolean)
+      return { ownedCount: files.length, files: files.slice(0, 12) }
+    } catch (err) {
+      return {
+        ownedCount: 0,
+        files: [],
+        error: err instanceof Error ? err.message : String(err),
+      }
+    }
+  }
 
   // -------------------------------------------------------------------------
   // API: setup wizard
@@ -4366,6 +5156,205 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  function normalizeWorktreeIncludeLines(lines: unknown[]): string[] {
+    const out: string[] = []
+    for (const line of lines) {
+      if (typeof line !== 'string') continue
+      const withoutComment = line.replace(/\s+#.*$/, '').trim().replace(/^\/+/, '')
+      if (!withoutComment) continue
+      const normalized = withoutComment.replace(/\\/g, '/').replace(/\/+/g, '/')
+      const parts = normalized.split('/')
+      if (
+        normalized.startsWith('../') ||
+        normalized === '..' ||
+        normalized.includes('/../') ||
+        parts.some(part => part === '..') ||
+        isAbsolute(normalized)
+      ) {
+        throw new Error('Worktree include paths must be project-relative and stay inside the project root.')
+      }
+      if (!out.includes(normalized)) out.push(normalized)
+    }
+    return out
+  }
+
+  async function discoverWorktreeIncludeCandidates(
+    workspacePath: string,
+    selected: string[],
+  ): Promise<Array<{ path: string; reason: string; selected: boolean }>> {
+    const projectRoot = resolve(workspacePath)
+    const candidates = new Map<string, string>()
+    const skipDirs = new Set(['.git', '.guildhall', 'node_modules', 'dist', 'build', 'coverage', 'memory'])
+    const queue: Array<{ dir: string; depth: number }> = [{ dir: projectRoot, depth: 0 }]
+    while (queue.length > 0) {
+      const current = queue.shift()
+      if (!current) break
+      let entries: Dirent[]
+      try {
+        entries = readdirSync(current.dir, { withFileTypes: true })
+      } catch {
+        continue
+      }
+      for (const entry of entries) {
+        const absolute = join(current.dir, entry.name)
+        const rel = relative(projectRoot, absolute).split(pathSeparator).join('/')
+        if (!rel || rel.startsWith('..')) continue
+        if (entry.isDirectory()) {
+          if (skipDirs.has(entry.name)) continue
+          if (current.depth < 3) queue.push({ dir: absolute, depth: current.depth + 1 })
+          continue
+        }
+        if (!entry.isFile()) continue
+        const reason = worktreeIncludeCandidateReason(entry.name, rel)
+        if (!reason) continue
+        if (await isTrackedProjectFile(projectRoot, absolute)) continue
+        if (reason) candidates.set(rel, reason)
+      }
+    }
+    for (const include of selected) {
+      if (!candidates.has(include)) candidates.set(include, 'Already allowed for task worktrees.')
+    }
+    return [...candidates.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([candidatePath, reason]) => ({
+        path: candidatePath,
+        reason,
+        selected: selected.includes(candidatePath),
+      }))
+  }
+
+  async function isTrackedProjectFile(projectRoot: string, absolutePath: string): Promise<boolean> {
+    const rootRelativePath = relative(projectRoot, absolutePath).split(pathSeparator).join('/')
+    try {
+      await execFileP('git', ['ls-files', '--error-unmatch', '--', rootRelativePath], {
+        cwd: projectRoot,
+      })
+      return true
+    } catch {
+      const nestedGitRoot = findContainingGitRoot(projectRoot, absolutePath)
+      if (!nestedGitRoot || nestedGitRoot === projectRoot) return false
+      try {
+        await execFileP('git', ['ls-files', '--error-unmatch', '--', relative(nestedGitRoot, absolutePath)], {
+          cwd: nestedGitRoot,
+        })
+        return true
+      } catch {
+        return false
+      }
+    }
+  }
+
+  function findContainingGitRoot(projectRoot: string, absolutePath: string): string | null {
+    const root = resolve(projectRoot)
+    let current = dirname(resolve(absolutePath))
+    while (current === root || current.startsWith(`${root}${pathSeparator}`)) {
+      if (existsSync(join(current, '.git'))) return current
+      const next = dirname(current)
+      if (next === current) break
+      current = next
+    }
+    return null
+  }
+
+  function workspaceBaseProjectPath(workspacePath: string, workspace: ReturnType<typeof readWorkspaceConfig>): string {
+    return workspace.projectPath
+      ? resolve(workspace.projectPath.replace(/^~/, homedir()))
+      : resolve(workspacePath)
+  }
+
+  function resolveWorkspaceProjectEntryPath(
+    workspacePath: string,
+    workspace: ReturnType<typeof readWorkspaceConfig>,
+    entry: { path: string },
+  ): string {
+    return isAbsolute(entry.path)
+      ? resolve(entry.path)
+      : resolve(workspaceBaseProjectPath(workspacePath, workspace), entry.path)
+  }
+
+  async function renderWorktreeIncludeScope(
+    rootPath: string,
+    include: string[],
+    meta: { projectId?: string; label?: string; type?: string } = {},
+  ): Promise<{
+    projectId?: string
+    label?: string
+    type?: string
+    rootPath: string
+    include: string[]
+    candidates: Array<{ path: string; reason: string; selected: boolean }>
+  }> {
+    return {
+      ...meta,
+      rootPath,
+      include,
+      candidates: await discoverWorktreeIncludeCandidates(rootPath, include),
+    }
+  }
+
+  async function renderWorktreeIncludeResponse(
+    workspacePath: string,
+    selectedProjectId?: string,
+  ): Promise<{
+    include: string[]
+    candidates: Array<{ path: string; reason: string; selected: boolean }>
+    scopes: Array<{
+      projectId?: string
+      label?: string
+      type?: string
+      rootPath: string
+      include: string[]
+      candidates: Array<{ path: string; reason: string; selected: boolean }>
+    }>
+  }> {
+    const workspace = readWorkspaceConfig(workspacePath)
+    const workspaceScope = await renderWorktreeIncludeScope(
+      workspaceBaseProjectPath(workspacePath, workspace),
+      workspace.worktree?.include ?? [],
+      { label: workspace.name },
+    )
+    const childScopes = await Promise.all(
+      workspace.projects.map(projectEntry =>
+        renderWorktreeIncludeScope(
+          resolveWorkspaceProjectEntryPath(workspacePath, workspace, projectEntry),
+          projectEntry.worktree?.include ?? [],
+          {
+            projectId: projectEntry.id,
+            label: projectEntry.label ?? projectEntry.id,
+            type: projectEntry.type,
+          },
+        ),
+      ),
+    )
+    const scopes = childScopes.length > 0 ? childScopes : [workspaceScope]
+    const activeScope = selectedProjectId
+      ? scopes.find(scope => scope.projectId === selectedProjectId) ?? scopes[0]
+      : scopes[0]
+    return {
+      include: activeScope?.include ?? [],
+      candidates: activeScope?.candidates ?? [],
+      scopes,
+    }
+  }
+
+  function worktreeIncludeCandidateReason(fileName: string, relPath: string): string | null {
+    const lowerName = fileName.toLowerCase()
+    const lowerPath = relPath.toLowerCase()
+    if (lowerName === '.env' || lowerName.startsWith('.env.')) {
+      return 'Looks like a local environment file workers may need for bootstrap or tests.'
+    }
+    if (/^appsettings\.(local|development|dev)\.(json|ya?ml)$/.test(lowerName)) {
+      return 'Looks like a local appsettings file workers may need for bootstrap or tests.'
+    }
+    if (/(^|\/)(local|dev|development)[^/]*\.(env|json|ya?ml|toml)$/.test(lowerPath)) {
+      return 'Looks like local runtime configuration for this project.'
+    }
+    if (/(^|\/)(config|configs|settings)\/.*(local|dev|development).*\.(json|ya?ml|toml|env)$/.test(lowerPath)) {
+      return 'Looks like project-local configuration under a config directory.'
+    }
+    return null
+  }
+
   app.get('/api/project/local-config', async c => {
     try {
       const workspacePath = currentProjectPath()
@@ -4438,6 +5427,60 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  app.get('/api/project/worktree-includes', async c => {
+    try {
+      const workspacePath = currentProjectPath()
+      const workspaceProjectId = c.req.query('workspaceProjectId')?.trim() || undefined
+      return c.json(await renderWorktreeIncludeResponse(workspacePath, workspaceProjectId))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/worktree-includes', async c => {
+    try {
+      const workspacePath = currentProjectPath()
+      const body = (await c.req.json().catch(() => ({}))) as {
+        include?: unknown
+        includeText?: unknown
+        workspaceProjectId?: unknown
+      }
+      const requested = Array.isArray(body.include)
+        ? body.include
+        : typeof body.includeText === 'string'
+          ? body.includeText.split(/\r?\n/)
+          : []
+      const include = normalizeWorktreeIncludeLines(requested)
+      const workspace = readWorkspaceConfig(workspacePath)
+      const nextConfig = { ...workspace }
+      const workspaceProjectId = typeof body.workspaceProjectId === 'string' && body.workspaceProjectId.trim().length > 0
+        ? body.workspaceProjectId.trim()
+        : undefined
+      if (workspaceProjectId) {
+        const projectIndex = nextConfig.projects.findIndex(projectEntry => projectEntry.id === workspaceProjectId)
+        if (projectIndex < 0) return c.json({ error: `Unknown workspace project: ${workspaceProjectId}` }, 400)
+        const projectEntry = nextConfig.projects[projectIndex]!
+        nextConfig.projects[projectIndex] = include.length > 0
+          ? { ...projectEntry, worktree: { ...(projectEntry.worktree ?? {}), include } }
+          : { ...projectEntry, worktree: undefined }
+      } else {
+        if (nextConfig.kind === 'workspace' && nextConfig.projects.length > 0) {
+          return c.json({ error: 'workspaceProjectId is required when saving worktree files for a multi-project workspace.' }, 400)
+        }
+        if (include.length > 0) {
+          nextConfig.worktree = { ...(workspace.worktree ?? {}), include }
+        } else {
+          delete nextConfig.worktree
+        }
+      }
+      writeWorkspaceConfig(workspacePath, nextConfig)
+      refreshProject(project.path)
+      return c.json({ ok: true, ...await renderWorktreeIncludeResponse(workspacePath, workspaceProjectId) })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400)
+    }
+  })
+
   app.get('/api/config/models', async c => {
     try {
       const global = readGlobalConfig()
@@ -4499,7 +5542,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         model?: string
         models?: Partial<ModelAssignmentConfig>
       }
-      const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker']
+      const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker', 'contextIndexer']
       if (!body.scope) return c.json({ error: 'Missing "scope"' }, 400)
       const workspacePath = currentProjectPath()
       const projectCfg = readProjectConfig(workspacePath)
@@ -4793,6 +5836,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/web/app.css', c => serveWebAsset(c, 'app.css', 'text/css; charset=utf-8'))
   app.get('/web/app.js.map', c => serveWebAsset(c, 'app.js.map', 'application/json'))
   app.get('/web/app.css.map', c => serveWebAsset(c, 'app.css.map', 'application/json'))
+  app.get('/icons/:filename', c => serveWebIcon(c, c.req.param('filename')))
+  app.get('/favicon.ico', c => serveWebIcon(c, 'favicon.ico'))
+  app.get('/apple-touch-icon.png', c => serveWebIcon(c, 'apple-touch-icon.png'))
+  app.get('/site.webmanifest', c => serveWebIcon(c, 'site.webmanifest'))
 
   // -------------------------------------------------------------------------
   // SPA (catch-all)
@@ -4886,7 +5933,7 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
       console.warn(`[guildhall serve] stopAll error: ${err instanceof Error ? err.message : String(err)}`)
     }
     await removeServiceStateIfOwned()
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeHttpServerForShutdown(server)
     console.log('[guildhall serve] Shutdown complete.')
     process.exit(0)
   }
@@ -4937,6 +5984,20 @@ async function serveWebAsset(
   })
 }
 
+function iconContentType(filename: string): string {
+  const extension = extname(filename).toLowerCase()
+  if (extension === '.ico') return 'image/x-icon'
+  if (extension === '.png') return 'image/png'
+  if (extension === '.webmanifest') return 'application/manifest+json; charset=utf-8'
+  return 'application/octet-stream'
+}
+
+async function serveWebIcon(c: Context, filename: string): Promise<Response> {
+  const safeName = basename(filename)
+  if (safeName !== filename) return c.text('invalid icon path', 400)
+  return serveWebAsset(c, join('icons', safeName), iconContentType(safeName))
+}
+
 // ---------------------------------------------------------------------------
 // Inline dashboard SPA
 // ---------------------------------------------------------------------------
@@ -4947,7 +6008,13 @@ export function dashboardHtml(): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0f0d16" />
   <title>Guildhall</title>
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/genfavicon-32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/icons/genfavicon-16.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/site.webmanifest" />
   <link rel="stylesheet" href="/web/app.css?v=${WEB_ASSET_VERSION}" />
 </head>
 <body>

@@ -16,23 +16,42 @@ const sections: Record<string, { label: string; href: string }> = {
 }
 
 const getStartedPaths = new Set([
+  '/guide/introduction',
+  '/guide/concepts',
   '/guide/quick-start',
+  '/guide/how-guildhall-works',
   '/guide/new-project',
   '/guide/existing-project',
   '/guide/first-tasks',
   '/guide/managing-projects',
 ])
 
-const crumbs = computed(() => {
+const pathInfo = computed(() => {
   const base = site.value.base.replace(/\/$/, '')
   const rawPath = route.path.startsWith(`${base}/`)
     ? route.path.slice(base.length)
     : route.path
   const path = rawPath.replace(/\.html$/, '')
+  const versionMatch = path.match(/^(\/next|\/versions\/[^/]+)(\/.*)?$/)
+  return {
+    path,
+    prefix: versionMatch?.[1] ?? '',
+    unversionedPath: versionMatch ? (versionMatch[2] || '/') : path,
+  }
+})
+
+function hrefForVersion(href: string): string {
+  const prefix = pathInfo.value.prefix
+  if (!prefix || !href.startsWith('/')) return href
+  return `${prefix}${href}`
+}
+
+const crumbs = computed(() => {
+  const path = pathInfo.value.unversionedPath
   const normalizedPath = path.replace(/\/$/, '')
   if (getStartedPaths.has(normalizedPath)) {
     return [
-      { label: 'Get started', href: '/guide/quick-start' },
+      { label: 'Get started', href: hrefForVersion('/guide/introduction') },
       { label: page.value.title || 'Get started' },
     ]
   }
@@ -47,7 +66,7 @@ const crumbs = computed(() => {
     return [{ label: section.label }]
   }
   return [
-    { label: section.label, href: section.href },
+    { label: section.label, href: hrefForVersion(section.href) },
     { label: currentTitle },
   ]
 })

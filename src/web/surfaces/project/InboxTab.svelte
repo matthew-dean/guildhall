@@ -7,7 +7,7 @@
   import Card from '../../lib/Card.svelte'
   import Icon, { type IconName } from '../../lib/Icon.svelte'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
-  import { nav } from '../../lib/nav.svelte.js'
+  import { nav, path } from '../../lib/nav.svelte.js'
   import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
 
   interface Props {
@@ -127,12 +127,12 @@
     bootstrap_missing: 'Configure',
     workspace_import_pending: 'Review import',
     agent_question_pending: 'Answer question',
-    import_draft_queue: 'Review next draft',
-    brief_approval: 'Review in Thread',
-    spec_approval: 'Review in Thread',
+    import_draft_queue: 'Draft task brief',
+    brief_approval: 'Review brief',
+    spec_approval: 'Review spec',
     open_escalation: 'Resolve',
     lever_questions: 'Review',
-    spec_fill_pending: 'Open details',
+    spec_fill_pending: 'Review checklist',
   }
 
   function actionVerb(item: InboxItem): string {
@@ -142,12 +142,22 @@
     return DEFAULT_VERBS[item.kind]
   }
 
-  function goTo(item: InboxItem): void {
-    if (item.kind === 'brief_approval' || item.kind === 'spec_approval') {
-      nav(projectActionHref('/thread'))
-      return
+  function itemDigest(item: InboxItem): string | null {
+    if (item.kind === 'lever_questions') {
+      return 'Safe defaults are active. Review them only if you want to tune autonomy, recovery, or review strictness.'
     }
-    if (item.actionHref) nav(projectActionHref(item.actionHref))
+    if (item.kind === 'spec_fill_pending') {
+      return null
+    }
+    return null
+  }
+
+  function goTo(item: InboxItem): void {
+    if (item.actionHref) {
+      const href = projectActionHref(item.actionHref)
+      const route = href.split('?')[0]?.split('#')[0] ?? href
+      nav(href, route.includes('/task/') ? { backgroundPath: path.value } : undefined)
+    }
   }
 
   const priorityItems = $derived(items.filter(item => item.severity !== 'low'))
@@ -176,7 +186,7 @@
   {:else}
     {#if priorityItems.length === 0}
       <Card tone="neutral">
-        <p class="muted">Nothing is blocked right now. The remaining items are optional housekeeping.</p>
+        <p class="muted">Nothing is blocked right now. The remaining items are optional cleanup.</p>
       </Card>
     {/if}
 
@@ -200,6 +210,9 @@
                 <div class="body">
                   <div class="title" title={item.title}>{item.title}</div>
                   <div class="detail" title={item.detail}>{item.detail}</div>
+                  {#if itemDigest(item)}
+                    <div class="digest">{itemDigest(item)}</div>
+                  {/if}
                 </div>
                 <span class="verb">{actionVerb(item)} →</span>
               </button>
@@ -233,7 +246,7 @@
     {#if housekeepingItems.length > 0}
       <section class="housekeeping">
         <header class="subhead">
-          <h3>Housekeeping</h3>
+          <h3>Optional cleanup</h3>
           <span class="count">({housekeepingItems.length})</span>
         </header>
         <ul class="list list-housekeeping">
@@ -253,6 +266,9 @@
                   <div class="body">
                     <div class="title" title={item.title}>{item.title}</div>
                     <div class="detail" title={item.detail}>{item.detail}</div>
+                    {#if itemDigest(item)}
+                      <div class="digest">{itemDigest(item)}</div>
+                    {/if}
                   </div>
                   <span class="verb">{actionVerb(item)} →</span>
                 </button>
@@ -273,12 +289,14 @@
   .wrap {
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
+    gap: var(--s-4);
+    padding-block-start: var(--s-3);
   }
   .head {
     display: flex;
     align-items: baseline;
     gap: var(--s-2);
+    margin-block-end: var(--s-1);
   }
   .head h2 {
     margin: 0;
@@ -442,6 +460,12 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .digest {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-copy);
+    white-space: normal;
   }
   .verb {
     color: var(--accent);

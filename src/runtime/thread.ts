@@ -33,6 +33,7 @@ import {
 } from './wizards.js'
 import { shouldUseImportDraftState } from './import-drafts.js'
 import { META_INTAKE_TASK_ID, parseCoordinatorDraft } from './meta-intake.js'
+import { visibleOpenQuestions } from './question-visibility.js'
 import { thresholdMs } from './liveness.js'
 
 // ---------------------------------------------------------------------------
@@ -250,6 +251,7 @@ export interface BuildThreadOptions {
   /** Recent supervisor events, used only for live "agent is currently busy" hints. */
   recentEvents?: Array<{
     at?: string | undefined
+    workspaceId?: string | undefined
     event?: {
       type?: string | undefined
       task_id?: string | null | undefined
@@ -257,6 +259,7 @@ export interface BuildThreadOptions {
       tool_name?: string | null | undefined
       message?: string | null | undefined
       output?: string | null | undefined
+      reason?: string | null | undefined
       is_error?: boolean | null | undefined
     } | undefined
   }>
@@ -276,10 +279,6 @@ function tasksArray(raw: unknown): Task[] {
     return (raw as { tasks: Task[] }).tasks
   }
   return []
-}
-
-function isTerminalQuestionState(status: string): boolean {
-  return status === 'done' || status === 'shelved' || status === 'blocked' || status === 'pending_pr'
 }
 
 function isGuildhallQueuedTurn(turn: ThreadTurn): boolean {
@@ -314,10 +313,6 @@ function isHumanOwnedActiveTurn(turn: ThreadTurn): boolean {
   }
 }
 
-function hasRoutingDraft(taskSpec: string): boolean {
-  return !!parseCoordinatorDraft(taskSpec) || /```ya?ml[\s\S]*?\bcoordinators:\b[\s\S]*?```/i.test(taskSpec)
-}
-
 function hasSpecDraftContent(task: Pick<Task, 'spec' | 'acceptanceCriteria'>): boolean {
   return (
     typeof task.spec === 'string' &&
@@ -336,12 +331,8 @@ function hasApprovedProductBrief(task: Pick<Task, 'productBrief'>): boolean {
   )
 }
 
-function hasConcreteSpecDraft(task: Task): boolean {
-  return (
-    typeof task.status === 'string' &&
-    task.status === 'spec_review' &&
-    hasSpecDraftContent(task)
-  )
+function taskNeedsSpecFill(task: Pick<Task, 'spec' | 'acceptanceCriteria' | 'productBrief'>): boolean {
+  return !hasApprovedProductBrief(task) || !hasSpecDraftContent(task)
 }
 
 function isQueuedSpecRevision(task: Task): boolean {
@@ -408,39 +399,6 @@ function displayTaskTitle(task: Task): string {
     return 'Starter task spec draft'
   }
   return raw || task.id
-}
-
-function isObsoleteMetaRoutingQuestion(taskId: string, taskSpec: string, question: Record<string, unknown>): boolean {
-  if (taskId !== META_INTAKE_TASK_ID) return false
-  if (!hasRoutingDraft(taskSpec)) return false
-  const text =
-    (typeof question.restatement === 'string' && question.restatement) ||
-    (typeof question.prompt === 'string' && question.prompt) ||
-    ''
-  return /project areas|review lanes|coordinator domains?|coordinators for/i.test(text)
-}
-
-function isObsoleteStarterTaskFocusQuestion(task: Task, question: Record<string, unknown>): boolean {
-  if (!hasConcreteSpecDraft(task)) return false
-  const text =
-    (typeof question.restatement === 'string' && question.restatement) ||
-    (typeof question.prompt === 'string' && question.prompt) ||
-    ''
-  if (!/what should .*?(first|starter) task focus on|pick the focus for this first task/i.test(text)) {
-    return false
-  }
-  const askedAt = typeof question.askedAt === 'string' ? Date.parse(question.askedAt) : Number.NaN
-  const updatedAt = typeof task.updatedAt === 'string' ? Date.parse(task.updatedAt) : Number.NaN
-  return !Number.isFinite(askedAt) || !Number.isFinite(updatedAt) || askedAt <= updatedAt
-}
-
-function isObsoleteVisibleQuestion(task: Task, question: Record<string, unknown>): boolean {
-  const taskId = typeof task.id === 'string' ? task.id : ''
-  const taskSpec = typeof task.spec === 'string' ? task.spec : ''
-  return (
-    isObsoleteMetaRoutingQuestion(taskId, taskSpec, question) ||
-    isObsoleteStarterTaskFocusQuestion(task, question)
-  )
 }
 
 function stripMarkdown(value: string): string {
@@ -714,9 +672,9 @@ const SETUP_STEP_ACTIONS: Record<string, SetupAction> = {
   },
   firstTask: {
     affordance: 'inline-text',
-    actionLabel: 'Create task',
+    actionLabel: 'Start shaping',
     submitEndpoint: '/api/project/intake',
-    placeholder: 'First task',
+    placeholder: 'Describe the product idea or first outcome',
   },
 }
 
@@ -1097,6 +1055,40 @@ function activityByTask(
   return activity
 }
 
+function latestSupervisorActivity(
+  events: BuildThreadOptions['recentEvents'],
+): { at: string; label: string; tone: LiveActivity['tone']; message: string } | null {
+  const latest = [...(events ?? [])].reverse().find(envelope =>
+    ['supervisor_started', 'supervisor_stopped', 'supervisor_error'].includes(String(envelope.event?.type ?? '')),
+  )
+  const type = latest?.event?.type ?? ''
+  const rawMessage = latest?.event?.message
+  const message = typeof rawMessage === 'string' && rawMessage.trim()
+    ? rawMessage.trim()
+    : type === 'supervisor_started'
+      ? 'Run started.'
+      : type === 'supervisor_error'
+        ? 'Run hit an error.'
+        : 'Run finished.'
+  const label = type === 'supervisor_started'
+    ? 'Run started'
+    : type === 'supervisor_error'
+      ? 'Run error'
+      : 'Run finished'
+  const tone: LiveActivity['tone'] = type === 'supervisor_started'
+    ? 'running'
+    : type === 'supervisor_error'
+      ? 'danger'
+      : 'ok'
+  if (!latest || !type) return null
+  return {
+    at: latest.at ?? new Date().toISOString(),
+    label,
+    tone,
+    message,
+  }
+}
+
 export function buildThread(opts: BuildThreadOptions): Thread {
   const snap = opts.snapshot ?? buildSnapshot({ projectPath: opts.projectPath })
   const turns: ThreadTurn[] = []
@@ -1186,11 +1178,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const createdAt =
       typeof t.createdAt === 'string' ? t.createdAt : new Date().toISOString()
 
-    const openQs = isTerminalQuestionState(taskStatus)
-      ? []
-      : (Array.isArray(t.openQuestions)
-          ? (t.openQuestions as Array<Record<string, unknown>>)
-          : []).filter((q) => !isObsoleteVisibleQuestion(t, q))
+    const openQs = visibleOpenQuestions<Record<string, unknown>>(t)
     const seenQuestionSignatures = new Set<string>()
     const visibleQuestions: Array<{
       q: Record<string, unknown>
@@ -1428,6 +1416,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       const livePersona = personaForAgent(effectiveLiveAgent?.name)
       const persona = livePersona ?? (taskStatus === 'exploring' || taskStatus === 'import_draft' ? 'spec' : 'worker')
       const queuedSpecRevision = isQueuedSpecRevision(t)
+      const needsSpecFill = taskStatus === 'ready' && taskNeedsSpecFill(t)
       const phase = taskStatus === 'ready'
         ? 'ready'
         : taskId === META_INTAKE_TASK_ID && setupStillBlockingMetaIntake && !liveAgent
@@ -1463,7 +1452,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
                 ? 'Guildhall has your latest answers and a spec draft. The next step is for Guildhall to revise the spec.'
               : 'The spec author is shaping this task.'
             : taskStatus === 'ready'
-              ? 'Approved and queued for work.'
+              ? needsSpecFill
+                ? 'Queued, but the task brief or acceptance criteria still need cleanup before a worker should treat this as approved.'
+                : 'Approved and queued for work.'
               : taskStatus === 'gate_check'
                 ? 'Gate checks are next.'
                 : taskStatus === 'review'
@@ -1487,7 +1478,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         liveAgent: effectiveLiveAgent,
         activity: liveActivity.get(taskId),
         checklist:
-          taskStatus === 'exploring' &&
+          (taskStatus === 'exploring' || needsSpecFill) &&
           !queuedSpecRevision &&
           taskId !== META_INTAKE_TASK_ID &&
           taskId !== 'task-workspace-import' &&
@@ -1498,14 +1489,24 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     }
 
     // Open escalations
-    for (const esc of activeEscalations(t)) {
+    const openEscalations = activeEscalations(t)
+    const fallbackBlockedEscalations = openEscalations.length === 0 && t.status === 'blocked' && typeof t.blockReason === 'string' && t.blockReason.trim()
+      ? [{
+          id: 'block-reason',
+          summary: t.blockReason.trim(),
+          details: undefined,
+          raisedAt: typeof t.updatedAt === 'string' ? t.updatedAt : createdAt,
+        }]
+      : []
+    for (const esc of [...openEscalations, ...fallbackBlockedEscalations]) {
       const escId = typeof esc.id === 'string' ? esc.id : ''
       const at = typeof esc.raisedAt === 'string' ? esc.raisedAt : createdAt
+      const reason = 'reason' in esc && typeof esc.reason === 'string' ? esc.reason : ''
       const summary =
         typeof esc.summary === 'string' && esc.summary.trim()
           ? esc.summary
-          : typeof esc.reason === 'string'
-            ? esc.reason
+          : reason
+            ? reason
             : 'Agent escalation awaiting human input.'
       const status: TurnStatus = !activeAssigned ? 'active' : 'pending'
       if (status === 'active') activeAssigned = true
@@ -1528,6 +1529,30 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         activity: liveActivity.get(taskId),
       })
     }
+  }
+
+  const latestRunActivity = latestSupervisorActivity(opts.recentEvents)
+  const hasTaskActivityTurn = turns.some(turn => turn.kind !== 'setup_step')
+  if (latestRunActivity && !hasTaskActivityTurn) {
+    turns.push({
+      kind: 'inflight',
+      id: 'run:recent-activity',
+      at: latestRunActivity.at,
+      persona: 'coord',
+      status: 'done',
+      phase: 'done',
+      taskId: '__run__',
+      taskTitle: 'Project run',
+      constructionMode: 'survey',
+      taskStatus: 'run_activity',
+      summary: latestRunActivity.message,
+      activity: [{
+        at: latestRunActivity.at,
+        label: latestRunActivity.label,
+        tone: latestRunActivity.tone,
+        detail: latestRunActivity.message,
+      }],
+    })
   }
 
   // ---- Sort: setup first (epoch=0), then turns by `at` chronological -------

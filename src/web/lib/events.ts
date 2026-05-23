@@ -9,6 +9,7 @@
 
 import type { EventEnvelope } from './types.js'
 import { withCurrentProjectQuery } from './project-routes.js'
+import { friendlyTaskId, labelForIdentifier } from './identifier-labels.js'
 
 type Listener = (ev: EventEnvelope) => void
 
@@ -16,7 +17,7 @@ const listeners = new Set<Listener>()
 let current: EventSource | null = null
 let currentUrl: string | null = null
 
-export type SseStatus = 'connecting' | 'live' | 'error'
+export type SseStatus = 'connecting' | 'live' | 'reconnecting' | 'error'
 type StatusListener = (s: SseStatus) => void
 const statusListeners = new Set<StatusListener>()
 let status: SseStatus = 'connecting'
@@ -47,7 +48,7 @@ export function connectStream(): void {
   const es = new EventSource(nextUrl)
   current = es
   es.onopen = () => setStatus('live')
-  es.onerror = () => setStatus('error')
+  es.onerror = () => setStatus(status === 'live' || status === 'reconnecting' ? 'reconnecting' : 'error')
   es.onmessage = e => {
     setStatus('live')
     try {
@@ -70,25 +71,29 @@ export function disconnectStream(): void {
 export function summarizeEvent(env: EventEnvelope): string {
   const inner = env.event ?? (env as EventEnvelope as EventEnvelope & Record<string, unknown>)
   const type = (inner.type as string) ?? ''
+  const taskLabel = (value: unknown) => typeof value === 'string' ? friendlyTaskId(value) : 'Task'
+  const agentLabel = (value: unknown) => typeof value === 'string' ? labelForIdentifier('agent', value).label : 'Guildhall'
+  const statusLabel = (value: unknown) => typeof value === 'string' ? labelForIdentifier('status', value).label : 'Unknown'
+  const runReasonLabel = (value: unknown) => typeof value === 'string' ? labelForIdentifier('run-reason', value).label : ''
   switch (type) {
     case 'task_transition':
-      return `${inner.task_id} ${inner.from_status} → ${inner.to_status} (${inner.agent_name ?? ''}${inner.reason ? ': ' + inner.reason : ''})`
+      return `${taskLabel(inner.task_id)} ${statusLabel(inner.from_status)} → ${statusLabel(inner.to_status)} (${agentLabel(inner.agent_name)}${inner.reason ? ': ' + inner.reason : ''})`
     case 'escalation_raised':
-      return `ESCALATION ${inner.task_id}${inner.agent_name ? ' by ' + inner.agent_name : ''} — ${inner.reason ?? ''}`
+      return `Needs attention: ${taskLabel(inner.task_id)}${inner.agent_name ? ' by ' + agentLabel(inner.agent_name) : ''} — ${inner.reason ?? ''}`
     case 'error':
       return 'ERROR: ' + (inner.message ?? '')
     case 'agent_issue':
-      return `issue [${inner.severity}/${inner.code}] ${inner.task_id} — ${inner.reason ?? ''}`
+      return `Issue [${inner.severity}/${inner.code}] ${taskLabel(inner.task_id)} — ${inner.reason ?? ''}`
     case 'agent_started':
-      return `${inner.agent_name ?? 'agent'} started ${inner.task_id ?? ''}`
+      return `${agentLabel(inner.agent_name)} started ${taskLabel(inner.task_id)}`
     case 'agent_finished':
-      return `${inner.agent_name ?? 'agent'} finished ${inner.task_id ?? ''}`
+      return `${agentLabel(inner.agent_name)} finished ${taskLabel(inner.task_id)}`
     case 'supervisor_started':
     case 'supervisor_stopped':
     case 'supervisor_error':
       return (
         type.replace('supervisor_', '') +
-        (inner.reason ? ` (${inner.reason})` : '') +
+        (inner.reason ? ` (${runReasonLabel(inner.reason)})` : '') +
         (inner.message ? ': ' + inner.message : '')
       )
     case 'provider_health_changed':

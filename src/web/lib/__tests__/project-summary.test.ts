@@ -19,6 +19,14 @@ describe('summarizeProjects', () => {
             recentCompletedTaskTitle: 'Publish 0.4.0',
           },
           taskCounts: { total: 10, active: 2, draftReview: 0, blocked: 1, done: 6, shelved: 1 },
+          taskActivity: {
+            windowLabel: 'Last 30 days',
+            max: 3,
+            bars: [
+              { value: 0, label: 'No updates' },
+              { value: 3, label: '3 task updates, May 1-May 2' },
+            ],
+          },
           run: { status: 'running' },
         },
       ],
@@ -34,9 +42,21 @@ describe('summarizeProjects', () => {
         stageLabel: 'Running',
         activityLabel: 'Agents are working on 2 tasks.',
         recentLabel: 'Working on: Restructure project service shell',
+        completedLabel: 'Publish 0.4.0',
+        nextLabel: 'In progress: Restructure project service shell',
+        maturityLabel: 'Inspect',
+        maturityDescription: 'Some work needs triage before Guildhall can treat the project as flowing cleanly.',
         blurb: 'Guildhall runs autonomous engineering workflows over local projects.',
         tags: ['cli', 'orchestrator'],
         counts: { total: 10, active: 2, draftReview: 0, blocked: 1, done: 6, shelved: 1 },
+        taskActivity: {
+          windowLabel: 'Last 30 days',
+          max: 3,
+          bars: [
+            { value: 0, label: 'No updates' },
+            { value: 3, label: '3 task updates, May 1-May 2' },
+          ],
+        },
         ticker: {
           tone: 'active',
           pulse: true,
@@ -70,6 +90,8 @@ describe('summarizeProjects', () => {
       tone: 'idle',
       stageLabel: 'Ready',
       activityLabel: 'No task activity yet.',
+      maturityLabel: 'Intake',
+      maturityDescription: 'Guildhall has the project registered, but does not yet have a meaningful task map.',
       ticker: {
         tone: 'idle',
         pulse: false,
@@ -81,6 +103,11 @@ describe('summarizeProjects', () => {
       canStart: true,
       canStop: false,
     })
+    expect(summarizeProjects(service)[0]?.taskActivity).toMatchObject({
+      windowLabel: 'Last 30 days',
+      max: 0,
+    })
+    expect(summarizeProjects(service)[0]?.taskActivity.bars).toHaveLength(18)
   })
 
   it('normalizes Windows user-profile project paths for display', () => {
@@ -117,6 +144,8 @@ describe('summarizeProjects', () => {
       tone: 'warn',
       stageLabel: 'Needs setup',
       activityLabel: 'Needs first-time Guildhall setup.',
+      maturityLabel: 'Setup',
+      maturityDescription: 'Guildhall still needs the basic project setup contract before it can reason about work reliably.',
       ticker: {
         tone: 'warn',
         pulse: false,
@@ -157,14 +186,15 @@ describe('summarizeProjects', () => {
       stageLabel: 'Needs attention',
       activityLabel: '1 blocked task needs attention.',
       recentLabel: 'Blocked on: Repair staging auth flow',
-      runActionLabel: 'Start',
+      runActionLabel: null,
+      canStart: false,
     })
     expect(summarizeProjects(service)[1]).toMatchObject({
       statusLabel: 'Stable',
       stageLabel: 'Stable',
       activityLabel: '4 of 4 tasks are done.',
       recentLabel: 'Recently completed: Audit primitive integration',
-      runActionLabel: 'Start',
+      runActionLabel: null,
     })
   })
 
@@ -187,7 +217,9 @@ describe('summarizeProjects', () => {
       stageLabel: 'Paused',
       activityLabel: '1 task is paused.',
       recentLabel: 'Working on: Build TypeScript-JSDoc round-trip conversion',
-      runActionLabel: 'Start',
+      maturityLabel: 'Paused',
+      maturityDescription: 'Work is ready or paused, but no agents are running right now.',
+      runActionLabel: 'Resume',
     })
   })
 
@@ -214,6 +246,8 @@ describe('summarizeProjects', () => {
       statusLabel: 'Needs task briefs',
       stageLabel: 'Needs task briefs',
       activityLabel: '75 imported drafts need task briefs.',
+      maturityLabel: 'Mixed',
+      maturityDescription: 'The project has a mix of completed, queued, and planning work; inspect details for the next meaningful step.',
       counts: { total: 89, active: 0, draftReview: 75, blocked: 0, done: 14, shelved: 0 },
       ticker: {
         tone: 'warn',

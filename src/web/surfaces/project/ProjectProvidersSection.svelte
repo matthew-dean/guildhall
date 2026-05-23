@@ -2,7 +2,7 @@
   Project-level providers sub-tab: SELECT which configured provider this
   project should prefer. Credentials live globally (~/.guildhall/providers.yaml)
   — this view is read-only for credentials and only writes
-  `preferredProvider` to the project's guildhall.yaml.
+  `preferredProvider` to the project's private .guildhall/config.yaml override.
 
   Providers that aren't configured globally are shown disabled with a hint
   to open the global /providers page.
@@ -44,10 +44,12 @@
     { id: 'worker', label: 'Worker' },
     { id: 'reviewer', label: 'Reviewer' },
     { id: 'gateChecker', label: 'Gate checker' },
+    { id: 'contextIndexer', label: 'Context indexer' },
   ]
 
   let providers = $state<Record<string, ProviderMeta> | null>(null)
   let models = $state<ModelConfig | null>(null)
+  let modelsError = $state<string | null>(null)
   let preferred = $state<string | null>(null)
   let originalPreferred = $state<string | null>(null)
   let loadError = $state<string | null>(null)
@@ -75,9 +77,11 @@
     const modelRes = await projectFetch('/api/config/models')
     const modelJson = await modelRes.json().catch(() => ({}))
     if (!modelRes.ok || modelJson.error) {
-      flash(modelJson.error ?? `Model reload failed (HTTP ${modelRes.status})`, true)
+      modelsError = modelJson.error ?? `Model reload failed (HTTP ${modelRes.status})`
+      flash(modelsError, true)
       return false
     }
+    modelsError = null
     models = modelJson as ModelConfig
     return true
   }
@@ -168,7 +172,7 @@
             <span class="body">
               <span class="label">{meta.label}</span>
               <span class="detail">
-                {disabled ? 'Not configured globally — set up in /providers first.' : meta.detail}
+                {disabled ? 'Not configured globally — set up credentials in global Providers first.' : meta.detail}
               </span>
             </span>
             {#if meta.verifiedAt}
@@ -209,7 +213,9 @@
       </div>
     {/if}
 
-    {#if !models}
+    {#if modelsError}
+      <p class="error">{modelsError}</p>
+    {:else if !models}
       <p class="muted">Loading...</p>
     {:else}
       <div class="model-list">

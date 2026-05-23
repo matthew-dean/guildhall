@@ -2,12 +2,16 @@ import type { ProjectView as Tab } from './types.js'
 
 export type Route =
   | { kind: 'projects' }
+  | { kind: 'fleet-inbox' }
   | { kind: 'project'; projectId: string | null; view: Tab; sub: string | null; drawerTaskId: string | null; backgroundPath: string | null }
   | { kind: 'setup'; projectId: string | null }
   | { kind: 'providers' }
 
 export function parseRoute(p: string, state: unknown = null): Route {
+  const pathname = p.split(/[?#]/, 1)[0] || '/'
+  p = pathname
   if (p === '/' || p === '/projects') return { kind: 'projects' }
+  if (p === '/needs-you' || p === '/notifications') return { kind: 'fleet-inbox' }
   if (p === '/setup') return { kind: 'setup', projectId: null }
   const projectSetupMatch = /^\/projects\/([^/]+)\/setup$/.exec(p)
   if (projectSetupMatch) return { kind: 'setup', projectId: decodeURIComponent(projectSetupMatch[1] ?? '') }
@@ -90,14 +94,14 @@ export function parseRoute(p: string, state: unknown = null): Route {
       return { kind: 'project', projectId, view: 'release', sub: null, drawerTaskId: null, backgroundPath: null }
     const routingSub = /^\/routing\/(.+)$/.exec(normalized)
     if (routingSub)
-      return { kind: 'project', projectId, view: 'settings', sub: 'routing', drawerTaskId: null, backgroundPath: null }
+      return { kind: 'project', projectId, view: 'settings', sub: 'coordinators', drawerTaskId: null, backgroundPath: null }
     if (normalized === '/routing')
-      return { kind: 'project', projectId, view: 'settings', sub: 'routing', drawerTaskId: null, backgroundPath: null }
+      return { kind: 'project', projectId, view: 'settings', sub: 'coordinators', drawerTaskId: null, backgroundPath: null }
     const coordSub = /^\/coordinators\/(.+)$/.exec(normalized)
     if (coordSub)
-      return { kind: 'project', projectId, view: 'settings', sub: 'routing', drawerTaskId: null, backgroundPath: null }
+      return { kind: 'project', projectId, view: 'settings', sub: 'coordinators', drawerTaskId: null, backgroundPath: null }
     if (normalized === '/coordinators')
-      return { kind: 'project', projectId, view: 'settings', sub: 'routing', drawerTaskId: null, backgroundPath: null }
+      return { kind: 'project', projectId, view: 'settings', sub: 'coordinators', drawerTaskId: null, backgroundPath: null }
     if (normalized === '/planner') return { kind: 'project', projectId, view: 'planner', sub: null, drawerTaskId: null, backgroundPath: null }
     if (normalized === '/facts') return { kind: 'project', projectId, view: 'facts', sub: null, drawerTaskId: null, backgroundPath: null }
     if (normalized === '/timeline') return { kind: 'project', projectId, view: 'timeline', sub: null, drawerTaskId: null, backgroundPath: null }
@@ -127,14 +131,14 @@ export function parseRoute(p: string, state: unknown = null): Route {
     return { kind: 'project', projectId: null, view: 'release', sub: null, drawerTaskId: null, backgroundPath: null }
   const routingSub = /^\/routing\/(.+)$/.exec(normalized)
   if (routingSub)
-    return { kind: 'project', projectId: null, view: 'settings', sub: 'routing', drawerTaskId: null, backgroundPath: null }
+    return { kind: 'project', projectId: null, view: 'settings', sub: 'coordinators', drawerTaskId: null, backgroundPath: null }
   if (normalized === '/routing')
-    return { kind: 'project', projectId: null, view: 'settings', sub: 'routing', drawerTaskId: null, backgroundPath: null }
+    return { kind: 'project', projectId: null, view: 'settings', sub: 'coordinators', drawerTaskId: null, backgroundPath: null }
   const coordSub = /^\/coordinators\/(.+)$/.exec(normalized)
   if (coordSub)
-    return { kind: 'project', projectId: null, view: 'settings', sub: 'routing', drawerTaskId: null, backgroundPath: null }
+    return { kind: 'project', projectId: null, view: 'settings', sub: 'coordinators', drawerTaskId: null, backgroundPath: null }
   if (normalized === '/coordinators')
-    return { kind: 'project', projectId: null, view: 'settings', sub: 'routing', drawerTaskId: null, backgroundPath: null }
+    return { kind: 'project', projectId: null, view: 'settings', sub: 'coordinators', drawerTaskId: null, backgroundPath: null }
   if (normalized === '/planner') return { kind: 'project', projectId: null, view: 'planner', sub: null, drawerTaskId: null, backgroundPath: null }
   if (normalized === '/facts') return { kind: 'project', projectId: null, view: 'facts', sub: null, drawerTaskId: null, backgroundPath: null }
   if (normalized === '/timeline') return { kind: 'project', projectId: null, view: 'timeline', sub: null, drawerTaskId: null, backgroundPath: null }

@@ -4,6 +4,7 @@
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte'
+  import Tooltip from './Tooltip.svelte'
 
   type Variant = 'primary' | 'secondary' | 'danger' | 'ghost' | 'human' | 'agent'
   type Size = 'sm' | 'md'
@@ -12,6 +13,7 @@
     variant?: Variant
     size?: Size
     disabled?: boolean
+    iconOnly?: boolean
     type?: 'button' | 'submit'
     ariaLabel?: string
     title?: string
@@ -24,6 +26,7 @@
     variant = 'primary',
     size = 'md',
     disabled = false,
+    iconOnly = false,
     type = 'button',
     ariaLabel,
     title,
@@ -33,16 +36,25 @@
   }: Props = $props()
 </script>
 
-<button
-  class={`btn v-${variant} s-${size} ${className}`.trim()}
-  {type}
-  {disabled}
-  {onclick}
-  aria-label={ariaLabel}
-  {title}
->
-  {@render children?.()}
-</button>
+{#snippet buttonElement()}
+  <button
+    class={`btn v-${variant} s-${size} ${iconOnly ? 'icon-only' : ''} ${className}`.trim()}
+    {type}
+    {disabled}
+    {onclick}
+    aria-label={ariaLabel}
+  >
+    {@render children?.()}
+  </button>
+{/snippet}
+
+{#if title && iconOnly}
+  <Tooltip text={title}>
+    {@render buttonElement()}
+  </Tooltip>
+{:else}
+  {@render buttonElement()}
+{/if}
 
 <style>
   .btn {
@@ -79,42 +91,68 @@
   }
 
   .v-primary {
-    background: var(--accent);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 18%, transparent), transparent 48%),
+      linear-gradient(100deg, var(--light-violet-warm), var(--accent) 64%, color-mix(in srgb, var(--accent) 88%, black));
     color: white;
     border-color: color-mix(in srgb, var(--accent) 65%, white 18%);
+    box-shadow:
+      var(--light-emitted-accent),
+      inset 0 1px 0 color-mix(in srgb, white 18%, transparent);
   }
   .v-human {
-    background: var(--accent);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 18%, transparent), transparent 48%),
+      linear-gradient(100deg, var(--light-violet-warm), var(--accent) 64%, color-mix(in srgb, var(--accent) 88%, black));
     color: white;
     border-color: color-mix(in srgb, var(--accent) 65%, white 18%);
+    box-shadow:
+      var(--light-emitted-accent),
+      inset 0 1px 0 color-mix(in srgb, white 18%, transparent);
   }
   .v-agent {
-    background: var(--accent-2);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 22%, transparent), transparent 50%),
+      var(--accent-2);
     color: var(--bg-base);
     border-color: color-mix(in srgb, var(--accent-2) 72%, white 14%);
+    box-shadow:
+      var(--light-emitted-agent),
+      inset 0 1px 0 color-mix(in srgb, white 20%, transparent);
   }
   .v-agent:not(:disabled):hover {
-    background: color-mix(in srgb, var(--accent-2) 88%, white 12%);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 26%, transparent), transparent 50%),
+      color-mix(in srgb, var(--accent-2) 88%, white 12%);
     border-color: color-mix(in srgb, var(--accent-2) 62%, white 24%);
     filter: none;
   }
   .v-secondary {
-    background: var(--bg-raised-2);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 8%, transparent), transparent 48%),
+      color-mix(in srgb, var(--button-secondary-bg) 76%, transparent);
     color: var(--text);
-    border-color: var(--border-strong);
-    box-shadow:
-      inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
-      0 1px 0 color-mix(in srgb, black 22%, transparent);
+    border-color: var(--button-secondary-border);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, white 9%, transparent);
   }
   .v-secondary:not(:disabled):hover {
-    background: color-mix(in srgb, var(--bg-raised-2) 82%, white 18%);
-    border-color: color-mix(in srgb, var(--border-strong) 68%, var(--text) 32%);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 10%, transparent), transparent 48%),
+      color-mix(in srgb, var(--button-secondary-bg-hover) 82%, transparent);
+    border-color: var(--button-secondary-border-hover);
     filter: none;
   }
   .v-danger {
-    background: var(--danger);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 16%, transparent), transparent 48%),
+      var(--danger);
     color: white;
     border-color: color-mix(in srgb, var(--danger) 70%, white 14%);
+    box-shadow:
+      0 0 16px color-mix(in srgb, var(--danger) 28%, transparent),
+      inset 0 1px 0 color-mix(in srgb, white 18%, transparent);
   }
   .v-ghost {
     background: transparent;
@@ -128,11 +166,20 @@
   }
 
   .s-sm {
-    padding: 2px var(--s-2);
+    padding: var(--control-pad-y) var(--s-3);
     font-size: var(--fs-1);
-    min-height: 22px;
+    min-height: 28px;
   }
   .s-md {
     padding: var(--control-pad-y) var(--control-pad-x);
+  }
+  .icon-only {
+    width: var(--control-h);
+    min-width: var(--control-h);
+    padding-inline: 0;
+  }
+  .s-sm.icon-only {
+    width: 28px;
+    min-width: 28px;
   }
 </style>

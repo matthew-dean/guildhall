@@ -50,6 +50,7 @@ function baseConfig(): ResolvedConfig {
       worker: 'm',
       reviewer: 'm',
       gateChecker: 'm',
+      contextIndexer: 'm',
     },
     coordinators: [],
     maxRevisions: 5,
@@ -315,7 +316,7 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
     expect(decisions).toContain('security-engineer')
   })
 
-  it('does not adjudicate under strict policy even with recurrent dissent', async () => {
+  it('routes repeated same-persona dissent through coordinator inspection under strict policy', async () => {
     await setFanoutPolicy('strict')
     const priorTs = '2026-04-23T10:00:00.000Z'
     await writeTask(
@@ -359,7 +360,81 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
     await orch.tick()
 
     const after = (await readQueue()).tasks[0]!
-    expect(after.adjudications).toHaveLength(0)
+    expect(after.adjudications).toHaveLength(1)
+    expect(after.adjudications[0]).toMatchObject({
+      trigger: 'policy_conflict',
+      dissenters: ['security-engineer'],
+      decidedBy: 'coordinator',
+    })
     expect(after.status).toBe('in_progress')
+  })
+
+  it('escalates instead of looping when the same dissent returns after coordinator adjudication', async () => {
+    await setFanoutPolicy('strict')
+    const priorTs = '2026-04-23T10:00:00.000Z'
+    await writeTask(
+      mkTask({
+        reviewVerdicts: [
+          {
+            verdict: 'revise',
+            reviewerPath: 'llm',
+            reason: 'The Security Engineer requested revision',
+            reasoning: 'Verify email before posting.',
+            failingSignals: ['security-engineer'],
+            recordedAt: priorTs,
+          },
+        ],
+        adjudications: [
+          {
+            round: 2,
+            trigger: 'policy_conflict',
+            dissenters: ['security-engineer'],
+            winningConcerns: ['security-engineer'],
+            supersededConcerns: [],
+            summary: 'Coordinator adjudicated the security revision.',
+            rationale: 'Worker should address email verification before posting.',
+            scopeInstructions: ['Verify email before posting.'],
+            decidedBy: 'coordinator',
+            decidedAt: '2026-04-23T10:05:00.000Z',
+          },
+        ],
+        revisionCount: 2,
+      }),
+    )
+
+    const runner: ReviewerFanoutRunner = async ({ personas }) => {
+      return personas.map((persona): PersonaVerdict => ({
+        guildSlug: persona.slug,
+        guildName: persona.name,
+        verdict: persona.slug === 'security-engineer' ? 'revise' : 'approve',
+        reasoning:
+          persona.slug === 'security-engineer'
+            ? 'Verify email before posting still not enforced.'
+            : `${persona.name} approved.`,
+        revisionItems:
+          persona.slug === 'security-engineer'
+            ? ['Verify email before posting.']
+            : [],
+        rawOutput: '',
+      }))
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      reviewerFanout: runner,
+    })
+    const outcome = await orch.tick()
+
+    expect(outcome?.kind).toBe('escalated')
+    const after = (await readQueue()).tasks[0]!
+    expect(after.status).toBe('blocked')
+    expect(after.blockReason).toContain('Reviewer/worker handoff loop detected')
+    expect(after.escalations.at(-1)).toMatchObject({
+      agentId: 'coordinator-foreman',
+      reason: 'human_judgment_required',
+      summary: 'Reviewer/worker handoff loop detected after coordinator adjudication.',
+    })
+    expect(after.notes.some((note) => note.agentId === 'reviewer-fanout')).toBe(false)
   })
 })

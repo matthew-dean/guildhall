@@ -1,7 +1,8 @@
 <!--
   Project root view. Shell layout:
-    · Left rail (220px, collapses to 56px icon-only under 1100px viewport):
-      primary nav entries + accordion sub-nav + Providers link pinned
+    · Left rail (220px, collapses to 56px icon-only on medium viewports;
+      mobile hides the rail until the hamburger opens a full-screen menu):
+      primary nav entries + accordion sub-nav + Settings pinned as a utility
       to the bottom.
     · Top bar (slim): workspace name chip + run-status chip + Start/Stop
       + New Task. No tab strip.
@@ -13,6 +14,7 @@
   import Chip from '../lib/Chip.svelte'
   import Icon, { type IconName } from '../lib/Icon.svelte'
   import NoticeBand from '../lib/NoticeBand.svelte'
+  import StatusButton from '../lib/StatusButton.svelte'
   import StatusDot from '../lib/StatusDot.svelte'
   import ProjectShell from '../lib/layout/ProjectShell.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
@@ -36,8 +38,9 @@
   import { buildProviderIndicator } from '../lib/provider-indicator.js'
   import { formatUserPath } from '../lib/display-path.js'
   import { humanizeProjectName } from '../lib/project-name.js'
+  import { isOperationalReceiptQuestion } from '@guildhall/shared'
   import type { InboxItem } from '../lib/inbox-item-key.js'
-  import type { EventEnvelope, ProjectView, ProviderStatus } from '../lib/types.js'
+  import type { AgentQuestion, EventEnvelope, ProjectView, ProviderStatus, Task } from '../lib/types.js'
 
   interface Props {
     initialView?: ProjectView
@@ -52,6 +55,7 @@
   const routeProjectId = $derived(props.projectId?.trim() || null)
   const activeProjectId = $derived(routeProjectId ?? project.detail?.id ?? null)
   let busy = $state(false)
+  let optimisticRunStatus = $state<'running' | 'stopping' | null>(null)
   let runError = $state<string | null>(null)
   let intakeOpen = $state(false)
   let refreshHandle: ReturnType<typeof setInterval> | null = null
@@ -62,6 +66,8 @@
   let mobileRailOpen = $state(false)
   let railPreviewOpen = $state(false)
   let railPreference = $state<'collapsed' | 'expanded'>('collapsed')
+  let topbarLabelsCollapsed = $state(false)
+  let newTaskInOverflow = $state(false)
   const RAIL_PREFERENCE_KEY = 'guildhall:project-rail'
 
   // Inbox blockers drive disabled-state on top-bar actions so hard blockers
@@ -197,6 +203,22 @@
     return () => media.removeEventListener('change', sync)
   })
 
+  $effect(() => {
+    const compactLabels = window.matchMedia('(max-width: 720px)')
+    const overflowNewTask = window.matchMedia('(max-width: 640px)')
+    const sync = () => {
+      topbarLabelsCollapsed = compactLabels.matches
+      newTaskInOverflow = overflowNewTask.matches
+    }
+    sync()
+    compactLabels.addEventListener('change', sync)
+    overflowNewTask.addEventListener('change', sync)
+    return () => {
+      compactLabels.removeEventListener('change', sync)
+      overflowNewTask.removeEventListener('change', sync)
+    }
+  })
+
   function toggleRail(): void {
     if (railForcedCollapsed) return
     railPreference = railCollapsed ? 'expanded' : 'collapsed'
@@ -260,7 +282,7 @@
     id: ProjectView
     label: string
     icon: IconName
-    path: string
+    suffix: string
     subs?: Array<{ id: string; label: string; path: string }>
   }
 
@@ -268,34 +290,22 @@
   const needsMeta = $derived(coordinators.length === 0)
 
   const entries = $derived<NavEntry[]>([
-    { id: 'thread', label: 'Thread', icon: 'sparkles', path: currentProjectHref('/thread', activeProjectId) },
-    { id: 'inbox', label: 'Needs you', icon: 'inbox', path: currentProjectHref('/notifications', activeProjectId) },
-    { id: 'work', label: 'Work', icon: 'activity', path: currentProjectHref('/work', activeProjectId) },
-    { id: 'timeline', label: 'Timeline', icon: 'clock', path: currentProjectHref('/timeline', activeProjectId) },
+    { id: 'thread', label: 'Thread', icon: 'sparkles', suffix: '/thread' },
+    { id: 'inbox', label: 'Needs you', icon: 'inbox', suffix: '/notifications' },
+    { id: 'work', label: 'Work', icon: 'activity', suffix: '/work' },
+    { id: 'timeline', label: 'Timeline', icon: 'clock', suffix: '/timeline' },
     {
       id: 'release',
       label: 'Release',
       icon: 'rocket',
-      path: currentProjectHref('/release', activeProjectId),
+      suffix: '/release',
       subs: [
         { id: 'verdict', label: 'Verdict', path: currentProjectHref('/release', activeProjectId) },
         { id: 'criteria', label: 'Criteria', path: currentProjectHref('/release/criteria', activeProjectId) },
       ],
     },
-    {
-      id: 'settings',
-      label: 'Settings',
-      icon: 'settings',
-      path: currentProjectHref('/settings', activeProjectId),
-      subs: [
-        { id: 'ready', label: 'Ready', path: currentProjectHref('/settings', activeProjectId) },
-        { id: 'providers', label: 'Providers', path: currentProjectHref('/settings/providers', activeProjectId) },
-        { id: 'facts', label: 'Facts', path: currentProjectHref('/settings/facts', activeProjectId) },
-        { id: 'learning', label: 'Learning', path: currentProjectHref('/settings/learning', activeProjectId) },
-        { id: 'advanced', label: 'Advanced', path: currentProjectHref('/settings/advanced', activeProjectId) },
-      ],
-    },
   ])
+  const settingsPath = $derived(currentProjectHref('/settings', activeProjectId))
 
   function go(href: string) {
     closeMobileRail()
@@ -321,6 +331,7 @@
 
   async function start(mode: 'continuous' | 'one_task' = 'continuous') {
     busy = true
+    optimisticRunStatus = 'running'
     runError = null
     try {
       const res = await projectFetch('/api/project/start', {
@@ -335,6 +346,7 @@
         } catch {
           runError = `Start failed (HTTP ${res.status})`
         }
+        optimisticRunStatus = null
         return
       }
       setTimeout(() => void project.refresh(activeProjectId), 300)
@@ -353,6 +365,7 @@
 
   async function stop() {
     busy = true
+    optimisticRunStatus = 'stopping'
     runError = null
     try {
       const res = await projectFetch('/api/project/stop', { method: 'POST' }, activeProjectId)
@@ -363,6 +376,7 @@
         } catch {
           runError = `Stop failed (HTTP ${res.status})`
         }
+        optimisticRunStatus = null
         return
       }
       setTimeout(() => void project.refresh(activeProjectId), 300)
@@ -402,6 +416,15 @@
     return eventAtMillis(candidate) >= eventAtMillis(current) ? candidate : current
   }
 
+  function hasVisibleUnansweredQuestion(task: Task): boolean {
+    const status = task.status ?? ''
+    if (['done', 'shelved', 'blocked', 'pending_pr'].includes(status)) return false
+    return (task.openQuestions ?? []).some((question: AgentQuestion) =>
+      !question.answeredAt &&
+      !isOperationalReceiptQuestion(question),
+    )
+  }
+
   const detail = $derived(project.detail)
   $effect(() => {
     latestTickerEvent = (detail?.recentEvents ?? []).reduce<EventEnvelope | null>(
@@ -415,7 +438,12 @@
     }, 5000)
     return () => clearInterval(handle)
   })
-  const runStatus = $derived(detail?.run?.status ?? 'stopped')
+  const actualRunStatus = $derived(detail?.run?.status ?? 'stopped')
+  const runStatus = $derived(optimisticRunStatus ?? actualRunStatus)
+  $effect(() => {
+    if (optimisticRunStatus === 'running' && actualRunStatus === 'running') optimisticRunStatus = null
+    if (optimisticRunStatus === 'stopping' && actualRunStatus !== 'running') optimisticRunStatus = null
+  })
   const runMode = $derived(detail?.run?.mode === 'one_task' ? 'one_task' : 'continuous')
   const providerStatus = $derived(detail?.providerStatus ?? detail?.run?.providerStatus ?? null)
   const startReadiness = $derived(detail?.startReadiness ?? null)
@@ -445,6 +473,12 @@
       ? `${providerHeaderLabel ?? 'Current provider'} has seen ${providerStatus.health.consecutiveFailures} consecutive pooled failures${providerStatus.health.lastError ? ` (${providerStatus.health.lastError})` : ''}.`
       : null,
   )
+  const allTerminalStart = $derived(startReadiness?.code === 'all_terminal')
+  const allTerminalReadinessMessage = $derived(
+    allTerminalStart
+      ? startReadiness?.message ?? 'All tasks are already finished.'
+      : null,
+  )
   const projectTicker = $derived(buildProjectTicker(detail, latestTickerEvent, new Date(tickerNow)))
   const currentStopSummary = $derived.by(() => {
     if (runStatus === 'running' || runStatus === 'stopping') return null
@@ -464,8 +498,7 @@
     }
     for (const task of tasks) {
       const status = task.status ?? ''
-      const unansweredQuestions = (task.openQuestions ?? []).filter(q => !q.answeredAt).length
-      if (unansweredQuestions > 0) counts.waitingOnUser += 1
+      if (hasVisibleUnansweredQuestion(task)) counts.waitingOnUser += 1
       if ((task.escalations ?? []).some(escalation => !escalation.resolvedAt)) counts.escalated += 1
       if (status === 'spec_review') counts.awaitingApproval += 1
       if (status === 'import_draft') counts.draftReview += 1
@@ -514,7 +547,7 @@
     const tasks = detail?.tasks ?? []
     return tasks.some((task) => {
       const status = task.status ?? ''
-      const hasUnansweredQuestion = (task.openQuestions ?? []).some((question) => !question.answeredAt)
+      const hasUnansweredQuestion = hasVisibleUnansweredQuestion(task)
       const hasOpenEscalation = (task.escalations ?? []).some((escalation) => !escalation.resolvedAt)
       return (
         hasUnansweredQuestion ||
@@ -609,7 +642,7 @@
   // done yet" (hard blockers open, or no coordinator) from "operating — just
   // not currently running". Gives the user a clear mental model of what the
   // controls actually do right now.
-  type Phase = 'setting-up' | 'paused' | 'running' | 'error'
+  type Phase = 'setting-up' | 'paused' | 'stable' | 'running' | 'error'
   const phase = $derived<Phase>(
     runStatus === 'error'
       ? 'error'
@@ -617,6 +650,8 @@
         ? 'running'
         : needsMeta || blockers.bootstrap
           ? 'setting-up'
+          : activeCount === 0 && awaitingApprovalCount === 0 && taskList.length > 0
+            ? 'stable'
           : 'paused',
   )
   const phaseLabel = $derived(
@@ -626,6 +661,8 @@
         ? 'Running'
         : phase === 'error'
           ? 'Error'
+          : phase === 'stable'
+            ? 'Stable'
           : 'Paused',
   )
   const phaseTone = $derived(
@@ -635,10 +672,10 @@
         ? 'danger'
         : phase === 'setting-up'
           ? 'warn'
+          : phase === 'stable'
+            ? 'ok'
           : 'neutral',
   )
-  const providersActive = $derived(path.value === '/providers')
-
   // Task counts for the top-bar indicator. Stuck = has at least one open
   // escalation. Active = running/in-progress-like statuses.
   const taskList = $derived(detail?.tasks ?? [])
@@ -652,11 +689,11 @@
   const activeCount = $derived(
     taskList.filter(t => {
       const s = (t as { status?: string }).status
-      return s && !['done', 'blocked', 'cancelled', 'archived', 'spec_review'].includes(s)
+      return s && !['done', 'blocked', 'cancelled', 'archived', 'spec_review', 'shelved'].includes(s)
     }).length,
   )
   const activeCountLabel = $derived(
-    runStatus === 'running' || runStatus === 'stopping' ? 'active' : 'paused',
+    runStatus === 'running' || runStatus === 'stopping' ? 'active' : 'open',
   )
   const awaitingApprovalCount = $derived(
     taskList.filter(t => (t as { status?: string }).status === 'spec_review').length,
@@ -670,6 +707,8 @@
   const startDisabledReason = $derived(
     !startReadiness?.canStart
       ? startReadiness?.message ?? 'Finish setup before starting'
+      : activeCount === 0 && awaitingApprovalCount === 0 && taskList.length > 0
+        ? 'No tasks to start'
       : blockers.bootstrap && !metaIntakePending
         ? failedBootstrapStep
           ? 'Fix the bootstrap failure before starting'
@@ -678,12 +717,45 @@
   )
   const newTaskDisabledReason = $derived(
     needsMeta
-      ? 'Bootstrap the project first'
+      ? 'Finish project setup before adding tasks'
       : blockers.bootstrap
         ? failedBootstrapStep
           ? 'Fix the bootstrap failure before adding tasks'
           : 'Complete bootstrap in Thread before adding tasks'
         : null,
+  )
+  const setupAttentionHref = $derived(
+    currentProjectHref(
+      needsMeta || metaIntakePending
+        ? '/setup'
+        : startReadiness?.actionHref ?? '/settings/ready',
+      activeProjectId,
+    ),
+  )
+  const setupAttentionLabel = $derived(
+    startReadiness?.code === 'import_drafts_waiting'
+      ? 'Imported drafts need review'
+      : needsMeta || metaIntakePending
+        ? 'Project setup needs attention'
+        : startDisabledReason === 'No tasks to start'
+          ? 'No tasks to start'
+        : 'Readiness checks need attention',
+  )
+  const setupAttentionButtonLabel = $derived(
+    startReadiness?.code === 'import_drafts_waiting'
+      ? 'Review drafts'
+      : startDisabledReason === 'No tasks to start'
+        ? 'Ready'
+        : 'Setup',
+  )
+  const showSetupAttention = $derived(
+    Boolean(!allTerminalStart && (newTaskDisabledReason || (runStatus !== 'running' && startDisabledReason && startDisabledReason !== 'No tasks to start'))),
+  )
+  const showRunButton = $derived(
+    runStatus === 'running' || runStatus === 'stopping' || (!allTerminalStart && startDisabledReason !== 'No tasks to start'),
+  )
+  const showAdvanceOneTaskAction = $derived(
+    !allTerminalStart,
   )
 </script>
 
@@ -695,10 +767,12 @@
     uninitialized
     railCollapsed={railCollapsed && !railOverlayOpen}
     railPreviewOpen={railPreviewOpen}
+    mobileRailMode={railForcedCollapsed}
+    railOverlayOpen={railOverlayOpen}
   >
     {#snippet rail()}
     {#if railOverlayOpen}
-      <button type="button" class="rail-scrim" aria-label="Close project navigation" onclick={closeMobileRail}></button>
+      <button type="button" class="rail-scrim" aria-hidden="true" tabindex="-1" onclick={closeMobileRail}></button>
     {/if}
     <aside
       class="rail"
@@ -715,25 +789,29 @@
         <div class="rail-head-top">
           <div class="rail-project">{projectDisplayName}</div>
           <div class="rail-head-actions">
-            <button
-              type="button"
-              class="rail-pin"
+            <Button
+              variant="secondary"
+              size="sm"
+              iconOnly
+              className="rail-pin"
               onclick={toggleRail}
-              aria-label={railCollapsed ? 'Pin project navigation open' : 'Collapse project navigation'}
+              ariaLabel={railCollapsed ? 'Pin project navigation open' : 'Collapse project navigation'}
               title={railCollapsed ? 'Pin navigation open' : 'Collapse navigation'}
             >
               <Icon name={railCollapsed ? 'panel-left-open' : 'panel-left-close'} size={16} />
-            </button>
+            </Button>
           {#if railOverlayOpen}
-              <button
-                type="button"
-                class="rail-close"
+              <Button
+                variant="secondary"
+                size="sm"
+                iconOnly
+                className="rail-close"
                 onclick={closeMobileRail}
-                aria-label="Close project navigation"
+                ariaLabel="Close project navigation"
                 title="Close navigation"
               >
                 <Icon name="x" size={16} />
-              </button>
+              </Button>
             {/if}
           </div>
         </div>
@@ -747,6 +825,7 @@
             type="button"
             class="rail-item active"
             onclick={() => go('/')}
+            aria-label="Projects"
           >
             <span class="rail-stripe"></span>
             <Icon name="folder" size={18} />
@@ -762,13 +841,15 @@
           <Button
             variant="secondary"
             size="sm"
-            className="toolbar-btn toolbar-btn--back"
+            iconOnly={topbarLabelsCollapsed}
             onclick={() => go('/')}
             ariaLabel="Back to Projects"
             title="Back to Projects"
           >
             <Icon name="chevron-left" size={16} />
-            <span class="toolbar-btn-label">Projects</span>
+            {#if !topbarLabelsCollapsed}
+              <span>Projects</span>
+            {/if}
           </Button>
         </div>
         <div class="topbar-leading"></div>
@@ -792,10 +873,12 @@
   <ProjectShell
     railCollapsed={railCollapsed && !railOverlayOpen}
     railPreviewOpen={railPreviewOpen}
+    mobileRailMode={railForcedCollapsed}
+    railOverlayOpen={railOverlayOpen}
   >
     {#snippet rail()}
     {#if railOverlayOpen}
-      <button type="button" class="rail-scrim" aria-label="Close project navigation" onclick={closeMobileRail}></button>
+      <button type="button" class="rail-scrim" aria-hidden="true" tabindex="-1" onclick={closeMobileRail}></button>
     {/if}
     <aside
       class="rail"
@@ -812,25 +895,29 @@
         <div class="rail-head-top">
           <div class="rail-project">{projectDisplayName}</div>
           <div class="rail-head-actions">
-            <button
-              type="button"
-              class="rail-pin"
+            <Button
+              variant="secondary"
+              size="sm"
+              iconOnly
+              className="rail-pin"
               onclick={toggleRail}
-              aria-label={railCollapsed ? 'Pin project navigation open' : 'Collapse project navigation'}
+              ariaLabel={railCollapsed ? 'Pin project navigation open' : 'Collapse project navigation'}
               title={railCollapsed ? 'Pin navigation open' : 'Collapse navigation'}
             >
               <Icon name={railCollapsed ? 'panel-left-open' : 'panel-left-close'} size={16} />
-            </button>
+            </Button>
             {#if railOverlayOpen}
-              <button
-                type="button"
-                class="rail-close"
+              <Button
+                variant="secondary"
+                size="sm"
+                iconOnly
+                className="rail-close"
                 onclick={closeMobileRail}
-                aria-label="Close project navigation"
+                ariaLabel="Close project navigation"
                 title="Close navigation"
               >
                 <Icon name="x" size={16} />
-              </button>
+              </Button>
             {/if}
           </div>
         </div>
@@ -846,7 +933,8 @@
               type="button"
               class="rail-item"
               class:active
-              onclick={() => go(e.path)}
+              onclick={() => go(currentProjectHref(e.suffix, activeProjectId))}
+              aria-label={e.label}
               aria-current={active ? 'page' : undefined}
             >
               <span class="rail-stripe"></span>
@@ -878,16 +966,18 @@
         {/each}
       </nav>
       <div class="rail-bottom">
-        <Tooltip text="Providers" placement="right" className="rail-tooltip" disabled={railLabelsVisible}>
+        <Tooltip text="Settings" placement="right" className="rail-tooltip" disabled={railLabelsVisible}>
           <button
             type="button"
             class="rail-item"
-            class:active={providersActive}
-            onclick={() => go('/providers')}
+            class:active={currentView === 'settings'}
+            onclick={() => go(settingsPath)}
+            aria-label="Settings"
+            aria-current={currentView === 'settings' ? 'page' : undefined}
           >
             <span class="rail-stripe"></span>
-            <Icon name="plug" size={18} />
-            <span class="rail-label">Providers</span>
+            <Icon name="settings" size={18} />
+            <span class="rail-label">Settings</span>
           </button>
         </Tooltip>
       </div>
@@ -899,122 +989,162 @@
           <Button
             variant="secondary"
             size="sm"
-            className="toolbar-btn toolbar-btn--back"
+            iconOnly={topbarLabelsCollapsed}
             onclick={() => go('/')}
             ariaLabel="Back to Projects"
             title="Back to Projects"
           >
             <Icon name="chevron-left" size={16} />
-            <span class="toolbar-btn-label">Projects</span>
+            {#if !topbarLabelsCollapsed}
+              <span>Projects</span>
+            {/if}
           </Button>
         </div>
         <div class="topbar-leading">
-          {#if activeCount > 0 || awaitingApprovalCount > 0 || stuckCount > 0}
-            <button
-              type="button"
-              class="tasks-indicator"
-              class:has-stuck={stuckCount > 0}
+          {#if showSetupAttention}
+            <StatusButton
+              tone="warn"
+              icon="alert-triangle"
+              label={setupAttentionButtonLabel}
+              showLabel={!topbarLabelsCollapsed}
+              tooltip={topbarLabelsCollapsed}
+              onclick={() => go(setupAttentionHref)}
+              title={setupAttentionLabel}
+              ariaLabel={`${setupAttentionLabel}: ${newTaskDisabledReason ?? startDisabledReason ?? 'Review required'}`}
+            />
+          {/if}
+          {#if providerStatus?.fallback && providerHeaderLabel}
+            <StatusButton
+              tone="warn"
+              icon="plug"
+              label="Provider"
+              showLabel={!topbarLabelsCollapsed}
+              tooltip={topbarLabelsCollapsed}
+              onclick={() => go(currentProjectHref('/settings/providers', activeProjectId))}
+              title={providerTitle}
+              ariaLabel={providerTitle}
+            />
+          {/if}
+          {#if stuckCount > 0}
+            <StatusButton
+              tone="warn"
+              icon="alert-triangle"
+              label="Stuck"
+              count={stuckCount}
+              showLabel={!topbarLabelsCollapsed}
+              tooltip={topbarLabelsCollapsed}
               onclick={() => go(currentProjectHref('/work', activeProjectId))}
-              title="Jump to Work"
-              aria-label="{activeCount} {activeCountLabel}, {awaitingApprovalCount} awaiting approval, {stuckCount} stuck"
-            >
-              <span class="tasks-count">{activeCount} {activeCountLabel}</span>
-              {#if awaitingApprovalCount > 0}
-                <span class="tasks-approval">· {awaitingApprovalCount} awaiting approval</span>
-              {/if}
-              {#if stuckCount > 0}
-                <span class="tasks-stuck">· {stuckCount} stuck</span>
-              {/if}
-            </button>
+              title={`${stuckCount} stuck`}
+              ariaLabel={`${activeCount} ${activeCountLabel}, ${awaitingApprovalCount} awaiting approval, ${stuckCount} stuck`}
+            />
           {/if}
           {#if inboxActionableCount > 0}
-            <button
-              type="button"
-              class="inbox-indicator"
-              class:warn-only={!inboxHasHighSeverity}
+            <StatusButton
+              tone={inboxHasHighSeverity ? 'danger' : 'warn'}
+              icon="inbox"
+              label="Needs you"
+              count={inboxActionableCount}
+              showLabel={!topbarLabelsCollapsed}
+              tooltip={topbarLabelsCollapsed}
               onclick={() => go(currentProjectHref('/notifications', activeProjectId))}
-              title="Jump to Notifications"
-              aria-label="{inboxActionableCount} notifications need you"
-            >
-              <Icon name="inbox" size={14} />
-              <span>{inboxActionableCount}</span>
-            </button>
+              title={`${inboxActionableCount} need you`}
+              ariaLabel={`${inboxActionableCount} notifications need you`}
+            />
           {/if}
-          {#if providerHeaderLabel}
-            <button
-              type="button"
-              class="provider-indicator"
-              class:fallback={providerStatus?.fallback}
-              onclick={() => go('/providers')}
-              title={providerTitle}
-              aria-label={providerTitle}
-            >
-              <Icon name="plug" size={14} />
-              <span class="provider-summary">{providerHeaderLabel}</span>
-              {#if providerStatus?.fallback}
-                <span class="provider-fallback">fallback</span>
-              {/if}
-            </button>
+          {#if stuckCount === 0 && inboxActionableCount === 0 && (activeCount > 0 || awaitingApprovalCount > 0)}
+            <StatusButton
+              icon={awaitingApprovalCount > 0 ? 'check-circle-2' : 'list-checks'}
+              label={awaitingApprovalCount > 0 ? 'Review' : 'Work'}
+              count={awaitingApprovalCount > 0 ? awaitingApprovalCount : activeCount}
+              showLabel={!topbarLabelsCollapsed}
+              tooltip={topbarLabelsCollapsed}
+              onclick={() => go(currentProjectHref('/work', activeProjectId))}
+              title={awaitingApprovalCount > 0 ? 'Review' : 'Work'}
+              ariaLabel={`${activeCount} ${activeCountLabel}, ${awaitingApprovalCount} awaiting approval`}
+            />
           {/if}
         </div>
         <div class="topbar-actions">
-          <Button
-            variant="secondary"
-            size="sm"
-            className="toolbar-btn toolbar-btn--new-task"
-            disabled={busy || newTaskDisabledReason !== null}
-            onclick={newTask}
-            ariaLabel={newTaskDisabledReason ?? 'New task'}
-            title={newTaskDisabledReason ?? 'New task'}
-          >
-            <Icon name="plus" size={16} />
-            <span class="toolbar-btn-label">New task</span>
-          </Button>
-          <Button
-            variant={runStatus === 'running' ? 'danger' : 'primary'}
-            size="sm"
-            className="toolbar-btn toolbar-btn--primary"
-            disabled={busy || (runStatus !== 'running' && (runStatus === 'stopping' || startDisabledReason !== null))}
-            onclick={runStatus === 'running' ? stop : () => start('continuous')}
-            ariaLabel={
-              runStatus === 'running'
-                ? (runMode === 'one_task' ? 'Stop one-step run' : 'Stop')
-                : (startDisabledReason ?? 'Start')
-            }
-            title={
-              runStatus === 'running'
-                ? (runMode === 'one_task' ? 'Stop the current one-step run' : 'Stop Guildhall')
-                : (startDisabledReason ?? 'Let Guildhall advance this project')
-            }
-          >
-            <span class="btn-inner">
-              <Icon name={runStatus === 'running' ? 'square' : 'play'} size={16} />
-              {runStatus === 'running' ? (runMode === 'one_task' ? 'Stop 1' : 'Stop') : 'Start'}
-            </span>
-          </Button>
-          <div class="actions-menu" bind:this={actionsMenuEl}>
+          {#if newTaskDisabledReason === null && !newTaskInOverflow}
             <Button
               variant="secondary"
               size="sm"
-              className={`toolbar-btn toolbar-btn--icon ${actionsMenuOpen ? 'toolbar-btn--menu-open' : ''}`}
+              iconOnly={topbarLabelsCollapsed}
+              disabled={busy}
+              onclick={newTask}
+              ariaLabel="New task"
+              title="New task"
+            >
+              <Icon name="plus" size={16} />
+              {#if !topbarLabelsCollapsed}
+                <span>New task</span>
+              {/if}
+            </Button>
+          {/if}
+          {#if showRunButton}
+            <Button
+              variant={runStatus === 'running' || runStatus === 'stopping' ? 'danger' : 'primary'}
+              size="sm"
+              iconOnly={topbarLabelsCollapsed}
+              disabled={busy || runStatus === 'stopping' || (runStatus !== 'running' && startDisabledReason !== null)}
+              onclick={runStatus === 'running' ? stop : () => start('continuous')}
+              ariaLabel={
+                runStatus === 'stopping'
+                  ? 'Stopping'
+                  : runStatus === 'running'
+                  ? (runMode === 'one_task' ? 'Stop one-step run' : 'Stop')
+                  : (startDisabledReason ?? 'Start')
+              }
+              title={
+                runStatus === 'stopping'
+                  ? 'Stopping Guildhall'
+                  : runStatus === 'running'
+                  ? (runMode === 'one_task' ? 'Stop the current one-step run' : 'Stop Guildhall')
+                  : (startDisabledReason ?? 'Let Guildhall advance this project')
+              }
+            >
+              <Icon name={runStatus === 'running' || runStatus === 'stopping' ? 'square' : 'play'} size={16} />
+              {#if !topbarLabelsCollapsed}
+                {runStatus === 'stopping' ? 'Stopping...' : runStatus === 'running' ? (runMode === 'one_task' ? 'Stop 1' : 'Stop') : 'Start'}
+              {/if}
+            </Button>
+          {/if}
+          <div class="actions-menu" bind:this={actionsMenuEl}>
+            <Button
+              variant="ghost"
+              size="sm"
+              iconOnly
               ariaLabel="Open actions menu"
               title="Open actions menu"
               onclick={toggleActionsMenu}
             >
-              ...
+              <Icon name="ellipsis" size={18} />
             </Button>
             {#if actionsMenuOpen}
               <div class="actions-menu-panel">
-                <button
-                  type="button"
-                  class="actions-menu-item"
-                  disabled={busy || startDisabledReason !== null || runStatus === 'running' || runStatus === 'stopping'}
-                  title={startDisabledReason ?? ''}
-                  onclick={() => { closeActionsMenu(); start('one_task') }}
-                >
-                  <Icon name="check-circle-2" size={16} />
-                  <span>Advance one task</span>
-                </button>
+                {#if newTaskDisabledReason === null && newTaskInOverflow}
+                  <button
+                    type="button"
+                    class="actions-menu-item"
+                    disabled={busy}
+                    onclick={() => { closeActionsMenu(); void newTask() }}
+                  >
+                    <Icon name="plus" size={16} />
+                    <span>New task</span>
+                  </button>
+                {/if}
+                {#if showAdvanceOneTaskAction}
+                  <button
+                    type="button"
+                    class="actions-menu-item"
+                    disabled={busy || startDisabledReason !== null || runStatus === 'running' || runStatus === 'stopping'}
+                    title={startDisabledReason ?? ''}
+                    onclick={() => { closeActionsMenu(); start('one_task') }}
+                  >
+                    <Icon name="check-circle-2" size={16} />
+                    <span>Advance one task</span>
+                  </button>
+                {/if}
               </div>
             {/if}
           </div>
@@ -1027,7 +1157,7 @@
             <strong>{runError}</strong>
             {#snippet actions()}
             {#if /provider/i.test(runError)}
-              <a href="/providers" onclick={(e) => { e.preventDefault(); nav('/providers') }}>Open Providers</a>
+              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>Open project providers</a>
             {/if}
             <button class="dismiss" onclick={() => (runError = null)} aria-label="Dismiss">×</button>
             {/snippet}
@@ -1049,7 +1179,7 @@
           >
             <strong>{providerNoticeText}</strong>
             {#snippet actions()}
-              <a href="/providers" onclick={(e) => { e.preventDefault(); nav('/providers') }}>Open Providers</a>
+              <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>Open project providers</a>
             {/snippet}
           </NoticeBand>
         {/if}
@@ -1071,6 +1201,11 @@
             {#snippet actions()}
               <a href={currentProjectHref('/settings/providers', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/settings/providers', activeProjectId)) }}>Open Settings</a>
             {/snippet}
+          </NoticeBand>
+        {/if}
+        {#if allTerminalReadinessMessage}
+          <NoticeBand tone="accent" icon="check-circle-2" density="compact">
+            <strong>{allTerminalReadinessMessage}</strong>
           </NoticeBand>
         {/if}
         {#if runStopSummaryText}
@@ -1121,7 +1256,12 @@
         <div class="project-ticker-main">
           <StatusDot tone={projectTicker.tone} pulse={projectTicker.pulse} size="sm" />
           <span class="project-ticker-actor">{projectTicker.actorLabel ?? projectTicker.label}</span>
-          <span class="project-ticker-message">{projectTicker.message}</span>
+          <span class="project-ticker-message">
+            {projectTicker.message}
+            {#if projectTicker.detail}
+              <span class="project-ticker-detail"> - {projectTicker.detail}</span>
+            {/if}
+          </span>
         </div>
         {#if projectTicker.timeLabel}
           <span class="project-ticker-time">{projectTicker.timeLabel}</span>
@@ -1138,8 +1278,15 @@
 <style>
   .rail {
     width: 240px;
-    border-right: 1px solid var(--border);
-    background: var(--bg-raised);
+    border-right: 1px solid color-mix(in srgb, var(--glass-border) 78%, var(--border));
+    background:
+      linear-gradient(160deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 34%),
+      color-mix(in srgb, var(--glass-bg-strong) 90%, var(--bg-raised));
+    box-shadow:
+      inset -1px 0 0 color-mix(in srgb, white 4%, transparent),
+      10px 0 30px color-mix(in srgb, black 12%, transparent);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     display: flex;
     flex-direction: column;
     block-size: 100%;
@@ -1161,7 +1308,9 @@
   }
   .rail.rail-collapsed.rail-preview-open {
     width: 240px;
-    box-shadow: 14px 0 26px rgba(0, 0, 0, 0.22);
+    box-shadow:
+      14px 0 30px color-mix(in srgb, black 28%, transparent),
+      inset -1px 0 0 color-mix(in srgb, white 5%, transparent);
     overflow-x: visible;
     z-index: calc(var(--z-drawer) + 1);
   }
@@ -1194,7 +1343,7 @@
     flex: 1;
   }
   .rail-bottom {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid color-mix(in srgb, var(--glass-border) 78%, var(--border));
     padding-top: var(--s-2);
   }
   .rail-item {
@@ -1221,11 +1370,16 @@
   }
   .rail-item:hover {
     color: var(--text);
-    background: var(--bg-raised-2);
+    background:
+      linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%),
+      color-mix(in srgb, var(--glass-bg-strong) 78%, var(--bg-raised-2));
   }
   .rail-item.active {
     color: var(--text);
-    background: var(--bg-elevated);
+    background:
+      linear-gradient(90deg, color-mix(in srgb, var(--accent) 16%, transparent), transparent 62%),
+      color-mix(in srgb, var(--glass-bg-strong) 88%, var(--bg-elevated));
+    box-shadow: inset 0 1px 0 color-mix(in srgb, white 7%, transparent);
   }
   .rail-stripe {
     position: absolute;
@@ -1236,7 +1390,8 @@
     background: transparent;
   }
   .rail-item.active .rail-stripe {
-    background: var(--stripe-accent);
+    background: linear-gradient(180deg, var(--light-violet-warm), var(--stripe-accent));
+    box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 36%, transparent);
   }
   .rail-subs {
     list-style: none;
@@ -1261,7 +1416,7 @@
   }
   .rail-sub:hover { color: var(--text); }
   .rail-sub.active {
-    color: var(--text);
+    color: var(--accent-2);
     font-weight: 700;
   }
 
@@ -1274,8 +1429,15 @@
     align-items: center;
     gap: var(--s-2);
     padding: var(--s-3) var(--s-4);
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-raised);
+    border-bottom: 1px solid color-mix(in srgb, var(--glass-border) 80%, var(--border));
+    background:
+      linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 34%),
+      color-mix(in srgb, var(--glass-bg-strong) 94%, var(--bg-raised));
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, white 7%, transparent),
+      0 10px 28px color-mix(in srgb, black 16%, transparent);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     min-width: 0;
   }
   .topbar-start {
@@ -1289,7 +1451,7 @@
     flex-wrap: nowrap;
     gap: var(--s-2);
     min-width: 0;
-    overflow: hidden;
+    overflow: visible;
     justify-self: start;
   }
   .topbar-actions {
@@ -1302,7 +1464,7 @@
   }
   .rail-head {
     padding: var(--s-3) var(--s-3) var(--s-4) var(--s-3);
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid color-mix(in srgb, var(--glass-border) 78%, var(--border));
     margin-bottom: var(--s-3);
     display: flex;
     flex-direction: column;
@@ -1321,44 +1483,13 @@
     gap: var(--s-1);
     flex: 0 0 auto;
   }
-  .rail-pin {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 30px;
-    flex: 0 0 30px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: var(--bg-elevated);
-    color: var(--text-muted);
-    cursor: pointer;
-    padding: 0;
+  :global(.rail-pin),
+  :global(.rail-close) {
+    flex: 0 0 28px;
   }
-  .rail-close {
+  :global(.rail-close) {
     display: none;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 30px;
-    flex: 0 0 30px;
     margin-left: auto;
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: var(--bg-elevated);
-    color: var(--text-muted);
-    cursor: pointer;
-    padding: 0;
-  }
-  .rail-close:hover {
-    color: var(--text);
-    border-color: var(--border-strong);
-    background: var(--bg-raised-2);
-  }
-  .rail-pin:hover {
-    color: var(--text);
-    border-color: var(--border-strong);
-    background: var(--bg-raised-2);
   }
   .rail.rail-collapsed:not(.rail-preview-open) .rail-head {
     padding-inline: calc((56px - 30px) / 2);
@@ -1392,90 +1523,10 @@
   .rail-status {
     display: flex;
   }
-  .tasks-indicator,
-  .inbox-indicator,
-  .provider-indicator {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    color: var(--text-muted);
-    font-size: var(--fs-1);
-    padding: 2px 8px;
-    cursor: pointer;
-    font: inherit;
-    line-height: 1;
-  }
-  .tasks-indicator:hover,
-  .inbox-indicator:hover,
-  .provider-indicator:hover {
-    color: var(--text);
-    border-color: var(--border-strong);
-    background: var(--bg-raised-2);
-  }
-  .tasks-indicator.has-stuck {
-    color: var(--warn);
-    border-color: var(--warn);
-  }
-  .tasks-stuck { font-weight: 600; }
-  .inbox-indicator {
-    color: var(--danger);
-    border-color: var(--danger);
-    font-weight: 600;
-  }
-  .inbox-indicator.warn-only {
-    color: var(--warn);
-    border-color: var(--warn);
-  }
-  .provider-indicator {
-    color: var(--text-muted);
-    max-width: min(100%, 42ch);
-    min-width: 0;
-  }
-  .provider-indicator.fallback {
-    color: var(--warn);
-    border-color: var(--warn);
-    font-weight: 600;
-  }
-  .provider-summary {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
-  .provider-fallback {
-    font-size: var(--fs-0);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
   .btn-inner {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-  }
-  .toolbar-btn {
-    min-height: 40px;
-    padding: 0 14px;
-    border-radius: 10px;
-    flex: none;
-  }
-  .toolbar-btn--primary {
-    min-width: 116px;
-  }
-  .toolbar-btn--new-task {
-    min-width: 118px;
-  }
-  .toolbar-btn--icon {
-    width: 40px;
-    min-width: 40px;
-    padding: 0;
-    border-radius: 999px;
-  }
-  .toolbar-btn--menu-open {
-    background: var(--bg-elevated);
-    border-color: var(--border-strong);
   }
   .actions-menu {
     position: relative;
@@ -1490,10 +1541,14 @@
     flex-direction: column;
     gap: 2px;
     padding: var(--s-2);
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: var(--bg-elevated);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+    border: 1px solid color-mix(in srgb, var(--glass-border-strong) 66%, var(--border));
+    border-radius: var(--r-2);
+    background:
+      var(--glass-reflect-violet),
+      color-mix(in srgb, var(--glass-bg-strong) 94%, var(--bg-elevated));
+    box-shadow: var(--glass-shadow), var(--glass-etch);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
   }
   .actions-menu-item {
     display: inline-flex;
@@ -1513,55 +1568,30 @@
     cursor: pointer;
   }
   .actions-menu-item:hover:not(:disabled) {
-    background: var(--bg-raised-2);
+    background: color-mix(in srgb, var(--accent) 12%, var(--bg-raised-2));
   }
   .actions-menu-item:disabled {
     opacity: 0.5;
     cursor: not-allowed;
   }
 
-  @media (max-width: 1180px) {
-    .tasks-approval,
-    .tasks-stuck,
-    .provider-fallback {
-      display: none;
-    }
-    .toolbar-btn--back .toolbar-btn-label {
-      display: none;
-    }
-  }
-
   @media (max-width: 900px) {
-    .rail-pin {
+    :global(.rail-pin) {
       display: none;
-    }
-    .toolbar-btn-label {
-      display: none;
-    }
-    .toolbar-btn--new-task {
-      width: 40px;
-      min-width: 40px;
-      padding: 0;
-      border-radius: 999px;
     }
     .topbar {
-      grid-template-columns: auto auto;
-      grid-template-rows: auto auto;
-      row-gap: var(--s-2);
+      grid-template-columns: auto minmax(0, 1fr) auto;
     }
     .topbar-start {
       grid-column: 1;
-      grid-row: 1;
     }
     .topbar-actions {
-      grid-column: 2;
-      grid-row: 1;
+      grid-column: 3;
       justify-self: end;
     }
     .topbar-leading {
-      grid-column: 1 / -1;
-      grid-row: 2;
-      justify-self: stretch;
+      grid-column: 2;
+      justify-self: start;
       overflow-x: auto;
       scrollbar-width: none;
     }
@@ -1570,15 +1600,6 @@
     }
   }
 
-  .page {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-5);
-    padding-top: var(--s-5);
-    max-width: 1400px;
-    margin: 0 auto;
-    width: 100%;
-  }
   .band {
     display: flex;
     flex-direction: column;
@@ -1661,17 +1682,15 @@
   .rail.rail-collapsed:not(.rail-preview-open) .rail-head { padding: var(--s-2); align-items: center; }
 
   @media (max-width: 920px) {
-    .rail-pin {
+    :global(.rail-pin) {
       display: none;
     }
-    .rail.rail-mobile-open .rail-close {
+    .rail:not(.rail-mobile-open) {
+      display: none;
+    }
+    .rail.rail-mobile-open :global(.rail-close) {
       display: inline-flex;
     }
-    .rail:not(.rail-mobile-open) .rail-label { display: none; }
-    .rail:not(.rail-mobile-open) .rail-subs { display: none; }
-    .rail:not(.rail-mobile-open) .rail-item { justify-content: center; padding: var(--s-2); }
-    .rail:not(.rail-mobile-open) .rail-project { display: none; }
-    .rail:not(.rail-mobile-open) .rail-head { padding: var(--s-2); align-items: center; }
     .rail.rail-mobile-open {
       width: 100vw;
       padding: var(--s-4) 0;
@@ -1703,10 +1722,6 @@
     .rail.rail-mobile-open .rail-bottom {
       padding: var(--s-3) 0 0 0;
     }
-    .page {
-      gap: var(--s-4);
-      padding-top: var(--s-4);
-    }
     .body {
       gap: var(--s-4);
     }
@@ -1715,6 +1730,23 @@
     }
     .project-ticker-message {
       white-space: normal;
+    }
+  }
+  @media (max-width: 520px) {
+    .topbar {
+      padding: var(--s-2);
+      gap: var(--s-2);
+    }
+    .topbar-start :global(.btn span:not(.ic)) {
+      display: none;
+    }
+    .topbar-actions {
+      max-width: 100%;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .topbar-actions::-webkit-scrollbar {
+      display: none;
     }
   }
 </style>

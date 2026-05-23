@@ -124,6 +124,36 @@ describe('GET /api/project/task/:id', () => {
     ])
   })
 
+  it('returns the exploring transcript artifact for the task drawer', async () => {
+    await seedTask('task-1')
+    await fs.mkdir(path.join(memoryDir, 'exploring'), { recursive: true })
+    await fs.writeFile(
+      path.join(memoryDir, 'exploring', 'task-1.md'),
+      [
+        '# Exploring transcript: task-1',
+        '',
+        '## [2026-05-19T23:48:34.395Z] system',
+        '',
+        'Imported from project notes. Turn this into a complete task.',
+        '',
+        '---',
+        '## [2026-05-19T23:49:39.164Z] spec-agent',
+        '',
+        'Let me find the source note first.',
+        '',
+        '---',
+      ].join('\n'),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.exploringTranscript?.path).toBe(path.join(memoryDir, 'exploring', 'task-1.md'))
+    expect(body.exploringTranscript?.content).toContain('Let me find the source note first.')
+  })
+
   it('filters stale acceptance-note transcript entries that no longer match canonical criteria', async () => {
     await seedTask('task-1', {
       acceptanceCriteria: [
@@ -1196,6 +1226,59 @@ describe('GET /api/project/activity', () => {
     expect(body.counts.done).toBe(1)
     expect(body.inFlight).toHaveLength(2)
     expect(body.inFlight.map((t: any) => t.id).sort()).toEqual(['t1', 't2'])
+  })
+
+  it('includes the latest live event metadata for in-flight tasks', async () => {
+    const tasksPath = path.join(memoryDir, 'TASKS.json')
+    const older = '2026-05-23T18:00:00.000Z'
+    const now = '2026-05-23T18:01:00.000Z'
+    const queue = {
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        { id: 't1', title: 'Long worker loop', description: '', domain: 'd', projectPath: tmpDir, status: 'in_progress', priority: 'normal', revisionCount: 0, remediationAttempts: 0, origination: 'human', createdAt: older, updatedAt: older },
+      ],
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+    await fs.writeFile(
+      path.join(memoryDir, 'recent-events.jsonl'),
+      [
+        JSON.stringify({
+          at: older,
+          workspaceId: projectId,
+          event: {
+            type: 'tool_execution_started',
+            task_id: 't1',
+            tool_name: 'command',
+            tool_input: { cmd: 'pnpm test' },
+          },
+        }),
+        JSON.stringify({
+          at: now,
+          workspaceId: projectId,
+          event: {
+            type: 'tool_execution_completed',
+            task_id: 't1',
+            tool_name: 'command',
+            output: 'command failed',
+            is_error: true,
+          },
+        }),
+      ].join('\n') + '\n',
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/activity')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.inFlight[0]).toMatchObject({
+      id: 't1',
+      status: 'in_progress',
+      lastActivityLabel: 'Failed command',
+      lastActivityTone: 'danger',
+    })
+    expect(body.inFlight[0].lastActivityAt).toBe(now)
   })
 
   it('returns empty summary when no tasks file exists yet', async () => {

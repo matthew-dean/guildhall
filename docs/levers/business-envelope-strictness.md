@@ -11,7 +11,7 @@ help_summary: |
 
 **Scope:** project • **Default:** `advisory`
 
-Controls enforcement of the project's business envelope — `memory/business-envelope.yaml` with `goals:` and `guardrails:`.
+Controls enforcement of the project's business envelope — `./memory/business-envelope.yaml` with `goals:` and `guardrails:`.
 
 ## Positions
 

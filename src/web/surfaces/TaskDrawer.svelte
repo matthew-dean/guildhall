@@ -22,10 +22,12 @@
   import ResolveEscalationModal from './drawer/ResolveEscalationModal.svelte'
   import type { DrawerPayload, DrawerTab, Escalation } from '../lib/types.js'
   import { onEvent, eventTaskId } from '../lib/events.js'
-  import { currentTaskHref, projectFetch } from '../lib/project-routes.js'
+  import { currentProjectHref, currentTaskHref, projectFetch } from '../lib/project-routes.js'
   import { project } from '../lib/project.svelte.js'
   import { onMount, onDestroy } from 'svelte'
   import { toast } from 'svelte-sonner'
+  import { activeEscalations } from '../lib/escalation.js'
+  import { escalationPrimaryAction } from '../lib/escalation-labels.js'
 
   interface Props {
     taskId: string
@@ -75,6 +77,35 @@
     const singleLine = value.replace(/\s+/g, ' ').trim()
     if (singleLine.length <= max) return singleLine
     return `${singleLine.slice(0, max - 1).trim()}...`
+  }
+
+  async function copyTaskLink(taskId: string): Promise<void> {
+    const href = currentTaskHref(taskId)
+    const absolute = typeof window === 'undefined'
+      ? href
+      : new URL(href, window.location.origin).toString()
+    try {
+      await navigator.clipboard?.writeText(absolute)
+      toast.success('Task link copied.')
+    } catch {
+      toast.error('Could not copy the task link.')
+    }
+  }
+
+  function requestedInitialTab(): DrawerTab | null {
+    if (typeof window === 'undefined') return null
+    const raw = new URLSearchParams(window.location.search).get('tab')
+    if (
+      raw === 'current' ||
+      raw === 'spec' ||
+      raw === 'transcript' ||
+      raw === 'experts' ||
+      raw === 'history' ||
+      raw === 'provenance'
+    ) {
+      return raw
+    }
+    return null
   }
 
   const BASE_TABS = [
@@ -213,6 +244,21 @@
     await runProject('start', taskId)
   }
 
+  async function handleShelve() {
+    if (!confirmed('Shelve')) return
+    if (!(await post('shelve'))) return
+    await project.refresh()
+    toast.success('Task put aside.')
+    onClose()
+  }
+
+  async function handleUnshelve() {
+    if (!confirmed('Unshelve')) return
+    if (!(await post('unshelve'))) return
+    await project.refresh()
+    toast.success('Task returned to the queue.')
+  }
+
   async function handleAddAcceptance(description: string) {
     await post('add-acceptance', { description })
   }
@@ -239,9 +285,59 @@
       ? ([{ id: 'current', label: 'Now' }, ...BASE_TABS] as const)
       : BASE_TABS,
   )
-  const canPause = $derived(task && task.status !== 'done' && task.status !== 'shelved')
-  const canShelve = $derived(task && task.status !== 'done')
+  function isTerminalRunStatus(status: string | undefined): boolean {
+    return status === 'done' || status === 'shelved' || status === 'pending_pr'
+  }
+
+  const isTerminalRunTask = $derived(isTerminalRunStatus(task?.status))
+  const canPause = $derived(task && !isTerminalRunTask)
+  const canShelve = $derived(task && task.status !== 'done' && task.status !== 'pending_pr')
   const isShelved = $derived(task?.status === 'shelved')
+  const isWorkspaceImportTask = $derived(task?.id === 'task-workspace-import')
+  const openEscalations = $derived(task ? activeEscalations(task) : [])
+  const firstOpenEscalation = $derived(openEscalations[0] ?? null)
+  const firstOpenEscalationAction = $derived(escalationPrimaryAction(firstOpenEscalation))
+  const drawerOutcome = $derived.by(() => {
+    if (!task) return null
+    if (task.status === 'shelved') {
+      return {
+        tone: 'warn',
+        eyebrow: 'Put aside',
+        title: 'This task is out of the active queue.',
+        detail: task.shelveReason?.detail
+          ?? 'Guildhall will not work on it again until you return it to the queue.',
+      }
+    }
+    if (task.terminalSummary?.headline) {
+      return {
+        tone: 'ok',
+        eyebrow: 'Finished',
+        title: task.terminalSummary.headline,
+        detail: task.terminalSummary.detail ?? 'This task has a terminal result.',
+      }
+    }
+    if (task.latestCheckpoint?.nextPlannedAction || task.latestCheckpoint?.intent) {
+      return {
+        tone: 'info',
+        eyebrow: 'Checkpoint saved',
+        title: task.latestCheckpoint.nextPlannedAction
+          ? 'Guildhall saved where to resume.'
+          : 'Guildhall saved a recovery checkpoint.',
+        detail: task.latestCheckpoint.nextPlannedAction
+          ?? task.latestCheckpoint.intent
+          ?? 'The next worker pass can resume from the latest checkpoint.',
+      }
+    }
+    if (firstOpenEscalation && /no visible progress/i.test(firstOpenEscalation.summary ?? '')) {
+      return {
+        tone: 'warn',
+        eyebrow: 'Needs recovery',
+        title: 'Guildhall did not produce a durable task update.',
+        detail: 'Check Transcript for useful observations, then resume the task or mark the blocker resolved with a note.',
+      }
+    }
+    return null
+  })
   const displayTaskTitle = $derived.by(() => {
     if (!task) return taskId
     const raw = typeof task.title === 'string' ? task.title.trim() : ''
@@ -290,7 +386,12 @@
   $effect(() => {
     if (!payload) return
     if (initializedTabForTaskId === taskId) return
-    activeTab = hasCurrentTurns && !preferSpecTab ? 'current' : 'spec'
+    const requested = requestedInitialTab()
+    activeTab = requested && (requested !== 'current' || hasCurrentTurns)
+      ? requested
+      : hasCurrentTurns && !preferSpecTab
+        ? 'current'
+        : 'spec'
     initializedTabForTaskId = taskId
   })
 
@@ -321,7 +422,13 @@
           : undefined,
       })
       if (!res.ok) {
-        const b = await res.json().catch(() => ({}))
+        const b = await res.json().catch(() => ({})) as { code?: string; error?: string; status?: string }
+        if (b.code === 'run_already_active') {
+          toast.info('Guildhall is already running. This task stays queued for the coordinator.')
+          await project.refresh()
+          await load()
+          return
+        }
         runError = b.error ?? `${action === 'start' ? 'Start' : 'Stop'} failed (HTTP ${res.status})`
         return
       }
@@ -409,112 +516,174 @@
       </div>
     {:else if !payload}
       <p class="loading">Loading...</p>
-    {:else if activeTab === 'current'}
-      <CurrentTab
-        task={payload.task}
-        turns={payload.threadTurns ?? []}
-        {busy}
-        {runBusy}
-        {runError}
-        onApproveBrief={() => post('approve-brief')}
-        onApproveSpec={handleApproveSpec}
-        onRunTask={() => runProject('start', taskId)}
-        onShapeDraft={handleShapeDraft}
-        onOpenSpecTab={() => (activeTab = 'spec')}
-        onAnswerQuestion={answerQuestion}
-      />
-    {:else if activeTab === 'spec'}
-      <SpecTab
-        task={payload.task}
-        {busy}
-        onApproveBrief={() => post('approve-brief')}
-        onApproveSpec={handleApproveSpec}
-        onPause={() => confirmed('Pause') && post('pause')}
-        onShelve={() => confirmed('Shelve') && post('shelve')}
-        onUnshelve={() => confirmed('Unshelve') && post('unshelve')}
-        onResolveEscalation={handleResolveEscalation}
-        onSendFollowUp={handleSendFollowUp}
-        onAddAcceptance={handleAddAcceptance}
-      />
-    {:else if activeTab === 'transcript'}
-      <TranscriptTab task={payload.task} />
-    {:else if activeTab === 'experts'}
-      <ExpertsTab taskId={taskId} />
-    {:else if activeTab === 'history'}
-      <HistoryTab task={payload.task} />
-    {:else if activeTab === 'provenance'}
-      <ProvenanceTab task={payload.task} contextDebug={payload.contextDebug ?? []} />
+    {:else}
+      {#if drawerOutcome}
+        <section class={`drawer-outcome tone-${drawerOutcome.tone}`} aria-label={drawerOutcome.eyebrow}>
+          <span class="outcome-eyebrow">{drawerOutcome.eyebrow}</span>
+          <strong>{drawerOutcome.title}</strong>
+          <span>{drawerOutcome.detail}</span>
+        </section>
+      {/if}
+      {#if activeTab === 'current'}
+        <CurrentTab
+          task={payload.task}
+          turns={payload.threadTurns ?? []}
+          {busy}
+          {runBusy}
+          {runError}
+          {runStatus}
+          onApproveBrief={() => post('approve-brief')}
+          onApproveSpec={handleApproveSpec}
+          onRunTask={() => runProject('start', taskId)}
+          onShapeDraft={handleShapeDraft}
+          onOpenSpecTab={() => (activeTab = 'spec')}
+          onAnswerQuestion={answerQuestion}
+        />
+      {:else if activeTab === 'spec'}
+        <SpecTab
+          task={payload.task}
+          {busy}
+          onApproveBrief={() => post('approve-brief')}
+          onApproveSpec={handleApproveSpec}
+          onPause={() => confirmed('Pause') && post('pause')}
+          onShelve={() => confirmed('Shelve') && post('shelve')}
+          onUnshelve={() => confirmed('Unshelve') && post('unshelve')}
+          onResolveEscalation={handleResolveEscalation}
+          onSendFollowUp={handleSendFollowUp}
+          onAddAcceptance={handleAddAcceptance}
+        />
+      {:else if activeTab === 'transcript'}
+        <TranscriptTab task={payload.task} exploringTranscript={payload.exploringTranscript} />
+      {:else if activeTab === 'experts'}
+        <ExpertsTab taskId={taskId} />
+      {:else if activeTab === 'history'}
+        <HistoryTab task={payload.task} />
+      {:else if activeTab === 'provenance'}
+        <ProvenanceTab task={payload.task} contextDebug={payload.contextDebug ?? []} />
+      {/if}
     {/if}
   </div>
 
   {#if payload && task}
     <footer class="gh-drawer-foot">
-      <div class="run-controls">
-        {#if runError}
-          <span class="run-error">{runError}</span>
-        {/if}
-        {#if !hasCurrentTurns}
-          {#if runStatus === 'running'}
+      {#if isWorkspaceImportTask}
+        <div class="footer-actions-left">
+          <Button variant="ghost" size="sm" onclick={() => copyTaskLink(task.id)}>
+            Copy link
+          </Button>
+        </div>
+        <div class="footer-actions-right">
+          <Button
+            variant="primary"
+            size="sm"
+            onclick={() => {
+              window.history.pushState({}, '', currentProjectHref('/workspace-import'))
+              window.dispatchEvent(new PopStateEvent('popstate'))
+            }}
+          >
+            Open import review
+          </Button>
+        </div>
+      {:else}
+        <div class="footer-actions-left">
+          <div class="run-controls">
+            {#if runError}
+              <span class="run-error">{runError}</span>
+            {/if}
+            {#if !hasCurrentTurns && !isTerminalRunTask}
+              {#if runStatus === 'running'}
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={runBusy}
+                  onclick={() => runProject('stop')}
+                >
+                  Stop run
+                </Button>
+              {:else}
+                <Button
+                  variant={firstOpenEscalation ? 'secondary' : 'primary'}
+                  size="sm"
+                  disabled={runBusy || runStatus === 'stopping'}
+                  onclick={() => runProject('start')}
+                >
+                  Run this task
+                </Button>
+              {/if}
+            {/if}
+          </div>
+          {#if canPause || (!isShelved && canShelve) || stageRerun}
+            <details class="more-actions">
+              <summary>More task actions</summary>
+              <div class="more-action-menu">
+                {#if canPause}
+                  {#if stageRerun}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={busy || rerunStageBusy !== null}
+                      onclick={() => rerunStage(stageRerun.stage)}
+                    >
+                      {rerunStageBusy === stageRerun.stage ? 'Re-running...' : stageRerun.label}
+                    </Button>
+                  {/if}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy}
+                    onclick={() => confirmed('Pause') && post('pause')}
+                  >
+                    Pause task
+                  </Button>
+                {/if}
+                {#if !isShelved && canShelve}
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    disabled={busy}
+                    onclick={handleShelve}
+                  >
+                    Put aside
+                  </Button>
+                {/if}
+              </div>
+            </details>
+          {/if}
+          <Button variant="ghost" size="sm" onclick={() => copyTaskLink(task.id)}>
+            Copy link
+          </Button>
+        </div>
+        <div class="footer-actions-right">
+          {#if firstOpenEscalation}
             <Button
-              variant="danger"
+              variant="secondary"
               size="sm"
-              disabled={runBusy}
-              onclick={() => runProject('stop')}
+              disabled={busy}
+              onclick={() => handleResolveEscalation(firstOpenEscalation, 'resolve')}
             >
-              Stop run
+              Mark resolved...
             </Button>
-          {:else}
             <Button
               variant="primary"
               size="sm"
-              disabled={runBusy || runStatus === 'stopping'}
-              onclick={() => runProject('start')}
+              disabled={busy}
+              onclick={() => handleResolveEscalation(firstOpenEscalation, 'retry')}
             >
-              Run this task
+              {firstOpenEscalationAction.label}
             </Button>
           {/if}
-        {/if}
-      </div>
-      {#if canPause}
-        {#if stageRerun}
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={busy || rerunStageBusy !== null}
-            onclick={() => rerunStage(stageRerun.stage)}
-          >
-            {rerunStageBusy === stageRerun.stage ? 'Re-running...' : stageRerun.label}
-          </Button>
-        {/if}
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={busy}
-          onclick={() => confirmed('Pause') && post('pause')}
-        >
-          Pause task
-        </Button>
+          {#if isShelved}
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={busy}
+              onclick={handleUnshelve}
+            >
+              Unshelve
+            </Button>
+          {/if}
+        </div>
       {/if}
-      {#if isShelved}
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={busy}
-          onclick={() => confirmed('Unshelve') && post('unshelve')}
-        >
-          Unshelve
-        </Button>
-      {:else if canShelve}
-        <Button
-          variant="danger"
-          size="sm"
-          disabled={busy}
-          onclick={() => confirmed('Shelve') && post('shelve')}
-        >
-          Put aside
-        </Button>
-      {/if}
-      <a class="copy-link" href={currentTaskHref(task.id)}>copy link</a>
     </footer>
   {/if}
 </aside>
@@ -587,20 +756,70 @@
     overflow-y: auto;
     padding: var(--s-4);
   }
+  .drawer-outcome {
+    display: grid;
+    gap: var(--s-1);
+    margin-bottom: var(--s-4);
+    padding: var(--s-3);
+    border: 1px solid var(--border);
+    border-left-width: 3px;
+    border-radius: var(--radius-md);
+    background: var(--bg);
+    color: var(--text);
+  }
+  .drawer-outcome strong {
+    font-size: var(--fs-2);
+    line-height: var(--lh-tight);
+  }
+  .drawer-outcome span:last-child {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-copy);
+  }
+  .outcome-eyebrow {
+    color: var(--text-subtle);
+    font-size: var(--fs-0);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .drawer-outcome.tone-warn {
+    border-left-color: var(--warning);
+  }
+  .drawer-outcome.tone-ok {
+    border-left-color: var(--success);
+  }
+  .drawer-outcome.tone-info {
+    border-left-color: var(--accent);
+  }
   .gh-drawer-foot {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
     gap: var(--s-2);
     padding: var(--s-3) var(--s-4);
     border-top: 1px solid var(--border);
     background: var(--bg-sunken, var(--bg));
   }
+  .footer-actions-left,
+  .footer-actions-right {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    min-width: 0;
+  }
+  .footer-actions-left {
+    flex: 1 1 auto;
+    justify-content: flex-start;
+  }
+  .footer-actions-right {
+    flex: 0 0 auto;
+    justify-content: flex-end;
+  }
   .run-controls {
     display: flex;
     align-items: center;
     gap: var(--s-2);
-    margin-right: auto;
     min-width: 0;
   }
   .run-error {
@@ -612,11 +831,39 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .more-actions {
+    position: relative;
+  }
+  .more-actions summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    font-weight: 700;
+    list-style: none;
+  }
+  .more-actions summary::-webkit-details-marker {
+    display: none;
+  }
+  .more-actions[open] summary {
+    color: var(--text);
+  }
+  .more-action-menu {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + var(--s-2));
+    display: grid;
+    gap: var(--s-2);
+    min-width: 180px;
+    padding: var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-raised);
+    box-shadow: var(--shadow-lg);
+  }
   .copy-link {
     color: var(--text-muted);
     font-size: var(--fs-1);
     text-decoration: underline dotted;
-    margin-left: var(--s-2);
   }
   .error-stack {
     display: flex;
@@ -631,5 +878,23 @@
   }
   .error {
     color: var(--danger);
+  }
+  @media (max-width: 720px) {
+    .gh-drawer-foot,
+    .footer-actions-left,
+    .footer-actions-right {
+      align-items: stretch;
+    }
+    .gh-drawer-foot {
+      flex-direction: column;
+    }
+    .footer-actions-left,
+    .footer-actions-right {
+      width: 100%;
+      flex-wrap: wrap;
+    }
+    .footer-actions-right {
+      justify-content: flex-end;
+    }
   }
 </style>

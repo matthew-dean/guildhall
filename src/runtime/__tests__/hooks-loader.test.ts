@@ -23,6 +23,7 @@ function baseConfig(hooks?: Record<string, unknown[]>): ResolvedConfig {
       worker: 'm',
       reviewer: 'm',
       gateChecker: 'm',
+      contextIndexer: 'm',
     },
     coordinators: [],
     maxRevisions: 3,

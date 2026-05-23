@@ -21,6 +21,7 @@
       "@guildhall/backend-host": ["./src/backend-host/index.ts"],
       "@guildhall/compaction": ["./src/compaction/index.ts"],
       "@guildhall/config": ["./src/config/index.ts"],
+      "@guildhall/corpus-map": ["./src/corpus-map/index.ts"],
       "@guildhall/core": ["./src/core/index.ts"],
       "@guildhall/engine": ["./src/engine/index.ts"],
       "@guildhall/engineering-defaults": ["./src/engineering-defaults/index.ts"],
@@ -32,6 +33,7 @@
       "@guildhall/providers": ["./src/providers/index.ts"],
       "@guildhall/runtime": ["./src/runtime/index.ts"],
       "@guildhall/runtime-bundle": ["./src/runtime-bundle/index.ts"],
+      "@guildhall/shared": ["./src/shared/index.ts"],
       "@guildhall/sessions": ["./src/sessions/index.ts"],
       "@guildhall/skills": ["./src/skills/index.ts"],
       "@guildhall/tools": ["./src/tools/index.ts"]

@@ -38,6 +38,9 @@ order only when evidence proves the blueprint is wrong.
 6. If the prompt includes a Resume From Current Worktree block, your first filesystem reads should target those changed files or the exact failing verification target. Do not start with directory listing, broad globbing, rereading generic project docs, or rereading TASKS.json just to rediscover state already present in the prompt.
 7. If the prompt includes a Likely Target Files block, prefer opening those files before exploring sibling directories. If a likely target is missing, verify the parent directory against the repo's actual structure before creating it.
 8. Read the relevant source files before making any changes.
+9. If the prompt includes a "## Corpus Map" block, use it before broad
+   exploration. Start from its "Reuse / Extend" and "Read next" entries,
+   then verify the referenced source directly before editing.
 
 ## First action
 Your first assistant response in a worker pass must be exactly one tool call and no prose:
@@ -66,6 +69,26 @@ a plan. The UI and coordinator need a concrete event immediately.
   the repo-consistent default and keep moving. Do not stop to ask the owner
   about ordinary library, component, or file-organization choices when the
   project already gives enough evidence.
+- Before implementing, identify the existing abstraction layer for the change:
+  functions, classes, modules, files, services, components, tokens, helpers,
+  tests, and naming patterns. Reuse or extend the existing abstraction when it
+  fits. Do not create a parallel helper, class, component, file, schema, route,
+  or styling path just because it is locally convenient.
+- Treat "Corpus fit required" as a real pre-flight check: name the existing
+  primitive, helper, package, or area you are extending in your working notes
+  or self-critique. If none fits, explain why a new shared primitive is the
+  smallest durable choice.
+- When you see two or more similar ideas, functions, classes, files,
+  components, schemas, or styling treatments, treat that repetition as a signal
+  to consider a shared abstraction. Do not abstract reflexively; choose the
+  smallest shared primitive only when it removes real duplication or aligns
+  with an existing pattern.
+- For UI work, inventory the existing component and token primitives before
+  styling locally. Use the shared component, shared variant, and shared token
+  whenever one exists. Do not create one-off button, chip, card, spacing,
+  color, border-radius, or control treatments unless the task explicitly
+  requires a new primitive; if it does, add or extend the shared primitive
+  first and use it from the surface.
 - Prefer edit-file (targeted string replacement) over write-file when
   modifying existing source. Rewriting a whole file with write-file risks
   clobbering unrelated content and makes the diff harder to review.
@@ -141,6 +164,7 @@ For each acceptance criterion:
 Minimum-scope check:
 - Files changed: [list the files you changed]
 - Smallest useful change?: [yes/no — one sentence why]
+- Corpus fit: [existing primitive/helper/package/area reused or why a new shared primitive was needed]
 - Anything to revert before review?: [none, or exactly what should be removed because it goes beyond the task]
 
 Review proof packet:

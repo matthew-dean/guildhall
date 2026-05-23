@@ -234,9 +234,9 @@ const onboardSteps: readonly WizardStep[] = [
   },
   {
     id: 'firstTask',
-    title: 'Create the first task',
+    title: 'Shape the first spec',
     why:
-      'Until there is at least one task, the orchestrator has nothing to tick on.',
+      'Turn a rough idea into a product brief, focused questions, and the first buildable spec before implementation work starts.',
     skippable: false,
     status: snap => (snap.taskCount > 0 ? 'done' : 'pending'),
   },
@@ -583,7 +583,9 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
 
   // tasks. Reserved setup/import bookkeeping tasks do not count as "first
   // task"; otherwise setup can claim the project is ready while Planner only
-  // contains Guildhall's own housekeeping.
+  // contains Guildhall's own housekeeping. Do not exclude by domain alone:
+  // starter projects can route the user's first real spec-shaping task through
+  // `_meta` until richer project lanes exist.
   const tasksPath = join(projectPath, 'memory', 'TASKS.json')
   const tasksRaw = readJsonSafe(tasksPath)
   const tasks = Array.isArray(tasksRaw)
@@ -595,7 +597,6 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
     if (!task || typeof task !== 'object') return false
     const t = task as { id?: unknown; domain?: unknown }
     if (t.id === 'task-meta-intake' || t.id === 'task-workspace-import') return false
-    if (t.domain === '_meta' || t.domain === '_workspace_import') return false
     return true
   }).length
 

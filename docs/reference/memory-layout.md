@@ -2,7 +2,7 @@
 title: Memory layout
 help_topic: reference.memory_layout
 help_summary: |
-  The memory/ directory is the on-disk state. Contains TASKS.json (queue),
+  The ./memory/ directory is the on-disk state. Contains TASKS.json (queue),
   agent-settings.yaml (levers), learning.json (project learning),
   project-skills.json (project skill proposals), sessions/ (per-agent snapshots),
   transcripts/ (audit trail), PROGRESS.md, events.ndjson, and
@@ -11,12 +11,12 @@ help_summary: |
 
 # Memory layout
 
-Everything Guildhall persists sits under `memory/` at the project root.
+Everything Guildhall persists sits under `./memory/` at the project root.
 Commit it with the project — the queue, levers, and transcripts are part of
 the project's history.
 
-```
-memory/
+```text
+./memory/
 ├─ TASKS.json                    # the work queue, keyed by task id
 ├─ agent-settings.yaml           # every lever + provenance
 ├─ learning.json                 # project-scoped learned behavior
@@ -39,36 +39,49 @@ memory/
 
 ## What to commit and what to ignore
 
-- **Commit**: `TASKS.json`, `agent-settings.yaml`, `learning.json`, `project-skills.json`, `business-envelope.yaml`, `PROGRESS.md`, `transcripts/`, `skills/`, `engineering-defaults/`, `guilds.yaml`.
-- **Ignore**: `events.ndjson`, `sessions/`. They regenerate and contain ephemeral stream data.
+- **Commit**: `./memory/TASKS.json`, `./memory/agent-settings.yaml`, `./memory/learning.json`, `./memory/project-skills.json`, `./memory/business-envelope.yaml`, `./memory/PROGRESS.md`, `./memory/transcripts/`, `./memory/skills/`, `./memory/engineering-defaults/`, `./memory/guilds.yaml`.
+- **Ignore**: `./memory/events.ndjson`, `./memory/sessions/`. They regenerate and contain ephemeral stream data.
 
 ## Learned behavior
 
-Project-specific learning lives in `memory/learning.json`. It records suggested
+Project-specific learning lives in `./memory/learning.json`. It records suggested
 and active project facts, project policies, product suggestions, and workspace
 import defaults learned from this project. Project skill proposals live next to
-it in `memory/project-skills.json`; active project skills are still only used
+it in `./memory/project-skills.json`; active project skills are still only used
 when the workspace opts into project-local skills.
 
 Machine-wide user preferences and model-lane recommendations live outside the
 project in `~/.guildhall/learning.json`.
 
-Use Settings → Learning in the browser to inspect project memories,
+Use Settings → Memory in the browser to inspect project memories,
 cross-project preferences, project playbooks, and Guildhall product ideas. You
 can accept, dismiss, make project-wide, or reset learned records there. Product
 ideas can open a prefilled GitHub issue draft with **Give product feedback**,
-but they do not change runtime behavior by themselves. The API equivalents are
-`POST /api/project/learning/action` and
-`POST /api/project/skill-proposals/action`.
+but they do not change runtime behavior by themselves.
 
-A starter `.gitignore` snippet:
+A starter `.gitignore` snippet using project-root patterns:
 
 ```gitignore
-memory/events.ndjson
-memory/sessions/
-.guildhall/config.yaml
-.guildhall/worktrees/
+/memory/events.ndjson
+/memory/sessions/
+!/.guildhall/
+!/.guildhall/*.yaml
+/.guildhall/config.yaml
+/.guildhall/worktrees/
 ```
+
+## Project-local Guildhall metadata
+
+The `./.guildhall/` directory is not automatically private. Treat it as two
+lanes:
+
+- **Commit shared Guildhall metadata** such as `./.guildhall/artifacts.yaml`
+  and future `./.guildhall/*.yaml` metadata files.
+  These files let the guild refer to project artifacts by stable IDs instead of
+  brittle historical paths.
+- **Ignore local/private overrides** such as `./.guildhall/config.yaml` and
+  `./.guildhall/worktrees/`. Those describe this checkout or temporary task
+  worktrees, not the shared project contract.
 
 ## Global data
 

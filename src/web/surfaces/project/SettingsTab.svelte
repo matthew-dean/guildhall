@@ -13,6 +13,7 @@
   import Row from '../../lib/Row.svelte'
   import Button from '../../lib/Button.svelte'
   import Input from '../../lib/Input.svelte'
+  import Select from '../../lib/Select.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import Byline from '../../lib/Byline.svelte'
   import LogViewer from '../../lib/LogViewer.svelte'
@@ -22,14 +23,28 @@
   import Help from '../../lib/Help.svelte'
   import { nav } from '../../lib/nav.svelte.js'
   import { project } from '../../lib/project.svelte.js'
-  import { projectFetch } from '../../lib/project-routes.js'
+  import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { buildProductFeedbackIssueUrl } from '../../lib/product-feedback.js'
 
   interface Props {
     subView?: string | null
   }
   let { subView = null }: Props = $props()
-  const section = $derived(subView ?? 'ready')
+  type SettingSection = 'ready' | 'providers' | 'facts' | 'coordinators' | 'learning' | 'advanced'
+  const KNOWN_SECTIONS = new Set<SettingSection>(['ready', 'providers', 'facts', 'coordinators', 'learning', 'advanced'])
+  const section = $derived(KNOWN_SECTIONS.has(subView as SettingSection) ? subView as SettingSection : 'ready')
+  const settingsSections: Array<{ id: SettingSection; label: string }> = [
+    { id: 'ready', label: 'Ready' },
+    { id: 'providers', label: 'Providers' },
+    { id: 'coordinators', label: 'Coordinators' },
+    { id: 'facts', label: 'Facts' },
+    { id: 'learning', label: 'Memory' },
+    { id: 'advanced', label: 'Advanced' },
+  ]
+
+  function settingsSectionHref(id: SettingSection): string {
+    return projectActionHref(id === 'ready' ? '/settings/ready' : `/settings/${id}`)
+  }
 
   interface Lever {
     name: string
@@ -37,6 +52,7 @@
     setBy: string
     rationale: string
     scope: string
+    defaultPosition?: string
   }
   interface DesignSystem {
     revision?: number
@@ -87,6 +103,30 @@
     effective: { productSuggestions: ProductSuggestion[] } | null
     projectSkillProposals: ProjectSkillProposal[]
   }
+  interface CodebaseMapStatus {
+    configured: boolean
+    generatedAt: string | null
+    stale: { stale: true; at: string; reason: string; error: string } | null
+    counts: { files: number; areas: number; abstractions: number }
+    designSystem?: {
+      maturity: 'absent' | 'thin' | 'emerging' | 'established'
+      approved: boolean
+      tokenCounts: { color: number; spacing: number; typography: number; radius: number; shadow: number }
+      primitives: number
+      recommendations: string[]
+    } | null
+    semantic?: {
+      modelId: string
+      corpusKind: 'documentation' | 'code' | 'mixed' | 'unknown'
+      confidence: number
+      projectPurpose: string
+      readNext: Array<{ path: string; reason: string }>
+      workerGuidance: string[]
+      needsBroaderRead: boolean
+    } | null
+    frameworks?: string[]
+    packageManagers?: string[]
+  }
 
   let initialized = $state<boolean | null>(null)
   let name = $state('')
@@ -96,7 +136,11 @@
 
   let levers = $state<Lever[] | null>(null)
   let leversError = $state<string | null>(null)
+  let savingLever = $state<string | null>(null)
   let designSystem = $state<DesignSystem | null | undefined>(undefined)
+  let codebaseMapStatus = $state<CodebaseMapStatus | null>(null)
+  let codebaseMapBusy = $state(false)
+  let codebaseMapError = $state<string | null>(null)
   let learning = $state<LearningSnapshot | null>(null)
   let learningError = $state<string | null>(null)
   let learningBusy = $state<string | null>(null)
@@ -129,9 +173,38 @@
         tried: Array<{ command: string; result: string; stderr?: string }>
       } | null
     }
+    workspaceProjects?: Array<{
+      id: string
+      label: string
+      path: string
+      bootstrap?: {
+        commands: string[]
+        successGates: string[]
+        timeoutMs?: number
+      } | null
+    }>
   }
   let bootstrapInfo = $state<BootstrapInfo | null>(null)
   let bootstrapRunning = $state(false)
+  interface WorktreeIncludeCandidate {
+    path: string
+    reason: string
+    selected: boolean
+  }
+  interface WorktreeIncludeScope {
+    projectId?: string
+    label?: string
+    type?: string
+    rootPath: string
+    include: string[]
+    candidates: WorktreeIncludeCandidate[]
+  }
+  let worktreeIncludeText = $state('')
+  let worktreeIncludeCandidates = $state<WorktreeIncludeCandidate[]>([])
+  let worktreeIncludeScopes = $state<WorktreeIncludeScope[]>([])
+  let selectedWorktreeProjectId = $state<string | null>(null)
+  let worktreeIncludeBusy = $state(false)
+  let worktreeIncludeStatus = $state<{ text: string; error: boolean } | null>(null)
 
   interface ProviderStatus {
     configured: boolean
@@ -159,18 +232,22 @@
       .then(r => r.json())
       .then(j => (designSystem = j?.designSystem ?? null))
       .catch(() => (designSystem = null))
-    fetch('/api/providers/status')
+    void loadCodebaseMapStatus()
+    projectFetch('/api/setup/providers')
       .then(r => (r.ok ? r.json() : null))
       .then(j => {
         if (!j) return
+        const preferred = j?.preferredProvider
+        const preferredMeta = typeof preferred === 'string' ? j?.providers?.[preferred] : null
         providerStatus = {
-          configured: Boolean(j?.configured ?? j?.active),
-          active: j?.active,
+          configured: Boolean(preferred && preferredMeta?.detected),
+          active: preferredMeta?.label ?? preferred ?? undefined,
         }
       })
       .catch(() => (providerStatus = { configured: false }))
     void loadBootstrap()
     void loadLearning()
+    void loadWorktreeIncludes()
   })
 
   async function loadBootstrap() {
@@ -180,6 +257,79 @@
     } catch {
       bootstrapInfo = null
     }
+  }
+
+  async function loadWorktreeIncludes() {
+    try {
+      const suffix = selectedWorktreeProjectId
+        ? `?workspaceProjectId=${encodeURIComponent(selectedWorktreeProjectId)}`
+        : ''
+      const r = await projectFetch(`/api/project/worktree-includes${suffix}`, { cache: 'no-store' })
+      const j = await r.json() as {
+        include?: string[]
+        candidates?: WorktreeIncludeCandidate[]
+        scopes?: WorktreeIncludeScope[]
+        error?: string
+      }
+      if (j.error) {
+        worktreeIncludeStatus = { text: j.error, error: true }
+        return
+      }
+      worktreeIncludeScopes = j.scopes ?? []
+      if (!selectedWorktreeProjectId && worktreeIncludeScopes.some(scope => scope.projectId)) {
+        selectedWorktreeProjectId = worktreeIncludeScopes.find(scope => scope.projectId)?.projectId ?? null
+      }
+      const activeScope = selectedWorktreeProjectId
+        ? worktreeIncludeScopes.find(scope => scope.projectId === selectedWorktreeProjectId)
+        : null
+      if (activeScope) {
+        worktreeIncludeText = activeScope.include.join('\n')
+        worktreeIncludeCandidates = activeScope.candidates
+        return
+      }
+      worktreeIncludeText = (j.include ?? []).join('\n')
+      worktreeIncludeCandidates = j.candidates ?? []
+    } catch (err) {
+      worktreeIncludeStatus = { text: err instanceof Error ? err.message : String(err), error: true }
+    }
+  }
+
+  async function saveWorktreeIncludes() {
+    worktreeIncludeBusy = true
+    worktreeIncludeStatus = null
+    try {
+      const r = await projectFetch('/api/project/worktree-includes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          includeText: worktreeIncludeText,
+          ...(selectedWorktreeProjectId ? { workspaceProjectId: selectedWorktreeProjectId } : {}),
+        }),
+      })
+      const j = await r.json() as { include?: string[]; error?: string }
+      if (j.error) {
+        worktreeIncludeStatus = { text: j.error, error: true }
+        return
+      }
+      worktreeIncludeText = (j.include ?? []).join('\n')
+      worktreeIncludeStatus = { text: 'Saved', error: false }
+      await loadWorktreeIncludes()
+    } finally {
+      worktreeIncludeBusy = false
+    }
+  }
+
+  function addWorktreeIncludeCandidate(candidate: string) {
+    const lines = worktreeIncludeText.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+    if (!lines.includes(candidate)) lines.push(candidate)
+    worktreeIncludeText = lines.join('\n')
+  }
+
+  function selectWorktreeIncludeScope(scope: WorktreeIncludeScope) {
+    selectedWorktreeProjectId = scope.projectId ?? null
+    worktreeIncludeText = scope.include.join('\n')
+    worktreeIncludeCandidates = scope.candidates
+    worktreeIncludeStatus = null
   }
 
   async function loadLearning() {
@@ -205,6 +355,48 @@
       }
     } catch (err) {
       learningError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  async function loadCodebaseMapStatus() {
+    try {
+      codebaseMapError = null
+      const r = await projectFetch('/api/project/codebase-map/status')
+      const j = await r.json().catch(() => null)
+      if (!r.ok || !j || typeof j !== 'object') {
+        codebaseMapError = j && typeof j === 'object' && 'error' in j
+          ? String(j.error)
+          : `HTTP ${r.status}`
+        return
+      }
+      if ('error' in j && j.error) {
+        codebaseMapError = String(j.error)
+        return
+      }
+      codebaseMapStatus = j as CodebaseMapStatus
+    } catch (err) {
+      codebaseMapError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  async function refreshCodebaseMap() {
+    if (codebaseMapBusy) return
+    codebaseMapBusy = true
+    codebaseMapError = null
+    try {
+      const r = await projectFetch('/api/project/codebase-map/refresh', { method: 'POST' })
+      const j = await r.json().catch(() => null)
+      if (!r.ok || !j || typeof j !== 'object' || ('error' in j && j.error)) {
+        codebaseMapError = j && typeof j === 'object' && 'error' in j
+          ? String(j.error)
+          : `HTTP ${r.status}`
+        return
+      }
+      codebaseMapStatus = (j as { status?: CodebaseMapStatus }).status ?? null
+    } catch (err) {
+      codebaseMapError = err instanceof Error ? err.message : String(err)
+    } finally {
+      codebaseMapBusy = false
     }
   }
 
@@ -271,6 +463,33 @@
     }
   }
 
+  async function saveLever(lever: Lever, nextValue: string) {
+    const key = `${lever.scope}:${lever.name}`
+    savingLever = key
+    leversError = null
+    try {
+      const r = await projectFetch('/api/config/levers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: lever.scope,
+          name: lever.name,
+          position: nextValue === 'same_as_global' ? null : nextValue,
+        }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j?.error) {
+        leversError = j?.error ?? `HTTP ${r.status}`
+        return
+      }
+      levers = j.levers ?? []
+    } catch (err) {
+      leversError = err instanceof Error ? err.message : String(err)
+    } finally {
+      savingLever = null
+    }
+  }
+
   async function runLearningAction(kind: string, scope: 'project' | 'user_global', id?: string) {
     learningBusy = `${kind}:${scope}:${id ?? 'all'}`
     try {
@@ -315,7 +534,42 @@
 
   const coordinators = $derived(project.detail?.config?.coordinators ?? [])
 
-  const bootstrapReady = $derived(Boolean(bootstrapInfo?.configured && bootstrapInfo?.status?.success))
+  const workspaceChildProjects = $derived(bootstrapInfo?.workspaceProjects ?? [])
+  const hasWorkspaceChildProjects = $derived(workspaceChildProjects.length > 0)
+  const workspaceChildGateCount = $derived(
+    workspaceChildProjects.reduce((count, child) => count + (child.bootstrap?.successGates?.length ?? 0), 0),
+  )
+  const bootstrapVerified = $derived(Boolean(
+    bootstrapInfo?.configured && bootstrapInfo?.status?.success && !bootstrapInfo?.needed,
+  ))
+  const bootstrapReady = $derived(Boolean(
+    bootstrapVerified ||
+    (bootstrapInfo && !bootstrapInfo.configured && !bootstrapInfo.needed && !hasWorkspaceChildProjects),
+  ))
+  const bootstrapShellLabel = $derived(
+    bootstrapInfo?.configured && bootstrapInfo?.status?.success && bootstrapInfo?.needed
+      ? 're-run needed'
+      : bootstrapInfo?.configured && bootstrapInfo?.status?.success
+      ? 'passed'
+      : bootstrapInfo?.configured
+        ? 'failed'
+        : hasWorkspaceChildProjects
+          ? `${workspaceChildProjects.length} child project${workspaceChildProjects.length === 1 ? '' : 's'}`
+          : bootstrapInfo && !bootstrapInfo.needed
+            ? 'not required'
+            : 'not set',
+  )
+  const bootstrapShellTone = $derived(
+    bootstrapReady
+      ? 'ok'
+      : bootstrapInfo?.configured && bootstrapInfo?.status?.success && bootstrapInfo?.needed
+        ? 'warn'
+      : bootstrapInfo?.configured
+        ? 'danger'
+        : hasWorkspaceChildProjects
+          ? 'info'
+          : 'warn',
+  )
   const providerReady = $derived(Boolean(providerStatus?.configured))
   const coordinatorsReady = $derived(coordinators.length > 0)
   const readinessCount = $derived(
@@ -366,6 +620,150 @@
     }
     return [...out.entries()]
   })
+
+  const leverNameLabels: Record<string, string> = {
+    agent_health_strictness: 'Stuck-agent detection',
+    business_envelope_strictness: 'Product-risk strictness',
+    completion_approval: 'Completion approval',
+    concurrent_task_dispatch: 'Task dispatch',
+    crash_recovery_default: 'Crash recovery',
+    escalation_on_ambiguity: 'Ambiguity handling',
+    landing_strategy: 'Where work lands',
+    max_revisions: 'Revision limit',
+    pre_rejection_policy: 'Pre-rejection handling',
+    rejection_dampening: 'Review strictness',
+    remediation_autonomy: 'Recovery autonomy',
+    reviewer_fanout_policy: 'Reviewer agreement',
+    reviewer_mode: 'Review style',
+    runtime_isolation: 'Runtime isolation',
+    spec_completeness: 'Spec detail level',
+    task_origination: 'Who can create tasks',
+    workspace_import_autonomy: 'Existing-work import',
+    worktree_isolation: 'Worktree isolation',
+  }
+  const leverPositionLabels: Record<string, string> = {
+    advisory: 'Advisory',
+    agent_autonomous: 'Agent autonomous',
+    agent_proposed_coordinator_approved: 'Agent proposes, coordinator approves',
+    agent_proposed_human_approved: 'Agent proposes, human approves',
+    always: 'Always',
+    auto: 'Automatic',
+    cherry_pick_local: 'Land locally',
+    cherry_pick_with_push: 'Land and push',
+    confirm_all: 'Confirm all recovery',
+    confirm_destructive: 'Confirm destructive recovery',
+    coordinator_adjudicates_on_conflict: 'Coordinator adjudicates conflicts',
+    coordinator_first: 'Coordinator first',
+    coordinator_sufficient: 'Coordinator approval',
+    deterministic_only: 'Deterministic only',
+    emergent: 'Emergent',
+    fanout_2: 'Two at a time',
+    fanout_4: 'Four at a time',
+    fanout_2_reviewers: 'Two reviewers',
+    fanout_4_reviewers: 'Four reviewers',
+    full_upfront: 'Full upfront',
+    gates_sufficient: 'Verification gates',
+    hard_suppress_after_2: 'Hard suppress after 2',
+    hard_suppress_after_3: 'Hard suppress after 3',
+    first_pass: 'First pass only',
+    human_only: 'Human only',
+    human_required: 'Human approval',
+    lax: 'Lax',
+    lenient: 'Lenient',
+    llm_only: 'LLM only',
+    llm_with_deterministic_fallback: 'LLM with deterministic fallback',
+    majority: 'Majority',
+    manual_pr: 'Manual PR',
+    minimal: 'Minimal',
+    never: 'Never',
+    none: 'None',
+    off: 'Off',
+    pause_all_on_issue: 'Pause all on issue',
+    pause_for_review: 'Pause for review',
+    per_attempt: 'Per attempt',
+    per_task: 'Per task',
+    prefer_restart_clean: 'Prefer clean restart',
+    prefer_resume: 'Prefer resume',
+    requeue_lower_priority: 'Requeue lower priority',
+    requeue_with_dampening: 'Requeue with dampening',
+    same_as_global: 'Same as global setting',
+    serial: 'Serial',
+    soft_penalty_after_2: 'Soft penalty after 2',
+    soft_penalty_after_3: 'Soft penalty after 3',
+    slot_allocation: 'Slot allocation',
+    stage_appropriate: 'Stage appropriate',
+    standard: 'Standard',
+    strict: 'Strict',
+    suggest: 'Suggest',
+    terminal_shelved: 'Shelve terminal failures',
+    thorough: 'Thorough',
+  }
+  const leverOptions: Record<string, string[]> = {
+    agent_health_strictness: ['lax', 'standard', 'strict'],
+    business_envelope_strictness: ['strict', 'advisory', 'off'],
+    completion_approval: ['human_required', 'coordinator_sufficient', 'gates_sufficient'],
+    concurrent_task_dispatch: ['serial', 'fanout_2', 'fanout_4'],
+    crash_recovery_default: ['prefer_resume', 'prefer_restart_clean', 'pause_for_review'],
+    escalation_on_ambiguity: ['always', 'coordinator_first', 'never'],
+    landing_strategy: ['cherry_pick_local', 'cherry_pick_with_push', 'manual_pr'],
+    max_revisions: ['1', '2', '3', '4', '5'],
+    pre_rejection_policy: ['terminal_shelved', 'requeue_lower_priority', 'requeue_with_dampening'],
+    rejection_dampening: ['off', 'soft_penalty_after_2', 'soft_penalty_after_3', 'hard_suppress_after_2', 'hard_suppress_after_3'],
+    remediation_autonomy: ['auto', 'confirm_destructive', 'confirm_all', 'pause_all_on_issue'],
+    reviewer_fanout_policy: ['strict', 'coordinator_adjudicates_on_conflict', 'advisory', 'majority'],
+    reviewer_mode: ['llm_only', 'deterministic_only', 'llm_with_deterministic_fallback'],
+    runtime_isolation: ['none', 'slot_allocation'],
+    spec_completeness: ['full_upfront', 'stage_appropriate', 'emergent'],
+    task_origination: ['human_only', 'agent_proposed_human_approved', 'agent_proposed_coordinator_approved', 'agent_autonomous'],
+    workspace_import_autonomy: ['off', 'suggest', 'apply'],
+    worktree_isolation: ['none', 'per_task', 'per_attempt'],
+  }
+
+  function humanizeLeverName(name: string): string {
+    return leverNameLabels[name] ?? name.replace(/[_.-]+/g, ' ').replace(/\b\w/g, char => char.toUpperCase())
+  }
+
+  function leverScopeLabel(scope: string): string {
+    if (scope === 'project') return 'Project behavior'
+    if (scope === 'domain:default') return 'Default task behavior'
+    if (scope.startsWith('domain:')) return `${scope.slice('domain:'.length)} task behavior`
+    return scope.replaceAll('_', ' ')
+  }
+
+  function leverPositionLabel(position: string): string {
+    return leverPositionLabels[position] ?? position.replaceAll('_', ' ')
+  }
+
+  function leverSetByLabel(setBy: string): string {
+    switch (setBy) {
+      case 'system-default':
+        return 'Same as global setting'
+      case 'user-direct':
+        return 'Project override'
+      case 'inferred':
+        return 'Learned from this project'
+      default:
+        return setBy.replaceAll('_', ' ').replaceAll('-', ' ')
+    }
+  }
+
+  function optionsForLever(lever: Lever): string[] {
+    return leverOptions[lever.name] ?? [lever.position]
+  }
+
+  function selectValueForLever(lever: Lever): string {
+    return lever.setBy === 'system-default' ? 'same_as_global' : lever.position
+  }
+
+  function selectOptionsForLever(lever: Lever): Array<{ value: string; label: string }> {
+    const values = new Set(optionsForLever(lever))
+    if (lever.position && lever.setBy !== 'system-default') values.add(lever.position)
+    if (lever.defaultPosition) values.add(lever.defaultPosition)
+    return [
+      { value: 'same_as_global', label: `Same as global setting${lever.defaultPosition ? ` (${leverPositionLabel(lever.defaultPosition)})` : ''}` },
+      ...[...values].map(value => ({ value, label: leverPositionLabel(value) })),
+    ]
+  }
 
   const dsTokenCount = $derived(
     designSystem
@@ -479,6 +877,21 @@
       </NoticeBand>
     {/if}
 
+    <nav class="settings-section-nav" aria-label="Settings sections">
+      {#each settingsSections as item (item.id)}
+        {@const active = section === item.id}
+        <button
+          type="button"
+          class="settings-section-button"
+          class:active
+          aria-current={active ? 'page' : undefined}
+          onclick={() => nav(settingsSectionHref(item.id))}
+        >
+          {item.label}
+        </button>
+      {/each}
+    </nav>
+
     {#if section === 'facts'}
       <FactsTab />
     {:else if section === 'providers'}
@@ -500,22 +913,24 @@
         {/snippet}
       </SectionHeader>
 
-      <FrameCard class="readiness-card">
+      <FrameCard class="readiness-card" density="compact">
         <ul class="checklist">
           <li class="check-row">
             <div class="check-copy">
               <span class="check-label">Bootstrap</span>
               <span class="check-detail">Project bootstrap commands and success gates.</span>
             </div>
-            <StatusPill
-              label={bootstrapReady ? 'passed' : bootstrapInfo?.configured ? 'failed' : 'not set'}
-              tone={bootstrapReady ? 'ok' : bootstrapInfo?.configured ? 'danger' : 'warn'}
-            />
-            {#if !bootstrapReady}
-              <button type="button" class="linkbtn" onclick={runBootstrap} disabled={bootstrapRunning}>
-                {bootstrapRunning ? 'Running…' : 'Configure'}
-              </button>
-            {/if}
+            <div class="check-actions">
+              <StatusPill
+                label={bootstrapShellLabel}
+                tone={bootstrapShellTone}
+              />
+              {#if !bootstrapReady}
+                <Button variant="secondary" size="sm" onclick={runBootstrap} disabled={bootstrapRunning}>
+                  {bootstrapRunning ? 'Running…' : 'Run bootstrap'}
+                </Button>
+              {/if}
+            </div>
             {#if bootstrapError}
               <div class="row-error">{bootstrapError}</div>
             {/if}
@@ -526,13 +941,17 @@
               <span class="check-label">Coordinators</span>
               <span class="check-detail">Routing roles that own planning and task execution.</span>
             </div>
-            <StatusPill
-              label={coordinatorsReady ? `${coordinators.length} defined` : 'none'}
-              tone={coordinatorsReady ? 'ok' : 'warn'}
-            />
-            {#if !coordinatorsReady}
-              <button type="button" class="linkbtn" onclick={() => nav('/')}>Configure</button>
-            {/if}
+            <div class="check-actions">
+              <StatusPill
+                label={coordinatorsReady ? `${coordinators.length} defined` : 'none'}
+                tone={coordinatorsReady ? 'ok' : 'warn'}
+              />
+              {#if !coordinatorsReady}
+                <Button variant="secondary" size="sm" onclick={() => nav(projectActionHref('/settings/coordinators'))}>
+                  Open coordinators
+                </Button>
+              {/if}
+            </div>
           </li>
 
           <li class="check-row">
@@ -540,18 +959,54 @@
               <span class="check-label">LLM provider</span>
               <span class="check-detail">Active model host and runtime selection for this project.</span>
             </div>
-            <StatusPill
-              label={providerReady ? (providerStatus?.active ?? 'configured') : 'not configured'}
-              tone={providerReady ? 'ok' : 'warn'}
-            />
-            {#if !providerReady}
-              <button type="button" class="linkbtn" onclick={() => nav('/providers')}>
-                Configure
-              </button>
-            {/if}
+            <div class="check-actions">
+              <StatusPill
+                label={providerReady ? (providerStatus?.active ?? 'configured') : 'not configured'}
+                tone={providerReady ? 'ok' : 'warn'}
+              />
+              {#if !providerReady}
+                <Button variant="secondary" size="sm" onclick={() => nav(projectActionHref('/settings/providers'))}>
+                  Choose provider
+                </Button>
+              {/if}
+            </div>
           </li>
         </ul>
       </FrameCard>
+
+      {#if hasWorkspaceChildProjects}
+        <NoticeBand
+          tone="info"
+          role="note"
+          label="Workspace"
+          title="This workspace coordinates child projects"
+          density="compact"
+        >
+          <p>
+            The root shell is the council layer. Task bootstrap and verification should come from the
+            child project a task belongs to, so a missing root package file is not itself a project failure.
+          </p>
+          <ul class="workspace-project-list" aria-label="Child project bootstrap contracts">
+            {#each workspaceChildProjects as child (child.id)}
+              <li>
+                <span class="workspace-project-name">{child.label}</span>
+                <span class="workspace-project-path">{child.path}</span>
+                {#if child.bootstrap?.commands?.length}
+                  <span>{child.bootstrap.commands.length} setup command{child.bootstrap.commands.length === 1 ? '' : 's'}</span>
+                {/if}
+                {#if child.bootstrap?.successGates?.length}
+                  <span>{child.bootstrap.successGates.length} gate{child.bootstrap.successGates.length === 1 ? '' : 's'}</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+          {#if workspaceChildGateCount === 0}
+            <p class="workspace-project-note">
+              No child gates are configured yet. Add gates to each child project before expecting fully unattended work.
+            </p>
+          {/if}
+        </NoticeBand>
+      {/if}
 
       {#if bootstrapInfo?.configured}
         <FrameCard
@@ -869,13 +1324,13 @@
       <SectionHeader
         eyebrow="Settings"
         title="Advanced settings"
-        description="Identity, levers, and design-system controls that shape how Guildhall operates."
+        description="Project identity, defaults, and operating style. Most projects can leave this alone."
         headingTag="h2"
         density="compact"
       />
 
       <div class="advanced-grid">
-        <FrameCard class="advanced-card">
+        <FrameCard class="advanced-card" density="compact">
           {#snippet header()}
             <SectionHeader
               title="Workspace identity"
@@ -894,7 +1349,7 @@
               <span>Workspace ID (slug)</span>
               <Input bind:value={id} />
             </label>
-            <Row justify="end" gap="2" align="center">
+            <Row justify="start" gap="2" align="center" wrap>
               {#if identityStatus}
                 <span class="status" class:error={identityStatus.error}>{identityStatus.text}</span>
               {/if}
@@ -905,11 +1360,80 @@
           </Stack>
         </FrameCard>
 
-        <FrameCard class="advanced-card">
+        <FrameCard class="advanced-card advanced-card-wide" density="compact">
           {#snippet header()}
             <SectionHeader
-              title="Levers"
-              description="Every behavioral knob should stay explicit, named, and explainable."
+              title="Task worktree local files"
+              description="Root-relative files or directories Guildhall may copy into isolated task worktrees before bootstrap."
+              headingTag="h3"
+              density="dense"
+            />
+          {/snippet}
+
+          <Stack gap="3">
+            <NoticeBand tone="neutral" role="note" label="Worktrees" title="Opt in local runtime config" density="compact">
+              <p>
+                Use this for files like <code>.env</code>, <code>.env.local</code>, or
+                <code>appsettings.local.yaml</code> when workers need them to run local setup.
+                Guildhall detects likely filenames, but only copies the paths listed here.
+              </p>
+            </NoticeBand>
+            {#if worktreeIncludeScopes.length > 1}
+              <div class="candidate-list" aria-label="Workspace project worktree settings">
+                {#each worktreeIncludeScopes as scope (scope.projectId ?? scope.rootPath)}
+                  <button
+                    type="button"
+                    class="candidate-chip"
+                    class:selected={(scope.projectId ?? null) === selectedWorktreeProjectId}
+                    title={scope.rootPath}
+                    onclick={() => selectWorktreeIncludeScope(scope)}
+                  >
+                    {scope.label ?? scope.projectId ?? 'Workspace'}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+            {#if worktreeIncludeCandidates.length > 0}
+              <div class="candidate-list" aria-label="Detected local config candidates">
+                {#each worktreeIncludeCandidates.slice(0, 6) as candidate (candidate.path)}
+                  <button
+                    type="button"
+                    class="candidate-chip"
+                    class:selected={worktreeIncludeText.split(/\r?\n/).map(line => line.trim()).includes(candidate.path)}
+                    title={candidate.reason}
+                    onclick={() => addWorktreeIncludeCandidate(candidate.path)}
+                  >
+                    {candidate.path}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+            <label class="field">
+              <span>Include in task worktrees</span>
+              <textarea
+                class="settings-textarea"
+                bind:value={worktreeIncludeText}
+                rows="5"
+                spellcheck="false"
+                placeholder=".env&#10;appsettings.local.yaml&#10;config/local/**"
+              ></textarea>
+            </label>
+            <Row justify="start" gap="2" align="center" wrap>
+              {#if worktreeIncludeStatus}
+                <span class="status" class:error={worktreeIncludeStatus.error}>{worktreeIncludeStatus.text}</span>
+              {/if}
+              <Button variant="primary" disabled={worktreeIncludeBusy} onclick={saveWorktreeIncludes}>
+                {worktreeIncludeBusy ? 'Saving…' : 'Save worktree files'}
+              </Button>
+            </Row>
+          </Stack>
+        </FrameCard>
+
+        <FrameCard class="advanced-card advanced-card-wide" density="compact">
+          {#snippet header()}
+            <SectionHeader
+              title="Behavior defaults"
+              description="These shape how Guildhall works on this project. Use the global defaults unless this project genuinely needs a different operating style."
               headingTag="h3"
               density="dense"
             >
@@ -936,31 +1460,152 @@
                 <p>This project is currently using defaults only.</p>
               </NoticeBand>
             {:else}
+              <NoticeBand tone="neutral" role="note" label="Defaults" title="Most projects should not need overrides" density="compact">
+                <p>Settings below show the active behavior and where it came from. Project-specific changes should stay narrow and intentional.</p>
+              </NoticeBand>
               {#each leversByScope as [scope, entries] (scope)}
-                <div class="lever-scope">{scope}</div>
-                <table class="lever-table">
-                  <tbody>
+                <section class="lever-scope">
+                  <header class="lever-scope-head">
+                    <h4>{leverScopeLabel(scope)}</h4>
+                    <span>{entries.length} setting{entries.length === 1 ? '' : 's'}</span>
+                  </header>
+                  <div class="lever-list">
                     {#each entries as lever, i (lever.name + i)}
-                      <tr>
-                        <td>
-                          <code>{lever.name}</code>
-                          <Help topic={`lever.${lever.name}`} size={12} />
-                        </td>
-                        <td><strong>{lever.position}</strong></td>
-                        <td class="lever-by">{lever.setBy}</td>
-                      </tr>
-                      <tr class="lever-rationale">
-                        <td colspan="3">{lever.rationale}</td>
-                      </tr>
+                      <article class="lever-card">
+                        <header class="lever-card-head">
+                          <div class="lever-title-block">
+                            <div class="lever-title-row">
+                              <strong>{humanizeLeverName(lever.name)}</strong>
+                              <Help topic={`lever.${lever.name}`} size={12} />
+                            </div>
+                          </div>
+                          {#if savingLever === `${lever.scope}:${lever.name}`}
+                            <StatusPill label="Saving" tone="info" density="dense" />
+                          {:else if lever.setBy !== 'system-default'}
+                            <StatusPill label={leverSetByLabel(lever.setBy)} tone={lever.setBy === 'user-direct' ? 'warn' : 'neutral'} density="dense" />
+                          {/if}
+                        </header>
+                        <div class="lever-control">
+                          <Select
+                            value={selectValueForLever(lever)}
+                            options={selectOptionsForLever(lever)}
+                            ariaLabel={`${humanizeLeverName(lever.name)} setting`}
+                            disabled={savingLever === `${lever.scope}:${lever.name}`}
+                            onchange={(value) => saveLever(lever, value)}
+                          />
+                          <p class="lever-current">
+                            Current: {leverPositionLabel(lever.position)}
+                            {#if lever.setBy === 'system-default'}
+                              · inherited from global defaults
+                            {:else}
+                              · {leverSetByLabel(lever.setBy)}
+                            {/if}
+                          </p>
+                        </div>
+                        {#if lever.rationale}
+                          <p class="lever-rationale">{lever.rationale}</p>
+                        {/if}
+                      </article>
                     {/each}
-                  </tbody>
-                </table>
+                  </div>
+                </section>
               {/each}
             {/if}
           </Stack>
         </FrameCard>
 
-        <FrameCard class="advanced-card advanced-card-wide">
+        <FrameCard class="advanced-card advanced-card-wide" density="compact">
+          {#snippet header()}
+            <SectionHeader
+              title="Codebase map"
+              description="Compact architecture context workers use to find existing primitives before editing."
+              headingTag="h3"
+              density="dense"
+            >
+              {#snippet meta()}
+                {#if codebaseMapStatus}
+                  <StatusPill
+                    label={codebaseMapStatus.stale ? 'stale' : codebaseMapStatus.configured ? 'ready' : 'not built'}
+                    tone={codebaseMapStatus.stale ? 'warn' : codebaseMapStatus.configured ? 'ok' : 'neutral'}
+                  />
+                {/if}
+              {/snippet}
+            </SectionHeader>
+          {/snippet}
+
+          <Stack gap="3">
+            {#if codebaseMapError}
+              <NoticeBand tone="danger" role="alert" label="Codebase map" title="Could not read map" density="compact">
+                <p>{codebaseMapError}</p>
+              </NoticeBand>
+            {:else if !codebaseMapStatus}
+              <NoticeBand tone="neutral" role="status" label="Codebase map" title="Loading map status" density="compact">
+                <p>Checking the compact architecture index…</p>
+              </NoticeBand>
+            {:else}
+              <div class="map-facts">
+                <div><span class="muted">Files</span><strong>{codebaseMapStatus.counts.files}</strong></div>
+                <div><span class="muted">Areas</span><strong>{codebaseMapStatus.counts.areas}</strong></div>
+                <div><span class="muted">Abstractions</span><strong>{codebaseMapStatus.counts.abstractions}</strong></div>
+                <div><span class="muted">Design system</span><strong>{codebaseMapStatus.designSystem?.maturity ?? '—'}</strong></div>
+                <div><span class="muted">Corpus</span><strong>{codebaseMapStatus.semantic?.corpusKind ?? '—'}</strong></div>
+              </div>
+              {#if codebaseMapStatus.semantic}
+                <div class="map-semantic">
+                  <div class="map-semantic-meta">
+                    <span>{codebaseMapStatus.semantic.modelId}</span>
+                    {#if codebaseMapStatus.semantic.needsBroaderRead}
+                      <span>broader read</span>
+                    {/if}
+                  </div>
+                  <p>{codebaseMapStatus.semantic.projectPurpose}</p>
+                  {#if codebaseMapStatus.semantic.readNext.length}
+                    <div>
+                      <strong>Read next</strong>
+                      <ul class="map-recommendations">
+                        {#each codebaseMapStatus.semantic.readNext.slice(0, 3) as item (item.path)}
+                          <li><code>{item.path}</code> — {item.reason}</li>
+                        {/each}
+                      </ul>
+                    </div>
+                  {/if}
+                  {#if codebaseMapStatus.semantic.workerGuidance.length}
+                    <div>
+                      <strong>Worker guidance</strong>
+                      <ul class="map-recommendations">
+                        {#each codebaseMapStatus.semantic.workerGuidance.slice(0, 2) as guidance, i (`worker-guidance-${i}`)}
+                          <li>{guidance}</li>
+                        {/each}
+                      </ul>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+              {#if codebaseMapStatus.designSystem?.recommendations?.length}
+                <ul class="map-recommendations">
+                  {#each codebaseMapStatus.designSystem.recommendations.slice(0, 2) as recommendation, i (`ds-rec-${i}`)}
+                    <li>{recommendation}</li>
+                  {/each}
+                </ul>
+              {/if}
+              {#if codebaseMapStatus.generatedAt}
+                <Byline verb="Last built" at={codebaseMapStatus.generatedAt} />
+              {/if}
+              {#if codebaseMapStatus.stale}
+                <NoticeBand tone="warn" role="note" label="Codebase map" title="Map needs refresh" density="compact">
+                  <p>{codebaseMapStatus.stale.error}</p>
+                </NoticeBand>
+              {/if}
+              <Row justify="end">
+                <Button variant="secondary" onclick={refreshCodebaseMap} disabled={codebaseMapBusy}>
+                  {codebaseMapBusy ? 'Refreshing…' : codebaseMapStatus.configured ? 'Refresh map' : 'Build map'}
+                </Button>
+              </Row>
+            {/if}
+          </Stack>
+        </FrameCard>
+
+        <FrameCard class="advanced-card advanced-card-wide" density="compact">
           {#snippet header()}
             <SectionHeader
               title="Design system"
@@ -1036,6 +1681,46 @@
     display: grid;
     gap: var(--gh-space-4);
     container-type: inline-size;
+    max-inline-size: 72rem;
+  }
+
+  .settings-section-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    align-items: center;
+    padding: var(--gh-space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg-raised);
+    inline-size: min(100%, 62rem);
+  }
+
+  .settings-section-button {
+    appearance: none;
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: var(--bg);
+    color: var(--text-muted);
+    cursor: pointer;
+    flex: 1 1 8rem;
+    font: inherit;
+    font-size: var(--fs-1);
+    font-weight: 650;
+    line-height: var(--lh-tight);
+    min-block-size: 34px;
+    padding: var(--gh-space-2) var(--gh-space-3);
+  }
+
+  .settings-section-button:hover {
+    color: var(--text);
+    background: var(--bg-raised-2);
+  }
+
+  .settings-section-button.active {
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--accent) 64%, var(--border-strong));
+    background: var(--bg-elevated);
   }
 
   .field {
@@ -1060,14 +1745,6 @@
     color: var(--danger);
   }
 
-  code {
-    font-family: 'SF Mono', monospace;
-    background: var(--bg-raised-2);
-    padding: 0 4px;
-    border-radius: var(--r-1);
-    font-size: var(--fs-1);
-  }
-
   .checklist {
     list-style: none;
     display: grid;
@@ -1079,7 +1756,7 @@
     display: grid;
     gap: var(--gh-space-3);
     align-items: start;
-    padding: var(--gh-space-3) 0;
+    padding: var(--gh-space-4) 0;
     border-top: 1px solid var(--border);
   }
 
@@ -1106,25 +1783,13 @@
     line-height: var(--lh-body);
   }
 
-  .linkbtn {
-    justify-self: start;
-    background: transparent;
-    border: 1px solid var(--gh-color-border-strong);
-    border-radius: var(--gh-radius-full);
-    color: var(--gh-color-text-primary);
-    cursor: pointer;
-    font: inherit;
-    min-height: var(--gh-control-height-default);
-    padding: var(--gh-control-padding-block) var(--gh-control-padding-inline);
-  }
-
-  .linkbtn:hover {
-    background: color-mix(in srgb, var(--gh-color-feedback-accent) 12%, transparent);
-  }
-
-  .linkbtn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+  .check-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    align-items: center;
+    justify-content: flex-start;
+    min-inline-size: 0;
   }
 
   .row-error {
@@ -1155,6 +1820,11 @@
   .advanced-grid {
     display: grid;
     gap: var(--gh-space-4);
+    max-inline-size: 62rem;
+  }
+
+  :global(.advanced-card) {
+    align-self: start;
   }
 
   .learning-grid {
@@ -1250,41 +1920,88 @@
   }
 
   .lever-scope {
-    text-transform: uppercase;
-    letter-spacing: 0;
-    color: var(--text-muted);
-    font-weight: 700;
-    font-size: var(--fs-0);
+    display: grid;
+    gap: 12px;
   }
 
-  .lever-table {
-    width: 100%;
-    border-collapse: collapse;
+  .lever-scope-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    padding-block-start: 8px;
+  }
+
+  .lever-scope-head h4 {
+    margin: 0;
+    color: var(--text);
+    font-size: var(--fs-2);
+    font-weight: 700;
+    line-height: var(--lh-tight);
+  }
+
+  .lever-scope-head span {
+    color: var(--text-muted);
     font-size: var(--fs-1);
   }
 
-  .lever-table td {
-    padding: var(--gh-space-2) var(--gh-space-2);
-    border-top: 1px solid var(--border);
-    vertical-align: top;
+  .lever-list {
+    display: grid;
+    gap: 12px;
   }
 
-  .lever-table tbody tr:first-child td {
-    border-top: none;
+  .lever-card {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
   }
 
-  .lever-by {
+  .lever-card-head {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: 16px;
+    min-inline-size: 0;
+    flex-wrap: wrap;
+  }
+
+  .lever-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-inline-size: 0;
+  }
+
+  .lever-title-row strong {
+    font-size: var(--fs-2);
+    line-height: var(--lh-tight);
+  }
+
+  .lever-title-block {
+    min-inline-size: min(100%, 18rem);
+  }
+
+  .lever-control {
+    display: grid;
+    gap: var(--gh-space-2);
+    max-inline-size: 28rem;
+  }
+
+  .lever-current {
+    margin: 0;
     color: var(--text-muted);
-    text-transform: uppercase;
-    font-size: var(--fs-0);
-    font-weight: 700;
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
   }
 
-  .lever-rationale td {
+  .lever-rationale {
+    margin: 0;
     color: var(--text-muted);
-    font-style: italic;
-    padding-top: 0;
-    border-top: none;
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
   }
 
   .ds-head {
@@ -1294,14 +2011,123 @@
     align-items: center;
   }
 
-  .ds-facts {
+  .ds-facts,
+  .map-facts {
     display: grid;
     gap: var(--gh-space-3);
   }
 
-  .ds-facts > div {
+  .ds-facts > div,
+  .map-facts > div {
     display: grid;
     gap: var(--gh-space-1);
+  }
+
+  .map-recommendations {
+    margin: 0;
+    padding-inline-start: var(--gh-space-4);
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+
+  .workspace-project-list {
+    list-style: none;
+    display: grid;
+    gap: var(--gh-space-2);
+    margin: var(--gh-space-3) 0 0;
+    padding: 0;
+  }
+
+  .workspace-project-list li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    align-items: center;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+
+  .workspace-project-name {
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .workspace-project-path {
+    font-family: var(--font-mono);
+  }
+
+  .workspace-project-note {
+    margin-block-start: var(--gh-space-3);
+  }
+
+  .candidate-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+  }
+
+  .candidate-chip {
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+    color: var(--text-muted);
+    padding: 6px 10px;
+    font: inherit;
+    font-size: var(--fs-1);
+    cursor: pointer;
+  }
+
+  .candidate-chip:hover,
+  .candidate-chip:focus-visible,
+  .candidate-chip.selected {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .settings-textarea {
+    inline-size: 100%;
+    min-block-size: 8rem;
+    resize: vertical;
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+    color: var(--text);
+    padding: var(--gh-space-3);
+    font: 500 var(--fs-2) / var(--lh-body) var(--font-mono);
+  }
+
+  .settings-textarea:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .map-semantic {
+    display: grid;
+    gap: var(--gh-space-3);
+    padding-block-start: var(--gh-space-1);
+  }
+
+  .map-semantic-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+  }
+
+  .map-semantic-meta span + span::before {
+    content: "·";
+    margin-inline-end: var(--gh-space-2);
+  }
+
+  .map-semantic p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+    max-width: 72ch;
   }
 
   .ds-prims {
@@ -1318,27 +2144,23 @@
 
   @container (min-width: 42rem) {
     .check-row {
-      grid-template-columns: minmax(0, 1fr) auto auto;
+      grid-template-columns: minmax(0, 1fr) minmax(16rem, auto);
       align-items: center;
+    }
+
+    .check-actions {
+      justify-content: flex-end;
     }
 
     .row-error {
       grid-column: 1 / -1;
     }
 
-    .ds-facts {
+    .ds-facts,
+    .map-facts {
       grid-template-columns: repeat(4, minmax(0, 1fr));
     }
-  }
 
-  @container (min-width: 60rem) {
-    .advanced-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    :global(.advanced-card-wide) {
-      grid-column: 1 / -1;
-    }
   }
 
   @container (min-width: 84rem) {

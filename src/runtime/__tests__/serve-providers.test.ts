@@ -381,6 +381,7 @@ describe('POST /api/setup/providers/config', () => {
             worker: 'qwen/qwen3.5-122b-a10b',
             reviewer: 'qwen/qwen3.5-122b-a10b',
             gateChecker: 'qwen/qwen3.5-122b-a10b',
+            contextIndexer: 'qwen/qwen3.5-122b-a10b',
           },
         }),
       }),
@@ -393,6 +394,7 @@ describe('POST /api/setup/providers/config', () => {
         worker: 'qwen/qwen3.5-122b-a10b',
         reviewer: 'qwen/qwen3.5-122b-a10b',
         gateChecker: 'qwen/qwen3.5-122b-a10b',
+        contextIndexer: 'qwen/qwen3.5-122b-a10b',
       },
     })
   })
@@ -411,6 +413,7 @@ describe('POST /api/setup/providers/config', () => {
             worker: 'qwen/qwen3.6-35b-a3b',
             reviewer: 'qwen/qwen2.5-coder-14b',
             gateChecker: 'qwen/qwen2.5-coder-14b',
+            contextIndexer: 'qwen/qwen2.5-coder-14b',
           },
         }),
       }),
@@ -422,6 +425,7 @@ describe('POST /api/setup/providers/config', () => {
       worker: 'qwen/qwen3.6-35b-a3b',
       reviewer: 'qwen/qwen2.5-coder-14b',
       gateChecker: 'qwen/qwen2.5-coder-14b',
+      contextIndexer: 'qwen/qwen2.5-coder-14b',
     })
     expect(readWorkspaceConfig(tmpProject).models).toBeUndefined()
   })

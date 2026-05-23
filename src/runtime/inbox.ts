@@ -16,7 +16,8 @@ import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import type { Task } from '@guildhall/core'
 import { activeEscalations } from '@guildhall/tools'
-import { parseCoordinatorDraft, META_INTAKE_TASK_ID } from './meta-intake.js'
+import { META_INTAKE_TASK_ID } from './meta-intake.js'
+import { visibleOpenQuestions } from './question-visibility.js'
 import type { BootstrapStatus } from './bootstrap-runner.js'
 import {
   buildSnapshot,
@@ -100,65 +101,8 @@ function inboxTitle(taskId: string, title: string): string {
   return truncateTitle(title)
 }
 
-function isTerminalQuestionState(status: string): boolean {
-  return status === 'done' || status === 'shelved' || status === 'blocked' || status === 'pending_pr'
-}
-
-function hasRoutingDraft(taskSpec: string): boolean {
-  return !!parseCoordinatorDraft(taskSpec) || /```ya?ml[\s\S]*?\bcoordinators:\b[\s\S]*?```/i.test(taskSpec)
-}
-
-function hasConcreteSpecDraft(task: Task): boolean {
-  return (
-    typeof task.status === 'string' &&
-    task.status === 'spec_review' &&
-    typeof task.spec === 'string' &&
-    task.spec.trim().length > 0 &&
-    Array.isArray(task.acceptanceCriteria) &&
-    task.acceptanceCriteria.length > 0
-  )
-}
-
-function isObsoleteMetaRoutingQuestion(taskId: string, taskSpec: string, question: { prompt?: unknown; restatement?: unknown }): boolean {
-  if (taskId !== META_INTAKE_TASK_ID) return false
-  if (!hasRoutingDraft(taskSpec)) return false
-  const text =
-    (typeof question.restatement === 'string' && question.restatement) ||
-    (typeof question.prompt === 'string' && question.prompt) ||
-    ''
-  return /project areas|review lanes|coordinator domains?|coordinators for/i.test(text)
-}
-
-function isObsoleteStarterTaskFocusQuestion(
-  task: Task,
-  question: { prompt?: unknown; restatement?: unknown; askedAt?: unknown },
-): boolean {
-  if (!hasConcreteSpecDraft(task)) return false
-  const text =
-    (typeof question.restatement === 'string' && question.restatement) ||
-    (typeof question.prompt === 'string' && question.prompt) ||
-    ''
-  if (!/what should .*?(first|starter) task focus on|pick the focus for this first task/i.test(text)) {
-    return false
-  }
-  const askedAt = typeof question.askedAt === 'string' ? Date.parse(question.askedAt) : Number.NaN
-  const updatedAt = typeof task.updatedAt === 'string' ? Date.parse(task.updatedAt) : Number.NaN
-  return !Number.isFinite(askedAt) || !Number.isFinite(updatedAt) || askedAt <= updatedAt
-}
-
 function unresolvedVisibleQuestions(task: Task): Array<{ answeredAt?: unknown; prompt?: unknown; restatement?: unknown }> {
-  const status = typeof task.status === 'string' ? task.status : ''
-  if (isTerminalQuestionState(status)) return []
-  const spec = typeof task.spec === 'string' ? task.spec : ''
-  const taskId = typeof task.id === 'string' ? task.id : ''
-  const questions = Array.isArray(task.openQuestions)
-    ? (task.openQuestions as Array<{ answeredAt?: unknown; prompt?: unknown; restatement?: unknown; askedAt?: unknown }>)
-    : []
-  return questions.filter((q) =>
-    typeof q?.answeredAt !== 'string' &&
-    !isObsoleteMetaRoutingQuestion(taskId, spec, q) &&
-    !isObsoleteStarterTaskFocusQuestion(task, q),
-  )
+  return visibleOpenQuestions(task)
 }
 
 function readJsonSafe(path: string): unknown {
@@ -310,9 +254,20 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     }
   }
 
+  const tasksPath = join(projectPath, 'memory', 'TASKS.json')
+  const tasks = tasksArray(readJsonSafe(tasksPath))
+  const workspaceImportTask = tasks.find(t => t?.id === 'task-workspace-import')
+  const workspaceImportTaskStatus =
+    workspaceImportTask && typeof workspaceImportTask.status === 'string'
+      ? workspaceImportTask.status
+      : ''
+  const workspaceImportTaskOpen =
+    workspaceImportTask != null &&
+    !['done', 'cancelled', 'archived'].includes(workspaceImportTaskStatus)
+
   const setupProgress = progressFor(onboardWizard, buildSnapshot({ projectPath, ...(snapshotOptions ?? {}) }))
   const activeSetupStep = setupProgress.steps.find(step => step.id === setupProgress.activeStepId)
-  if (activeSetupStep && ['direction', 'workspaceImport', 'firstTask'].includes(activeSetupStep.id)) {
+  if (activeSetupStep && ['direction', 'firstTask'].includes(activeSetupStep.id)) {
     items.push({
       kind: 'setup_pending',
       severity: 'medium',
@@ -334,27 +289,27 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     anchors.includes('packages') ||
     anchors.includes('skills') ||
     anchors.includes('ROADMAP.md')
-  if (!hasGoals && hasReadme && hasAnchor) {
+  if (workspaceImportTaskOpen || (!hasGoals && hasReadme && hasAnchor)) {
+    const signals = anchors.length > 0 ? anchors : ['workspace import']
     items.push({
       kind: 'workspace_import_pending',
       severity: 'medium',
-      title: 'Existing repo detected',
-      detail: `Anchors found (${anchors.slice(0, 3).join(', ')}${anchors.length > 3 ? '...' : ''}). Open to see what the detector extracts — or dismiss.`,
-      signals: anchors,
+      title: workspaceImportTaskOpen ? 'Review existing project work' : 'Existing repo detected',
+      detail: workspaceImportTaskOpen
+        ? 'Review the sources and possible backlog tasks Guildhall found.'
+        : `Anchors found (${anchors.slice(0, 3).join(', ')}${anchors.length > 3 ? '...' : ''}). Open to see what the detector extracts — or dismiss.`,
+      signals,
       actionHref: '/workspace-import',
       dismissEndpoint: '/api/project/workspace-import/dismiss',
     })
   }
 
   // --- tasks: briefs / specs / escalations / spec-fill gaps ----------------
-  const tasksPath = join(projectPath, 'memory', 'TASKS.json')
-  const tasks = tasksArray(readJsonSafe(tasksPath))
-  const workspaceImportTask = tasks.find(t => t?.id === 'task-workspace-import')
   const workspaceImportNeedsAnswer = workspaceImportTask
     ? unresolvedVisibleQuestions(workspaceImportTask).length > 0
     : false
   const importDrafts = tasks.filter(t => t && typeof t === 'object' && t.status === 'import_draft')
-  const setupStillOwnsNextAction = activeSetupStep != null
+  const setupStillOwnsNextAction = activeSetupStep != null && activeSetupStep.id !== 'workspaceImport'
   if (importDrafts.length > 0 && !workspaceImportNeedsAnswer && !setupStillOwnsNextAction) {
     const nextDraft = importDrafts[0]!
     const nextDraftId = typeof nextDraft.id === 'string' ? nextDraft.id : ''
@@ -375,7 +330,9 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
             ? '1 imported draft needs a task brief'
             : `${importDrafts.length} imported drafts need task briefs`,
         detail: queuedDetail,
-        actionHref: '/task/' + encodeURIComponent(nextDraftId),
+        actionHref: nextDraftId === 'task-workspace-import'
+          ? '/workspace-import'
+          : '/task/' + encodeURIComponent(nextDraftId),
       })
     }
   }
@@ -405,14 +362,15 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
         taskId: id,
         title: inboxTitle(id, title),
         detail: truncateTitle(questionDetail, 140),
-        actionHref: '/task/' + encodeURIComponent(id),
+        actionHref: '/task/' + encodeURIComponent(id) + '?tab=current',
       })
     }
     const briefNeedsHuman =
       brief &&
       typeof brief === 'object' &&
       !brief.approvedAt &&
-      status === 'exploring'
+      status === 'exploring' &&
+      !hasUnansweredQuestions
     if (briefNeedsHuman) {
       items.push({
         kind: 'brief_approval',
@@ -420,7 +378,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
         taskId: id,
         title: inboxTitle(id, title),
         detail: 'Brief awaiting approval.',
-        actionHref: '/task/' + encodeURIComponent(id),
+        actionHref: '/task/' + encodeURIComponent(id) + '?tab=current',
       })
     }
 
@@ -431,7 +389,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
         taskId: id,
         title: inboxTitle(id, title),
         detail: 'Spec awaiting approval.',
-        actionHref: '/task/' + encodeURIComponent(id),
+        actionHref: '/task/' + encodeURIComponent(id) + '?tab=current',
       })
     }
 
@@ -447,7 +405,13 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     const briefDraftPending =
       brief && typeof brief === 'object' && !brief.approvedAt
     const specInReview = t.status === 'spec_review'
-    if (specFillEmitted < SPEC_FILL_EMIT_CAP && !briefDraftPending && !specInReview) {
+    if (
+      id !== 'task-workspace-import' &&
+      specFillEmitted < SPEC_FILL_EMIT_CAP &&
+      !briefDraftPending &&
+      !specInReview &&
+      !hasUnansweredQuestions
+    ) {
       const snap = buildTaskSnapshot({
         projectPath,
         task: t as Parameters<typeof buildTaskSnapshot>[0]['task'],
@@ -477,11 +441,11 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
               detail:
                 id === 'task-workspace-import'
                   ? 'Review the sources and possible backlog tasks Guildhall found.'
-                  : `Missing ${missingLabels}.`,
+                  : `Optional cleanup: add ${missingLabels} so agents and reviewers have a clearer brief.`,
               actionHref:
                 id === 'task-workspace-import'
                   ? '/workspace-import'
-                  : '/task/' + encodeURIComponent(id),
+                  : '/task/' + encodeURIComponent(id) + '?tab=spec',
               missingSteps,
             })
             specFillEmitted += 1
@@ -490,13 +454,21 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
       }
     }
 
-    for (const esc of activeEscalations(t)) {
+    const openEscalations = activeEscalations(t)
+    const fallbackBlockedEscalations = openEscalations.length === 0 && t.status === 'blocked' && typeof t.blockReason === 'string' && t.blockReason.trim()
+      ? [{
+          id: 'block-reason',
+          summary: t.blockReason.trim(),
+        }]
+      : []
+    for (const esc of [...openEscalations, ...fallbackBlockedEscalations]) {
       const escId = typeof esc.id === 'string' ? esc.id : ''
+      const reason = 'reason' in esc && typeof esc.reason === 'string' ? esc.reason : ''
       const summary =
         typeof esc.summary === 'string' && esc.summary.trim()
           ? esc.summary
-          : typeof esc.reason === 'string'
-            ? esc.reason
+          : reason
+            ? reason
             : 'Agent escalation awaiting human input.'
       items.push({
         kind: 'open_escalation',

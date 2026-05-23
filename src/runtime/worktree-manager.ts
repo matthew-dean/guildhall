@@ -70,6 +70,7 @@ export interface EnsureWorktreeInput {
   projectId: string
   projectPath: string
   workspacePath?: string
+  worktreeInclude?: string[]
   baseBranch: string
   gitDriver: GitDriver
 }
@@ -100,7 +101,7 @@ export interface EnsureWorktreeResult {
 export async function ensureWorktreeForDispatch(
   input: EnsureWorktreeInput,
 ): Promise<EnsureWorktreeResult> {
-  const { task, mode, projectId, projectPath, workspacePath, baseBranch, gitDriver } = input
+  const { task, mode, projectId, projectPath, workspacePath, worktreeInclude, baseBranch, gitDriver } = input
 
   if (mode === 'none') {
     return {
@@ -131,6 +132,11 @@ export async function ensureWorktreeForDispatch(
       projectPath,
       worktreePath: task.worktreePath,
     })
+    await copyWorktreeIncludeFiles({
+      projectPath,
+      worktreePath: task.worktreePath,
+      include: worktreeInclude ?? [],
+    })
     return {
       worktreePath: task.worktreePath,
       branchName: expectedBranch,
@@ -153,6 +159,11 @@ export async function ensureWorktreeForDispatch(
       projectPath,
       worktreePath: expectedPath,
     })
+    await copyWorktreeIncludeFiles({
+      projectPath,
+      worktreePath: expectedPath,
+      include: worktreeInclude ?? [],
+    })
     return {
       worktreePath: expectedPath,
       branchName: expectedBranch,
@@ -174,6 +185,11 @@ export async function ensureWorktreeForDispatch(
     workspacePath,
     projectPath,
     worktreePath: expectedPath,
+  })
+  await copyWorktreeIncludeFiles({
+    projectPath,
+    worktreePath: expectedPath,
+    include: worktreeInclude ?? [],
   })
   return {
     worktreePath: expectedPath,
@@ -218,6 +234,137 @@ interface EnsureWorkspaceSiblingLinksInput {
 interface PruneProjectRuntimeLinksInput {
   projectPath: string
   worktreePath: string
+}
+
+interface CopyWorktreeIncludeFilesInput {
+  projectPath: string
+  worktreePath: string
+  include: string[]
+}
+
+async function copyWorktreeIncludeFiles(
+  input: CopyWorktreeIncludeFilesInput,
+): Promise<void> {
+  if (input.include.length === 0) return
+  const projectRoot = path.resolve(input.projectPath)
+  const worktreeRoot = path.resolve(input.worktreePath)
+  for (const rawPattern of input.include) {
+    const normalized = normalizeWorktreeIncludePattern(rawPattern)
+    if (!normalized) continue
+    if (normalized.endsWith('/**')) {
+      const dir = normalized.slice(0, -3)
+      await copyWorktreeIncludePath({ projectRoot, worktreeRoot, relativePath: dir })
+      continue
+    }
+    if (normalized.includes('*')) {
+      const matches = await findWorktreeIncludeMatches(projectRoot, normalized)
+      for (const relativePath of matches) {
+        await copyWorktreeIncludePath({ projectRoot, worktreeRoot, relativePath })
+      }
+      continue
+    }
+    await copyWorktreeIncludePath({ projectRoot, worktreeRoot, relativePath: normalized })
+  }
+}
+
+function normalizeWorktreeIncludePattern(rawPattern: string): string | null {
+  const trimmed = rawPattern.trim().replace(/^\/+/, '')
+  if (!trimmed) return null
+  const normalized = path.posix.normalize(trimmed.replace(/\\/g, '/'))
+  if (
+    normalized === '.' ||
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    path.isAbsolute(normalized)
+  ) {
+    return null
+  }
+  return normalized
+}
+
+async function copyWorktreeIncludePath(input: {
+  projectRoot: string
+  worktreeRoot: string
+  relativePath: string
+}): Promise<void> {
+  const sourcePath = path.resolve(input.projectRoot, input.relativePath)
+  const targetPath = path.resolve(input.worktreeRoot, input.relativePath)
+  if (!isPathInside(input.projectRoot, sourcePath)) return
+  if (!isPathInside(input.worktreeRoot, targetPath)) return
+  let stat
+  try {
+    stat = await fs.lstat(sourcePath)
+  } catch {
+    return
+  }
+  if (stat.isSymbolicLink()) return
+  if (!stat.isFile() && !stat.isDirectory()) return
+  await fs.mkdir(path.dirname(targetPath), { recursive: true })
+  await fs.cp(sourcePath, targetPath, {
+    recursive: stat.isDirectory(),
+    force: true,
+    errorOnExist: false,
+    dereference: false,
+  })
+}
+
+async function findWorktreeIncludeMatches(
+  projectRoot: string,
+  pattern: string,
+): Promise<string[]> {
+  const matcher = globPatternToRegExp(pattern)
+  const matches: string[] = []
+  const skipDirs = new Set(['.git', '.guildhall', 'node_modules', 'dist', 'build', 'coverage'])
+  const queue = ['']
+  while (queue.length > 0) {
+    const relativeDir = queue.shift() ?? ''
+    const absoluteDir = path.join(projectRoot, relativeDir)
+    let entries
+    try {
+      entries = await fs.readdir(absoluteDir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      const relativePath = path.posix.join(relativeDir.split(path.sep).join('/'), entry.name)
+      if (entry.isDirectory()) {
+        if (skipDirs.has(entry.name)) continue
+        queue.push(path.join(relativeDir, entry.name))
+        continue
+      }
+      if (entry.isFile() && matcher.test(relativePath)) {
+        matches.push(relativePath)
+      }
+    }
+  }
+  return matches
+}
+
+function globPatternToRegExp(pattern: string): RegExp {
+  let source = '^'
+  for (let i = 0; i < pattern.length; i += 1) {
+    const char = pattern[i] ?? ''
+    const next = pattern[i + 1]
+    if (char === '*' && next === '*') {
+      source += '.*'
+      i += 1
+    } else if (char === '*') {
+      source += '[^/]*'
+    } else {
+      source += escapeRegExp(char)
+    }
+  }
+  source += '$'
+  return new RegExp(source)
+}
+
+function escapeRegExp(char: string): string {
+  return /[|\\{}()[\]^$+*?.]/.test(char) ? `\\${char}` : char
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate)
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
 async function pruneProjectRuntimeLinks(

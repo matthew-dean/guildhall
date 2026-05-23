@@ -192,6 +192,11 @@ export interface DrawerPayload {
   recentEvents?: unknown[]
   contextDebug?: ContextDebugRecord[]
   threadTurns?: TaskThreadTurn[]
+  exploringTranscript?: {
+    content: string | null
+    path: string
+    error?: string
+  }
 }
 
 export type DrawerTab = 'current' | 'spec' | 'transcript' | 'experts' | 'history' | 'provenance'
@@ -446,6 +451,7 @@ export interface ProviderStatus {
     worker?: string
     reviewer?: string
     gateChecker?: string
+    contextIndexer?: string
   } | null
 }
 
@@ -533,6 +539,14 @@ export interface ServiceProjectSummary {
     activeTaskTitle?: string | null
     blockedTaskTitle?: string | null
     recentCompletedTaskTitle?: string | null
+  }
+  taskActivity?: {
+    windowLabel: string
+    max: number
+    bars: Array<{
+      value: number
+      label: string
+    }>
   }
   run?: ProjectRun | null
 }

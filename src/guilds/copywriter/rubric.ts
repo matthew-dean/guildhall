@@ -26,6 +26,18 @@ export const COPYWRITER_RUBRIC: SoftGateRubricItem[] = [
     weight: 0.6,
   },
   {
+    id: 'copy-small-labels-reviewed',
+    question:
+      'Were small user-facing strings reviewed too: nav, tabs, buttons, chips, badges, status labels, settings labels, tooltips, headings, and page titles?',
+    weight: 0.8,
+  },
+  {
+    id: 'copy-docs-product-voice',
+    question:
+      'If public docs changed, do they speak to the reader in friendly product-facing language instead of sounding like a project plan, governance memo, or agent prompt?',
+    weight: 0.9,
+  },
+  {
     id: 'copy-error-with-recovery',
     question:
       'Does every error string name the problem AND give a concrete recovery path — never "Something went wrong" alone?',

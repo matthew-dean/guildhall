@@ -120,7 +120,7 @@ describe('drawer task detail tabs', () => {
 
     render(ProvenanceTab, { task: task(), contextDebug })
 
-    expect(screen.getByText('workspace_import')).toBeInTheDocument()
+    expect(screen.getByText('Workspace Import')).toBeInTheDocument()
     expect(screen.getByText('Pull request opened')).toBeInTheDocument()
     expect(screen.getByText('Awaiting review.')).toBeInTheDocument()
     expect(screen.getByText('Covered by the editor foundation task.')).toBeInTheDocument()
@@ -140,7 +140,36 @@ describe('drawer task detail tabs', () => {
     expect(screen.getByText('Worker is stuck.')).toBeInTheDocument()
   })
 
-  it('renders transcript notes and escapes placeholder-like file references', () => {
+  it('renders exploring transcript entries before task notes', () => {
+    render(TranscriptTab, {
+      task: task(),
+      exploringTranscript: {
+        path: '/tmp/project/memory/exploring/task-link-editor.md',
+        content: [
+          '# Exploring transcript: task-link-editor',
+          '',
+          '## [2026-05-19T15:01:00.000Z] system',
+          '',
+          'Draft a complete task brief.',
+          '',
+          '---',
+          '## [2026-05-19T15:02:00.000Z] spec-agent',
+          '',
+          'Let me inspect `PROJECT_STATE.md` before drafting.',
+          '',
+          '---',
+        ].join('\n'),
+      },
+    })
+
+    expect(screen.getByText('system')).toBeInTheDocument()
+    expect(screen.getByText('spec-agent')).toBeInTheDocument()
+    expect(screen.getByText(/Let me inspect/)).toHaveTextContent('Let me inspect PROJECT_STATE.md before drafting.')
+    expect(screen.getByText('Task notes')).toBeInTheDocument()
+    expect(screen.getByText(/Read/)).toHaveTextContent('Read <Editor.vue> and found the toolbar adapter.')
+  })
+
+  it('falls back to task notes when no exploring transcript exists', () => {
     render(TranscriptTab, { task: task() })
 
     expect(screen.getByText('worker-agent')).toBeInTheDocument()
@@ -301,8 +330,8 @@ describe('shared detail primitives', () => {
     await userEvent.click(screen.getByRole('button', { name: /acceptance give the reviewer/i }))
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' })
 
-    await userEvent.click(screen.getByRole('button', { name: /^skip$/i }))
-    await userEvent.click(screen.getByRole('button', { name: /^resume$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^skip acceptance$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^resume brief$/i }))
     await userEvent.click(screen.getByRole('button', { name: /^hide$/i }))
 
     expect(screen.queryByText('Give the reviewer a finish line.')).not.toBeInTheDocument()

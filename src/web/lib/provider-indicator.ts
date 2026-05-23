@@ -30,6 +30,7 @@ function modelMixSummary(models: ProviderStatus['models']): string | null {
     ['Worker', models.worker],
     ['Reviewer', models.reviewer],
     ['Gate', models.gateChecker],
+    ['Context', models.contextIndexer],
   ]
   const values = roles.map(([, model]) => model).filter((model): model is string => Boolean(model))
   if (values.length === 0) return null

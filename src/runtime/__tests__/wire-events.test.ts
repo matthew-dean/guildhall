@@ -163,6 +163,21 @@ describe('tickOutcomeToBackendEvent — FR-16 wire mapping', () => {
     expect(parsed.message).toMatch(/retry the run or switch providers/i)
   })
 
+  it('humanizes empty assistant recovery checkpoints without repeating raw provider text', () => {
+    const outcome: TickOutcome = {
+      kind: 'agent-error',
+      taskId: 'task-001',
+      agent: 'worker-agent',
+      error: 'empty assistant reply after verified progress',
+    }
+    const evt = tickOutcomeToBackendEvent(outcome)
+    const parsed = backendEventSchema.parse(evt)
+    expect(parsed.type).toBe('error')
+    expect(parsed.message).toBe('Saved a recovery checkpoint after the model stopped responding clearly.')
+    expect(parsed.message).not.toMatch(/empty assistant message/i)
+    expect(parsed.reason).toBe('empty_assistant_after_verified_progress')
+  })
+
   it('maps no-coordinator to a wire error event', () => {
     const outcome: TickOutcome = {
       kind: 'no-coordinator',

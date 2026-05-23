@@ -1,6 +1,6 @@
 import type { LearningCandidate } from './policy.js'
 
-export type BakeoffScenarioOrigin = '0.5.0-flow-audit' | 'custom'
+export type BakeoffScenarioOrigin = '0.5.0-flow-audit' | 'context-indexer' | 'custom'
 export type BakeoffOutcome = 'pass' | 'fail' | 'blocked'
 
 export interface ReplayScenario {
@@ -17,6 +17,17 @@ export interface ModelLaneConfig {
   label: string
   kind: 'deterministic' | 'model'
   model?: string
+  role?: 'spec' | 'coordinator' | 'worker' | 'reviewer' | 'gateChecker' | 'contextIndexer'
+}
+
+export interface EvaluationLadderTrack {
+  id: string
+  label: string
+  repo: string
+  corpusKind: 'documentation' | 'code' | 'design-system' | 'hard-architecture'
+  pathHint: string
+  purpose: string
+  expectedSignals: string[]
 }
 
 export interface ReplayRunRecord {
@@ -68,6 +79,7 @@ export interface BakeoffReport {
   generatedAt: string
   scenarioCount: number
   scenarios: ReplayScenario[]
+  evaluationLadder?: EvaluationLadderTrack[]
   lanes: LaneReport[]
   runs: ReplayRunRecord[]
   recommendation: string
@@ -169,6 +181,120 @@ export const historicalFailureScenarios: ReplayScenario[] = [
   },
 ]
 
+export const contextIndexerScenarios: ReplayScenario[] = [
+  {
+    id: 'canonical-abstraction-purpose',
+    title: 'Context indexer identifies the canonical abstraction and purpose',
+    origin: 'context-indexer',
+    summary: 'Given several similarly named UI controls, the context indexer should identify the canonical button/status primitive and explain when to reuse it.',
+    expectedSignals: ['canonical abstraction named', 'purpose explained', 'avoid parallel primitive'],
+  },
+  {
+    id: 'legacy-versus-current-path',
+    title: 'Context indexer distinguishes legacy paths from current architecture',
+    origin: 'context-indexer',
+    summary: 'Given old docs, generated files, and current runtime code, the context indexer should mark the current source of truth and warn about stale scaffolding.',
+    expectedSignals: ['current path named', 'legacy path flagged', 'read-next guidance'],
+  },
+  {
+    id: 'design-system-drift-summary',
+    title: 'Context indexer summarizes design-system drift and just-in-time abstraction need',
+    origin: 'context-indexer',
+    summary: 'Given repeated one-off UI styles, the context indexer should call out the repeated concept and recommend reuse or a small shared primitive.',
+    expectedSignals: ['repetition detected', 'design-system gap summarized', 'just-in-time abstraction'],
+  },
+  {
+    id: 'semantic-contract-summary',
+    title: 'Context indexer captures module contracts without dumping source',
+    origin: 'context-indexer',
+    summary: 'Given a runtime module, tests, and adjacent docs, the context indexer should summarize what contract the module protects and which files verify it.',
+    expectedSignals: ['contract summarized', 'verification path named', 'bounded source references'],
+  },
+]
+
+export const deepInfraContextIndexerLanes: ModelLaneConfig[] = [
+  {
+    id: 'deepinfra-deepseek-v4-flash-context',
+    label: 'Context indexer — DeepSeek V4 Flash',
+    kind: 'model',
+    role: 'contextIndexer',
+    model: 'deepseek-ai/DeepSeek-V4-Flash',
+  },
+  {
+    id: 'deepinfra-qwen3-6-35b-context',
+    label: 'Context indexer — Qwen 3.6 35B A3B',
+    kind: 'model',
+    role: 'contextIndexer',
+    model: 'Qwen/Qwen3.6-35B-A3B',
+  },
+  {
+    id: 'deepinfra-glm-4-6-context',
+    label: 'Context indexer — GLM 4.6',
+    kind: 'model',
+    role: 'contextIndexer',
+    model: 'zai-org/GLM-4.6',
+  },
+]
+
+export const contextIndexerTestLadder: EvaluationLadderTrack[] = [
+  {
+    id: 'docs-intent-narrative-harness',
+    label: 'Documentation and product-intent corpus',
+    repo: 'narrative-harness',
+    corpusKind: 'documentation',
+    pathHint: '/Users/matthew/git/oss/narrative-harness',
+    purpose:
+      'Check whether the context indexer can summarize product theory, specs, decisions, and future architecture intent without inventing implementation details.',
+    expectedSignals: [
+      'documentation-first corpus classified',
+      'implementation gaps named',
+      'product intent summarized without code claims',
+    ],
+  },
+  {
+    id: 'code-corpus-linecraft',
+    label: 'Small-to-medium real code corpus',
+    repo: 'linecraft',
+    corpusKind: 'code',
+    pathHint: '/Users/matthew/git/oss/linecraft',
+    purpose:
+      'Check whether the context indexer can map a real code architecture, identify canonical modules, and give useful read-next guidance at modest cost.',
+    expectedSignals: [
+      'source areas mapped',
+      'canonical abstractions identified',
+      'verification entrypoints named',
+    ],
+  },
+  {
+    id: 'design-system-guildhall-ui',
+    label: 'Design-system reuse stress slice',
+    repo: 'guildhall',
+    corpusKind: 'design-system',
+    pathHint: '/Users/matthew/git/oss/guildhall/src/web + /Users/matthew/git/oss/guildhall/packages/ui',
+    purpose:
+      'Check whether the context indexer can steer workers toward existing UI primitives and flag one-off styling or component drift.',
+    expectedSignals: [
+      'shared UI primitives named',
+      'design-system gaps summarized',
+      'one-off duplication risks flagged',
+    ],
+  },
+  {
+    id: 'hard-architecture-jess',
+    label: 'Hard compiler/parser architecture corpus',
+    repo: 'jess',
+    corpusKind: 'hard-architecture',
+    pathHint: '/Users/matthew/git/oss/jess',
+    purpose:
+      'Check whether the context indexer still produces useful orientation when architecture is deeper, more coupled, and easier to summarize incorrectly.',
+    expectedSignals: [
+      'deep architecture boundaries preserved',
+      'stale or misleading paths avoided',
+      'read-next guidance stays bounded',
+    ],
+  },
+]
+
 function roundMoney(value: number): number {
   return Number(value.toFixed(6))
 }
@@ -256,6 +382,37 @@ export function aggregateBakeoffReport(input: {
 }
 
 function simulatedRun(scenario: ReplayScenario, lane: ModelLaneConfig): ReplayRunRecord {
+  if (lane.role === 'contextIndexer' || scenario.origin === 'context-indexer') {
+    const model = `${lane.model ?? lane.id}`.toLowerCase()
+    const isDeepSeek = model.includes('deepseek')
+    const isQwen = model.includes('qwen')
+    const isGlm = model.includes('glm')
+    const pass = isDeepSeek || isQwen || (isGlm && scenario.id !== 'design-system-drift-summary')
+    const quality = isDeepSeek ? 0.91 : isQwen ? 0.88 : isGlm ? 0.84 : 0.7
+    const inputTokens = scenario.id === 'semantic-contract-summary' ? 6200 : 4200
+    const outputTokens = isDeepSeek ? 520 : isQwen ? 640 : 760
+    return {
+      scenarioId: scenario.id,
+      laneId: lane.id,
+      outcome: pass ? 'pass' : 'fail',
+      toolCount: pass ? 2 : 4,
+      wallTimeMs: isDeepSeek ? 900 : isQwen ? 1250 : 1500,
+      inputTokens,
+      outputTokens,
+      estimatedCostUsd: roundMoney(
+        isDeepSeek
+          ? (inputTokens * 0.14 + outputTokens * 0.28) / 1_000_000
+          : isQwen
+            ? (inputTokens * 0.15 + outputTokens * 0.8) / 1_000_000
+            : (inputTokens * 0.8 + outputTokens * 2.4) / 1_000_000,
+      ),
+      falseEscalations: pass ? 0 : 1,
+      falseApprovals: 0,
+      playbookSuccesses: pass ? 1 : 0,
+      playbookFailures: pass ? 0 : 1,
+      packetQuality: pass ? quality : 0.45,
+    }
+  }
   const deterministicPass = [
     'dirty-checkout-before-worktree',
     'failed-typecheck-in-touched-files',
@@ -301,6 +458,20 @@ export function runModelBakeoff(input: {
   ])]
   const runs = lanes.flatMap((lane) => scenarios.map((scenario) => simulatedRun(scenario, lane)))
   return aggregateBakeoffReport({ scenarios, lanes, runs, generatedAt: input.generatedAt })
+}
+
+export function runContextIndexerBakeoff(input: {
+  generatedAt?: string
+} = {}): BakeoffReport {
+  const report = runModelBakeoff({
+    scenarios: contextIndexerScenarios,
+    lanes: deepInfraContextIndexerLanes,
+    generatedAt: input.generatedAt,
+  })
+  return {
+    ...report,
+    evaluationLadder: contextIndexerTestLadder,
+  }
 }
 
 export function learningCandidatesFromBakeoffReport(report: BakeoffReport): LearningCandidate[] {
@@ -359,9 +530,10 @@ export function renderBakeoffMarkdown(report: BakeoffReport): string {
     '|---|---:|---:|---:|---:|---:|---:|---:|---:|',
   ]
   for (const lane of report.lanes) {
+    const laneLabel = lane.label === lane.laneId ? lane.laneId : `${lane.label} (${lane.laneId})`
     lines.push(
       [
-        lane.laneId,
+        laneLabel,
         `${lane.completedTasks}/${report.scenarioCount}`,
         String(lane.failedTasks),
         String(lane.falseEscalations),
@@ -372,6 +544,23 @@ export function renderBakeoffMarkdown(report: BakeoffReport): string {
         lane.averagePacketQuality === null ? 'n/a' : lane.averagePacketQuality.toFixed(2),
       ].join(' | '),
     )
+  }
+  if (report.evaluationLadder?.length) {
+    lines.push(
+      '',
+      '## Evaluation ladder',
+      '',
+      '| Track | Repo | Corpus | Purpose |',
+      '|---|---|---|---|',
+    )
+    for (const track of report.evaluationLadder) {
+      lines.push([
+        track.label,
+        track.repo,
+        track.corpusKind,
+        track.purpose,
+      ].join(' | '))
+    }
   }
   return `${lines.join('\n')}\n`
 }

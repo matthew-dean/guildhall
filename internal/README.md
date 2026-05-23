@@ -1,0 +1,20 @@
+# Internal planning
+
+This directory is for Guildhall planning material that should not be published
+on the public docs site.
+
+Use this directory for:
+
+- future-release specs and implementation plans;
+- private product strategy;
+- commercially sensitive notes;
+- agent-facing operating instructions;
+- raw research and design exploration that has not been sanitized for readers.
+
+If a note belongs in public docs, move or rewrite it deliberately under
+`docs/`. Do not assume a planning note is publishable just because it is
+written in Markdown.
+
+Current 0.8.0 planning lives in `internal/specs/`.
+Live product/runtime audit checklists live in `internal/audits/`.
+Older exploratory design notes live in `internal/design-notes/`.

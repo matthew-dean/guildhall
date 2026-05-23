@@ -7,12 +7,14 @@
   import Button from '../../lib/Button.svelte'
   import Card from '../../lib/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
-  import Markdown from '../../lib/Markdown.svelte'
+  import ProgressFeed from '../../lib/ProgressFeed.svelte'
   import TaskCard from '../../lib/TaskCard.svelte'
   import { friendlyDomain, friendlyPriority, friendlyStatus } from '../../lib/display.js'
+  import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
   import { buildWorkSurface } from '../../lib/project-data.js'
+  import { isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
 
@@ -62,13 +64,25 @@
 
   const taskCounts = $derived.by(() => {
     const all = tasks
+    const running = detail.run?.status === 'running'
+    const readyTasks = all.filter(task => task.status === 'ready')
     return {
       total: all.length,
-      active: all.filter(task => ['exploring', 'in_progress', 'review', 'gate_check'].includes(task.status ?? '')).length,
+      agentActive: all.filter(task => running && ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')).length,
+      paused: all.filter(task => !running && task.status === 'in_progress').length,
+      reviewWaiting: all.filter(task => !running && task.status === 'review').length,
+      gatesWaiting: all.filter(task => !running && task.status === 'gate_check').length,
+      shaping: all.filter(task => task.status === 'exploring').length,
+      readyForWorker: readyTasks.filter(isCompleteForWorkerHandoff).length,
+      needsSpecCleanup: readyTasks.filter(needsWorkerHandoffSpecCleanup).length,
       awaitingApproval: all.filter(task => task.status === 'spec_review').length,
       done: all.filter(task => ['done', 'pending_pr'].includes(task.status ?? '')).length,
     }
   })
+
+  function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+    return `${count} ${count === 1 ? singular : plural}`
+  }
 
   const sortedTasks = $derived.by(() => {
     const list = [...tasks]
@@ -126,6 +140,14 @@
     nav(currentTaskHref(task.id), { backgroundPath: path.value })
   }
 
+  function openImportedDraft(task: Task): void {
+    if (task.id === 'task-workspace-import') {
+      nav(currentProjectHref('/workspace-import'))
+      return
+    }
+    openTask(task)
+  }
+
   function onTaskKey(event: KeyboardEvent, task: Task): void {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
@@ -148,6 +170,40 @@
         return 'accent'
       default:
         return 'neutral'
+    }
+  }
+
+  function effectiveStatus(task: Task): string | undefined {
+    if (task.status === 'ready' && needsWorkerHandoffSpecCleanup(task)) {
+      return 'needs_spec_cleanup'
+    }
+    if (detail.run?.status !== 'running') {
+      if (task.status === 'in_progress') return 'paused'
+      if (task.status === 'review') return 'review_waiting'
+      if (task.status === 'gate_check') return 'gates_waiting'
+    }
+    return task.status
+  }
+
+  function effectiveStatusLabel(task: Task): string {
+    switch (effectiveStatus(task)) {
+      case 'paused': return 'Paused'
+      case 'review_waiting': return 'Review waiting'
+      case 'gates_waiting': return 'Gates waiting'
+      case 'needs_spec_cleanup': return 'Needs brief cleanup'
+      default: return friendlyStatus(task.status)
+    }
+  }
+
+  function effectiveStatusTone(task: Task): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
+    switch (effectiveStatus(task)) {
+      case 'paused': return 'neutral'
+      case 'review_waiting':
+      case 'gates_waiting':
+      case 'needs_spec_cleanup':
+        return 'warn'
+      default:
+        return statusTone(task.status)
     }
   }
 
@@ -181,16 +237,20 @@
     if (task.terminalSummary?.headline) return task.terminalSummary.headline
     if (task.latestCheckpoint?.nextPlannedAction) return task.latestCheckpoint.nextPlannedAction
     if (task.description) return task.description
-    return task.id
+    return friendlyTaskId(task.id)
   }
 
   $effect(() => {
-    projectFetch('/api/project/progress')
+    const projectId = detail.id ?? null
+    progress = 'Loading...'
+    projectFetch('/api/project/progress', undefined, projectId)
       .then(r => r.json())
       .then(j => {
+        if (projectId !== (detail.id ?? null)) return
         progress = j.progress || '(empty)'
       })
       .catch(() => {
+        if (projectId !== (detail.id ?? null)) return
         progress = '(failed to load)'
       })
   })
@@ -229,9 +289,7 @@
 
   <details class="progress-more progress-more--full">
     <summary>Recent progress</summary>
-    <div class="progress">
-      <Markdown source={progress} />
-    </div>
+    <ProgressFeed {progress} {tasks} />
   </details>
 {:else}
   <div class="work-list-view">
@@ -259,11 +317,27 @@
 
       <div class="work-summary">
         <Chip label={`${taskCounts.total} tasks`} tone="neutral" />
-        <Chip label={`${taskCounts.active} active`} tone="accent" />
+        {#if taskCounts.agentActive > 0}
+          <Chip label={countLabel(taskCounts.agentActive, 'agent-active', 'agent-active')} tone="accent" />
+        {/if}
+        {#if taskCounts.paused > 0}
+          <Chip label={countLabel(taskCounts.paused, 'paused task')} tone="neutral" />
+        {/if}
+        {#if taskCounts.reviewWaiting > 0}
+          <Chip label={countLabel(taskCounts.reviewWaiting, 'review waiting', 'review waiting')} tone="warn" />
+        {/if}
+        {#if taskCounts.gatesWaiting > 0}
+          <Chip label={countLabel(taskCounts.gatesWaiting, 'gates waiting', 'gates waiting')} tone="warn" />
+        {/if}
+        <Chip label={countLabel(taskCounts.shaping, 'shaping', 'shaping')} tone="neutral" />
+        <Chip label={countLabel(taskCounts.readyForWorker, 'ready for worker', 'ready for worker')} tone="neutral" />
+        {#if taskCounts.needsSpecCleanup > 0}
+          <Chip label={countLabel(taskCounts.needsSpecCleanup, 'need brief cleanup', 'need brief cleanup')} tone="warn" />
+        {/if}
         <Chip label={`${taskCounts.awaitingApproval} awaiting approval`} tone="warn" />
         <Chip label={`${taskCounts.done} done`} tone="ok" />
         {#if importDraftCount > 0}
-          <Chip label={`${importDraftCount} imported drafts`} tone="neutral" />
+          <Chip label={countLabel(importDraftCount, 'import draft')} tone="neutral" />
         {/if}
       </div>
 
@@ -280,15 +354,20 @@
               {/if}
             </p>
           </div>
-          <Button variant="secondary" size="sm" onclick={() => openTask(nextImportDraft)}>
-            Review next draft
+          <Button variant="secondary" size="sm" onclick={() => openImportedDraft(nextImportDraft)}>
+            {nextImportDraft.id === 'task-workspace-import' ? 'Open import review' : 'Draft task brief'}
           </Button>
         </div>
       {/if}
 
       {#if tasks.length === 0}
         {#if needsMeta}
-          <p class="muted">No tasks yet — <strong>Bootstrap project</strong> first.</p>
+          <div class="setup-empty">
+            <p class="muted">No tasks yet. Finish project setup first.</p>
+            <Button variant="primary" size="sm" onclick={() => nav(currentProjectHref('/setup'))}>
+              Open setup
+            </Button>
+          </div>
         {:else}
           <p class="muted">No tasks yet — <strong>New task</strong> to begin.</p>
         {/if}
@@ -320,7 +399,7 @@
                     <div class="task-subcopy">{taskSecondaryText(task)}</div>
                   </td>
                   <td class="cell-status">
-                    <Chip label={friendlyStatus(task.status)} tone={statusTone(task.status)} />
+                    <Chip label={effectiveStatusLabel(task)} tone={effectiveStatusTone(task)} />
                   </td>
                   <td class="cell-steward">{friendlyDomain(task.domain) || 'Project'}</td>
                   <td class="cell-priority">
@@ -338,9 +417,7 @@
 
     <details class="progress-more progress-more--full">
       <summary>Recent progress</summary>
-      <div class="progress">
-        <Markdown source={progress} />
-      </div>
+      <ProgressFeed {progress} {tasks} />
     </details>
   </div>
 {/if}
@@ -361,6 +438,19 @@
     flex-wrap: wrap;
     gap: var(--s-2);
     margin-bottom: var(--s-3);
+  }
+  .setup-empty {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+    padding: var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-subtle);
+  }
+  .setup-empty p {
+    margin: 0;
   }
   .task-table-wrap {
     overflow-x: auto;
@@ -519,27 +609,83 @@
   .progress-more[open] > summary::before {
     content: '▾ ';
   }
-  .progress {
-    max-height: 260px;
-    overflow: auto;
-    margin-top: var(--s-2);
-  }
   .muted {
     color: var(--text-muted);
     font-size: var(--fs-2);
   }
 
-  @media (max-width: 720px) {
+  @media (max-width: 860px) {
     .draft-queue-card {
       flex-direction: column;
       align-items: stretch;
     }
-    .task-table th,
+    .task-table-wrap {
+      overflow-x: hidden;
+    }
+    .task-table {
+      min-width: 0;
+      display: block;
+    }
+    .task-table thead {
+      display: none;
+    }
+    .task-table tbody {
+      display: flex;
+      flex-direction: column;
+    }
+    .task-table tr,
     .task-table td {
-      padding: var(--s-2);
+      display: block;
+    }
+    .task-table .task-row {
+      padding: var(--s-3);
+      border-bottom: 1px solid var(--border);
+    }
+    .task-table .task-row:last-child {
+      border-bottom: 0;
+    }
+    .task-table td {
+      padding: 0;
+      border-bottom: 0;
+    }
+    .cell-task {
+      min-width: 0;
+      margin-bottom: var(--s-2);
     }
     .task-title {
       font-size: var(--fs-1);
     }
+    .task-subcopy {
+      -webkit-line-clamp: 3;
+    }
+    .cell-status,
+    .cell-steward,
+    .cell-priority,
+    .cell-revisions,
+    .cell-updated {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--s-1);
+      margin: 0 var(--s-2) var(--s-1) 0;
+      white-space: normal;
+      text-align: left;
+    }
+    .cell-status::before,
+    .cell-steward::before,
+    .cell-priority::before,
+    .cell-revisions::before,
+    .cell-updated::before {
+      margin-right: var(--s-1);
+      color: var(--text-muted);
+      font-size: var(--fs-0);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .cell-status::before { content: 'Stage'; }
+    .cell-steward::before { content: 'Part'; }
+    .cell-priority::before { content: 'Priority'; }
+    .cell-revisions::before { content: 'Revisions'; }
+    .cell-updated::before { content: 'Updated'; }
   }
 </style>

@@ -4,6 +4,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import ProjectsHome from '../ProjectsHome.svelte'
 import { path } from '../../lib/nav.svelte.js'
+import { getCachedService } from '../../lib/service-cache.js'
 import type { ServiceDetail } from '../../lib/types.js'
 
 const servicePayload: ServiceDetail = {
@@ -23,8 +24,14 @@ const servicePayload: ServiceDetail = {
       id: 'fair-labor-license',
       path: '/repo/fair-labor-license',
       name: 'Fair Labor License',
-      taskCounts: { total: 4, active: 1, draftReview: 0, blocked: 0, done: 1, shelved: 0 },
-      highlights: {},
+      summary:
+        'Fair Labor License is a platform for helping OSS projects, independent developers, and small software companies adopt and operate software licensing with the Fair Labor License.',
+      taskCounts: { total: 4, active: 1, draftReview: 0, blocked: 1, done: 1, shelved: 0 },
+      highlights: {
+        activeTaskTitle: 'Bootstrap database migrations',
+        blockedTaskTitle: 'Stripe Connect payment flow',
+        recentCompletedTaskTitle: 'Project onboarding brief',
+      },
       run: { status: 'stopped', mode: 'continuous' },
     },
   ],
@@ -49,6 +56,7 @@ describe('ProjectsHome', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
     cleanup()
   })
@@ -64,6 +72,128 @@ describe('ProjectsHome', () => {
 
     expect(path.value).toBe('/projects/looma-knit/thread')
     expect(window.location.pathname).toBe('/projects/looma-knit/thread')
+  })
+
+  it('does not invent an in-page project details pane from card selection', async () => {
+    const fetchMock = vi.fn(async () => json(servicePayload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+    await screen.findByText('Looma knit')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Project: Looma knit' }))
+
+    expect(path.value).toBe('/')
+    expect(window.location.pathname).toBe('/')
+    expect(screen.getByText('Where it is')).toBeTruthy()
+    expect(screen.getByText('Current status')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Show Looma knit details on this page' })).toBeNull()
+  })
+
+  it('shows full project details with chip counts and recent/next work', async () => {
+    const fetchMock = vi.fn(async () => json(servicePayload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+    await screen.findByText('Fair Labor License')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Project: Fair Labor License' }))
+
+    expect(screen.getByText(/Fair Labor License is a platform for helping OSS projects/)).toBeTruthy()
+    expect(screen.getByText('Recently completed')).toBeTruthy()
+    expect(screen.getByText('Project onboarding brief')).toBeTruthy()
+    expect(screen.getByText('Next up')).toBeTruthy()
+    expect(screen.getByText('Unblock: Stripe Connect payment flow')).toBeTruthy()
+    expect(screen.getAllByText('1').length).toBeGreaterThan(0)
+    expect(screen.getByText('blocked task')).toBeTruthy()
+    expect(screen.getByText('total tasks')).toBeTruthy()
+  })
+
+  it('opens the fleet needs-you view instead of a random project inbox', async () => {
+    const fetchMock = vi.fn(async () => json(servicePayload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+    await screen.findByText('Looma knit')
+
+    await userEvent.click(screen.getByRole('button', { name: /needs you/i }))
+
+    expect(path.value).toBe('/needs-you')
+    expect(window.location.pathname).toBe('/needs-you')
+  })
+
+  it('counts needs-you projects, not every grouped draft item', async () => {
+    const fetchMock = vi.fn(async () => json({
+      ...servicePayload,
+      projects: [
+        ...servicePayload.projects,
+        {
+          id: 'font-something',
+          path: '/repo/font-something',
+          name: 'Font Something',
+          taskCounts: { total: 8, active: 2, draftReview: 3, blocked: 1, done: 2, shelved: 0 },
+          run: { status: 'stopped', mode: 'continuous' },
+        },
+      ],
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+
+    expect(await screen.findByRole('button', { name: /needs you 2/i })).toBeTruthy()
+  })
+
+  it('summarizes the project floor and exposes card work mix visuals', async () => {
+    const fetchMock = vi.fn(async () => json(servicePayload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+    await screen.findByText('Guild hall')
+
+    expect(screen.getByLabelText('1 running now')).toBeTruthy()
+    expect(screen.getByLabelText('3 active tasks')).toBeTruthy()
+    expect(screen.getByLabelText('Builder: working')).toBeTruthy()
+    expect(screen.getAllByLabelText(/Project work mix:/)).toHaveLength(2)
+    expect(screen.getByLabelText(/Project work mix: 2 active, 0 drafts, 0 blocked, 3 done/)).toBeTruthy()
+    await userEvent.hover(screen.getByLabelText('3 active tasks'))
+    expect((await screen.findByRole('tooltip')).textContent).toContain('tasks currently queued or in progress')
+    await userEvent.unhover(screen.getByLabelText('3 active tasks'))
+    await userEvent.hover(screen.getByText('3 active'))
+    expect(screen.queryByRole('tooltip')).toBeNull()
+    await userEvent.unhover(screen.getByText('3 active'))
+    await userEvent.hover(screen.getByLabelText('Looma knit: running now. Agents are working on 2 tasks.'))
+    expect((await screen.findByRole('tooltip')).textContent).toContain('Looma knit: running now. Agents are working on 2 tasks.')
+  })
+
+  it('uses specific project-avatar tooltips instead of repeated filler copy', async () => {
+    const fetchMock = vi.fn(async () => json(servicePayload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+    await screen.findByText('Fair Labor License')
+
+    expect(screen.queryByLabelText(/assigned or relevant/i)).toBeNull()
+    expect(screen.getByLabelText('Coordinator: 1 blocker to triage in Fair Labor License.')).toBeTruthy()
+    expect(screen.getByLabelText('Builder: 1 active task waiting for a run in Fair Labor License.')).toBeTruthy()
+    expect(screen.getByLabelText('Reviewer: 1 blocked and 1 done task in Fair Labor License.')).toBeTruthy()
+
+    await userEvent.hover(screen.getByLabelText('Coordinator: 1 blocker to triage in Fair Labor License.'))
+    expect((await screen.findByRole('tooltip')).textContent).toBe('Coordinator: 1 blocker to triage in Fair Labor License.')
+  })
+
+  it('assigns stable role palette tones to dashboard and project avatars', async () => {
+    const fetchMock = vi.fn(async () => json(servicePayload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+    await screen.findByText('Fair Labor License')
+
+    expect(screen.getByLabelText('Coordinator: directing live work').classList.contains('avatar-tone-coordinator')).toBe(true)
+    expect(screen.getByLabelText('Spec: at table').classList.contains('avatar-tone-spec')).toBe(true)
+    expect(screen.getByLabelText('Builder: working').classList.contains('avatar-tone-builder')).toBe(true)
+    expect(screen.getByLabelText('Reviewer: inspecting blocks').classList.contains('avatar-tone-reviewer')).toBe(true)
+    expect(screen.getByLabelText('Builder: 1 active task waiting for a run in Fair Labor License.').classList.contains('avatar-tone-builder')).toBe(true)
+    expect(screen.getByLabelText('Reviewer: 1 blocked and 1 done task in Fair Labor License.').classList.contains('avatar-tone-reviewer')).toBe(true)
   })
 
   it('starts and stops projects with project ids in the endpoint', async () => {
@@ -86,8 +216,8 @@ describe('ProjectsHome', () => {
     render(ProjectsHome)
     await screen.findByText('Fair Labor License')
 
-    await userEvent.click(screen.getByRole('button', { name: /start/i }))
-    await userEvent.click(screen.getByRole('button', { name: /stop/i }))
+    await userEvent.click(screen.getByRole('button', { name: /resume/i }))
+    await userEvent.click(screen.getAllByRole('button', { name: /stop/i })[0]!)
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/start'))).toBe(true)
@@ -125,6 +255,21 @@ describe('ProjectsHome', () => {
     expect(screen.getByText('No projects yet')).toBeTruthy()
   })
 
+  it('does not rewrite the dashboard state when a background poll returns the same service snapshot', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.fn(async () => json(structuredClone(servicePayload)))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+    await screen.findByText('Looma knit')
+    const cachedAfterInitialLoad = getCachedService()
+
+    await vi.advanceTimersByTimeAsync(30000)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(getCachedService()).toBe(cachedAfterInitialLoad)
+  })
+
   it('surfaces start and stop failures on the projects page', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
@@ -141,7 +286,7 @@ describe('ProjectsHome', () => {
     render(ProjectsHome)
     await screen.findByText('Fair Labor License')
 
-    await userEvent.click(screen.getByRole('button', { name: /start/i }))
+    await userEvent.click(screen.getByRole('button', { name: /resume/i }))
     await screen.findByText('model unavailable')
     await userEvent.click(screen.getByRole('button', { name: /stop/i }))
     await screen.findByText('stop failed')

@@ -7,13 +7,16 @@
     label: string
     description: string
     tone?: Tone
+    showLabel?: boolean
   }
 
-  let { label, description, tone = 'neutral' }: Props = $props()
+  let { label, description, tone = 'neutral', showLabel = true }: Props = $props()
 </script>
 
 <div class="state-summary">
-  <Chip {label} {tone} />
+  {#if showLabel}
+    <Chip {label} {tone} />
+  {/if}
   <p>{description}</p>
 </div>
 

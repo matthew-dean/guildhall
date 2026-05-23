@@ -7,6 +7,7 @@ vi.mock('@guildhall/core', () => ({
     worker: 'local-worker',
     reviewer: 'local-reviewer',
     gateChecker: 'local-gate-checker',
+    contextIndexer: 'local-gate-checker',
   },
   STANDARD_CODE_REVIEW_RUBRIC: [],
   STANDARD_TS_GATES: [],
@@ -37,6 +38,7 @@ describe('forgeConfig', () => {
       worker: 'local-worker',
       reviewer: 'local-reviewer',
       gateChecker: 'local-gate-checker',
+      contextIndexer: 'local-gate-checker',
     })
     expect(config.maxRevisions).toBe(3)
     expect(config.heartbeatInterval).toBe(5)

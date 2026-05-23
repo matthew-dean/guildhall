@@ -132,10 +132,10 @@ function installBrowserFakes() {
   path.value = '/projects/looma-knit/thread'
 }
 
-function installFetchFakes() {
+function installFetchFakes(projectPayload: ProjectDetail = detail()) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://localhost')
-    if (url.pathname === '/api/project') return json(detail())
+    if (url.pathname === '/api/project') return json(projectPayload)
     if (url.pathname === '/api/project/inbox') {
       return json({
         blockers: { bootstrap: false, workspaceImport: false },
@@ -289,6 +289,30 @@ function installMobileBrowserFakes() {
   }
 }
 
+function installViewportMatchMedia(width: number) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn().mockImplementation((query: string) => {
+      const max = query.match(/max-width:\s*(\d+)px/)
+      const min = query.match(/min-width:\s*(\d+)px/)
+      const matches = Boolean(
+        (max && width <= Number(max[1])) ||
+        (min && width >= Number(min[1])),
+      )
+      return {
+        matches,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }
+    }),
+  })
+}
+
 describe('ProjectView', () => {
   beforeEach(() => {
     installBrowserFakes()
@@ -309,7 +333,7 @@ describe('ProjectView', () => {
     await renderProjectView('thread')
     await screen.findByText('Which controls belong in the link editor?')
 
-    await user.click(screen.getByRole('button', { name: 'URL input only' }))
+    await user.click(screen.getByRole('button', { name: /url input only/i }))
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/project/task/task-link-editor/answer-questions'),
@@ -341,6 +365,151 @@ describe('ProjectView', () => {
     await renderProjectView('thread', null, null)
 
     await waitFor(() => expect(path.value).toBe('/projects/looma-knit/thread'))
+  })
+
+  it('routes setup blockers with a pending meta-intake task to the setup recovery surface', async () => {
+    const user = userEvent.setup()
+    const projectPayload = detail({
+      startReadiness: { canStart: false, message: 'Resume project setup first' },
+      tasks: [
+        task({
+          id: 'task-meta-intake',
+          title: 'Inspect the repo',
+          status: 'blocked',
+          escalations: [{ id: 'esc-meta', summary: 'Human judgment required' }],
+        }),
+      ],
+    })
+    installFetchFakes(projectPayload)
+    await renderProjectView(
+      'thread',
+      null,
+      'looma-knit',
+      projectPayload,
+    )
+
+    await user.click(screen.getByRole('button', { name: /project setup needs attention/i }))
+    expect(path.value).toBe('/projects/looma-knit/setup')
+  })
+
+  it('routes imported-draft start blockers to the draft review surface', async () => {
+    const user = userEvent.setup()
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'import_drafts_waiting',
+        message: 'Review 6 imported drafts before starting.',
+        actionHref: '/task/task-import-1',
+      },
+      tasks: [
+        task({
+          id: 'task-import-1',
+          title: 'Imported draft',
+          status: 'import_draft',
+          escalations: [],
+        }),
+      ],
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+    await renderProjectView('thread', null, 'looma-knit', projectPayload)
+
+    const attention = screen.getByRole('button', { name: /imported drafts need review/i })
+    expect(attention).toHaveTextContent(/Review drafts/i)
+    await user.click(attention)
+    expect(path.value).toBe('/projects/looma-knit/task/task-import-1')
+  })
+
+  it('does not present stable done-only projects as paused or needing setup attention', async () => {
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'All tasks are already finished.',
+      },
+      tasks: [
+        task({ id: 'task-done-a', title: 'Done A', status: 'done' }),
+        task({ id: 'task-done-b', title: 'Done B', status: 'done' }),
+      ],
+      totals: { blockingCount: 0, tasks: 2, done: 2 },
+      statusCounts: { done: 2 },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('thread', null, 'looma-knit', projectPayload)
+
+    expect(screen.getByText('Stable')).toBeTruthy()
+    expect(screen.getByText('All tasks are already finished.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'No tasks to start: No tasks to start' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'No tasks to start' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^start$/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /readiness checks need attention/i })).toBeNull()
+    expect(screen.queryByText('Paused')).toBeNull()
+    expect(screen.queryByText('Setup')).toBeNull()
+  })
+
+  it('shows all-terminal supervisor stop detail in the project ticker footer', async () => {
+    const projectPayload = detail({
+      run: { status: 'stopped', mode: 'continuous' },
+      tasks: [
+        task({ id: 'task-done', title: 'Done task', status: 'done' }),
+        task({ id: 'task-blocked', title: 'Blocked task', status: 'blocked' }),
+      ],
+      recentEvents: [
+        {
+          at: now,
+          event: {
+            type: 'supervisor_stopped',
+            reason: 'all_terminal',
+            message: 'No actionable tasks remain: 1 done, 1 blocked, 0 shelved.',
+          },
+        },
+      ],
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('thread', null, 'looma-knit', projectPayload)
+
+    expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('Run finished')
+    expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('No actionable tasks remain')
+  })
+
+  it('does not show waiting-on-input for blocked work with only suppressed promise questions', async () => {
+    const projectPayload = detail({
+      tasks: [
+        task({
+          id: 'task-blocked-promise',
+          title: 'Fix checkout recovery',
+          status: 'blocked',
+          blockReason: 'Recovery needs a clean checkout.',
+          openQuestions: [
+            {
+              id: 'q-promise',
+              kind: 'choice',
+              askedBy: 'spec-agent',
+              askedAt: now,
+              prompt: 'Next, pick the output path:',
+              selectionMode: 'single',
+              choices: [
+                'I will draft the blueprint',
+                'I will update the product brief',
+                'I will persist progress with tools',
+              ],
+            },
+          ],
+          escalations: [],
+        }),
+      ],
+      run: {
+        status: 'stopped',
+        mode: 'continuous',
+      },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('work', null, 'looma-knit', projectPayload)
+
+    expect(screen.queryByText(/Waiting on input/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/Blocked: 1 task/i)).toBeInTheDocument()
   })
 
   it('starts a continuous run and keeps the project id in the mutating request body', async () => {
@@ -381,6 +550,35 @@ describe('ProjectView', () => {
     expect(screen.queryByRole('button', { name: /advance one task/i })).not.toBeInTheDocument()
   })
 
+  it('collapses topbar labels before the project toolbar wraps', async () => {
+    installViewportMatchMedia(680)
+
+    await renderProjectView('thread')
+    const topbar = document.querySelector('header.topbar')
+    expect(topbar).not.toBeNull()
+
+    await waitFor(() => {
+      expect(topbar).not.toHaveTextContent('Projects')
+    })
+    expect(topbar).not.toHaveTextContent('New task')
+    expect(topbar).not.toHaveTextContent('Start')
+    expect(topbar).not.toHaveTextContent('Needs you')
+  })
+
+  it('moves New task into the overflow menu at narrow toolbar widths', async () => {
+    const user = userEvent.setup()
+    installViewportMatchMedia(600)
+
+    project.detail = detail()
+    project.error = null
+    render(ProjectView, { initialView: 'thread', initialSub: null, projectId: 'looma-knit' })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open actions menu' })).toBeInTheDocument())
+
+    expect(screen.queryByRole('button', { name: 'New task' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Open actions menu' }))
+    expect(screen.getByRole('button', { name: 'New task' })).toBeInTheDocument()
+  })
+
   it('labels a running one-task pass as Stop 1 and stops the scoped project run', async () => {
     const user = userEvent.setup()
     const running = detail({
@@ -401,12 +599,38 @@ describe('ProjectView', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await renderProjectView('thread', null, 'looma-knit', running)
+    expect(screen.getByRole('button', { name: /stop one-step run/i })).toHaveTextContent('Stop 1')
     await user.click(screen.getByRole('button', { name: /stop one-step run/i }))
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/stop'))).toBe(true)
     })
-    expect(screen.getByRole('button', { name: /stop one-step run/i })).toHaveTextContent('Stop 1')
+    expect(screen.getByRole('button', { name: /stopping/i })).toBeDisabled()
+  })
+
+  it('acknowledges stop immediately while the project run is stopping', async () => {
+    const user = userEvent.setup()
+    const running = detail({
+      run: { status: 'running', mode: 'continuous' },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return json(running)
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      if (url.pathname === '/api/project/thread') return json({ turns: [], activeTurnId: null })
+      if (url.pathname === '/api/project/stop') {
+        expect(init?.method).toBe('POST')
+        return json({ ok: true, status: 'stopping' })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await renderProjectView('thread', null, 'looma-knit', running)
+    await user.click(screen.getByRole('button', { name: /^stop$/i }))
+
+    await screen.findByRole('button', { name: /stopping/i })
+    expect(screen.getByRole('button', { name: /stopping/i })).toBeDisabled()
   })
 
   it('surfaces provider start failures with a direct Providers action', async () => {
@@ -428,8 +652,8 @@ describe('ProjectView', () => {
     await user.click(screen.getByRole('button', { name: /^start$/i }))
 
     await screen.findByText('Provider is not configured.')
-    await user.click(screen.getByRole('link', { name: /open providers/i }))
-    expect(path.value).toBe('/providers')
+    await user.click(screen.getByRole('link', { name: /open project providers/i }))
+    expect(path.value).toBe('/projects/looma-knit/settings/providers')
   })
 
   it('renders loading, error, and uninitialized project states without a stale project shell', async () => {
@@ -493,7 +717,8 @@ describe('ProjectView', () => {
     await renderProjectView('thread', null, 'looma-knit', brokenBootstrap)
 
     expect(screen.getByText('pnpm test exited 1: Cannot find module ./Button.svelte')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /fix the bootstrap failure before adding tasks/i })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: /new task/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /readiness checks need attention/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /fix the bootstrap failure before starting/i })).toBeDisabled()
 
     await user.click(screen.getByRole('link', { name: /open readiness checks/i }))
@@ -505,21 +730,32 @@ describe('ProjectView', () => {
     installMobileBrowserFakes()
 
     await renderProjectView('thread')
+    const shell = document.querySelector('.app-shell')
+    const shellRail = document.querySelector('.app-shell-rail')
+    expect(shell).toHaveClass('mobile-rail-mode')
+    expect(shell).not.toHaveClass('rail-overlay-open')
+    expect(shellRail).toHaveAttribute('aria-hidden', 'true')
     expect(screen.queryByRole('button', { name: /close project navigation/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Work$/ })).not.toBeInTheDocument()
 
     window.dispatchEvent(new Event('guildhall:toggle-project-nav'))
     await waitFor(() => {
-      expect(screen.getAllByRole('button', { name: /close project navigation/i })).toHaveLength(2)
+      expect(screen.getAllByRole('button', { name: /close project navigation/i })).toHaveLength(1)
     })
+    expect(shell).toHaveClass('rail-overlay-open')
+    expect(shellRail).toHaveAttribute('aria-hidden', 'false')
+    expect(screen.getByRole('button', { name: /^Work$/ })).toBeInTheDocument()
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /close project navigation/i })).not.toBeInTheDocument()
     })
+    expect(shell).not.toHaveClass('rail-overlay-open')
+    expect(shellRail).toHaveAttribute('aria-hidden', 'true')
 
     window.dispatchEvent(new Event('guildhall:toggle-project-nav'))
     await waitFor(() => {
-      expect(screen.getAllByRole('button', { name: /close project navigation/i })).toHaveLength(2)
+      expect(screen.getAllByRole('button', { name: /close project navigation/i })).toHaveLength(1)
     })
     await user.click(screen.getByRole('button', { name: /^Work$/ }))
 
@@ -527,5 +763,34 @@ describe('ProjectView', () => {
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /close project navigation/i })).not.toBeInTheDocument()
     })
+  })
+
+  it('keeps collapsed rail navigation accessible by name', async () => {
+    await renderProjectView('work')
+
+    expect(screen.getByRole('button', { name: 'Thread' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Work' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Release' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Project provider settings' })).not.toBeInTheDocument()
+  })
+
+  it('routes the rail Needs you item to the notifications surface', async () => {
+    await renderProjectView('thread')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Needs you' }))
+
+    expect(path.value).toBe('/projects/looma-knit/notifications')
+  })
+
+  it('keeps Settings pinned in the rail utility section instead of expanding settings subsections there', async () => {
+    await renderProjectView('settings', 'providers')
+
+    const railBottom = document.querySelector('.rail-bottom')
+    expect(railBottom).not.toBeNull()
+    expect(railBottom).toContainElement(screen.getByRole('button', { name: 'Settings' }))
+    expect(document.querySelector('.rail-subs')).toBeNull()
   })
 })

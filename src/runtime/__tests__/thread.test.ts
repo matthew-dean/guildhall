@@ -336,6 +336,44 @@ describe('buildThread', () => {
     }
   })
 
+  it('frames the empty-project first work item as spec shaping instead of implementation task creation', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({ tasks: [] }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'commerce-project',
+          name: 'Commerce Project',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'project-implementation', name: 'Project Implementation' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const activeSetup = thread.turns.find(turn => turn.kind === 'setup_step' && turn.status === 'active')
+      if (!activeSetup || activeSetup.kind !== 'setup_step') throw new Error('expected active setup step')
+
+      expect(activeSetup.stepId).toBe('firstTask')
+      expect(activeSetup.title).toBe('Shape the first spec')
+      expect(activeSetup.why).toMatch(/rough idea into a product brief/i)
+      expect(activeSetup.actionLabel).toBe('Start shaping')
+      expect(activeSetup.placeholder).toBe('Describe the product idea or first outcome')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('keeps a workspace-import question active ahead of later queued work', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
@@ -405,6 +443,192 @@ describe('buildThread', () => {
       const queuedTask = thread.turns.find((turn) => turn.id === 'inflight:task-003')
       if (!queuedTask || queuedTask.kind !== 'inflight') throw new Error('expected queued task turn')
       expect(queuedTask.status).toBe('pending')
+      expect(queuedTask.summary).toContain('brief or acceptance criteria still need cleanup')
+      expect(queuedTask.checklist?.totalSteps).toBeGreaterThan(0)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('does not render operational receipts as answerable questions', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const now = new Date().toISOString()
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-db-bootstrap',
+              title: 'Bootstrap database',
+              status: 'exploring',
+              createdAt: now,
+              updatedAt: now,
+              openQuestions: [
+                {
+                  id: 'q-receipt',
+                  askedBy: 'spec-agent',
+                  askedAt: now,
+                  kind: 'choice',
+                  prompt: 'Done — I took the durable blueprint steps:',
+                  selectionMode: 'single',
+                  choices: [
+                    'Updated the product brief',
+                    'Revised and strengthened the spec',
+                    'Set task status to `spec_review`',
+                    'Appended this turn to the exploring transcript',
+                    'Logged a milestone in `PROGRESS.md`',
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: now },
+          coordinators: [{ id: 'data', name: 'Data' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
+
+      expect(thread.turns.some(turn => turn.kind === 'agent_question')).toBe(false)
+      expect(thread.turns.some(turn => turn.kind === 'inflight' && turn.id === 'inflight:task-db-bootstrap')).toBe(true)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('does not render output promises as answerable questions', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const now = new Date().toISOString()
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-blueprint',
+              title: 'Draft the blueprint',
+              status: 'exploring',
+              createdAt: now,
+              updatedAt: now,
+              openQuestions: [
+                {
+                  id: 'q-promise',
+                  askedBy: 'spec-agent',
+                  askedAt: now,
+                  kind: 'choice',
+                  prompt: 'Next, pick the output path:',
+                  selectionMode: 'single',
+                  choices: [
+                    'I will draft the blueprint',
+                    'I will update the product brief',
+                    'I will persist progress with tools',
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: now },
+          coordinators: [{ id: 'product', name: 'Product' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
+
+      expect(thread.turns.some(turn => turn.kind === 'agent_question')).toBe(false)
+      expect(thread.turns.some(turn => turn.kind === 'inflight' && turn.id === 'inflight:task-blueprint')).toBe(true)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('surfaces immediate all-terminal start-stop activity in Thread', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const now = new Date().toISOString()
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'done-1',
+              title: 'Done one',
+              status: 'done',
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: now },
+          coordinators: [{ id: 'data', name: 'Data' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        runStatus: 'stopped',
+        recentEvents: [
+          {
+            at: now,
+            workspaceId: 'test',
+            event: { type: 'supervisor_started', message: 'Orchestrator started for test' },
+          },
+          {
+            at: now,
+            workspaceId: 'test',
+            event: {
+              type: 'supervisor_stopped',
+              reason: 'all_terminal',
+              message: 'No actionable tasks remain: 1 done, 0 blocked, 0 shelved.',
+            },
+          },
+        ],
+      })
+
+      expect(JSON.stringify(thread)).toContain('No actionable tasks remain')
+      expect(thread.turns.some(turn => turn.id === 'run:recent-activity')).toBe(true)
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -841,6 +1065,78 @@ describe('buildThread', () => {
       const questionTurn = questionTurns[0]
       if (!questionTurn || questionTurn.kind !== 'agent_question') throw new Error('expected question turn')
       expect(questionTurn.question.prompt).toBe('Pick one')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('collapses near-duplicate fallback questions with the same choices into one visible card', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      const now = new Date().toISOString()
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-emoji',
+              title: 'Emoji flow',
+              status: 'spec_review',
+              createdAt: now,
+              updatedAt: now,
+              openQuestions: [
+                {
+                  kind: 'choice',
+                  id: 'q-1',
+                  askedBy: 'spec-agent',
+                  askedAt: now,
+                  prompt: 'Pick the emoji fallback path:',
+                  choices: ['Keep current emoji set', 'Use platform emoji', 'Defer emoji work'],
+                  selectionMode: 'single',
+                },
+                {
+                  kind: 'choice',
+                  id: 'q-2',
+                  askedBy: 'spec-agent',
+                  askedAt: now,
+                  prompt: 'Which emoji fallback path should I use?',
+                  choices: ['Keep current emoji set', 'Use platform emoji', 'Defer emoji work'],
+                  selectionMode: 'single',
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: now },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
+
+      const questionTurns = thread.turns.filter((turn) => turn.kind === 'agent_question')
+      expect(questionTurns).toHaveLength(1)
+      const questionTurn = questionTurns[0]
+      if (!questionTurn || questionTurn.kind !== 'agent_question') throw new Error('expected question turn')
+      expect(questionTurn.questions).toBeUndefined()
+      expect(questionTurn.question.choices).toEqual([
+        'Keep current emoji set',
+        'Use platform emoji',
+        'Defer emoji work',
+      ])
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -1665,6 +1961,56 @@ coordinators:
       expect(turn.activity?.at(-1)?.label).toBe('Failed file edit')
       expect(turn.activity?.at(-1)?.tone).toBe('danger')
       expect(turn.activity?.at(-1)?.detail).toContain('missing oldString')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('surfaces blocked tasks even when only blockReason was persisted', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-blocked-without-escalation',
+              title: 'Fix local bootstrap',
+              status: 'blocked',
+              blockReason: 'worktree bootstrap failed on command `pixi install`.',
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'core', name: 'Core' }],
+        },
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      const turn = thread.turns.find(t => t.kind === 'escalation')
+      if (!turn || turn.kind !== 'escalation') throw new Error('expected blockReason escalation turn')
+      expect(turn.phase).toBe('blocked')
+      expect(turn.taskTitle).toBe('Fix local bootstrap')
+      expect(turn.summary).toContain('pixi install')
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }

@@ -9,7 +9,7 @@ help_summary: |
 
 # Hooks
 
-**Source:** `src/hooks/`
+**Source:** `./src/hooks/`
 
 A hook is user-defined logic that fires at a lifecycle event. Four types:
 
@@ -18,7 +18,7 @@ A hook is user-defined logic that fires at a lifecycle event. Four types:
 | `command` | A shell command with structured args. | Audit logging, local side effects. |
 | `prompt` | An LLM prompt that returns a structured result. | Soft checks, natural-language gating. |
 | `http` | An HTTP call to an external service. | External approvals, incident tracking. |
-| `agent` | Another GuildHall agent invocation (nested). | Meta-review, deep analysis. |
+| `agent` | Another Guildhall agent invocation (nested). | Meta-review, deep analysis. |
 
 ## Events
 

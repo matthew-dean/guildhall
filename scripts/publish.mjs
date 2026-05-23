@@ -13,12 +13,14 @@
  *   2. Refuse to run on a dirty worktree or when not on `main` (override with
  *      `--allow-dirty` / `--allow-branch`).
  *   3. Bump the root `package.json` to the new version.
- *   4. Typecheck + docs build + tests + dep-cruise as the pre-publish gate.
- *   5. Rebuild `dist/` fresh.
- *   6. Build the macOS packaged artifact used by the curl installer.
- *   7. Verify package contents exclude raw docs/ but keep generated help.
- *   8. `npm publish` with `--access=public`.
- *   9. Commit the version bump and tag `v<version>`.
+ *   4. For real publishes, update public docs pointers and cut
+ *      docs/versions/<version> from the current docs. Dry-runs skip this.
+ *   5. Typecheck + docs build + tests + dep-cruise as the pre-publish gate.
+ *   6. Rebuild `dist/` fresh.
+ *   7. Build the macOS packaged artifact used by the curl installer.
+ *   8. Verify package contents exclude raw docs/ but keep generated help.
+ *   9. `npm publish` with `--access=public`.
+ *   10. Commit the version/docs bump and tag `v<version>`.
  *
  * Flags:
  *   --dry-run             Print each step; run everything except `npm publish`
@@ -37,7 +39,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -65,8 +67,14 @@ const flags = {
 }
 const originalManifestText = readFileSync(MANIFEST, 'utf-8')
 let restoreManifestOnExit = false
+const releaseArtifactRollback = {
+  active: false,
+  files: new Map(),
+  dirsToRemove: [],
+}
 process.on('exit', () => {
   if (restoreManifestOnExit) writeFileSync(MANIFEST, originalManifestText)
+  if (releaseArtifactRollback.active) restoreReleaseArtifacts()
 })
 const versionArg = args.find((a) => !a.startsWith('--'))
 if (!versionArg) die('Missing version argument. Pass a semver or `patch`/`minor`/`major`.')
@@ -101,13 +109,30 @@ if (manifest.version !== nextVersion) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Pre-publish gate
+// 4. Version docs for real publishes
+// ---------------------------------------------------------------------------
+
+if (flags.dryRun) {
+  warn('Dry-run: skipping docs versioning and public docs pointer updates.')
+} else {
+  trackReleaseArtifacts(nextVersion)
+  updatePublicDocsVersion(nextVersion)
+  log(`Cutting docs version ${nextVersion} from current docs...`)
+  run('node', ['scripts/version-docs.mjs', nextVersion])
+}
+
+const releaseHelpDocsEnv = flags.dryRun
+  ? {}
+  : { GUILDHALL_HELP_DOCS_PREFIX: `versions/${nextVersion}/` }
+
+// ---------------------------------------------------------------------------
+// 5. Pre-publish gate
 // ---------------------------------------------------------------------------
 
 if (!flags.skipTests) {
   log('Running typecheck, docs build, lint:deps, and tests...')
   run('pnpm', ['typecheck'])
-  run('pnpm', ['docs:build'])
+  run('pnpm', ['docs:build'], releaseHelpDocsEnv)
   run('pnpm', ['lint:deps'])
   run('pnpm', ['test'])
 } else {
@@ -115,28 +140,28 @@ if (!flags.skipTests) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Build the bundle
+// 6. Build the bundle
 // ---------------------------------------------------------------------------
 
 log('Building dist/...')
-run('pnpm', ['build'])
+run('pnpm', ['build'], releaseHelpDocsEnv)
 
 // ---------------------------------------------------------------------------
-// 6. Build the macOS packaged artifact
+// 7. Build the macOS packaged artifact
 // ---------------------------------------------------------------------------
 
 log('Building macOS packaged artifact...')
 run('node', ['scripts/build-macos-package.mjs', '--skip-build'])
 
 // ---------------------------------------------------------------------------
-// 7. Package contents guard
+// 8. Package contents guard
 // ---------------------------------------------------------------------------
 
 log('Checking npm package contents...')
 assertNoDocsInPackage()
 
 // ---------------------------------------------------------------------------
-// 8. Publish
+// 9. Publish
 // ---------------------------------------------------------------------------
 
 const publishArgs = ['publish', '--access=public', '--tag', flags.tag]
@@ -146,10 +171,11 @@ log(`Publishing guildhall@${nextVersion} (tag: ${flags.tag})${flags.dryRun ? ' [
 run('npm', publishArgs)
 if (!flags.dryRun) {
   restoreManifestOnExit = false
+  releaseArtifactRollback.active = false
 }
 
 // ---------------------------------------------------------------------------
-// 9. Commit + tag
+// 10. Commit + tag
 // ---------------------------------------------------------------------------
 
 if (flags.dryRun) {
@@ -158,11 +184,17 @@ if (flags.dryRun) {
 }
 
 log('Committing version bump + tagging...')
-run('git', ['add', 'package.json'])
-if (hasStagedDiff(['package.json'])) {
+const releasePaths = [
+  'package.json',
+  'docs/index.md',
+  'docs/releases/index.md',
+  `docs/versions/${nextVersion}`,
+]
+run('git', ['add', ...releasePaths])
+if (hasStagedDiff(releasePaths)) {
   run('git', ['commit', '-m', `chore(release): guildhall@${nextVersion}`])
 } else {
-  warn('No package.json version diff to commit; skipping release commit.')
+  warn('No release diff to commit; skipping release commit.')
 }
 if (gitRefExists(`refs/tags/v${nextVersion}`)) {
   warn(`Tag v${nextVersion} already exists; skipping tag creation.`)
@@ -221,9 +253,54 @@ function writeJson(path, obj) {
   writeFileSync(path, JSON.stringify(obj, null, 2) + '\n')
 }
 
-function run(cmd, argv) {
+function updatePublicDocsVersion(version) {
+  const homePath = join(ROOT, 'docs/index.md')
+  const releasesPath = join(ROOT, 'docs/releases/index.md')
+
+  replaceFileText(homePath, (raw) => raw
+    .replace(/\/guildhall\/versions\/\d+\.\d+\.\d+(-[\w.]+)?\//g, `/guildhall/versions/${version}/`)
+    .replace(/Guildhall \d+\.\d+\.\d+(-[\w.]+)?/g, `Guildhall ${version}`))
+
+  replaceFileText(releasesPath, (raw) => raw
+    .replace(/\/versions\/\d+\.\d+\.\d+(-[\w.]+)?\//g, `/versions/${version}/`)
+    .replace(/Guildhall \d+\.\d+\.\d+(-[\w.]+)?/g, `Guildhall ${version}`))
+
+  log(`Updated public docs pointers to ${version}.`)
+}
+
+function trackReleaseArtifacts(version) {
+  const trackedFiles = [
+    join(ROOT, 'docs/index.md'),
+    join(ROOT, 'docs/releases/index.md'),
+  ]
+  for (const file of trackedFiles) {
+    releaseArtifactRollback.files.set(file, readFileSync(file, 'utf-8'))
+  }
+  const versionDir = join(ROOT, 'docs/versions', version)
+  if (!existsSync(versionDir)) {
+    releaseArtifactRollback.dirsToRemove.push(versionDir)
+  }
+  releaseArtifactRollback.active = true
+}
+
+function restoreReleaseArtifacts() {
+  for (const [file, contents] of releaseArtifactRollback.files) {
+    writeFileSync(file, contents)
+  }
+  for (const dir of releaseArtifactRollback.dirsToRemove) {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+function replaceFileText(path, transform) {
+  const raw = readFileSync(path, 'utf-8')
+  const next = transform(raw)
+  if (next !== raw) writeFileSync(path, next)
+}
+
+function run(cmd, argv, extraEnv = {}) {
   try {
-    execFileSync(cmd, argv, { stdio: 'inherit', cwd: ROOT })
+    execFileSync(cmd, argv, { stdio: 'inherit', cwd: ROOT, env: { ...process.env, ...extraEnv } })
   } catch {
     die(`Command failed: ${cmd} ${argv.join(' ')}`)
   }

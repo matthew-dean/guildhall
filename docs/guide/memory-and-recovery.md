@@ -1,15 +1,19 @@
 ---
-title: Memory and recovery
+title: Memory, learning, and recovery
 pageClass: gh-first-visit-page
 ---
 
-# Memory and recovery
+# Memory, learning, and recovery
 
-Guildhall can now do more than stop at the first awkward blocker. When a worker
-gets stuck, the coordinator classifies the failure, chooses a bounded recovery
-playbook, and records what happened. When the result teaches Guildhall
-something durable, the lesson lands in the right layer instead of becoming
-mystery behavior.
+Memory is part of how Guildhall works, not just a task cleanup feature. It is
+how the product remembers useful project facts, asks before turning repeated
+preferences into defaults, and recovers from stuck work without starting from
+scratch.
+
+When a worker gets stuck, the coordinator classifies the failure, chooses a
+bounded recovery playbook, and records what happened. When the result teaches
+Guildhall something durable, the lesson lands in the right layer instead of
+becoming mystery behavior.
 
 The important product rule is simple: **Guildhall may learn, but learned
 behavior stays inspectable and reversible.**
@@ -27,23 +31,23 @@ Examples include:
 - repairing a touched-file verification failure
 - refreshing a stale edit target after an `oldString` miss
 - proposing a change order when evidence shows the blueprint is wrong
-- stopping with a concrete human question when the setup issue is outside the
-  task
+- stopping with a concrete question when the setup issue is outside the task
 
-Thread and blocker summaries should explain the human reason, not raw internal
-schema names. The audit trail keeps the typed classification and playbook record
-for future inspection.
+Thread and blocker summaries explain the real reason, not raw internal schema
+names. The audit trail keeps the typed classification and playbook record for
+future inspection.
 
 ## Memory layers
 
-Guildhall separates lessons by scope:
+Guildhall separates lessons by scope, because “remember this” can mean very
+different things:
 
 | Layer | Used for | Where to inspect |
 |---|---|---|
-| This project | Repo-specific commands, paths, facts, and workflow habits. | Settings -> Learning -> This project |
-| Across projects | Repeated user preferences that can apply beyond one repo. | Settings -> Learning -> Across projects |
-| Project playbooks | Repeatable project-local procedures that can enter worker context when a matching task appears. | Settings -> Learning -> Project playbooks |
-| Ideas for Guildhall | Product improvements for Guildhall itself. They do not change runtime behavior. | Settings -> Learning -> Ideas for Guildhall |
+| This project | Repo-specific commands, paths, facts, and workflow habits. | Settings -> Memory -> This project |
+| Across projects | Repeated user preferences that can apply beyond one repo. | Settings -> Memory -> Across projects |
+| Project playbooks | Repeatable project-local procedures that can enter worker context when a matching task appears. | Settings -> Memory -> Project playbooks |
+| Ideas for Guildhall | Product improvements for Guildhall itself. They do not change runtime behavior. | Settings -> Memory -> Ideas for Guildhall |
 
 Project facts do not silently become global preferences. Product ideas do not
 silently change how Guildhall runs. If a behavior would increase autonomy or
@@ -51,7 +55,7 @@ apply more broadly, it needs explicit approval.
 
 ## Memory and habits
 
-Open **Settings -> Learning** inside a project to review what Guildhall wants to
+Open **Settings -> Memory** inside a project to review what Guildhall wants to
 reuse.
 
 Common actions:
@@ -71,8 +75,8 @@ stay off until you choose to use them.
 ## Product feedback
 
 Product ideas are for improving Guildhall itself. They include the suggestion,
-evidence, affected project, and source id, but they remain inert until a human
-decides to act.
+evidence, affected project, and source id, but they remain inert until someone
+chooses to act.
 
 The **Give product feedback** button opens a draft issue in the Guildhall GitHub
 repo. Guildhall does not submit the issue automatically.

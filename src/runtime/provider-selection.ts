@@ -401,6 +401,7 @@ function providerKeyForModelId(id: string): PreferredProviderKey | undefined {
       case 'anthropic':
         return 'claude-oauth'
       case 'openai':
+      case 'deepinfra':
         return 'openai-api'
       case 'google':
         return undefined
@@ -432,6 +433,7 @@ export function inferPreferredProvider(
     providerKeyForModelId(models.worker),
     providerKeyForModelId(models.reviewer),
     providerKeyForModelId(models.gateChecker),
+    providerKeyForModelId(models.contextIndexer),
   ]
   const first = keys[0]
   if (!first) return undefined

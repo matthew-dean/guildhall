@@ -5,32 +5,51 @@ pageClass: gh-first-visit-page
 
 # Start here
 
-Guildhall is a local app for letting a guild of AI helpers work on your real
-projects while keeping plans, work, review, and blockers visible. You do not
-have to understand AI provider setup, agent roles, or internal queues before
-your first run.
+Guildhall is a local app for handing real project work to AI agents without
+losing the plot. It keeps the plan, the work, the review, and the blockers in
+one visible place. You do not need to learn the internal machinery before your
+first run.
 
-![Guildhall settings view showing provider setup and project facts.](../assets/ui-audit/settings.png)
+![Guildhall settings view showing readiness checks and project setup state.](../assets/ui-audit/0-7-0/settings.png)
 
 ## The first mental model
 
-Think of Guildhall as a small construction office for software:
+Think of Guildhall as a small project office for AI-assisted software work.
+The name comes from a guild hall: a shared room where different skilled trades
+coordinate work and standards. In Guildhall, those "trades" are AI agents with
+different jobs.
+
+The pieces you touch first are:
 
 - **Projects** are your repos.
-- **Blueprints** are the accepted plans for what should be built and how it
+- **Blueprints** are the accepted plans for what gets built and how it
   will be checked.
-- **Tasks** are framed pieces of work that can move through the guild.
-- **The guild** is the set of helpers that plan, build, inspect, and report.
-- **The shell** is the browser screen where you can see the job site.
+- **Tasks** are framed pieces of work that can move through planning,
+  implementation, review, and gates.
+- **Agents** are the helpers that plan, build, inspect, and report.
+- **The shell** is the browser screen where you see the current project.
 
 The goal of getting started is simple: open one project, give it one small
 task set, and see whether the work moves with clear evidence. Read
 [How Guildhall builds](./how-guildhall-builds) when you want the full mental
-model.
+model, or keep [Core concepts](./concepts) nearby as the glossary.
 
-You should not have to answer a long setup questionnaire. Guildhall should
-infer routine defaults, recommend a path, and ask only when the answer changes
-what you are trying to build or how safe the run will be.
+Setup stays short by design. Guildhall can infer routine defaults and save
+your attention for choices that change what you are building, how safe the run
+is, or whether the result is good enough.
+
+## What a good first run proves
+
+Do not start by asking Guildhall to build an entire product. Start with one
+small task that can show the loop:
+
+1. Guildhall understands the project well enough to draft a blueprint.
+2. You can approve or correct that blueprint.
+3. A worker can make a bounded change.
+4. Reviewers and checks attach evidence.
+5. If the run stops, the blocker tells you why.
+
+That is the little heartbeat you want before asking for more ambitious work.
 
 ## Install
 
@@ -48,7 +67,7 @@ The installer downloads the latest macOS package from GitHub Releases and
 checks `guildhall-macos.tar.gz.sha256` before installing. To pin a release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.6.0 sh
+curl -fsSL https://raw.githubusercontent.com/matthew-dean/guildhall/main/scripts/install.sh | GUILDHALL_VERSION=0.7.0 sh
 ```
 
 ## Open one project
@@ -59,36 +78,35 @@ guildhall serve
 ```
 
 Guildhall opens the browser. If this is the first time the repo has been
-opened, the setup wizard asks for only the basics: the project name, a stable
-URL slug, and how the guild should call a model. That is the first site survey:
-where is the project, what is it called, and how can the guild work safely?
+opened, the setup wizard asks for the basics: the project name, a stable URL
+slug, and which model provider to use. That is the first site survey: where is
+the project, what is it called, and can Guildhall work safely?
 
-![Guildhall thread view showing setup prompts, human questions, and next actions.](../assets/ui-audit/inbox.png)
+![Guildhall Thread view showing setup prompts, project questions, and next actions.](../assets/ui-audit/0-7-0/thread.png)
 
 ## What Guildhall may ask
 
-Guildhall should not ask you to design the whole project before it can move.
-It should ask only for answers that change the plan, safety, or success
-criteria. The first run usually falls into a few kinds of questions.
+Guildhall does not need you to design the whole project before it can move. On
+the first run, the questions usually fall into a few small buckets.
 
 ### Project identity
 
 These are setup questions, not product questions:
 
-> **Project name:** What should this project be called in Guildhall?
+> **Project name:** What is this project called in Guildhall?
 
 Good answer:
 
 > `Acme Billing Portal`
 
-> **Project slug:** What stable URL slug should Guildhall use?
+> **Project slug:** What stable URL slug will Guildhall use?
 
 Good answer:
 
 > `acme-billing-portal`
 
-The slug matters because project URLs are scoped by it. A browser tab for one
-project should not silently become another project.
+The slug keeps project URLs stable. A browser tab for one project must never
+quietly turn into another project. That way lies comedy, and not the good kind.
 
 ### Project direction
 
@@ -105,23 +123,23 @@ A useful answer is short and product-shaped:
 > pricing plans or admin tools yet.
 
 You do not need to pick a database, component library, or folder structure
-unless that choice is part of the product intent. Guildhall should infer or
-recommend routine implementation choices from the repo.
+unless that choice is part of the product direction. Guildhall can usually read
+the repo and follow the local pattern.
 
 ### Existing notes and imports
 
 For an existing repo, Guildhall may find README sections, TODO files, roadmap
 notes, or old planning docs:
 
-> I found possible work in `README.md`, `docs/roadmap.md`, and `TODO.md`.
-> Which source should become task drafts?
+> I found possible work in `README.md`, `./docs/roadmap.md`, and `TODO.md`.
+> Which source becomes task drafts?
 
 Useful answers:
 
-> Use `docs/roadmap.md` first. Treat `TODO.md` as scratch notes.
+> Use `./docs/roadmap.md` first. Treat `TODO.md` as scratch notes.
 
 > Ignore the old README checklist. The current source of truth is
-> `docs/release-plan.md`.
+> `./docs/release-plan.md`.
 
 This does not mean every note becomes runnable work. It means Guildhall can
 turn selected notes into draft task blueprints for review.
@@ -130,12 +148,11 @@ turn selected notes into draft task blueprints for review.
 
 Before a worker starts, Guildhall may ask about scope or success:
 
-> Should password reset be in scope for this auth task, or should it be a
-> separate task?
+> Does password reset belong in this auth task, or is it a separate task?
 
 Useful answers:
 
-> Separate task. This one should only make login/register work with existing
+> Separate task. This one only makes login/register work with existing
 > email confirmation.
 
 > Include it, but only if the repo already has the email provider configured.
@@ -154,21 +171,21 @@ If you are not sure what Guildhall is asking, say that. A good follow-up is:
 > I do not know what this refers to. Show me the source note and your current
 > assumption.
 
-Guildhall should keep the question open and give you the missing context
-instead of treating that reply as the final answer.
+Guildhall keeps the question open and gives you the missing context instead of
+treating that reply as the final answer.
 
 ### Runtime blockers
 
-Once work starts, the questions should become concrete:
+Once work starts, questions get very concrete:
 
 > The repo is dirty. These files were changed by an earlier Guildhall run.
-> Should Guildhall package them into a task checkpoint before continuing?
+> Package them into a task checkpoint before continuing?
 
 > `pnpm build` fails because `pixi` is missing. Install it and retry, or mark
 > the readiness check blocked?
 
 > The worker completed the code path, but the reviewer found no verification
-> command. Should it run the focused test or move back to implementation?
+> command. Run the focused test, or move back to implementation?
 
 Good blockers tell you:
 
@@ -178,11 +195,12 @@ Good blockers tell you:
 - what Guildhall recommends
 
 If a blocker only says "Needs you" without context, that is a product problem,
-not something you were supposed to intuit.
+not a puzzle you were supposed to solve with vibes.
 
 ## A first-run example
 
-Here is the shape a healthy first run should have.
+Here is what a healthy first run feels like. Tiny, useful, boring in the best
+way.
 
 1. You run `guildhall serve` inside `~/projects/my-app`.
 2. Guildhall asks for a project name, slug, and provider.
@@ -193,7 +211,7 @@ Here is the shape a healthy first run should have.
 
 4. You add direction:
 
-   > First release is a private dashboard for internal users. Focus on auth,
+   > First release is a private dashboard for the internal team. Focus on auth,
    > navigation, and one useful settings page. Do not build billing yet.
 
 5. Guildhall drafts starter blueprints:
@@ -212,8 +230,20 @@ Here is the shape a healthy first run should have.
    same task.
 9. If work stops, the blocker names the specific reason and the next choice.
 
-That is the feeling to look for: one project, one visible queue, one task state,
-and enough evidence that you can tell whether Guildhall is working or waiting.
+That is the feeling to look for: one project, one visible queue, one task
+state, and enough evidence that you can tell whether Guildhall is working or
+waiting.
+
+## Two ways to start
+
+If you are a developer, pick a task where you already know the verification
+path: a failing test, a small UI fix, a documentation/code mismatch, or one obvious
+setup problem. You are checking whether Guildhall respects the repo.
+
+If you are closer to product than code, pick a narrow outcome you can describe
+well: who it is for, what the user should be able to do, what is out of scope,
+and what would make you say “yes, that solves the problem.” You are checking
+whether Guildhall can turn your intent into usable technical work.
 
 ## Choose your path
 
@@ -228,13 +258,12 @@ enough that the worker is not inventing the plan while building.
 
 ## What success looks like
 
-After you start a project, the app should make motion visible:
+After you start a project, the app shows motion:
 
 - task status changes
 - live events appear
 - transcripts and review notes accumulate
 - blockers explain what stopped and what needs your answer
 
-If the button flips back and nothing visible changed, that is not a good
-unattended run. It is a setup problem, a product bug, or a task that needs
-more information.
+If the button flips back and nothing visible changed, that is not a good run.
+It is a setup problem, a product bug, or a task that needs more information.

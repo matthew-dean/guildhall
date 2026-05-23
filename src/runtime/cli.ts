@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { resolve, join } from 'node:path'
+import { dirname, resolve, join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { runOrchestrator } from './orchestrator.js'
+import { renderBakeoffMarkdown, runContextIndexerBakeoff, runModelBakeoff } from './model-bakeoff.js'
 import { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
 import { runInit } from './init.js'
 import { runServe } from './serve.js'
@@ -13,10 +14,15 @@ import {
   registerWorkspace,
   unregisterWorkspace,
   readWorkspaceConfig,
+  readGlobalConfig,
+  readGlobalProviders,
+  resolveModelsForProvider,
   slugify,
 } from '@guildhall/config'
 import { exec, spawn } from 'node:child_process'
 import { platform } from 'node:os'
+import { buildSemanticIndexPrompt, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
+import { OpenAICompatibleClient } from '@guildhall/providers'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`
@@ -34,6 +40,11 @@ function expandPath(p: string): string {
 
 const DEFAULT_DASHBOARD_PORT = 7777
 const SERVICE_STATE_FILENAME = 'service.json'
+const APPROX_CHARS_PER_TOKEN = 4
+const SEMANTIC_COMPLETION_MIN_TOKENS = 8_000
+const SEMANTIC_COMPLETION_MAX_TOKENS = 16_000
+const SEMANTIC_REPAIR_MIN_TOKENS = 10_000
+const SEMANTIC_REPAIR_MAX_TOKENS = 24_000
 
 interface ServiceRuntimeState {
   pid: number
@@ -250,6 +261,10 @@ export function resolveServiceLifecycleIntent(
 //   guildhall serve                     — start the web dashboard (all workspaces)
 //     --port <n>                    — override the dashboard port (default: 7777)
 //   guildhall config [id|path]          — re-run the init wizard on an existing workspace
+//   guildhall corpus-map refresh [--semantic] [path]
+//                                      — rebuild memory/codebase-map.yaml for a workspace
+//   guildhall model-bakeoff [--context-indexer] [output]
+//                                      — write replay model bakeoff JSON + Markdown
 // ---------------------------------------------------------------------------
 
 export const SHIPPED_CLI_COMMANDS = [
@@ -263,6 +278,8 @@ export const SHIPPED_CLI_COMMANDS = [
   'stop',
   'open',
   'config',
+  'corpus-map',
+  'model-bakeoff',
 ] as const
 
 const [command = 'help', ...args] = process.argv.slice(2)
@@ -277,13 +294,14 @@ function getFlag(flag: string): string | undefined {
 // another flag — otherwise boolean flags like `--no-browser` would eat the
 // following positional by mistake.
 function positionals(): string[] {
+  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state'])
   const result: string[] = []
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
     if (a === undefined) continue
     if (a.startsWith('--')) {
       const next = args[i + 1]
-      if (next !== undefined && !next.startsWith('--')) {
+      if (valueFlags.has(a) && next !== undefined && !next.startsWith('--')) {
         i++ // consume the value
       }
       continue
@@ -319,6 +337,10 @@ Usage:
   guildhall open [path]              Open the running service (starts it if needed)
 
   guildhall config [id|path]         Re-run the init wizard on an existing workspace
+  guildhall corpus-map refresh [--semantic] [path]
+                                  Rebuild compact codebase map context
+  guildhall model-bakeoff [--context-indexer] [output]
+                                  Write replay model bakeoff JSON + Markdown
 
 Options:
   --help, -h                     Show this help
@@ -327,6 +349,9 @@ Examples:
   guildhall init ~/projects/my-app
   guildhall run looma
   guildhall serve
+  guildhall corpus-map refresh --semantic .
+  guildhall model-bakeoff artifacts/model-bakeoff/report.json
+  guildhall model-bakeoff --context-indexer
 `.trim()
 }
 
@@ -588,6 +613,184 @@ async function cmdConfig() {
   await runInit({ targetDir: targetDir ?? process.cwd(), reconfigure: true })
 }
 
+async function cmdCorpusMap() {
+  const pos = positionals()
+  const subcommand = pos[0] ?? 'refresh'
+  if (subcommand !== 'refresh') {
+    console.error('[guildhall] Usage: guildhall corpus-map refresh [--semantic] [id|path]')
+    process.exit(1)
+  }
+  const idOrPath = pos[1]
+  let projectPath: string
+  if (idOrPath) {
+    const entry = findWorkspace(idOrPath)
+    projectPath = resolve(expandPath(entry?.path ?? idOrPath))
+  } else {
+    projectPath = process.cwd()
+  }
+  const semantic = args.includes('--semantic')
+  const semanticIndexer = semantic ? createSemanticIndexer(projectPath) : undefined
+  const result = await refreshCodebaseMap({
+    projectRoot: projectPath,
+    memoryDir: join(projectPath, 'memory'),
+    reason: 'manual',
+    ...(semanticIndexer ? { semanticIndexer } : {}),
+  })
+  console.log(`[guildhall] Codebase map refreshed (${result.mode}).`)
+  console.log(`[guildhall] Files: ${Object.keys(result.map.files).length}`)
+  console.log(`[guildhall] Areas: ${result.map.areas.length}`)
+  console.log(`[guildhall] Abstractions: ${result.map.abstractions.length}`)
+  if (result.map.semantic) {
+    console.log(`[guildhall] Semantic: ${result.map.semantic.corpusKind} via ${result.map.semantic.modelId}`)
+  }
+  console.log(`[guildhall] Written: ${join(projectPath, 'memory', 'codebase-map.yaml')}`)
+}
+
+function createSemanticIndexer(projectPath: string): CorpusSemanticIndexer {
+  const providers = readGlobalProviders().providers
+  const openai = providers['openai-api']
+  if (!openai?.apiKey) {
+    throw new Error('Semantic Corpus Map refresh requires an OpenAI-compatible provider key in ~/.guildhall/providers.yaml.')
+  }
+  const global = readGlobalConfig()
+  const openAiModels = resolveModelsForProvider(global.models, 'openai-api')
+  const modelId =
+    openAiModels.contextIndexer ??
+    'zai-org/GLM-4.6'
+  const repairModelId = 'deepseek-ai/DeepSeek-V4-Flash'
+  const client = new OpenAICompatibleClient({
+    baseUrl: openai.baseUrl || 'https://api.openai.com/v1',
+    apiKey: openai.apiKey,
+    requestTimeoutMs: 180_000,
+  })
+  return {
+    modelId,
+    async completeJson({ prompt }) {
+      const maxTokens = semanticCompletionBudget(prompt)
+      console.log(`[guildhall] Semantic Corpus Map: ${modelId} with up to ${maxTokens} completion tokens.`)
+      const text = await completeOpenAiCompatibleJson(client, {
+        modelId,
+        systemPrompt: 'You produce compact, valid JSON for codebase/documentation orientation. Do not include markdown.',
+        prompt,
+        maxTokens,
+      })
+      if (text.trim().length === 0) {
+        throw new Error(`Context indexer model ${modelId} returned no text for ${projectPath}.`)
+      }
+      return text
+    },
+    async repairJson({ raw, error, schemaHint, map }) {
+      const mapPrompt = buildSemanticIndexPrompt(map)
+      const maxTokens = semanticRepairCompletionBudget(mapPrompt, raw)
+      console.log(`[guildhall] Semantic Corpus Map repair: ${repairModelId} with up to ${maxTokens} completion tokens.`)
+      return completeOpenAiCompatibleJson(client, {
+        modelId: repairModelId,
+        systemPrompt: 'You repair malformed or schema-invalid JSON. Return only valid JSON. Preserve substance; fix syntax and schema shape.',
+        prompt: [
+          'Repair this context-indexer response.',
+          '',
+          'Error:',
+          error,
+          '',
+          schemaHint,
+          '',
+          'Raw response:',
+          raw,
+          '',
+          'Corpus Map context:',
+          mapPrompt,
+        ].join('\n'),
+        maxTokens,
+      })
+    },
+  }
+}
+
+export function semanticCompletionBudget(prompt: string): number {
+  const promptTokens = estimateTokenCount(prompt)
+  return clampTokenBudget(
+    SEMANTIC_COMPLETION_MIN_TOKENS + Math.ceil(promptTokens * 0.5),
+    SEMANTIC_COMPLETION_MIN_TOKENS,
+    SEMANTIC_COMPLETION_MAX_TOKENS,
+  )
+}
+
+export function semanticRepairCompletionBudget(prompt: string, rawOutput: string): number {
+  const promptTokens = estimateTokenCount(prompt)
+  const rawTokens = estimateTokenCount(rawOutput)
+  return clampTokenBudget(
+    SEMANTIC_REPAIR_MIN_TOKENS + Math.ceil((promptTokens + rawTokens) * 0.5),
+    SEMANTIC_REPAIR_MIN_TOKENS,
+    SEMANTIC_REPAIR_MAX_TOKENS,
+  )
+}
+
+function estimateTokenCount(text: string): number {
+  return Math.ceil(text.length / APPROX_CHARS_PER_TOKEN)
+}
+
+function clampTokenBudget(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
+}
+
+async function completeOpenAiCompatibleJson(
+  client: OpenAICompatibleClient,
+  input: {
+    modelId: string
+    systemPrompt: string
+    prompt: string
+    maxTokens: number
+  },
+): Promise<string> {
+  let text = ''
+  for await (const event of client.streamMessage({
+    model: input.modelId,
+    system_prompt: input.systemPrompt,
+    messages: [{ role: 'user', content: [{ type: 'text', text: input.prompt }] }],
+    max_tokens: input.maxTokens,
+    temperature: 0,
+    tools: [],
+  })) {
+    if (event.type === 'text_delta') text += event.text
+  }
+  return text
+}
+
+export function writeModelBakeoffReport(outputPath: string, opts: {
+  contextIndexer?: boolean
+} = {}): {
+  jsonPath: string
+  markdownPath: string
+} {
+  const jsonPath = resolve(expandPath(outputPath))
+  const markdownPath = /\.json$/i.test(jsonPath)
+    ? jsonPath.replace(/\.json$/i, '.md')
+    : `${jsonPath}.md`
+  const report = opts.contextIndexer ? runContextIndexerBakeoff() : runModelBakeoff()
+
+  mkdirSync(dirname(jsonPath), { recursive: true })
+  mkdirSync(dirname(markdownPath), { recursive: true })
+  writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8')
+  writeFileSync(markdownPath, renderBakeoffMarkdown(report), 'utf8')
+
+  return { jsonPath, markdownPath }
+}
+
+function cmdModelBakeoff() {
+  const pos = positionals()
+  const contextIndexer = args.includes('--context-indexer')
+  const { jsonPath, markdownPath } = writeModelBakeoffReport(
+    pos[0] ?? (
+      contextIndexer
+        ? 'artifacts/model-bakeoff/context-indexer-report.json'
+        : 'artifacts/model-bakeoff/model-bakeoff-report.json'
+    ),
+    { contextIndexer },
+  )
+  console.log(`[guildhall] Model bakeoff report: ${jsonPath}`)
+  console.log(`[guildhall] Model bakeoff summary: ${markdownPath}`)
+}
+
 async function main() {
   if (command === '--help' || command === '-h' || command === 'help') {
     printHelp()
@@ -606,6 +809,8 @@ async function main() {
     case 'open':    return cmdOpen()
     case 'serve-internal': return cmdServeInternal()
     case 'config':  return cmdConfig()
+    case 'corpus-map': return cmdCorpusMap()
+    case 'model-bakeoff': return cmdModelBakeoff()
     default:
       console.error(`[guildhall] Unknown command: ${command}`)
       console.error(`[guildhall] Run "guildhall help" for usage.`)

@@ -4,9 +4,9 @@
   or PROGRESS.md content appears — anything that arrives as markdown should
   render with headings/bold/lists/code, not as raw asterisks.
 
-  Safety: `marked` escapes raw HTML by default; we don't set dangerous
-  options. Content comes from local fixtures or the orchestrator's own
-  output (same trust boundary as the rest of the dashboard).
+  Safety: `marked` preserves raw HTML, so sanitize the rendered fragment before
+  passing it to Svelte's {@html}. Rich agent HTML should go through a separate
+  validated artifact path, not this plain markdown renderer.
 -->
 <script lang="ts">
   import { marked } from 'marked'
@@ -20,10 +20,98 @@
 
   marked.setOptions({ gfm: true, breaks: false })
 
+  const ALLOWED_TAGS = new Set([
+    'A',
+    'BLOCKQUOTE',
+    'BR',
+    'CODE',
+    'DEL',
+    'DIV',
+    'EM',
+    'H1',
+    'H2',
+    'H3',
+    'H4',
+    'H5',
+    'H6',
+    'HR',
+    'LI',
+    'OL',
+    'P',
+    'PRE',
+    'SPAN',
+    'STRONG',
+    'TABLE',
+    'TBODY',
+    'TD',
+    'TH',
+    'THEAD',
+    'TR',
+    'UL',
+  ])
+  const DROP_WITH_CONTENT = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED'])
+  const URL_ATTRS = new Set(['href'])
+  const SAFE_ATTRS = new Set(['href', 'title'])
+
+  function safeUrl(value: string): boolean {
+    const trimmed = value.trim()
+    if (!trimmed) return false
+    if (trimmed.startsWith('#')) return true
+    try {
+      const url = new URL(trimmed, 'https://guildhall.local')
+      return ['http:', 'https:', 'mailto:'].includes(url.protocol)
+    } catch {
+      return false
+    }
+  }
+
+  function sanitizeNode(node: Node): void {
+    for (const child of Array.from(node.childNodes)) {
+      if (!(child instanceof Element)) {
+        continue
+      }
+      const tag = child.tagName.toUpperCase()
+      if (DROP_WITH_CONTENT.has(tag)) {
+        child.remove()
+        continue
+      }
+      if (!ALLOWED_TAGS.has(tag)) {
+        child.replaceWith(...Array.from(child.childNodes))
+        sanitizeNode(node)
+        continue
+      }
+      for (const attr of Array.from(child.attributes)) {
+        const name = attr.name.toLowerCase()
+        if (!SAFE_ATTRS.has(name)) {
+          child.removeAttribute(attr.name)
+          continue
+        }
+        if (URL_ATTRS.has(name) && !safeUrl(attr.value)) {
+          child.removeAttribute(attr.name)
+        }
+      }
+      if (tag === 'A' && !child.getAttribute('href')) {
+        child.replaceWith(...Array.from(child.childNodes))
+        sanitizeNode(node)
+        continue
+      }
+      sanitizeNode(child)
+    }
+  }
+
+  function sanitizeMarkdownHtml(rawHtml: string): string {
+    if (typeof document === 'undefined') return rawHtml
+    const template = document.createElement('template')
+    template.innerHTML = rawHtml
+    sanitizeNode(template.content)
+    return template.innerHTML
+  }
+
   const html = $derived.by(() => {
     const src = (source ?? '').trim()
     if (!src) return ''
-    return inline ? marked.parseInline(src) : marked.parse(src)
+    const rendered = inline ? marked.parseInline(src) : marked.parse(src)
+    return sanitizeMarkdownHtml(String(rendered))
   })
 </script>
 

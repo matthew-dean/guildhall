@@ -23,15 +23,17 @@ Use it for the everyday loop:
 5. Inspect transcripts, reviews, gates, and provenance.
 6. Resolve escalations and tune settings.
 
-The app is still transparent: project state lands in `guildhall.yaml`,
-`.guildhall/config.yaml`, and `memory/*`, while machine-scoped state such as
-the project registry, provider credentials, and default provider choice live
-under `~/.guildhall/`.
+The app is still transparent: the shared project contract lands in
+`./guildhall.yaml`, shared Guildhall metadata can live in checked-in
+`./.guildhall/*.yaml` files, project memory lands in `./memory/*`, and
+local/private checkout overrides stay in `./.guildhall/config.yaml`.
+Machine-scoped state such as the project registry, provider credentials, and
+default provider choice live under `~/.guildhall/`.
 
 ## Pages
 
 - [Setup wizard](./setup) — first-run onboarding.
-- [Dashboard](./dashboard) — service home and project launcher.
+- [Projects home](./dashboard) — `Projects & Workspaces`, service-level work mix, attention, running-now, and project launcher.
 - [Project view](./project-view) — main per-project shell.
 - [Task drawer](./task-drawer) — task detail pane.
 - [Providers page](./providers) — credential management.

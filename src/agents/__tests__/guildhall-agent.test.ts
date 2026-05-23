@@ -395,6 +395,14 @@ describe('agent factories', () => {
     expect(prompt).toContain('Do not invent product requirements')
   })
 
+  it('createSpecAgent uses Corpus Map entries as the starting abstraction inventory', () => {
+    const a = createSpecAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('## Corpus Map')
+    expect(prompt).toContain('Reuse / Extend')
+    expect(prompt).toContain('starting inventory')
+  })
+
   it('createWorkerAgent registers shell + file tools', async () => {
     const a = createWorkerAgent(llm)
     expect(a.name).toBe('worker-agent')
@@ -421,7 +429,16 @@ describe('agent factories', () => {
     const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
     expect(prompt).toContain('Minimum-scope check:')
     expect(prompt).toContain('Smallest useful change?')
+    expect(prompt).toContain('Corpus fit:')
     expect(prompt).toContain('Anything to revert before review?')
+  })
+
+  it('createWorkerAgent treats Corpus Map guidance as a pre-flight reuse check', async () => {
+    const a = createWorkerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('## Corpus Map')
+    expect(prompt).toContain('Reuse / Extend')
+    expect(prompt).toContain('Corpus fit required')
   })
 
   it('createWorkerAgent treats shell verification as durable progress', async () => {
@@ -486,6 +503,14 @@ describe('agent factories', () => {
     expect(prompt).toContain('correct task-local work')
     expect(prompt).toContain('change-order-style')
     expect(prompt).toContain('what assumption changed')
+  })
+
+  it('createReviewerAgent checks corpus fit during review', () => {
+    const a = createReviewerAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('## Corpus Map')
+    expect(prompt).toContain('check corpus fit')
+    expect(prompt).toContain('**Corpus fit:**')
   })
 
   it('createGateCheckerAgent', () => {

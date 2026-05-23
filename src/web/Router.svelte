@@ -4,6 +4,7 @@
 -->
 <script lang="ts">
   import ProjectsHome from './surfaces/ProjectsHome.svelte'
+  import FleetNeedsYou from './surfaces/FleetNeedsYou.svelte'
   import ProjectView from './surfaces/ProjectView.svelte'
   import TaskDrawer from './surfaces/TaskDrawer.svelte'
   import SetupWizard from './surfaces/SetupWizard.svelte'
@@ -36,6 +37,8 @@
 
 {#if route.kind === 'projects'}
   <ProjectsHome />
+{:else if route.kind === 'fleet-inbox'}
+  <FleetNeedsYou />
 {:else if route.kind === 'project'}
   <ProjectView initialView={route.view} initialSub={route.sub} projectId={route.projectId} />
   {#if route.drawerTaskId}

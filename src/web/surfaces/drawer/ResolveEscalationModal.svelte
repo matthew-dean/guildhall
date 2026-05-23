@@ -60,7 +60,7 @@
 
 <Modal
   {open}
-  title="Resolve escalation"
+  title={mode === 'retry' ? primaryAction.label : 'Mark blocker resolved'}
   {onClose}
   size="md"
 >
@@ -73,9 +73,19 @@
             <Chip label={roleText} tone="accent" />
           </div>
           <p class="summary">{escalation.summary}</p>
+          <p class="mode-help">
+            {mode === 'retry'
+              ? 'Guildhall will close this blocker and try the task again from the selected step.'
+              : 'Use this when you handled the blocker yourself or want to tell Guildhall exactly where to continue.'}
+          </p>
         </Stack>
 
-        <Field label="How should the agent proceed?" hint="Fed back to the coordinator as context on resume.">
+        <Field
+          label={mode === 'retry' ? 'Resume note' : 'Resolution note'}
+          hint={mode === 'retry'
+            ? 'This note is sent back to the coordinator when the task resumes.'
+            : 'Tell the coordinator what changed, then choose where the task re-enters.'}
+        >
           <Textarea
             bind:value={resolution}
             rows={4}
@@ -102,12 +112,15 @@
 
   {#snippet footer()}
     <Button variant="ghost" disabled={busy} onclick={onClose}>Cancel</Button>
-    <Button variant="secondary" disabled={busy} onclick={handleRetry}>
-      {primaryAction.label}
-    </Button>
-    <Button variant="primary" disabled={busy || !resolution.trim()} onclick={handleResolve}>
-      Resolve
-    </Button>
+    {#if mode === 'retry'}
+      <Button variant="primary" disabled={busy} onclick={handleRetry}>
+        {primaryAction.label}
+      </Button>
+    {:else}
+      <Button variant="primary" disabled={busy || !resolution.trim()} onclick={handleResolve}>
+        Mark resolved
+      </Button>
+    {/if}
   {/snippet}
 </Modal>
 
@@ -120,6 +133,12 @@
   .summary {
     color: var(--text);
     font-size: var(--fs-2);
+    line-height: var(--lh-body);
+    margin: 0;
+  }
+  .mode-help {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
     line-height: var(--lh-body);
     margin: 0;
   }

@@ -71,7 +71,7 @@ describe('event stream wiring', () => {
     instances[0]!.onmessage?.({ data: '{not-json' })
     instances[0]!.onerror?.()
 
-    expect(statuses).toEqual(['connecting', 'live', 'error'])
+    expect(statuses).toEqual(['connecting', 'live', 'reconnecting'])
     expect(events).toEqual([
       {
         type: 'task_transition',
@@ -82,6 +82,37 @@ describe('event stream wiring', () => {
     ])
 
     offEvent()
+    offStatus()
+  })
+
+  it('marks a dropped live stream as reconnecting and restores live on the next open or message', () => {
+    const statuses: string[] = []
+    const offStatus = onStatus(status => statuses.push(status))
+
+    connectStream()
+    instances[0]!.onopen?.()
+    instances[0]!.onerror?.()
+    instances[0]!.onmessage?.({ data: JSON.stringify({ type: 'heartbeat' }) })
+    instances[0]!.onerror?.()
+    instances[0]!.onopen?.()
+
+    expect(statuses).toEqual(['connecting', 'live', 'reconnecting', 'live', 'reconnecting', 'live'])
+
+    offStatus()
+  })
+
+  it('keeps repeated retry errors visibly reconnecting after the stream has been live', () => {
+    const statuses: string[] = []
+    const offStatus = onStatus(status => statuses.push(status))
+
+    connectStream()
+    instances[0]!.onopen?.()
+    instances[0]!.onerror?.()
+    instances[0]!.onerror?.()
+
+    expect(statuses).toEqual(['connecting', 'live', 'reconnecting'])
+    expect(statuses.at(-1)).toBe('reconnecting')
+
     offStatus()
   })
 
@@ -120,13 +151,13 @@ describe('event display helpers', () => {
       to_status: 'review',
       agent_name: 'worker-agent',
       reason: 'done',
-    } as any)).toBe('task-1 ready → review (worker-agent: done)')
-    expect(summarizeEvent({ type: 'escalation_raised', task_id: 'task-2', reason: 'blocked' } as any)).toBe('ESCALATION task-2 — blocked')
+    } as any)).toBe('Task 1 Ready → In review (Builder: done)')
+    expect(summarizeEvent({ type: 'escalation_raised', task_id: 'task-2', reason: 'blocked' } as any)).toBe('Needs attention: Task 2 — blocked')
     expect(summarizeEvent({ type: 'error', message: 'boom' } as any)).toBe('ERROR: boom')
-    expect(summarizeEvent({ type: 'agent_issue', severity: 'warn', code: 'stuck', task_id: 'task-3', reason: 'quiet' } as any)).toBe('issue [warn/stuck] task-3 — quiet')
-    expect(summarizeEvent({ type: 'agent_started', agent_name: 'spec-agent', task_id: 'task-4' } as any)).toBe('spec-agent started task-4')
-    expect(summarizeEvent({ type: 'agent_finished', agent_name: 'reviewer-agent', task_id: 'task-5' } as any)).toBe('reviewer-agent finished task-5')
-    expect(summarizeEvent({ type: 'supervisor_stopped', reason: 'all_terminal' } as any)).toBe('stopped (all_terminal)')
+    expect(summarizeEvent({ type: 'agent_issue', severity: 'warn', code: 'stuck', task_id: 'task-3', reason: 'quiet' } as any)).toBe('Issue [warn/stuck] Task 3 — quiet')
+    expect(summarizeEvent({ type: 'agent_started', agent_name: 'spec-agent', task_id: 'task-4' } as any)).toBe('Spec writer started Task 4')
+    expect(summarizeEvent({ type: 'agent_finished', agent_name: 'reviewer-agent', task_id: 'task-5' } as any)).toBe('Review team finished Task 5')
+    expect(summarizeEvent({ type: 'supervisor_stopped', reason: 'all_terminal' } as any)).toBe('stopped (Run finished)')
     expect(summarizeEvent({ type: 'provider_health_changed', message: 'ok' } as any)).toBe('provider health: ok')
     expect(summarizeEvent({ type: 'connected' } as any)).toBe('')
   })

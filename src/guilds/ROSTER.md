@@ -13,7 +13,7 @@ Each persona is an expert with a role in the lifecycle:
 | `project-manager` | The Project Manager | overseer | _(lifecycle enforced elsewhere)_ | Always |
 | `component-designer` | The Component Designer | designer | `findExternalMargins`, `findHardcodedDesignValues` (pure detectors; wiring TBD) | UI task or design system exists |
 | `visual-designer` | The Visual Designer | designer | _(rubric-only)_ | Design system exists, product brief, or surface keywords |
-| `copywriter` | The Copywriter | designer | `findBannedTerms` (pure) | Copy voice declared, product brief, or copy keywords |
+| `copywriter` | The Copywriter | designer | `findBannedTerms` (pure) | UI, docs, onboarding, release-note, label/control, or explicit copy work |
 | `color-theorist` | The Color Theorist | designer | `color.near-duplicate-roles` (OKLab distance) | Design system has color tokens |
 | `api-designer` | The API Designer | designer | _(rubric-only; OpenAPI diff in future)_ | API / endpoint / schema keywords |
 | `accessibility-specialist` | The Accessibility Specialist | specialist | `a11y.contrast-matrix` (WCAG math over declared token pairs) | UI task or design system exists |

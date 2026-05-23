@@ -9,7 +9,7 @@ help_summary: |
 
 # Backend host
 
-**Source:** `src/backend-host/`
+**Source:** `./src/backend-host/`
 
 The backend host connects a running runtime to the web UI. Events flow out (transcript items, state changes, tool executions); commands flow in (submit_line, permission responses, command selections).
 
@@ -40,7 +40,7 @@ Line-prefix framing means the stream can be multiplexed with logs without a sepa
 
 - `submit_line` — user text for the current agent.
 - `permission_response` — approve/deny a pending permission prompt.
-- `select_command` — user picked a dashboard action.
+- `select_command` — user picked a browser UI action.
 
 ## Public API
 

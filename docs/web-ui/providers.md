@@ -35,7 +35,7 @@ For each provider, the page shows:
   - `~/.claude/.credentials.json`
   - `~/.codex/auth.json`
 - Machine-wide default: `preferredProvider` in `~/.guildhall/config.yaml`.
-- Optional project override: `preferredProvider` in `.guildhall/config.yaml` only when one project truly needs different behavior.
+- Optional project override: `preferredProvider` in `./.guildhall/config.yaml` only when one project truly needs different behavior.
 
 The page only reveals credentials that are explicitly in config — it will never log or display a hidden system credential.
 

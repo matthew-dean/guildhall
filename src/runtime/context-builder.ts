@@ -4,6 +4,7 @@ import { execFile, execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import type { Checkpoint, ConstructionMode, Task } from '@guildhall/core'
+import { buildWorkerCorpusContext, loadCodebaseMap, refreshCodebaseMap } from '@guildhall/corpus-map'
 import {
   constructionModeForTask,
   summarizeDesignSystem,
@@ -52,12 +53,28 @@ const MAX_REVISION_FEEDBACK_CHARS = 3500
 const MAX_AGENT_NOTE_CHARS = 1200
 const MAX_AGENT_NOTES = 3
 const MAX_SPEC_OVERVIEW_CHARS = 3200
+const MAX_CORPUS_MAP_CHARS = 3200
 const execFileP = promisify(execFile)
 const repoFileCache = new Map<string, string[]>()
 
 const ACTIONABLE_FILE_HINT_RE = /^\s*(?:[-*]\s*|\d+\.\s*)?(edit|update|modify|create|write|verify|check|test|open|remove|delete|rename|trim|clean)\b/i
 const SHELLISH_CANDIDATE_RE = /^(pnpm|npm|yarn|bun|cd|node)\b|--|&&|\|\|/
 const GLOB_CANDIDATE_RE = /[*?{}]/
+
+async function loadOrCreateCodebaseMap(memoryDir: string, task: Task) {
+  const projectRoot = (task.worktreePath?.trim() || task.projectPath?.trim())
+  const existing = await loadCodebaseMap(memoryDir)
+  if (existing) {
+    if (!projectRoot || path.resolve(existing.project.root) === path.resolve(projectRoot)) return existing
+  }
+  if (!projectRoot) return null
+  const result = await refreshCodebaseMap({
+    projectRoot,
+    memoryDir,
+    reason: 'setup',
+  })
+  return result.map
+}
 
 function isActionableFileCandidate(candidate: string): boolean {
   const trimmed = candidate.trim()
@@ -72,6 +89,16 @@ export function resolveLikelyTaskFiles(task: Task, checkpointFilesTouched: reado
   const root = task.worktreePath?.trim() || task.projectPath?.trim() || ''
   const out: string[] = []
   const seen = new Set<string>()
+  const importedSourceHints = task.notes
+    .flatMap((note) => {
+      const content = typeof note.content === 'string' ? note.content.trim() : ''
+      const match = content.match(/^Imported from:\s*(.+)$/i)
+      if (!match?.[1]) return []
+      return match[1]
+        .split(',')
+        .map((candidate) => candidate.trim())
+        .filter(isActionableFileCandidate)
+    })
   const reviewerFeedbackText = task.notes
     .filter((note) => note.role === 'reviewer' || note.agentId === 'reviewer-fanout' || note.agentId === 'reviewer-agent')
     .slice(-3)
@@ -183,10 +210,21 @@ ${reviewerFeedbackText}`
       existsSync(path.join(root, 'web', withPrefix.split('/')[0]!))
         ? `web/${withPrefix}`
         : withPrefix
+    const rootBasename = path.basename(root)
+    const deprojectedPath =
+      rootBasename &&
+      nuxtWebPrefixed.startsWith(`${rootBasename}/`)
+        ? nuxtWebPrefixed.slice(rootBasename.length + 1)
+        : ''
+    if (deprojectedPath) {
+      const candidate = path.resolve(root, deprojectedPath)
+      if (existsSync(candidate)) return candidate
+    }
     const rootedPath = path.resolve(root, nuxtWebPrefixed)
     if (existsSync(rootedPath)) return rootedPath
     return (
       resolveRepoSuffixMatch(root, nuxtWebPrefixed) ??
+      (deprojectedPath ? resolveRepoSuffixMatch(root, deprojectedPath) : null) ??
       resolveRepoSuffixMatch(root, withPrefix) ??
       resolveRepoSuffixMatch(root, trimmed) ??
       rootedPath
@@ -202,6 +240,9 @@ ${reviewerFeedbackText}`
     out.push(normalized)
   }
 
+  for (const candidate of importedSourceHints) {
+    push(candidate)
+  }
   for (const candidate of rootedHints) {
     push(candidate)
   }
@@ -523,6 +564,11 @@ export interface BuiltContext {
    * attach only when the task's surface warrants it.
    */
   reviewRubrics: string
+  /**
+   * Compact architecture/corpus navigation for this task. Workers use this to
+   * find existing primitives, helpers, and area conventions before editing.
+   */
+  corpusMap: string
   reviewPacket?: string
   /** Concatenated string ready to prepend to an agent message */
   formatted: string
@@ -640,7 +686,7 @@ export async function buildContext(
     }
   }
 
-  const [memory, progress, decisions, exploring, goal, ds, worktreeResume, checkpoint] = await Promise.all([
+  const [memory, progress, decisions, exploring, goal, ds, worktreeResume, checkpoint, codebaseMap] = await Promise.all([
     readSafe('MEMORY.md'),
     readSafe('PROGRESS.md'),
     readSafe('DECISIONS.md'),
@@ -658,6 +704,7 @@ export async function buildContext(
           .then((checkpoint) => shouldUseCheckpointForTask(task, checkpoint) ? checkpoint : null)
           .catch(() => null)
       : Promise.resolve(null),
+    loadOrCreateCodebaseMap(memoryDir, task).catch(() => null),
   ])
   const reviewPacket =
     task.status === 'review' || task.status === 'gate_check'
@@ -721,8 +768,16 @@ export async function buildContext(
   let personaPrompt = ''
   if (task.status === 'exploring') {
     personaPrompt = renderSpecContributions(applicableGuilds, guildSignals)
-  } else if (task.status === 'in_progress' && primaryEngineer) {
-    personaPrompt = renderPersonaPrompt(primaryEngineer, guildSignals)
+  } else if (task.status === 'in_progress') {
+    personaPrompt = primaryEngineer
+      ? renderPersonaPrompt(primaryEngineer, guildSignals)
+      : [
+          '## Worker role guidance',
+          '',
+          'You are the implementation worker for this task. Use the saved spec, acceptance criteria, project memory, and repository evidence to make the smallest coherent change that satisfies the task.',
+          'Before inventing a component, command, file path, or dependency, verify it exists or create it deliberately as part of the implementation.',
+          'Run the task success gates or the closest project-specific verification command before asking for review.',
+        ].join('\n')
     if (handoffStep && task.handoffSequence) {
       personaPrompt = [
         personaPrompt,
@@ -745,6 +800,33 @@ export async function buildContext(
   const reviewRubrics = coreRubrics
   const latestCheckpoint = renderLatestCheckpoint(task, checkpoint)
   const likelyTaskFiles = renderLikelyTaskFiles(task, checkpoint?.filesTouched ?? [])
+  const corpusMap = codebaseMap
+    ? buildWorkerCorpusContext(
+        codebaseMap,
+        {
+          id: task.id,
+          title: task.title,
+          description: [
+            task.description,
+            task.spec ?? '',
+            task.productBrief?.userJob ?? '',
+            task.productBrief?.successMetric ?? '',
+            ...task.acceptanceCriteria.map((criterion) => criterion.description),
+          ].filter(Boolean).join('\n'),
+          domain: task.domain,
+          acceptanceCriteria: task.acceptanceCriteria.map((criterion) => ({
+            description: criterion.description,
+            command: criterion.command,
+          })),
+          likelyFiles: resolveLikelyTaskFiles(task, checkpoint?.filesTouched ?? []).map((file) => {
+            const root = task.worktreePath?.trim() || task.projectPath?.trim() || codebaseMap.project.root
+            const relative = path.relative(root, file).replace(/\\/g, '/')
+            return relative.startsWith('..') ? file : relative
+          }),
+        },
+        { maxChars: MAX_CORPUS_MAP_CHARS },
+      )
+    : ''
   const activeRecoveryPlaybook = renderActiveRecoveryPlaybook(task)
   const projectSkills = renderProjectSkills(task, memoryDir, opts.projectSkillsEnabled === true)
   const resolvedEscalationGuidance = renderResolvedEscalationGuidance(task)
@@ -837,6 +919,8 @@ export async function buildContext(
     '',
     reviewPacket ? `## Review Packet\n${reviewPacket}` : '',
     '',
+    corpusMap,
+    '',
     projectMemory ? `## Relevant Project Memory\n${projectMemory}` : '',
     '',
     recentProgress ? `## Recent Progress\n${recentProgress}` : '',
@@ -863,6 +947,7 @@ export async function buildContext(
     envelope,
     designSystem,
     reviewRubrics,
+    corpusMap,
     reviewPacket,
     formatted,
   }

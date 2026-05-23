@@ -60,7 +60,13 @@ function importedDraftTurn(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function questionTurn(id: string, questionId: string, prompt: string, choices: string[]) {
+function questionTurn(
+  id: string,
+  questionId: string,
+  prompt: string,
+  choices: string[],
+  questionOverrides: Record<string, unknown> = {},
+) {
   return {
     kind: 'agent_question',
     id,
@@ -83,6 +89,7 @@ function questionTurn(id: string, questionId: string, prompt: string, choices: s
       prompt,
       choices,
       selectionMode: 'single',
+      ...questionOverrides,
     },
   }
 }
@@ -209,16 +216,29 @@ function installBrowserFakes(url = '/projects/looma-knit/thread') {
   Element.prototype.scrollIntoView = vi.fn()
 }
 
-function installFetchFakes(turns: unknown[], activeTurnId: string | null) {
+function installFetchFakes(
+  turns: unknown[],
+  activeTurnId: string | null,
+  options: {
+    answerQuestionsResponse?: Response
+    sourceNoteResponse?: Response | (() => Response | Promise<Response>)
+    caughtUp?: boolean
+  } = {},
+) {
   const calls: Array<{ url: string; init?: RequestInit; body?: Record<string, unknown> }> = []
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined
     calls.push({ url, init, body })
     if (url.startsWith('/api/project/thread')) {
-      return json({ turns, activeTurnId, caughtUp: false })
+      return json({ turns, activeTurnId, caughtUp: options.caughtUp ?? false })
     }
     if (url.startsWith('/api/project/source-note')) {
+      if (options.sourceNoteResponse) {
+        return typeof options.sourceNoteResponse === 'function'
+          ? options.sourceNoteResponse()
+          : options.sourceNoteResponse
+      }
       return json({
         path: '/repo/looma-knit/docs/roadmap.md',
         displayPath: 'docs/roadmap.md',
@@ -236,6 +256,7 @@ function installFetchFakes(turns: unknown[], activeTurnId: string | null) {
       return json({ ok: true })
     }
     if (url.startsWith('/api/project/task/') && url.includes('/answer-questions')) {
+      if (options.answerQuestionsResponse) return options.answerQuestionsResponse
       return json({ ok: true })
     }
     if (url.startsWith('/api/project/meta-intake/synthesize')) return json({ ok: true })
@@ -287,6 +308,37 @@ describe('ThreadTab', () => {
     expect(setupCall?.url).toContain('projectId=looma-knit')
     expect(setupCall?.body).toMatchObject({
       name: 'Looma + Knit Docs',
+    })
+  })
+
+  it('clears the first spec shaping input after the idea is submitted', async () => {
+    const { calls } = installFetchFakes([
+      setupTurn({
+        id: 'setup:firstTask',
+        stepId: 'firstTask',
+        title: 'Shape the first spec',
+        why: 'Turn a rough idea into a product brief, focused questions, and the first buildable spec.',
+        affordance: 'inline-text',
+        actionLabel: 'Start shaping',
+        submitEndpoint: '/api/project/intake',
+        placeholder: 'Describe the product idea or first outcome',
+        currentValue: '',
+      }),
+    ], 'setup:firstTask')
+
+    render(ThreadTab)
+    await screen.findByText('Shape the first spec')
+
+    const input = screen.getByPlaceholderText('Describe the product idea or first outcome')
+    await userEvent.type(input, 'Amazon competitor seeded through merchant tools')
+    await userEvent.click(screen.getByRole('button', { name: /start shaping/i }))
+
+    await waitFor(() => {
+      expect(calls.some(call => call.url.includes('/api/project/intake'))).toBe(true)
+    })
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe(''))
+    expect(calls.find(call => call.url.includes('/api/project/intake'))?.body).toMatchObject({
+      ask: 'Amazon competitor seeded through merchant tools',
     })
   })
 
@@ -403,6 +455,29 @@ describe('ThreadTab', () => {
     })
   })
 
+  it('routes inactive setup cards to the dedicated setup recovery page', async () => {
+    installFetchFakes(
+      [
+        setupTurn({
+          id: 'setup-direction',
+          stepId: 'direction',
+          title: 'Describe the project',
+          status: 'pending',
+          affordance: 'inline-textarea',
+          actionLabel: 'Save direction',
+          submitEndpoint: '/api/setup/direction',
+        }),
+      ],
+      'setup-direction',
+    )
+
+    render(ThreadTab)
+    await screen.findByText('Describe the project')
+    await userEvent.click(screen.getByRole('button', { name: /open setup/i }))
+
+    expect(path.value).toBe('/projects/looma-knit/setup')
+  })
+
   it('explains bootstrap failures with the first useful command output line', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -458,7 +533,7 @@ describe('ThreadTab', () => {
     expect(screen.getByText('Build URL input, display text, open-in-new-tab, and remove link controls.')).toBeTruthy()
     expect(screen.getByText('docs/roadmap.md')).toBeTruthy()
     expect(screen.getByText('web/app/components/editor/toolbar.ts')).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: 'Open source note docs/roadmap.md' }))
+    await userEvent.click(screen.getByRole('button', { name: /open source note.*roadmap\.md/i }))
     await screen.findByRole('dialog', { name: 'Source note' })
     expect(screen.getByText('Roadmap source')).toBeTruthy()
     expect(screen.getByText('This is the source note Guildhall used.')).toBeTruthy()
@@ -469,7 +544,7 @@ describe('ThreadTab', () => {
       expect(calls.some(call => call.url.includes('/shape-draft') && call.url.includes('projectId=looma-knit'))).toBe(true)
     })
 
-    await userEvent.click(screen.getByRole('button', { name: /add context/i }))
+    await userEvent.click(screen.getByRole('button', { name: /add optional note/i }))
     await userEvent.type(screen.getByPlaceholderText('Tell the agent what to do next'), 'Keep drag handles out of scope.')
     await userEvent.click(screen.getByRole('button', { name: /^send$/i }))
     await waitFor(() => {
@@ -482,6 +557,130 @@ describe('ThreadTab', () => {
         ),
       ).toBe(true)
     })
+  })
+
+  it('keeps ready tasks with incomplete checklists out of worker-start actions', async () => {
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'turn-ready-incomplete',
+        taskId: 'task-ready-incomplete',
+        taskTitle: 'Knit: add link editor controls',
+        taskStatus: 'ready',
+        importedDraft: false,
+        phase: 'inflight',
+        summary: 'Ready for work.',
+        checklist: {
+          title: 'Task checklist',
+          doneCount: 2,
+          totalSteps: 4,
+          steps: [
+            { id: 'title', title: 'Give the task a title', why: 'Needed downstream.', status: 'done' },
+            { id: 'description', title: 'Describe the work', why: 'Needed downstream.', status: 'done' },
+            { id: 'success', title: 'Explain success', why: 'Review needs this.', status: 'active' },
+            { id: 'criteria', title: 'Add acceptance criteria', why: 'Review needs this.', status: 'pending' },
+          ],
+        },
+      }),
+    ], 'turn-ready-incomplete')
+
+    render(ThreadTab)
+
+    await screen.findByText('Needs task brief')
+    expect(screen.getByText(/brief\/spec is still incomplete/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Start work' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Review checklist' })).toBeTruthy()
+  })
+
+  it('does not offer task-specific starts while the project run is already active', async () => {
+    project.detail = {
+      ...(project.detail as any),
+      run: { status: 'running', mode: 'continuous' },
+    }
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'turn-exploring',
+        taskId: 'task-exploring',
+        taskTitle: 'Knit: add link editor controls',
+        taskStatus: 'exploring',
+        importedDraft: false,
+        phase: 'spec',
+        summary: 'Partial brief exists.',
+      }),
+    ], 'turn-exploring')
+
+    render(ThreadTab)
+
+    await screen.findByText('Spec revision queued')
+    expect(screen.queryByRole('button', { name: /continue drafting spec/i })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Already queued' }).hasAttribute('disabled')).toBe(true)
+  })
+
+  it('opens source notes immediately and bounds large rendered previews', async () => {
+    let resolveSourceNote: (response: Response) => void = () => {}
+    const sourceNotePromise = new Promise<Response>(resolve => {
+      resolveSourceNote = resolve
+    })
+    installFetchFakes([importedDraftTurn()], 'draft-link-controls', {
+      sourceNoteResponse: () => sourceNotePromise,
+    })
+
+    render(ThreadTab)
+    await screen.findByText('Knit: add link editor controls')
+    await userEvent.click(screen.getByRole('button', { name: /open source note.*roadmap\.md/i }))
+
+    await screen.findByRole('dialog', { name: 'Source note' })
+    expect(screen.getByText('Opening source note...')).toBeTruthy()
+
+    resolveSourceNote(json({
+      path: '/repo/looma-knit/docs/roadmap.md',
+      displayPath: 'docs/roadmap.md',
+      content: `# Large source\n\n${'A'.repeat(40_000)}\n\nEnd marker that should not render.`,
+      truncated: false,
+    }))
+
+    await screen.findByText('Large source')
+    expect(screen.getByText('Preview truncated to keep Thread responsive.')).toBeTruthy()
+    expect(screen.queryByText(/End marker that should not render/)).toBeNull()
+  })
+
+  it('renders source-note directory previews in the Thread modal', async () => {
+    installFetchFakes([importedDraftTurn()], 'draft-link-controls', {
+      sourceNoteResponse: json({
+        path: '/repo/looma-knit/supabase/migrations',
+        displayPath: 'supabase/migrations',
+        kind: 'directory',
+        content: '# Directory: supabase/migrations\n\n```text\nsupabase/migrations/\n  - 001_initial.sql\n```',
+        truncated: false,
+      }),
+    })
+
+    render(ThreadTab)
+    await screen.findByText('Knit: add link editor controls')
+    await userEvent.click(screen.getByRole('button', { name: /open source note.*roadmap\.md/i }))
+
+    await screen.findByRole('dialog', { name: 'Source note' })
+    expect(screen.getByText('Directory: supabase/migrations')).toBeTruthy()
+    expect(screen.getByText(/001_initial\.sql/)).toBeTruthy()
+  })
+
+  it('renders missing source-note previews with nearby files instead of a dead modal', async () => {
+    installFetchFakes([importedDraftTurn()], 'draft-link-controls', {
+      sourceNoteResponse: json({
+        path: '/repo/looma-knit/frontend/app/composables/useAuth.ts',
+        displayPath: 'frontend/app/composables/useAuth.ts',
+        missing: true,
+        content: '# Source not found: useAuth.ts\n\nNearby files in `frontend/app/composables`:\n- useSupabase.ts',
+        truncated: false,
+      }),
+    })
+
+    render(ThreadTab)
+    await screen.findByText('Knit: add link editor controls')
+    await userEvent.click(screen.getByRole('button', { name: /open source note.*roadmap\.md/i }))
+
+    await screen.findByRole('dialog', { name: 'Source note' })
+    expect(screen.getByText('Source not found: useAuth.ts')).toBeTruthy()
+    expect(screen.getByText(/useSupabase\.ts/)).toBeTruthy()
   })
 
   it('uses compact operation rows when a phase has many parallel turns', async () => {
@@ -591,7 +790,7 @@ describe('ThreadTab', () => {
     await screen.findByLabelText('Compact Intake operations')
     expect(screen.getByText('Needs one answer before the task can continue.')).toBeTruthy()
     expect(screen.getByText('Review the task brief; approve it to queue worker execution.')).toBeTruthy()
-    expect(screen.getByText('Review the project split Guildhall inferred.')).toBeTruthy()
+    expect(screen.getByText('Review the starter project split.')).toBeTruthy()
     expect(screen.getByText('Review the spec before worker execution.')).toBeTruthy()
     expect(screen.getByText('Worker is blocked on missing setup.')).toBeTruthy()
     expect(screen.getByText('Reviewer asked for a smaller follow-up.')).toBeTruthy()
@@ -599,7 +798,105 @@ describe('ThreadTab', () => {
     expect(screen.getByText('Implementation checklist: 1 of 3 complete.')).toBeTruthy()
   })
 
+  it('renders completed compact rows as finished instead of active work', async () => {
+    const completedTurns = Array.from({ length: 8 }, (_, index) =>
+      workerTurn({
+        id: `done-compact-${index}`,
+        phase: 'done',
+        status: 'done',
+        taskId: `task-done-${index}`,
+        taskTitle: `Finished task ${index + 1}`,
+        taskStatus: 'done',
+        constructionMode: 'survey',
+        liveAgent: {
+          name: 'spec-agent',
+          startedAt: now,
+          lastEventLabel: 'No activity',
+          silentMs: 120_000,
+        },
+        summary: 'Run finished.',
+      }),
+    )
+    installFetchFakes(completedTurns, null, { caughtUp: true })
+
+    render(ThreadTab)
+
+    await userEvent.click(await screen.findByRole('button', { name: /completed updates/i }))
+    const compact = await screen.findByLabelText('Compact Completed updates operations')
+    expect(compact.textContent).toContain('Done')
+    expect(compact.textContent).not.toContain('Guildhall working')
+    expect(compact.textContent).not.toContain('Survey')
+    expect(compact.textContent).not.toContain('In flight')
+  })
+
+  it('treats stopped runtime in-progress and exploring turns as paused instead of agent-active', async () => {
+    installFetchFakes(
+      [
+        workerTurn({
+          id: 'stopped-worker',
+          taskStatus: 'in_progress',
+          liveAgent: {
+            name: 'worker-agent',
+            startedAt: now,
+            lastEventLabel: 'No activity',
+            silentMs: 129 * 60_000,
+          },
+          summary: 'Worker was stopped.',
+        }),
+        workerTurn({
+          id: 'stopped-exploring',
+          phase: 'spec',
+          taskId: 'task-stopped-exploring',
+          taskTitle: 'Basic project listing',
+          taskStatus: 'exploring',
+          liveAgent: undefined,
+          summary: 'Spec draft is waiting.',
+        }),
+      ],
+      'stopped-worker',
+    )
+
+    render(ThreadTab)
+
+    const summary = await screen.findByLabelText('Thread operations summary')
+    expect(summary.textContent).toContain('0 Agent-active')
+    expect(screen.queryByText('Guildhall working')).toBeNull()
+    expect(screen.queryByText(/No activity for 129m/)).toBeNull()
+    expect((await screen.findAllByText('Paused')).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('does not label stopped gate checks as live Guildhall work', async () => {
+    installFetchFakes(
+      [
+        workerTurn({
+          id: 'gate-check-stopped',
+          taskStatus: 'gate_check',
+          taskTitle: 'Narrative harness gate review',
+          liveAgent: {
+            name: 'gate-checker-agent',
+            startedAt: now,
+            lastEventLabel: 'Running gate checks',
+            silentMs: 90_000,
+          },
+          summary: 'Gate check is waiting for the next run.',
+        }),
+      ],
+      'gate-check-stopped',
+    )
+
+    render(ThreadTab)
+
+    const summary = await screen.findByLabelText('Thread operations summary')
+    expect(summary.textContent).toContain('0 Agent-active')
+    expect(screen.queryByText('Guildhall working')).toBeNull()
+    expect(screen.getByText('Gate checks are queued. Start Guildhall when you want it to continue.')).toBeTruthy()
+  })
+
   it('summarizes and prioritizes high-volume thread operations', async () => {
+    project.detail = {
+      ...(project.detail as any),
+      run: { status: 'running', mode: 'continuous' },
+    }
     const crowded = [
       importedDraftTurn({ id: 'draft-a', taskId: 'task-import-a', taskTitle: 'Draft A' }),
       importedDraftTurn({ id: 'draft-b', taskId: 'task-import-b', taskTitle: 'Draft B' }),
@@ -638,12 +935,14 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await screen.findByLabelText('Thread operations summary')
-    expect(screen.getByText('7 need you')).toBeTruthy()
-    expect(screen.getByText('1 working')).toBeTruthy()
-    expect(screen.getByText('1 blocked')).toBeTruthy()
-    expect(screen.getByText('2 queued')).toBeTruthy()
-    expect(screen.getByText('5 drafts')).toBeTruthy()
+    const summary = await screen.findByLabelText('Thread operations summary')
+    expect(summary.textContent).toContain('7 Input cards')
+    expect(summary.textContent).toContain('1 Agent-active')
+    expect(summary.textContent).toContain('1 Blocked')
+    expect(summary.textContent).toContain('2 Queued')
+    expect(summary.textContent).toContain('5 Drafts')
+    expect(summary.textContent).not.toContain('thread cards need you')
+    expect(screen.getByLabelText('7 cards waiting for input')).toBeTruthy()
 
     const compact = await screen.findByLabelText('Compact Intake operations')
     const compactText = compact.textContent ?? ''
@@ -651,11 +950,50 @@ describe('ThreadTab', () => {
     expect(compactText.indexOf('Live spec task')).toBeLessThan(compactText.indexOf('Queued ready task'))
   })
 
-  it('shows construction stage chips on task turns', async () => {
+  it('does not call paused in-progress worker state queued or agent-active', async () => {
+    installFetchFakes(
+      [
+        workerTurn({
+          liveAgent: undefined,
+          taskStatus: 'in_progress',
+          summary: 'Waiting between worker passes.',
+        }),
+      ],
+      'worker-link-controls',
+    )
+
+    render(ThreadTab)
+
+    const summary = await screen.findByLabelText('Thread operations summary')
+    expect(summary.textContent).toContain('0 Agent-active')
+    expect(summary.textContent).toContain('0 Queued')
+    expect((await screen.findAllByText('Paused')).length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByText(/^queued$/i, { selector: '.chip' })).toBeNull()
+  })
+
+  it('does not describe transcript-only escalation attempts as zero value progress', async () => {
+    installFetchFakes(
+      [
+        escalationTurn({
+          summary: 'Spec agent made no visible progress after 3 passes.',
+          details: 'Task remained in exploring with no saved spec.',
+        }),
+      ],
+      'esc-link-controls',
+    )
+
+    render(ThreadTab)
+    await screen.findByText('Needs recovery')
+    expect(screen.getByText('Guildhall found context but did not save the next draft.')).toBeTruthy()
+    expect(screen.getByText(/transcript may contain useful observations/i)).toBeTruthy()
+    expect(screen.queryByText('Worker is stuck')).toBeNull()
+  })
+
+  it('keeps queued task cards focused on queue state instead of competing stage chips', async () => {
     installFetchFakes(
       [
         importedDraftTurn({ id: 'draft-stage', taskId: 'task-draft-stage', constructionMode: 'blueprint' }),
-        workerTurn({ id: 'worker-stage', taskId: 'task-worker-stage', constructionMode: 'build' }),
+        workerTurn({ id: 'worker-stage', taskId: 'task-worker-stage', constructionMode: 'build', taskStatus: 'ready' }),
       ],
       'draft-stage',
     )
@@ -663,11 +1001,13 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await screen.findByText('Blueprint')
-    await userEvent.click(screen.getByRole('button', { name: /paused/i }))
-    expect(screen.getByText('Build')).toBeTruthy()
+    expect(screen.getAllByText('Queued').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByText('Guildhall next')).toBeNull()
+    expect(screen.queryByText('Build')).toBeNull()
+    expect(screen.getAllByRole('button', { name: /add optional note/i }).length).toBeGreaterThanOrEqual(1)
   })
 
-  it('stages multiple task questions and submits them as one answer batch', async () => {
+  it('submits each task question answer directly without a second submit step', async () => {
     const { calls } = installFetchFakes(
       [
         questionTurn('q-scope', 'scope', 'Should drag-and-drop be in scope?', [
@@ -683,35 +1023,86 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await waitFor(() => expect(screen.getAllByText('2 questions about this task')).toHaveLength(2))
+    await waitFor(() => expect(screen.getAllByText('2 questions before Guildhall continues')).toHaveLength(2))
 
     await userEvent.click(screen.getByRole('button', { name: /drag handle is out of scope/i }))
-    await waitFor(() => {
-      expect(calls.some(call => call.url.includes('/stage-answer') && call.body?.questionId === 'scope')).toBe(true)
-    })
-    expect(screen.getByText('1 of 2 answers ready so far')).toBeTruthy()
-    const threadTextAfterFirstAnswer = document.body.textContent ?? ''
-    expect(threadTextAfterFirstAnswer.indexOf('Which link UI should be built?')).toBeLessThan(
-      threadTextAfterFirstAnswer.indexOf('Answers staged'),
-    )
-
-    await userEvent.click(screen.getByRole('button', { name: /URL input \+ Display text/i }))
-    await waitFor(() => {
-      expect(calls.some(call => call.url.includes('/stage-answer') && call.body?.questionId === 'link-ui')).toBe(true)
-    })
-    expect(screen.getByText('2 of 2 answers ready to submit')).toBeTruthy()
-
-    await userEvent.click(screen.getByRole('button', { name: /submit answers/i }))
     await waitFor(() => {
       expect(
         calls.some(
           call =>
             call.url.includes('/answer-questions') &&
             Array.isArray(call.body?.answers) &&
-            call.body.answers.length === 2,
+            call.body.answers.length === 1 &&
+            call.body.answers[0]?.questionId === 'scope',
         ),
       ).toBe(true)
     })
+    expect(screen.queryByText('Answers staged')).toBeNull()
+    expect(screen.queryByRole('button', { name: /submit answers/i })).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: /URL input \+ Display text/i }))
+    await waitFor(() => {
+      expect(calls.some(
+        call =>
+          call.url.includes('/answer-questions') &&
+          Array.isArray(call.body?.answers) &&
+          call.body.answers[0]?.questionId === 'link-ui',
+      )).toBe(true)
+    })
+    expect(calls.some(call => call.url.includes('/stage-answer'))).toBe(false)
+  })
+
+  it('commits preserved draft answers together so old staged answers are not re-asked one by one', async () => {
+    const { calls } = installFetchFakes(
+      [
+        questionTurn('q-scope', 'scope', 'Should drag-and-drop be in scope?', [
+          'Include drag handle',
+          'Drag handle is out of scope',
+        ], { draftAnswer: 'Drag handle is out of scope' }),
+        questionTurn('q-link-ui', 'link-ui', 'Which link UI should be built?', [
+          'URL input only',
+          'URL input + Display text',
+        ], { draftAnswer: 'URL input + Display text' }),
+      ],
+      'q-scope',
+    )
+
+    render(ThreadTab)
+    await waitFor(() => expect(screen.getAllByText('Draft answer')).toHaveLength(2))
+
+    await userEvent.click(screen.getAllByRole('button', { name: /send saved answers/i })[0])
+
+    await waitFor(() => {
+      const call = calls.find(candidate => candidate.url.includes('/answer-questions'))
+      expect(call?.body?.answers).toMatchObject([
+        { questionId: 'scope', answer: 'Drag handle is out of scope' },
+        { questionId: 'link-ui', answer: 'URL input + Display text' },
+      ])
+    })
+    expect(calls.some(call => call.url.includes('/stage-answer'))).toBe(false)
+    expect(screen.queryByRole('button', { name: /submit answers/i })).toBeNull()
+  })
+
+  it('keeps the question visible and reports an error when answer saving fails', async () => {
+    const { calls } = installFetchFakes(
+      [
+        questionTurn('q-scope', 'scope', 'Should drag-and-drop be in scope?', [
+          'Include drag handle',
+          'Drag handle is out of scope',
+        ]),
+      ],
+      'q-scope',
+      { answerQuestionsResponse: json({ error: 'disk is full' }, { status: 500 }) },
+    )
+
+    render(ThreadTab)
+    await screen.findByText('Should drag-and-drop be in scope?')
+
+    await userEvent.click(screen.getByRole('button', { name: /drag handle is out of scope/i }))
+
+    await waitFor(() => expect(screen.getByText('disk is full')).toBeTruthy())
+    expect(screen.getByText('Should drag-and-drop be in scope?')).toBeTruthy()
+    expect(calls.some(call => call.url.includes('/answer-questions'))).toBe(true)
   })
 
   it('lets the user ask for missing question context without answering the question', async () => {
@@ -727,10 +1118,10 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
     await screen.findByText('Pick one: what is the single source of truth for migration status?')
-    expect(screen.getByText('Need more context?')).toBeTruthy()
-    expect(screen.getByText(/Ask Guildhall to explain the source note or current assumption before you answer/)).toBeTruthy()
+    expect(screen.getByText('Missing context is expected.')).toBeTruthy()
+    expect(screen.getByText(/Ask Guildhall to explain project terms, source notes, or assumptions before you answer/)).toBeTruthy()
 
-    await userEvent.click(screen.getByRole('button', { name: /ask for context/i }))
+    await userEvent.click(screen.getByRole('button', { name: /ask guildhall to explain/i }))
     await userEvent.type(
       screen.getByPlaceholderText('Ask what the agent means or what source/evidence it is using'),
       'Which migration status are you asking about?',
@@ -793,6 +1184,44 @@ describe('ThreadTab', () => {
     })
   })
 
+  it('uses the shared secondary-left and primary-right brief decision buttons', async () => {
+    installFetchFakes([briefTurn()], 'brief-link-controls')
+
+    render(ThreadTab)
+    await screen.findByText('Edit links inline.')
+
+    const noButton = screen.getByRole('button', { name: /no, change it/i })
+    const yesButton = screen.getByRole('button', { name: /yes, that's right/i })
+
+    expect(noButton.classList.contains('v-secondary')).toBe(true)
+    expect(yesButton.classList.contains('v-primary')).toBe(true)
+    expect(noButton.compareDocumentPosition(yesButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('renders brief approvals as human-facing task briefs and hides operational receipt text', async () => {
+    installFetchFakes([
+      briefTurn({
+        taskTitle: 'Bootstrap database — run migrations, verify schema',
+        brief: {
+          userJob: 'Done — I persisted concrete progress with tools:',
+          successMetric: 'Migrations run cleanly and the schema matches the current application expectations.',
+          authoredBy: 'spec-agent',
+        },
+      }),
+    ], 'brief-link-controls')
+
+    render(ThreadTab)
+    await screen.findByText('Review this task brief')
+
+    expect(screen.queryByText('Is this what you want?')).toBeNull()
+    expect(screen.queryByText('What it thinks you want')).toBeNull()
+    expect(screen.queryByText('Done — I persisted concrete progress with tools:')).toBeNull()
+    expect(screen.getByText('Scope')).toBeTruthy()
+    expect(screen.getAllByText('Bootstrap database — run migrations, verify schema').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText('Done when')).toBeTruthy()
+    expect(screen.getByText('Migrations run cleanly and the schema matches the current application expectations.')).toBeTruthy()
+  })
+
   it('blocks brief and spec approval until task questions are answered', async () => {
     installFetchFakes(
       [
@@ -807,7 +1236,7 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByText('Is this what you want?')
+    await screen.findByText('Review this task brief')
     expect(screen.getByText(/Answer 1 open question in Thread before approving/)).toBeTruthy()
     expect((screen.getByRole('button', { name: /yes, that's right/i }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: /approve spec/i }) as HTMLButtonElement).disabled).toBe(true)
@@ -848,6 +1277,10 @@ describe('ThreadTab', () => {
   })
 
   it('surfaces live and stalled worker activity on collapsed-looking work cards', async () => {
+    project.detail = {
+      ...(project.detail as any),
+      run: { status: 'running', mode: 'continuous' },
+    }
     installFetchFakes(
       [
         workerTurn({
@@ -874,6 +1307,122 @@ describe('ThreadTab', () => {
     await screen.findByText(/Still waiting for the local model/)
     expect(screen.getByText('Started write checkpoint')).toBeTruthy()
     expect(screen.getByText('Writing implementation notes')).toBeTruthy()
+  })
+
+  it('labels partial durable progress as recovery work instead of queued work', async () => {
+    installFetchFakes(
+      [
+        workerTurn({
+          liveAgent: undefined,
+          activity: [
+            {
+              at: '2026-05-19T14:59:30.000Z',
+              label: 'Finished write file',
+              detail: 'Wrote docs/specs/story-memory-schemas.md',
+              tone: 'ok',
+            },
+            {
+              at: '2026-05-19T14:59:45.000Z',
+              label: 'Agent worker-agent failed on task-link-controls: worker-agent timed out after 120000ms of inactivity',
+              tone: 'danger',
+            },
+          ],
+        }),
+      ],
+      'worker-link-controls',
+    )
+
+    render(ThreadTab)
+    expect((await screen.findAllByText('Needs recovery')).length).toBeGreaterThan(0)
+    expect(screen.getByText(/partial progress/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Inspect recovery' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Add recovery note' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Resume work' })).toBeTruthy()
+    expect(screen.queryAllByText(/^Queued$/)).toHaveLength(1)
+  })
+
+  it('can resume a recovery task directly from Thread', async () => {
+    const { calls } = installFetchFakes(
+      [
+        workerTurn({
+          liveAgent: undefined,
+          activity: [
+            {
+              at: '2026-05-19T14:59:30.000Z',
+              label: 'Finished write file',
+              detail: 'Wrote docs/specs/story-memory-schemas.md',
+              tone: 'ok',
+            },
+            {
+              at: '2026-05-19T14:59:45.000Z',
+              label: 'Agent worker-agent failed on task-link-controls: worker-agent timed out after 120000ms of inactivity',
+              tone: 'danger',
+            },
+          ],
+        }),
+      ],
+      'worker-link-controls',
+    )
+
+    render(ThreadTab)
+    await screen.findByText(/partial progress/i)
+    await userEvent.click(screen.getByRole('button', { name: 'Resume work' }))
+
+    await waitFor(() => {
+      expect(calls.some(call => (
+        call.url.startsWith('/api/project/start') &&
+        call.body?.taskId === 'task-link-controls' &&
+        call.body?.mode === 'continuous'
+      ))).toBe(true)
+    })
+  })
+
+  it('counts exploring imported drafts as Guildhall shaping after drafting starts', async () => {
+    installFetchFakes(
+      [
+        importedDraftTurn({
+          taskStatus: 'exploring',
+          summary: 'Imported draft has a task brief in progress.',
+        }),
+      ],
+      'draft-link-controls',
+    )
+
+    render(ThreadTab)
+    await screen.findByLabelText('1 shaping')
+    expect(screen.getByText('Guildhall shaping')).toBeTruthy()
+    expect(screen.getByLabelText('0 cards waiting for input')).toBeTruthy()
+    expect(screen.queryAllByText(/^Input cards$/)).toHaveLength(1)
+  })
+
+  it('surfaces all-terminal readiness without a start affordance when caught up', async () => {
+    project.detail = {
+      id: 'looma-knit',
+      name: 'Looma + Knit',
+      path: '/repo/looma-knit',
+      run: { status: 'stopped', mode: 'continuous' },
+      tasks: [
+        {
+          id: 'task-done',
+          title: 'Done task',
+          status: 'done',
+          openQuestions: [],
+          escalations: [],
+        },
+      ],
+      config: { coordinators: [{ id: 'knit', domain: 'knit' }] },
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'All tasks are already finished.',
+      },
+    }
+    installFetchFakes([], null, { caughtUp: true })
+
+    render(ThreadTab)
+
+    await screen.findByText('All tasks are already finished.')
+    expect(screen.queryByRole('button', { name: /start/i })).toBeNull()
   })
 
   it('shows start failures inline when a queued task cannot resume', async () => {

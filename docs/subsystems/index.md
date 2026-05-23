@@ -4,7 +4,7 @@ title: Architecture
 
 # Architecture
 
-GuildHall is a layered system. Each layer has a single job; layers above build on layers below.
+Guildhall is a layered system. Each layer has a single job; layers above build on layers below.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐

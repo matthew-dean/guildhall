@@ -56,7 +56,7 @@ describe('MODEL_CATALOG', () => {
 })
 
 describe('ROLE_PROFILES', () => {
-  const roles = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker'] as const
+  const roles = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker', 'contextIndexer'] as const
 
   it('defines a profile for every agent role', () => {
     for (const role of roles) {
@@ -76,6 +76,15 @@ describe('ROLE_PROFILES', () => {
   it('reviewer and gateChecker prefer speed', () => {
     expect(ROLE_PROFILES.reviewer.preferSpeed).toBe(true)
     expect(ROLE_PROFILES.gateChecker.preferSpeed).toBe(true)
+  })
+
+  it('contextIndexer balances code understanding, structure, and speed', () => {
+    expect(ROLE_PROFILES.contextIndexer).toMatchObject({
+      reasoning: 2,
+      codegen: 2,
+      structuredOutput: 3,
+      preferSpeed: true,
+    })
   })
 
   it('spec and coordinator do not prefer speed', () => {
@@ -110,13 +119,25 @@ describe('recommendModelsForRole', () => {
   })
 
   it('returns at least one local and one cloud model for most roles', () => {
-    for (const role of ['spec', 'coordinator', 'worker', 'reviewer'] as const) {
+    for (const role of ['spec', 'coordinator', 'worker', 'reviewer', 'contextIndexer'] as const) {
       const results = recommendModelsForRole(role)
       const hasLocal = results.some(m => m.provider === 'lm-studio')
-      const hasCloud = results.some(m => m.provider === 'anthropic' || m.provider === 'openai')
+      const hasCloud = results.some(m => ['anthropic', 'openai', 'deepinfra'].includes(m.provider))
       expect(hasLocal).toBe(true)
       expect(hasCloud).toBe(true)
     }
+  })
+
+  it('recommends DeepInfra candidates for context indexing', () => {
+    const results = recommendModelsForRole('contextIndexer')
+    expect(results[0]?.id).toBe('zai-org/GLM-4.6')
+    expect(results.map(m => m.id)).toEqual(
+      expect.arrayContaining([
+        'zai-org/GLM-4.6',
+        'deepseek-ai/DeepSeek-V4-Flash',
+        'Qwen/Qwen3.6-35B-A3B',
+      ]),
+    )
   })
 })
 
@@ -148,7 +169,7 @@ describe('default model assignments', () => {
   it('cloud assignment uses only cloud models', () => {
     for (const id of Object.values(DEFAULT_CLOUD_MODEL_ASSIGNMENT)) {
       const provider = findModel(id)?.provider
-      expect(['anthropic', 'openai', 'google']).toContain(provider)
+      expect(['anthropic', 'openai', 'google', 'deepinfra']).toContain(provider)
     }
   })
 })

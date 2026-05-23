@@ -113,6 +113,43 @@ why.
    tranche to task specs to implementation.
 7. **Treat plan changes as normal.** Change orders update the construction plan,
    not just a task note.
+8. **Keep the machinery optional.** Construction planning should appear when it
+   helps the owner understand a large or risky job. It should not become
+   cognitive overhead for small tasks, direct fixes, or obvious follow-ups.
+
+## Proportional Visibility
+
+The construction plan should be available detail, not mandatory ceremony.
+
+Guildhall should adapt the visible planning surface to the size and ambiguity of
+the work:
+
+| Work Shape | Default Experience | Construction Detail |
+| --- | --- | --- |
+| Tiny fix | normal task flow | hidden unless requested |
+| Single clear feature | task spec + optional parent slice | collapsed summary |
+| Feature family | lightweight area/slice grouping | visible in Work and drawer |
+| Large product build | full construction plan | Build Map, active tranche, decisions |
+| High-risk change | plan/checklist focused on risk | surfaced near affected action |
+
+The owner should be able to ask for the Build Map or plan detail at any time,
+but Guildhall should not force them to think about phases, slices, areas,
+change orders, and perspective levels when the work does not need them.
+
+Rules:
+
+- no Build Map prompt for simple direct tasks unless the owner asks
+- no construction-plan approval step for tiny fixes
+- no extra navigation item if a project has no construction plan
+- show only the at-a-glance summary when a plan exists but has no active owner
+  decision
+- collapse construction metadata inside task cards unless it explains "why now"
+  or "why blocked"
+- let users hide or minimize the construction summary band per project
+- preserve direct commands such as "fix this bug" and "run this check"
+
+The product should feel like it has a powerful planning layer behind the work,
+not like the user must operate that layer before any work can happen.
 
 ## Core Artifact: Construction Plan
 
@@ -194,8 +231,10 @@ decisions:
       reason: "Offline/local guarantees are central to the first slice"
   inferred:
     - id: "component-layer"
-      decision: "Use existing UI component stack where available"
-      evidence: "Repo already depends on it"
+      decision: "Use existing abstractions wherever a fitting primitive exists"
+      evidence: "Repo already contains component, token, helper, module, service, schema, route, and test patterns"
+      enforcement: "Spec, worker, and reviewer prompts should steer work toward shared primitives first. A one-off helper, class, file, module, button, chip, card, color, spacing rule, border radius, route, schema, or interaction treatment is a defect unless the task explicitly adds or extends a shared primitive."
+      repetitionRule: "Two similar ideas should trigger an abstraction decision: reuse or extend an existing primitive, introduce the smallest shared primitive, or intentionally keep duplication because the pattern is not stable yet."
 
 tasks:
   generated:
@@ -222,6 +261,368 @@ First implementation should store the construction plan under project memory:
 
 Later, this can move into a typed runtime store. The first slice should avoid a
 large migration if project memory is enough.
+
+## Project Corpus Map
+
+Workers should function like modern coding agents: they receive enough
+architecture context to make the first good move, but Guildhall must not dump
+the entire repository into every prompt.
+
+Detailed module, partial-refresh, and runtime integration requirements live in
+[`2026-05-21-corpus-map-engine-technical-spec.md`](./2026-05-21-corpus-map-engine-technical-spec.md).
+That technical spec is authoritative for the 0.7.0 Corpus Map MVP.
+
+This is a distinct 0.7.0 workstream. The existing context builder already
+injects focused task memory, likely target files, checkpoints, recent progress,
+and decisions. That is useful, but it is not the same thing as understanding
+the codebase. Workers also need a durable map of "what already exists here,
+what should be reused, and where to read next."
+
+### Product Contract
+
+Guildhall should create and maintain a project-local corpus map that lets
+agents answer these questions without broad repo spelunking:
+
+- What kind of project is this?
+- What are the major areas/modules/packages?
+- What shared primitives, helpers, services, schemas, tests, and conventions
+  already exist?
+- Which files are canonical entry points vs. leaf implementations?
+- Which packages own which behaviors?
+- Which existing abstraction should a worker reuse for this task?
+- Which nearby files should the worker read if the summary is not enough?
+- When is a new abstraction justified?
+
+The corpus map is not a search index that copies every file into memory. It is
+an architecture guide with references. It should point agents to the right
+files, symbols, commands, and conventions, then let them open the supporting
+files they actually need.
+
+### Artifacts
+
+0.7.0 should add durable project memory artifacts:
+
+- `memory/codebase-map.yaml` — current summarized map
+- `memory/codebase-map.history.jsonl` — append-only map refresh events
+- `memory/codebase-map.stale.json` — optional stale/failed refresh state
+- `memory/codebase-map.overrides.yaml` — optional human-authored corrections
+
+The map should be valid structured data, but readable in a text editor. Human
+overrides win over generated summaries and should never be overwritten by a
+refresh.
+
+Suggested top-level shape:
+
+```yaml
+version: 1
+generatedAt: "2026-05-21T00:00:00.000Z"
+project:
+  root: "/path/to/project"
+  languages: ["typescript", "svelte"]
+  packageManagers: ["pnpm"]
+  primaryFrameworks: ["svelte", "vite"]
+  summary: "Guildhall is a local multi-agent project orchestration app..."
+
+entrypoints:
+  - kind: "cli"
+    path: "src/cli.ts"
+    summary: "Command dispatch and serve entrypoint."
+  - kind: "web-app"
+    path: "src/web/main.ts"
+    summary: "Browser UI bootstrap."
+
+areas:
+  - id: "web-ui"
+    title: "Web UI"
+    summary: "Svelte project shell, task surfaces, settings, and workspace import."
+    owns:
+      - "src/web/**"
+      - "packages/ui/**"
+    canonicalFiles:
+      - path: "src/web/lib/Button.svelte"
+        symbols: ["Button"]
+        summary: "Shared command button component. Use this for toolbar and form actions."
+      - path: "packages/ui/src/components/FrameCard.svelte"
+        symbols: ["FrameCard"]
+        summary: "Shared framed card primitive for grouped content."
+    conventions:
+      - "Use shared Button variants before adding local button CSS."
+      - "Use token variables for radius, color, and spacing."
+    tests:
+      - "src/web/surfaces/__tests__/*.test.ts"
+      - "src/web/surfaces/project/__tests__/*.test.ts"
+
+abstractions:
+  - id: "button"
+    title: "Command buttons"
+    kind: "ui-component"
+    canonicalPath: "src/web/lib/Button.svelte"
+    useWhen:
+      - "A user triggers an action from a toolbar, form, panel, or drawer."
+    avoid:
+      - "Do not add local button padding, radius, or neutral backgrounds."
+    related:
+      - "src/web/lib/StatusButton.svelte"
+      - "src/web/tokens.css"
+
+verification:
+  commands:
+    - "pnpm test <focused test file>"
+    - "pnpm typecheck"
+    - "pnpm build"
+```
+
+### What Gets Indexed
+
+The first implementation should index enough to guide implementation, not
+enough to recreate the repository.
+
+Required inputs:
+
+- package manifests and workspace definitions
+- top-level README and repo-local agent guidance
+- docs or memory files that describe architecture/conventions
+- source tree shape from tracked and untracked non-ignored files
+- exported symbols for TypeScript/JavaScript where cheap to parse
+- Svelte/Vue/React component filenames, props, and obvious exports
+- test file locations and naming patterns
+- scripts and common verification commands
+- route files, API handlers, CLI commands, schemas, and persistence modules
+- design-system artifacts, UI tokens, and shared component primitives
+
+Optional later inputs:
+
+- dependency graph edges from imports
+- TypeScript language-service symbol metadata
+- ripgrep-derived symbol references
+- recent git history to identify hot/canonical files
+- reviewer decisions that mark a pattern canonical or forbidden
+
+Excluded from the map:
+
+- full file contents
+- generated files unless they are the only source of truth
+- vendored dependencies
+- large fixtures and snapshots
+- secrets and env files
+- raw logs
+- transcripts except for short decisions promoted into memory
+
+### Context Budgeting
+
+The context builder should treat the corpus map as a retrieval layer, not a
+prompt blob.
+
+Always include:
+
+- project summary
+- active task area if known
+- likely target files
+- matching shared abstractions
+- matching conventions
+- focused verification commands
+- "read next" supporting files
+
+Include only when relevant:
+
+- neighboring area summaries
+- design-system primitives for UI work
+- persistence/schema conventions for data work
+- route/API conventions for endpoint work
+- packaging/build conventions for tooling work
+- prior reviewer warnings for the same abstraction
+
+Never include by default:
+
+- every area in the project
+- every symbol in a package
+- full source excerpts
+- long generated docs
+- full transcripts
+
+Hard budget targets:
+
+- corpus context block: 1,500 to 4,000 characters by default
+- max fallback block: 8,000 characters when task scope is genuinely unclear
+- each file/abstraction summary: 1 to 4 sentences
+- "read next" list: 3 to 8 files
+
+### Relevance Decision Tree
+
+When building context for a worker:
+
+1. If the task names files, routes, components, commands, or packages, use
+   those as the primary retrieval anchors.
+2. Else if the task belongs to a construction slice, use the slice's area,
+   product surface, and generated task metadata.
+3. Else if the task domain/guild is clear, map the domain to corpus areas
+   such as UI, runtime, CLI, docs, persistence, tests, or release.
+4. Else use top-level project summary, entrypoints, and the smallest likely
+   area set; instruct the worker to ask a focused map question before editing.
+5. For each candidate file, include the nearest canonical abstraction before
+   leaf files. Example: `Button.svelte` and tokens before a one-off toolbar
+   surface.
+6. If two or more similar concepts appear in the task or map, add an
+   "abstraction decision" note that asks the worker to reuse, extend, or
+   intentionally keep duplication.
+7. If no map entry fits, include "no known abstraction found" explicitly so the
+   worker knows this is an evidence gap, not permission to invent locally.
+
+### Worker Tools
+
+Agents should not need to parse the whole map manually. Add focused tools:
+
+- `read-codebase-map` — returns the project summary, areas, and entrypoints.
+- `query-codebase-map` — accepts text plus optional `area`, `kind`, `paths`,
+  and returns ranked map entries.
+- `find-existing-abstraction` — asks "what should I reuse for X?" and returns
+  canonical files, use/avoid guidance, and supporting files.
+- `read-supporting-context` — opens one map-referenced supporting file or a
+  small group of companion files with an explicit reason.
+- `record-corpus-note` — lets reviewers/coordinators promote a discovered
+  convention or correction into map overrides.
+- `refresh-codebase-map` — refreshes generated entries after imports, setup,
+  or meaningful changes.
+
+Tool responses should be short and structured. A worker asking about button
+styling should get "use `src/web/lib/Button.svelte`, `StatusButton.svelte`,
+and `src/web/tokens.css`" with one-paragraph rationale, not a pasted file.
+
+### Worker Prompt Contract
+
+Before editing, the worker must be able to name:
+
+- the task's mapped area
+- the likely target files
+- the shared abstraction or convention it is reusing
+- the supporting file it read when the summary was not enough
+- whether the work creates a second similar concept
+
+If it cannot name those from injected context, its first action should be a map
+query or focused supporting-file read, not a broad `ls`/`rg` sweep and not a
+new local implementation.
+
+For implementation handoff, worker self-critique should include:
+
+```text
+Corpus fit:
+- Area: <mapped area>
+- Reused abstraction: <file/symbol or "none found">
+- Supporting context read: <file(s)>
+- New abstraction decision: <reuse / extend / add shared primitive / keep local because...>
+```
+
+### Spec Agent Contract
+
+Specs should stop saying "make a button" or "add a helper" when the repo has a
+known primitive. The spec agent should query the corpus map while drafting and
+include a "Reuse / Extend" section:
+
+```text
+Reuse / Extend:
+- Use `src/web/lib/Button.svelte` for command actions.
+- Use `src/web/lib/StatusButton.svelte` for outlined state controls with
+  count badges.
+- Do not add local button padding/radius/color CSS in the surface.
+- If the existing variant cannot express the needed state, extend `Button`
+  first and consume that variant from the surface.
+```
+
+If the map is stale or absent, the spec should say that explicitly and add a
+setup task to refresh or seed it before dispatching implementation work that
+depends on local conventions.
+
+### Reviewer Contract
+
+Reviewers should inspect both behavior and corpus fit.
+
+Required reviewer questions:
+
+- Did the worker consult the corpus map or relevant injected map slice?
+- Did the diff reuse the canonical abstraction named by the map?
+- Did the worker invent a local helper/component/style where a shared one
+  exists?
+- Did the worker add a shared primitive when the task genuinely needed a new
+  concept?
+- Did repeated concepts become an explicit abstraction decision?
+- Did the worker read enough supporting context to avoid guessing?
+
+Review verdicts should use specific language:
+
+- Approve: "Fits corpus map: reused `Button` and tokens."
+- Needs revision: "Parallel abstraction: local `.toolbar-btn` duplicates
+  `Button` sizing."
+- Change order: "Corpus map says provider settings are global, but product
+  flow now needs project-scoped provider selection."
+
+### Refresh Strategy
+
+Map refresh should be cheap and incremental.
+
+Refresh triggers:
+
+- project setup/import completes
+- package manifests change
+- files are added/removed under source roots
+- design-system files change
+- reviewer records a corpus correction
+- user manually asks to refresh
+
+The refresh should:
+
+- preserve human overrides
+- mark stale sections instead of deleting uncertain entries immediately
+- avoid blocking normal work if indexing fails
+- log failures to `codebase-map.history.jsonl`
+- surface "map stale" as a quiet warning in agent context and Settings, not as
+  a loud blocker unless the task depends on a stale area
+
+### UI Surface
+
+The map should be available without becoming another mandatory dashboard.
+
+Suggested locations:
+
+- Settings -> Advanced -> Codebase map: status, last refresh, refresh action,
+  stale areas, and human overrides
+- Task drawer -> Context fit: mapped area, reused abstraction, read-next files
+- Review drawer -> Corpus fit checklist
+- Thread -> only when Guildhall needs the user to decide whether a pattern
+  should become canonical
+
+Small projects should not have to think about this. If the map contains only a
+few entries, the UI should stay quiet and simply feed the right context to
+agents.
+
+### Failure Modes
+
+Avoid these designs:
+
+- dumping all file summaries into every worker prompt
+- treating the map as always correct when recent changes contradict it
+- making the user curate the map before Guildhall can run
+- adding a vector database as the first implementation when structured files
+  and targeted search are enough
+- letting generated summaries override human corrections
+- scoring relevance only by keyword overlap when routes/components/packages
+  give stronger anchors
+- asking workers to "follow existing patterns" without naming the patterns
+  and the files that embody them
+
+### Implementation Cut
+
+For 0.7.0, build the smallest useful version:
+
+- generate `memory/codebase-map.yaml` from manifests, file tree, docs, and
+  obvious source symbols
+- add a loader/query API with deterministic scoring
+- inject a compact corpus slice into `buildContext`
+- add worker/spec/reviewer prompt requirements around corpus fit
+- add a read-only Settings status panel
+- add unit tests for relevance selection and context budgeting
+
+Do not build semantic embeddings, a live language-server daemon, or a rich map
+editor in 0.7.0. Those can follow once the structured map proves useful.
 
 ## Public UI: Build Map
 
@@ -281,24 +682,28 @@ Decisions
 The Build Map should be calm and compact. It is a planning surface, not a
 Gantt-chart product.
 
-## Visual Model And Zoom Levels
+## Visual Model And Perspective Levels
 
 The construction plan needs more than one view. A user should be able to move
 between the whole project, the current structure, the result being built, one
 area, one slice, and one task without losing orientation.
 
 Use the house metaphor internally, but translate it into product UI language.
+These are perspective levels, not literal map zoom controls. The interface can
+use tabs, grouped bands, filters, summary cards, and detail panels. It should
+feel like changing lenses or drilling into a section, not like navigating a
+canvas.
 
-| Metaphor | Product View | What It Answers | Primary Surface |
+| Metaphor | Product Perspective | What It Answers | Primary Surface |
 | --- | --- | --- | --- |
-| Blueprint | Full construction plan | What are we building, in what shape, and why? | Build Map |
-| Frame | Areas, phases, dependencies, active tranche | What exists now versus later, and what holds it together? | Build Map + Work |
-| Rendered house | Progress/readiness projection | What would be usable if work stopped today? | Timeline + Release |
-| Room | Product area or feature family | What belongs to this section, who owns it, and what is its state? | Build Map detail |
-| Slice | End-to-end user value path | What is Guildhall actively trying to make usable? | Work + task drawer |
-| Task | Concrete build/review unit | What is one agent doing or waiting on? | Task drawer + Thread |
+| Blueprint | Whole-plan perspective | What are we building, in what shape, and why? | Build Map |
+| Frame | Structural perspective | What exists now versus later, and what holds it together? | Build Map + Work |
+| Rendered house | Usability/readiness perspective | What would be usable if work stopped today? | Timeline + Release |
+| Room | Product-area perspective | What belongs to this section, who owns it, and what is its state? | Build Map detail |
+| Slice | User-value perspective | What is Guildhall actively trying to make usable? | Work + task drawer |
+| Task | Work-unit perspective | What is one agent doing or waiting on? | Task drawer + Thread |
 
-The user should never have to choose between "giant map" and "one task card."
+The user should never have to choose between "everything at once" and "one task card."
 Every major surface should preserve both context and focus:
 
 - Where am I in the whole plan?
@@ -315,15 +720,21 @@ Every major surface should preserve both context and focus:
 Rules:
 
 - show a one-screen summary before detailed lists
-- use progressive disclosure for dependency details
+- use progressive disclosure for help text, dependency details, provenance,
+  raw diagnostics, and rationale
 - group by active tranche before status
 - show later work as muted and collapsed by default
 - show only the top owner decisions in Needs You
 - avoid duplicating the same alert across Thread, Needs You, and Work
 - make every dense view answer one primary question
-- prefer counts and state chips over paragraphs
+- prefer counts, state chips, and direct controls over paragraphs
 - keep "why now?" visible for active work
 - keep "why not now?" available for queued/deferred work
+- keep construction detail collapsed unless it changes the next action
+- hide tutorial/explanatory copy behind question-mark help once the user has a
+  real object or decision on screen
+- never show every available field just because the runtime has it; default
+  surfaces should expose the minimum state needed to decide or act
 
 Status language:
 
@@ -336,11 +747,11 @@ Status language:
 
 Do not make users infer these states from task status names alone.
 
-## Build Map Interaction Model
+## Build Map Perspective Model
 
-Build Map is the zoomed-out planning surface.
+Build Map is the broadest planning surface.
 
-It should support these zoom modes:
+It should support these perspective levels:
 
 ### 1. Overview
 
@@ -442,7 +853,7 @@ Each surface should own a different question.
 | Needs You | What decision or action blocks progress? | owner decisions, approvals, blocked questions, risky change orders | notification dump |
 | Work | What is now, next, later, blocked, and done? | active tranche tasks, queued slice work, worker assignments, status movement | raw backlog warehouse |
 | Timeline | What changed over time? | tranche selection, task starts/finishes, change orders, decisions, gate outcomes | chat transcript |
-| Build Map | What is the shape of the project? | phases, areas, slices, dependencies, active tranche, zoom levels | Gantt chart |
+| Build Map | What is the shape of the project? | phases, areas, slices, dependencies, active tranche, perspective levels | Gantt chart |
 | Task Drawer | What is true about this unit? | parent slice, current worker/reviewer, ACs, evidence, history | project-wide plan |
 
 ## Thread Integration
@@ -656,6 +1067,8 @@ It must not:
 - say "this is too large"
 - ask the owner to manually decompose the whole product
 - create dozens of ready tasks before a construction plan exists
+- route simple bug fixes, chores, or direct manual tasks through full
+  construction planning
 - bury the plan in a transcript
 - expose private product validation context in public docs
 
@@ -1083,13 +1496,17 @@ Acceptance:
 10. Public Guildhall docs and examples do not reveal private dogfood product
     details.
 11. Existing projects without construction plans continue to work.
-12. Verification covers typecheck, unit tests, docs build, and at least one
+12. Small/direct tasks continue through the lightweight task flow without forcing
+    the owner to manage a Build Map.
+13. Verification covers typecheck, unit tests, docs build, and at least one
     scenario test for ambitious-product intake.
 
 ## Non-Goals
 
 - Do not build a full Jira/Gantt/roadmap suite.
 - Do not require every small task to have a construction plan.
+- Do not make construction planning visible by default when it adds no
+  immediate user value.
 - Do not block direct manual tasks when the owner explicitly asks for them.
 - Do not expose private dogfood products in bundled examples.
 - Do not force the owner to approve every coordinator sequencing decision.

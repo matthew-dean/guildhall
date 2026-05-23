@@ -7,6 +7,7 @@
   The product says "do this", and Inbox remains for the full list.
 -->
 <script lang="ts">
+  import ActionBar from '../lib/ActionBar.svelte'
   import Card from '../lib/Card.svelte'
   import Button from '../lib/Button.svelte'
   import { onEvent } from '../lib/events.js'
@@ -84,38 +85,38 @@
         }
       case 'open_escalation':
         return {
-          verb: `Resolve the escalation${id}`,
-          why: item.detail ?? 'An agent needs a human decision to continue.',
-          button: 'Open task',
+          verb: `Review the blocked task${id}`,
+          why: item.detail ? `Recovery needed. Detail: ${item.detail}` : 'Choose the next recovery action so Guildhall can continue.',
+          button: 'Review recovery',
           href: item.actionHref ?? '/work',
         }
       case 'agent_question_pending':
         return {
           verb: `Answer Guildhall’s question${id}`,
           why: item.detail ?? 'Guildhall needs one answer before it can continue shaping the work.',
-          button: 'Answer in Thread',
+          button: 'Answer question',
           href: item.actionHref ?? '/thread',
         }
       case 'import_draft_queue':
         return {
           verb: 'Shape the imported drafts',
           why: item.detail ?? 'Guildhall imported planning work that still needs a quick shaping pass.',
-          button: 'Review next draft',
+          button: item.taskId === 'task-workspace-import' ? 'Open import review' : 'Draft task brief',
           href: item.actionHref ?? '/thread',
         }
       case 'brief_approval':
         return {
           verb: `Review the product brief${id}`,
           why: 'The spec agent is waiting for you to confirm the brief (or correct it).',
-          button: 'Review in Thread',
-          href: '/thread',
+          button: 'Review brief',
+          href: item.actionHref ?? '/thread',
         }
       case 'spec_approval':
         return {
           verb: `Approve the spec${id}`,
           why: 'The worker can’t start until the spec is approved.',
-          button: 'Review in Thread',
-          href: '/thread',
+          button: 'Review spec',
+          href: item.actionHref ?? '/thread',
         }
       case 'workspace_import_pending':
         return {
@@ -169,6 +170,14 @@
   const actionableItems = $derived.by(() =>
     visibleItems.filter(({ item }) => item.severity !== 'low'),
   )
+  const moreItems = $derived.by(() => visibleItems.slice(1))
+  const moreButtonLabel = $derived.by(() => {
+    if (moreItems.length <= 0) return ''
+    if (moreItems.every(({ item }) => item.severity === 'low')) {
+      return moreItems.length === 1 ? '1 optional cleanup item ›' : `${moreItems.length} optional cleanup items ›`
+    }
+    return `${moreItems.length} more in Inbox ›`
+  })
   const source = $derived<TopSource | null>(
     actionableItems[0]
         ? (() => {
@@ -177,9 +186,9 @@
               verb: top.prescription.verb,
               why: top.prescription.why,
               button: top.prescription.button,
-            href: projectActionHref(top.prescription.href),
+              href: projectActionHref(top.prescription.href),
               severity: top.item.severity,
-              moreLabel: `${visibleItems.length - 1} more in Inbox ›`,
+              moreLabel: moreButtonLabel,
               moreHref: projectActionHref('/inbox'),
             }
           })()
@@ -195,12 +204,15 @@
   const moreCount = $derived(visibleItems.length - 1)
 
   function go(href: string) {
-    nav(projectActionHref(href))
+    const next = projectActionHref(href)
+    const route = next.split('?')[0]?.split('#')[0] ?? next
+    nav(next, route.includes('/task/') ? { backgroundPath: path.value } : undefined)
   }
 </script>
 
 {#if loaded && source}
-  <Card {tone}>
+  <div class="next-wrap">
+    <Card {tone}>
     <div class="row">
       <div class="text">
         <div class="eyebrow">Do this next</div>
@@ -209,21 +221,25 @@
           <div class="why">{source.why}</div>
         {/if}
       </div>
-      <div class="actions">
+      <ActionBar>
         <Button variant="primary" onclick={() => go(source.href)}>
           {source.button} →
         </Button>
         {#if moreCount > 0}
-          <button type="button" class="more" onclick={() => go(projectActionHref('/inbox'))}>
-            {moreCount} more in Inbox ›
-          </button>
+          <Button variant="secondary" size="sm" onclick={() => go(projectActionHref('/inbox'))}>
+            {source.moreLabel}
+          </Button>
         {/if}
-      </div>
+      </ActionBar>
     </div>
-  </Card>
+    </Card>
+  </div>
 {/if}
 
 <style>
+  .next-wrap {
+    margin-block: var(--s-3) var(--s-4);
+  }
   .row {
     display: flex;
     align-items: center;
@@ -250,21 +266,4 @@
     color: var(--text-muted);
     line-height: var(--lh-body);
   }
-  .actions {
-    display: flex;
-    align-items: center;
-    gap: var(--s-3);
-    flex-wrap: wrap;
-  }
-  .more {
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    font: inherit;
-    font-size: var(--fs-1);
-    cursor: pointer;
-    padding: 0;
-    text-decoration: underline;
-  }
-  .more:hover { color: var(--text); }
 </style>

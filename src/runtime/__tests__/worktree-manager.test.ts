@@ -235,6 +235,75 @@ describe('ensureWorktreeForDispatch', () => {
     await expect(fs.lstat(path.join(result.worktreePath, 'node_modules'))).rejects.toThrow()
     await expect(fs.lstat(path.join(result.worktreePath, 'web', 'node_modules'))).rejects.toThrow()
   })
+
+  it('copies explicit local config files into new task worktrees', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-worktree-include-'))
+    const projectPath = path.join(tmp, 'app')
+    const outsidePath = path.join(tmp, 'outside.env')
+    await fs.mkdir(path.join(projectPath, 'config'), { recursive: true })
+    await fs.writeFile(path.join(projectPath, '.env'), 'API_TOKEN=local-secret\n')
+    await fs.writeFile(
+      path.join(projectPath, 'config', 'appsettings.local.yaml'),
+      'db: local\n',
+    )
+    await fs.writeFile(outsidePath, 'SHOULD_NOT_COPY=true\n')
+
+    const driver = new InMemoryGitDriver()
+    const result = await ensureWorktreeForDispatch({
+      task: task({ id: 'include-local-config', projectPath }),
+      mode: 'per_task',
+      projectId: 'demo-project',
+      projectPath,
+      baseBranch: 'main',
+      gitDriver: driver,
+      worktreeInclude: [
+        '.env',
+        'config/*.local.yaml',
+        '../outside.env',
+        'missing.local.yaml',
+      ],
+    })
+
+    await expect(fs.readFile(path.join(result.worktreePath, '.env'), 'utf8')).resolves.toBe(
+      'API_TOKEN=local-secret\n',
+    )
+    await expect(
+      fs.readFile(path.join(result.worktreePath, 'config', 'appsettings.local.yaml'), 'utf8'),
+    ).resolves.toBe('db: local\n')
+    await expect(fs.access(path.join(result.worktreePath, 'outside.env'))).rejects.toThrow()
+  })
+
+  it('refreshes explicit local config files when reusing a task worktree', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-worktree-refresh-'))
+    const projectPath = path.join(tmp, 'app')
+    const worktreePath = path.join(TEST_GUILDHALL_HOME, 'worktrees', 'demo-project', 'refresh')
+    await fs.mkdir(projectPath, { recursive: true })
+    await fs.mkdir(worktreePath, { recursive: true })
+    await fs.writeFile(path.join(projectPath, '.env'), 'API_TOKEN=first\n')
+    await fs.writeFile(path.join(worktreePath, '.env'), 'API_TOKEN=stale\n')
+
+    const driver = new InMemoryGitDriver()
+    const result = await ensureWorktreeForDispatch({
+      task: task({
+        id: 'refresh',
+        projectPath,
+        worktreePath,
+        branchName: 'guildhall/task-refresh',
+        baseBranch: 'main',
+      }),
+      mode: 'per_task',
+      projectId: 'demo-project',
+      projectPath,
+      baseBranch: 'main',
+      gitDriver: driver,
+      worktreeInclude: ['.env'],
+    })
+
+    expect(result.created).toBe(false)
+    await expect(fs.readFile(path.join(worktreePath, '.env'), 'utf8')).resolves.toBe(
+      'API_TOKEN=first\n',
+    )
+  })
 })
 
 describe('cleanupWorktreeForTerminal', () => {

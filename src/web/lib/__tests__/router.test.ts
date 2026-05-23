@@ -6,6 +6,8 @@ describe('parseRoute', () => {
   it('routes top-level surfaces', () => {
     expect(parseRoute('/')).toEqual({ kind: 'projects' })
     expect(parseRoute('/projects')).toEqual({ kind: 'projects' })
+    expect(parseRoute('/needs-you')).toEqual({ kind: 'fleet-inbox' })
+    expect(parseRoute('/notifications')).toEqual({ kind: 'fleet-inbox' })
     expect(parseRoute('/setup')).toEqual({ kind: 'setup', projectId: null })
     expect(parseRoute('/projects/fair-labor-license/setup')).toEqual({
       kind: 'setup',
@@ -37,11 +39,11 @@ describe('parseRoute', () => {
     })
     expect(parseRoute('/projects/looma-knit/routing/agents')).toMatchObject({
       view: 'settings',
-      sub: 'routing',
+      sub: 'coordinators',
     })
     expect(parseRoute('/projects/looma-knit/coordinators/knit')).toMatchObject({
       view: 'settings',
-      sub: 'routing',
+      sub: 'coordinators',
     })
     expect(parseRoute('/projects/looma-knit/planner')).toMatchObject({ view: 'planner' })
     expect(parseRoute('/projects/looma-knit/facts')).toMatchObject({ view: 'facts' })
@@ -73,6 +75,17 @@ describe('parseRoute', () => {
     })
   })
 
+  it('ignores query strings and hashes when matching task drawer routes', () => {
+    expect(parseRoute('/projects/looma-knit/task/task-import-2?sourceNoteCheck=1#now')).toEqual({
+      kind: 'project',
+      projectId: 'looma-knit',
+      view: 'thread',
+      sub: null,
+      drawerTaskId: 'task-import-2',
+      backgroundPath: '/projects/looma-knit/thread',
+    })
+  })
+
   it('keeps legacy single-project URLs working while preserving drawer context', () => {
     expect(parseRoute('/project')).toMatchObject({
       kind: 'project',
@@ -90,7 +103,7 @@ describe('parseRoute', () => {
     })
     expect(parseRoute('/project/coordinators')).toMatchObject({
       view: 'settings',
-      sub: 'routing',
+      sub: 'coordinators',
     })
     expect(parseRoute('/project/planner')).toMatchObject({ view: 'planner' })
     expect(parseRoute('/project/facts')).toMatchObject({ view: 'facts' })

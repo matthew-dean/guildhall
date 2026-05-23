@@ -133,11 +133,33 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Which controls belong in the link editor?')
-    await userEvent.click(screen.getByText('URL input only'))
+    await userEvent.click(screen.getByRole('button', { name: /url input only/i }))
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/answer-questions'))).toBe(true)
     })
+  })
+
+  it('opens the Now tab when a question notification deep-links to the current surface', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=current')
+    path.value = '/projects/looma-knit/task/task-link-editor'
+    const payload = drawerPayload()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Which controls belong in the link editor?')
+    expect(screen.getByRole('tab', { name: 'Now' }).getAttribute('aria-selected')).toBe('true')
   })
 
   it('runs and manages the task from drawer controls without losing project scope', async () => {
@@ -176,6 +198,7 @@ describe('TaskDrawer', () => {
 
     await screen.findByText('Add link editor controls inside the existing editor toolbar.')
     await userEvent.click(screen.getByRole('button', { name: /run this task/i }))
+    await userEvent.click(screen.getByText('More task actions'))
     await userEvent.click(screen.getByRole('button', { name: /pause task/i }))
     await userEvent.click(screen.getByRole('button', { name: /put aside/i }))
 
@@ -184,6 +207,35 @@ describe('TaskDrawer', () => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/pause'))).toBe(true)
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/shelve'))).toBe(true)
     })
+  })
+
+  it('does not expose run controls for a completed task but keeps copy link available', async () => {
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'done'
+    payload.task.terminalSummary = {
+      headline: 'Task completed.',
+      detail: 'DONE',
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Task completed.')
+
+    expect(screen.queryByRole('button', { name: /run this task/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /pause task/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /put aside/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /copy link/i })).toBeTruthy()
   })
 
   it('approves a task spec with an optional note from the drawer footer flow', async () => {
@@ -306,6 +358,7 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Add link editor controls inside the existing editor toolbar.')
+    await userEvent.click(screen.getByText('More task actions'))
     await userEvent.click(screen.getByRole('button', { name: /re-run review/i }))
 
     await waitFor(() => {
@@ -460,7 +513,7 @@ describe('TaskDrawer', () => {
     })
   })
 
-  it('resolves open escalations with an explicit next status from the drawer', async () => {
+  it('separates retry and manual blocker resolution actions in the drawer footer', async () => {
     const payload = drawerPayload({ threadTurns: [] })
     payload.task.status = 'blocked'
     payload.task.blockReason = 'verification_failed: Build failed after implementation.'
@@ -499,13 +552,68 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Build failed after implementation.')
-    await userEvent.click(screen.getByRole('button', { name: /resolve\.\.\./i }))
+    expect(screen.queryByRole('button', { name: /retry blocker/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /resolve blocker/i })).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: /mark resolved\.\.\./i }))
+    await screen.findByText('Use this when you handled the blocker yourself or want to tell Guildhall exactly where to continue.')
     await userEvent.type(
-      screen.getByLabelText(/how should the agent proceed/i),
+      screen.getByLabelText(/resolution note/i),
       'Use the existing shared button component and rerun checks.',
     )
     await userEvent.selectOptions(screen.getByLabelText(/resume at/i), 'review')
-    await userEvent.click(screen.getByRole('button', { name: /^resolve$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^mark resolved$/i }))
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/resolve-escalation'))).toBe(true)
+    })
+  })
+
+  it('uses a reason-aware primary recovery action for open escalations', async () => {
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'blocked'
+    payload.task.blockReason = 'gate_hard_failure: Tests failed.'
+    payload.task.escalations = [
+      {
+        id: 'esc-gates',
+        reason: 'gate_hard_failure',
+        summary: 'Tests failed.',
+        details: 'pnpm test failed after implementation.',
+        agentId: 'gate-checker',
+      },
+    ]
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/resolve-escalation')) {
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          projectId: 'looma-knit',
+          escalationId: 'esc-gates',
+          resolution: 'Retrying gates after addressing the failure.',
+          nextStatus: 'gate_check',
+        })
+        return json({ ok: true })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Tests failed.')
+    const footerRetry = screen.getAllByRole('button', { name: /^retry gates$/i }).at(-1)
+    expect(footerRetry).toBeDefined()
+    await userEvent.click(footerRetry!)
+    await screen.findByText('Guildhall will close this blocker and try the task again from the selected step.')
+    const modalRetry = screen.getAllByRole('button', { name: /^retry gates$/i }).at(-1)
+    expect(modalRetry).toBeDefined()
+    await userEvent.click(modalRetry!)
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/resolve-escalation'))).toBe(true)
@@ -567,5 +675,45 @@ describe('TaskDrawer', () => {
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/unshelve'))).toBe(true)
     })
+  })
+
+  it('explains shelved and checkpointed outcomes without crowding the footer', async () => {
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'shelved'
+    payload.task.shelveReason = {
+      code: 'duplicate',
+      detail: 'Duplicate of the existing link editor task.',
+      rejectedAt: now,
+      rejectedBy: 'coordinator-agent',
+    }
+    payload.task.latestCheckpoint = {
+      step: 3,
+      agentId: 'worker-agent',
+      intent: 'Verify focused toolbar tests',
+      nextPlannedAction: 'Rerun the focused toolbar test and hand off to review.',
+      filesTouched: ['web/app/components/editor/toolbar.ts'],
+      writtenAt: now,
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Knit: add link editor controls')
+    expect(screen.getByText('This task is out of the active queue.')).toBeTruthy()
+    expect(screen.getAllByText('Duplicate of the existing link editor task.').length).toBeGreaterThan(0)
+    expect(screen.getByText('Latest checkpoint')).toBeTruthy()
+    expect(screen.getByText(/Rerun the focused toolbar test/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /pause task/i })).toBeNull()
+    expect(screen.getAllByRole('button', { name: /^unshelve$/i }).length).toBeGreaterThan(0)
   })
 })

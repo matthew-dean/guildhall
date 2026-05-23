@@ -27,13 +27,14 @@ function handlers() {
   }
 }
 
-function renderCurrent(turns: TaskThreadTurn[], options: { runError?: string | null } = {}) {
+function renderCurrent(turns: TaskThreadTurn[], options: { runError?: string | null; runStatus?: string } = {}) {
   const props = {
     task: baseTask(),
     turns,
     busy: false,
     runBusy: false,
     runError: options.runError ?? null,
+    runStatus: options.runStatus ?? 'stopped',
     ...handlers(),
   }
   render(CurrentTab, props)
@@ -75,7 +76,7 @@ describe('CurrentTab', () => {
       },
     ])
 
-    await userEvent.click(screen.getByText('URL input only'))
+    await userEvent.click(screen.getByText(/url input only/i))
 
     expect(props.onAnswerQuestion).toHaveBeenCalledWith('q-link-scope', 'URL input only')
   })
@@ -168,11 +169,60 @@ describe('CurrentTab', () => {
 
     expect(screen.getByText('Needs task brief')).toBeTruthy()
     expect(screen.getByText(/Next step: turn this note into a task brief with scope, evidence, and acceptance criteria/)).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: /review draft/i }))
     await userEvent.click(screen.getByRole('button', { name: /draft task brief/i }))
 
-    expect(props.onOpenSpecTab).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', { name: /review draft/i })).toBeNull()
+    expect(props.onOpenSpecTab).not.toHaveBeenCalled()
     expect(props.onShapeDraft).toHaveBeenCalledOnce()
+  })
+
+  it('shows imported draft shaping as Guildhall-owned progress, not user babysitting', () => {
+    renderCurrent([
+      {
+        id: 'turn-import-shaping',
+        kind: 'inflight',
+        at: now,
+        persona: 'spec',
+        status: 'active',
+        phase: 'spec',
+        taskId: 'task-import-2',
+        taskTitle: 'Knit: add revision summary',
+        taskStatus: 'exploring',
+        importedDraft: true,
+        summary: 'Guildhall is shaping the imported note.',
+      },
+    ])
+
+    expect(screen.getByText('Guildhall shaping')).toBeTruthy()
+    expect(screen.getByText(/You can add context, but you do not need to babysit the draft/i)).toBeTruthy()
+    expect(screen.queryByText('Task brief in progress')).toBeNull()
+    expect(screen.queryByText(/Continue drafting the brief here when you are ready/i)).toBeNull()
+  })
+
+  it('surfaces partial durable progress as recovery instead of queued work', () => {
+    renderCurrent([
+      {
+        id: 'turn-recovery',
+        kind: 'inflight',
+        at: now,
+        persona: 'worker',
+        status: 'active',
+        phase: 'inflight',
+        taskId: 'task-link-editor',
+        taskTitle: 'Knit: add link editor controls',
+        taskStatus: 'in_progress',
+        summary: 'Worker started implementation.',
+        activity: [
+          { at: now, label: 'Write file src/components/LinkEditor.svelte', tone: 'ok', detail: 'Updated link editor controls.' },
+          { at: now, label: 'Worker timed out after 120 seconds', tone: 'danger', detail: 'No new assistant message arrived.' },
+        ],
+      },
+    ])
+
+    expect(screen.getByText('Needs recovery')).toBeTruthy()
+    expect(screen.getByText(/Guildhall made partial progress, then the agent failed/i)).toBeTruthy()
+    expect(screen.getByText('Write file src/components/LinkEditor.svelte')).toBeTruthy()
+    expect(screen.queryByText('Queued')).toBeNull()
   })
 
   it('shows queued work, run errors, and checklist progress in one card', async () => {
@@ -191,12 +241,11 @@ describe('CurrentTab', () => {
           summary: 'Ready for work.',
           checklist: {
             title: 'Implementation path',
-            doneCount: 1,
+            doneCount: 2,
             totalSteps: 2,
-            activeStepId: 'write',
             steps: [
               { id: 'read', title: 'Read files', why: 'Find existing patterns.', status: 'done' },
-              { id: 'write', title: 'Write controls', why: 'Add the requested UI.', status: 'active' },
+              { id: 'write', title: 'Write controls', why: 'Add the requested UI.', status: 'done' },
             ],
           },
         },
@@ -210,6 +259,89 @@ describe('CurrentTab', () => {
     await userEvent.click(screen.getByRole('button', { name: /start work/i }))
 
     expect(props.onRunTask).toHaveBeenCalledOnce()
+  })
+
+  it('does not offer a run action for terminal task states', () => {
+    const props = renderCurrent([
+      {
+        id: 'turn-done',
+        kind: 'inflight',
+        at: now,
+        persona: 'worker',
+        status: 'active',
+        phase: 'inflight',
+        taskId: 'task-link-editor',
+        taskTitle: 'Knit: add link editor controls',
+        taskStatus: 'done',
+        summary: 'Task completed.',
+      },
+    ])
+
+    expect(screen.getByText('Task completed.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /run this task/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /start work/i })).toBeNull()
+    expect(props.onRunTask).not.toHaveBeenCalled()
+  })
+
+  it('does not offer Start work for a ready task with an incomplete checklist', async () => {
+    const props = renderCurrent([
+      {
+        id: 'turn-incomplete-ready',
+        kind: 'inflight',
+        at: now,
+        persona: 'worker',
+        status: 'active',
+        phase: 'inflight',
+        taskId: 'task-link-editor',
+        taskTitle: 'Knit: add link editor controls',
+        taskStatus: 'ready',
+        summary: 'Ready for work.',
+        checklist: {
+          title: 'Task checklist',
+          doneCount: 2,
+          totalSteps: 4,
+          activeStepId: 'success',
+          steps: [
+            { id: 'title', title: 'Give the task a title', why: 'Needed downstream.', status: 'done' },
+            { id: 'description', title: 'Describe what the agent is looking at', why: 'Needed downstream.', status: 'done' },
+            { id: 'success', title: 'Explain what success looks like', why: 'Review needs this.', status: 'active' },
+            { id: 'criteria', title: 'Add at least one acceptance criterion', why: 'Review needs this.', status: 'pending' },
+          ],
+        },
+      },
+    ])
+
+    expect(screen.getByText('Needs task brief')).toBeTruthy()
+    expect(screen.getByText(/not ready for worker implementation/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /start work/i })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /review checklist/i }))
+
+    expect(props.onOpenSpecTab).toHaveBeenCalledOnce()
+    expect(props.onRunTask).not.toHaveBeenCalled()
+  })
+
+  it('shows already-running ready work as queued instead of starting silently', () => {
+    renderCurrent(
+      [
+        {
+          id: 'turn-ready-running',
+          kind: 'inflight',
+          at: now,
+          persona: 'worker',
+          status: 'active',
+          phase: 'inflight',
+          taskId: 'task-link-editor',
+          taskTitle: 'Knit: add link editor controls',
+          taskStatus: 'ready',
+          summary: 'Ready for work.',
+        },
+      ],
+      { runStatus: 'running' },
+    )
+
+    expect(screen.getByText('Queued for Guildhall')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /already queued/i })).toHaveProperty('disabled', true)
+    expect(screen.queryByRole('button', { name: /start work/i })).toBeNull()
   })
 
   it('identifies a live worker as in flight with recent activity', () => {

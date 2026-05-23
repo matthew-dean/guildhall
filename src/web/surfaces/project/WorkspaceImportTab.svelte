@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ActionBar from '../../lib/ActionBar.svelte'
   import Card from '../../lib/Card.svelte'
   import Row from '../../lib/Row.svelte'
   import Stack from '../../lib/Stack.svelte'
@@ -10,7 +11,7 @@
   import WizardStepper from '../../lib/WizardStepper.svelte'
   import { project } from '../../lib/project.svelte.js'
   import { nav } from '../../lib/nav.svelte.js'
-  import { projectFetch } from '../../lib/project-routes.js'
+  import { projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { toast } from 'svelte-sonner'
 
   interface DetectedGoal {
@@ -41,6 +42,7 @@
     label: string
     excerpt: string
     source: string
+    references?: readonly string[]
   }
   interface SourceGroup {
     key: string
@@ -103,11 +105,24 @@
       }>
     }
   }
+  interface ParsedImport {
+    goals: DetectedGoal[]
+    tasks: Array<{
+      id: string
+      title: string
+      description: string
+      domain: string
+      priority: 'critical' | 'high' | 'normal' | 'low'
+      references?: readonly string[]
+    }>
+    milestones: Array<{ title: string; evidence: string }>
+  }
   interface DraftResponse {
     taskExists: boolean
     specReady: boolean
     taskStatus?: string | null
     detected: DetectedDraft | null
+    parsed?: ParsedImport | null
     dismissed: boolean
     anchors?: readonly string[]
     error?: string
@@ -145,6 +160,7 @@
   let detailFocus = $state<DetailFocus | null>(null)
   let detailOpen = $state(false)
   let completedImport = $state<CompletedImportSummary | null>(null)
+  let individualSourceReviewOpen = $state(false)
 
   function displayText(value: string): string {
     return value
@@ -165,7 +181,17 @@
       }
       data = j
       const defaults = j.detected?.learning?.defaults
-      if (defaults) {
+      const review = j.detected?.review
+      if (
+        defaults &&
+        review?.totalTaskCandidates === 0 &&
+        defaults.selectedAreaKeys.length === 0 &&
+        defaults.selectedSourceKeys.length === 0
+      ) {
+        selectedAreaKeys = (review.areaGroups ?? []).map(area => area.key)
+        selectedSourceKeys = (review.sourceGroups ?? []).map(group => group.key)
+        selectedTaskIds = []
+      } else if (defaults) {
         selectedAreaKeys = [...defaults.selectedAreaKeys]
         selectedSourceKeys = [...defaults.selectedSourceKeys]
         selectedTaskIds = [...defaults.selectedTaskIds]
@@ -173,9 +199,15 @@
         const defaultAreas = (j.detected?.review?.areaGroups ?? []).filter(
           area => area.taskCount > 0,
         )
-        selectedAreaKeys = defaultAreas.map(area => area.key)
+        const fallbackReferenceAreas = (j.detected?.review?.totalTaskCandidates ?? 0) === 0
+          ? (j.detected?.review?.areaGroups ?? [])
+          : []
+        const selectedDefaults = defaultAreas.length > 0 ? defaultAreas : fallbackReferenceAreas
+        selectedAreaKeys = selectedDefaults.map(area => area.key)
         const defaultSources = (j.detected?.review?.sourceGroups ?? []).filter(
-          group => defaultAreas.some(area => area.key === group.areaKey) && group.taskCount > 0,
+          group =>
+            selectedDefaults.some(area => area.key === group.areaKey) &&
+            (defaultAreas.length > 0 ? group.taskCount > 0 : true),
         )
         selectedSourceKeys = defaultSources.map(group => group.key)
         selectedTaskIds = (j.detected?.tasks ?? [])
@@ -187,6 +219,7 @@
       currentGroupIndex = 0
       detailFocus = null
       detailOpen = false
+      individualSourceReviewOpen = false
       completedImport = null
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
@@ -228,6 +261,9 @@
   const currentAreaSecondarySources = $derived(
     currentAreaSources.filter(group => group.taskCount === 0),
   )
+  const selectedCurrentAreaSecondaryCount = $derived(
+    currentAreaSecondarySources.filter(group => selectedSourceKeys.includes(group.key)).length,
+  )
   const focusedArea = $derived(
     detailFocus?.kind === 'area'
       ? areaGroups.find(area => area.key === detailFocus.key) ?? null
@@ -250,7 +286,16 @@
     return 'Details'
   })
   const selectedSourceCount = $derived(
-    selectedTaskGroups.length + secondaryGroups.filter(group => selectedSourceKeys.includes(group.key)).length,
+    selectedGroups.filter(group => selectedAreaKeys.includes(group.areaKey)).length,
+  )
+  const currentAreaSelectedSourceCount = $derived(
+    currentAreaSources.filter(group => selectedSourceKeys.includes(group.key)).length,
+  )
+  const currentAreaSelectedTaskCount = $derived(
+    currentAreaSources
+      .filter(group => selectedSourceKeys.includes(group.key))
+      .flatMap(group => group.taskIds)
+      .filter(id => selectedTaskIds.includes(id)).length,
   )
   const selectedTasks = $derived(
     allTasks.filter(
@@ -263,20 +308,43 @@
     selectedTaskGroups[Math.min(currentGroupIndex, Math.max(0, selectedTaskGroups.length - 1))] ?? null,
   )
   const hasTaskCandidates = $derived(totalTaskCandidates > 0)
+  const visibleJourneySteps = $derived(
+    hasTaskCandidates
+      ? journeySteps
+      : [
+          { id: 'found', label: '1. Found' },
+          { id: 'parts', label: '2. Parts' },
+          { id: 'sources', label: '3. Notes' },
+          { id: 'confirm', label: '4. Save' },
+        ] satisfies Array<{ id: Step; label: string }>,
+  )
   const canConfirmReferenceImport = $derived(
     selectedAreaKeys.length > 0 &&
     selectedSourceKeys.length > 0 &&
     selectedTaskGroups.length === 0,
   )
+  const completedTaskImport = $derived(data?.taskStatus === 'done' && !completedImport)
+  const completedParsedTaskCount = $derived(data?.parsed?.tasks?.length ?? 0)
+  const completedMissingParsedTasks = $derived.by(() => {
+    const parsedTasks = data?.parsed?.tasks ?? []
+    const currentTasks = project.detail?.tasks ?? []
+    if (currentTasks.length === 0) return parsedTasks
+    const existingIds = new Set(currentTasks.map(task => task.id))
+    return parsedTasks.filter(task => !existingIds.has(task.id))
+  })
+  const completedMissingTaskCount = $derived(completedMissingParsedTasks.length)
+  const completedParsedSourceCount = $derived(data?.detected?.review?.sourceGroups?.length ?? 0)
+  const completedParsedGoalCount = $derived(data?.parsed?.goals?.length ?? data?.detected?.review?.totalGoals ?? 0)
+  const completedParsedMilestoneCount = $derived(data?.parsed?.milestones?.length ?? data?.detected?.review?.totalMilestones ?? 0)
 
   function selectArea(key: string) {
     const area = areaGroups.find(item => item.key === key)
     if (!area || selectedAreaKeys.includes(key)) return
     selectedAreaKeys = [...selectedAreaKeys, key]
-    const taskBearingSourceKeys = groups
-      .filter(group => group.areaKey === key && group.taskCount > 0)
+    const defaultSourceKeys = groups
+      .filter(group => group.areaKey === key && (area.taskCount === 0 || group.taskCount > 0))
       .map(group => group.key)
-    selectedSourceKeys = [...new Set([...selectedSourceKeys, ...taskBearingSourceKeys])]
+    selectedSourceKeys = [...new Set([...selectedSourceKeys, ...defaultSourceKeys])]
     const taskIdsToAdd = groups
       .filter(group => group.areaKey === key && group.taskCount > 0)
       .flatMap(group => group.taskIds)
@@ -296,6 +364,26 @@
     currentAreaIndex = 0
   }
 
+  function selectAreas(keys: string[]) {
+    for (const key of keys) {
+      const area = areaGroups.find(item => item.key === key)
+      if (!area || selectedAreaKeys.includes(key)) continue
+      selectedAreaKeys = [...selectedAreaKeys, key]
+      const defaultSourceKeys = groups
+        .filter(group => group.areaKey === key && (area.taskCount === 0 || group.taskCount > 0))
+        .map(group => group.key)
+      selectedSourceKeys = [...new Set([...selectedSourceKeys, ...defaultSourceKeys])]
+      const taskIdsToAdd = groups
+        .filter(group => group.areaKey === key && group.taskCount > 0)
+        .flatMap(group => group.taskIds)
+      selectedTaskIds = [...new Set([...selectedTaskIds, ...taskIdsToAdd])]
+    }
+  }
+
+  function clearAreas(keys: string[]) {
+    for (const key of keys) removeArea(key)
+  }
+
   function toggleSource(key: string) {
     if (selectedSourceKeys.includes(key)) {
       selectedSourceKeys = selectedSourceKeys.filter(value => value !== key)
@@ -309,6 +397,26 @@
     const group = groups.find(item => item.key === key)
     if (group) {
       selectedTaskIds = [...new Set([...selectedTaskIds, ...group.taskIds])]
+    }
+  }
+
+  function selectSources(keys: string[]) {
+    selectedSourceKeys = [...new Set([...selectedSourceKeys, ...keys])]
+    const taskIds = groups
+      .filter(group => keys.includes(group.key))
+      .flatMap(group => group.taskIds)
+    if (taskIds.length > 0) {
+      selectedTaskIds = [...new Set([...selectedTaskIds, ...taskIds])]
+    }
+  }
+
+  function clearSources(keys: string[]) {
+    selectedSourceKeys = selectedSourceKeys.filter(value => !keys.includes(value))
+    const taskIdsToRemove = groups
+      .filter(group => keys.includes(group.key))
+      .flatMap(group => group.taskIds)
+    if (taskIdsToRemove.length > 0) {
+      selectedTaskIds = selectedTaskIds.filter(id => !taskIdsToRemove.includes(id))
     }
   }
 
@@ -350,14 +458,17 @@
     if (area.taskCount > 0) {
       parts.push(`${area.taskCount} possible task${area.taskCount === 1 ? '' : 's'}`)
     }
+    if (area.goalCount > 0) {
+      parts.push(`${area.goalCount} goal${area.goalCount === 1 ? '' : 's'}`)
+    }
+    if (area.milestoneCount > 0) {
+      parts.push(`${area.milestoneCount} milestone${area.milestoneCount === 1 ? '' : 's'}`)
+    }
+    if (area.contextCount > 0) {
+      parts.push(`${area.contextCount} reference note${area.contextCount === 1 ? '' : 's'}`)
+    }
     if (area.sourceCount > 0) {
       parts.push(`${area.sourceCount} planning source${area.sourceCount === 1 ? '' : 's'}`)
-    }
-    if (area.taskCount === 0 && area.milestoneCount > 0) {
-      parts.push(`${area.milestoneCount} milestone note${area.milestoneCount === 1 ? '' : 's'}`)
-    }
-    if (area.taskCount === 0 && area.contextCount > 0) {
-      parts.push(`${area.contextCount} reference note${area.contextCount === 1 ? '' : 's'}`)
     }
     return parts.join(' · ')
   }
@@ -370,31 +481,38 @@
     if (group.milestoneCount > 0) {
       parts.push(`${group.milestoneCount} milestone note${group.milestoneCount === 1 ? '' : 's'}`)
     }
+    if (group.goalCount > 0) {
+      parts.push(`${group.goalCount} goal${group.goalCount === 1 ? '' : 's'}`)
+    }
     if (group.contextCount > 0) {
       parts.push(`${group.contextCount} reference note${group.contextCount === 1 ? '' : 's'}`)
     }
+    if (parts.length === 0) return 'Source'
     return parts.join(' · ')
   }
 
   function sourcePreview(area: AreaGroup): string {
     const names = groups
-      .filter(group => group.areaKey === area.key && group.taskCount > 0)
+      .filter(group => group.areaKey === area.key)
       .slice(0, 3)
       .map(group => group.label)
-    if (names.length === 0) return 'Reference notes only'
+    if (names.length === 0) return area.summary || 'Project context'
     const preview = names.join(', ')
     const remaining = area.sourceCount - names.length
     return remaining > 0 ? `${preview}, and ${remaining} more` : preview
   }
 
   function areaKindLabel(area: AreaGroup): string {
-    return area.taskCount > 0 ? 'Task-bearing part' : 'Reference-only part'
+    if (area.taskCount > 0) return 'Task-bearing part'
+    if (area.goalCount > 0) return 'Goal context'
+    return 'Context part'
   }
 
   function sourceKindLabel(group: SourceGroup): string {
     if (group.kind === 'tasks') return 'Task list'
     if (group.kind === 'mixed') return 'Mixed source'
     if (group.kind === 'milestones') return 'Milestone notes'
+    if (group.goalCount > 0) return 'Goal context'
     return 'Reference notes'
   }
 
@@ -409,16 +527,70 @@
     return tasksForGroup(group).slice(0, 8)
   }
 
+  function sourceMatches(value: string | undefined, group: SourceGroup): boolean {
+    if (!value) return false
+    const normalized = value.replaceAll('\\', '/').toLowerCase()
+    const groupPath = group.path?.replaceAll('\\', '/').toLowerCase()
+    return normalized === group.label.toLowerCase() ||
+      Boolean(groupPath && (normalized === groupPath || normalized.endsWith(groupPath) || groupPath.endsWith(normalized)))
+  }
+
+  function sourceEvidence(group: SourceGroup): Array<{ label: string; text: string }> {
+    const evidence: Array<{ label: string; text: string }> = []
+    for (const goal of data?.detected?.goals ?? []) {
+      if (
+        sourceMatches(goal.source, group) ||
+        (goal.references ?? []).some(ref => sourceMatches(ref, group))
+      ) {
+        evidence.push({ label: 'Goal', text: displayText(goal.rationale || goal.title) })
+      }
+    }
+    for (const milestone of data?.detected?.milestones ?? []) {
+      if (
+        sourceMatches(milestone.source, group) ||
+        (milestone.references ?? []).some(ref => sourceMatches(ref, group))
+      ) {
+        evidence.push({ label: 'Milestone', text: displayText(milestone.evidence || milestone.title) })
+      }
+    }
+    for (const context of data?.detected?.context ?? []) {
+      if (
+        sourceMatches(context.source, group) ||
+        (context.references ?? []).some(ref => sourceMatches(ref, group))
+      ) {
+        evidence.push({ label: context.label || 'Context', text: displayText(context.excerpt) })
+      }
+    }
+    return evidence.slice(0, 3)
+  }
+
+  function usefulSourceSummary(group: SourceGroup): string {
+    const evidence = sourceEvidence(group)[0]?.text
+    if (group.summary && !/^\d+\s+(reference note|reference notes|source|sources)$/i.test(group.summary)) return group.summary
+    if (evidence && !/^[\w./-]+\.md$/i.test(evidence)) return evidence
+    return evidence || group.summary
+  }
+
   function displayPath(value: string | null): string {
     if (!value) return ''
     const normalized = value.replaceAll('\\', '/')
-    const marker = '/looma-knit/'
-    const fromProject = normalized.includes(marker)
-      ? normalized.split(marker).at(-1) ?? normalized
+    const projectPath = project.detail?.project?.path?.replaceAll('\\', '/')
+    const fromProject = projectPath && normalized.startsWith(`${projectPath}/`)
+      ? normalized.slice(projectPath.length + 1)
       : normalized
     const parts = fromProject.split('/').filter(Boolean)
     if (parts.length <= 4) return fromProject
     return parts.slice(-4).join('/')
+  }
+
+  async function copySourcePath(path: string | null) {
+    if (!path) return
+    try {
+      await navigator.clipboard?.writeText(path)
+      toast.success('Source path copied')
+    } catch {
+      toast.message(path)
+    }
   }
 
   function taskSupportingText(task: DetectedTask): string {
@@ -436,6 +608,7 @@
     currentAreaIndex = 0
     detailFocus = null
     detailOpen = false
+    individualSourceReviewOpen = false
   }
 
   function openTaskReview() {
@@ -476,12 +649,14 @@
       currentAreaIndex += 1
       detailFocus = null
       detailOpen = false
+      individualSourceReviewOpen = false
       return
     }
     if (selectedTaskGroups.length === 0) {
       step = 'confirm'
       detailFocus = null
       detailOpen = false
+      individualSourceReviewOpen = false
       return
     }
     openTaskReview()
@@ -548,6 +723,45 @@
     }
   }
 
+  async function restoreCompletedImportDrafts() {
+    busy = 'approve'
+    try {
+      const r = await projectFetch('/api/project/workspace-import/approve', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const j = (await r.json()) as {
+        ok?: boolean
+        tasksAdded?: number
+        goalsRecorded?: number
+        milestonesLogged?: number
+        error?: string
+      }
+      if (!r.ok || j.error) {
+        toast.error(j.error ?? `Import repair failed (${r.status})`)
+        return
+      }
+      completedImport = {
+        tasksAdded: j.tasksAdded ?? 0,
+        sourceCount: completedParsedSourceCount,
+        areaCount: data?.detected?.review?.areaGroups?.length ?? 0,
+        goalsRecorded: j.goalsRecorded ?? completedParsedGoalCount,
+        milestonesLogged: j.milestonesLogged ?? completedParsedMilestoneCount,
+      }
+      toast.success(
+        (j.tasksAdded ?? 0) > 0
+          ? `Restored ${j.tasksAdded} draft task${j.tasksAdded === 1 ? '' : 's'} from the completed import.`
+          : 'Import is already landed.',
+      )
+      await project.refresh()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e))
+    } finally {
+      busy = null
+    }
+  }
+
   async function dismiss() {
     busy = 'dismiss'
     try {
@@ -589,7 +803,7 @@
     <h2>Review existing project work</h2>
     <p class="sub">
       Guildhall has already scanned the notes, roadmaps, and project docs it found here.
-      You are confirming what should become backlog tasks.
+      You are confirming what should be remembered as context and what should become backlog tasks.
     </p>
   </header>
 
@@ -619,12 +833,19 @@
             <Chip label="Import complete" tone="accent" />
             <span>Next up</span>
           </div>
-          <h3 class="section-title">
-            Guildhall created {completedImport.tasksAdded} draft task{completedImport.tasksAdded === 1 ? '' : 's'}.
-          </h3>
-          <p class="section-copy">
-            Nothing starts automatically. These new tasks are paused drafts until you shape them in Thread.
-          </p>
+          {#if completedImport.tasksAdded > 0}
+            <h3 class="section-title">
+              Guildhall created {completedImport.tasksAdded} draft task{completedImport.tasksAdded === 1 ? '' : 's'}.
+            </h3>
+            <p class="section-copy">
+              Nothing starts automatically. These new tasks are paused drafts until you shape them in Thread.
+            </p>
+          {:else}
+            <h3 class="section-title">Guildhall saved project context.</h3>
+            <p class="section-copy">
+              Guildhall did not infer draft tasks from this pass, but it recorded the sources and goals so the next task can start from real context.
+            </p>
+          {/if}
         </div>
         <div class="metric-row">
           <Chip label={`${completedImport.sourceCount} source${completedImport.sourceCount === 1 ? '' : 's'}`} tone="neutral" />
@@ -637,24 +858,80 @@
           {/if}
         </div>
         <Row justify="end" gap="3" wrap>
-          <Button variant="secondary" onclick={() => nav('/work')}>
+          <Button variant="secondary" onclick={() => nav(projectActionHref('/work'))}>
             See all tasks in Work
           </Button>
-          <Button variant="primary" onclick={() => nav('/thread')}>
-            Shape imported drafts in Thread
+          <Button variant="primary" onclick={() => nav(projectActionHref('/thread'))}>
+            {completedImport.tasksAdded > 0 ? 'Shape imported drafts in Thread' : 'Use this context in Thread'}
           </Button>
         </Row>
       </Stack>
     </Card>
+  {:else if completedTaskImport}
+    <Card tone="accent">
+      <Stack gap="5">
+        <div class="section-intro">
+          <div class="section-kicker">
+            <Chip label="Import complete" tone="accent" />
+            <span>Saved context</span>
+          </div>
+          <h3 class="section-title">This project import has already been approved.</h3>
+          <p class="section-copy">
+            Guildhall saved the project context and marked the import review done. Re-run only if the project notes changed or the import needs repair.
+          </p>
+          <div class="metric-row" aria-label="Completed import summary">
+            {#if completedParsedTaskCount > 0}
+              <Chip label={`${completedParsedTaskCount} proposed task${completedParsedTaskCount === 1 ? '' : 's'}`} tone="ok" />
+            {/if}
+            {#if completedParsedGoalCount > 0}
+              <Chip label={`${completedParsedGoalCount} goal${completedParsedGoalCount === 1 ? '' : 's'}`} tone="neutral" />
+            {/if}
+            {#if completedParsedMilestoneCount > 0}
+              <Chip label={`${completedParsedMilestoneCount} milestone${completedParsedMilestoneCount === 1 ? '' : 's'}`} tone="neutral" />
+            {/if}
+            {#if completedParsedSourceCount > 0}
+              <Chip label={`${completedParsedSourceCount} source${completedParsedSourceCount === 1 ? '' : 's'}`} tone="neutral" />
+            {/if}
+          </div>
+        </div>
+        {#if completedMissingTaskCount > 0}
+          <p class="learned-note">
+            {completedMissingTaskCount} proposed task{completedMissingTaskCount === 1 ? '' : 's'} from this import
+            {completedMissingTaskCount === 1 ? ' is' : ' are'} missing from Work. Restore the import to add only those missing drafts.
+          </p>
+        {:else if completedParsedTaskCount > 0}
+          <p class="learned-note">
+            All proposed tasks from this completed import already exist in Work.
+          </p>
+        {/if}
+        <Row justify="end" gap="3" wrap>
+          <Button variant="secondary" onclick={rerun} disabled={busy !== null}>
+            {busy === 'rerun' ? 'Re-reading…' : 'Re-run import'}
+          </Button>
+          <Button variant="secondary" onclick={() => nav(projectActionHref('/work'))}>
+            Open Work
+          </Button>
+          {#if completedMissingTaskCount > 0}
+            <Button variant="primary" onclick={restoreCompletedImportDrafts} disabled={busy !== null}>
+              {busy === 'approve' ? 'Restoring…' : `Restore ${completedMissingTaskCount} draft task${completedMissingTaskCount === 1 ? '' : 's'}`}
+            </Button>
+          {:else}
+            <Button variant="primary" onclick={() => nav(projectActionHref('/thread'))}>
+              Use this context in Thread
+            </Button>
+          {/if}
+        </Row>
+      </Stack>
+    </Card>
   {:else}
-    <WizardStepper steps={journeySteps} activeId={step} />
+    <WizardStepper steps={visibleJourneySteps} activeId={step} />
 
     {#if step === 'found'}
       <Card>
         <Stack gap="5">
           <div class="section-intro">
             <div class="section-kicker">
-              <Chip label="Step 1 of 5" tone="accent" />
+              <Chip label={hasTaskCandidates ? 'Step 1 of 5' : 'Step 1 of 4'} tone="accent" />
               <span>Found</span>
             </div>
             <h3 class="section-title">
@@ -668,6 +945,9 @@
                 Confirm the parts first. Guildhall found planning notes and goals here, but it did not infer any draft tasks yet.
                 You can still review the sources and import the project context it found.
               {/if}
+            </p>
+            <p class="section-copy">
+              Nothing is saved until the final step. You can resume this review later from Needs you or the import page.
             </p>
             <div class="metric-row" aria-label="Import summary">
               <Chip label={`${areaGroups.length} parts`} tone="accent" />
@@ -684,31 +964,34 @@
           {#if data.detected?.learning?.defaults?.note}
             <p class="learned-note">{data.detected.learning.defaults.note}</p>
           {/if}
-          <ul class="source-summary">
-            {#each primaryAreas as area (area.key)}
-              <li>
-                <button type="button" class="inspect-row" onclick={() => focusArea(area.key)}>
-                <Row justify="between" align="start" gap="4" wrap>
-                  <div class="summary-main">
-                    <div class="summary-title-row">
-                      <strong>{area.label}</strong>
+          {#if primaryAreas.length > 0}
+            <ul class="source-summary">
+              {#each primaryAreas as area (area.key)}
+                <li>
+                  <Row justify="between" align="start" gap="4" wrap>
+                    <div class="summary-main">
+                      <div class="summary-title-row">
+                        <strong>{area.label}</strong>
+                      </div>
+                      <div class="metric-row">
+                        <Chip label={`${area.taskCount} tasks`} tone="ok" />
+                        <Chip label={`${area.sourceCount} sources`} tone="neutral" />
+                      </div>
                     </div>
-                    <div class="metric-row">
-                      <Chip label={`${area.taskCount} tasks`} tone="ok" />
-                      <Chip label={`${area.sourceCount} sources`} tone="neutral" />
+                    <div class="summary-side">
+                      <span class="summary-label">Planning sources</span>
+                      <span class="summary-preview">{sourcePreview(area)}</span>
                     </div>
-                  </div>
-                  <div class="summary-side">
-                    <span class="summary-label">Planning sources</span>
-                    <span class="summary-preview">{sourcePreview(area)}</span>
-                  </div>
-                </Row>
-                </button>
-              </li>
-            {/each}
-          </ul>
+                    <Button variant="ghost" size="sm" onclick={() => focusArea(area.key)}>
+                      Details
+                    </Button>
+                  </Row>
+                </li>
+              {/each}
+            </ul>
+          {/if}
           {#if secondaryAreas.length > 0}
-            <details class="secondary-summary">
+            <details class:reference-only={primaryAreas.length === 0} class="secondary-summary">
               <summary>Show reference-only parts</summary>
               <ul class="source-summary nested">
                 {#each secondaryAreas as area (area.key)}
@@ -719,14 +1002,17 @@
                           <strong>{area.label}</strong>
                         </div>
                         <div class="metric-row">
-                          <Chip label={`${area.milestoneCount || area.contextCount} reference notes`} tone="neutral" />
+                          <Chip label={areaSummary(area)} tone="neutral" />
                           <Chip label={`${area.sourceCount} sources`} tone="neutral" />
                         </div>
                       </div>
                       <div class="summary-side">
-                        <span class="summary-label">Reference notes</span>
+                        <span class="summary-label">Project context</span>
                         <span class="summary-preview">{sourcePreview(area)}</span>
                       </div>
+                      <Button variant="ghost" size="sm" onclick={() => focusArea(area.key)}>
+                        Details
+                      </Button>
                     </Row>
                   </li>
                 {/each}
@@ -750,94 +1036,115 @@
         <Stack gap="5">
           <div class="section-intro">
             <div class="section-kicker">
-              <Chip label="Step 2 of 5" tone="accent" />
+              <Chip label={hasTaskCandidates ? 'Step 2 of 5' : 'Step 2 of 4'} tone="accent" />
               <span>Project parts</span>
             </div>
             <h3 class="section-title">Choose the parts for this pass</h3>
             <p class="section-copy">
               Nothing is being imported yet. Select the parts you want Guildhall to review.
               Next, Guildhall will walk through their notes one part at a time.
+              Context-only parts can still be useful: they preserve goals, decisions, and framing even when they do not contain task candidates.
             </p>
             <div class="metric-row" aria-label="Part selection summary">
               <Chip label={`${selectedAreaKeys.length} selected`} tone="accent" />
-              <Chip label={`${primaryAreas.length} task-bearing parts`} tone="ok" />
+              <Chip label={hasTaskCandidates ? `${primaryAreas.length} task-bearing parts` : 'Context import'} tone={hasTaskCandidates ? 'ok' : 'neutral'} />
             </div>
           </div>
           <Stack gap="4">
           {#each primaryAreas as area (area.key)}
             <div class:selected={selectedAreaKeys.includes(area.key)} class="source-card">
               <Row justify="between" align="start" gap="4" wrap>
-                <button type="button" class="inspect-card" onclick={() => focusArea(area.key)}>
-                <Stack gap="3">
-                  <div class="source-title-row">
-                    <strong>{area.label}</strong>
-                    {#if selectedAreaKeys.includes(area.key)}
-                      <Chip label="Queued" tone="accent" />
-                    {/if}
-                    <span class:reference={area.taskCount === 0} class="kind-label">
-                      {areaKindLabel(area)}
-                    </span>
-                  </div>
-                  <div class="metric-row">
-                    <Chip label={`${area.taskCount} tasks`} tone="ok" />
-                    <Chip label={`${area.sourceCount} sources`} tone="neutral" />
-                  </div>
-                  <div class="source-path">{sourcePreview(area)}</div>
-                </Stack>
-                </button>
-                <div class="card-actions-inline">
+                <div class="card-main">
+                  <Stack gap="3">
+                    <div class="source-title-row">
+                      <strong>{area.label}</strong>
+                      {#if selectedAreaKeys.includes(area.key)}
+                        <Chip label="Queued" tone="accent" />
+                      {/if}
+                      <span class:reference={area.taskCount === 0} class="kind-label">
+                        {areaKindLabel(area)}
+                      </span>
+                    </div>
+                    <div class="metric-row">
+                      <Chip label={`${area.taskCount} tasks`} tone="ok" />
+                      <Chip label={`${area.sourceCount} sources`} tone="neutral" />
+                    </div>
+                    <div class="source-path">{sourcePreview(area)}</div>
+                  </Stack>
+                </div>
+                <ActionBar className="import-card-actions">
+                  <Button variant="ghost" size="sm" onclick={() => focusArea(area.key)}>
+                    Details
+                  </Button>
                   {#if selectedAreaKeys.includes(area.key)}
                     <Button variant="secondary" size="sm" onclick={() => removeArea(area.key)}>
                       <Icon name="x" size={14} />
-                      Remove from this pass
+                      Exclude
                     </Button>
                   {:else}
                     <Button variant="secondary" size="sm" onclick={() => selectArea(area.key)}>
                       <Icon name="plus" size={14} />
-                      Add to this pass
+                      Include
                     </Button>
                   {/if}
-                </div>
+                </ActionBar>
               </Row>
             </div>
           {/each}
           </Stack>
           {#if secondaryAreas.length > 0}
-            <details class="secondary-summary">
-              <summary>Optional reference-only parts</summary>
+            <details class="secondary-summary" open={primaryAreas.length === 0}>
+              <summary>Included project context</summary>
+              <p class="secondary-help">
+                These parts contain goals, specs, or context rather than obvious task lists. Guildhall includes project docs by default so future work starts from the project’s actual direction. Exclude a part only when it is stale, noisy, or unrelated.
+              </p>
+              <div class="bulk-row">
+                <span class="bulk-label">{secondaryAreas.length} reference-only part{secondaryAreas.length === 1 ? '' : 's'} available</span>
+                <Row gap="2" wrap>
+                  <Button variant="secondary" size="sm" onclick={() => selectAreas(secondaryAreas.map(area => area.key))}>
+                    Restore
+                  </Button>
+                  <Button variant="secondary" size="sm" onclick={() => clearAreas(secondaryAreas.map(area => area.key))}>
+                    Exclude all
+                  </Button>
+                </Row>
+              </div>
               <Stack gap="4">
               {#each secondaryAreas as area (area.key)}
                 <div class:selected={selectedAreaKeys.includes(area.key)} class="source-card secondary">
                   <Row justify="between" align="start" gap="4" wrap>
-                    <button type="button" class="inspect-card" onclick={() => focusArea(area.key)}>
-                    <Stack gap="3">
-                      <div class="source-title-row">
-                        <strong>{area.label}</strong>
-                        {#if selectedAreaKeys.includes(area.key)}
-                          <Chip label="Queued" tone="accent" />
-                        {/if}
-                        <span class="kind-label reference">Reference-only part</span>
-                      </div>
-                      <div class="metric-row">
-                        <Chip label={`${area.sourceCount} sources`} tone="neutral" />
-                        <Chip label={`${area.milestoneCount || area.contextCount} notes`} tone="neutral" />
-                      </div>
-                      <div class="source-path">{sourcePreview(area)}</div>
-                    </Stack>
-                    </button>
-                    <div class="card-actions-inline">
+                    <div class="card-main">
+                      <Stack gap="3">
+                        <div class="source-title-row">
+                          <strong>{area.label}</strong>
+                          {#if selectedAreaKeys.includes(area.key)}
+                            <Chip label="Queued" tone="accent" />
+                          {/if}
+                          <span class="kind-label reference">{areaKindLabel(area)}</span>
+                        </div>
+                        <div class="metric-row">
+                          <Chip label={`${area.sourceCount} sources`} tone="neutral" />
+                          <Chip label={areaSummary(area)} tone="neutral" />
+                        </div>
+                        <div class="source-path">{sourcePreview(area)}</div>
+                      </Stack>
+                    </div>
+                    <ActionBar className="import-card-actions">
+                      <Button variant="ghost" size="sm" onclick={() => focusArea(area.key)}>
+                        Details
+                      </Button>
                       {#if selectedAreaKeys.includes(area.key)}
                         <Button variant="secondary" size="sm" onclick={() => removeArea(area.key)}>
                           <Icon name="x" size={14} />
-                          Remove from this pass
+                          Exclude
                         </Button>
                       {:else}
                         <Button variant="secondary" size="sm" onclick={() => selectArea(area.key)}>
                           <Icon name="plus" size={14} />
-                          Add to this pass
+                          Include
                         </Button>
                       {/if}
-                    </div>
+                    </ActionBar>
                   </Row>
                 </div>
               {/each}
@@ -859,18 +1166,22 @@
         <Stack gap="5">
           <div class="section-intro">
             <div class="section-kicker">
-              <Chip label="Step 3 of 5" tone="accent" />
+              <Chip label={hasTaskCandidates ? 'Step 3 of 5' : 'Step 3 of 4'} tone="accent" />
               <span>Notes</span>
             </div>
             <h3 class="section-title">{currentArea ? `Review notes in ${currentArea.label}` : 'Review notes'}</h3>
             <p class="section-copy">
             These are the planning notes Guildhall found inside this part of the project.
             Keep the notes you want to use in this pass, then move on.
+            Reference notes become project context; task-bearing notes can also create draft tasks.
             </p>
             <div class="metric-row" aria-label="Source review summary">
               <Chip label={`Part ${Math.min(currentAreaIndex + 1, Math.max(selectedAreas.length, 1))} of ${Math.max(selectedAreas.length, 1)}`} tone="accent" />
-              <Chip label={`${selectedSourceCount} notes in this pass`} tone="neutral" />
-              <Chip label={`${selectedTasks.length} tasks currently kept`} tone="ok" />
+              <Chip label={`${currentAreaSelectedSourceCount} of ${currentAreaSources.length} notes selected here`} tone="neutral" />
+              <Chip label={`${selectedSourceCount} total selected`} tone="neutral" />
+              {#if hasTaskCandidates}
+                <Chip label={`${currentAreaSelectedTaskCount} tasks kept here`} tone="ok" />
+              {/if}
             </div>
           </div>
         {#if currentArea}
@@ -878,69 +1189,119 @@
             {#each currentAreaPrimarySources as group (group.key)}
               <div class:selected={selectedSourceKeys.includes(group.key)} class="source-card">
                 <Row justify="between" align="start" gap="4" wrap>
-                  <button type="button" class="inspect-card" onclick={() => focusSource(group.key)}>
-                  <Stack gap="3">
-                    <div class="source-title-row">
-                      <strong>{group.label}</strong>
-                      {#if selectedSourceKeys.includes(group.key)}
-                        <Chip label="In this pass" tone="accent" />
+                  <div class="card-main">
+                    <Stack gap="3">
+                      <div class="source-title-row">
+                        <strong>{group.label}</strong>
+                        {#if selectedSourceKeys.includes(group.key)}
+                          <Chip label="In this pass" tone="accent" />
+                        {/if}
+                        <span class:reference={group.kind === 'reference' || group.kind === 'milestones'} class="kind-label">
+                          {sourceKindLabel(group)}
+                        </span>
+                      </div>
+                      <div class="metric-row">
+                        {#if group.taskCount > 0}
+                          <Chip label={`${group.taskCount} tasks`} tone="ok" />
+                        {/if}
+                        {#if group.milestoneCount > 0}
+                          <Chip label={`${group.milestoneCount} milestones`} tone="warn" />
+                        {/if}
+                        <Chip label={sourceSummary(group)} tone="neutral" />
+                      </div>
+                      {#if group.path}
+                        <div class="source-path">{displayPath(group.path)}</div>
                       {/if}
-                      <span class:reference={group.kind === 'reference' || group.kind === 'milestones'} class="kind-label">
-                        {sourceKindLabel(group)}
-                      </span>
-                    </div>
-                    <div class="metric-row">
-                      {#if group.taskCount > 0}
-                        <Chip label={`${group.taskCount} tasks`} tone="ok" />
+                      {#if usefulSourceSummary(group)}
+                        <p class="source-summary-copy">{usefulSourceSummary(group)}</p>
                       {/if}
-                      {#if group.milestoneCount > 0}
-                        <Chip label={`${group.milestoneCount} milestones`} tone="warn" />
-                      {/if}
-                      <Chip label={group.contextCount > 0 ? `${group.contextCount} notes` : 'source'} tone="neutral" />
-                    </div>
-                    {#if group.path}
-                      <div class="source-path">{displayPath(group.path)}</div>
-                    {/if}
-                  </Stack>
-                  </button>
-                  <Button variant={selectedSourceKeys.includes(group.key) ? 'secondary' : 'primary'} onclick={() => toggleSource(group.key)}>
-                    {selectedSourceKeys.includes(group.key) ? 'Leave out' : 'Use this source'}
-                  </Button>
+                    </Stack>
+                  </div>
+                  <ActionBar className="import-card-actions">
+                    <Button variant="ghost" size="sm" onclick={() => focusSource(group.key)}>
+                      Details
+                    </Button>
+                    <Button variant={selectedSourceKeys.includes(group.key) ? 'secondary' : 'primary'} size="sm" onclick={() => toggleSource(group.key)}>
+                      {selectedSourceKeys.includes(group.key) ? 'Exclude' : 'Include'}
+                    </Button>
+                  </ActionBar>
                 </Row>
               </div>
             {/each}
           </Stack>
           {#if currentAreaSecondarySources.length > 0}
-            <details class="secondary-summary">
-              <summary>Optional milestone and reference notes in {currentArea.label}</summary>
-              <Stack gap="4">
-                {#each currentAreaSecondarySources as group (group.key)}
-                  <div class:selected={selectedSourceKeys.includes(group.key)} class="source-card secondary">
-                    <Row justify="between" align="start" gap="4" wrap>
-                      <button type="button" class="inspect-card" onclick={() => focusSource(group.key)}>
-                      <Stack gap="3">
-                        <div class="source-title-row">
-                          <strong>{group.label}</strong>
-                          {#if selectedSourceKeys.includes(group.key)}
-                            <Chip label="In this pass" tone="accent" />
-                          {/if}
-                          <span class="kind-label reference">{sourceKindLabel(group)}</span>
+            <details class="secondary-summary" open={currentAreaPrimarySources.length === 0}>
+              <summary>Included context notes in {currentArea.label}</summary>
+              <div class="bulk-row">
+                <p class="secondary-help">
+                  These notes may not create tasks by themselves, but they preserve goals, decisions, and product framing for the next work pass. Keep them selected unless a note is stale, misleading, or outside this project.
+                </p>
+                <Row gap="2" wrap>
+                  <Chip
+                    label={`${selectedCurrentAreaSecondaryCount} of ${currentAreaSecondarySources.length} selected`}
+                    tone={selectedCurrentAreaSecondaryCount === currentAreaSecondarySources.length ? 'accent' : 'neutral'}
+                  />
+                  {#if selectedCurrentAreaSecondaryCount < currentAreaSecondarySources.length}
+                    <Button variant="secondary" size="sm" onclick={() => selectSources(currentAreaSecondarySources.map(group => group.key))}>
+                      Restore
+                    </Button>
+                  {/if}
+                  {#if selectedCurrentAreaSecondaryCount > 0}
+                    <Button variant="secondary" size="sm" onclick={() => clearSources(currentAreaSecondarySources.map(group => group.key))}>
+                      Exclude selected
+                    </Button>
+                  {/if}
+                </Row>
+              </div>
+              <div class="individual-source-list">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onclick={() => (individualSourceReviewOpen = !individualSourceReviewOpen)}
+                >
+                  {individualSourceReviewOpen ? 'Hide individual notes' : 'Review individual notes'}
+                </Button>
+                {#if individualSourceReviewOpen}
+                <Stack gap="4">
+                  {#each currentAreaSecondarySources as group (group.key)}
+                    <div class:selected={selectedSourceKeys.includes(group.key)} class="source-card secondary">
+                      <Row justify="between" align="start" gap="4" wrap>
+                        <label class="source-check">
+                          <input
+                            type="checkbox"
+                            checked={selectedSourceKeys.includes(group.key)}
+                            onchange={() => toggleSource(group.key)}
+                          />
+                        </label>
+                        <div class="card-main">
+                          <Stack gap="3">
+                            <div class="source-title-row">
+                              <strong>{group.label}</strong>
+                              {#if selectedSourceKeys.includes(group.key)}
+                                <Chip label="In this pass" tone="accent" />
+                              {/if}
+                              <span class="kind-label reference">{sourceKindLabel(group)}</span>
+                            </div>
+                            <div class="metric-row">
+                              <Chip label={sourceSummary(group)} tone="neutral" />
+                            </div>
+                            {#if group.path}
+                              <div class="source-path">{displayPath(group.path)}</div>
+                            {/if}
+                            {#if usefulSourceSummary(group)}
+                              <p class="source-summary-copy">{usefulSourceSummary(group)}</p>
+                            {/if}
+                          </Stack>
                         </div>
-                        <div class="metric-row">
-                          <Chip label={sourceSummary(group)} tone="neutral" />
-                        </div>
-                        {#if group.path}
-                          <div class="source-path">{displayPath(group.path)}</div>
-                        {/if}
-                      </Stack>
-                      </button>
-                      <Button variant={selectedSourceKeys.includes(group.key) ? 'secondary' : 'primary'} onclick={() => toggleSource(group.key)}>
-                        {selectedSourceKeys.includes(group.key) ? 'Leave out' : 'Use this source'}
-                      </Button>
-                    </Row>
-                  </div>
-                {/each}
-              </Stack>
+                        <Button variant="ghost" size="sm" onclick={() => focusSource(group.key)}>
+                          Details
+                        </Button>
+                      </Row>
+                    </div>
+                  {/each}
+                </Stack>
+                {/if}
+              </div>
             </details>
           {/if}
         {/if}
@@ -1034,7 +1395,7 @@
         <Stack gap="5">
           <div class="section-intro">
             <div class="section-kicker">
-              <Chip label="Step 5 of 5" tone="accent" />
+              <Chip label={hasTaskCandidates ? 'Step 5 of 5' : 'Step 4 of 4'} tone="accent" />
               <span>Create</span>
             </div>
             {#if selectedTasks.length > 0}
@@ -1137,7 +1498,17 @@
             <div class="detail-label">Sources in this part</div>
             <ul class="detail-list">
               {#each groups.filter(group => group.areaKey === focusedArea.key).slice(0, 6) as group (group.key)}
-                <li>{group.label}</li>
+                <li>
+                  <button type="button" class="detail-source" onclick={() => focusSource(group.key)}>
+                    <span class="detail-source-title">{group.label}</span>
+                    {#if group.path}
+                      <span class="detail-source-path">{displayPath(group.path)}</span>
+                    {/if}
+                    {#if usefulSourceSummary(group)}
+                      <span class="detail-source-summary">{usefulSourceSummary(group)}</span>
+                    {/if}
+                  </button>
+                </li>
               {/each}
             </ul>
           </div>
@@ -1164,7 +1535,17 @@
               <div class="detail-code">{displayPath(focusedSource.path)}</div>
             </div>
           {/if}
-          <p class="detail-copy">{focusedSource.summary}</p>
+          <p class="detail-copy">{usefulSourceSummary(focusedSource)}</p>
+          {#if sourceEvidence(focusedSource).length > 0}
+            <div class="detail-block">
+              <div class="detail-label">Useful signals</div>
+              <ul class="detail-list">
+                {#each sourceEvidence(focusedSource) as item}
+                  <li><strong>{item.label}:</strong> {item.text}</li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
           <div class="detail-block">
             <div class="detail-label">What Guildhall found here</div>
             <div class="metric-row">
@@ -1214,6 +1595,58 @@
             </div>
           {/if}
         </Stack>
+      {/if}
+    {/snippet}
+    {#snippet footer()}
+      {#if focusedArea}
+        {#if selectedAreaKeys.includes(focusedArea.key)}
+          <Button variant="secondary" size="sm" onclick={() => removeArea(focusedArea.key)}>
+            Exclude part
+          </Button>
+        {:else}
+          <Button variant="primary" size="sm" onclick={() => selectArea(focusedArea.key)}>
+            Include part
+          </Button>
+        {/if}
+      {:else if focusedSource}
+        {#if focusedSource.path}
+          <Button variant="secondary" size="sm" onclick={() => copySourcePath(focusedSource.path)}>
+            Copy path
+          </Button>
+        {/if}
+        {#if selectedSourceKeys.includes(focusedSource.key)}
+          <Button variant="secondary" size="sm" onclick={() => toggleSource(focusedSource.key)}>
+            Exclude note
+          </Button>
+        {:else}
+          <Button variant="primary" size="sm" onclick={() => toggleSource(focusedSource.key)}>
+            Include note
+          </Button>
+        {/if}
+      {:else if focusedTask}
+        {#if step === 'tasks'}
+          <Button
+            variant="secondary"
+            size="sm"
+            onclick={advanceFromTasks}
+            disabled={selectedTaskIds.length === 0}
+          >
+            {#if nextGroupLabel()}
+              Review next source
+            {:else}
+              Review final task list
+            {/if}
+          </Button>
+        {/if}
+        {#if selectedTaskIds.includes(focusedTask.suggestedId)}
+          <Button variant="secondary" size="sm" onclick={() => toggleTask(focusedTask.suggestedId)}>
+            Exclude task
+          </Button>
+        {:else}
+          <Button variant="primary" size="sm" onclick={() => toggleTask(focusedTask.suggestedId)}>
+            Include task
+          </Button>
+        {/if}
       {/if}
     {/snippet}
   </SideDrawer>
@@ -1291,6 +1724,32 @@
     font-size: var(--fs-1);
     line-height: var(--lh-body);
   }
+  .detail-source {
+    width: 100%;
+    display: grid;
+    gap: var(--s-1);
+    padding: var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: var(--bg-raised);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .detail-source:hover {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised));
+  }
+  .detail-source-title {
+    font-weight: 700;
+  }
+  .detail-source-path,
+  .detail-source-summary {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
   .detail-code {
     color: var(--text-muted);
     font-size: var(--fs-1);
@@ -1364,8 +1823,6 @@
     font-size: var(--fs-2);
     line-height: var(--lh-body);
   }
-  .inspect-row,
-  .inspect-card,
   .inspect-task {
     appearance: none;
     border: 0;
@@ -1376,30 +1833,15 @@
     text-align: left;
     cursor: pointer;
   }
-  .inspect-row {
-    width: 100%;
-    border-radius: var(--r-1);
-    transition: background-color 140ms ease, box-shadow 140ms ease;
-  }
-  .inspect-card {
-    flex: 1;
-    min-width: 0;
-    border-radius: var(--r-1);
-    transition: background-color 140ms ease, box-shadow 140ms ease;
-  }
   .inspect-task {
     flex: 1;
     min-width: 0;
     border-radius: var(--r-1);
     transition: background-color 140ms ease, box-shadow 140ms ease;
   }
-  .inspect-row:hover,
-  .inspect-card:hover,
   .inspect-task:hover {
     background: color-mix(in srgb, var(--accent) 8%, transparent);
   }
-  .inspect-row:focus-visible,
-  .inspect-card:focus-visible,
   .inspect-task:focus-visible {
     background: color-mix(in srgb, var(--accent) 10%, transparent);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
@@ -1409,6 +1851,43 @@
   }
   .secondary-summary {
     margin-top: var(--s-4);
+  }
+  .secondary-summary.reference-only {
+    margin-top: 0;
+  }
+  .secondary-help {
+    margin: var(--s-3) 0;
+    color: var(--text-muted);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+    max-width: 72ch;
+  }
+  .bulk-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+    flex-wrap: wrap;
+    margin-block: var(--s-3);
+  }
+  .bulk-row .secondary-help {
+    margin: 0;
+    flex: 1 1 28rem;
+  }
+  .bulk-label {
+    color: var(--text-muted);
+    font-size: var(--fs-2);
+  }
+  .individual-source-list {
+    margin-block-start: var(--s-3);
+    border-top: 1px solid var(--border);
+    padding-block-start: var(--s-3);
+    display: grid;
+    gap: var(--s-3);
+  }
+  .card-main {
+    flex: 1;
+    min-width: 0;
   }
   .source-card {
     border: 1px solid var(--border);
@@ -1449,12 +1928,22 @@
     line-height: var(--lh-body);
     max-width: 64ch;
   }
-  .card-actions-inline {
-    display: flex;
-    gap: var(--s-3);
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    align-items: center;
+  .source-summary-copy {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+    max-width: 72ch;
+  }
+  .source-check {
+    display: inline-flex;
+    align-items: start;
+    padding-top: 2px;
+  }
+  .source-check input {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
   }
   .items {
     list-style: none;

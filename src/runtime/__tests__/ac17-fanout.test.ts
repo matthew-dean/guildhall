@@ -41,7 +41,7 @@ function config(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
     workspacePath: tmpDir,
     projectPath: tmpDir,
     memoryDir,
-    models: { spec: 'm', coordinator: 'm', worker: 'm', reviewer: 'm', gateChecker: 'm' },
+    models: { spec: 'm', coordinator: 'm', worker: 'm', reviewer: 'm', gateChecker: 'm', contextIndexer: 'm' },
     coordinators: [],
     maxRevisions: 3,
     heartbeatInterval: 5,

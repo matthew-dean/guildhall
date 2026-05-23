@@ -204,6 +204,8 @@ describe('WorkspaceImportTab', () => {
     render(WorkspaceImportTab)
     await screen.findByText(/Guildhall found planning notes in 2 project parts/)
     expect(screen.getByText(/Using the same import defaults/)).toBeTruthy()
+    expect(screen.getByText(/Nothing is saved until the final step/)).toBeTruthy()
+    expect(screen.getByText(/You can resume this review later/)).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
     await screen.findByText('Choose the parts for this pass')
@@ -214,7 +216,7 @@ describe('WorkspaceImportTab', () => {
     await userEvent.click(screen.getByRole('button', { name: /review selected tasks/i }))
     await screen.findByText('Review tasks from Roadmap')
 
-    await userEvent.click(screen.getByRole('button', { name: /review next source/i }))
+    await userEvent.click(screen.getAllByRole('button', { name: /review next source/i }).at(-1)!)
     await screen.findByText('Review tasks from Editor notes')
 
     await userEvent.click(screen.getByRole('button', { name: /review final task list/i }))
@@ -237,19 +239,63 @@ describe('WorkspaceImportTab', () => {
     expect(screen.getByText(/Guildhall created 2 draft tasks/)).toBeTruthy()
   })
 
-  it('opens optional details without making the drawer a required path', async () => {
+  it('opens extra details without making the drawer a required path', async () => {
     installFetchFakes()
 
     render(WorkspaceImportTab)
     await screen.findByText(/Guildhall found planning notes/)
 
-    await userEvent.click(screen.getByRole('button', { name: /Knit 2 tasks 2 sources/i }))
+    await userEvent.click(screen.getAllByRole('button', { name: /details/i })[0]!)
     expect(screen.getByRole('complementary', { name: 'Knit' })).toBeTruthy()
     expect(screen.getByText('Editor planning and implementation notes.')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: /close/i }))
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
     expect(screen.getByText('Choose the parts for this pass')).toBeTruthy()
+  })
+
+  it('lets users inspect source summaries from a part details drawer', async () => {
+    installFetchFakes()
+
+    render(WorkspaceImportTab)
+    await screen.findByText(/Guildhall found planning notes in 2 project parts/)
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Details' })[0]!)
+
+    expect(await screen.findByText('Sources in this part')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Roadmap/ })).toBeTruthy()
+    expect(screen.getByText('Roadmap items for editor linking.')).toBeTruthy()
+  })
+
+  it('does not reserve blank summary space when every found part is reference-only', async () => {
+    const referenceOnlyDraft = structuredClone(detectedDraft)
+    referenceOnlyDraft.detected.tasks = []
+    referenceOnlyDraft.detected.stats = { inputSignals: 4, drafted: 0, deduped: 0 }
+    referenceOnlyDraft.detected.review.totalTaskCandidates = 0
+    referenceOnlyDraft.detected.review.areaGroups = referenceOnlyDraft.detected.review.areaGroups.map(area => ({
+      ...area,
+      taskCount: 0,
+    }))
+    referenceOnlyDraft.detected.review.sourceGroups = referenceOnlyDraft.detected.review.sourceGroups.map(group => ({
+      ...group,
+      taskCount: 0,
+      kind: 'reference',
+      taskIds: [],
+    }))
+    referenceOnlyDraft.detected.learning.defaults = {
+      selectedAreaKeys: [],
+      selectedSourceKeys: [],
+      selectedTaskIds: [],
+      taskSelectionMode: 'all',
+      note: null,
+    }
+    installFetchFakes(referenceOnlyDraft)
+
+    const { container } = render(WorkspaceImportTab)
+    await screen.findByText(/Guildhall found planning notes in 2 project parts/)
+
+    expect(container.querySelectorAll('ul.source-summary:not(.nested)')).toHaveLength(0)
+    expect(screen.getByText('Show reference-only parts')).toBeTruthy()
   })
 
   it('can import reference-only project context without creating draft tasks', async () => {
@@ -259,13 +305,13 @@ describe('WorkspaceImportTab', () => {
     await screen.findByText(/Guildhall found planning notes/)
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
-    await userEvent.click(screen.getByRole('button', { name: /remove from this pass/i }))
-    await userEvent.click(screen.getByText('Optional reference-only parts'))
-    await userEvent.click(screen.getAllByRole('button', { name: /add to this pass/i })[1]!)
+    await userEvent.click(screen.getAllByRole('button', { name: /^exclude$/i })[0]!)
+    await userEvent.click(screen.getByText('Included project context'))
+    await userEvent.click(screen.getAllByRole('button', { name: /^include$/i })[1]!)
     await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
 
     await screen.findByText('Review notes in Looma')
-    await userEvent.click(screen.getByRole('button', { name: /use this source/i }))
+    expect(screen.queryByRole('button', { name: /use this source/i })).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: /review import summary/i }))
 
     await screen.findByText('Import the project notes and goals?')
@@ -287,6 +333,92 @@ describe('WorkspaceImportTab', () => {
     })
   })
 
+  it('shows a completed import repair path without reopening the wizard', async () => {
+    const completedDraft = structuredClone(detectedDraft)
+    completedDraft.taskStatus = 'done'
+    completedDraft.parsed = {
+      goals: [{ id: 'goal-fll', title: 'Launch the license workflow', rationale: 'Project brief' }],
+      tasks: [
+        {
+          id: 'task-auth-complete',
+          title: 'Complete authentication flow',
+          description: 'Finish registration, login, profile management, and email confirmation.',
+          domain: 'auth',
+          priority: 'high',
+          references: ['docs/brief.md'],
+        },
+        {
+          id: 'task-listings-basic',
+          title: 'Build basic listing submission',
+          description: '',
+          domain: 'core',
+          priority: 'normal',
+          references: [],
+        },
+      ],
+      milestones: [],
+    }
+    const { calls } = installFetchFakes(completedDraft)
+
+    render(WorkspaceImportTab)
+
+    await screen.findByText('This project import has already been approved.')
+    expect(screen.queryByText(/Guildhall found planning notes/)).toBeNull()
+    expect(screen.getByText('2 proposed tasks')).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: /restore 2 draft tasks/i }))
+
+    await waitFor(() => {
+      const repairCall = calls.find(call => call.url.startsWith('/api/project/workspace-import/approve'))
+      expect(repairCall).toBeDefined()
+      expect(repairCall?.body).toEqual({ projectId: 'looma-knit' })
+    })
+    await screen.findByText(/Guildhall created 2 draft tasks/)
+  })
+
+  it('does not offer restore when completed import tasks already exist in Work', async () => {
+    const completedDraft = structuredClone(detectedDraft)
+    completedDraft.taskStatus = 'done'
+    completedDraft.parsed = {
+      goals: [],
+      tasks: [
+        {
+          id: 'task-link-editor',
+          title: 'Knit: add link editor controls',
+          description: '',
+          domain: 'editor',
+          priority: 'high',
+          references: [],
+        },
+        {
+          id: 'task-link-preview',
+          title: 'Knit: preview saved links',
+          description: '',
+          domain: 'editor',
+          priority: 'normal',
+          references: [],
+        },
+      ],
+      milestones: [],
+    }
+    project.detail = {
+      id: 'looma-knit',
+      name: 'Looma + Knit',
+      path: '/repo/looma-knit',
+      tasks: [
+        { id: 'task-link-editor', title: 'Knit: add link editor controls', status: 'ready' },
+        { id: 'task-link-preview', title: 'Knit: preview saved links', status: 'import_draft' },
+      ],
+    } as never
+    installFetchFakes(completedDraft)
+
+    render(WorkspaceImportTab)
+
+    await screen.findByText('This project import has already been approved.')
+    expect(screen.getByText('All proposed tasks from this completed import already exist in Work.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /restore/i })).toBeNull()
+  })
+
   it('lets users narrow sources and individual imported tasks before creating drafts', async () => {
     const { calls } = installFetchFakes()
 
@@ -297,7 +429,7 @@ describe('WorkspaceImportTab', () => {
     await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
     await screen.findByText('Review notes in Knit')
 
-    await userEvent.click(screen.getAllByRole('button', { name: /leave out/i })[0]!)
+    await userEvent.click(screen.getAllByRole('button', { name: /^exclude$/i })[0]!)
     await userEvent.click(screen.getByRole('button', { name: /review selected tasks/i }))
     await screen.findByText('Review tasks from Editor notes')
     expect(screen.queryByText('Review tasks from Roadmap')).toBeNull()
@@ -324,6 +456,25 @@ describe('WorkspaceImportTab', () => {
         ),
       ).toBe(true)
     })
+  })
+
+  it('lets users continue task review from an open task details drawer', async () => {
+    installFetchFakes()
+
+    render(WorkspaceImportTab)
+    await screen.findByText(/Guildhall found planning notes/)
+
+    await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
+    await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
+    await userEvent.click(screen.getByRole('button', { name: /review selected tasks/i }))
+    await screen.findByText('Review tasks from Roadmap')
+
+    await userEvent.click(screen.getByRole('button', { name: /Knit: add link editor controls/i }))
+    expect(await screen.findByRole('complementary', { name: /Knit: add link editor controls/i })).toBeTruthy()
+    await userEvent.click(screen.getAllByRole('button', { name: /review next source/i }).at(-1)!)
+
+    await screen.findByText('Review tasks from Editor notes')
+    expect(screen.queryByRole('complementary', { name: /Knit: add link editor controls/i })).toBeNull()
   })
 
   it('surfaces draft, approve, dismiss, and rerun failures without changing context', async () => {

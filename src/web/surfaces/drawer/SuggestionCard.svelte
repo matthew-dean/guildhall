@@ -9,6 +9,7 @@
   whole drawer for that task.
 -->
 <script lang="ts">
+  import ActionBar from '../../lib/ActionBar.svelte'
   import Stack from '../../lib/Stack.svelte'
   import Button from '../../lib/Button.svelte'
   import Textarea from '../../lib/Textarea.svelte'
@@ -53,7 +54,7 @@
 
   {#if mode === 'idle'}
     <Stack gap="2">
-      <div class="actions">
+      <ActionBar align="start">
         <Button variant="primary" disabled={busy} onclick={onYes}>
           Yes, do this
         </Button>
@@ -63,7 +64,7 @@
         <Button variant="ghost" disabled={busy} onclick={onNo}>
           No, drop it
         </Button>
-      </div>
+      </ActionBar>
     </Stack>
   {:else}
     <Stack gap="2">
@@ -72,7 +73,7 @@
         rows={3}
         placeholder="What should I do instead? (one sentence is fine)"
       />
-      <div class="actions">
+      <ActionBar align="start">
         <Button
           variant="primary"
           disabled={busy || correction.trim().length === 0}
@@ -83,7 +84,7 @@
         <Button variant="ghost" disabled={busy} onclick={() => { mode = 'idle'; correction = '' }}>
           Cancel
         </Button>
-      </div>
+      </ActionBar>
     </Stack>
   {/if}
 </div>
@@ -114,10 +115,5 @@
     color: var(--text);
     font-size: var(--fs-2);
     line-height: var(--lh-body);
-  }
-  .actions {
-    display: flex;
-    gap: var(--s-2);
-    flex-wrap: wrap;
   }
 </style>

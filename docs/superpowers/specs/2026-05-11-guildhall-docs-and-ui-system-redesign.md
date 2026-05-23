@@ -1,8 +1,8 @@
-# GuildHall Docs and UI System Redesign
+# Guildhall Docs and UI System Redesign
 
 ## Goal
 
-Redesign GuildHall's public docs site so it feels like the actual product:
+Redesign Guildhall's public docs site so it feels like the actual product:
 
 - more alive
 - more branded
@@ -11,13 +11,13 @@ Redesign GuildHall's public docs site so it feels like the actual product:
 - more honest about how it earns trust
 
 At the same time, create a reusable Svelte UI system as a distinct package in
-the GuildHall monorepo so the docs redesign and the product UI can share one
+the Guildhall monorepo so the docs redesign and the product UI can share one
 structural language instead of drifting apart.
 
 The resulting system should support both:
 
 - **display mode** for big, bold, branded docs surfaces
-- **operator mode** for dense in-product views inside GuildHall
+- **operator mode** for dense in-product views inside Guildhall
 
 ## Problem
 
@@ -31,9 +31,9 @@ The current site often sounds like default docs software:
 - descriptive but not memorable
 - technically correct but emotionally flat
 
-That is a poor fit for GuildHall.
+That is a poor fit for Guildhall.
 
-GuildHall is not just another "agent framework" or "AI coding harness." It is
+Guildhall is not just another "agent framework" or "AI coding harness." It is
 an opinionated product for people who are tired of babysitting a pile of hidden
 state and trying to remember too many things at once.
 
@@ -48,7 +48,7 @@ The current VitePress site still reads as:
 - isolated copy blocks
 - diagrams that explain mechanics but do not build identity
 
-This undersells GuildHall's strongest product qualities:
+This undersells Guildhall's strongest product qualities:
 
 - the project shell
 - the visible queue
@@ -82,7 +82,7 @@ We want the opposite:
 
 The docs should lead with this product claim:
 
-> GuildHall is as unattended as you want, and as auditable as you need.
+> Guildhall is as unattended as you want, and as auditable as you need.
 
 The product lets the user hand work to a guild and step back, but it earns that
 trust through:
@@ -126,12 +126,12 @@ It should not target:
 - correctness
 - projects with real stakes
 
-GuildHall should sound like it has a point of view, not like it is trying to
+Guildhall should sound like it has a point of view, not like it is trying to
 win a joke contest.
 
 ### Explicit origin note
 
-The site may mention once, explicitly, that GuildHall was built by an ADHD
+The site may mention once, explicitly, that Guildhall was built by an ADHD
 engineer who got overwhelmed by AI harnesses that demanded too much attention
 just to stay upright.
 
@@ -192,7 +192,7 @@ This achieves both goals:
 The hero should also include one short explanatory paragraph that says, in
 plain language:
 
-- GuildHall is a local service over projects
+- Guildhall is a local service over projects
 - the user works from a project shell
 - the guild can keep moving without constant babysitting
 - the results remain inspectable
@@ -222,7 +222,7 @@ Recommended homepage order:
 3. One origin note: the ADHD/cognitive-load sentence
 4. Why it works: reviewers, guardrails, transcripts, levers
 5. Guild layer: how personalities participate
-6. Honest limits: what GuildHall is strongest at today
+6. Honest limits: what Guildhall is strongest at today
 
 This sequence is important.
 
@@ -251,7 +251,7 @@ It should demote:
 - VitePress-default feature-grid pacing
 - over-neat "AI product" copy
 
-The docs should be plainer about what GuildHall actually does:
+The docs should be plainer about what Guildhall actually does:
 
 - it helps you remember less
 - it reduces babysitting
@@ -262,12 +262,12 @@ The docs should be plainer about what GuildHall actually does:
 
 ### Package decision
 
-Create a distinct package in the GuildHall monorepo:
+Create a distinct package in the Guildhall monorepo:
 
 - recommended package name: `@guildhall/ui`
 
 This package should be the reusable design-system and component-system package
-for GuildHall.
+for Guildhall.
 
 The monorepo work is part of this redesign effort, not a separate future
 cleanup.
@@ -302,7 +302,7 @@ monorepo/package split as an explicit change, not as an assumption.
 It should be purpose-built for both:
 
 - **showpiece mode** for docs and branded surfaces
-- **condensed operator mode** for GuildHall's product shell
+- **condensed operator mode** for Guildhall's product shell
 
 ### Not a Vue component library
 
@@ -376,7 +376,7 @@ Build reusable shell-level patterns for the actual product:
 - drawer shell
 - release/settings inspection shell
 
-This is where GuildHall's strongest current ideas can become real reusable
+This is where Guildhall's strongest current ideas can become real reusable
 system pieces instead of bespoke screen implementations.
 
 ### Layer 4: Docs/brand compositions
@@ -392,11 +392,11 @@ Use the same structural language to build:
 These should feel like elaborations of the same system, not a separate visual
 universe.
 
-## GuildHall Product Audit
+## Guildhall Product Audit
 
 ### Audit purpose
 
-The current GuildHall UI should be audited for:
+The current Guildhall UI should be audited for:
 
 - structure
 - configurability
@@ -458,7 +458,7 @@ The audit should produce:
 
 ## Screenshot and Visual Plan
 
-The redesign should capture and use real GuildHall visuals.
+The redesign should capture and use real Guildhall visuals.
 
 Recommended screenshot set:
 
@@ -504,9 +504,9 @@ After that:
 
 ## Honest Product Framing
 
-The redesign must not oversell GuildHall's autonomy.
+The redesign must not oversell Guildhall's autonomy.
 
-The docs should clearly state that GuildHall is strongest today on narrower,
+The docs should clearly state that Guildhall is strongest today on narrower,
 well-bounded software work.
 
 That honesty is part of the product's credibility.
@@ -524,11 +524,11 @@ not from pretending the product is already omnipotent.
 
 Recommended order of execution:
 
-1. audit current GuildHall UI
+1. audit current Guildhall UI
 2. capture screenshots of key product surfaces
 3. define the shared Svelte component system and package boundary
 4. redesign homepage and first-visit docs pages using that system
-5. port the strongest structural ideas back into GuildHall product surfaces
+5. port the strongest structural ideas back into Guildhall product surfaces
 
 This order matters because it keeps the redesign grounded in the real product
 instead of drifting into docs-only branding theater.
@@ -544,7 +544,7 @@ This effort is successful when:
 - the ADHD/cognitive-load origin note appears once and usefully
 - a distinct `@guildhall/ui` package exists in the monorepo plan
 - the shared UI system is clearly designed for both display and operator modes
-- the GuildHall audit identifies reusable structural strengths instead of just
+- the Guildhall audit identifies reusable structural strengths instead of just
   aesthetic complaints
 - the redesign creates assets and primitives that can improve the app itself,
   not only the docs site
