@@ -38,7 +38,7 @@
   import { buildProviderIndicator } from '../lib/provider-indicator.js'
   import { formatUserPath } from '../lib/display-path.js'
   import { humanizeProjectName } from '../lib/project-name.js'
-  import { isOperationalReceiptQuestion } from '../../shared/question-visibility.js'
+  import { isOperationalReceiptQuestion } from '@guildhall/shared'
   import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { AgentQuestion, EventEnvelope, ProjectView, ProviderStatus, Task } from '../lib/types.js'
 

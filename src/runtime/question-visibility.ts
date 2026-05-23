@@ -3,7 +3,7 @@ import {
   isOperationalReceiptQuestion,
   visibleQuestionSignature,
   type QuestionVisibilityRecord,
-} from '../shared/question-visibility.js'
+} from '@guildhall/shared'
 import { META_INTAKE_TASK_ID, parseCoordinatorDraft } from './meta-intake.js'
 
 type QuestionRecord = QuestionVisibilityRecord & {

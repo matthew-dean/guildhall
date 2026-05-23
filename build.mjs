@@ -111,6 +111,7 @@ const webBuildOptions = {
     }),
   ],
   loader: { '.css': 'css' },
+  tsconfig: resolve(ROOT, 'tsconfig.json'),
   sourcemap: true,
   minify: false,
   logLevel: 'info',

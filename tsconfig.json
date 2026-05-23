@@ -33,6 +33,7 @@
       "@guildhall/providers": ["./src/providers/index.ts"],
       "@guildhall/runtime": ["./src/runtime/index.ts"],
       "@guildhall/runtime-bundle": ["./src/runtime-bundle/index.ts"],
+      "@guildhall/shared": ["./src/shared/index.ts"],
       "@guildhall/sessions": ["./src/sessions/index.ts"],
       "@guildhall/skills": ["./src/skills/index.ts"],
       "@guildhall/tools": ["./src/tools/index.ts"]
