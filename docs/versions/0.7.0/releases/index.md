@@ -6,12 +6,11 @@ title: Releases
 
 Guildhall release notes capture the product claim each version can honestly make, the proof behind that claim, and the limits that still remain.
 
-The published docs root defaults to the latest public release. Main-branch docs
+This is the version-pinned docs snapshot for Guildhall 0.7.0. The public docs root defaults to this latest published release; unreleased main-branch docs live under [Next](/next/guide/).
 are published separately under [Next](/next/guide/) so unreleased work can be
 documented without promising it to users who installed the current npm package.
 
-Historical release notes stay versioned with their docs snapshot. The current
-stable snapshot is [Guildhall 0.7.0](/versions/0.7.0/guide/quick-start).
+
 
 - [0.7.0](./0.7.0) — project planning, scoped lever settings, [Corpus Map](../guide/corpus-map) integration, context-indexer model lane, workspace import cleanup, and calmer project-shell state.
 - [0.6.0](./0.6.0) — bounded recovery, scoped learning, project playbooks, product feedback drafts, and model comparison evidence.
