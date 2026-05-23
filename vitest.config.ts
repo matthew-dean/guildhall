@@ -34,6 +34,7 @@ export default defineConfig({
       'providers',
       'runtime',
       'runtime-bundle',
+      'shared',
       'sessions',
       'skills',
       'tools',
