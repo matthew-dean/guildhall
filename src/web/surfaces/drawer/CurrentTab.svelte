@@ -9,6 +9,11 @@
   import StatusLight from '../../lib/StatusLight.svelte'
   import AgentQuestion from '../../lib/AgentQuestion.svelte'
   import Markdown from '../../lib/Markdown.svelte'
+  import {
+    isImportedDraftShaping,
+    isQueuedSpecRevision,
+    needsRecovery,
+  } from '../../lib/task-state.js'
   import type {
     AgentQuestion as Question,
     Task,
@@ -69,6 +74,7 @@
   }
 
   function taskStateLabel(turn: TaskThreadInFlightTurn): string {
+    if (needsRecovery(turn)) return 'Needs recovery'
     if (turn.liveAgent?.name === 'spec-agent') return turn.importedDraft ? 'Shaping draft' : 'Drafting'
     if (turn.liveAgent?.name?.startsWith('coordinator-')) return 'Ready'
     if (turn.liveAgent?.name === 'worker-agent') return 'In flight'
@@ -76,16 +82,19 @@
     if (turn.liveAgent?.name === 'gate-checker-agent') return 'Gates'
     switch (turn.taskStatus) {
       case 'import_draft': return 'Needs task brief'
-      case 'exploring': return turn.importedDraft ? 'Task brief in progress' : isQueuedSpecRevision(turn) ? 'Spec revision queued' : 'Intake'
+      case 'exploring': return isImportedDraftShaping(turn) ? 'Guildhall shaping' : isQueuedSpecRevision(turn) ? 'Spec revision queued' : 'Intake'
       case 'ready': return 'Ready'
       case 'gate_check': return 'Gates'
       case 'review': return 'Review'
-      case 'in_progress': return turn.liveAgent ? 'In flight' : 'Queued'
+      case 'in_progress': return turn.liveAgent ? 'In flight' : 'Paused'
       default: return canRunTask(turn) ? 'Queued' : 'In flight'
     }
   }
 
   function taskStateDescription(turn: TaskThreadInFlightTurn): string {
+    if (needsRecovery(turn)) {
+      return 'Guildhall made partial progress, then the agent failed. Review the durable worktree changes or restart from that recovery point.'
+    }
     if (
       turn.liveAgent?.lastEventLabel === 'Waiting for the local model to respond.' &&
       (turn.liveAgent.silentMs ?? 0) >= 60_000
@@ -107,11 +116,11 @@
         return 'Guildhall already has the draft spec plus your latest answers. Start Guildhall when you want it to revise the spec.'
       }
       return turn.importedDraft
-        ? 'Guildhall started the task brief for this imported note. Continue drafting the brief here when you are ready.'
+        ? 'Guildhall is shaping the task brief for this imported note. You can add context, but you do not need to babysit the draft.'
         : 'Guildhall has a partial draft here. Review it, then let Guildhall keep shaping it when you are ready.'
     }
     if (turn.taskStatus === 'in_progress' && !turn.liveAgent) {
-      return 'Work is queued. Start Guildhall when you want it to continue.'
+      return 'Work is paused. Start Guildhall when you want it to continue.'
     }
     if (turn.taskStatus === 'review' && !turn.liveAgent) {
       return 'Review is queued. Start Guildhall when you want it to continue.'
@@ -123,6 +132,7 @@
   }
 
   function taskStateTone(turn: TaskThreadInFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
+    if (needsRecovery(turn)) return 'warn'
     if (turn.liveAgent) return 'running'
     switch (turn.taskStatus) {
       case 'ready': return 'accent'
@@ -143,16 +153,6 @@
       turn.taskStatus === 'in_progress' ||
       turn.taskStatus === 'review' ||
       turn.taskStatus === 'gate_check'
-    )
-  }
-
-  function isQueuedSpecRevision(turn: TaskThreadInFlightTurn): boolean {
-    return (
-      turn.taskStatus === 'exploring' &&
-      !turn.importedDraft &&
-      !turn.liveAgent &&
-      !turn.checklist &&
-      turn.phase === 'spec'
     )
   }
 

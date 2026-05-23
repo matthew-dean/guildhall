@@ -1,24 +1,23 @@
 ---
-title: Internal routing
+title: How Guildhall routes work
 help_topic: guide.coordinators
 help_summary: |
-  Guildhall keeps one coordinating layer. It infers and stores internal routing
-  slices so tasks can get the right context and review lenses without making
-  the user manage a steward roster.
+  Guildhall keeps one coordinating layer. It routes tasks to the right context
+  and review lenses without making you manage a roster.
 ---
 
-# Internal routing
+# How Guildhall routes work
 
-Guildhall has **one coordinator on the user's system**. That coordinator uses
-an internal routing map to decide:
+Guildhall keeps **one coordinator on your system**. Behind the scenes, it uses
+a routing map to decide:
 
 - what kind of task this is
 - what code or repo slice it belongs to
 - what context to gather
 - which review lenses matter
 
-This routing map is an implementation detail, not the main thing the user is
-supposed to manage.
+That map is there to keep work pointed in the right direction. You usually do
+not need to manage it directly.
 
 ## What the routing map is for
 
@@ -28,16 +27,16 @@ Guildhall still needs a stable way to tell:
 - repo-root work from subproject work
 - release/setup work from product-task work
 
-So the runtime stores internal slices under the existing `coordinators:` key in
-`guildhall.yaml`. That key is historical. The important product truth is:
+Guildhall stores those slices under the existing `coordinators:` key in
+`guildhall.yaml`. That key is historical. The useful product rule is simpler:
 
-- users manage projects, tasks, and decisions
+- you manage projects, tasks, and decisions
 - Guildhall manages routing and review structure underneath
 
 ## How the map gets created
 
-For a new project, Guildhall should infer the routing map from repo evidence
-first. It should only stop to ask the user when:
+For a new project, Guildhall starts by reading the repo and sketching a routing
+map. It stops to ask only when the answer changes the project:
 
 1. confidence is low, and
 2. the consequence of being wrong is high enough to matter
@@ -45,17 +44,17 @@ first. It should only stop to ask the user when:
 That means the normal flow is:
 
 1. inspect the repo
-2. infer the internal routing slices
+2. infer the routing slices
 3. move on
 4. ask for confirmation only if a material ambiguity remains
 
-## What the user may still inspect
+## What you can inspect
 
-Advanced users can still inspect the routing map in Settings/Facts to see:
+When you want the details, Settings/Facts shows:
 
 - which domain labels Guildhall is using
 - which paths those labels cover
 - what concerns and escalation triggers were inferred
 
-But that is there for transparency and debugging, not because Guildhall expects
-users to design its internal staffing model by hand.
+That view is for transparency and debugging. It is not a new staffing model you
+have to design by hand.

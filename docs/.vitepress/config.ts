@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }
 const currentVersion = pkg.version
 const stableVersion = resolveStableVersion(currentVersion)
+const currentBase = ''
 const stableBase = `/versions/${stableVersion}`
 const nextBase = '/next'
 
@@ -63,6 +64,7 @@ const guideWorksItems = [
   { text: 'How Guildhall builds', link: '/guide/how-guildhall-builds' },
   { text: 'Agent context', link: '/guide/agent-context' },
   { text: 'Corpus Map', link: '/guide/corpus-map' },
+  { text: 'Memory, learning, and recovery', link: '/guide/memory-and-recovery' },
 ]
 
 const guideOperateItems = [
@@ -74,7 +76,6 @@ const guideOperateItems = [
 
 const guideTaskItems = [
   { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
-  { text: 'Memory and recovery', link: '/guide/memory-and-recovery' },
 ]
 
 const guideSpecItems = [
@@ -165,7 +166,6 @@ const referenceSidebarSections = [
       { text: 'agent-settings.yaml', link: '/reference/agent-settings' },
       { text: 'Environment variables', link: '/reference/env' },
       { text: 'Memory layout', link: '/reference/memory-layout' },
-      { text: 'Web server routes', link: '/reference/http-api' },
     ],
   },
   {
@@ -220,6 +220,7 @@ const releaseSidebarSections = [
     text: 'Releases',
     items: [
       { text: 'Overview', link: '/releases/' },
+      { text: '0.7.0', link: '/releases/0.7.0' },
       { text: '0.6.0', link: '/releases/0.6.0' },
       { text: '0.5.1', link: '/releases/0.5.1' },
       { text: '0.5.0', link: '/releases/0.5.0' },
@@ -228,19 +229,25 @@ const releaseSidebarSections = [
   },
 ]
 
+const stableReleaseSidebarSections = releaseSidebarSections.map((section) => ({
+  ...section,
+  items: section.items.filter((item) => item.link !== '/releases/0.7.0'),
+}))
+
 function addVersionedSidebars(
   prefix: string,
   options: { includeStarted?: boolean; includeNextOnlyPages?: boolean } = {},
 ): Record<string, SidebarSection[]> {
   const includeStarted = options.includeStarted ?? true
   const guideSections = options.includeNextOnlyPages ? guideSidebarSections : stableGuideSidebarSections
+  const releaseSections = options.includeNextOnlyPages ? releaseSidebarSections : stableReleaseSidebarSections
   const sidebars: Record<string, SidebarSection[]> = {
     [`${prefix}/guide/`]: prefixSections(guideSections, prefix),
     [`${prefix}/cli/`]: prefixSections(referenceSidebarSections, prefix),
     [`${prefix}/web-ui/`]: prefixSections(referenceSidebarSections, prefix),
     [`${prefix}/reference/`]: prefixSections(referenceSidebarSections, prefix),
     [`${prefix}/levers/`]: prefixSections(leverSidebarSections, prefix),
-    [`${prefix}/releases/`]: prefixSections(releaseSidebarSections, prefix),
+    [`${prefix}/releases/`]: prefixSections(releaseSections, prefix),
   }
   if (includeStarted) {
     for (const path of [
@@ -263,6 +270,14 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   base: '/guildhall/',
+  ignoreDeadLinks: [
+    // VitePress normalizes `/next/guide/` to this internal target during
+    // dead-link checks even though `docs/next/guide/index.md` exists.
+    /^\/next\/guide\/index$/,
+  ],
+  rewrites(id) {
+    return id.startsWith('current/') ? id.slice('current/'.length) : id
+  },
   srcExclude: [
     'cli/**',
     'design/**',
@@ -274,6 +289,11 @@ export default defineConfig({
     'subsystems/**',
     'web-ui/**',
   ],
+  transformHead({ page }) {
+    if (page.startsWith('versions/')) {
+      return [['meta', { name: 'robots', content: 'noindex,follow' }]]
+    }
+  },
   appearance: 'dark',
   head: [
     ['link', { rel: 'icon', href: '/guildhall/favicon.svg' }],
@@ -281,13 +301,20 @@ export default defineConfig({
   ],
   themeConfig: {
     nav: [
-      { text: 'Get started', link: `${stableBase}/guide/quick-start`, activeMatch: `^${stableBase}/guide/(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects)` },
-      { text: 'Guide', link: `${stableBase}/guide/`, activeMatch: `^${stableBase}/guide/(?!(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects))` },
-      { text: 'Reference', link: `${stableBase}/reference/`, activeMatch: `^${stableBase}/(reference|cli|web-ui|levers|releases)/` },
-      { text: `v${stableVersion}`, link: `${stableBase}/releases/${stableVersion}` },
-      { text: 'Next', link: `${nextBase}/guide/`, activeMatch: `^${nextBase}/` },
+      { text: 'Get started', link: '/guide/quick-start', activeMatch: '^(/next)?/guide/(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects)' },
+      { text: 'Guide', link: '/guide/', activeMatch: '^(/next)?/guide/(?!(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects))' },
+      { text: 'Reference', link: '/reference/', activeMatch: '^(/next)?/(reference|cli|web-ui|levers|releases)/' },
+      {
+        text: 'Version',
+        items: [
+          { text: `Current (v${stableVersion})`, link: '/guide/quick-start' },
+          { text: 'Next', link: `${nextBase}/guide/` },
+          { text: `Version archive v${stableVersion}`, link: `${stableBase}/guide/quick-start` },
+        ],
+      },
     ],
     sidebar: {
+      ...addVersionedSidebars(currentBase),
       ...addVersionedSidebars(stableBase),
       ...addVersionedSidebars(nextBase, { includeNextOnlyPages: true }),
     },

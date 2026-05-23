@@ -21,9 +21,9 @@ tool support, and output behavior.
 | `spec` | `deepseek-ai/DeepSeek-V4-Flash` | Strong enough reasoning for project framing without requiring the largest lane. | Re-test for long, ambiguous specs before making it the only spec model. |
 | `coordinator` | `deepseek-ai/DeepSeek-V4-Flash` | Good decision quality on structured coordination prompts and supports the OpenAI-compatible API shape Guildhall uses. | Keep deterministic guards around promotions and task handoffs. |
 | `worker` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | Best strict pass rate in the current worker-lane replay set, with reliable JSON formatting. | It is slower than some flash models, so use lane-specific routing instead of making every role use the worker model. |
-| `reviewer` | `deepseek-ai/DeepSeek-V4-Flash` | Good fit for critique and acceptance checks when paired with deterministic gate evidence. | Reviewers should cite concrete files, commands, and acceptance criteria rather than giving vibes. |
-| `gateChecker` | `deepseek-ai/DeepSeek-V4-Flash` or a deterministic path | Gate checks should mostly run commands and parse evidence. A model is useful only when it summarizes failures or chooses the next recovery playbook. | Do not let model judgment replace command exit codes or explicit policy checks. |
-| `contextIndexer` | `zai-org/GLM-4.6` for semantic enrichment; `deepseek-ai/DeepSeek-V4-Flash` for cheap replay/default experiments | GLM led the combined live context-indexer ladder across documentation, code, UI design-system, and hard architecture tracks. DeepSeek remains a useful cheap challenger and repair model, but GLM is the current recommended semantic default. | Keep prompts tight, keep schema repair enabled, and retest as provider behavior changes; this lane should summarize architecture, not make product or implementation decisions. |
+| `reviewer` | `deepseek-ai/DeepSeek-V4-Flash` | Good fit for critique and acceptance checks when paired with deterministic gate evidence. | Ask for concrete files, commands, and acceptance criteria, not vibes. |
+| `gateChecker` | `deepseek-ai/DeepSeek-V4-Flash` or a deterministic path | Gate checks mostly run commands and parse evidence. A model helps when it summarizes failures or chooses the next recovery playbook. | Command exit codes and explicit checks stay in charge. |
+| `contextIndexer` | `zai-org/GLM-4.6` for semantic enrichment; `deepseek-ai/DeepSeek-V4-Flash` for cheap replay/default experiments | GLM led the combined live context-indexer ladder across documentation, code, UI design-system, and hard architecture tracks. DeepSeek remains a useful cheap challenger and repair model, but GLM is the current recommended semantic default. | Keep prompts tight, keep schema repair enabled, and retest as provider behavior changes; this lane summarizes architecture, not product or implementation decisions. |
 
 Premium or experimental lanes:
 
@@ -39,7 +39,7 @@ Premium or experimental lanes:
 
 ## How we test
 
-Model testing should replay the same frozen task input across each candidate:
+Model testing replays the same frozen task input across each candidate:
 
 - the exact agent role prompt,
 - the same task context and project facts,
@@ -50,25 +50,25 @@ Model testing should replay the same frozen task input across each candidate:
 Deterministic checks come first. A model that chooses the right answer but
 cannot return the expected shape is not ready for a structured Guildhall lane.
 
-## Development findings
+## Model comparison findings
 
-The current recommendations came from a small live development bakeoff against
-frozen Guildhall prompts. The table below summarizes the result shape without
-treating it as a permanent benchmark.
+The current recommendations came from comparing frozen Guildhall prompts across
+candidate models. The table below summarizes the result shape without treating
+it as a permanent benchmark.
 
 | Model | What we saw | Recommendation |
 |---|---|---|
 | `Qwen/Qwen3-235B-A22B-Instruct-2507` | Best strict pass rate and strongest structured-output reliability in the worker-style cases. | Use for `worker` by default. |
 | `deepseek-ai/DeepSeek-V4-Flash` | Strong general decision quality across coordinator/reviewer-style cases, with acceptable structured output in replay. In the first live context-indexer ladder it produced one good docs result, then malformed JSON for `linecraft`. | Use for `spec`, `coordinator`, `reviewer`, and model-assisted `gateChecker` work. Keep it in the context-indexer set as the cheap challenger, but do not rely on it without schema repair. |
 | `zai-org/GLM-4.6` | Best combined live context-indexer result across the expanded ladder. It gave stronger semantic summaries overall and was faster than DeepSeek on the later Guildhall/Jess tracks, with schema repair covering occasional malformed JSON. | Use for semantic Corpus Map enrichment until a cheaper model passes the same live ladder. |
-| `Qwen/Qwen3.6-35B-A3B` | Good replay candidate, but returned no parseable JSON in the first live context-indexer ladder. | Keep in the bakeoff set only if prompt/schema handling changes. |
+| `Qwen/Qwen3.6-35B-A3B` | Good replay candidate, but returned no parseable JSON in the first live context-indexer ladder. | Keep in the comparison set only if prompt/schema handling changes. |
 | `openai/gpt-oss-120b` | Promising decisions, but weak format reliability in the current harness. | Retest after schema repair before recommending. |
 | `Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo` | Strong decisions, but poor strict-format reliability in the current worker harness. | Keep as a premium worker experiment, not a default. |
 | `deepseek-ai/DeepSeek-V3.2` | Reasonable decisions, but failed the strict structured-output path. | Do not use for structured Guildhall lanes as tested. |
 | `openai/gpt-oss-20b` | Did not clear enough worker/reviewer cases in this harness. | Do not recommend for default lanes yet. |
 | `zai-org/GLM-4.7-Flash`, `MiniMaxAI/MiniMax-M2.5`, `stepfun-ai/Step-3.5-Flash` | Did not work well enough with the current structured lane requirements. | Do not recommend unless the provider/output path changes and is retested. |
 
-## Local replay command
+## Compare models locally
 
 Use the built-in replay harness to generate a deterministic report:
 
@@ -112,9 +112,9 @@ uses when moving from replay checks to provider-backed evaluation:
 | Design-system slice | `guildhall/src/web` and `guildhall/packages/ui` | Whether the indexer steers workers toward shared primitives instead of one-off controls or styling. |
 | Hard architecture | `jess` | Whether summaries stay bounded and correct in a deeper compiler/parser architecture. |
 
-## Planned live bakeoff mode
+## Planned live comparison mode
 
-The live version should add provider-backed candidate runs:
+The live version adds provider-backed candidate runs:
 
 ```bash
 guildhall model-bakeoff --live \
@@ -123,8 +123,7 @@ guildhall model-bakeoff --live \
   --judge-model deepseek-ai/DeepSeek-V4-Flash
 ```
 
-The judge model should not be the whole evaluation. Guildhall should score
-hard facts first:
+The judge model is not the whole evaluation. Guildhall scores hard facts first:
 
 - Did the model return valid structured output?
 - Did it call the right tool or produce the expected decision?
@@ -133,6 +132,6 @@ hard facts first:
 - How long did it take, and how many tokens did it use?
 
 After that, an explicit judge model can compare outputs under a rubric and
-explain tradeoffs. That evaluator should be configurable, excluded from the
-candidate set by default, and treated as advisory evidence. The user should
-approve any change to global model defaults.
+explain tradeoffs. That evaluator is configurable, excluded from the candidate
+set by default, and treated as advisory evidence. You approve any change to
+global model defaults.

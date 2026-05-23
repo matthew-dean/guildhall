@@ -51,6 +51,20 @@ function codebaseMapStatus(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function providersPayload(preferredProvider = 'openai-api') {
+  return {
+    preferredProvider,
+    providers: {
+      'openai-api': {
+        label: 'OpenAI-compatible API',
+        detected: true,
+        detail: 'Stored globally.',
+        verifiedAt: now,
+      },
+    },
+  }
+}
+
 describe('SettingsTab', () => {
   beforeEach(() => {
     installProjectState()
@@ -72,7 +86,7 @@ describe('SettingsTab', () => {
       if (url.pathname === '/api/config/levers') return json({ levers: [] })
       if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
       if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
-      if (url.pathname === '/api/providers/status') return json({ configured: true, active: 'OpenAI-compatible API' })
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
       if (url.pathname === '/api/project/bootstrap/status') {
         return json({
           configured: true,
@@ -125,7 +139,7 @@ describe('SettingsTab', () => {
       if (url.pathname === '/api/config/levers') return json({ levers: [] })
       if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
       if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
-      if (url.pathname === '/api/providers/status') return json({ configured: false })
+      if (url.pathname === '/api/setup/providers') return json({ preferredProvider: null, providers: {} })
       if (url.pathname === '/api/project/bootstrap/status') {
         return json({ configured: true, needed: true, status: null, bootstrap: { commands: [], successGates: [], timeoutMs: 0 } })
       }
@@ -141,6 +155,115 @@ describe('SettingsTab', () => {
 
     await screen.findByText('Bootstrap failed: pnpm install failed')
     expect(screen.getByText('pnpm install failed')).toBeInTheDocument()
+  })
+
+  it('explains workspace child-project gates without treating the root shell as the only app', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/setup/status') return json({ initialized: true, name: 'Looma + Knit', id: 'looma-knit' })
+      if (url.pathname === '/api/config/levers') return json({ levers: [] })
+      if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
+      if (url.pathname === '/api/project/bootstrap/status') {
+        return json({
+          configured: false,
+          needed: false,
+          status: null,
+          workspaceProjects: [
+            {
+              id: 'looma',
+              label: 'Looma',
+              path: 'looma',
+              bootstrap: { commands: ['pnpm install'], successGates: ['pnpm test'], timeoutMs: 120000 },
+            },
+            {
+              id: 'knit',
+              label: 'Knit',
+              path: 'knit',
+              bootstrap: { commands: ['pnpm install'], successGates: ['pnpm typecheck'], timeoutMs: 120000 },
+            },
+          ],
+        })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SettingsTab, { subView: 'ready' })
+
+    await screen.findByRole('heading', { name: /ready to start/i })
+    expect(screen.getByText('2 child projects')).toBeInTheDocument()
+    expect(screen.getByText('This workspace coordinates child projects')).toBeInTheDocument()
+    expect(screen.getByText(/The root shell is the council layer/)).toBeInTheDocument()
+    expect(screen.getByText('Looma')).toBeInTheDocument()
+    expect(screen.getByText('Knit')).toBeInTheDocument()
+    expect(screen.getAllByText('1 gate')).toHaveLength(2)
+  })
+
+  it('counts bootstrap as ready when the project does not need bootstrap commands', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/setup/status') return json({ initialized: true, name: 'Fair Labor License', id: 'fair-labor-license' })
+      if (url.pathname === '/api/config/levers') return json({ levers: [] })
+      if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
+      if (url.pathname === '/api/project/bootstrap/status') {
+        return json({
+          configured: false,
+          needed: false,
+          status: null,
+          workspaceProjects: [],
+        })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SettingsTab, { subView: 'ready' })
+
+    await screen.findByRole('heading', { name: /ready to start/i })
+    expect(screen.getByText('3/3 ready')).toBeInTheDocument()
+    expect(screen.getByText('not required')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^run bootstrap$/i })).not.toBeInTheDocument()
+  })
+
+  it('does not count bootstrap as ready when a previous pass succeeded but must be rerun', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/setup/status') return json({ initialized: true, name: 'Narrative Harness', id: 'narrative-harness' })
+      if (url.pathname === '/api/config/levers') return json({ levers: [] })
+      if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
+      if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
+      if (url.pathname === '/api/project/bootstrap/status') {
+        return json({
+          configured: true,
+          needed: true,
+          status: {
+            success: true,
+            lastRunAt: now,
+            durationMs: 120,
+            steps: [],
+          },
+          bootstrap: {
+            commands: ['pnpm install'],
+            successGates: ['pnpm build'],
+            timeoutMs: 120000,
+          },
+        })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(SettingsTab, { subView: 'ready' })
+
+    await screen.findByRole('heading', { name: /ready to start/i })
+    expect(screen.getByText('2/3 ready')).toBeInTheDocument()
+    expect(screen.getAllByText('re-run needed')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: /^run bootstrap$/i })).toBeInTheDocument()
   })
 
   it('saves advanced identity, resets lever errors, and approves a design-system draft', async () => {
@@ -220,6 +343,15 @@ describe('SettingsTab', () => {
           configured: true,
           generatedAt: now,
           counts: { files: 121, areas: 8, abstractions: 5 },
+          semantic: {
+            modelId: 'zai-org/GLM-4.6',
+            corpusKind: 'documentation',
+            confidence: 0.95,
+            projectPurpose: 'Documentation-led product specification.',
+            readNext: [{ path: 'docs/architecture.md', reason: 'Canonical architecture note.' }],
+            workerGuidance: ['Read the semantic map before editing.'],
+            needsBroaderRead: true,
+          },
           designSystem: {
             maturity: 'thin',
             approved: true,
@@ -243,7 +375,7 @@ describe('SettingsTab', () => {
           }),
         })
       }
-      if (url.pathname === '/api/providers/status') return json({ configured: true, active: 'OpenAI-compatible API' })
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
       if (url.pathname === '/api/project/bootstrap/status') return json({ configured: false, needed: true, status: null })
       if (url.pathname === '/api/setup/identity') {
         expect(url.searchParams.get('projectId')).toBe('looma-knit')
@@ -280,6 +412,11 @@ describe('SettingsTab', () => {
     expect(screen.getByText('8')).toBeInTheDocument()
     expect(screen.getByText('5')).toBeInTheDocument()
     expect(screen.getByText('thin')).toBeInTheDocument()
+    expect(screen.getByText('documentation')).toBeInTheDocument()
+    expect(screen.getByText('zai-org/GLM-4.6')).toBeInTheDocument()
+    expect(screen.getByText('Documentation-led product specification.')).toBeInTheDocument()
+    expect(screen.getByText('docs/architecture.md')).toBeInTheDocument()
+    expect(screen.getByText(/Read the semantic map before editing/i)).toBeInTheDocument()
     expect(screen.getByText('UI surface area is larger than the captured token/primitive set.')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /refresh map/i }))
     await screen.findByText('122')
@@ -298,7 +435,7 @@ describe('SettingsTab', () => {
       if (url.pathname === '/api/config/levers') return json({ levers: [] })
       if (url.pathname === '/api/project/design-system') return json({ designSystem: null })
       if (url.pathname === '/api/project/codebase-map/status') return json(codebaseMapStatus())
-      if (url.pathname === '/api/providers/status') return json({ configured: true, active: 'OpenAI-compatible API' })
+      if (url.pathname === '/api/setup/providers') return json(providersPayload())
       if (url.pathname === '/api/project/bootstrap/status') return json({ configured: false, needed: true, status: null })
       if (url.pathname === '/api/project/learning/action') {
         expect(url.searchParams.get('projectId')).toBe('looma-knit')

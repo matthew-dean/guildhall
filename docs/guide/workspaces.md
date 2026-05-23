@@ -4,11 +4,25 @@ title: Project files and workspace state
 
 # Project files and workspace state
 
-In the product, you mostly see **projects**. In the config and runtime layers,
-the same unit is still called a **workspace**.
+In the product, you mostly start with **projects**. A project is one buildable
+thing: one repo or folder with one setup path, one set of gates, and one queue
+of work.
 
-In practice, one workspace usually maps to one project folder. These are the
-files that make a project durable across service restarts and agent sessions.
+Most people do not need more vocabulary than that.
+
+A **workspace** is the advanced shape for related projects that need to be
+coordinated as one effort. Use it when the folders have separate setup/startup
+contracts but the work has to be planned together. For example, Looma and Knit
+are separate buildable projects, but Knit product needs can drive Looma
+primitive design.
+
+In that shape, the workspace has a lightweight **council**: the coordination
+rules that explain how the child projects influence each other. The council is
+not another mandatory setup step for ordinary projects. It exists only when a
+multi-project workspace needs shared planning.
+
+These are the files that make a project or workspace durable across service
+restarts and agent sessions.
 
 A workspace is a directory containing:
 
@@ -30,16 +44,34 @@ guildhall unregister my-app              # remove
 `guildhall init` registers the project automatically. The projects view can
 also register an existing folder when it finds a `guildhall.yaml`.
 
-## Multiple projects in the service
+## Single Project Or Workspace
 
-The registry lets the CLI resolve project ids to paths, and the service uses
-it to power the `/projects` home. You can attach a folder there, scan what is
+When you add a folder, Guildhall usually treats it as a single project.
+That keeps setup flat: find the package manager, verify bootstrap, draft the
+first tasks, and start moving.
+
+Choose the workspace shape only when the folder is really a coordination layer
+over multiple buildable projects:
+
+- each child has its own working directory
+- each child has its own install/start/test commands
+- tasks normally belong to one child by default
+- some tasks intentionally coordinate across children
+
+In a workspace, the parent coordinates; the child project runs. That means a
+Looma task bootstraps Looma, a Knit task bootstraps Knit, and a cross-project
+task gets split or linked so each side has an explicit lane.
+
+## Multiple Projects In The Service
+
+The registry lets the CLI resolve project ids to paths, and the service uses it
+to power the `/projects` home. You can attach folders there, scan what is
 moving across registered projects, and jump into the shell that needs your
 eyes.
 
-When you launch `guildhall serve` from a project folder, Guildhall usually
-opens that one project shell directly. The service view is still there when you
-want the broader fleet picture.
+When you launch `guildhall serve` from a project folder, Guildhall usually opens
+that one project shell directly. The service view is still there when you want
+the broader fleet picture.
 
 Use the `tags` field in `guildhall.yaml` to keep related projects grouped in
 the registry metadata even before the UI grows into a fuller fleet view.

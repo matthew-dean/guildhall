@@ -540,6 +540,14 @@ export interface ServiceProjectSummary {
     blockedTaskTitle?: string | null
     recentCompletedTaskTitle?: string | null
   }
+  taskActivity?: {
+    windowLabel: string
+    max: number
+    bars: Array<{
+      value: number
+      label: string
+    }>
+  }
   run?: ProjectRun | null
 }
 

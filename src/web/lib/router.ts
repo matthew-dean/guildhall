@@ -2,12 +2,16 @@ import type { ProjectView as Tab } from './types.js'
 
 export type Route =
   | { kind: 'projects' }
+  | { kind: 'fleet-inbox' }
   | { kind: 'project'; projectId: string | null; view: Tab; sub: string | null; drawerTaskId: string | null; backgroundPath: string | null }
   | { kind: 'setup'; projectId: string | null }
   | { kind: 'providers' }
 
 export function parseRoute(p: string, state: unknown = null): Route {
+  const pathname = p.split(/[?#]/, 1)[0] || '/'
+  p = pathname
   if (p === '/' || p === '/projects') return { kind: 'projects' }
+  if (p === '/needs-you' || p === '/notifications') return { kind: 'fleet-inbox' }
   if (p === '/setup') return { kind: 'setup', projectId: null }
   const projectSetupMatch = /^\/projects\/([^/]+)\/setup$/.exec(p)
   if (projectSetupMatch) return { kind: 'setup', projectId: decodeURIComponent(projectSetupMatch[1] ?? '') }

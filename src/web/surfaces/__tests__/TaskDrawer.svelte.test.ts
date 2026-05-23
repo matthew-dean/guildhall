@@ -133,7 +133,7 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Which controls belong in the link editor?')
-    await userEvent.click(screen.getByText('URL input only'))
+    await userEvent.click(screen.getByRole('button', { name: /url input only/i }))
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/answer-questions'))).toBe(true)
@@ -176,6 +176,7 @@ describe('TaskDrawer', () => {
 
     await screen.findByText('Add link editor controls inside the existing editor toolbar.')
     await userEvent.click(screen.getByRole('button', { name: /run this task/i }))
+    await userEvent.click(screen.getByText('More task actions'))
     await userEvent.click(screen.getByRole('button', { name: /pause task/i }))
     await userEvent.click(screen.getByRole('button', { name: /put aside/i }))
 
@@ -306,6 +307,7 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Add link editor controls inside the existing editor toolbar.')
+    await userEvent.click(screen.getByText('More task actions'))
     await userEvent.click(screen.getByRole('button', { name: /re-run review/i }))
 
     await waitFor(() => {
@@ -567,5 +569,45 @@ describe('TaskDrawer', () => {
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/unshelve'))).toBe(true)
     })
+  })
+
+  it('explains shelved and checkpointed outcomes without crowding the footer', async () => {
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'shelved'
+    payload.task.shelveReason = {
+      code: 'duplicate',
+      detail: 'Duplicate of the existing link editor task.',
+      rejectedAt: now,
+      rejectedBy: 'coordinator-agent',
+    }
+    payload.task.latestCheckpoint = {
+      step: 3,
+      agentId: 'worker-agent',
+      intent: 'Verify focused toolbar tests',
+      nextPlannedAction: 'Rerun the focused toolbar test and hand off to review.',
+      filesTouched: ['web/app/components/editor/toolbar.ts'],
+      writtenAt: now,
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Knit: add link editor controls')
+    expect(screen.getByText('This task is out of the active queue.')).toBeTruthy()
+    expect(screen.getAllByText('Duplicate of the existing link editor task.').length).toBeGreaterThan(0)
+    expect(screen.getByText('Latest checkpoint')).toBeTruthy()
+    expect(screen.getByText(/Rerun the focused toolbar test/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /pause task/i })).toBeNull()
+    expect(screen.getAllByRole('button', { name: /^unshelve$/i }).length).toBeGreaterThan(0)
   })
 })

@@ -21,7 +21,7 @@ import {
 } from '@guildhall/config'
 import { exec, spawn } from 'node:child_process'
 import { platform } from 'node:os'
-import { refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
+import { buildSemanticIndexPrompt, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
 import { OpenAICompatibleClient } from '@guildhall/providers'
 
 function openBrowser(url: string): void {
@@ -40,6 +40,11 @@ function expandPath(p: string): string {
 
 const DEFAULT_DASHBOARD_PORT = 7777
 const SERVICE_STATE_FILENAME = 'service.json'
+const APPROX_CHARS_PER_TOKEN = 4
+const SEMANTIC_COMPLETION_MIN_TOKENS = 8_000
+const SEMANTIC_COMPLETION_MAX_TOKENS = 16_000
+const SEMANTIC_REPAIR_MIN_TOKENS = 10_000
+const SEMANTIC_REPAIR_MAX_TOKENS = 24_000
 
 interface ServiceRuntimeState {
   pid: number
@@ -661,18 +666,23 @@ function createSemanticIndexer(projectPath: string): CorpusSemanticIndexer {
   return {
     modelId,
     async completeJson({ prompt }) {
+      const maxTokens = semanticCompletionBudget(prompt)
+      console.log(`[guildhall] Semantic Corpus Map: ${modelId} with up to ${maxTokens} completion tokens.`)
       const text = await completeOpenAiCompatibleJson(client, {
         modelId,
         systemPrompt: 'You produce compact, valid JSON for codebase/documentation orientation. Do not include markdown.',
         prompt,
-        maxTokens: 2200,
+        maxTokens,
       })
       if (text.trim().length === 0) {
         throw new Error(`Context indexer model ${modelId} returned no text for ${projectPath}.`)
       }
       return text
     },
-    async repairJson({ raw, error, schemaHint }) {
+    async repairJson({ raw, error, schemaHint, map }) {
+      const mapPrompt = buildSemanticIndexPrompt(map)
+      const maxTokens = semanticRepairCompletionBudget(mapPrompt, raw)
+      console.log(`[guildhall] Semantic Corpus Map repair: ${repairModelId} with up to ${maxTokens} completion tokens.`)
       return completeOpenAiCompatibleJson(client, {
         modelId: repairModelId,
         systemPrompt: 'You repair malformed or schema-invalid JSON. Return only valid JSON. Preserve substance; fix syntax and schema shape.',
@@ -686,11 +696,41 @@ function createSemanticIndexer(projectPath: string): CorpusSemanticIndexer {
           '',
           'Raw response:',
           raw,
+          '',
+          'Corpus Map context:',
+          mapPrompt,
         ].join('\n'),
-        maxTokens: 1800,
+        maxTokens,
       })
     },
   }
+}
+
+export function semanticCompletionBudget(prompt: string): number {
+  const promptTokens = estimateTokenCount(prompt)
+  return clampTokenBudget(
+    SEMANTIC_COMPLETION_MIN_TOKENS + Math.ceil(promptTokens * 0.5),
+    SEMANTIC_COMPLETION_MIN_TOKENS,
+    SEMANTIC_COMPLETION_MAX_TOKENS,
+  )
+}
+
+export function semanticRepairCompletionBudget(prompt: string, rawOutput: string): number {
+  const promptTokens = estimateTokenCount(prompt)
+  const rawTokens = estimateTokenCount(rawOutput)
+  return clampTokenBudget(
+    SEMANTIC_REPAIR_MIN_TOKENS + Math.ceil((promptTokens + rawTokens) * 0.5),
+    SEMANTIC_REPAIR_MIN_TOKENS,
+    SEMANTIC_REPAIR_MAX_TOKENS,
+  )
+}
+
+function estimateTokenCount(text: string): number {
+  return Math.ceil(text.length / APPROX_CHARS_PER_TOKEN)
+}
+
+function clampTokenBudget(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
 }
 
 async function completeOpenAiCompatibleJson(

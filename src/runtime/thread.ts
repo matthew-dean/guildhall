@@ -336,6 +336,10 @@ function hasApprovedProductBrief(task: Pick<Task, 'productBrief'>): boolean {
   )
 }
 
+function taskNeedsSpecFill(task: Pick<Task, 'spec' | 'acceptanceCriteria' | 'productBrief'>): boolean {
+  return !hasApprovedProductBrief(task) || !hasSpecDraftContent(task)
+}
+
 function hasConcreteSpecDraft(task: Task): boolean {
   return (
     typeof task.status === 'string' &&
@@ -714,9 +718,9 @@ const SETUP_STEP_ACTIONS: Record<string, SetupAction> = {
   },
   firstTask: {
     affordance: 'inline-text',
-    actionLabel: 'Create task',
+    actionLabel: 'Start shaping',
     submitEndpoint: '/api/project/intake',
-    placeholder: 'First task',
+    placeholder: 'Describe the product idea or first outcome',
   },
 }
 
@@ -1428,6 +1432,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       const livePersona = personaForAgent(effectiveLiveAgent?.name)
       const persona = livePersona ?? (taskStatus === 'exploring' || taskStatus === 'import_draft' ? 'spec' : 'worker')
       const queuedSpecRevision = isQueuedSpecRevision(t)
+      const needsSpecFill = taskStatus === 'ready' && taskNeedsSpecFill(t)
       const phase = taskStatus === 'ready'
         ? 'ready'
         : taskId === META_INTAKE_TASK_ID && setupStillBlockingMetaIntake && !liveAgent
@@ -1463,7 +1468,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
                 ? 'Guildhall has your latest answers and a spec draft. The next step is for Guildhall to revise the spec.'
               : 'The spec author is shaping this task.'
             : taskStatus === 'ready'
-              ? 'Approved and queued for work.'
+              ? needsSpecFill
+                ? 'Queued, but the task brief or acceptance criteria still need cleanup before a worker should treat this as approved.'
+                : 'Approved and queued for work.'
               : taskStatus === 'gate_check'
                 ? 'Gate checks are next.'
                 : taskStatus === 'review'
@@ -1487,7 +1494,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         liveAgent: effectiveLiveAgent,
         activity: liveActivity.get(taskId),
         checklist:
-          taskStatus === 'exploring' &&
+          (taskStatus === 'exploring' || needsSpecFill) &&
           !queuedSpecRevision &&
           taskId !== META_INTAKE_TASK_ID &&
           taskId !== 'task-workspace-import' &&

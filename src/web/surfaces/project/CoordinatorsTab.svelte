@@ -3,8 +3,9 @@
   of recent task statuses, mandate line, and the tasks in that slice.
 -->
 <script lang="ts">
+  import ActionBar from '../../lib/ActionBar.svelte'
   import TaskCard from '../../lib/TaskCard.svelte'
-  import { friendlyStewardName } from '../../lib/display.js'
+  import { friendlyDomain, friendlyStewardName } from '../../lib/display.js'
   import { nav } from '../../lib/nav.svelte.js'
   import { buildCoordinatorsSurface } from '../../lib/project-data.js'
   import type { ProjectDetail } from '../../lib/types.js'
@@ -56,7 +57,7 @@
     </div>
     {#if selectedColumn}
       <p class="intro-copy">
-        This routing slice covers <code>{selectedColumn.c.domain ?? 'unknown'}</code>. Use this view to
+        This routing slice covers <strong>{friendlyDomain(selectedColumn.c.domain) || 'Unknown'}</strong>. Use this view to
         inspect what kind of work lands here, what context and checks Guildhall tends to apply, and which
         tasks are currently routed through it.
       </p>
@@ -78,7 +79,7 @@
         <div class="detail-card">
             <div class="detail-head">
               <div class="detail-meta-row">
-              <span class="domain-chip">Domain: {selectedColumn.c.domain ?? 'unknown'}</span>
+              <span class="domain-chip">Part: {friendlyDomain(selectedColumn.c.domain) || 'Unknown'}</span>
               <span class="scope-chip">Scope: {scopeLabel(selectedColumn.c.path)}</span>
               </div>
               <button type="button" class="linkbtn" onclick={() => nav('/routing')}>
@@ -183,7 +184,7 @@
           <div class="col-head">
             <span class="name">{friendlyStewardName(undefined, col.c.domain, col.c.id)}</span>
             <div class="meta-row">
-              <span class="domain-chip">Domain: {col.c.domain ?? 'unknown'}</span>
+              <span class="domain-chip">Part: {friendlyDomain(col.c.domain) || 'Unknown'}</span>
               <span class="scope-chip">Scope: {scopeLabel(col.c.path)}</span>
             </div>
             <span class="mini">
@@ -202,11 +203,11 @@
             <div class="label">Protects</div>
             <div class="mandate">{protectsLabel(col.c.mandate)}</div>
           </div>
-          <div class="card-actions">
+          <ActionBar className="routing-actions">
             <button type="button" class="linkbtn" onclick={() => nav('/routing/' + encodeURIComponent((col.c.id ?? col.c.domain ?? '').toString()))}>
               View routing →
             </button>
-          </div>
+          </ActionBar>
           {#if col.domainTasks.length === 0}
             <div class="empty">No tasks currently routed here.</div>
           {:else}
@@ -484,10 +485,6 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-  }
-  .card-actions {
-    display: flex;
-    justify-content: flex-end;
   }
   .label {
     font-size: var(--fs-0);

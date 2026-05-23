@@ -26,7 +26,7 @@ place so you do not have to reconstruct what happened from scattered logs.
 
 ## When a task is stuck
 
-When a task is blocked, the drawer should summarize why in one place: recent
+When a task is blocked, the drawer summarizes why in one place: recent
 reviewer rejections, failed gate output, escalation text, and the next decision
 Guildhall needs from you.
 

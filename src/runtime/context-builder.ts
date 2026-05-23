@@ -768,8 +768,16 @@ export async function buildContext(
   let personaPrompt = ''
   if (task.status === 'exploring') {
     personaPrompt = renderSpecContributions(applicableGuilds, guildSignals)
-  } else if (task.status === 'in_progress' && primaryEngineer) {
-    personaPrompt = renderPersonaPrompt(primaryEngineer, guildSignals)
+  } else if (task.status === 'in_progress') {
+    personaPrompt = primaryEngineer
+      ? renderPersonaPrompt(primaryEngineer, guildSignals)
+      : [
+          '## Worker role guidance',
+          '',
+          'You are the implementation worker for this task. Use the saved spec, acceptance criteria, project memory, and repository evidence to make the smallest coherent change that satisfies the task.',
+          'Before inventing a component, command, file path, or dependency, verify it exists or create it deliberately as part of the implementation.',
+          'Run the task success gates or the closest project-specific verification command before asking for review.',
+        ].join('\n')
     if (handoffStep && task.handoffSequence) {
       personaPrompt = [
         personaPrompt,

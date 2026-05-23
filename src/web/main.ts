@@ -1,5 +1,6 @@
 import { mount } from 'svelte'
 import App from './App.svelte'
+import '../../packages/ui/src/styles.css'
 import './tokens.css'
 
 const target = document.getElementById('svelte-root')

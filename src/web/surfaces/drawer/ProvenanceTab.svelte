@@ -7,6 +7,7 @@
   import Card from '../../lib/Card.svelte'
   import DefinitionList from '../../lib/DefinitionList.svelte'
   import Byline from '../../lib/Byline.svelte'
+  import { friendlyTaskId, labelForIdentifier } from '../../lib/identifier-labels.js'
   import type {
     ContextDebugRecord,
     ContextHealthWarning,
@@ -21,8 +22,8 @@
   let { task, contextDebug = [] }: Props = $props()
 
   const lines = $derived<Array<readonly [string, string | null]>>([
-    ['Origination', task.origination ?? 'human'],
-    ['Proposed by', task.proposedBy ?? null],
+    ['Origination', task.origination ? labelForIdentifier('agent', task.origination).label : 'Human'],
+    ['Proposed by', task.proposedBy ? labelForIdentifier('agent', task.proposedBy).label : null],
     ['Proposal rationale', task.proposalRationale ?? null],
     ['Task workspace', task.worktreePath ?? null],
     ['Task branch', task.branchName ?? null],
@@ -30,14 +31,14 @@
     ['Created at', task.createdAt ?? ''],
     ['Updated at', task.updatedAt ?? ''],
     ['Completed at', task.completedAt ?? null],
-    ['Parent goal', task.parentGoalId ?? null],
-    ['Permission mode', task.permissionMode ?? null],
-    ['Depends on', task.dependsOn?.length ? task.dependsOn.join(', ') : null],
+    ['Parent goal', task.parentGoalId ? labelForIdentifier('task', task.parentGoalId).label : null],
+    ['Permission mode', task.permissionMode ? labelForIdentifier('domain', task.permissionMode).label : null],
+    ['Depends on', task.dependsOn?.length ? task.dependsOn.map(id => friendlyTaskId(id)).join(', ') : null],
   ])
 
   const mergeLines = $derived<Array<readonly [string, string | null]>>([
-    ['Outcome', task.mergeRecord?.result ?? null],
-    ['Strategy', task.mergeRecord?.strategy ?? null],
+    ['Outcome', task.mergeRecord?.result ? labelForIdentifier('status', task.mergeRecord.result).label : null],
+    ['Strategy', task.mergeRecord?.strategy ? labelForIdentifier('domain', task.mergeRecord.strategy).label : null],
     ['From branch', task.mergeRecord?.fromBranch ?? null],
     ['Into branch', task.mergeRecord?.toBranch ?? null],
     ['Merged at', task.mergeRecord?.mergedAt ?? null],
@@ -78,7 +79,7 @@
     <Card title="Shelve reason" tone="warn">
       <Stack gap="2">
         <header class="meta">
-          <span>{task.shelveReason.code ?? '—'}</span>
+          <span>{task.shelveReason.code ? labelForIdentifier('status', task.shelveReason.code).label : '—'}</span>
           <Byline by={task.shelveReason.rejectedBy} at={task.shelveReason.rejectedAt} />
         </header>
         {#if task.shelveReason.detail}
@@ -95,8 +96,8 @@
           <section class="debug-record">
             <header class="debug-head">
               <div>
-                <h4>{record.agentName ?? 'agent'} {#if record.modelId}<span>· {record.modelId}</span>{/if}</h4>
-                <p>{record.at ?? '—'} · {record.taskStatus ?? task.status ?? '—'}</p>
+                <h4>{labelForIdentifier('agent', record.agentName).label} {#if record.modelId}<span>· {record.modelId}</span>{/if}</h4>
+                <p>{record.at ?? '—'} · {labelForIdentifier('status', record.taskStatus ?? task.status).label}</p>
               </div>
               <div class="counts">
                 <span>{record.contextChars ?? 0} ctx</span>

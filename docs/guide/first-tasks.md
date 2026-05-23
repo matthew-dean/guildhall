@@ -29,9 +29,9 @@ Weak first tasks:
 
 ## Give each task a blueprint
 
-Each runnable task should answer:
+Each runnable task answers:
 
-- What should change?
+- What changes?
 - What is out of scope?
 - Where is the likely work area?
 - How can the work be checked?
@@ -41,17 +41,17 @@ If those answers are missing, leave the item as a draft or answer the question
 in Thread.
 
 Do not over-specify routine mechanics. If a decision is conventional and the
-repo gives enough evidence, Guildhall should recommend the default and keep
-moving. Save human attention for product intent, audience, user flow, content,
+repo gives enough evidence, Guildhall can recommend the default and keep
+moving. Save your attention for product intent, audience, flow, content,
 constraints, and the finish line.
 
 ## Treat drafts as a holding area
 
-A draft means "maybe work, not framed yet." It should not auto-run just because
+A draft means "maybe work, not framed yet." It does not auto-run just because
 Guildhall found it in a file.
 
 Approve the draft when it has enough evidence to become a blueprint. Keep it as
-a draft when it needs a human choice, release planning, or a clearer success
+a draft when it needs your decision, release planning, or a clearer success
 signal.
 
 ## Start when the queue is honest
@@ -59,6 +59,6 @@ signal.
 Before starting, check that at least one task is ready, no task is waiting for
 your answer, and blockers are visible where you can act on them.
 
-Once started, Guildhall should keep showing motion: live events, transcript
-movement, worktree/bootstrap status, verification output, reviewer decisions,
-change orders, and blockers.
+Once started, Guildhall keeps showing motion: live events, transcript movement,
+worktree/bootstrap status, verification output, reviewer decisions, change
+orders, and blockers.

@@ -458,7 +458,7 @@ const PRIORITIES: ReadonlySet<TaskPriority> = new Set([
   'low',
 ])
 
-function iterateYamlFences(spec: string): Generator<Record<string, unknown>> {
+function iterateYamlFences(spec: string): Generator<Record<string, unknown> | unknown[]> {
   return (function* () {
     const fence = /```ya?ml\s*\n([\s\S]*?)```/gi
     let match: RegExpExecArray | null
@@ -470,11 +470,28 @@ function iterateYamlFences(spec: string): Generator<Record<string, unknown>> {
       } catch {
         continue
       }
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        yield parsed as Record<string, unknown>
+      if (parsed && typeof parsed === 'object') {
+        yield parsed as Record<string, unknown> | unknown[]
       }
     }
   })()
+}
+
+function workspaceImportYamlErrors(spec: string): string[] {
+  const errors: string[] = []
+  const fence = /```ya?ml\s*\n([\s\S]*?)```/gi
+  let match: RegExpExecArray | null
+  let index = 0
+  while ((match = fence.exec(spec)) !== null) {
+    index++
+    try {
+      yamlLoad(match[1] ?? '')
+    } catch (err) {
+      const message = err instanceof Error ? err.message.split('\n')[0] : String(err)
+      errors.push(`fence ${index}: ${message}`)
+    }
+  }
+  return errors
 }
 
 function normStringList(value: unknown): string[] {
@@ -560,6 +577,32 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
   const milestones: ParsedMilestone[] = []
 
   for (const obj of iterateYamlFences(spec)) {
+    if (Array.isArray(obj)) {
+      for (const raw of obj) {
+        if (!raw || typeof raw !== 'object') continue
+        const t = raw as Record<string, unknown>
+        const id = typeof t['id'] === 'string' ? t['id'] : undefined
+        const title = typeof t['title'] === 'string' ? t['title'] : undefined
+        const rawDescription =
+          typeof t['description'] === 'string' ? t['description'] : ''
+        const domain = typeof t['domain'] === 'string' ? t['domain'] : 'core'
+        const rawPriority = t['priority']
+        const priority =
+          typeof rawPriority === 'string' && PRIORITIES.has(rawPriority as TaskPriority)
+            ? (rawPriority as TaskPriority)
+            : 'normal'
+        if (!id || !title) continue
+        tasks.push({
+          id,
+          title,
+          description: supportingText(title, rawDescription),
+          domain,
+          priority,
+          references: normStringList(t['references']),
+        })
+      }
+      continue
+    }
     if (Array.isArray(obj['goals'])) {
       for (const raw of obj['goals']) {
         if (!raw || typeof raw !== 'object') continue
@@ -718,6 +761,15 @@ export async function approveWorkspaceImport(
     : (!task.spec || task.spec.trim().length === 0)
         ? null
         : parseWorkspaceImport(task.spec)
+  if (!input.draftOverride && task.spec && task.spec.trim().length > 0) {
+    const yamlErrors = workspaceImportYamlErrors(task.spec)
+    if (yamlErrors.length > 0) {
+      return {
+        success: false,
+        error: `Invalid workspace-import YAML: ${yamlErrors.join('; ')}`,
+      }
+    }
+  }
   if (!parsed) {
     return {
       success: false,

@@ -47,6 +47,15 @@ describe('InboxTab', () => {
               detail: 'Optional project note cleanup.',
               actionHref: '/workspace-import',
             },
+            {
+              id: 'levers',
+              kind: 'lever_questions',
+              severity: 'low',
+              title: '18 levers at system defaults',
+              detail: 'Defaults are still in effect for some project policies.',
+              defaultCount: 18,
+              actionHref: '/settings/advanced',
+            },
           ],
         })
       }
@@ -57,6 +66,8 @@ describe('InboxTab', () => {
 
     await screen.findByText('Choose link editor scope')
     expect(screen.getByText('Housekeeping')).toBeInTheDocument()
+    expect(screen.getByText(/Safe defaults are active/)).toBeInTheDocument()
+    expect(screen.getByText(/Review them only if you want to tune autonomy, recovery, or review strictness/)).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: 'Choose link editor scope' }))
     expect(path.value).toBe('/projects/looma-knit/thread')

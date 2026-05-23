@@ -336,6 +336,44 @@ describe('buildThread', () => {
     }
   })
 
+  it('frames the empty-project first work item as spec shaping instead of implementation task creation', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'TASKS.json'),
+        JSON.stringify({ tasks: [] }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'commerce-project',
+          name: 'Commerce Project',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'project-implementation', name: 'Project Implementation' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const activeSetup = thread.turns.find(turn => turn.kind === 'setup_step' && turn.status === 'active')
+      if (!activeSetup || activeSetup.kind !== 'setup_step') throw new Error('expected active setup step')
+
+      expect(activeSetup.stepId).toBe('firstTask')
+      expect(activeSetup.title).toBe('Shape the first spec')
+      expect(activeSetup.why).toMatch(/rough idea into a product brief/i)
+      expect(activeSetup.actionLabel).toBe('Start shaping')
+      expect(activeSetup.placeholder).toBe('Describe the product idea or first outcome')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('keeps a workspace-import question active ahead of later queued work', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
@@ -405,6 +443,8 @@ describe('buildThread', () => {
       const queuedTask = thread.turns.find((turn) => turn.id === 'inflight:task-003')
       if (!queuedTask || queuedTask.kind !== 'inflight') throw new Error('expected queued task turn')
       expect(queuedTask.status).toBe('pending')
+      expect(queuedTask.summary).toContain('brief or acceptance criteria still need cleanup')
+      expect(queuedTask.checklist?.totalSteps).toBeGreaterThan(0)
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }

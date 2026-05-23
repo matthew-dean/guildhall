@@ -14,7 +14,7 @@ help_summary: |
 The CLI talks to the same local service and project files as the browser UI.
 Use it for local service lifecycle, project registry management, and focused
 debug runs. Task creation, approval, and setup interviews live in the browser
-UI and HTTP API rather than as separate human-facing CLI commands.
+UI rather than as separate human-facing CLI commands.
 
 ## `guildhall init [path]`
 
@@ -106,8 +106,8 @@ section.
 
 ## `guildhall model-bakeoff [--context-indexer] [output.json]`
 
-Write a deterministic model bakeoff replay report. The command currently uses
-saved replay scenarios and simulated lanes so it can validate Guildhall's
+Write a deterministic model comparison replay report. The command currently
+uses saved replay scenarios and simulated lanes so it can validate Guildhall's
 scoring/reporting path without spending provider credits.
 
 Default output:
@@ -115,7 +115,7 @@ Default output:
 - `artifacts/model-bakeoff/model-bakeoff-report.json`
 - `artifacts/model-bakeoff/model-bakeoff-report.md`
 
-Use `--context-indexer` to run the semantic Corpus Map bakeoff. That writes
+Use `--context-indexer` to compare semantic Corpus Map candidates. That writes
 `artifacts/model-bakeoff/context-indexer-report.json` and a Markdown summary by
 default, using DeepInfra candidate lanes for choosing a cheap, fast indexing
 model. The report includes the real-project evaluation ladder:

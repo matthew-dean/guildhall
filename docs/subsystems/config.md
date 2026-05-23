@@ -77,4 +77,4 @@ See [`guildhall.yaml` reference](../reference/workspace-config) for the user-fac
 
 ## Validation
 
-All config reads go through Zod schemas (`src/config/schemas.ts`). Validation errors include a pointer into the YAML (line + column) so the dashboard can surface them inline.
+All config reads go through Zod schemas (`src/config/schemas.ts`). Validation errors include a pointer into the YAML (line + column) so the browser UI can surface them inline.

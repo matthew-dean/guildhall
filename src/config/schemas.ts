@@ -1,5 +1,9 @@
 import { z } from 'zod'
-import { ModelAssignmentConfig, DEFAULT_LOCAL_MODEL_ASSIGNMENT } from '@guildhall/core'
+import {
+  ModelAssignmentConfig,
+  DEFAULT_CLOUD_MODEL_ASSIGNMENT,
+  DEFAULT_LOCAL_MODEL_ASSIGNMENT,
+} from '@guildhall/core'
 import { mcpServerConfigSchema } from '@guildhall/mcp'
 
 const MODEL_ROLE_KEYS = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker', 'contextIndexer'] as const
@@ -51,6 +55,77 @@ const ProjectSkillsConfig = z.object({
   }).default({}),
 }).default({})
 
+const BootstrapConfig = z.object({
+  commands: z.array(z.string()).default([]),
+  successGates: z.array(z.string()).default([]),
+  timeoutMs: z.number().int().positive().default(300_000),
+  provenance: z.object({
+    establishedBy: z.string(),
+    establishedAt: z.string(),
+    tried: z.array(z.object({
+      command: z.string(),
+      result: z.enum(['pass', 'fail']),
+      stderr: z.string().optional(),
+    })).default([]),
+  }).optional(),
+  // Structural verification block written by `runBootstrap` (see
+  // src/runtime/bootstrap.ts). Presence of `verifiedAt` is the hard
+  // precondition the orchestrator enforces before dispatching any task.
+  verifiedAt: z.string().optional(),
+  packageManager: z.enum(['pnpm', 'npm', 'yarn', 'bun', 'none']).optional(),
+  install: z.object({
+    command: z.string(),
+    lastRunAt: z.string().optional(),
+    status: z.enum(['ok', 'failed']).optional(),
+  }).optional(),
+  gates: z.object({
+    lint: z.object({
+      command: z.string(),
+      available: z.boolean(),
+      unavailableReason: z.string().optional(),
+    }).optional(),
+    typecheck: z.object({
+      command: z.string(),
+      available: z.boolean(),
+      unavailableReason: z.string().optional(),
+    }).optional(),
+    build: z.object({
+      command: z.string(),
+      available: z.boolean(),
+      unavailableReason: z.string().optional(),
+    }).optional(),
+    test: z.object({
+      command: z.string(),
+      available: z.boolean(),
+      unavailableReason: z.string().optional(),
+    }).optional(),
+  }).optional(),
+})
+
+const WorktreeConfig = z.object({
+  include: z.array(z.string()).default([]),
+}).default({})
+
+const WorkspaceProjectConfig = z.object({
+  id: z.string().regex(/^[a-z0-9-]+$/),
+  label: z.string().optional(),
+  type: z.string().optional(),
+  path: z.string(),
+  coordinator: z.string().optional(),
+  bootstrap: BootstrapConfig.optional(),
+  worktree: WorktreeConfig.optional(),
+})
+
+const CouncilConfig = z.object({
+  mandate: z.string().optional(),
+  coordinationRules: z.array(z.object({
+    id: z.string().optional(),
+    from: z.string().optional(),
+    to: z.string().optional(),
+    rule: z.string(),
+  })).default([]),
+}).default({})
+
 // ---------------------------------------------------------------------------
 // guildhall.yaml — per-workspace configuration
 // Lives next to the project's code (or in a .guildhall/ subdir).
@@ -66,6 +141,21 @@ export const WorkspaceYamlConfig = z.object({
   // Absolute path to the project this workspace is tracking.
   // Defaults to the directory containing guildhall.yaml.
   projectPath: z.string().optional(),
+
+  // Most Guildhall installs are one buildable project. Set `kind: workspace`
+  // only when this config coordinates multiple buildable projects with
+  // separate paths/setup/gates.
+  kind: z.enum(['project', 'workspace']).default('project'),
+
+  // Child projects inside a multi-project workspace. These are the buildable
+  // units with their own setup/gate contracts. A workspace council can
+  // coordinate them, but tasks should bootstrap the child they belong to.
+  projects: z.array(WorkspaceProjectConfig).default([]),
+
+  // Optional multi-project coordination layer. This is intentionally separate
+  // from normal coordinator setup so single-project users never need to learn
+  // the council concept.
+  council: CouncilConfig.optional(),
 
   // Model assignments per agent role.
   // Missing roles fall back to global config, then built-in defaults.
@@ -156,52 +246,13 @@ export const WorkspaceYamlConfig = z.object({
   // for the state to be considered testable — the meta-intake agent
   // empirically verifies these before writing the block. `provenance`
   // records what was tried so humans can audit the derivation.
-  bootstrap: z.object({
-    commands: z.array(z.string()).default([]),
-    successGates: z.array(z.string()).default([]),
-    timeoutMs: z.number().int().positive().default(300_000),
-    provenance: z.object({
-      establishedBy: z.string(),
-      establishedAt: z.string(),
-      tried: z.array(z.object({
-        command: z.string(),
-        result: z.enum(['pass', 'fail']),
-        stderr: z.string().optional(),
-      })).default([]),
-    }).optional(),
-    // Structural verification block written by `runBootstrap` (see
-    // src/runtime/bootstrap.ts). Presence of `verifiedAt` is the hard
-    // precondition the orchestrator enforces before dispatching any task.
-    verifiedAt: z.string().optional(),
-    packageManager: z.enum(['pnpm', 'npm', 'yarn', 'bun', 'none']).optional(),
-    install: z.object({
-      command: z.string(),
-      lastRunAt: z.string().optional(),
-      status: z.enum(['ok', 'failed']).optional(),
-    }).optional(),
-    gates: z.object({
-      lint: z.object({
-        command: z.string(),
-        available: z.boolean(),
-        unavailableReason: z.string().optional(),
-      }).optional(),
-      typecheck: z.object({
-        command: z.string(),
-        available: z.boolean(),
-        unavailableReason: z.string().optional(),
-      }).optional(),
-      build: z.object({
-        command: z.string(),
-        available: z.boolean(),
-        unavailableReason: z.string().optional(),
-      }).optional(),
-      test: z.object({
-        command: z.string(),
-        available: z.boolean(),
-        unavailableReason: z.string().optional(),
-      }).optional(),
-    }).optional(),
-  }).optional(),
+  bootstrap: BootstrapConfig.optional(),
+
+  // Explicit project-root-relative local files/directories that should be
+  // copied into isolated task worktrees before bootstrap. Intended for
+  // ignored/untracked runtime config such as `.env` or
+  // `appsettings.local.yaml`; never inferred silently.
+  worktree: WorktreeConfig.optional(),
 })
 export type WorkspaceYamlConfig = z.infer<typeof WorkspaceYamlConfig>
 
@@ -377,6 +428,10 @@ export const ResolvedConfig = z.object({
   // Project path (defaults to workspacePath)
   projectPath: z.string(),
 
+  kind: z.enum(['project', 'workspace']).optional(),
+  projects: z.array(WorkspaceProjectConfig).optional(),
+  council: CouncilConfig.optional(),
+
   // Optional explicit landing branch for accepted work in this checkout.
   landingBranch: z.string().optional(),
 
@@ -438,49 +493,8 @@ export const ResolvedConfig = z.object({
   // Project bootstrap block (passthrough from WorkspaceYamlConfig.bootstrap).
   // The orchestrator runs `commands` before the first task dispatch and re-runs
   // when the lockfile hash changes; `successGates` verify testability.
-  bootstrap: z.object({
-    commands: z.array(z.string()),
-    successGates: z.array(z.string()),
-    timeoutMs: z.number().int().positive(),
-    provenance: z.object({
-      establishedBy: z.string(),
-      establishedAt: z.string(),
-      tried: z.array(z.object({
-        command: z.string(),
-        result: z.enum(['pass', 'fail']),
-        stderr: z.string().optional(),
-      })),
-    }).optional(),
-    verifiedAt: z.string().optional(),
-    packageManager: z.enum(['pnpm', 'npm', 'yarn', 'bun', 'none']).optional(),
-    install: z.object({
-      command: z.string(),
-      lastRunAt: z.string().optional(),
-      status: z.enum(['ok', 'failed']).optional(),
-    }).optional(),
-    gates: z.object({
-      lint: z.object({
-        command: z.string(),
-        available: z.boolean(),
-        unavailableReason: z.string().optional(),
-      }).optional(),
-      typecheck: z.object({
-        command: z.string(),
-        available: z.boolean(),
-        unavailableReason: z.string().optional(),
-      }).optional(),
-      build: z.object({
-        command: z.string(),
-        available: z.boolean(),
-        unavailableReason: z.string().optional(),
-      }).optional(),
-      test: z.object({
-        command: z.string(),
-        available: z.boolean(),
-        unavailableReason: z.string().optional(),
-      }).optional(),
-    }).optional(),
-  }).optional(),
+  bootstrap: BootstrapConfig.optional(),
+  worktree: WorktreeConfig.optional(),
 })
 export type ResolvedConfig = z.infer<typeof ResolvedConfig>
 
@@ -569,6 +583,34 @@ export function resolveModelsForProvider(
   return {}
 }
 
+export function defaultModelsForProvider(provider?: string): z.infer<typeof ModelAssignmentConfig> {
+  const normalized = normalizeProviderModelKey(provider)
+  if (normalized === 'codex' || normalized === 'codex-oauth') {
+    return {
+      spec: 'gpt-5.3-codex',
+      coordinator: 'gpt-5.3-codex',
+      worker: 'gpt-5.3-codex',
+      reviewer: 'gpt-5.3-codex',
+      gateChecker: 'gpt-5.3-codex',
+      contextIndexer: 'gpt-5.3-codex',
+    }
+  }
+  if (normalized === 'claude-oauth' || normalized === 'anthropic-api') {
+    return DEFAULT_CLOUD_MODEL_ASSIGNMENT
+  }
+  if (normalized === 'openai-api') {
+    return {
+      spec: 'gpt-4o',
+      coordinator: 'gpt-4o',
+      worker: 'gpt-4o',
+      reviewer: 'gpt-4o-mini',
+      gateChecker: 'gpt-4o-mini',
+      contextIndexer: 'gpt-4o-mini',
+    }
+  }
+  return DEFAULT_LOCAL_MODEL_ASSIGNMENT
+}
+
 export function writeModelsForProvider(
   input: ModelConfigInput | undefined,
   provider: string | undefined,
@@ -600,8 +642,9 @@ export function writeModelsForProvider(
 export function mergeModels(
   base: ModelAssignmentPartial,
   override: ModelAssignmentPartial | undefined,
+  defaults: z.infer<typeof ModelAssignmentConfig> = DEFAULT_LOCAL_MODEL_ASSIGNMENT,
 ): z.infer<typeof ModelAssignmentConfig> {
-  const cleaned: Record<string, string> = { ...DEFAULT_LOCAL_MODEL_ASSIGNMENT }
+  const cleaned: Record<string, string> = { ...defaults }
   for (const [k, v] of Object.entries(base)) {
     if (v !== undefined) cleaned[k] = v
   }

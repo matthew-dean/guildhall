@@ -112,4 +112,54 @@ describe('writeContextDebugRecord', () => {
 
     expect(record.health.some((warning) => warning.code === 'subproject_scope_mismatch')).toBe(true)
   })
+
+  it('does not warn when a subproject task runs in its isolated task worktree', async () => {
+    const record = await writeContextDebugRecord({
+      memoryDir,
+      workspacePath: '/repo',
+      activeWorktreePath: '/Users/me/.guildhall/worktrees/workspace/task-ctx',
+      task: mkTask({ projectPath: '/repo/subproject' }),
+      ctx: mkContext(),
+      agentName: 'worker-agent',
+      modelId: 'qwen/test',
+      prompt: 'short prompt',
+    })
+
+    expect(record.health.some((warning) => warning.code === 'subproject_scope_mismatch')).toBe(false)
+  })
+
+  it('records corpus map guidance as first-class injected context', async () => {
+    const record = await writeContextDebugRecord({
+      memoryDir,
+      workspacePath: '/repo',
+      activeWorktreePath: '/repo/.wt/task-ctx',
+      task: mkTask(),
+      ctx: mkContext({
+        corpusMap: [
+          '## Corpus Map',
+          '',
+          'Read next:',
+          '- src/web/lib/Button.svelte: canonical command button',
+          '',
+          'Corpus fit required: reuse the existing button primitive.',
+        ].join('\n'),
+      }),
+      agentName: 'worker-agent',
+      modelId: 'qwen/test',
+      prompt: 'short prompt',
+    })
+
+    expect(record.sections.find((section) => section.key === 'corpusMap')).toMatchObject({
+      label: 'Corpus map',
+      included: true,
+    })
+    expect(record.corpusMap).toMatchObject({
+      included: true,
+      readNext: ['src/web/lib/Button.svelte'],
+    })
+    expect(record.reasons).toContain('Corpus map guidance was injected.')
+
+    const snapshot = await fs.readFile(record.snapshotPath, 'utf8')
+    expect(snapshot).toContain('- Corpus map:')
+  })
 })

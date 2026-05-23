@@ -1334,6 +1334,84 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.openQuestions ?? []).toHaveLength(0)
   })
 
+  it('does not promote operational checklists into fallback owner questions', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Meta intake' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'I’ll now finalize by:',
+        '',
+        '- Reading current task/spec state from `TASKS.json`',
+        '- Confirming the spec includes required sections and the 3 YAML fences',
+        '- Updating task status to `spec_review`',
+        '- Logging a progress milestone',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions ?? []).toHaveLength(0)
+  })
+
+  it('does not promote completed-work narration into fallback choices', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Auth flow' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'Done — I took the durable blueprint steps:',
+        '',
+        '- Updated the product brief',
+        '- Set task status to spec_review',
+        '- Logged a progress milestone',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions ?? []).toHaveLength(0)
+  })
+
+  it('does not promote "posted a question" narration into a duplicate fallback question', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Autoencoder quality pass' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'Posted a focused scope question to unblock the blueprint:',
+        '',
+        '- Full autoencoder quality pass',
+        '- Narrow glyph outline review',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions ?? []).toHaveLength(0)
+  })
+
   it('preserves fallback brief and question state when a spec turn hits the max turn limit after plain-text output', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Collections coverage' })])
     const spec = {
@@ -2375,6 +2453,71 @@ describe('Orchestrator.tick — feedback loop', () => {
     await orch.tick()
 
     expect(assignedDuringDispatch).toBe('worker-agent')
+  })
+
+  it('returns excess active worker tasks to ready when dispatch is serial', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'older-worker-task',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        updatedAt: '2026-05-03T00:00:00.000Z',
+      }),
+      mkTask({
+        id: 'newer-worker-task',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        updatedAt: '2026-05-03T00:01:00.000Z',
+      }),
+    ])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    await orch.tick()
+
+    const q = await readQueue()
+    const older = q.tasks.find((task) => task.id === 'older-worker-task')
+    const newer = q.tasks.find((task) => task.id === 'newer-worker-task')
+    expect(older?.status).toBe('ready')
+    expect(older?.assignedTo ?? null).toBeNull()
+    expect(older?.notes.at(-1)?.content).toContain('serial dispatch')
+    expect(newer?.status).toBe('in_progress')
+    expect(newer?.assignedTo).toBe('worker-agent')
+  })
+
+  it('clears stale spec claims from exploring tasks when dispatch is serial', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'draft-a',
+        status: 'exploring',
+        assignedTo: 'spec-agent',
+        updatedAt: '2026-05-03T00:00:00.000Z',
+      }),
+      mkTask({
+        id: 'draft-b',
+        status: 'exploring',
+        assignedTo: 'spec-agent',
+        updatedAt: '2026-05-03T00:01:00.000Z',
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    await orch.tick()
+
+    const q = await readQueue()
+    const drafts = q.tasks.filter((task) => task.status === 'exploring')
+    expect(drafts).toHaveLength(2)
+    expect(drafts.every((task) => task.assignedTo == null)).toBe(true)
+    expect(drafts.some((task) =>
+      task.notes.some((note) => note.content.includes('cleared a stale spec-agent claim')),
+    )).toBe(true)
   })
 
   it('normalizes stale reviewer ownership before dispatching a gate_check task', async () => {
@@ -4991,7 +5134,7 @@ describe('Orchestrator.run — full loops', () => {
 
     expect(out.kind).toBe('processed')
     if (out.kind === 'processed') {
-      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.beforeStatus).toBe('ready')
       expect(out.afterStatus).toBe('in_progress')
     }
 
@@ -5006,6 +5149,211 @@ describe('Orchestrator.run — full loops', () => {
     )).toBe(true)
     expect(task?.escalations[0]?.resolvedBy).toBe('system')
     expect(task?.escalations[0]?.resolution).toContain('explicitly resumed')
+  })
+
+  it('reopens a stale tool/path mismatch blocker after task-worktree routing is fixed', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: 'approved spec',
+        blockReason: 'decision_required: Tool reads are being intercepted to an unrelated missing file, blocking implementation',
+        notes: [
+          {
+            agentId: 'task-claimer',
+            role: 'orchestrator',
+            content: 'Claimed ready task for worker-agent.',
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'decision_required',
+            summary: 'Tool reads are being intercepted to an unrelated missing file, blocking implementation',
+            details: 'The required companion file read was misrouted into a different task worktree.',
+            raisedAt: '2026-05-03T00:11:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({
+        worker: stubAgent('worker-agent', async () => {
+          await mutateTask('a', { status: 'in_progress' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('ready')
+      expect(out.afterStatus).toBe('in_progress')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('old tool/path routing bug'),
+    )).toBe(true)
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('task-worktree path/context routing')
+  })
+
+  it('runs foreman inspection before escalating stale blueprint tooling blockers to the user', async () => {
+    const coordinator = stubAgent('coordinator-looma', async () => {
+      await mutateTask('a', { status: 'ready', assignedTo: null })
+    })
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: 'Implement auth profile management and email confirmation.',
+        blockReason: 'human_judgment_required: Cannot author missing useAuth.ts during blueprint phase for a spec task.',
+        notes: [
+          {
+            agentId: 'spec-agent',
+            role: 'blueprint-review',
+            content: 'Reviewed auth files and prepared the spec.',
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'spec-agent',
+            reason: 'human_judgment_required',
+            summary: 'Cannot author missing useAuth.ts during blueprint phase for a spec task.',
+            details:
+              'The read-only planning lane is being forced to create frontend/app/composables/useAuth.ts before it can inspect nearby evidence.',
+            raisedAt: '2026-05-03T00:11:00.000Z',
+          },
+        ],
+      }),
+      mkTask({
+        id: 'b',
+        status: 'blocked',
+        assignedTo: null,
+        title: 'Choose billing model',
+        blockReason: 'human_judgment_required: Owner decision needed on per-seat billing vs project billing.',
+        escalations: [
+          {
+            id: 'esc-b-1',
+            taskId: 'b',
+            agentId: 'spec-agent',
+            reason: 'human_judgment_required',
+            summary: 'Owner decision needed on billing model.',
+            details: 'The project can support either per-seat billing or project billing; the owner must choose.',
+            raisedAt: '2026-05-03T00:12:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({
+        coordinators: { looma: coordinator },
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('spec_review')
+      expect(out.afterStatus).toBe('ready')
+    }
+    expect(coordinator.calls).toHaveLength(1)
+
+    const queue = await readQueue()
+    const inspected = queue.tasks.find((candidate) => candidate.id === 'a')
+    const realDecision = queue.tasks.find((candidate) => candidate.id === 'b')
+    expect(inspected?.blockReason ?? null).toBeNull()
+    expect(inspected?.notes.some((note) =>
+      note.agentId === 'coordinator' &&
+      note.role === 'foreman-inspection' &&
+      note.content.includes('stale blueprint/tooling blocker'),
+    )).toBe(true)
+    expect(inspected?.escalations[0]?.resolvedBy).toBe('coordinator')
+    expect(inspected?.escalations[0]?.resolution).toContain('Foreman inspection')
+    expect(realDecision?.status).toBe('blocked')
+    expect(realDecision?.escalations[0]?.resolvedAt).toBeUndefined()
+  })
+
+  it('reopens a stale spec no-progress blocker into intake after transcript preservation is fixed', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        title: 'Emoji',
+        blockReason: 'human_judgment_required: Spec agent made no visible progress after 3 passes.',
+        notes: [
+          {
+            agentId: 'task-claimer',
+            role: 'orchestrator',
+            content: 'Claimed ready task for spec-agent.',
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'spec-agent',
+            reason: 'human_judgment_required',
+            summary: 'Spec agent made no visible progress after 3 passes.',
+            details: 'Task remained in exploring with no saved spec.',
+            raisedAt: '2026-05-03T00:11:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({
+        spec: stubAgent('spec-agent', async () => {
+          await mutateTask('a', { status: 'spec_review' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('exploring')
+      expect(out.afterStatus).toBe('spec_review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('spec_review')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('failed to save a durable draft'),
+    )).toBe(true)
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('preserve useful transcript context')
   })
 
   it('reopens a checkpoint-backed worker timeout blocker when the user explicitly restarts the project', async () => {
@@ -5625,7 +5973,7 @@ describe('Orchestrator.run — full loops', () => {
 
     expect(out.kind).toBe('processed')
     if (out.kind === 'processed') {
-      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.beforeStatus).toBe('ready')
       expect(out.afterStatus).toBe('in_progress')
     }
 

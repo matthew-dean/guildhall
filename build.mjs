@@ -15,6 +15,8 @@ const OUT_DIR = resolve(ROOT, 'dist')
 const ENTRY = resolve(ROOT, 'src/runtime/cli.ts')
 const WEB_ENTRY = resolve(ROOT, 'src/web/main.ts')
 const WEB_OUT_DIR = join(OUT_DIR, 'web')
+const ICONS_SRC = resolve(ROOT, 'icons')
+const WEB_ICONS_OUT_DIR = join(WEB_OUT_DIR, 'icons')
 
 const EXTERNALS = Object.keys(
   JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')).dependencies ?? {},
@@ -57,6 +59,11 @@ const copyAssetsPlugin = {
 function cleanDist() {
   if (existsSync(OUT_DIR)) rmSync(OUT_DIR, { recursive: true, force: true })
   mkdirSync(OUT_DIR, { recursive: true })
+}
+
+function copyWebIcons() {
+  if (!existsSync(ICONS_SRC)) return
+  cpSync(ICONS_SRC, WEB_ICONS_OUT_DIR, { recursive: true })
 }
 
 const buildOptions = {
@@ -132,6 +139,7 @@ function extractHelpTopics() {
 
 cleanDist()
 mkdirSync(WEB_OUT_DIR, { recursive: true })
+copyWebIcons()
 extractHelpTopics()
 
 if (watch) {
@@ -143,6 +151,7 @@ if (watch) {
 } else {
   await build(buildOptions)
   await build(webBuildOptions)
+  copyWebIcons()
   chmodSync(join(OUT_DIR, 'cli.js'), 0o755)
   console.log(`[guildhall build] ✓ dist/cli.js`)
   console.log(`[guildhall build] ✓ dist/web/app.js + app.css`)

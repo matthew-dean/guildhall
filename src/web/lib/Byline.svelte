@@ -8,6 +8,8 @@
     <Byline by={ds.approvedBy} at={ds.approvedAt} verb="Approved" />
 -->
 <script lang="ts">
+  import { labelForIdentifier } from './identifier-labels.js'
+
   interface Props {
     by?: string | null
     at?: string | null
@@ -17,11 +19,12 @@
   let { by, at, verb = 'by' }: Props = $props()
 
   const date = $derived(at ? String(at).slice(0, 10) : '')
+  const actor = $derived(by ? labelForIdentifier('agent', by).label : '')
 </script>
 
 {#if by || date}
   <span class="byline">
-    {#if by}{verb} {by}{/if}
+    {#if actor}{verb} {actor}{/if}
     {#if by && date} · {/if}
     {#if date}<time>{date}</time>{/if}
   </span>

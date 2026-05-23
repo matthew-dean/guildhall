@@ -21,11 +21,11 @@ Every lever entry records:
 |---|---|
 | `system-default` | The seed value written at workspace init. Edit freely. |
 | `spec-agent-intake` | Set by the Spec Agent while refining a task in `exploring`. |
-| `user-direct` | Set by a human — CLI, dashboard, or hand-edited YAML. |
+| `user-direct` | Set by a human — CLI, browser UI, or hand-edited YAML. |
 | `coordinator:<name>` | Set mid-project by a coordinator agent acting within its autonomy. |
 
 ## Why it matters
 
 When behavior surprises you, you can trace the exact line in `agent-settings.yaml` that produced it — and see who and when. This turns "the agents decided to fan out" from an opaque outcome into an explicit decision you can audit, roll back, or argue with.
 
-The dashboard's Settings tab surfaces the setter chip next to every lever, and clicking it opens the full rationale + history.
+The browser Settings tab surfaces the setter chip next to every lever, and clicking it opens the full rationale + history.

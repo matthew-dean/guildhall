@@ -11,7 +11,7 @@ help_summary: |
 
 **Source:** `src/mcp/`
 
-GuildHall consumes [Model Context Protocol](https://modelcontextprotocol.io) servers. Any server you configure becomes available to agents as tools (and, for resources, as `list_mcp_resources` / `read_mcp_resource`).
+Guildhall consumes [Model Context Protocol](https://modelcontextprotocol.io) servers. Any server you configure becomes available to agents as tools (and, for resources, as `list_mcp_resources` / `read_mcp_resource`).
 
 ## Configuration
 
@@ -59,7 +59,7 @@ Manages connection lifecycle: auto-reconnect on disconnect, status tracking (`co
 
 ## Status in the UI
 
-The dashboard surfaces `McpConnectionStatus` per server so you can see at a glance whether a configured server is up. Failed servers show the last error.
+The browser UI surfaces `McpConnectionStatus` per server so you can see at a glance whether a configured server is up. Failed servers show the last error.
 
 ## Security notes
 

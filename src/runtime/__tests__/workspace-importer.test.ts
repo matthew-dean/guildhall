@@ -306,6 +306,41 @@ tasks:
     expect(parsed.tasks).toHaveLength(1)
     expect(parsed.tasks[0]!.id).toBe('t-ok')
   })
+
+  it('treats a root YAML array as a task list for completed import recovery', () => {
+    const parsed = parseWorkspaceImport(`
+\`\`\`yaml
+- id: task-auth-complete
+  title: Complete authentication flow
+  description: Finish registration, login, profile management, and email confirmation.
+  domain: auth
+  priority: high
+  references:
+    - docs/brief.md
+- id: task-listings-basic
+  title: Build basic listing submission
+\`\`\`
+`)
+
+    expect(parsed.tasks).toEqual([
+      {
+        id: 'task-auth-complete',
+        title: 'Complete authentication flow',
+        description: 'Finish registration, login, profile management, and email confirmation.',
+        domain: 'auth',
+        priority: 'high',
+        references: ['docs/brief.md'],
+      },
+      {
+        id: 'task-listings-basic',
+        title: 'Build basic listing submission',
+        description: '',
+        domain: 'core',
+        priority: 'normal',
+        references: [],
+      },
+    ])
+  })
 })
 
 describe('approveWorkspaceImport', () => {
@@ -341,6 +376,44 @@ describe('approveWorkspaceImport', () => {
     })
     expect(res.success).toBe(false)
     expect(res.error).toContain('Could not find')
+  })
+
+  it('rejects malformed YAML fences instead of marking a partial import done', async () => {
+    await seedImporterWithSpec(`
+\`\`\`yaml
+goals:
+  - id: g1
+    title: Ship orchestrator
+\`\`\`
+
+\`\`\`yaml
+tasks:
+  - id: t-wire-dashboard
+    title: Wire dashboard card
+    description: do the thing
+    domain: ui
+    priority: high
+    references:
+      - ROADMAP.md
+     - bad-indent.md
+\`\`\`
+
+\`\`\`yaml
+milestones:
+  - title: Ship v0.1.0
+\`\`\`
+`)
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(res.success).toBe(false)
+    expect(res.error).toContain('Invalid workspace-import YAML')
+
+    const q = await readQueue()
+    const importerTask = q.tasks.find((t) => t.id === WORKSPACE_IMPORT_TASK_ID)!
+    expect(importerTask.status).not.toBe('done')
+    expect(q.tasks.some((t) => t.id === 't-wire-dashboard')).toBe(false)
   })
 
   it('inserts tasks as import drafts + origination=human, records goals + milestones', async () => {

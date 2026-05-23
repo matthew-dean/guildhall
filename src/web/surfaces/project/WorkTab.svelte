@@ -7,9 +7,10 @@
   import Button from '../../lib/Button.svelte'
   import Card from '../../lib/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
-  import Markdown from '../../lib/Markdown.svelte'
+  import ProgressFeed from '../../lib/ProgressFeed.svelte'
   import TaskCard from '../../lib/TaskCard.svelte'
   import { friendlyDomain, friendlyPriority, friendlyStatus } from '../../lib/display.js'
+  import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
   import { buildWorkSurface } from '../../lib/project-data.js'
@@ -64,11 +65,17 @@
     const all = tasks
     return {
       total: all.length,
-      active: all.filter(task => ['exploring', 'in_progress', 'review', 'gate_check'].includes(task.status ?? '')).length,
+      agentActive: all.filter(task => ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')).length,
+      shaping: all.filter(task => task.status === 'exploring').length,
+      readyForWorker: all.filter(task => task.status === 'ready').length,
       awaitingApproval: all.filter(task => task.status === 'spec_review').length,
       done: all.filter(task => ['done', 'pending_pr'].includes(task.status ?? '')).length,
     }
   })
+
+  function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+    return `${count} ${count === 1 ? singular : plural}`
+  }
 
   const sortedTasks = $derived.by(() => {
     const list = [...tasks]
@@ -189,16 +196,20 @@
     if (task.terminalSummary?.headline) return task.terminalSummary.headline
     if (task.latestCheckpoint?.nextPlannedAction) return task.latestCheckpoint.nextPlannedAction
     if (task.description) return task.description
-    return task.id
+    return friendlyTaskId(task.id)
   }
 
   $effect(() => {
-    projectFetch('/api/project/progress')
+    const projectId = detail.id ?? null
+    progress = 'Loading...'
+    projectFetch('/api/project/progress', undefined, projectId)
       .then(r => r.json())
       .then(j => {
+        if (projectId !== (detail.id ?? null)) return
         progress = j.progress || '(empty)'
       })
       .catch(() => {
+        if (projectId !== (detail.id ?? null)) return
         progress = '(failed to load)'
       })
   })
@@ -237,9 +248,7 @@
 
   <details class="progress-more progress-more--full">
     <summary>Recent progress</summary>
-    <div class="progress">
-      <Markdown source={progress} />
-    </div>
+    <ProgressFeed {progress} {tasks} />
   </details>
 {:else}
   <div class="work-list-view">
@@ -267,11 +276,13 @@
 
       <div class="work-summary">
         <Chip label={`${taskCounts.total} tasks`} tone="neutral" />
-        <Chip label={`${taskCounts.active} active`} tone="accent" />
+        <Chip label={countLabel(taskCounts.agentActive, 'agent-active', 'agent-active')} tone="accent" />
+        <Chip label={countLabel(taskCounts.shaping, 'shaping', 'shaping')} tone="neutral" />
+        <Chip label={countLabel(taskCounts.readyForWorker, 'ready for worker', 'ready for worker')} tone="neutral" />
         <Chip label={`${taskCounts.awaitingApproval} awaiting approval`} tone="warn" />
         <Chip label={`${taskCounts.done} done`} tone="ok" />
         {#if importDraftCount > 0}
-          <Chip label={`${importDraftCount} imported drafts`} tone="neutral" />
+          <Chip label={countLabel(importDraftCount, 'import draft')} tone="neutral" />
         {/if}
       </div>
 
@@ -296,7 +307,12 @@
 
       {#if tasks.length === 0}
         {#if needsMeta}
-          <p class="muted">No tasks yet — <strong>Bootstrap project</strong> first.</p>
+          <div class="setup-empty">
+            <p class="muted">No tasks yet. Finish project setup first.</p>
+            <Button variant="primary" size="sm" onclick={() => nav(currentProjectHref('/setup'))}>
+              Open setup
+            </Button>
+          </div>
         {:else}
           <p class="muted">No tasks yet — <strong>New task</strong> to begin.</p>
         {/if}
@@ -346,9 +362,7 @@
 
     <details class="progress-more progress-more--full">
       <summary>Recent progress</summary>
-      <div class="progress">
-        <Markdown source={progress} />
-      </div>
+      <ProgressFeed {progress} {tasks} />
     </details>
   </div>
 {/if}
@@ -369,6 +383,19 @@
     flex-wrap: wrap;
     gap: var(--s-2);
     margin-bottom: var(--s-3);
+  }
+  .setup-empty {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+    padding: var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-subtle);
+  }
+  .setup-empty p {
+    margin: 0;
   }
   .task-table-wrap {
     overflow-x: auto;
@@ -527,27 +554,83 @@
   .progress-more[open] > summary::before {
     content: '▾ ';
   }
-  .progress {
-    max-height: 260px;
-    overflow: auto;
-    margin-top: var(--s-2);
-  }
   .muted {
     color: var(--text-muted);
     font-size: var(--fs-2);
   }
 
-  @media (max-width: 720px) {
+  @media (max-width: 860px) {
     .draft-queue-card {
       flex-direction: column;
       align-items: stretch;
     }
-    .task-table th,
+    .task-table-wrap {
+      overflow-x: hidden;
+    }
+    .task-table {
+      min-width: 0;
+      display: block;
+    }
+    .task-table thead {
+      display: none;
+    }
+    .task-table tbody {
+      display: flex;
+      flex-direction: column;
+    }
+    .task-table tr,
     .task-table td {
-      padding: var(--s-2);
+      display: block;
+    }
+    .task-table .task-row {
+      padding: var(--s-3);
+      border-bottom: 1px solid var(--border);
+    }
+    .task-table .task-row:last-child {
+      border-bottom: 0;
+    }
+    .task-table td {
+      padding: 0;
+      border-bottom: 0;
+    }
+    .cell-task {
+      min-width: 0;
+      margin-bottom: var(--s-2);
     }
     .task-title {
       font-size: var(--fs-1);
     }
+    .task-subcopy {
+      -webkit-line-clamp: 3;
+    }
+    .cell-status,
+    .cell-steward,
+    .cell-priority,
+    .cell-revisions,
+    .cell-updated {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--s-1);
+      margin: 0 var(--s-2) var(--s-1) 0;
+      white-space: normal;
+      text-align: left;
+    }
+    .cell-status::before,
+    .cell-steward::before,
+    .cell-priority::before,
+    .cell-revisions::before,
+    .cell-updated::before {
+      margin-right: var(--s-1);
+      color: var(--text-muted);
+      font-size: var(--fs-0);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .cell-status::before { content: 'Stage'; }
+    .cell-steward::before { content: 'Part'; }
+    .cell-priority::before { content: 'Priority'; }
+    .cell-revisions::before { content: 'Revisions'; }
+    .cell-updated::before { content: 'Updated'; }
   }
 </style>

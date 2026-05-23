@@ -18,6 +18,8 @@ export interface ThreadPhaseLike {
   kind: string
   skippable?: boolean
   liveAgent?: unknown
+  taskStatus?: string
+  activity?: Array<{ label?: string; tone?: string }>
 }
 
 export interface ThreadPhaseGroup<T extends ThreadPhaseLike> {
@@ -39,12 +41,29 @@ export function buildThreadPhaseGroups<T extends ThreadPhaseLike>(turns: T[]): A
         group.turns.every((turn) => turn.kind === 'setup_step' && turn.skippable)
           ? 'Optional'
           : group.phase === 'inflight' &&
+              group.turns.some((turn) => isRecoveryTurnLike(turn))
+            ? 'Needs recovery'
+          : group.phase === 'inflight' &&
               group.turns.length > 0 &&
               group.turns.every((turn) => turn.kind === 'inflight' && !turn.liveAgent)
             ? 'Paused'
             : THREAD_PHASE_LABELS[group.phase],
     }))
     .filter((group) => group.turns.length > 0)
+}
+
+function isRecoveryTurnLike(turn: ThreadPhaseLike): boolean {
+  if (turn.kind !== 'inflight' || turn.liveAgent || turn.taskStatus !== 'in_progress') return false
+  const activity = turn.activity ?? []
+  const hasFailure = activity.some(item =>
+    item.tone === 'danger' ||
+    /failed|timed out|empty assistant|error/i.test(item.label ?? ''),
+  )
+  const hasDurableProgress = activity.some(item =>
+    item.tone === 'ok' ||
+    /write file|wrote |checkpoint|committed|changed/i.test(item.label ?? ''),
+  )
+  return hasFailure && hasDurableProgress
 }
 
 export function sortEventsChronologically(items: EventEnvelope[]): EventEnvelope[] {

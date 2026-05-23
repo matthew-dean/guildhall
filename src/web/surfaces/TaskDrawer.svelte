@@ -261,6 +261,47 @@
   const isWorkspaceImportTask = $derived(task?.id === 'task-workspace-import')
   const openEscalations = $derived(task ? activeEscalations(task) : [])
   const firstOpenEscalation = $derived(openEscalations[0] ?? null)
+  const drawerOutcome = $derived.by(() => {
+    if (!task) return null
+    if (task.status === 'shelved') {
+      return {
+        tone: 'warn',
+        eyebrow: 'Put aside',
+        title: 'This task is out of the active queue.',
+        detail: task.shelveReason?.detail
+          ?? 'Guildhall will not work on it again until you return it to the queue.',
+      }
+    }
+    if (task.terminalSummary?.headline) {
+      return {
+        tone: 'ok',
+        eyebrow: 'Finished',
+        title: task.terminalSummary.headline,
+        detail: task.terminalSummary.detail ?? 'This task has a terminal result.',
+      }
+    }
+    if (task.latestCheckpoint?.nextPlannedAction || task.latestCheckpoint?.intent) {
+      return {
+        tone: 'info',
+        eyebrow: 'Checkpoint saved',
+        title: task.latestCheckpoint.nextPlannedAction
+          ? 'Guildhall saved where to resume.'
+          : 'Guildhall saved a recovery checkpoint.',
+        detail: task.latestCheckpoint.nextPlannedAction
+          ?? task.latestCheckpoint.intent
+          ?? 'The next worker pass can resume from the latest checkpoint.',
+      }
+    }
+    if (firstOpenEscalation && /no visible progress/i.test(firstOpenEscalation.summary ?? '')) {
+      return {
+        tone: 'warn',
+        eyebrow: 'Needs recovery',
+        title: 'Guildhall did not produce a durable task update.',
+        detail: 'Check Transcript for useful observations, then retry or resolve the blocker from here.',
+      }
+    }
+    return null
+  })
   const displayTaskTitle = $derived.by(() => {
     if (!task) return taskId
     const raw = typeof task.title === 'string' ? task.title.trim() : ''
@@ -428,41 +469,50 @@
       </div>
     {:else if !payload}
       <p class="loading">Loading...</p>
-    {:else if activeTab === 'current'}
-      <CurrentTab
-        task={payload.task}
-        turns={payload.threadTurns ?? []}
-        {busy}
-        {runBusy}
-        {runError}
-        onApproveBrief={() => post('approve-brief')}
-        onApproveSpec={handleApproveSpec}
-        onRunTask={() => runProject('start', taskId)}
-        onShapeDraft={handleShapeDraft}
-        onOpenSpecTab={() => (activeTab = 'spec')}
-        onAnswerQuestion={answerQuestion}
-      />
-    {:else if activeTab === 'spec'}
-      <SpecTab
-        task={payload.task}
-        {busy}
-        onApproveBrief={() => post('approve-brief')}
-        onApproveSpec={handleApproveSpec}
-        onPause={() => confirmed('Pause') && post('pause')}
-        onShelve={() => confirmed('Shelve') && post('shelve')}
-        onUnshelve={() => confirmed('Unshelve') && post('unshelve')}
-        onResolveEscalation={handleResolveEscalation}
-        onSendFollowUp={handleSendFollowUp}
-        onAddAcceptance={handleAddAcceptance}
-      />
-    {:else if activeTab === 'transcript'}
-      <TranscriptTab task={payload.task} exploringTranscript={payload.exploringTranscript} />
-    {:else if activeTab === 'experts'}
-      <ExpertsTab taskId={taskId} />
-    {:else if activeTab === 'history'}
-      <HistoryTab task={payload.task} />
-    {:else if activeTab === 'provenance'}
-      <ProvenanceTab task={payload.task} contextDebug={payload.contextDebug ?? []} />
+    {:else}
+      {#if drawerOutcome}
+        <section class={`drawer-outcome tone-${drawerOutcome.tone}`} aria-label={drawerOutcome.eyebrow}>
+          <span class="outcome-eyebrow">{drawerOutcome.eyebrow}</span>
+          <strong>{drawerOutcome.title}</strong>
+          <span>{drawerOutcome.detail}</span>
+        </section>
+      {/if}
+      {#if activeTab === 'current'}
+        <CurrentTab
+          task={payload.task}
+          turns={payload.threadTurns ?? []}
+          {busy}
+          {runBusy}
+          {runError}
+          onApproveBrief={() => post('approve-brief')}
+          onApproveSpec={handleApproveSpec}
+          onRunTask={() => runProject('start', taskId)}
+          onShapeDraft={handleShapeDraft}
+          onOpenSpecTab={() => (activeTab = 'spec')}
+          onAnswerQuestion={answerQuestion}
+        />
+      {:else if activeTab === 'spec'}
+        <SpecTab
+          task={payload.task}
+          {busy}
+          onApproveBrief={() => post('approve-brief')}
+          onApproveSpec={handleApproveSpec}
+          onPause={() => confirmed('Pause') && post('pause')}
+          onShelve={() => confirmed('Shelve') && post('shelve')}
+          onUnshelve={() => confirmed('Unshelve') && post('unshelve')}
+          onResolveEscalation={handleResolveEscalation}
+          onSendFollowUp={handleSendFollowUp}
+          onAddAcceptance={handleAddAcceptance}
+        />
+      {:else if activeTab === 'transcript'}
+        <TranscriptTab task={payload.task} exploringTranscript={payload.exploringTranscript} />
+      {:else if activeTab === 'experts'}
+        <ExpertsTab taskId={taskId} />
+      {:else if activeTab === 'history'}
+        <HistoryTab task={payload.task} />
+      {:else if activeTab === 'provenance'}
+        <ProvenanceTab task={payload.task} contextDebug={payload.contextDebug ?? []} />
+      {/if}
     {/if}
   </div>
 
@@ -507,64 +557,72 @@
           {/if}
         {/if}
       </div>
-      {#if firstOpenEscalation}
-      <Button
-        variant="primary"
-        size="sm"
-        disabled={busy}
-        onclick={() => handleResolveEscalation(firstOpenEscalation, 'retry')}
-      >
-        Retry blocker
-      </Button>
-      <Button
-        variant="secondary"
-        size="sm"
-        disabled={busy}
-        onclick={() => handleResolveEscalation(firstOpenEscalation, 'resolve')}
-      >
-        Resolve blocker
-      </Button>
-      {/if}
-      {#if canPause}
-        {#if stageRerun}
+        {#if firstOpenEscalation}
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={busy}
+            onclick={() => handleResolveEscalation(firstOpenEscalation, 'retry')}
+          >
+            Retry blocker
+          </Button>
           <Button
             variant="secondary"
             size="sm"
-            disabled={busy || rerunStageBusy !== null}
-            onclick={() => rerunStage(stageRerun.stage)}
+            disabled={busy}
+            onclick={() => handleResolveEscalation(firstOpenEscalation, 'resolve')}
           >
-            {rerunStageBusy === stageRerun.stage ? 'Re-running...' : stageRerun.label}
+            Resolve blocker
           </Button>
         {/if}
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={busy}
-          onclick={() => confirmed('Pause') && post('pause')}
-        >
-          Pause task
-        </Button>
-      {/if}
-      {#if isShelved}
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={busy}
-          onclick={handleUnshelve}
-        >
-          Unshelve
-        </Button>
-      {:else if canShelve}
-        <Button
-          variant="danger"
-          size="sm"
-          disabled={busy}
-          onclick={handleShelve}
-        >
-          Put aside
-        </Button>
-      {/if}
-      <a class="copy-link" href={currentTaskHref(task.id)}>copy link</a>
+        {#if isShelved}
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={busy}
+            onclick={handleUnshelve}
+          >
+            Unshelve
+          </Button>
+        {/if}
+        {#if canPause || (!isShelved && canShelve) || stageRerun}
+          <details class="more-actions">
+            <summary>More task actions</summary>
+            <div class="more-action-menu">
+              {#if canPause}
+                {#if stageRerun}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy || rerunStageBusy !== null}
+                    onclick={() => rerunStage(stageRerun.stage)}
+                  >
+                    {rerunStageBusy === stageRerun.stage ? 'Re-running...' : stageRerun.label}
+                  </Button>
+                {/if}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy}
+                  onclick={() => confirmed('Pause') && post('pause')}
+                >
+                  Pause task
+                </Button>
+              {/if}
+              {#if !isShelved && canShelve}
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={busy}
+                  onclick={handleShelve}
+                >
+                  Put aside
+                </Button>
+              {/if}
+            </div>
+          </details>
+        {/if}
+        <a class="copy-link" href={currentTaskHref(task.id)}>copy link</a>
       {/if}
     </footer>
   {/if}
@@ -638,6 +696,42 @@
     overflow-y: auto;
     padding: var(--s-4);
   }
+  .drawer-outcome {
+    display: grid;
+    gap: var(--s-1);
+    margin-bottom: var(--s-4);
+    padding: var(--s-3);
+    border: 1px solid var(--border);
+    border-left-width: 3px;
+    border-radius: var(--radius-md);
+    background: var(--bg);
+    color: var(--text);
+  }
+  .drawer-outcome strong {
+    font-size: var(--fs-2);
+    line-height: var(--lh-tight);
+  }
+  .drawer-outcome span:last-child {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-copy);
+  }
+  .outcome-eyebrow {
+    color: var(--text-subtle);
+    font-size: var(--fs-0);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .drawer-outcome.tone-warn {
+    border-left-color: var(--warning);
+  }
+  .drawer-outcome.tone-ok {
+    border-left-color: var(--success);
+  }
+  .drawer-outcome.tone-info {
+    border-left-color: var(--accent);
+  }
   .gh-drawer-foot {
     display: flex;
     align-items: center;
@@ -662,6 +756,35 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .more-actions {
+    position: relative;
+  }
+  .more-actions summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    font-weight: 700;
+    list-style: none;
+  }
+  .more-actions summary::-webkit-details-marker {
+    display: none;
+  }
+  .more-actions[open] summary {
+    color: var(--text);
+  }
+  .more-action-menu {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + var(--s-2));
+    display: grid;
+    gap: var(--s-2);
+    min-width: 180px;
+    padding: var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-raised);
+    box-shadow: var(--shadow-lg);
   }
   .copy-link {
     color: var(--text-muted);

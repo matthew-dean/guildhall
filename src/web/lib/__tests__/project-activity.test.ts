@@ -25,7 +25,7 @@ describe('buildProjectTicker', () => {
     expect(buildProjectTicker(detail, latestEvent, now)).toEqual({
       tone: 'active',
       pulse: true,
-      actorLabel: 'Worker',
+      actorLabel: 'Builder',
       label: 'Live',
       message: 'Started Wire up auth callback',
       timeLabel: '10s ago',
@@ -46,7 +46,7 @@ describe('buildProjectTicker', () => {
     ).toMatchObject({
       tone: 'ok',
       pulse: false,
-      actorLabel: 'Reviewer',
+      actorLabel: 'Review team',
       label: 'Updated',
       message: 'Finished Polish task cards',
       timeLabel: '1m ago',
@@ -176,6 +176,25 @@ describe('buildProjectTicker', () => {
       message: '2 tasks queued to resume',
     })
 
+    expect(
+      buildProjectTicker(
+        {
+          tasks: [
+            { id: 'task-import-1', status: 'import_draft', title: 'Review existing work' },
+            { id: 'task-import-2', status: 'import_draft', title: 'Review more work' },
+            { id: 'done-1', status: 'done', title: 'Finished' },
+          ],
+        },
+        null,
+        now,
+      ),
+    ).toMatchObject({
+      tone: 'warn',
+      actorLabel: 'Needs task briefs',
+      label: 'Drafts',
+      message: '2 imported drafts need task briefs',
+    })
+
     expect(buildProjectTicker({ tasks: [] }, null, now)).toMatchObject({
       tone: 'idle',
       actorLabel: 'Idle',
@@ -218,6 +237,34 @@ describe('buildProjectTicker', () => {
       tone: 'warn',
       actorLabel: 'Needs you',
       message: 'Waiting on your answer in Thread',
+    })
+  })
+
+  it('lets current actionable draft state beat stale stopped-event copy', () => {
+    const detail: ProjectDetail = {
+      run: { status: 'stopped' },
+      tasks: [
+        { id: 'task-import-1', status: 'import_draft', title: 'Bootstrap database' },
+      ],
+    }
+
+    expect(
+      buildProjectTicker(
+        detail,
+        {
+          at: '2026-05-12T08:00:00.000Z',
+          event: {
+            type: 'supervisor_stopped',
+            message: 'No actionable tasks remain: 3 done, 0 blocked, 1 shelved.',
+          },
+        },
+        now,
+      ),
+    ).toMatchObject({
+      tone: 'warn',
+      actorLabel: 'Needs task briefs',
+      label: 'Drafts',
+      message: '1 imported draft needs task briefs',
     })
   })
 })

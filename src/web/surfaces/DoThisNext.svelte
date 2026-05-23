@@ -7,6 +7,7 @@
   The product says "do this", and Inbox remains for the full list.
 -->
 <script lang="ts">
+  import ActionBar from '../lib/ActionBar.svelte'
   import Card from '../lib/Card.svelte'
   import Button from '../lib/Button.svelte'
   import { onEvent } from '../lib/events.js'
@@ -212,7 +213,7 @@
           <div class="why">{source.why}</div>
         {/if}
       </div>
-      <div class="actions">
+      <ActionBar>
         <Button variant="primary" onclick={() => go(source.href)}>
           {source.button} →
         </Button>
@@ -221,7 +222,7 @@
             {moreCount} more in Inbox ›
           </Button>
         {/if}
-      </div>
+      </ActionBar>
     </div>
     </Card>
   </div>
@@ -256,11 +257,5 @@
     font-size: var(--fs-1);
     color: var(--text-muted);
     line-height: var(--lh-body);
-  }
-  .actions {
-    display: flex;
-    align-items: center;
-    gap: var(--s-3);
-    flex-wrap: wrap;
   }
 </style>

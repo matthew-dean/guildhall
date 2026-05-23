@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ActionBar from '../../lib/ActionBar.svelte'
   import Card from '../../lib/Card.svelte'
   import Row from '../../lib/Row.svelte'
   import Stack from '../../lib/Stack.svelte'
@@ -104,11 +105,24 @@
       }>
     }
   }
+  interface ParsedImport {
+    goals: DetectedGoal[]
+    tasks: Array<{
+      id: string
+      title: string
+      description: string
+      domain: string
+      priority: 'critical' | 'high' | 'normal' | 'low'
+      references?: readonly string[]
+    }>
+    milestones: Array<{ title: string; evidence: string }>
+  }
   interface DraftResponse {
     taskExists: boolean
     specReady: boolean
     taskStatus?: string | null
     detected: DetectedDraft | null
+    parsed?: ParsedImport | null
     dismissed: boolean
     anchors?: readonly string[]
     error?: string
@@ -309,6 +323,19 @@
     selectedSourceKeys.length > 0 &&
     selectedTaskGroups.length === 0,
   )
+  const completedTaskImport = $derived(data?.taskStatus === 'done' && !completedImport)
+  const completedParsedTaskCount = $derived(data?.parsed?.tasks?.length ?? 0)
+  const completedMissingParsedTasks = $derived.by(() => {
+    const parsedTasks = data?.parsed?.tasks ?? []
+    const currentTasks = project.detail?.tasks ?? []
+    if (currentTasks.length === 0) return parsedTasks
+    const existingIds = new Set(currentTasks.map(task => task.id))
+    return parsedTasks.filter(task => !existingIds.has(task.id))
+  })
+  const completedMissingTaskCount = $derived(completedMissingParsedTasks.length)
+  const completedParsedSourceCount = $derived(data?.detected?.review?.sourceGroups?.length ?? 0)
+  const completedParsedGoalCount = $derived(data?.parsed?.goals?.length ?? data?.detected?.review?.totalGoals ?? 0)
+  const completedParsedMilestoneCount = $derived(data?.parsed?.milestones?.length ?? data?.detected?.review?.totalMilestones ?? 0)
 
   function selectArea(key: string) {
     const area = areaGroups.find(item => item.key === key)
@@ -696,6 +723,45 @@
     }
   }
 
+  async function restoreCompletedImportDrafts() {
+    busy = 'approve'
+    try {
+      const r = await projectFetch('/api/project/workspace-import/approve', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const j = (await r.json()) as {
+        ok?: boolean
+        tasksAdded?: number
+        goalsRecorded?: number
+        milestonesLogged?: number
+        error?: string
+      }
+      if (!r.ok || j.error) {
+        toast.error(j.error ?? `Import repair failed (${r.status})`)
+        return
+      }
+      completedImport = {
+        tasksAdded: j.tasksAdded ?? 0,
+        sourceCount: completedParsedSourceCount,
+        areaCount: data?.detected?.review?.areaGroups?.length ?? 0,
+        goalsRecorded: j.goalsRecorded ?? completedParsedGoalCount,
+        milestonesLogged: j.milestonesLogged ?? completedParsedMilestoneCount,
+      }
+      toast.success(
+        (j.tasksAdded ?? 0) > 0
+          ? `Restored ${j.tasksAdded} draft task${j.tasksAdded === 1 ? '' : 's'} from the completed import.`
+          : 'Import is already landed.',
+      )
+      await project.refresh()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e))
+    } finally {
+      busy = null
+    }
+  }
+
   async function dismiss() {
     busy = 'dismiss'
     try {
@@ -798,6 +864,62 @@
           <Button variant="primary" onclick={() => nav(projectActionHref('/thread'))}>
             {completedImport.tasksAdded > 0 ? 'Shape imported drafts in Thread' : 'Use this context in Thread'}
           </Button>
+        </Row>
+      </Stack>
+    </Card>
+  {:else if completedTaskImport}
+    <Card tone="accent">
+      <Stack gap="5">
+        <div class="section-intro">
+          <div class="section-kicker">
+            <Chip label="Import complete" tone="accent" />
+            <span>Saved context</span>
+          </div>
+          <h3 class="section-title">This project import has already been approved.</h3>
+          <p class="section-copy">
+            Guildhall saved the project context and marked the import review done. Re-run only if the project notes changed or the import needs repair.
+          </p>
+          <div class="metric-row" aria-label="Completed import summary">
+            {#if completedParsedTaskCount > 0}
+              <Chip label={`${completedParsedTaskCount} proposed task${completedParsedTaskCount === 1 ? '' : 's'}`} tone="ok" />
+            {/if}
+            {#if completedParsedGoalCount > 0}
+              <Chip label={`${completedParsedGoalCount} goal${completedParsedGoalCount === 1 ? '' : 's'}`} tone="neutral" />
+            {/if}
+            {#if completedParsedMilestoneCount > 0}
+              <Chip label={`${completedParsedMilestoneCount} milestone${completedParsedMilestoneCount === 1 ? '' : 's'}`} tone="neutral" />
+            {/if}
+            {#if completedParsedSourceCount > 0}
+              <Chip label={`${completedParsedSourceCount} source${completedParsedSourceCount === 1 ? '' : 's'}`} tone="neutral" />
+            {/if}
+          </div>
+        </div>
+        {#if completedMissingTaskCount > 0}
+          <p class="learned-note">
+            {completedMissingTaskCount} proposed task{completedMissingTaskCount === 1 ? '' : 's'} from this import
+            {completedMissingTaskCount === 1 ? ' is' : ' are'} missing from Work. Restore the import to add only those missing drafts.
+          </p>
+        {:else if completedParsedTaskCount > 0}
+          <p class="learned-note">
+            All proposed tasks from this completed import already exist in Work.
+          </p>
+        {/if}
+        <Row justify="end" gap="3" wrap>
+          <Button variant="secondary" onclick={rerun} disabled={busy !== null}>
+            {busy === 'rerun' ? 'Re-reading…' : 'Re-run import'}
+          </Button>
+          <Button variant="secondary" onclick={() => nav(projectActionHref('/work'))}>
+            Open Work
+          </Button>
+          {#if completedMissingTaskCount > 0}
+            <Button variant="primary" onclick={restoreCompletedImportDrafts} disabled={busy !== null}>
+              {busy === 'approve' ? 'Restoring…' : `Restore ${completedMissingTaskCount} draft task${completedMissingTaskCount === 1 ? '' : 's'}`}
+            </Button>
+          {:else}
+            <Button variant="primary" onclick={() => nav(projectActionHref('/thread'))}>
+              Use this context in Thread
+            </Button>
+          {/if}
         </Row>
       </Stack>
     </Card>
@@ -950,7 +1072,7 @@
                     <div class="source-path">{sourcePreview(area)}</div>
                   </Stack>
                 </div>
-                <div class="card-actions-inline">
+                <ActionBar className="import-card-actions">
                   <Button variant="ghost" size="sm" onclick={() => focusArea(area.key)}>
                     Details
                   </Button>
@@ -965,7 +1087,7 @@
                       Include
                     </Button>
                   {/if}
-                </div>
+                </ActionBar>
               </Row>
             </div>
           {/each}
@@ -1007,7 +1129,7 @@
                         <div class="source-path">{sourcePreview(area)}</div>
                       </Stack>
                     </div>
-                    <div class="card-actions-inline">
+                    <ActionBar className="import-card-actions">
                       <Button variant="ghost" size="sm" onclick={() => focusArea(area.key)}>
                         Details
                       </Button>
@@ -1022,7 +1144,7 @@
                           Include
                         </Button>
                       {/if}
-                    </div>
+                    </ActionBar>
                   </Row>
                 </div>
               {/each}
@@ -1095,14 +1217,14 @@
                       {/if}
                     </Stack>
                   </div>
-                  <div class="card-actions-inline">
+                  <ActionBar className="import-card-actions">
                     <Button variant="ghost" size="sm" onclick={() => focusSource(group.key)}>
                       Details
                     </Button>
                     <Button variant={selectedSourceKeys.includes(group.key) ? 'secondary' : 'primary'} size="sm" onclick={() => toggleSource(group.key)}>
                       {selectedSourceKeys.includes(group.key) ? 'Exclude' : 'Include'}
                     </Button>
-                  </div>
+                  </ActionBar>
                 </Row>
               </div>
             {/each}
@@ -1502,6 +1624,20 @@
           </Button>
         {/if}
       {:else if focusedTask}
+        {#if step === 'tasks'}
+          <Button
+            variant="secondary"
+            size="sm"
+            onclick={advanceFromTasks}
+            disabled={selectedTaskIds.length === 0}
+          >
+            {#if nextGroupLabel()}
+              Review next source
+            {:else}
+              Review final task list
+            {/if}
+          </Button>
+        {/if}
         {#if selectedTaskIds.includes(focusedTask.suggestedId)}
           <Button variant="secondary" size="sm" onclick={() => toggleTask(focusedTask.suggestedId)}>
             Exclude task
@@ -1808,13 +1944,6 @@
     width: 18px;
     height: 18px;
     accent-color: var(--accent);
-  }
-  .card-actions-inline {
-    display: flex;
-    gap: var(--s-3);
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    align-items: center;
   }
   .items {
     list-style: none;

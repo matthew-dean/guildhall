@@ -54,6 +54,7 @@
   const routeProjectId = $derived(props.projectId?.trim() || null)
   const activeProjectId = $derived(routeProjectId ?? project.detail?.id ?? null)
   let busy = $state(false)
+  let optimisticRunStatus = $state<'running' | 'stopping' | null>(null)
   let runError = $state<string | null>(null)
   let intakeOpen = $state(false)
   let refreshHandle: ReturnType<typeof setInterval> | null = null
@@ -311,6 +312,7 @@
 
   async function start(mode: 'continuous' | 'one_task' = 'continuous') {
     busy = true
+    optimisticRunStatus = 'running'
     runError = null
     try {
       const res = await projectFetch('/api/project/start', {
@@ -325,6 +327,7 @@
         } catch {
           runError = `Start failed (HTTP ${res.status})`
         }
+        optimisticRunStatus = null
         return
       }
       setTimeout(() => void project.refresh(activeProjectId), 300)
@@ -343,6 +346,7 @@
 
   async function stop() {
     busy = true
+    optimisticRunStatus = 'stopping'
     runError = null
     try {
       const res = await projectFetch('/api/project/stop', { method: 'POST' }, activeProjectId)
@@ -353,6 +357,7 @@
         } catch {
           runError = `Stop failed (HTTP ${res.status})`
         }
+        optimisticRunStatus = null
         return
       }
       setTimeout(() => void project.refresh(activeProjectId), 300)
@@ -405,7 +410,12 @@
     }, 5000)
     return () => clearInterval(handle)
   })
-  const runStatus = $derived(detail?.run?.status ?? 'stopped')
+  const actualRunStatus = $derived(detail?.run?.status ?? 'stopped')
+  const runStatus = $derived(optimisticRunStatus ?? actualRunStatus)
+  $effect(() => {
+    if (optimisticRunStatus === 'running' && actualRunStatus === 'running') optimisticRunStatus = null
+    if (optimisticRunStatus === 'stopping' && actualRunStatus !== 'running') optimisticRunStatus = null
+  })
   const runMode = $derived(detail?.run?.mode === 'one_task' ? 'one_task' : 'continuous')
   const providerStatus = $derived(detail?.providerStatus ?? detail?.run?.providerStatus ?? null)
   const startReadiness = $derived(detail?.startReadiness ?? null)
@@ -673,6 +683,24 @@
           : 'Complete bootstrap in Thread before adding tasks'
         : null,
   )
+  const setupAttentionHref = $derived(
+    currentProjectHref(
+      needsMeta || metaIntakePending
+        ? '/setup'
+        : startReadiness?.actionHref ?? '/settings/ready',
+      activeProjectId,
+    ),
+  )
+  const setupAttentionLabel = $derived(
+    startReadiness?.code === 'import_drafts_waiting'
+      ? 'Imported drafts need review'
+      : needsMeta || metaIntakePending
+        ? 'Project setup needs attention'
+        : 'Readiness checks need attention',
+  )
+  const setupAttentionButtonLabel = $derived(
+    startReadiness?.code === 'import_drafts_waiting' ? 'Review drafts' : 'Setup',
+  )
 </script>
 
 <svelte:document onclick={handleDocumentClick} />
@@ -915,10 +943,10 @@
             <StatusButton
               tone="warn"
               icon="alert-triangle"
-              label="Setup"
-              onclick={() => go(currentProjectHref(needsMeta ? '/setup' : '/settings/ready', activeProjectId))}
+              label={setupAttentionButtonLabel}
+              onclick={() => go(setupAttentionHref)}
               title={newTaskDisabledReason ?? startDisabledReason ?? ''}
-              ariaLabel={`${needsMeta ? 'Project setup needs attention' : 'Readiness checks need attention'}: ${newTaskDisabledReason ?? startDisabledReason ?? 'Review required'}`}
+              ariaLabel={`${setupAttentionLabel}: ${newTaskDisabledReason ?? startDisabledReason ?? 'Review required'}`}
             />
           {/if}
           {#if providerStatus?.fallback && providerHeaderLabel}
@@ -979,24 +1007,28 @@
             </Button>
           {/if}
           <Button
-            variant={runStatus === 'running' ? 'danger' : 'primary'}
+            variant={runStatus === 'running' || runStatus === 'stopping' ? 'danger' : 'primary'}
             size="sm"
-            disabled={busy || (runStatus !== 'running' && (runStatus === 'stopping' || startDisabledReason !== null))}
+            disabled={busy || runStatus === 'stopping' || (runStatus !== 'running' && startDisabledReason !== null)}
             onclick={runStatus === 'running' ? stop : () => start('continuous')}
             ariaLabel={
-              runStatus === 'running'
+              runStatus === 'stopping'
+                ? 'Stopping'
+                : runStatus === 'running'
                 ? (runMode === 'one_task' ? 'Stop one-step run' : 'Stop')
                 : (startDisabledReason ?? 'Start')
             }
             title={
-              runStatus === 'running'
+              runStatus === 'stopping'
+                ? 'Stopping Guildhall'
+                : runStatus === 'running'
                 ? (runMode === 'one_task' ? 'Stop the current one-step run' : 'Stop Guildhall')
                 : (startDisabledReason ?? 'Let Guildhall advance this project')
             }
           >
             <span class="btn-inner">
-              <Icon name={runStatus === 'running' ? 'square' : 'play'} size={16} />
-              {runStatus === 'running' ? (runMode === 'one_task' ? 'Stop 1' : 'Stop') : 'Start'}
+              <Icon name={runStatus === 'running' || runStatus === 'stopping' ? 'square' : 'play'} size={16} />
+              {runStatus === 'stopping' ? 'Stopping...' : runStatus === 'running' ? (runMode === 'one_task' ? 'Stop 1' : 'Stop') : 'Start'}
             </span>
           </Button>
           <div class="actions-menu" bind:this={actionsMenuEl}>
@@ -1145,8 +1177,15 @@
 <style>
   .rail {
     width: 240px;
-    border-right: 1px solid var(--border);
-    background: var(--bg-raised);
+    border-right: 1px solid color-mix(in srgb, var(--glass-border) 78%, var(--border));
+    background:
+      linear-gradient(160deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 34%),
+      color-mix(in srgb, var(--glass-bg-strong) 90%, var(--bg-raised));
+    box-shadow:
+      inset -1px 0 0 color-mix(in srgb, white 4%, transparent),
+      10px 0 30px color-mix(in srgb, black 12%, transparent);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     display: flex;
     flex-direction: column;
     block-size: 100%;
@@ -1168,7 +1207,9 @@
   }
   .rail.rail-collapsed.rail-preview-open {
     width: 240px;
-    box-shadow: 14px 0 26px rgba(0, 0, 0, 0.22);
+    box-shadow:
+      14px 0 30px color-mix(in srgb, black 28%, transparent),
+      inset -1px 0 0 color-mix(in srgb, white 5%, transparent);
     overflow-x: visible;
     z-index: calc(var(--z-drawer) + 1);
   }
@@ -1201,7 +1242,7 @@
     flex: 1;
   }
   .rail-bottom {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid color-mix(in srgb, var(--glass-border) 78%, var(--border));
     padding-top: var(--s-2);
   }
   .rail-item {
@@ -1228,11 +1269,16 @@
   }
   .rail-item:hover {
     color: var(--text);
-    background: var(--bg-raised-2);
+    background:
+      linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 58%),
+      color-mix(in srgb, var(--glass-bg-strong) 78%, var(--bg-raised-2));
   }
   .rail-item.active {
     color: var(--text);
-    background: var(--bg-elevated);
+    background:
+      linear-gradient(90deg, color-mix(in srgb, var(--accent) 16%, transparent), transparent 62%),
+      color-mix(in srgb, var(--glass-bg-strong) 88%, var(--bg-elevated));
+    box-shadow: inset 0 1px 0 color-mix(in srgb, white 7%, transparent);
   }
   .rail-stripe {
     position: absolute;
@@ -1243,7 +1289,8 @@
     background: transparent;
   }
   .rail-item.active .rail-stripe {
-    background: var(--stripe-accent);
+    background: linear-gradient(180deg, var(--light-violet-warm), var(--stripe-accent));
+    box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 36%, transparent);
   }
   .rail-subs {
     list-style: none;
@@ -1268,7 +1315,7 @@
   }
   .rail-sub:hover { color: var(--text); }
   .rail-sub.active {
-    color: var(--text);
+    color: var(--accent-2);
     font-weight: 700;
   }
 
@@ -1281,8 +1328,15 @@
     align-items: center;
     gap: var(--s-2);
     padding: var(--s-3) var(--s-4);
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-raised);
+    border-bottom: 1px solid color-mix(in srgb, var(--glass-border) 80%, var(--border));
+    background:
+      linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 34%),
+      color-mix(in srgb, var(--glass-bg-strong) 94%, var(--bg-raised));
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, white 7%, transparent),
+      0 10px 28px color-mix(in srgb, black 16%, transparent);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     min-width: 0;
   }
   .topbar-start {
@@ -1309,7 +1363,7 @@
   }
   .rail-head {
     padding: var(--s-3) var(--s-3) var(--s-4) var(--s-3);
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid color-mix(in srgb, var(--glass-border) 78%, var(--border));
     margin-bottom: var(--s-3);
     display: flex;
     flex-direction: column;
@@ -1386,10 +1440,14 @@
     flex-direction: column;
     gap: 2px;
     padding: var(--s-2);
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: var(--bg-elevated);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+    border: 1px solid color-mix(in srgb, var(--glass-border-strong) 66%, var(--border));
+    border-radius: var(--r-2);
+    background:
+      var(--glass-reflect-violet),
+      color-mix(in srgb, var(--glass-bg-strong) 94%, var(--bg-elevated));
+    box-shadow: var(--glass-shadow), var(--glass-etch);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
   }
   .actions-menu-item {
     display: inline-flex;
@@ -1409,7 +1467,7 @@
     cursor: pointer;
   }
   .actions-menu-item:hover:not(:disabled) {
-    background: var(--bg-raised-2);
+    background: color-mix(in srgb, var(--accent) 12%, var(--bg-raised-2));
   }
   .actions-menu-item:disabled {
     opacity: 0.5;
@@ -1446,15 +1504,6 @@
     }
   }
 
-  .page {
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-5);
-    padding-top: var(--s-5);
-    max-width: 1400px;
-    margin: 0 auto;
-    width: 100%;
-  }
   .band {
     display: flex;
     flex-direction: column;
@@ -1577,10 +1626,6 @@
     .rail.rail-mobile-open .rail-bottom {
       padding: var(--s-3) 0 0 0;
     }
-    .page {
-      gap: var(--s-4);
-      padding-top: var(--s-4);
-    }
     .body {
       gap: var(--s-4);
     }
@@ -1606,10 +1651,6 @@
     }
     .topbar-actions::-webkit-scrollbar {
       display: none;
-    }
-    .page {
-      gap: var(--s-3);
-      padding-top: var(--s-3);
     }
   }
 </style>

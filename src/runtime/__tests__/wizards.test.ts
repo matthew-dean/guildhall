@@ -321,6 +321,31 @@ describe('buildSnapshot', () => {
     expect(snap.taskCount).toBe(3)
   })
 
+  it('counts user-created starter tasks even when they are routed through the meta lane', () => {
+    writeFileSync(
+      join(tmp, 'memory', 'TASKS.json'),
+      JSON.stringify({
+        tasks: [
+          { id: 'task-meta-intake', domain: '_meta' },
+          {
+            id: 'task-002',
+            domain: '_meta',
+            title: 'Shape the first product spec',
+            description: 'User-seeded business idea.',
+          },
+        ],
+      }),
+    )
+
+    const snap = buildSnapshot({
+      projectPath: tmp,
+      readProviders: () => ({ providers: {} }),
+      detectOauthProviders: () => ({ claude: false, codex: false }),
+    })
+
+    expect(snap.taskCount).toBe(1)
+  })
+
   it('reads wizards.yaml into snapshot.wizardState', () => {
     writeFileSync(
       join(tmp, 'memory', 'wizards.yaml'),

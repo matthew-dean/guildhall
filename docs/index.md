@@ -12,13 +12,13 @@ description: Local service where a guild of AI helpers plans, builds, reviews, a
       <p class="gh-kicker">Local guild. Shared plans. Visible work.</p>
       <h1>Let the guild carry the work.</h1>
       <p class="gh-home-subhead">As unattended as you want. As auditable as you need.</p>
-      <p class="gh-home-lede">Guildhall runs over your projects from a local service. It surveys the repo, drafts plans, frames tasks, assigns workers, inspects the results, and keeps every important decision attached to the work.</p>
-      <p class="gh-home-version">Docs default to the latest public release: <a href="/guildhall/versions/0.6.0/releases/0.6.0">Guildhall 0.6.0</a>. Unreleased main-branch docs live under <a href="/guildhall/next/guide/">Next</a>.</p>
+      <p class="gh-home-lede">Guildhall runs over your projects from a local service. It surveys the repo, drafts the plan, frames the tasks, sends helpers to work, checks the result, and keeps the receipts attached.</p>
+      <p class="gh-home-version">You are reading Current docs for <a href="/guildhall/releases/0.6.0">Guildhall 0.6.0</a>. Want the work-in-progress 0.7 docs? Open <a href="/guildhall/next/guide/">Next</a>.</p>
       <div class="gh-home-hero__actions">
         <div class="gh-cta-row">
-          <a class="gh-cta gh-cta-primary" href="/guildhall/versions/0.6.0/guide/quick-start">Get started</a>
-          <a class="gh-cta gh-cta-secondary" href="/guildhall/versions/0.6.0/guide/new-project">New project</a>
-          <a class="gh-cta gh-cta-secondary" href="/guildhall/versions/0.6.0/guide/existing-project">Existing project</a>
+          <a class="gh-cta gh-cta-primary" href="/guildhall/guide/quick-start">Get started</a>
+          <a class="gh-cta gh-cta-secondary" href="/guildhall/guide/new-project">New project</a>
+          <a class="gh-cta gh-cta-secondary" href="/guildhall/guide/existing-project">Existing project</a>
           <a class="gh-cta gh-cta-secondary" href="/guildhall/next/guide/">Next docs</a>
           <a class="gh-cta gh-cta-secondary" href="https://github.com/matthew-dean/guildhall">Read the code</a>
         </div>
@@ -32,8 +32,8 @@ description: Local service where a guild of AI helpers plans, builds, reviews, a
     <div class="gh-home-hero__media">
       <figure class="gh-doc-shot">
         <picture>
-          <source srcset="./assets/ui-audit/projects.avif" type="image/avif" />
-          <img src="./assets/ui-audit/projects.png" alt="Guildhall projects home showing several local projects with status, activity, and start controls." />
+          <source srcset="./assets/ui-audit/0-7-0/projects.avif" type="image/avif" />
+          <img src="./assets/ui-audit/0-7-0/projects.png" alt="Guildhall projects home showing several local projects with status, activity, and start controls." />
         </picture>
         <figcaption>
           <strong>The service starts with your projects.</strong>
@@ -44,7 +44,7 @@ description: Local service where a guild of AI helpers plans, builds, reviews, a
         <p class="gh-kicker">What this buys you</p>
         <h2>Less babysitting. More legible runs.</h2>
         <ul>
-          <li>Run work from a real project surface instead of juggling hidden session state.</li>
+          <li>Run work from the Projects home instead of guessing which hidden session is alive.</li>
           <li>Give agents a blueprint to build against instead of asking them to improvise the whole job.</li>
           <li>Keep reviewer calls and transcripts close enough to challenge.</li>
           <li>Turn autonomy up or down without handing your judgment to a mystery box.</li>
@@ -60,10 +60,10 @@ description: Local service where a guild of AI helpers plans, builds, reviews, a
       <p>Guildhall earns trust by putting the moving parts where you can see them. Site survey, task blueprints, active trade work, inspections, release readiness, and the drawer full of evidence are part of the product.</p>
     </div>
     <figure class="gh-doc-shot">
-      <img src="./assets/ui-audit/inbox.png" alt="Guildhall thread view showing setup prompts, active work, and human decisions in a single feed." />
+      <img src="./assets/ui-audit/0-7-0/thread.png" alt="Guildhall Thread view showing setup prompts, active work, and decisions in a single feed." />
       <figcaption>
         <strong>Real product, real state.</strong>
-        Thread, queue, and the human inbox stay close enough together that you can see whether the next move belongs to the service or to you.
+        Thread, queue, and the inbox stay close enough together that you can see whether the next move belongs to the service or to you.
       </figcaption>
     </figure>
   </section>
@@ -81,7 +81,7 @@ description: Local service where a guild of AI helpers plans, builds, reviews, a
     <div class="gh-signal-grid">
       <article class="gh-signal-card">
         <h3>Blueprints before build work</h3>
-        <p>Guildhall should shape the work before it implements: goal, scope, non-goals, acceptance criteria, and verification plan.</p>
+        <p>Guildhall shapes the work before it builds: goal, scope, non-goals, acceptance criteria, and checks.</p>
       </article>
       <article class="gh-signal-card">
         <h3>Reviewers with teeth</h3>
@@ -89,7 +89,7 @@ description: Local service where a guild of AI helpers plans, builds, reviews, a
       </article>
       <article class="gh-signal-card">
         <h3>Change orders, not drift</h3>
-        <p>When reality changes the plan, Guildhall should name the old assumption, the new evidence, and the scope or sequence change.</p>
+        <p>When reality changes the plan, Guildhall names the old assumption, the new evidence, and what moves next.</p>
       </article>
       <article class="gh-signal-card">
         <h3>Levers, not vibes</h3>
@@ -126,7 +126,7 @@ description: Local service where a guild of AI helpers plans, builds, reviews, a
         </figure>
         <article class="gh-guild-copy">
           <h3>Less theater, more legibility</h3>
-          <p>The point of the personas is not lore. The point is to make the system's internal argument readable enough that a human can trust or challenge it.</p>
+          <p>The point of the personas is not lore. The point is to make Guildhall's reasoning readable enough that you can trust it or challenge it.</p>
         </article>
       </div>
     </div>
@@ -152,7 +152,7 @@ description: Local service where a guild of AI helpers plans, builds, reviews, a
         <h3>Still being tightened</h3>
         <ul>
           <li>Some denser views still want calmer grouping and better rhythm.</li>
-          <li>The right amount of unattended behavior still depends on the project and the operator.</li>
+          <li>The right amount of unattended behavior still depends on the project and how much control you want.</li>
         </ul>
       </article>
     </div>

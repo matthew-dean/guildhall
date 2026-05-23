@@ -82,7 +82,10 @@
       </Button>
     {/if}
     <button type="button" class="brand" onclick={goHome} aria-label="Projects home">
-      Guildhall
+      <span class="brand-mark" aria-hidden="true">
+        <img src="/icons/genfavicon-64.png" alt="" />
+      </span>
+      <span class="brand-word">Guildhall</span>
     </button>
     {#if version}
       <span class="version" title="Guildhall runtime version">v{version}</span>
@@ -109,8 +112,15 @@
     gap: var(--s-3);
     padding: var(--s-2) var(--s-4);
     min-height: var(--app-header-h);
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-raised);
+    border-bottom: 1px solid color-mix(in srgb, var(--glass-border) 82%, var(--border));
+    background:
+      linear-gradient(135deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 32%),
+      color-mix(in srgb, var(--glass-bg-strong) 92%, var(--bg-raised));
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, white 7%, transparent),
+      0 8px 24px color-mix(in srgb, black 18%, transparent);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     z-index: var(--z-app-header);
   }
   .header-left,
@@ -129,7 +139,7 @@
     padding-inline: var(--s-3);
   }
   .project-title {
-    display: inline-block;
+    display: inline-flex;
     max-width: min(52vw, 40ch);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -142,9 +152,13 @@
     letter-spacing: 0;
   }
   .brand {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-2);
     font-size: var(--fs-3);
     font-weight: 700;
-    letter-spacing: -0.3px;
+    letter-spacing: 0;
     line-height: var(--lh-tight);
     background: transparent;
     border: none;
@@ -153,8 +167,51 @@
     padding: 0;
     font-family: inherit;
   }
+  .brand-mark {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 8px;
+    isolation: isolate;
+  }
+  .brand-mark::before {
+    content: "";
+    position: absolute;
+    inset: -8px;
+    border-radius: 999px;
+    background:
+      radial-gradient(circle, color-mix(in srgb, var(--accent) 38%, transparent) 0%, transparent 66%);
+    filter: blur(7px);
+    opacity: 0.78;
+    z-index: -1;
+  }
+  .brand-mark::after {
+    content: "";
+    position: absolute;
+    inset: 2px;
+    border-radius: 7px;
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, white 26%, transparent),
+      0 0 18px color-mix(in srgb, var(--accent) 34%, transparent);
+    pointer-events: none;
+  }
+  .brand-mark img {
+    display: block;
+    width: 22px;
+    height: 22px;
+    border-radius: 7px;
+  }
+  .brand-word {
+    display: inline-flex;
+  }
   .brand:hover {
-    color: var(--accent);
+    color: var(--light-violet-warm);
+    text-shadow: 0 0 16px color-mix(in srgb, var(--accent) 20%, transparent);
+  }
+  .brand:hover .brand-mark::before {
+    opacity: 1;
   }
   :global(.project-menu) {
     display: none;

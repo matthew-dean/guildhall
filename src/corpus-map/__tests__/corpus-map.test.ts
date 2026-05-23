@@ -252,8 +252,8 @@ describe('corpus map', () => {
           architectureAreas: [],
           canonicalAbstractions: [],
           gapsOrRisks: [],
-          readNext: [],
-          workerGuidance: [],
+          readNext: [{ path: 'docs/architecture.md', reason: 'Project orientation.' }],
+          workerGuidance: ['Read the Corpus Map before editing.'],
           needsBroaderRead: false,
         })
       },
@@ -265,6 +265,60 @@ describe('corpus map', () => {
       modelId: 'semantic-test-model',
     })
     expect(enriched.files).toBe(map.files)
+  })
+
+  it('uses the semantic repair model when JSON is valid but too thin to guide workers', async () => {
+    const { map } = await refreshCodebaseMap({ projectRoot, memoryDir, reason: 'manual' })
+    const calls: string[] = []
+    const enriched = await enrichCodebaseMapSemantics(map, {
+      modelId: 'semantic-test-model',
+      async completeJson() {
+        calls.push('main')
+        return JSON.stringify({
+          corpusKind: 'documentation',
+          confidence: 0.95,
+          projectPurpose: 'Fixture documentation project.',
+          currentTruth: ['The fixture has docs but no useful guidance'],
+          architectureAreas: [],
+          canonicalAbstractions: [],
+          gapsOrRisks: [],
+          readNext: [],
+          workerGuidance: [],
+          needsBroaderRead: false,
+        })
+      },
+      async repairJson({ error, schemaHint }) {
+        calls.push('repair')
+        expect(error).toContain('readNext')
+        expect(schemaHint).toContain('workerGuidance')
+        return JSON.stringify({
+          corpusKind: 'documentation',
+          confidence: 0.91,
+          projectPurpose: 'Fixture documentation project.',
+          currentTruth: ['The fixture is documentation-led and has one Svelte UI example.'],
+          architectureAreas: [
+            {
+              name: 'Documentation',
+              purpose: 'Project orientation and architecture notes.',
+              canonicalFiles: ['README.md', 'docs/architecture.md'],
+            },
+          ],
+          canonicalAbstractions: [],
+          gapsOrRisks: ['The deterministic map is thin and should not be treated as complete architecture knowledge.'],
+          readNext: [{ path: 'docs/architecture.md', reason: 'Canonical project architecture note.' }],
+          workerGuidance: ['Read the listed documentation before editing related code.'],
+          needsBroaderRead: true,
+        })
+      },
+    })
+
+    expect(calls).toEqual(['main', 'repair'])
+    expect(enriched.semantic).toMatchObject({
+      corpusKind: 'documentation',
+      readNext: [{ path: 'docs/architecture.md', reason: 'Canonical project architecture note.' }],
+      workerGuidance: ['Read the listed documentation before editing related code.'],
+      needsBroaderRead: true,
+    })
   })
 
   it('repairs obvious malformed semantic JSON deterministically before retrying the model', () => {
@@ -310,7 +364,7 @@ describe('corpus map', () => {
           architectureAreas: [],
           canonicalAbstractions: [],
           gapsOrRisks: [],
-          readNext: [],
+          readNext: [{ path: 'README.md', reason: 'Repaired project orientation.' }],
           workerGuidance: ['Use repaired JSON.'],
           needsBroaderRead: false,
         })
@@ -322,6 +376,7 @@ describe('corpus map', () => {
       modelId: 'semantic-test-model',
       projectPurpose: 'Repaired fixture purpose.',
       workerGuidance: ['Use repaired JSON.'],
+      readNext: [{ path: 'README.md', reason: 'Repaired project orientation.' }],
     })
   })
 
@@ -347,8 +402,8 @@ describe('corpus map', () => {
           architectureAreas: [],
           canonicalAbstractions: [],
           gapsOrRisks: [],
-          readNext: [],
-          workerGuidance: [],
+          readNext: [{ path: 'README.md', reason: 'Schema repaired project orientation.' }],
+          workerGuidance: ['Use schema-repaired JSON.'],
           needsBroaderRead: false,
         })
       },
@@ -358,6 +413,8 @@ describe('corpus map', () => {
       confidence: 0.84,
       projectPurpose: 'Schema repaired fixture purpose.',
       currentTruth: ['Schema now matches.'],
+      readNext: [{ path: 'README.md', reason: 'Schema repaired project orientation.' }],
+      workerGuidance: ['Use schema-repaired JSON.'],
     })
   })
 })

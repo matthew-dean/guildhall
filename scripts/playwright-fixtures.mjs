@@ -12,7 +12,7 @@ const now = '2026-05-18T00:00:00.000Z'
 async function writeProject({
   id,
   name,
-  taskCount,
+  statuses,
   withQuestion = false,
 }) {
   const projectPath = join(projectsRoot, id)
@@ -36,13 +36,25 @@ async function writeProject({
   await writeFile(join(memoryDir, 'MEMORY.md'), `# ${name} Memory\n`, 'utf8')
   await writeFile(join(memoryDir, 'DECISIONS.md'), `# ${name} Decisions\n`, 'utf8')
   await writeFile(join(memoryDir, 'PROGRESS.md'), `# ${name} Progress\n`, 'utf8')
-  const tasks = Array.from({ length: taskCount }, (_, index) => ({
+  const statusTitle = {
+    blocked: 'Resolve the release checklist blocker',
+    done: 'Publish the project brief',
+    exploring: 'Shape the next product slice',
+    gate_check: 'Verify the UI regression suite',
+    import_draft: 'Review imported workspace note',
+    in_progress: 'Implement the editor outline flow',
+    ready: 'Wire the next task lane',
+    review: 'Review the workspace import polish',
+    shelved: 'Archive duplicate planning note',
+    spec_review: 'Block menu / block side menu',
+  }
+  const tasks = statuses.map((status, index) => ({
     id: `${id}-task-${index + 1}`,
-    title: index === 0 ? 'Block menu / block side menu' : `Fixture task ${index + 1}`,
+    title: index === 0 ? (statusTitle[status] ?? 'Fixture task') : `${statusTitle[status] ?? 'Fixture task'} ${index + 1}`,
     description: 'Rendered UI fixture task.',
     domain: 'guildhall',
     projectPath,
-    status: index === 0 ? 'spec_review' : 'ready',
+    status,
     priority: 'normal',
     spec: 'Fixture spec for rendered UI coverage.',
     acceptanceCriteria: [],
@@ -84,10 +96,37 @@ await rm(root, { recursive: true, force: true })
 await mkdir(guildhallHome, { recursive: true })
 
 const projects = [
-  { id: 'looma-knit', name: 'Looma + Knit', taskCount: 8, withQuestion: true },
-  { id: 'font-something', name: 'Font something', taskCount: 7 },
-  { id: 'fair-labor-license', name: 'Fair Labor License', taskCount: 7 },
-  { id: 'tiny-demo', name: 'Tiny demo', taskCount: 6 },
+  {
+    id: 'looma-knit',
+    name: 'Looma + Knit',
+    statuses: ['spec_review', 'exploring', 'in_progress', 'review', 'gate_check', 'done', 'done', 'shelved'],
+    withQuestion: true,
+  },
+  {
+    id: 'font-something',
+    name: 'Font something',
+    statuses: ['import_draft', 'import_draft', 'import_draft', 'done', 'shelved'],
+  },
+  {
+    id: 'fair-labor-license',
+    name: 'Fair Labor License',
+    statuses: ['done', 'done', 'done', 'done', 'shelved'],
+  },
+  {
+    id: 'tiny-demo',
+    name: 'Tiny demo',
+    statuses: ['blocked', 'exploring', 'done'],
+  },
+  {
+    id: 'narrative-harness',
+    name: 'Narrative Harness',
+    statuses: ['exploring', 'spec_review', 'review', 'done', 'shelved'],
+  },
+  {
+    id: 'linecraft',
+    name: 'Linecraft',
+    statuses: ['in_progress', 'review', 'done', 'done'],
+  },
 ]
 
 const entries = []

@@ -59,6 +59,11 @@
     updatedAt: string | null
     specLength: number
   }
+  interface WorktreeIncludeCandidate {
+    path: string
+    reason: string
+    selected: boolean
+  }
 
   interface Props {
     projectId?: string | null
@@ -90,6 +95,10 @@
   let approving = $state(false)
   let approvalError = $state<string | null>(null)
   let launchActivity = $state<LaunchActivity | null>(null)
+  let resumeNotice = $state<string | null>(null)
+  let worktreeIncludeCandidates = $state<WorktreeIncludeCandidate[]>([])
+  let selectedWorktreeIncludes = $state<string[]>([])
+  let worktreeIncludeError = $state<string | null>(null)
   let activityNow = $state(Date.now())
   let bootstrapWatchActive = false
   let destroyed = false
@@ -165,7 +174,10 @@
         } else {
           step = 3
         }
-        if (step === 3) void hydrateLaunchState()
+        if (step === 3) {
+          void hydrateWorktreeIncludes()
+          void hydrateLaunchState()
+        }
         loaded = true
       })
       .catch(() => {
@@ -247,6 +259,7 @@
       identity = { ...identity, providerConfigured: true }
       step = 3
       history.replaceState({}, '', setupHref(3))
+      void hydrateWorktreeIncludes()
       void hydrateLaunchState()
     } finally {
       busy = false
@@ -260,6 +273,11 @@
   async function startBootstrap() {
     bootstrapBusy = true
     try {
+      const savedIncludes = await saveSelectedWorktreeIncludes()
+      if (!savedIncludes) {
+        bootstrapBusy = false
+        return
+      }
       const r = await setupFetch('/api/project/meta-intake', { method: 'POST' })
       const j = await r.json()
       if (j.error) {
@@ -271,6 +289,48 @@
       if (resumed) runBootstrapWatch()
     } finally {
       bootstrapBusy = false
+    }
+  }
+
+  async function hydrateWorktreeIncludes(): Promise<void> {
+    try {
+      const r = await setupFetch('/api/project/worktree-includes', { cache: 'no-store' })
+      const j = await r.json() as { include?: string[]; candidates?: WorktreeIncludeCandidate[]; error?: string }
+      if (j.error) {
+        worktreeIncludeError = j.error
+        return
+      }
+      worktreeIncludeCandidates = j.candidates ?? []
+      selectedWorktreeIncludes = j.include ?? []
+      worktreeIncludeError = null
+    } catch (err) {
+      worktreeIncludeError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  function toggleWorktreeInclude(candidatePath: string) {
+    selectedWorktreeIncludes = selectedWorktreeIncludes.includes(candidatePath)
+      ? selectedWorktreeIncludes.filter(item => item !== candidatePath)
+      : [...selectedWorktreeIncludes, candidatePath]
+  }
+
+  async function saveSelectedWorktreeIncludes(): Promise<boolean> {
+    try {
+      const r = await setupFetch('/api/project/worktree-includes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ include: selectedWorktreeIncludes }),
+      })
+      const j = await r.json()
+      if (j.error) {
+        worktreeIncludeError = j.error
+        return false
+      }
+      worktreeIncludeError = null
+      return true
+    } catch (err) {
+      worktreeIncludeError = err instanceof Error ? err.message : String(err)
+      return false
     }
   }
 
@@ -293,10 +353,14 @@
   async function resumeBootstrap() {
     bootstrapBusy = true
     bootstrapLive = true
+    resumeNotice = 'Resume requested. Guildhall is restarting the coordinator now.'
     try {
       const resumed = await ensureCoordinatorRunning()
       await refreshLaunchActivity()
-      if (resumed) runBootstrapWatch()
+      if (resumed) {
+        resumeNotice = 'Coordinator restarted. Watching for the next setup update.'
+        runBootstrapWatch()
+      }
     } finally {
       bootstrapBusy = false
     }
@@ -342,6 +406,12 @@
     const minutes = Math.floor(seconds / 60)
     const rest = seconds % 60
     return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`
+  }
+
+  function isStarterRoutingDraft(drafts: DraftCoordinator[] | null): boolean {
+    if (!drafts?.length) return false
+    const domains = new Set(drafts.map(d => d.domain))
+    return domains.has('_meta') && domains.has('project-implementation')
   }
 
   function runBootstrapWatch() {
@@ -509,6 +579,32 @@
             codebase, infer the project structure, and draft starter tasks. It should only stop to
             ask you something if confidence is low and the consequence of being wrong is meaningful.
           </p>
+          {#if worktreeIncludeCandidates.length > 0}
+            <div class="local-config-prompt">
+              <div>
+                <strong>Local files for task worktrees</strong>
+                <p class="muted">
+                  Guildhall found local config filenames that agents may need for bootstrap or tests.
+                  Check only the files task worktrees are allowed to copy.
+                </p>
+              </div>
+              <div class="local-config-list">
+                {#each worktreeIncludeCandidates as candidate (candidate.path)}
+                  <label class="local-config-option" title={candidate.reason}>
+                    <input
+                      type="checkbox"
+                      checked={selectedWorktreeIncludes.includes(candidate.path)}
+                      onchange={() => toggleWorktreeInclude(candidate.path)}
+                    />
+                    <span>{candidate.path}</span>
+                  </label>
+                {/each}
+              </div>
+              {#if worktreeIncludeError}
+                <p class="error">{worktreeIncludeError}</p>
+              {/if}
+            </div>
+          {/if}
           <Row gap="2">
             <Button variant="primary" disabled={bootstrapBusy || bootstrapLive} onclick={startBootstrap}>
               {bootstrapBusy ? 'Seeding...' : bootstrapLive ? 'Running' : 'Start meta-intake'}
@@ -545,6 +641,9 @@
                   </Button>
                 {/if}
               </Row>
+              {#if resumeNotice}
+                <p class="muted">{resumeNotice}</p>
+              {/if}
             {:else}
               <p class="muted">
                 When the draft is ready, this card changes to review.
@@ -565,14 +664,19 @@
       {/if}
       {#if approvalDrafts}
         {@const proposedCount = approvalDrafts.length}
-        <Card title={`Guildhall inferred ${proposedCount} ${proposedCount === 1 ? 'repo slice' : 'repo slices'}`}>
+        {@const starterRoutingDraft = isStarterRoutingDraft(approvalDrafts)}
+        <Card title={starterRoutingDraft
+          ? `Guildhall proposed ${proposedCount} starter ${proposedCount === 1 ? 'lane' : 'lanes'}`
+          : `Guildhall inferred ${proposedCount} ${proposedCount === 1 ? 'repo slice' : 'repo slices'}`}
+        >
           <Stack gap="3">
             <div class="section-title">
-              <strong>Guildhall inferred this from the repo.</strong>
+              <strong>{starterRoutingDraft ? 'Guildhall found an empty project and proposed starter routing placeholders.' : 'Guildhall inferred this from the repo.'}</strong>
             </div>
             <p class="muted">
-              Confirm it only if something here is materially wrong. Guildhall should handle the
-              routing and review structure underneath.
+              {starterRoutingDraft
+                ? 'Confirm only if these starter lanes are materially wrong. They give spec shaping a safe place to happen until real product code exists.'
+                : 'Confirm it only if something here is materially wrong. Guildhall should handle the routing and review structure underneath.'}
             </p>
             <div class="draft-summary-list">
               {#each approvalDrafts as d, i (i)}
@@ -583,7 +687,7 @@
               {/each}
             </div>
             <details class="draft-details">
-              <summary>See why Guildhall inferred this</summary>
+              <summary>{starterRoutingDraft ? 'See why Guildhall proposed this starter split' : 'See why Guildhall inferred this'}</summary>
               <div class="coord-list">
                 {#each approvalDrafts as d, i (i)}
                   <div class="coord">
@@ -766,5 +870,40 @@
     border: 1px solid var(--border);
     border-radius: var(--r-1);
     background: var(--bg-raised-2);
+  }
+  .local-config-prompt {
+    display: grid;
+    gap: var(--s-2);
+    padding: var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg-raised-2);
+  }
+  .local-config-prompt strong {
+    color: var(--text);
+    font-size: var(--fs-2);
+  }
+  .local-config-list {
+    display: grid;
+    gap: var(--s-2);
+  }
+  .local-config-option {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    padding: var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    color: var(--text);
+    font-size: var(--fs-1);
+    font-family: var(--font-mono);
+    cursor: pointer;
+  }
+  .local-config-option:hover {
+    border-color: var(--accent);
+  }
+  .local-config-option input {
+    inline-size: 1rem;
+    block-size: 1rem;
   }
 </style>

@@ -206,6 +206,53 @@ describe('general project status endpoints', () => {
     expect(body.configured).toBe(true)
     expect(body.counts.files).toBeGreaterThan(0)
     expect(body.frameworks).toContain('svelte')
+
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'codebase-map.yaml'),
+      [
+        'version: 1',
+        'generatedAt: 2026-05-21T12:00:00.000Z',
+        'project:',
+        `  root: ${tmpDir}`,
+        '  summary: Fixture',
+        '  languages: [typescript]',
+        '  packageManagers: [pnpm]',
+        '  primaryFrameworks: [svelte]',
+        'files: {}',
+        'entrypoints: []',
+        'areas: []',
+        'abstractions: []',
+        'verification:',
+        '  commands: []',
+        'semantic:',
+        '  generatedAt: 2026-05-21T12:00:00.000Z',
+        '  modelId: zai-org/GLM-4.6',
+        '  corpusKind: documentation',
+        '  confidence: 0.95',
+        '  projectPurpose: Fixture semantic map.',
+        '  currentTruth: []',
+        '  architectureAreas: []',
+        '  canonicalAbstractions: []',
+        '  gapsOrRisks: []',
+        '  readNext:',
+        '    - path: docs/architecture.md',
+        '      reason: Read the project architecture first.',
+        '  workerGuidance:',
+        '    - Use the semantic map before editing.',
+        '  needsBroaderRead: true',
+      ].join('\n'),
+      'utf8',
+    )
+    const semanticStatus = await app.fetch(new Request(scoped('/api/project/codebase-map/status')))
+    const semanticBody = await semanticStatus.json() as Record<string, any>
+    expect(semanticBody.semantic).toMatchObject({
+      modelId: 'zai-org/GLM-4.6',
+      corpusKind: 'documentation',
+      projectPurpose: 'Fixture semantic map.',
+      readNext: [{ path: 'docs/architecture.md', reason: 'Read the project architecture first.' }],
+      workerGuidance: ['Use the semantic map before editing.'],
+      needsBroaderRead: true,
+    })
   })
 
   it('reports setup status and generated setup defaults for the selected project', async () => {
@@ -246,6 +293,111 @@ describe('general project status endpoints', () => {
     expect(defaultsBody.suggestedId).toBe(PROJECT_ID)
     expect(Array.isArray(defaultsBody.localModels)).toBe(true)
     expect(Array.isArray(defaultsBody.cloudModels)).toBe(true)
+  })
+
+  it('detects and saves explicit task worktree include paths for local runtime config', async () => {
+    await fs.writeFile(path.join(tmpDir, '.env.local'), 'SECRET=do-not-read\n', 'utf8')
+    await fs.writeFile(path.join(tmpDir, 'README.md'), '# readme\n', 'utf8')
+    await fs.mkdir(path.join(tmpDir, 'frontend'), { recursive: true })
+    await execFileP('git', ['init'], { cwd: path.join(tmpDir, 'frontend') })
+    await execFileP('git', ['config', 'user.email', 'guildhall@example.test'], { cwd: path.join(tmpDir, 'frontend') })
+    await execFileP('git', ['config', 'user.name', 'Guildhall Test'], { cwd: path.join(tmpDir, 'frontend') })
+    await fs.writeFile(path.join(tmpDir, 'frontend', '.env'), 'SECRET=tracked\n', 'utf8')
+    await execFileP('git', ['add', '.env'], { cwd: path.join(tmpDir, 'frontend') })
+    await fs.mkdir(path.join(tmpDir, 'backend'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'backend', 'appsettings.local.yaml'),
+      'connection: local\n',
+      'utf8',
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const before = await app.fetch(new Request(scoped('/api/project/worktree-includes')))
+    expect(before.status).toBe(200)
+    const beforeBody = await before.json() as Record<string, any>
+    expect(beforeBody.include).toEqual([])
+    expect(beforeBody.candidates.map((candidate: { path: string }) => candidate.path)).toEqual(
+      expect.arrayContaining(['.env.local', 'backend/appsettings.local.yaml']),
+    )
+    expect(beforeBody.candidates.map((candidate: { path: string }) => candidate.path)).not.toContain('README.md')
+    expect(beforeBody.candidates.map((candidate: { path: string }) => candidate.path)).not.toContain('frontend/.env')
+
+    const save = await app.fetch(
+      new Request(scoped('/api/project/worktree-includes'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ includeText: '.env.local\nbackend/appsettings.local.yaml\n' }),
+      }),
+    )
+    expect(save.status).toBe(200)
+    const saved = await save.json() as Record<string, any>
+    expect(saved.include).toEqual(['.env.local', 'backend/appsettings.local.yaml'])
+    expect(readWorkspaceConfig(tmpDir).worktree?.include).toEqual([
+      '.env.local',
+      'backend/appsettings.local.yaml',
+    ])
+  })
+
+  it('rejects task worktree include paths outside the project root', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const save = await app.fetch(
+      new Request(scoped('/api/project/worktree-includes'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ include: ['.env', '../outside.env'] }),
+      }),
+    )
+    expect(save.status).toBe(400)
+    const body = await save.json() as Record<string, any>
+    expect(body.error).toMatch(/project-relative/i)
+  })
+
+  it('saves task worktree include paths on the selected child project in a workspace', async () => {
+    await fs.mkdir(path.join(tmpDir, 'looma'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'knit'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'knit', '.env'), 'SECRET=needed\n', 'utf8')
+    await fs.writeFile(path.join(tmpDir, 'knit', 'package.json'), JSON.stringify({ name: 'knit' }), 'utf8')
+    writeWorkspaceConfig(tmpDir, {
+      ...readWorkspaceConfig(tmpDir),
+      kind: 'workspace',
+      projectPath: tmpDir,
+      projects: [
+        { id: 'looma', label: 'Looma', path: 'looma', coordinator: 'looma' },
+        { id: 'knit', label: 'Knit', path: 'knit', coordinator: 'knit' },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const before = await app.fetch(new Request(scoped('/api/project/worktree-includes')))
+    expect(before.status).toBe(200)
+    const beforeBody = await before.json() as Record<string, any>
+    expect(beforeBody.scopes.map((scope: { projectId?: string }) => scope.projectId)).toEqual(['looma', 'knit'])
+    const knitScope = beforeBody.scopes.find((scope: { projectId?: string }) => scope.projectId === 'knit')
+    expect(knitScope.candidates.map((candidate: { path: string }) => candidate.path)).toContain('.env')
+
+    const saveWithoutChild = await app.fetch(
+      new Request(scoped('/api/project/worktree-includes'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ includeText: '.env\n' }),
+      }),
+    )
+    expect(saveWithoutChild.status).toBe(400)
+
+    const save = await app.fetch(
+      new Request(scoped('/api/project/worktree-includes'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceProjectId: 'knit', includeText: '.env\n' }),
+      }),
+    )
+    expect(save.status).toBe(200)
+    const saved = await save.json() as Record<string, any>
+    expect(saved.include).toEqual(['.env'])
+    const workspace = readWorkspaceConfig(tmpDir)
+    expect(workspace.worktree).toBeUndefined()
+    expect(workspace.projects.find(project => project.id === 'knit')?.worktree?.include).toEqual(['.env'])
+    expect(workspace.projects.find(project => project.id === 'looma')?.worktree).toBeUndefined()
   })
 
   it('redacts local config secrets and filters noisy progress entries', async () => {
@@ -378,6 +530,61 @@ describe('GET/POST /api/project/local-config', () => {
 })
 
 describe('POST /api/project/start', () => {
+  it('points Start at imported draft review when no runnable work is available', async () => {
+    const tasksPath = path.join(tmpDir, 'memory', 'TASKS.json')
+    await fs.writeFile(
+      tasksPath,
+      JSON.stringify({
+        version: 1,
+        lastUpdated: new Date().toISOString(),
+        tasks: [
+          {
+            id: 'task-import-1',
+            title: 'Imported draft',
+            description: 'Needs shaping before work can run.',
+            domain: 'core',
+            status: 'import_draft',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            escalations: [],
+            agentIssues: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectBody = (await projectRes.json()) as {
+      startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
+    }
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'import_drafts_waiting',
+      actionHref: '/task/task-import-1',
+    })
+    expect(projectBody.startReadiness?.message).toContain('Review the imported draft')
+
+    const startRes = await app.fetch(
+      new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
+    )
+    expect(startRes.status).toBe(400)
+    const startBody = (await startRes.json()) as { code?: string; actionHref?: string }
+    expect(startBody.code).toBe('import_drafts_waiting')
+    expect(startBody.actionHref).toBe('/task/task-import-1')
+  })
+
   it('rejects fanout without worktree isolation with a clear error', async () => {
     const settings = makeDefaultSettings()
     settings.project.concurrent_task_dispatch = {
@@ -521,6 +728,67 @@ describe('GET /api/project/facts', () => {
     const body = (await res.json()) as { environment: { packageManagers: string[] } }
     expect(body.environment.packageManagers).toContain('pnpm')
     expect(body.environment.packageManagers).toContain('NuGet')
+  })
+
+  it('counts saved completed workspace-import specs in the memory check-in facts', async () => {
+    await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'workspace-goals.json'),
+      JSON.stringify({
+        goals: [{ id: 'old-goal', title: 'Old goal' }],
+      }),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'TASKS.json'),
+      JSON.stringify(
+        {
+          version: 1,
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              status: 'done',
+              spec: [
+                '```yaml',
+                'goals:',
+                '  - id: imported-goal',
+                '    title: Imported goal',
+                '```',
+                '```yaml',
+                'tasks:',
+                '  - id: imported-task-one',
+                '    title: First imported task',
+                '  - id: imported-task-two',
+                '    title: Second imported task',
+                '```',
+                '```yaml',
+                'milestones:',
+                '  - title: First milestone',
+                '  - title: Second milestone',
+                '```',
+              ].join('\n'),
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request('http://localhost/api/project/facts'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      workspace: { goals: { imported: boolean; goalCount: number; taskCount: number; milestoneCount: number } }
+    }
+    expect(body.workspace.goals).toMatchObject({
+      imported: true,
+      goalCount: 1,
+      taskCount: 2,
+      milestoneCount: 2,
+    })
   })
 })
 
@@ -670,6 +938,174 @@ describe('Workspace Import review endpoints', () => {
     expect(body.ok).toBe(true)
     // Detector should have produced at least one goal from the README.
     expect((body.goalsRecorded ?? 0) + (body.tasksAdded ?? 0)).toBeGreaterThan(0)
+  })
+
+  it('approve preserves the importer agent curated spec when no review narrowing is supplied', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'README.md'),
+      '# Broad detector bait\n\n## Goals\n\n- Ship everything\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'roadmap.md'),
+      '- [ ] Detector task one\n- [ ] Detector task two\n- [ ] Detector task three\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'curated-import' }),
+      'utf8',
+    )
+    await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'TASKS.json'),
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'spec_review',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: [
+                '```yaml',
+                'goals:',
+                '  - id: curated-goal',
+                '    title: Keep the curated project direction',
+                '    rationale: The importer agent narrowed noisy repo notes to one useful workstream.',
+                '```',
+                '```yaml',
+                'tasks:',
+                '  - id: curated-first-task',
+                '    title: Build the curated first task',
+                '    description: Implement only the first reviewed workstream from the importer agent.',
+                '    domain: app',
+                '    priority: high',
+                '    references:',
+                '      - README.md',
+                '```',
+                '```yaml',
+                'milestones:',
+                '  - title: Curated import spec reviewed',
+                '    evidence: README.md',
+                '```',
+              ].join('\n'),
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const approve = await app.fetch(
+      new Request(scoped('/api/project/workspace-import/approve'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      }),
+    )
+    const body = (await approve.json()) as {
+      ok?: boolean
+      tasksAdded?: number
+      goalsRecorded?: number
+      milestonesLogged?: number
+      error?: string
+    }
+    if (approve.status !== 200) {
+      throw new Error(`approve failed: status=${approve.status} body=${JSON.stringify(body)}`)
+    }
+
+    expect(body.ok).toBe(true)
+    expect(body.tasksAdded).toBe(1)
+    expect(body.goalsRecorded).toBe(1)
+    expect(body.milestonesLogged).toBe(1)
+
+    const tasks = await readTasks(tmpDir)
+    expect(tasks.some(task => task.id === 'curated-first-task')).toBe(true)
+    expect(tasks.some(task => task.id === 'task-detector-task-one')).toBe(false)
+  })
+
+  it('status counts a completed importer task from its saved curated spec', async () => {
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'completed-import-status' }), 'utf8')
+    await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'TASKS.json'),
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: [
+                '```yaml',
+                'goals:',
+                '  - id: imported-direction',
+                '    title: Keep the imported direction',
+                '    rationale: The completed import captured the owner direction.',
+                '```',
+                '```yaml',
+                'tasks:',
+                '  - id: imported-first-task',
+                '    title: Build the first imported task',
+                '    description: Preserve completed import work in status summaries.',
+                '    domain: app',
+                '    priority: high',
+                '```',
+                '```yaml',
+                'milestones:',
+                '  - title: Imported work reviewed',
+                '    evidence: README.md',
+                '```',
+              ].join('\n'),
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const status = await app.fetch(new Request(scoped('/api/project/workspace-import/status')))
+    expect(status.status).toBe(200)
+    const body = await status.json() as Record<string, any>
+    expect(body).toMatchObject({
+      seeded: true,
+      taskStatus: 'done',
+      specPresent: true,
+      draft: {
+        goals: 1,
+        tasks: 1,
+        milestones: 1,
+      },
+    })
   })
 
   it('reuses learned import defaults after a narrowed approval', async () => {

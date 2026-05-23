@@ -142,6 +142,13 @@
     return DEFAULT_VERBS[item.kind]
   }
 
+  function itemDigest(item: InboxItem): string | null {
+    if (item.kind === 'lever_questions') {
+      return 'Safe defaults are active. Review them only if you want to tune autonomy, recovery, or review strictness.'
+    }
+    return null
+  }
+
   function goTo(item: InboxItem): void {
     if (item.kind === 'brief_approval' || item.kind === 'spec_approval') {
       nav(projectActionHref('/thread'))
@@ -204,6 +211,9 @@
                 <div class="body">
                   <div class="title" title={item.title}>{item.title}</div>
                   <div class="detail" title={item.detail}>{item.detail}</div>
+                  {#if itemDigest(item)}
+                    <div class="digest">{itemDigest(item)}</div>
+                  {/if}
                 </div>
                 <span class="verb">{actionVerb(item)} →</span>
               </button>
@@ -257,6 +267,9 @@
                   <div class="body">
                     <div class="title" title={item.title}>{item.title}</div>
                     <div class="detail" title={item.detail}>{item.detail}</div>
+                    {#if itemDigest(item)}
+                      <div class="digest">{itemDigest(item)}</div>
+                    {/if}
                   </div>
                   <span class="verb">{actionVerb(item)} →</span>
                 </button>
@@ -448,6 +461,12 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .digest {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-copy);
+    white-space: normal;
   }
   .verb {
     color: var(--accent);

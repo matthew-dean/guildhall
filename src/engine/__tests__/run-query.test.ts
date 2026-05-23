@@ -3394,6 +3394,77 @@ Uncertainties: none`,
     )).toBe(true)
   })
 
+  it('does not force spec agents to create missing likely target files during blueprint work', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async (input) => ({
+          output: `(file not found: ${input.filePath})`,
+          is_error: true,
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'read-exploring-transcript',
+        description: '',
+        inputSchema: z.object({ taskId: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({
+          output: '# Exploring transcript\n\nUse nearby current files to revise the blueprint.',
+          is_error: false,
+        }),
+      }),
+    )
+    const targetPath = '/workspace/project/frontend/app/composables/useAuth.ts'
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('read-file', { filePath: targetPath }, 'toolu_1') },
+      { message: assistantToolUse('read-exploring-transcript', { taskId: 'task-auth' }, 'toolu_2') },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_agent_id: 'spec-agent',
+            current_task_likely_target_files: [targetPath],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(events.some(e =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'read-exploring-transcript' &&
+      e.is_error === false,
+    )).toBe(true)
+    expect(messages.some(message =>
+      message.role === 'user' &&
+      message.content.some(block =>
+        block.type === 'tool_result' &&
+        block.is_error === true &&
+        String(block.content).includes('Create that file only if its parent directory exists'),
+      ),
+    )).toBe(false)
+  })
+
   it('refuses read-only worker exploration when a checkpoint already names the next step', async () => {
     const registry = new ToolRegistry()
     registry.register(

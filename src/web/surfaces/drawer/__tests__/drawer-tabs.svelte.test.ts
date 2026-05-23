@@ -120,7 +120,7 @@ describe('drawer task detail tabs', () => {
 
     render(ProvenanceTab, { task: task(), contextDebug })
 
-    expect(screen.getByText('workspace_import')).toBeInTheDocument()
+    expect(screen.getByText('Workspace Import')).toBeInTheDocument()
     expect(screen.getByText('Pull request opened')).toBeInTheDocument()
     expect(screen.getByText('Awaiting review.')).toBeInTheDocument()
     expect(screen.getByText('Covered by the editor foundation task.')).toBeInTheDocument()

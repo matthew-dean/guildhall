@@ -17,17 +17,17 @@ inspects, one enforces deterministic checks, and one enriches project context.
 | `worker` | Performs bounded trade work against the accepted blueprint. | Mid-to-high — coding-specific. |
 | `reviewer` | Inspects completed work against the blueprint + rubric. | Mid. |
 | `gateChecker` | Runs deterministic checks and custom gates. | Low — mostly shell/parse. |
-| `contextIndexer` | Summarizes code purpose, contracts, canonical abstractions, and read-next guidance for the Corpus Map. | Low-to-mid — cheap, fast, structured, code-aware. |
+| `contextIndexer` | Summarizes code purpose, contracts, canonical abstractions, and read-next guidance for the Corpus Map. | Mid — code-aware, structured, fast enough for repeated indexing. |
 
 ## Assigning models
 
 ```yaml
 models:
-  spec: claude-sonnet-4-6
-  coordinator: claude-sonnet-4-6
-  worker: qwen2.5-coder-32b-instruct
-  reviewer: qwen2.5-coder-14b-instruct
-  gateChecker: qwen2.5-coder-7b-instruct
+  spec: deepseek-ai/DeepSeek-V4-Flash
+  coordinator: deepseek-ai/DeepSeek-V4-Flash
+  worker: Qwen/Qwen3-235B-A22B-Instruct-2507
+  reviewer: deepseek-ai/DeepSeek-V4-Flash
+  gateChecker: deepseek-ai/DeepSeek-V4-Flash
   contextIndexer: zai-org/GLM-4.6
 ```
 
@@ -35,7 +35,7 @@ Model IDs resolve against Guildhall's bundled model catalog.
 
 Guildhall's public open-model recommendations live in
 [Open model recommendations](./open-models). Those notes are based on saved
-development replay prompts and should be treated as a starting point, not a
+development replay prompts and treated as a starting point, not a
 permanent ranking.
 
 ## Cognitive profiles

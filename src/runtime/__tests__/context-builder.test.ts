@@ -180,6 +180,18 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('Implement against the accepted blueprint')
   })
 
+  it('injects generic worker role guidance when no engineer persona matches', async () => {
+    const ctx = await buildContext({
+      ...baseTask,
+      domain: 'unmapped-domain',
+      title: 'Wire a niche internal surface',
+      description: 'No guild should match this on domain alone.',
+    }, tmpDir)
+
+    expect(ctx.personaPrompt).toContain('Worker role guidance')
+    expect(ctx.personaPrompt).toContain('Before inventing a component')
+  })
+
   it('includes out-of-scope list', async () => {
     const ctx = await buildContext(baseTask, tmpDir)
     expect(ctx.taskSummary).toContain('Knit-specific styling')
@@ -307,6 +319,28 @@ describe('buildContext — task summary', () => {
     expect(ctx.formatted).toContain('Reuse / Extend')
     expect(ctx.formatted).toContain('Command buttons')
     expect(ctx.formatted).toContain('Corpus fit required')
+  })
+
+  it('proves the corpus map changes worker context toward existing abstractions', async () => {
+    const withoutMap = await buildContext(baseTask, tmpDir)
+    expect(withoutMap.corpusMap).toBe('')
+    expect(withoutMap.formatted).not.toContain('Command buttons')
+
+    await saveCodebaseMap(tmpDir, minimalCodebaseMap({
+      root: '/projects/looma',
+      generatedAt: '2026-05-21T12:00:00.000Z',
+    }))
+
+    const withMap = await buildContext({
+      ...baseTask,
+      title: 'Add settings action button',
+      description: 'Use the existing shared button treatment in Settings.',
+    }, tmpDir)
+
+    expect(withMap.corpusMap).toContain('Command buttons')
+    expect(withMap.corpusMap).toContain('src/web/lib/Button.svelte')
+    expect(withMap.formatted.indexOf('Command buttons')).toBeGreaterThan(-1)
+    expect(withMap.formatted.indexOf('Command buttons')).toBeLessThan(withMap.formatted.indexOf('Corpus fit required'))
   })
 
   it('creates the corpus map lazily before building agent context when it is missing', async () => {

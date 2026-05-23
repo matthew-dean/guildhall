@@ -115,6 +115,15 @@
       primitives: number
       recommendations: string[]
     } | null
+    semantic?: {
+      modelId: string
+      corpusKind: 'documentation' | 'code' | 'mixed' | 'unknown'
+      confidence: number
+      projectPurpose: string
+      readNext: Array<{ path: string; reason: string }>
+      workerGuidance: string[]
+      needsBroaderRead: boolean
+    } | null
     frameworks?: string[]
     packageManagers?: string[]
   }
@@ -164,9 +173,38 @@
         tried: Array<{ command: string; result: string; stderr?: string }>
       } | null
     }
+    workspaceProjects?: Array<{
+      id: string
+      label: string
+      path: string
+      bootstrap?: {
+        commands: string[]
+        successGates: string[]
+        timeoutMs?: number
+      } | null
+    }>
   }
   let bootstrapInfo = $state<BootstrapInfo | null>(null)
   let bootstrapRunning = $state(false)
+  interface WorktreeIncludeCandidate {
+    path: string
+    reason: string
+    selected: boolean
+  }
+  interface WorktreeIncludeScope {
+    projectId?: string
+    label?: string
+    type?: string
+    rootPath: string
+    include: string[]
+    candidates: WorktreeIncludeCandidate[]
+  }
+  let worktreeIncludeText = $state('')
+  let worktreeIncludeCandidates = $state<WorktreeIncludeCandidate[]>([])
+  let worktreeIncludeScopes = $state<WorktreeIncludeScope[]>([])
+  let selectedWorktreeProjectId = $state<string | null>(null)
+  let worktreeIncludeBusy = $state(false)
+  let worktreeIncludeStatus = $state<{ text: string; error: boolean } | null>(null)
 
   interface ProviderStatus {
     configured: boolean
@@ -195,18 +233,21 @@
       .then(j => (designSystem = j?.designSystem ?? null))
       .catch(() => (designSystem = null))
     void loadCodebaseMapStatus()
-    fetch('/api/providers/status')
+    projectFetch('/api/setup/providers')
       .then(r => (r.ok ? r.json() : null))
       .then(j => {
         if (!j) return
+        const preferred = j?.preferredProvider
+        const preferredMeta = typeof preferred === 'string' ? j?.providers?.[preferred] : null
         providerStatus = {
-          configured: Boolean(j?.configured ?? j?.active),
-          active: j?.active,
+          configured: Boolean(preferred && preferredMeta?.detected),
+          active: preferredMeta?.label ?? preferred ?? undefined,
         }
       })
       .catch(() => (providerStatus = { configured: false }))
     void loadBootstrap()
     void loadLearning()
+    void loadWorktreeIncludes()
   })
 
   async function loadBootstrap() {
@@ -216,6 +257,79 @@
     } catch {
       bootstrapInfo = null
     }
+  }
+
+  async function loadWorktreeIncludes() {
+    try {
+      const suffix = selectedWorktreeProjectId
+        ? `?workspaceProjectId=${encodeURIComponent(selectedWorktreeProjectId)}`
+        : ''
+      const r = await projectFetch(`/api/project/worktree-includes${suffix}`, { cache: 'no-store' })
+      const j = await r.json() as {
+        include?: string[]
+        candidates?: WorktreeIncludeCandidate[]
+        scopes?: WorktreeIncludeScope[]
+        error?: string
+      }
+      if (j.error) {
+        worktreeIncludeStatus = { text: j.error, error: true }
+        return
+      }
+      worktreeIncludeScopes = j.scopes ?? []
+      if (!selectedWorktreeProjectId && worktreeIncludeScopes.some(scope => scope.projectId)) {
+        selectedWorktreeProjectId = worktreeIncludeScopes.find(scope => scope.projectId)?.projectId ?? null
+      }
+      const activeScope = selectedWorktreeProjectId
+        ? worktreeIncludeScopes.find(scope => scope.projectId === selectedWorktreeProjectId)
+        : null
+      if (activeScope) {
+        worktreeIncludeText = activeScope.include.join('\n')
+        worktreeIncludeCandidates = activeScope.candidates
+        return
+      }
+      worktreeIncludeText = (j.include ?? []).join('\n')
+      worktreeIncludeCandidates = j.candidates ?? []
+    } catch (err) {
+      worktreeIncludeStatus = { text: err instanceof Error ? err.message : String(err), error: true }
+    }
+  }
+
+  async function saveWorktreeIncludes() {
+    worktreeIncludeBusy = true
+    worktreeIncludeStatus = null
+    try {
+      const r = await projectFetch('/api/project/worktree-includes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          includeText: worktreeIncludeText,
+          ...(selectedWorktreeProjectId ? { workspaceProjectId: selectedWorktreeProjectId } : {}),
+        }),
+      })
+      const j = await r.json() as { include?: string[]; error?: string }
+      if (j.error) {
+        worktreeIncludeStatus = { text: j.error, error: true }
+        return
+      }
+      worktreeIncludeText = (j.include ?? []).join('\n')
+      worktreeIncludeStatus = { text: 'Saved', error: false }
+      await loadWorktreeIncludes()
+    } finally {
+      worktreeIncludeBusy = false
+    }
+  }
+
+  function addWorktreeIncludeCandidate(candidate: string) {
+    const lines = worktreeIncludeText.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+    if (!lines.includes(candidate)) lines.push(candidate)
+    worktreeIncludeText = lines.join('\n')
+  }
+
+  function selectWorktreeIncludeScope(scope: WorktreeIncludeScope) {
+    selectedWorktreeProjectId = scope.projectId ?? null
+    worktreeIncludeText = scope.include.join('\n')
+    worktreeIncludeCandidates = scope.candidates
+    worktreeIncludeStatus = null
   }
 
   async function loadLearning() {
@@ -420,7 +534,42 @@
 
   const coordinators = $derived(project.detail?.config?.coordinators ?? [])
 
-  const bootstrapReady = $derived(Boolean(bootstrapInfo?.configured && bootstrapInfo?.status?.success))
+  const workspaceChildProjects = $derived(bootstrapInfo?.workspaceProjects ?? [])
+  const hasWorkspaceChildProjects = $derived(workspaceChildProjects.length > 0)
+  const workspaceChildGateCount = $derived(
+    workspaceChildProjects.reduce((count, child) => count + (child.bootstrap?.successGates?.length ?? 0), 0),
+  )
+  const bootstrapVerified = $derived(Boolean(
+    bootstrapInfo?.configured && bootstrapInfo?.status?.success && !bootstrapInfo?.needed,
+  ))
+  const bootstrapReady = $derived(Boolean(
+    bootstrapVerified ||
+    (bootstrapInfo && !bootstrapInfo.configured && !bootstrapInfo.needed && !hasWorkspaceChildProjects),
+  ))
+  const bootstrapShellLabel = $derived(
+    bootstrapInfo?.configured && bootstrapInfo?.status?.success && bootstrapInfo?.needed
+      ? 're-run needed'
+      : bootstrapInfo?.configured && bootstrapInfo?.status?.success
+      ? 'passed'
+      : bootstrapInfo?.configured
+        ? 'failed'
+        : hasWorkspaceChildProjects
+          ? `${workspaceChildProjects.length} child project${workspaceChildProjects.length === 1 ? '' : 's'}`
+          : bootstrapInfo && !bootstrapInfo.needed
+            ? 'not required'
+            : 'not set',
+  )
+  const bootstrapShellTone = $derived(
+    bootstrapReady
+      ? 'ok'
+      : bootstrapInfo?.configured && bootstrapInfo?.status?.success && bootstrapInfo?.needed
+        ? 'warn'
+      : bootstrapInfo?.configured
+        ? 'danger'
+        : hasWorkspaceChildProjects
+          ? 'info'
+          : 'warn',
+  )
   const providerReady = $derived(Boolean(providerStatus?.configured))
   const coordinatorsReady = $derived(coordinators.length > 0)
   const readinessCount = $derived(
@@ -773,8 +922,8 @@
             </div>
             <div class="check-actions">
               <StatusPill
-                label={bootstrapReady ? 'passed' : bootstrapInfo?.configured ? 'failed' : 'not set'}
-                tone={bootstrapReady ? 'ok' : bootstrapInfo?.configured ? 'danger' : 'warn'}
+                label={bootstrapShellLabel}
+                tone={bootstrapShellTone}
               />
               {#if !bootstrapReady}
                 <Button variant="secondary" size="sm" onclick={runBootstrap} disabled={bootstrapRunning}>
@@ -824,6 +973,40 @@
           </li>
         </ul>
       </FrameCard>
+
+      {#if hasWorkspaceChildProjects}
+        <NoticeBand
+          tone="info"
+          role="note"
+          label="Workspace"
+          title="This workspace coordinates child projects"
+          density="compact"
+        >
+          <p>
+            The root shell is the council layer. Task bootstrap and verification should come from the
+            child project a task belongs to, so a missing root package file is not itself a project failure.
+          </p>
+          <ul class="workspace-project-list" aria-label="Child project bootstrap contracts">
+            {#each workspaceChildProjects as child (child.id)}
+              <li>
+                <span class="workspace-project-name">{child.label}</span>
+                <span class="workspace-project-path">{child.path}</span>
+                {#if child.bootstrap?.commands?.length}
+                  <span>{child.bootstrap.commands.length} setup command{child.bootstrap.commands.length === 1 ? '' : 's'}</span>
+                {/if}
+                {#if child.bootstrap?.successGates?.length}
+                  <span>{child.bootstrap.successGates.length} gate{child.bootstrap.successGates.length === 1 ? '' : 's'}</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+          {#if workspaceChildGateCount === 0}
+            <p class="workspace-project-note">
+              No child gates are configured yet. Add gates to each child project before expecting fully unattended work.
+            </p>
+          {/if}
+        </NoticeBand>
+      {/if}
 
       {#if bootstrapInfo?.configured}
         <FrameCard
@@ -1180,6 +1363,75 @@
         <FrameCard class="advanced-card advanced-card-wide" density="compact">
           {#snippet header()}
             <SectionHeader
+              title="Task worktree local files"
+              description="Root-relative files or directories Guildhall may copy into isolated task worktrees before bootstrap."
+              headingTag="h3"
+              density="dense"
+            />
+          {/snippet}
+
+          <Stack gap="3">
+            <NoticeBand tone="neutral" role="note" label="Worktrees" title="Opt in local runtime config" density="compact">
+              <p>
+                Use this for files like <code>.env</code>, <code>.env.local</code>, or
+                <code>appsettings.local.yaml</code> when workers need them to run local setup.
+                Guildhall detects likely filenames, but only copies the paths listed here.
+              </p>
+            </NoticeBand>
+            {#if worktreeIncludeScopes.length > 1}
+              <div class="candidate-list" aria-label="Workspace project worktree settings">
+                {#each worktreeIncludeScopes as scope (scope.projectId ?? scope.rootPath)}
+                  <button
+                    type="button"
+                    class="candidate-chip"
+                    class:selected={(scope.projectId ?? null) === selectedWorktreeProjectId}
+                    title={scope.rootPath}
+                    onclick={() => selectWorktreeIncludeScope(scope)}
+                  >
+                    {scope.label ?? scope.projectId ?? 'Workspace'}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+            {#if worktreeIncludeCandidates.length > 0}
+              <div class="candidate-list" aria-label="Detected local config candidates">
+                {#each worktreeIncludeCandidates.slice(0, 6) as candidate (candidate.path)}
+                  <button
+                    type="button"
+                    class="candidate-chip"
+                    class:selected={worktreeIncludeText.split(/\r?\n/).map(line => line.trim()).includes(candidate.path)}
+                    title={candidate.reason}
+                    onclick={() => addWorktreeIncludeCandidate(candidate.path)}
+                  >
+                    {candidate.path}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+            <label class="field">
+              <span>Include in task worktrees</span>
+              <textarea
+                class="settings-textarea"
+                bind:value={worktreeIncludeText}
+                rows="5"
+                spellcheck="false"
+                placeholder=".env&#10;appsettings.local.yaml&#10;config/local/**"
+              ></textarea>
+            </label>
+            <Row justify="start" gap="2" align="center" wrap>
+              {#if worktreeIncludeStatus}
+                <span class="status" class:error={worktreeIncludeStatus.error}>{worktreeIncludeStatus.text}</span>
+              {/if}
+              <Button variant="primary" disabled={worktreeIncludeBusy} onclick={saveWorktreeIncludes}>
+                {worktreeIncludeBusy ? 'Saving…' : 'Save worktree files'}
+              </Button>
+            </Row>
+          </Stack>
+        </FrameCard>
+
+        <FrameCard class="advanced-card advanced-card-wide" density="compact">
+          {#snippet header()}
+            <SectionHeader
               title="Behavior defaults"
               description="These shape how Guildhall works on this project. Use the global defaults unless this project genuinely needs a different operating style."
               headingTag="h3"
@@ -1296,7 +1548,39 @@
                 <div><span class="muted">Areas</span><strong>{codebaseMapStatus.counts.areas}</strong></div>
                 <div><span class="muted">Abstractions</span><strong>{codebaseMapStatus.counts.abstractions}</strong></div>
                 <div><span class="muted">Design system</span><strong>{codebaseMapStatus.designSystem?.maturity ?? '—'}</strong></div>
+                <div><span class="muted">Corpus</span><strong>{codebaseMapStatus.semantic?.corpusKind ?? '—'}</strong></div>
               </div>
+              {#if codebaseMapStatus.semantic}
+                <div class="map-semantic">
+                  <div class="map-semantic-meta">
+                    <span>{codebaseMapStatus.semantic.modelId}</span>
+                    {#if codebaseMapStatus.semantic.needsBroaderRead}
+                      <span>broader read</span>
+                    {/if}
+                  </div>
+                  <p>{codebaseMapStatus.semantic.projectPurpose}</p>
+                  {#if codebaseMapStatus.semantic.readNext.length}
+                    <div>
+                      <strong>Read next</strong>
+                      <ul class="map-recommendations">
+                        {#each codebaseMapStatus.semantic.readNext.slice(0, 3) as item (item.path)}
+                          <li><code>{item.path}</code> — {item.reason}</li>
+                        {/each}
+                      </ul>
+                    </div>
+                  {/if}
+                  {#if codebaseMapStatus.semantic.workerGuidance.length}
+                    <div>
+                      <strong>Worker guidance</strong>
+                      <ul class="map-recommendations">
+                        {#each codebaseMapStatus.semantic.workerGuidance.slice(0, 2) as guidance, i (`worker-guidance-${i}`)}
+                          <li>{guidance}</li>
+                        {/each}
+                      </ul>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
               {#if codebaseMapStatus.designSystem?.recommendations?.length}
                 <ul class="map-recommendations">
                   {#each codebaseMapStatus.designSystem.recommendations.slice(0, 2) as recommendation, i (`ds-rec-${i}`)}
@@ -1745,6 +2029,105 @@
     color: var(--text-muted);
     font-size: var(--fs-1);
     line-height: var(--lh-body);
+  }
+
+  .workspace-project-list {
+    list-style: none;
+    display: grid;
+    gap: var(--gh-space-2);
+    margin: var(--gh-space-3) 0 0;
+    padding: 0;
+  }
+
+  .workspace-project-list li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    align-items: center;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+
+  .workspace-project-name {
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .workspace-project-path {
+    font-family: var(--font-mono);
+  }
+
+  .workspace-project-note {
+    margin-block-start: var(--gh-space-3);
+  }
+
+  .candidate-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+  }
+
+  .candidate-chip {
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+    color: var(--text-muted);
+    padding: 6px 10px;
+    font: inherit;
+    font-size: var(--fs-1);
+    cursor: pointer;
+  }
+
+  .candidate-chip:hover,
+  .candidate-chip:focus-visible,
+  .candidate-chip.selected {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .settings-textarea {
+    inline-size: 100%;
+    min-block-size: 8rem;
+    resize: vertical;
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+    color: var(--text);
+    padding: var(--gh-space-3);
+    font: 500 var(--fs-2) / var(--lh-body) var(--font-mono);
+  }
+
+  .settings-textarea:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .map-semantic {
+    display: grid;
+    gap: var(--gh-space-3);
+    padding-block-start: var(--gh-space-1);
+  }
+
+  .map-semantic-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+  }
+
+  .map-semantic-meta span + span::before {
+    content: "·";
+    margin-inline-end: var(--gh-space-2);
+  }
+
+  .map-semantic p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+    max-width: 72ch;
   }
 
   .ds-prims {

@@ -40,7 +40,7 @@ Line-prefix framing means the stream can be multiplexed with logs without a sepa
 
 - `submit_line` — user text for the current agent.
 - `permission_response` — approve/deny a pending permission prompt.
-- `select_command` — user picked a dashboard action.
+- `select_command` — user picked a browser UI action.
 
 ## Public API
 

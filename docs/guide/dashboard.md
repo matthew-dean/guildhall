@@ -8,22 +8,23 @@ pageClass: gh-first-visit-page
 Guildhall is easiest to understand once you see how projects and work relate.
 The app starts at the service home, then narrows into the project shell where
 site survey, task blueprints, live trade work, inspections, and release
-readiness play out. It tries very hard not to make you remember more than you
-should.
+readiness play out. It keeps the current state visible so you do not have to
+hold the whole run in your head.
 
 <picture class="gh-doc-picture">
-  <source srcset="../assets/ui-audit/projects.avif" type="image/avif" />
-  <img src="../assets/ui-audit/projects.png" alt="Guildhall projects home showing several local projects with status, activity, and start controls." />
+  <source srcset="../assets/ui-audit/0-7-0/projects.avif" type="image/avif" />
+  <img src="../assets/ui-audit/0-7-0/projects.png" alt="Guildhall projects home showing several local projects with status, activity, and start controls." />
 </picture>
 
-![Guildhall work view with active tasks, live progress, and reviewer signals.](../assets/ui-audit/work.png)
+![Guildhall work view with active tasks, live progress, and reviewer signals.](../assets/ui-audit/0-7-0/work.png)
 
 ## What it does well
 
-- **Service over projects**: the dashboard is not married to one repo. It runs as a local service and keeps multiple projects available from one place.
+- **Service over projects**: Projects & Workspaces is not married to one repo. It runs as a local service and keeps multiple projects available from one place.
+- **Current labels match the app**: the service row is **Guild hall**, **Work mix**, **Attention**, and **Running now**; the project cards carry state chips such as **Paused**, **Queued**, **Needs task briefs**, **Mixed**, **Stable**, and **Inspect**.
 - **File-backed, not hidden**: project state still lives in `guildhall.yaml`, `.guildhall/config.yaml`, and `memory/*`, while machine-wide state such as the registry and provider credentials lives in `~/.guildhall/`. The UI is a clearer window into that state, not a secret second database.
-- **One operating surface**: the service home gets you into the right project, and the shell carries the detailed state without feeling like a separate product.
-- **Learning you can inspect**: Settings -> Learning shows project habits, cross-project preferences, project playbooks, and Guildhall product ideas without adding a new approval step to every task.
+- **One operating place**: the service home gets you into the right project, and the shell carries the detailed state without feeling like a separate product.
+- **Memory you can inspect**: Settings -> Memory shows project habits, cross-project preferences, project playbooks, and Guildhall product ideas without adding a new approval step to every task.
 
 ## Most of the real loop lives in the browser
 

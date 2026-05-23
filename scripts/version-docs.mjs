@@ -113,8 +113,8 @@ async function rewriteStableReleaseIndex(root) {
   )
   if (!next.includes('version-pinned docs snapshot')) {
     next = next.replace(
-      'GuildHall release notes capture the product claim each version can honestly make, the proof behind that claim, and the limits that still remain.',
-      `GuildHall release notes capture the product claim each version can honestly make, the proof behind that claim, and the limits that still remain.\n\nThis is the version-pinned docs snapshot for Guildhall ${version}. The public docs root defaults to this latest published release; unreleased main-branch docs live under [Next](/next/guide/).`,
+      'Guildhall release notes capture the product claim each version can honestly make, the proof behind that claim, and the limits that still remain.',
+      `Guildhall release notes capture the product claim each version can honestly make, the proof behind that claim, and the limits that still remain.\n\nThis is the version-pinned docs snapshot for Guildhall ${version}. The public docs root defaults to this latest published release; unreleased main-branch docs live under [Next](/next/guide/).`,
     )
   }
   await writeFile(file, next, 'utf8')

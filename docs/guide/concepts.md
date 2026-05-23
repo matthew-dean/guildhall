@@ -65,7 +65,7 @@ predicate; multiple guilds can inspect one task (fan-out).
 ## Change order
 
 An explicit revision to the accepted plan. Use a change order when new evidence
-changes scope, sequencing, assumptions, or task shape. Change orders should be
+changes scope, sequencing, assumptions, or task shape. Change orders stay
 visible because silent drift destroys trust.
 
 ## Punch list

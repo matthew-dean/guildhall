@@ -6,6 +6,7 @@ import {
   WorkspaceRegistryEntry,
   slugify,
   mergeModels,
+  defaultModelsForProvider,
   resolveModelsForProvider,
   writeModelsForProvider,
 } from '../schemas.js'
@@ -62,6 +63,24 @@ describe('mergeModels', () => {
     const result = mergeModels({}, { spec: 'qwen2.5-coder-32b-instruct' })
     // Other roles should still be defaults
     expect(result.coordinator).toBe(DEFAULT_LOCAL_MODEL_ASSIGNMENT.coordinator)
+  })
+
+  it('can merge against provider-specific defaults', () => {
+    const result = mergeModels({}, undefined, defaultModelsForProvider('codex'))
+    expect(result.worker).toBe('gpt-5.3-codex')
+    expect(result.spec).toBe('gpt-5.3-codex')
+  })
+})
+
+describe('defaultModelsForProvider', () => {
+  it('uses Codex-compatible models for Codex OAuth aliases', () => {
+    expect(defaultModelsForProvider('codex').worker).toBe('gpt-5.3-codex')
+    expect(defaultModelsForProvider('codex-oauth').gateChecker).toBe('gpt-5.3-codex')
+  })
+
+  it('keeps local defaults for local providers and unknown providers', () => {
+    expect(defaultModelsForProvider('llama-cpp')).toEqual(DEFAULT_LOCAL_MODEL_ASSIGNMENT)
+    expect(defaultModelsForProvider(undefined)).toEqual(DEFAULT_LOCAL_MODEL_ASSIGNMENT)
   })
 })
 
@@ -170,6 +189,57 @@ describe('WorkspaceYamlConfig', () => {
     expect(config.coordinators[0]?.autonomousDecisions).toEqual([])
   })
 
+  it('parses an optional multi-project workspace shape', () => {
+    const config = WorkspaceYamlConfig.parse({
+      name: 'Looma + Knit',
+      kind: 'workspace',
+      projects: [
+        {
+          id: 'looma',
+          label: 'Looma',
+          type: 'library',
+          path: 'looma',
+          coordinator: 'looma',
+          bootstrap: {
+            commands: ['pnpm install'],
+            successGates: ['pnpm typecheck', 'pnpm build', 'pnpm lint'],
+          },
+          worktree: {
+            include: ['.env'],
+          },
+        },
+        {
+          id: 'knit',
+          label: 'Knit',
+          type: 'app',
+          path: 'knit',
+          coordinator: 'knit',
+        },
+      ],
+      council: {
+        mandate: 'Keep Looma generic while letting Knit needs drive priority.',
+        coordinationRules: [
+          {
+            id: 'knit-drives-looma',
+            from: 'knit',
+            to: 'looma',
+            rule: 'Reusable Knit UI needs should become Looma primitives before app-specific wiring.',
+          },
+        ],
+      },
+    })
+
+    expect(config.kind).toBe('workspace')
+    expect(config.projects.map((project) => project.id)).toEqual(['looma', 'knit'])
+    expect(config.projects[0]?.bootstrap?.successGates).toEqual([
+      'pnpm typecheck',
+      'pnpm build',
+      'pnpm lint',
+    ])
+    expect(config.projects[0]?.worktree?.include).toEqual(['.env'])
+    expect(config.council?.coordinationRules[0]?.from).toBe('knit')
+  })
+
   it('defaults bootstrap to undefined (opt-in)', () => {
     const config = WorkspaceYamlConfig.parse({ name: 'Test' })
     expect(config.bootstrap).toBeUndefined()
@@ -195,6 +265,20 @@ describe('WorkspaceYamlConfig', () => {
     expect(config.bootstrap?.commands).toEqual(['pnpm install'])
     expect(config.bootstrap?.successGates).toEqual(['pnpm typecheck'])
     expect(config.bootstrap?.timeoutMs).toBe(300_000)
+  })
+
+  it('parses explicit task worktree include paths for local runtime config', () => {
+    const config = WorkspaceYamlConfig.parse({
+      name: 'Test',
+      worktree: {
+        include: ['.env', 'appsettings.local.yaml', 'config/local/**'],
+      },
+    })
+    expect(config.worktree?.include).toEqual([
+      '.env',
+      'appsettings.local.yaml',
+      'config/local/**',
+    ])
   })
 
   it('parses bootstrap.provenance with tried attempts', () => {

@@ -193,6 +193,16 @@ import { promisify } from 'node:util'
 
 const execFileP = promisify(execFile)
 
+function worktreeIncludeForTaskProject(
+  config: ResolvedConfig,
+  taskProjectPath: string,
+): string[] {
+  const normalizedTaskPath = path.resolve(taskProjectPath)
+  const childProject = config.projects?.find((project) => path.resolve(project.path) === normalizedTaskPath)
+  if (childProject) return childProject.worktree?.include ?? []
+  return config.worktree?.include ?? []
+}
+
 /**
  * Agent id recorded against promotion decisions written by the orchestrator
  * itself — distinguishes them from LLM-driven agent tool calls in progress
@@ -400,6 +410,55 @@ function isRecoverableNoProgressBlocker(task: Task): boolean {
   })
 }
 
+function isRecoverableSpecNoProgressBlocker(task: Task): boolean {
+  const text = [
+    task.blockReason ?? '',
+    ...(task.escalations ?? [])
+      .filter((escalation) => !escalation.resolvedAt)
+      .map((escalation) => `${escalation.agentId}\n${escalation.summary ?? ''}\n${escalation.details ?? ''}`),
+  ].join('\n')
+  return /spec-agent|Spec agent/i.test(text) && /made no visible progress|no saved spec|no durable draft/i.test(text)
+}
+
+function isRecoverableToolPathMismatchBlocker(task: Task): boolean {
+  const text = [
+    task.blockReason ?? '',
+    ...(task.escalations ?? [])
+      .filter((escalation) => !escalation.resolvedAt)
+      .map((escalation) => `${escalation.summary ?? ''}\n${escalation.details ?? ''}`),
+  ].join('\n')
+  return /tool (?:read|reads|layer|runtime|file\/write|file read\/write)|path mismatch|misrouted|intercepted|unrelated missing path|unrelated task file|different task worktree/i.test(text)
+}
+
+function isRecoverableBlueprintToolingBlocker(task: Task): boolean {
+  const text = [
+    task.blockReason ?? '',
+    ...(task.escalations ?? [])
+      .filter((escalation) => !escalation.resolvedAt)
+      .map((escalation) => `${escalation.agentId}\n${escalation.summary ?? ''}\n${escalation.details ?? ''}`),
+  ].join('\n')
+  if (!/\b(?:spec-agent|coordinator|blueprint|spec|planning lane)\b/i.test(text)) return false
+  if (!/\b(?:missing|likely target|target file|stale source|source reference)\b/i.test(text)) return false
+  return /\b(?:create|author|mutate|write)\b/i.test(text)
+}
+
+function resolveRecoverableBlueprintToolingEscalations(task: Task, resolvedAt: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    const text = `${escalation.agentId}\n${escalation.summary ?? ''}\n${escalation.details ?? ''}`
+    if (
+      /\b(?:spec-agent|coordinator|blueprint|spec|planning lane)\b/i.test(text) &&
+      /\b(?:missing|likely target|target file|stale source|source reference)\b/i.test(text) &&
+      /\b(?:create|author|mutate|write)\b/i.test(text)
+    ) {
+      escalation.resolvedAt = resolvedAt
+      escalation.resolvedBy = 'coordinator'
+      escalation.resolution =
+        'Foreman inspection resolved this as a stale blueprint/tooling blocker. Planning lanes may inspect evidence and revise the blueprint; they should not be forced to author a stale source path before coordinator review.'
+    }
+  }
+}
+
 function isRecoverableWorkerTimeoutBlocker(task: Task): boolean {
   const blockReason = task.blockReason ?? ''
   return /Worker timed out after failing to mutate the likely target file/i.test(blockReason)
@@ -457,6 +516,32 @@ function resolveRecoverableNoProgressEscalations(task: Task, resolvedAt: string)
       escalation.resolvedAt = resolvedAt
       escalation.resolvedBy = 'system'
       escalation.resolution = 'Superseded after the project was explicitly resumed from a recoverable no-progress stop.'
+    }
+  }
+}
+
+function resolveRecoverableSpecNoProgressEscalations(task: Task, resolvedAt: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    const text = `${escalation.agentId}\n${escalation.summary ?? ''}\n${escalation.details ?? ''}`
+    if (/spec-agent|Spec agent/i.test(text) && /made no visible progress|no saved spec|no durable draft/i.test(text)) {
+      escalation.resolvedAt = resolvedAt
+      escalation.resolvedBy = 'system'
+      escalation.resolution =
+        'Superseded after Guildhall learned to preserve useful transcript context and retry spec drafting from the last durable notes.'
+    }
+  }
+}
+
+function resolveRecoverableToolPathMismatchEscalations(task: Task, resolvedAt: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    const text = `${escalation.summary ?? ''}\n${escalation.details ?? ''}`
+    if (/tool (?:read|reads|layer|runtime|file\/write|file read\/write)|path mismatch|misrouted|intercepted|unrelated missing path|unrelated task file|different task worktree/i.test(text)) {
+      escalation.resolvedAt = resolvedAt
+      escalation.resolvedBy = 'system'
+      escalation.resolution =
+        'Superseded after Guildhall corrected task-worktree path/context routing. Reopened for a fresh worker pass.'
     }
   }
 }
@@ -979,7 +1064,24 @@ function isQuestionListPrompt(promptBody: string): boolean {
     /\b(?:two|three|four|five|\d+)\s+questions?\s+remain\b/.test(normalized) ||
     /\bquestions?\s+remain\b/.test(normalized) ||
     /\bposted\s+(?:two|three|four|five|\d+)\s+questions?\b/.test(normalized) ||
+    /\bposted\s+(?:a\s+|one\s+)?(?:focused\s+|scope\s+|structured\s+)*questions?\b/.test(normalized) ||
     /\bquestions?\s+to\s+help\b/.test(normalized)
+  )
+}
+
+function isOperationalFallbackPrompt(promptBody: string): boolean {
+  const normalized = promptBody
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/\*\*/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+  return (
+    /^(?:i(?:'|’)ll|i will|i(?:'|’)m going to|i am going to)(?: now)?(?: finalize|finish|complete|proceed) by:?$/.test(normalized) ||
+    /^(?:done|complete|completed|finished)(?:\s*[—-]\s*|\s*:|\s*$)/.test(normalized) ||
+    /^the user answered:?$/.test(normalized) ||
+    /^(?:required\s+)?yaml fences? for:?$/.test(normalized) ||
+    /^required sections:?$/.test(normalized)
   )
 }
 
@@ -1012,6 +1114,7 @@ function inferFallbackQuestionsFromPlaintext(text: string): FallbackQuestionDraf
     const promptLike = /pick one\b|choose one\b|select one\b|\?$|:\s*$|success look like/i.test(promptBody)
     if (!promptLike) continue
     if (isQuestionListPrompt(promptBody)) continue
+    if (isOperationalFallbackPrompt(promptBody)) continue
     const summaryLike =
       /i['’]ll draft the full spec with\b|i will draft the full spec with\b|once you (?:pick|answer).+i['’]ll draft\b/i
         .test(promptBody)
@@ -1083,6 +1186,7 @@ function inferFallbackQuestionsFromPlaintext(text: string): FallbackQuestionDraf
         .map((line) => line as string)
       if (choices.length >= 2 && choices.length <= 6) {
         if (isQuestionListPrompt(section.heading)) return null
+        if (isOperationalFallbackPrompt(section.heading)) return null
         const combined = [section.heading, ...section.lines.map((line) => line.trim()).filter((line) => line && !/^-/.test(line))]
           .join('\n')
           .trim()
@@ -1586,6 +1690,8 @@ function renderImmediateResumeInstructions(
   agentName: string,
   checkpoint: Checkpoint | null,
   checkpointNextAction = '',
+  taskProjectPath = '',
+  activeWorktreePath = '',
 ): string {
   if (agentName !== 'worker-agent' || task.status !== 'in_progress') return ''
   const normalizedCheckpoint = checkpointNextAction.trim()
@@ -1603,7 +1709,8 @@ function renderImmediateResumeInstructions(
   }
   const resumeSurface = checkpoint?.resumeContext?.safeNextMutationSurface?.slice(0, 4) ?? []
   const likelyFiles = resolveLikelyTaskFiles(task).slice(0, 4)
-  const targetFiles = resumeSurface.length > 0 ? resumeSurface : likelyFiles
+  const targetFiles = (resumeSurface.length > 0 ? resumeSurface : likelyFiles)
+    .map((file) => mapResumeTargetFileToWorktree(file, taskProjectPath, activeWorktreePath))
   if (targetFiles.length === 0) return ''
   const latestVerification = checkpoint?.resumeContext?.verification?.[checkpoint.resumeContext.verification.length - 1]
   return [
@@ -1623,6 +1730,27 @@ function renderImmediateResumeInstructions(
     'After you have the needed file contents, your next step should be a concrete mutation or a focused verification command tied to those files.',
     'Do not use list-files, glob, or generic repo-root shell inspection until you have attempted that mutation or focused verification.',
   ].join('\n')
+}
+
+function mapResumeTargetFileToWorktree(file: string, taskProjectPath: string, activeWorktreePath: string): string {
+  const trimmed = file.trim()
+  if (!trimmed || !path.isAbsolute(trimmed)) return file
+  const projectRoot = taskProjectPath.trim()
+  const worktreeRoot = activeWorktreePath.trim()
+  if (!projectRoot || !worktreeRoot) return file
+  const resolvedProjectRoot = path.resolve(projectRoot)
+  const resolvedWorktreeRoot = path.resolve(worktreeRoot)
+  if (resolvedProjectRoot === resolvedWorktreeRoot) return file
+  const relative = path.relative(resolvedProjectRoot, path.resolve(trimmed))
+  if (
+    relative &&
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  ) {
+    return path.join(resolvedWorktreeRoot, relative)
+  }
+  return file
 }
 
 function shouldUseCheckpointForTask(task: Task, checkpoint: Checkpoint | null): checkpoint is Checkpoint {
@@ -1874,9 +2002,9 @@ export class Orchestrator {
    */
   async tick(opts: OrchestratorTickOptions = {}): Promise<TickOutcome> {
     let queueBefore = await this.readQueue()
-    queueBefore = await this.normalizeQueuedReviewOwnership(queueBefore)
-    queueBefore = await this.reopenRecoverableDirtyRepoTasks(queueBefore)
     const resolvedCapacity = await this.resolveCapacity()
+    queueBefore = await this.normalizeQueuedReviewOwnership(queueBefore, resolvedCapacity)
+    queueBefore = await this.reopenRecoverableDirtyRepoTasks(queueBefore)
     const capacity =
       opts.dispatchLimit === undefined
         ? resolvedCapacity
@@ -2215,6 +2343,7 @@ export class Orchestrator {
           projectId: this.opts.config.workspaceId,
           projectPath: effectiveTaskProjectPath,
           workspacePath: this.opts.config.projectPath,
+          worktreeInclude: worktreeIncludeForTaskProject(this.opts.config, effectiveTaskProjectPath),
           baseBranch,
           gitDriver: this.gitDriver,
         })
@@ -2295,6 +2424,7 @@ export class Orchestrator {
       task,
       workspaceProjectPath: this.opts.config.projectPath,
       workspaceBootstrap: this.opts.config.bootstrap ?? undefined,
+      workspaceProjects: this.opts.config.projects ?? [],
     })
     if (
       wtBootstrap &&
@@ -2491,6 +2621,8 @@ export class Orchestrator {
       agent.name,
       checkpoint,
       checkpointNextAction,
+      effectiveTaskProjectPath,
+      activeWorktreePath,
     )
 
     const prompt = [
@@ -5149,12 +5281,57 @@ export class Orchestrator {
         t.reviewVerdicts.push(personaVerdictToReviewRecord(v, { now }))
       }
 
+      const repeatedAfterCoordinatorAdjudication =
+        aggregate.verdict === 'revise' &&
+        !proceduralOnlyDissent &&
+        hasPriorAdjudicationForDissent(t, aggregate.dissenting)
+      if (repeatedAfterCoordinatorAdjudication) {
+        await this.writeQueue(queue)
+        const dissenterSlugs = aggregate.dissenting.map((d) => d.guildSlug)
+        const details = [
+          'Reviewer fan-out returned the task to the same handoff lane after a coordinator adjudication.',
+          '',
+          `Dissenters: ${dissenterSlugs.join(', ') || 'unknown'}`,
+          '',
+          'Latest reviewer feedback:',
+          aggregate.combinedFeedback || '- No combined feedback recorded.',
+          '',
+          'Guildhall stopped this loop because another reviewer -> worker bounce would repeat a previously adjudicated handoff without a new plan.',
+        ].join('\n')
+        const escalation = await raiseEscalation({
+          tasksPath: this.tasksPath(),
+          progressPath: this.progressPath(),
+          taskId: task.id,
+          agentId: 'coordinator-foreman',
+          reason: 'human_judgment_required',
+          summary:
+            'Reviewer/worker handoff loop detected after coordinator adjudication.',
+          details,
+        })
+        return {
+          kind: 'escalated',
+          taskId: task.id,
+          agent: 'coordinator-foreman',
+          reason: 'review_worker_handoff_loop',
+          escalationId: escalation.escalationId ?? `esc-${task.id}`,
+        } as TickOutcome
+      }
+
       // Under `coordinator_adjudicates_on_conflict`, recurrent same-persona
       // dissent short-circuits to the domain coordinator instead of looping
       // the worker. The worker will re-enter in_progress only after the
       // coordinator lands a binding AdjudicationRecord with scoped
       // instructions.
-      if (aggregate.needsAdjudication && !proceduralOnlyDissent) {
+      const shouldInspectRepeatedHandoff =
+        aggregate.verdict === 'revise' &&
+        !proceduralOnlyDissent &&
+        (aggregate.needsAdjudication ||
+          hasOverlappingPriorDissent(aggregate.dissenting, priorRounds))
+      if (shouldInspectRepeatedHandoff) {
+        if (!aggregate.needsAdjudication) {
+          aggregate.needsAdjudication = true
+          aggregate.adjudicationTrigger = 'policy_conflict'
+        }
         const adjudicationOutcome = await this.routeToCoordinatorAdjudication({
           queue,
           task: t,
@@ -5312,12 +5489,22 @@ export class Orchestrator {
       for (const item of d.revisionItems) {
         if (!scopeInstructions.includes(item)) scopeInstructions.push(item)
       }
+      if (d.revisionItems.length === 0) {
+        const fallback = d.reasoning
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 420)
+        if (fallback && !scopeInstructions.includes(fallback)) {
+          scopeInstructions.push(`${d.guildName}: ${fallback}`)
+        }
+      }
     }
 
     const rationale = [
       `Reviewer fan-out round ${input.round} produced recurring dissent from`,
-      `${dissenterSlugs.join(', ')}. Policy \`coordinator_adjudicates_on_`,
-      `conflict\` routes to the domain coordinator (${input.task.domain}).`,
+      `${dissenterSlugs.join(', ')}. Guildhall routed this repeated handoff`,
+      `to the domain coordinator (${input.task.domain}) before bouncing the`,
+      'task back to the worker again.',
       '',
       'Decision (deterministic v1): keep each dissenting persona\'s scoped',
       'instructions. Worker executes the scoped list; the dissent transcript',
@@ -5680,25 +5867,53 @@ export class Orchestrator {
 
   private async reopenRecoverableDirtyRepoTasks(queue: TaskQueue): Promise<TaskQueue> {
     let changed = false
+    let expensiveRecoveryChecks = 0
+    const maxExpensiveRecoveryChecks = 1
     const now = this.now()
+    const recordFailedBootstrapRecovery = (task: Task, res: ReturnType<typeof runBootstrap>): void => {
+      const failed = res.steps.find((step) => step.result === 'fail')
+      const msg = `worktree bootstrap failed on ${failed?.kind ?? 'step'} \`${failed?.command ?? ''}\` (exit ${failed?.exitCode ?? '?'})`
+      const nextReason =
+        `Guildhall retried this task after the project setup contract changed, but task setup still fails: ${msg}. ` +
+        'Fix the task-local bootstrap/gate failure, then resume the task.'
+      if (task.blockReason === nextReason) return
+      task.blockReason = nextReason
+      task.notes.push({
+        agentId: 'coordinator',
+        role: 'bootstrap-failure',
+        content:
+          `Recovery retry did not reopen the task. ${msg}. ` +
+          'Guildhall updated this blocker with the current task-local setup failure instead of keeping the stale setup message.',
+        timestamp: now,
+      })
+      task.updatedAt = now
+      changed = true
+    }
     for (const task of queue.tasks) {
       if (task.status !== 'blocked') continue
       if (!this.hasGuildhallOwnershipTrail(task)) continue
       const blockReason = task.blockReason ?? ''
       let recoveryNote: string | null = null
+      let recoveryRole = 'recovery'
+      let recoveryStatus: Task['status'] = 'in_progress'
+      let recoveryAssignee: string | null = 'worker-agent'
       if (blockReason.includes('Guildhall could not start work because the target repo is dirty:')) {
         const repoRoot = resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
         const repoClean = await this.gitDriver.isClean(repoRoot)
         if (repoClean) continue
         recoveryNote =
           'User restarted the project while Guildhall-owned shared-checkout edits were still present. Reopened the task so Guildhall can checkpoint those edits into an isolated task branch.'
-      } else if (blockReason.includes('Guildhall could not start work because task setup failed:')) {
+      } else if (
+        blockReason.includes('Guildhall could not start work because task setup failed:') ||
+        blockReason.includes('project setup contract changed, but task setup still fails:')
+      ) {
         const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
         const activeWorktreePath = task.worktreePath?.trim() ?? ''
         const wtBootstrap = resolveEffectiveTaskBootstrapBlock({
           task,
           workspaceProjectPath: this.opts.config.projectPath,
           workspaceBootstrap: this.opts.config.bootstrap ?? undefined,
+          workspaceProjects: this.opts.config.projects ?? [],
         })
         if (
           !activeWorktreePath ||
@@ -5709,6 +5924,8 @@ export class Orchestrator {
         ) {
           continue
         }
+        if (expensiveRecoveryChecks >= maxExpensiveRecoveryChecks) continue
+        expensiveRecoveryChecks += 1
         const wtMemoryDir = path.join(activeWorktreePath, '.guildhall')
         const res = runBootstrap({
           projectPath: activeWorktreePath,
@@ -5717,9 +5934,14 @@ export class Orchestrator {
           successGates: wtBootstrap.successGates,
           timeoutMs: wtBootstrap.timeoutMs,
         })
-        if (!res.success) continue
+        if (!res.success) {
+          recordFailedBootstrapRecovery(task, res)
+          continue
+        }
+        recoveryStatus = 'ready'
+        recoveryAssignee = null
         recoveryNote =
-          'User restarted the project after an earlier task bootstrap failure. The task worktree bootstrap now passes, so Guildhall reopened the task and resumed work.'
+          'User restarted the project after an earlier task bootstrap failure. The task worktree bootstrap now passes, so Guildhall reopened the task into the runnable queue.'
       } else if (isRecoverableEnvironmentSetupBlocker(task)) {
         const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
         const activeWorktreePath = task.worktreePath?.trim() ?? ''
@@ -5727,6 +5949,7 @@ export class Orchestrator {
           task,
           workspaceProjectPath: this.opts.config.projectPath,
           workspaceBootstrap: this.opts.config.bootstrap ?? undefined,
+          workspaceProjects: this.opts.config.projects ?? [],
         })
         if (
           !activeWorktreePath ||
@@ -5737,6 +5960,8 @@ export class Orchestrator {
         ) {
           continue
         }
+        if (expensiveRecoveryChecks >= maxExpensiveRecoveryChecks) continue
+        expensiveRecoveryChecks += 1
         const wtMemoryDir = path.join(activeWorktreePath, '.guildhall')
         const res = runBootstrap({
           projectPath: activeWorktreePath,
@@ -5745,11 +5970,16 @@ export class Orchestrator {
           successGates: wtBootstrap.successGates,
           timeoutMs: wtBootstrap.timeoutMs,
         })
-        if (!res.success) continue
+        if (!res.success) {
+          recordFailedBootstrapRecovery(task, res)
+          continue
+        }
         resolveRecoverableEnvironmentSetupEscalations(task, now)
         if (activeEscalations(task).length > 0) continue
+        recoveryStatus = 'ready'
+        recoveryAssignee = null
         recoveryNote =
-          'User restarted the project after a task-local test environment failure. The repaired worktree install now passes, so Guildhall reopened the task and resumed worker verification inside the isolated worktree.'
+          'User restarted the project after a task-local test environment failure. The repaired worktree install now passes, so Guildhall reopened the task into the runnable queue.'
       } else if (isRecoverableReviewHandoffToolLoop(task)) {
         resolveRecoverableReviewHandoffEscalations(task, now)
         if (activeEscalations(task).length > 0) continue
@@ -5777,9 +6007,33 @@ export class Orchestrator {
         if (activeEscalations(task).length > 0) continue
         recoveryNote =
           'User restarted the project after the worker made no visible progress. Reopened the task so Guildhall can resume from the latest durable checkpoint instead of treating a recoverable no-progress stop as terminal.'
+      } else if (isRecoverableSpecNoProgressBlocker(task)) {
+        resolveRecoverableSpecNoProgressEscalations(task, now)
+        if (activeEscalations(task).length > 0) continue
+        recoveryStatus = 'exploring'
+        recoveryAssignee = 'spec-agent'
+        recoveryNote =
+          'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.'
+      } else if (isRecoverableBlueprintToolingBlocker(task)) {
+        resolveRecoverableBlueprintToolingEscalations(task, now)
+        if (activeEscalations(task).length > 0) continue
+        recoveryRole = 'foreman-inspection'
+        recoveryStatus = hasUsableBlueprint(task) ? 'spec_review' : 'exploring'
+        recoveryAssignee = recoveryStatus === 'exploring' ? 'spec-agent' : null
+        recoveryNote =
+          'Foreman inspection found a stale blueprint/tooling blocker rather than a real owner decision. Cleared the blocker so Guildhall can continue from the current plan and inspect nearby evidence instead of asking the user to repair an internal path guardrail.'
+      } else if (isRecoverableToolPathMismatchBlocker(task)) {
+        resolveRecoverableToolPathMismatchEscalations(task, now)
+        if (activeEscalations(task).length > 0) continue
+        recoveryStatus = 'ready'
+        recoveryAssignee = null
+        recoveryNote =
+          'User restarted the project after an old tool/path routing bug blocked this task. Reopened the worker lane so Guildhall can retry with the corrected task-worktree context.'
       } else if (isRecoverableTurnLimitBlocker(task)) {
         resolveRecoverableTurnLimitEscalations(task, now)
         if (activeEscalations(task).length > 0) continue
+        recoveryStatus = 'ready'
+        recoveryAssignee = null
         recoveryNote =
           'User restarted the project after the worker exhausted its turn budget. Reopened the task so Guildhall can continue from the current task state instead of treating the turn limit as terminal.'
       } else if (isRecoverableWorkerTimeoutBlocker(task)) {
@@ -5839,12 +6093,12 @@ export class Orchestrator {
       } else {
         continue
       }
-      task.status = 'in_progress'
-      task.assignedTo = 'worker-agent'
+      task.status = recoveryStatus
+      task.assignedTo = recoveryAssignee
       task.blockReason = undefined
       task.notes.push({
         agentId: 'coordinator',
-        role: 'recovery',
+        role: recoveryRole,
         content: recoveryNote,
         timestamp: now,
       })
@@ -6532,7 +6786,24 @@ export class Orchestrator {
     })
   }
 
-  private async normalizeQueuedReviewOwnership(queue: TaskQueue): Promise<TaskQueue> {
+  private async normalizeQueuedReviewOwnership(queue: TaskQueue, dispatchCapacity = 1): Promise<TaskQueue> {
+    const activeWorkerTasks = queue.tasks
+      .filter((task) =>
+        task.status === 'in_progress' &&
+        task.assignedTo === 'worker-agent',
+      )
+      .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+    const excessActiveWorkerIds = dispatchCapacity <= 1
+      ? activeWorkerTasks.slice(1).map((task) => task.id)
+      : []
+    const staleExploringSpecIds = dispatchCapacity <= 1
+      ? queue.tasks
+          .filter((task) =>
+            task.status === 'exploring' &&
+            task.assignedTo === 'spec-agent',
+          )
+          .map((task) => task.id)
+      : []
     const staleRetryWindowIds = queue.tasks
       .filter((task) => ensureRetryWindow({ ...task }))
       .map((task) => task.id)
@@ -6574,7 +6845,9 @@ export class Orchestrator {
       staleReviewIds.length === 0 &&
       staleGateCheckIds.length === 0 &&
       staleSpecReviewIds.length === 0 &&
-      staleTerminalIds.length === 0
+      staleTerminalIds.length === 0 &&
+      staleExploringSpecIds.length === 0 &&
+      excessActiveWorkerIds.length === 0
     ) return queue
 
     let normalizedQueue = queue
@@ -6592,6 +6865,31 @@ export class Orchestrator {
         ) {
           ensureWorkerOwnership(task)
           task.updatedAt = this.now()
+          changed = true
+        } else if (excessActiveWorkerIds.includes(task.id)) {
+          task.status = 'ready'
+          task.assignedTo = null
+          task.updatedAt = this.now()
+          task.notes ??= []
+          task.notes.push({
+            agentId: 'coordinator',
+            role: 'recovery',
+            content:
+              'Runtime normalized this task back to the runnable queue because the project is in serial dispatch and had multiple worker tasks marked active.',
+            timestamp: this.now(),
+          })
+          changed = true
+        } else if (staleExploringSpecIds.includes(task.id)) {
+          task.assignedTo = null
+          task.updatedAt = this.now()
+          task.notes ??= []
+          task.notes.push({
+            agentId: 'coordinator',
+            role: 'recovery',
+            content:
+              'Runtime cleared a stale spec-agent claim so this draft waits in the shaping queue instead of pretending an agent is actively working on it.',
+            timestamp: this.now(),
+          })
           changed = true
         } else if (
           task.status === 'review' &&
@@ -7668,6 +7966,44 @@ function isProceduralOnlyFanoutDissent(dissenting: readonly PersonaVerdict[]): b
       /\bcrash[- ]recovery\b/i.test(text)
     return saysAccepted && asksOnlyForProcess
   })
+}
+
+function sortedDissenterSlugs(dissenting: readonly PersonaVerdict[]): string[] {
+  return [...new Set(dissenting.map((verdict) => verdict.guildSlug).filter(Boolean))].sort()
+}
+
+function sameDissenterSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false
+  return left.every((slug, index) => slug === right[index])
+}
+
+function hasOverlappingPriorDissent(
+  dissenting: readonly PersonaVerdict[],
+  priorRounds: readonly (readonly PersonaVerdict[])[],
+): boolean {
+  const current = new Set(sortedDissenterSlugs(dissenting))
+  if (current.size === 0) return false
+  return priorRounds.some((round) =>
+    round.some((verdict) =>
+      verdict.verdict === 'revise' && current.has(verdict.guildSlug),
+    ),
+  )
+}
+
+function hasPriorAdjudicationForDissent(
+  task: Task,
+  dissenting: readonly PersonaVerdict[],
+): boolean {
+  const current = sortedDissenterSlugs(dissenting)
+  if (current.length === 0) return false
+  return (task.adjudications ?? []).some((record) =>
+    record.decidedBy === 'coordinator' &&
+    sameDissenterSet(sortedDissenterSlugsFromRecord(record.dissenters), current),
+  )
+}
+
+function sortedDissenterSlugsFromRecord(dissenters: readonly string[]): string[] {
+  return [...new Set(dissenters.filter(Boolean))].sort()
 }
 
 function resolvedScopeDecisionTexts(task: Task): string[] {

@@ -75,7 +75,7 @@ describe('CurrentTab', () => {
       },
     ])
 
-    await userEvent.click(screen.getByText('URL input only'))
+    await userEvent.click(screen.getByText(/url input only/i))
 
     expect(props.onAnswerQuestion).toHaveBeenCalledWith('q-link-scope', 'URL input only')
   })
@@ -173,6 +173,55 @@ describe('CurrentTab', () => {
 
     expect(props.onOpenSpecTab).toHaveBeenCalledOnce()
     expect(props.onShapeDraft).toHaveBeenCalledOnce()
+  })
+
+  it('shows imported draft shaping as Guildhall-owned progress, not user babysitting', () => {
+    renderCurrent([
+      {
+        id: 'turn-import-shaping',
+        kind: 'inflight',
+        at: now,
+        persona: 'spec',
+        status: 'active',
+        phase: 'spec',
+        taskId: 'task-import-2',
+        taskTitle: 'Knit: add revision summary',
+        taskStatus: 'exploring',
+        importedDraft: true,
+        summary: 'Guildhall is shaping the imported note.',
+      },
+    ])
+
+    expect(screen.getByText('Guildhall shaping')).toBeTruthy()
+    expect(screen.getByText(/You can add context, but you do not need to babysit the draft/i)).toBeTruthy()
+    expect(screen.queryByText('Task brief in progress')).toBeNull()
+    expect(screen.queryByText(/Continue drafting the brief here when you are ready/i)).toBeNull()
+  })
+
+  it('surfaces partial durable progress as recovery instead of queued work', () => {
+    renderCurrent([
+      {
+        id: 'turn-recovery',
+        kind: 'inflight',
+        at: now,
+        persona: 'worker',
+        status: 'active',
+        phase: 'inflight',
+        taskId: 'task-link-editor',
+        taskTitle: 'Knit: add link editor controls',
+        taskStatus: 'in_progress',
+        summary: 'Worker started implementation.',
+        activity: [
+          { at: now, label: 'Write file src/components/LinkEditor.svelte', tone: 'ok', detail: 'Updated link editor controls.' },
+          { at: now, label: 'Worker timed out after 120 seconds', tone: 'danger', detail: 'No new assistant message arrived.' },
+        ],
+      },
+    ])
+
+    expect(screen.getByText('Needs recovery')).toBeTruthy()
+    expect(screen.getByText(/Guildhall made partial progress, then the agent failed/i)).toBeTruthy()
+    expect(screen.getByText('Write file src/components/LinkEditor.svelte')).toBeTruthy()
+    expect(screen.queryByText('Queued')).toBeNull()
   })
 
   it('shows queued work, run errors, and checklist progress in one card', async () => {

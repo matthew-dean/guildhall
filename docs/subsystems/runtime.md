@@ -11,7 +11,7 @@ help_summary: |
 
 **Source:** `src/runtime/`
 
-The runtime is the top-level orchestration layer. It owns the task state machine, coordinates agents, enforces levers, and surfaces events to the dashboard.
+The runtime is the top-level orchestration layer. It owns the task state machine, coordinates agents, enforces levers, and surfaces events to the browser UI.
 
 ## Orchestrator
 
@@ -53,10 +53,10 @@ This keeps prompts tight — agents get only what they need for the current deci
 
 ## Intake and setup shaping
 
-- `src/runtime/intake.ts` — task-shaping flow used by the dashboard when work needs a clearer spec before it can run.
-- `src/runtime/meta-intake.ts` — setup flow used by the dashboard to inspect a repo, infer internal routing, and draft starter tasks.
+- `src/runtime/intake.ts` — task-shaping flow used by the browser UI when work needs a clearer spec before it can run.
+- `src/runtime/meta-intake.ts` — setup flow used by the browser UI to inspect a repo, infer internal routing, and draft starter tasks.
 
 ## CLI and server entry points
 
 - `src/runtime/cli.ts` — `guildhall <command>` dispatch.
-- `src/runtime/serve.ts` — the Hono HTTP server backing the dashboard. See [HTTP API reference](../reference/http-api).
+- `src/runtime/serve.ts` — the Hono HTTP server backing the browser UI.

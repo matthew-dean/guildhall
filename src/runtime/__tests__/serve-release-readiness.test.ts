@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { bootstrapWorkspace } from '@guildhall/config'
 import type { Task, TaskQueue } from '@guildhall/core'
 import { buildServeApp } from '../serve.js'
@@ -12,6 +14,7 @@ import { buildServeApp } from '../serve.js'
 let tmpDir: string
 let tasksPath: string
 let projectId: string
+const execFileP = promisify(execFile)
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-'))
@@ -62,6 +65,26 @@ function projectUrl(route: string): string {
   return url.toString()
 }
 
+async function approveDesignSystem(app: ReturnType<typeof buildServeApp>['app']): Promise<void> {
+  await app.fetch(new Request(projectUrl('/api/project/design-system'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      tokens: {
+        color: [{ name: 'primary', value: '#000' }],
+        spacing: [],
+        typography: [],
+        radius: [],
+        shadow: [],
+      },
+      primitives: [],
+      copyVoice: { tone: 'plain', bannedTerms: [], preferredTerms: [], examples: [] },
+      authoredBy: 'human',
+    }),
+  }))
+  await app.fetch(new Request(projectUrl('/api/project/design-system/approve'), { method: 'POST' }))
+}
+
 describe('GET /api/project/release-readiness', () => {
   it('reports initializationNeeded for an attached-but-uninitialized project shell', async () => {
     const emptyDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-uninitialized-'))
@@ -105,11 +128,54 @@ describe('GET /api/project/release-readiness', () => {
       }),
     ])
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
     const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
     const body = await res.json() as any
     expect(body.unapprovedBriefs.map((b: any) => b.id)).toEqual(['task-1'])
     expect(body.unapprovedSpecs.map((b: any) => b.id)).toEqual(['task-2'])
-    expect(body.totals.blockingCount).toBe(2)
+    expect(body.totals.humanBlockingCount).toBe(2)
+    expect(body.totals.blockingCount).toBeGreaterThan(2)
+  })
+
+  it('does not count terminal or reserved workspace-import briefs as human blockers', async () => {
+    await seed([
+      makeTask({
+        id: 'done-brief',
+        title: 'Done brief',
+        status: 'done',
+        productBrief: {
+          userJob: 'x',
+          successMetric: 'y',
+          antiPatterns: [],
+        },
+      }),
+      makeTask({
+        id: 'task-workspace-import',
+        title: 'Workspace import',
+        status: 'done',
+        productBrief: {
+          userJob: 'x',
+          successMetric: 'y',
+          antiPatterns: [],
+        },
+      }),
+      makeTask({
+        id: 'shelved-brief',
+        title: 'Shelved brief',
+        status: 'shelved',
+        productBrief: {
+          userJob: 'x',
+          successMetric: 'y',
+          antiPatterns: [],
+        },
+      }),
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    const body = await res.json() as any
+    expect(body.unapprovedBriefs).toEqual([])
+    expect(body.totals.blockingCount).toBe(0)
   })
 
   it('treats a done-only narrow-lane project as release-ready', async () => {
@@ -122,11 +188,39 @@ describe('GET /api/project/release-readiness', () => {
       }),
     ])
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
     const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
     const body = await res.json() as any
     expect(body.ready).toBe(true)
     expect(body.totals.done).toBe(1)
     expect(body.totals.blockingCount).toBe(0)
+  })
+
+  it('blocks release readiness when Guildhall-owned project files are dirty', async () => {
+    await seed([
+      makeTask({
+        id: 'task-1',
+        title: 'Completed cleanup',
+        status: 'done',
+        completedAt: '2026-05-09T00:00:00Z',
+      }),
+    ])
+    await execFileP('git', ['init', '-b', 'main'], { cwd: tmpDir })
+    await execFileP('git', ['config', 'user.email', 'guildhall@example.test'], { cwd: tmpDir })
+    await execFileP('git', ['config', 'user.name', 'Guildhall Test'], { cwd: tmpDir })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await execFileP('git', ['add', '.'], { cwd: tmpDir })
+    await execFileP('git', ['commit', '-m', 'baseline'], { cwd: tmpDir })
+    await fs.writeFile(path.join(tmpDir, 'memory', 'release-note.md'), 'unlanded Guildhall note\n', 'utf8')
+
+    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    const body = await res.json() as any
+
+    expect(body.ready).toBe(false)
+    expect(body.dirtyCheckout.ownedCount).toBe(1)
+    expect(body.dirtyCheckout.files).toEqual(['memory/release-note.md'])
+    expect(body.totals.dirtyCheckoutBlockingCount).toBe(1)
   })
 
   it('surfaces open escalations, shelved tasks, and blocked tasks', async () => {
@@ -174,6 +268,8 @@ describe('GET /api/project/release-readiness', () => {
     })
     expect(body.shelvedUnclaimed.map((s: any) => s.id)).toEqual(['task-2'])
     expect(body.blockedByAgent.map((b: any) => b.id)).toEqual(['task-1'])
+    expect(body.totals.humanBlockingCount).toBe(2)
+    expect(body.totals.blockingCount).toBeGreaterThan(2)
   })
 
   it('reports the design-system approval state', async () => {

@@ -6,8 +6,8 @@ pageClass: gh-first-visit-page
 # Existing project
 
 Existing repos usually arrive with README notes, plans, specs, TODOs, and
-partly finished work. Guildhall should survey that evidence, frame the useful
-parts, and avoid pretending every note is already a safe task.
+partly finished work. Guildhall surveys that pile, pulls out the useful pieces,
+and does not pretend every note is already a safe task.
 
 ## 1. Open the repo in Guildhall
 
@@ -43,8 +43,8 @@ Leave it as a draft when it is:
 - a duplicate
 - a context note
 - a broad idea without success criteria
-- blocked on a human choice
-- something that should be grouped into a later release
+- waiting on your decision
+- something that belongs in a later release
 
 For a large import, review by source instead of approving everything at once.
 
@@ -53,12 +53,13 @@ For a large import, review by source instead of approving everything at once.
 The useful question is not "how many tasks did Guildhall find?" It is "which
 few tasks can move without confusion?"
 
-A good first set has no unresolved human question, a visible success signal,
-and enough blueprint context for a worker to act without inventing the plan.
+A good first set has no unresolved question, a visible success signal, and
+enough blueprint context for the work to move without inventing the plan.
 
 ## 5. Start and expect evidence
 
-When you press **Start**, the project should move work or stop with a visible
-reason. A quiet flip from Stop back to Start is not acceptable evidence.
+When you press **Start**, the project moves work or stops with a visible
+reason. A quiet flip from Stop back to Start is not evidence. It is a tiny
+haunted doorbell.
 
 Next: [First task set](./first-tasks).

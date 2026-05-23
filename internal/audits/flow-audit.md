@@ -57,6 +57,247 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Run a second public-docs copy pass after wiring the Copywriter guild.
+  Source docs now avoid the worst internal-instruction tells, including
+  "the user/operator" phrasing, policy language where the page means behavior
+  settings, "durable artifact" where the page means durable evidence, and
+  several lingering "should" constructions that read like acceptance criteria
+  instead of product guidance. Frozen 0.6.0 version docs were left alone.
+- [x] Refresh the published 0.7 screenshot set into a new asset folder.
+  Screenshots were captured from the rebuilt `0.7.0` app fixture at 1440x900
+  into `docs/assets/ui-audit/0-7-0/`, docs now reference those cache-safe
+  paths, and `inbox.png` references were replaced with the current Thread
+  screenshot. The screenshot pass also caught and fixed Release copy that still
+  said "Operator summary".
+- [x] Integrate the generated icon package into the app chrome. The served app
+  HTML now exposes favicon, PNG favicon, Apple touch icon, and web manifest
+  links; runtime static routes serve the copied icon assets from `dist/web`;
+  and the upper-left app brand uses the 64px mark with a restrained glow beside
+  "Guildhall". The 0.7 screenshot set was recaptured after the chrome change.
+- [x] Wire Copywriter review into all user-facing surface work. Copywriter
+  should not wait for a task to literally say "copy"; docs, UI, settings,
+  release notes, onboarding, nav, labels, controls, headings, help text, and
+  capitalization choices all need the same review pressure as code quality.
+  This should be encoded in guild applicability and reviewer principles, not
+  left as an after-the-fact scolding when public copy drifts into internal
+  agent-instruction voice. The Copywriter now joins UI surface work and public
+  docs work, its spec questions call out small labels/casing/docs tone, and
+  the public docs explain that copy review is part of Guildhall's review loop.
+- [x] Rewrite public 0.7/Next docs out of internal agent-instruction voice.
+  Product-facing docs should talk to the person using Guildhall in direct,
+  conversational language: what they see, what they can do, why it matters,
+  and what good/bad product behavior feels like. Avoid public-doc phrasing like
+  "Guildhall should...", "agents should...", "human input", and long lists of
+  internal policy conditions unless the page is explicitly a reference page.
+  First pass rewrote the high-traffic guide/home/project pages and added a
+  `docs:check-copy` gate to fail future public docs builds on the worst
+  internal-instruction phrasing.
+- [x] Finish the 0.7 docs/code alignment pass instead of stopping at the
+  first dead-link cleanup. The audit checked CLI commands, project-shell
+  labels, Settings sections, config/model examples, Corpus Map/context docs,
+  docs versioning, and public wording boundaries. Public docs no longer expose
+  browser backend route inventories as a supported API surface; `Settings ->
+  Memory`, current open-model examples, browser-UI wording, and model catalog
+  entries now match the implementation.
+- [x] Use the existing `Tooltip` component for project-dashboard visual
+  explanations. The projects page was relying on native `title` attributes and
+  a short-lived `data-tooltip` pseudo-layer instead of Guildhall's shared
+  tooltip component, so hover behavior was invisible/inconsistent. Project
+  dashboard metrics, work-mix bars, recent-activity bars, guild avatars,
+  project spark cells, chips, and buttons now render through `Tooltip.svelte`,
+  and the tooltip itself has the shared light glass treatment.
+- [x] Remove the invented projects-page details rail and centralize action
+  rows. Project cards no longer create a second in-page "Project details"
+  rail that re-layouts the dashboard; card inspection now opens the existing
+  shared `SideDrawer` details component, while the explicit `Open project`
+  action remains the route into the project shell. Repeated card action-row
+  markup was replaced with shared `ActionBar.svelte` usage in `Card`, project
+  cards, Do This Next, drawer suggestions, attach flow, coordinator routing,
+  and workspace-import review cards so future card controls use the same
+  spacing and wrapping contract.
+- [x] Make the top-level `Needs you` button a fleet inbox, not a random
+  project shortcut. `/needs-you` now renders an all-project inbox grouped by
+  project, fetches each project inbox with an explicit `projectId`, and routes
+  item actions back to the owning project. The projects-page badge opens that
+  grouped view instead of jumping to the first project with draft/blocked work.
+  The fleet inbox loads project groups progressively with per-project request
+  timeouts, so a wedged inbox read can show as one project error instead of
+  leaving the whole page stuck on `Loading...`.
+- [x] Fix numeric badge vertical alignment on status controls. The shared
+  `StatusButton` and `Chip` count pills had a legacy glyph `translateY()` nudge
+  that made project-header counts such as `Needs you 1` look like the number
+  was sagging/melting under the current font stack. Count pills now use
+  grid-centering with no manual glyph offset, preserving the `99+` cap and
+  shared badge shape.
+- [x] Add a nested-glass treatment for "section within section" UI and reduce
+  over-bright question typography. Agent-question cards now use shared
+  `--glass-inset-*` tokens, softer body text tokens, lighter prompt/choice
+  weights, and more breathable line-height so coordinator questions read like
+  inspectable glass panes instead of flat black boxes full of bold white text.
+  The design-token docs and frontend agent guidance now name the inset-glass
+  pattern and the text intensity ladder.
+- [x] Apply the approved guild-glass visual language to the product and docs
+  design systems without changing the existing control geometry. The app now
+  defines shared glass, reflection, emitted-light, and stronger warning-signal
+  tokens; Card/Button/project-dashboard surfaces consume those tokens while
+  preserving current button heights, spacing scale, and radii. VitePress uses
+  matching glass tokens for nav, hero, cards, screenshots, and CTAs, and the
+  token docs now name the "transparent glass catches light / strong controls
+  emit light" rule.
+- [x] Put real recent-work sparklines on project cards. `/api/service` now
+  summarizes task `updatedAt`/`completedAt` timestamps into an 18-bin `Last 30
+  days` activity strip, and project cards render that strip below the current
+  queue-mix bar. Empty bars stay muted; the UI does not animate or imply work
+  happened when the project has no timestamp evidence.
+- [x] Fix the 2026-05-21 follow-up audit issues before the next multi-agent
+  pass. Looma + Knit now blocks `Start` on imported drafts instead of silently
+  doing nothing, under-specified ready tasks say their brief/spec still needs
+  cleanup instead of "Approved and queued," Release counts unfinished work,
+  missing design-system approval, and Guildhall-owned dirty checkout files as
+  release blockers, completed workspace imports reopen as completed summaries
+  instead of looping the wizard, workspace/council child-project bootstrap
+  contracts are visible in Settings, and completed import status is counted
+  from the saved curated spec rather than from a stale detector pass.
+- [x] Keep bootstrap-not-required projects out of false-warning readiness.
+  `fair-labor-license` style projects whose bootstrap endpoint reports
+  `needed: false` now count Bootstrap as ready, show `not required`, and hide
+  the mutating `Run bootstrap` action instead of reporting `2/3 ready` with a
+  misleading `not set` status.
+- [x] Fix the 2026-05-21 multi-agent follow-up findings from the fresh
+  rebuild pass. Project ticker copy now surfaces imported drafts as
+  `Needs task briefs` instead of saying no actionable work remains, Settings
+  no longer counts a stale successful bootstrap as ready when the endpoint says
+  `re-run needed`, Release separates total release blockers from unfinished
+  task counts, and Facts/memory check-in counts completed workspace-import
+  specs instead of understating imported tasks and milestones. A final visible
+  FLL pass also caught stale `supervisor_stopped` ticker copy overriding the
+  current imported-draft state; current actionable state now wins over stale
+  stopped events.
+- [x] Fresh rebuild audit on `narrative-harness` confirmed completed import
+  opens a completed summary/transcript, Thread/Work/task drawers route
+  correctly, and Release is blocked only by real project readiness signals.
+- [x] Fix source-note previews for stale and folder references found in the
+  FLL imported drafts. Source previews now recover moved references such as
+  `database/supabase/migrations` -> `supabase/migrations`, render directory
+  references as bounded folder trees, show nearby files for missing references
+  like stale `useAuth.ts`, and wrap code files in language fences instead of
+  rendering raw source as prose.
+- [x] Stop missing-source guardrails from forcing blueprint agents to author
+  code. FLL showed a stale imported `useAuth.ts` reference becoming a hard
+  mutation instruction for spec agents, then leaking into unrelated listings
+  and Stripe blueprint work. The strict "mutate this likely target or
+  escalate" rule now stays worker/build-lane scoped; spec/coordinator lanes may
+  read nearby evidence, adjust the blueprint, split work, or raise a scoped
+  planning escalation instead of being forced to create a stale file.
+- [x] Add foreman inspection for stale blueprint/tooling blockers. Before
+  dragging the user into a blocked task, the coordinator now recognizes the
+  specific class where a spec or planning lane was blocked by an internal
+  missing-source / likely-target guardrail, resolves that stale escalation with
+  evidence, and reopens the task into spec review or intake. Real owner
+  decisions, such as product/billing choices, remain blocked for human input.
+- [x] Fold all four running-agent audit reports into the live checklist. The
+  2026-05-21 pass covered Looma + Knit, Fair Labor License, Font Something,
+  and Narrative Harness. No agent wrote directly to this file; their reports
+  were consolidated here to avoid parallel write collisions.
+- [x] Reconcile release-readiness blocker math with actionable owner queues.
+  Live `looma-knit`, `fair-labor-license`, and `narrative-harness` testing
+  showed Release counting done briefs, reserved `task-workspace-import`, and
+  shelved/deferred work as `Human blockers`, producing numbers such as
+  `Human blockers 56` while Inbox showed `Needs you 1` or `0` actionable
+  items. Release readiness now excludes terminal/reserved import briefs from
+  unapproved-brief blockers and keeps shelved tasks informational instead of
+  adding them to the human-blocker total.
+- [x] Fix the fair-labor-license idle-copy contradiction. Live testing showed
+  Thread saying `Needs your input before Guildhall can continue` while the
+  same screen and Inbox reported no actionable items. Completed
+  `review_feedback` turns no longer count as live owner input in Thread's
+  caught-up footer.
+- [x] Fix Ready provider status so it reflects the project/global provider
+  selection. Live `font-something` testing showed `LLM provider: not
+  configured` while project provider settings reported an effective
+  `preferredProvider`. The Ready checklist now reads the same project-scoped
+  provider endpoint as the Providers tab and treats an inherited configured
+  provider as ready.
+- [x] Normalize worker context-health warnings for isolated subproject
+  worktrees. Live `looma-knit` testing showed a Looma task correctly using an
+  isolated Guildhall worktree while context health still emitted
+  `subproject_scope_mismatch`. Context health now recognizes task-scoped
+  isolated worktrees, and worker context gets generic role guidance when no
+  specialist engineer persona matches.
+- [x] Prove Corpus Map context is actually used, not just generated. Live
+  artifacts showed Corpus Map blocks in agent prompt snapshots, but the
+  context-debug ledger did not count them. Context debug now records Corpus Map
+  as a first-class section and preserves compact evidence (`chars` and
+  `readNext` paths), while the context-builder tests compare no-map vs
+  with-map prompts and assert the map surfaces existing abstractions such as
+  `Command buttons` before implementation guidance.
+- [x] Put project-page outside padding in the shared shell, not per-tab spacing.
+  Live testing on `commerce-project` showed the Work page card sitting directly
+  under the sticky run strip because the actual scroll container
+  (`AppShell.app-shell-page`) had no top padding; the intended `.page`
+  padding lived in `ProjectView.svelte` and did not reliably style the child
+  component boundary. The shared shell page region now owns top/right/bottom/
+  left padding and vertical page gap after the sticky band, so Thread, Work,
+  Settings, and other project views use the same container model instead of
+  ad-hoc first-card margins.
+- [x] Cap visual count badges at `99+`. Live Looma + Knit testing showed
+  two-digit phase counts squeezing inside circular badges. Status buttons and
+  numeric chips now render count-like labels as tabular pill badges, and Thread
+  phase counts display `99+` instead of overflowing when a bucket gets huge.
+- [x] Centralize friendly labels for runtime identifiers. Live testing on
+  `commerce-project` showed Recent Progress leaking raw identifiers such as
+  `spec-agent`, `_meta`, `task-002`, and `spec_review`. The web UI now has a
+  shared identifier-label map/component, and Work renders progress as
+  structured cards with persona/status/domain chips plus task links instead of
+  raw log metadata.
+- [x] Reframe first-run idea shaping before task creation. Live testing on
+  `commerce-project` showed the setup Thread asking the user to `Create the
+  first task` immediately after project direction, even when the user is still
+  trying to turn a rough business idea into a usable spec. The runtime can keep
+  using a task record internally, but the owner-facing first action should read
+  as `Shape the idea`, `Draft the product spec`, or similar until there is an
+  approved brief/spec and real implementation work exists. The first-work setup
+  step now reads `Shape the first spec`, uses `Start shaping`, and explains
+  that the input becomes a brief, focused questions, and a buildable spec before
+  implementation.
+- [x] Stop overstating empty-project meta-intake as repo inference. Live
+  testing on an empty `commerce-project` correctly produced generic
+  `_meta`/`project-implementation` placeholder slices, but the review card said
+  Guildhall “inferred this from the repo.” For empty or scaffold-only projects,
+  the card should say these are starter routing placeholders and should name the
+  lack of app source/tooling as the reason. Meta-intake review cards now switch
+  to starter-lane language for `_meta` + `project-implementation` placeholder
+  drafts.
+- [x] Clear or replace the first-task form after successful creation. In the
+  same setup flow, `First task created` appeared and `task-002` was persisted,
+  but the textbox still contained the submitted idea, making it look like the
+  action may not have happened. The setup input now clears after successful spec
+  shaping submission and the toast says `Spec shaping started.`
+- [x] Recover trust after the old staged-answer flow. The `commerce-project`
+  intake had four real user answers saved only as `draftAnswer`, so removing
+  the section-level `Submit answers` made already-entered answers appear to be
+  asked again. Thread now commits all preserved draft answers for the task with
+  one primary `Send saved answers` action, checks `/answer-questions` failures
+  before clearing UI state, and surfaces the server error in the card instead
+  of pretending the answer saved.
+- [x] Hide the first-spec setup card once a starter task exists. The same
+  `commerce-project` test still showed `Shape the first spec` after the product
+  idea task existed because the wizard counted first tasks by excluding the
+  `_meta` domain. Empty/starter projects can legitimately route the user's first
+  real task through `_meta`, so setup now excludes only reserved housekeeping
+  task ids, not the whole domain.
+- [x] Replace fragile Thread summary text truncation. In the live
+  `commerce-project` thread, the equal-width operation summary tile rendered
+  `1 thread card nee...` with an awkward centered ellipsis. The summary now uses
+  count-over-short-label metric cells (`Needs you`, `Working`, `Blocked`,
+  `Queued`, `Drafts`) and keeps the full phrase in `aria-label`/title instead
+  of trying to squeeze a sentence into a narrow tile.
+- [x] Make queued Thread cards read as informational, not required user action.
+  The `commerce-project` worker card showed `Build`, `Guildhall next`, and
+  `Queued` at the same visual weight, while the visible button said `Add note`.
+  Queued cards now collapse that chip soup to one primary `Queued` signal, hide
+  the construction-stage chip until work is actually running/reviewable, and
+  label note-taking as `Add optional note`.
 - [x] Run a second multi-agent cross-project UI/user-testing sweep. Started a
   read-only parallel pass across workspace import, Thread / Needs you, Work
   drawers, direct project routes, Release / Providers / Timeline, and shell
@@ -88,22 +329,23 @@ babysit setup/import/provider/release states across multiple pages.
   drawer now acts as a modal inspector with local Include/Exclude controls and
   a copy-path action, while the default notes step keeps the source list visible
   for scan-and-select review.
-- [ ] Unify the `Needs you` count model. Second-pass testing found Narrative
+- [x] Unify the `Needs you` count model. Second-pass testing found Narrative
   Harness reading as `5 need you` in Thread, `Needs you 2` in the rail/top bar,
   `Needs you (2 items)` plus `Housekeeping (1)` in Notifications, and `2 more
   in Inbox` on Work. The UI needs one count contract, or explicit buckets such
   as decisions, housekeeping, imported drafts, and blocked tasks. First pass:
-  Thread now labels its number as `thread cards need you` so it no longer
-  presents itself as the same unit as the Inbox/Needs You count. The deeper
-  count contract still needs a shared model.
-- [ ] Preserve task-route context or make task details a true focused page.
+  Thread now labels broad thread attention as `Input cards`, while the
+  project shell/Inbox retain the narrower `Needs you` count for actionable
+  owner input. This makes the mismatch explicit instead of presenting
+  different units as the same metric.
+- [x] Preserve task-route context or make task details a true focused page.
   Opening a task from Work changes the active rail item to Thread and shows the
   task under repeated Thread content. Either task drawers should preserve the
   originating surface through the background route, or `/task/:id` should
-  become a focused task page where the selected task appears first. First pass:
-  Work, Inbox, and `Do this next` now preserve the originating background path
-  when they open task drawers. Directly pasted `/task/:id` URLs still need a
-  focused-page decision.
+  become a focused task page where the selected task appears first. Work,
+  Inbox, and `Do this next` now preserve the originating background path, and
+  direct project-scoped task URLs open the drawer even with audit query
+  parameters instead of falling through to a generic Thread page.
 - [x] Collapse the split workspace-import routing model. `Review next draft`
   opens `task-workspace-import`, then the real work lives behind `Open import
   review` on `/workspace-import`. The product needs one canonical entry point:
@@ -111,14 +353,61 @@ babysit setup/import/provider/release states across multiple pages.
   task with a task-focused review UI. Reserved import work now routes directly
   to `/workspace-import` from Work, Inbox, and runtime inbox actions, with
   `Open import review` language instead of a generic task handoff.
-- [ ] Separate human next actions from worker runnable state. Narrative Harness
+- [x] Separate human next actions from worker runnable state. Narrative Harness
   can show `DO THIS NEXT` for an escalation, `0 active`, `1 imported draft`,
   and "No runnable tasks remain right now" at the same time. This is accurate
   internally, but the user needs a simple queue: what they should do now, what
   becomes runnable afterward, and what is merely waiting. First pass: reserved
-  import work points at the import review, and escalation copy leads with
-  recovery review instead of raw agent diagnosis. The broader queue model still
-  needs a shared source of truth.
+  import work points at the import review, escalation copy leads with recovery
+  review instead of raw agent diagnosis, Thread uses `Input cards` for broad
+  owner-facing items, and the project shell keeps the narrower `Needs you`
+  count for direct human input.
+- [x] Refresh Thread/Work state immediately after task-shaping actions. Live
+  Narrative Harness testing on the latest checkout service (`:7788`) advanced
+  imported drafts via `Draft task brief` and `Continue drafting spec`; the task
+  data correctly moved `coherence-reviewer-mvp` and `decision-trace-pipeline`
+  into `exploring`, but the current Thread card/drawer continued to read like a
+  queued or paused partial draft with stale checklist status. After a mutation,
+  the visible card/drawer should re-fetch the task, reclassify its phase, and
+  explain whether Guildhall is now shaping it, waiting for approval, or asking
+  for human input. First pass complete: Thread and Current task drawer now share
+  the same imported-draft shaping, queued spec revision, paused work, and
+  recovery classification language.
+- [x] Make Thread phase buckets reflect task truth instead of stale group
+  labels. During the same Narrative Harness pass, the API reported
+  `foundation-schema-contracts` as `in_progress` with a worker worktree, while
+  Thread briefly grouped it under `Guildhall working Paused 1` and rendered the
+  card as queued. Later it corrected to `Guildhall working In flight 1`.
+  Transient labels are acceptable for live work, but contradictory bucket text
+  makes the user doubt whether the agent is actually doing anything. Thread now
+  distinguishes live agent work, paused work, shaping, queued work, and recovery
+  before it renders phase groups.
+- [x] Surface partial durable progress distinctly from failure/no-progress.
+  The Narrative Harness `foundation-schema-contracts` worker timed out after
+  120 seconds of inactivity, but the activity stream also showed a real file
+  write to the isolated worktree before another empty assistant reply. Thread
+  collapsed that into `0 working`, a paused-looking bucket, queued card copy,
+  and an error ticker. A task with dirty target files, recent writes, and a
+  failed follow-up turn should read as `Needs recovery after partial progress`
+  with a clear action, not as both queued and failed. Thread and Current drawer
+  now classify durable progress plus a failed worker event as `Needs recovery`
+  with explicit recovery copy.
+- [x] Align project activity counts across Thread, Work, and ticker. The latest
+  Narrative Harness run showed `Working on 2/3/4 tasks` in the ticker while the
+  Thread summary and Work summary used different active/working/queued/draft
+  counts. These can be different concepts, but the UI needs explicit labels
+  such as `active agent work`, `ready for worker`, and `import drafts` rather
+  than overloaded `working`, `active`, and `queued` terms. Thread now uses
+  `Agent-active`, `Shaping`, `Recovery`, `Queued`, and `Drafts`; Work now uses
+  `agent-active`, `ready for worker`, `awaiting approval`, and `import drafts`.
+- [x] Make top-bar run controls acknowledge stop immediately. In the latest
+  Narrative Harness pass, pressing `Stop` from Thread did not visibly change
+  the top-bar button or page state within the next snapshot, while the same
+  project-scoped stop API returned `{ ok: true, status: "stopping" }`. The
+  shell should optimistically move the control into `Stopping...`/disabled
+  state and refresh the ticker so users know the click landed. The project shell
+  now enters an optimistic `Stopping...` disabled state as soon as stop is
+  requested.
 - [x] Make narrow project screens usable or explicitly unsupported. At
   `390px` wide, the collapsed rail still consumes layout width, Thread content
   starts too far right, and primary actions can clip off the viewport. Looma +
@@ -200,10 +489,12 @@ babysit setup/import/provider/release states across multiple pages.
   not drafted` deeper in criteria detail. The release verdict now treats an
   undrafted or unapproved design system as the named hard blocker even when no
   human-task blocker count exists.
-- [ ] Make task drawers explain shelved and checkpointed outcomes. Parallel
+- [x] Make task drawers explain shelved and checkpointed outcomes. Parallel
   testing found `fair-labor-license` task details stuck on `Loading...` for a
   shelved task, and `t-minus-t` completed tasks using checkpoint / no-merge
-  language that leaves the user unsure whether anything remains to do.
+  language that leaves the user unsure whether anything remains to do. Task
+  drawers now show a top outcome summary for shelved, checkpointed, terminal,
+  and no-visible-progress states before the raw diagnostic detail.
 - [x] Consolidate duplicate workspace-import entry points. Parallel testing
   found `font-something` surfacing `Review existing work`, `Existing repo
   detected`, and `Review existing project work` as separate-looking CTAs that
@@ -220,10 +511,12 @@ babysit setup/import/provider/release states across multiple pages.
   testing found icon-only rail buttons can appear without useful accessible
   labels when the project rail is collapsed. Collapsed rail items now carry
   explicit accessible labels for project sections and Providers.
-- [ ] Reduce always-visible mutating controls in read/inspect drawers. Parallel
+- [x] Reduce always-visible mutating controls in read/inspect drawers. Parallel
   testing found task drawers visually crowded by controls like `Pause task`,
   `Put aside`, and `Continue drafting spec` when the user is only trying to
-  inspect state.
+  inspect state. Primary footer actions now keep the current useful path
+  visible, while rare destructive/retry controls live under `More task
+  actions`.
 - [x] Fix pinned project navigation layout at medium desktop widths. Live
   Narrative Harness testing found that pinning the left rail opens the menu,
   but the rest of the app frame can keep the collapsed 56px column instead of
@@ -242,11 +535,14 @@ babysit setup/import/provider/release states across multiple pages.
   or a way to inspect the referenced note from the drawer. Part drawers now
   render each source as an inspectable row with title, path, and useful summary
   and clicking a source switches the drawer to that source's detail.
-- [ ] Make `Needs you` counts match actual actionable blockers. Parallel
+- [x] Make `Needs you` counts match actual actionable blockers. Parallel
   testing found Thread / Needs you showing stale or incomplete counts across
   `t-minus-t`, `fair-labor-license`, `looma-knit`, and `font-something`;
   release blockers, shelved tasks, and import-review work can be hidden even
-  when the top bar claims the project needs attention.
+  when the top bar claims the project needs attention. Thread no longer calls
+  its broad count `Needs you`; the top bar count stays tied to the project
+  Inbox/actionable-owner queue, while Thread exposes broader input-card volume
+  separately.
 - [x] Replace contradictory idle copy with a concrete next step. Parallel
   testing found projects showing combinations like `0 working`, `0 blocked`,
   `All caught up — agents are working`, `LIVE`, `Paused`, and `Start` without
@@ -265,10 +561,11 @@ babysit setup/import/provider/release states across multiple pages.
   routes to `/workspace-import`, and the task drawer primary action for
   `task-workspace-import` opens the import review instead of presenting normal
   worker-task controls.
-- [ ] Fix workspace-import task-review detail trapping. Parallel testing on
+- [x] Fix workspace-import task-review detail trapping. Parallel testing on
   `font-something` found Step 4 could reopen the same task detail after
   closing it and clicking `Review next source`, making the import review feel
-  non-advancable.
+  non-advancable. The Step 4 drawer footer now advances to the next source or
+  final task list and clears detail focus instead of reopening the same task.
 - [x] Fix workspace-import Details drawer close behavior. Live Narrative
   Harness testing reopened the Docs part drawer during the second audit and
   found the `Close` button was still intercepted by the app header. The shared
@@ -321,31 +618,35 @@ babysit setup/import/provider/release states across multiple pages.
   now use real select controls with `Same as global setting` as the first
   option, show the current inherited or overridden value below the control, and
   write audited `user-direct` overrides through `/api/config/levers`.
-- [ ] Audit major project screens for information density. Several views are
+- [x] Audit major project screens for information density. Several views are
   drifting back toward internal-state dumps: too much explanatory text, too
   many parallel counts, and too many secondary details visible by default.
   Each surface needs a primary user job, a one-screen default, and progressive
   disclosure for help text, rationale, provenance, raw diagnostics, and
-  rarely-used controls.
-- [ ] Add a project corpus map for worker context. Current worker prompts
+  rarely-used controls. Current passes tightened Thread high-volume rows,
+  Work progress cards, Timeline raw-trace disclosure, Settings grouping,
+  task-drawer action density, workspace-import staged review, and source-note
+  previews.
+- [x] Add a project corpus map for worker context. Current worker prompts
   receive focused task memory, likely target files, checkpoints, design
   summaries, and recent decisions rather than a full source dump, but there is
   no durable architecture/component/function inventory that workers can query
   before editing. Guildhall should build and maintain a codebase map with
   shared primitives, module boundaries, APIs, tests, and known patterns, then
   inject only the task-relevant slice while letting agents ask follow-up
-  questions. The 0.7 construction spec now defines the artifact shape, indexed
-  inputs, context-budget rules, worker tools, spec/worker/reviewer contracts,
-  refresh triggers, UI placement, and 0.7 implementation cut.
+  questions. The Corpus Map engine now generates `memory/codebase-map.yaml`,
+  records refresh history, injects compact map guidance into agent context,
+  and exposes `guildhall corpus-map`.
 - [x] Remove maintainer-only implementation pages from the public VitePress
   surface. The public docs build now excludes `docs/subsystems/**`,
   `docs/web-ui/design-tokens.md`, and `docs/web-ui/help-system.md`; sidebar,
   README, guide, reference, and generated help-topic links were cleaned so
   user docs no longer route people into "how Guildhall is built" internals.
-- [x] Make docs version posture visible. The VitePress nav now links the
-  current package version to its release note, and the release index states
-  that the public docs track the current release from `main` rather than
-  version-pinned historical docs.
+- [x] Make docs version posture visible. The VitePress nav now uses a single
+  Version dropdown for `Current (v0.6.0)`, Next, and the version archive
+  instead of separate top-level links. Current uses no version in the URL,
+  Next tracks unreleased main-branch docs, and archive URLs remain available
+  with `noindex,follow` so search engines prefer Current.
 - [x] Make Get Started concrete. `docs/guide/quick-start.md` now shows example
   first-run questions, useful answers, runtime blockers, and a full mini
   first-run scenario so new users can feel the product loop before opening
@@ -1224,7 +1525,7 @@ babysit setup/import/provider/release states across multiple pages.
 - Checked the `0.6.0` policy/learning branch against release acceptance and
   walked the branch UI on real projects via `http://localhost:7781` instead of
   the installed `0.5.1` service on port `7777`. Looma + Knit opened to a calm
-  Thread with concrete human questions, and Settings -> Learning showed no
+  Thread with concrete human questions, and Settings -> Memory showed no
   leftover Phase 7 proof records while still exposing project/user learning,
   project skill, product suggestion, and reset surfaces. T-minus-t and Fair
   Labor License opened as terminal/stable projects and their Learning settings
@@ -1233,7 +1534,7 @@ babysit setup/import/provider/release states across multiple pages.
   `policy-classification` note. That is now fixed; focused red/green coverage
   proves turn-limit and no-progress paths write `model_tool_use_failure`, while
   worker target-file timeouts write `provider_unavailable`.
-- Re-reviewed Settings -> Learning from a user-experience perspective instead
+- Re-reviewed Settings -> Memory from a user-experience perspective instead
   of treating endpoint/control presence as enough. The first pass was still too
   internal: "project learnings", "project skills", "builder suggestions",
   destination names, confidence/risk chips, disabled reset buttons, and product
@@ -1270,7 +1571,7 @@ babysit setup/import/provider/release states across multiple pages.
 - Started the public VitePress docs follow-through for the 0.6.0 branch. The
   docs now include a current Projects home screenshot, a Memory and recovery
   guide for bounded playbooks and scoped learning, a 0.6.0 release note, and
-  updated reference text for Settings -> Learning, project playbooks, and
+  updated reference text for Settings -> Memory, project playbooks, and
   product-feedback issue drafts. Screenshot capture also exposed that the
   Learning settings two-column layout was too eager at laptop width, so the
   responsive breakpoint now keeps it one calm column until the container is
@@ -2968,7 +3269,7 @@ babysit setup/import/provider/release states across multiple pages.
 - Approval routing is more direct for real Thread decisions now. Brief/spec approvals from `Do this next` and `Inbox` route into `Thread` and use `Review in Thread`, instead of dropping the user into task/work views that do not actually contain the approve affordance.
 - That routing rule turned out to be too blunt for reserved workspace import. The Looma + Knit inbox still surfaced `task-workspace-import` as work that needed a human decision, but `Open in Thread` landed on a dead-looking Thread view because the real action lived in `/workspace-import`, not in any open Thread turn. The fix was to keep brief/spec approvals on `Thread`, but send the reserved import item straight to `/workspace-import` with a truthful `Review import` verb.
 - Thread setup sections also stopped auto-collapsing themselves when the only pending setup work was skippable. That "helpful" collapse made `Optional` feel unopenable because the click immediately got undone by state. Setup phases now stay under direct user control: if a section is visible and the user clicks it, it actually opens.
-- Multi-question Thread answers now surface their own submit affordance inline on every active question card once any answer is staged. The user no longer has to intuit that the real submit button is hiding at the bottom of the section after the last question card.
+- [x] Remove duplicate answer confirmation from Thread intake questions. Per-question `Send` now posts the answer directly and resumes the task, while legacy saved drafts show their own `Send`/`Change` controls. The old section-level `Submit answers` footer is gone, so the UI no longer asks the user to send and then submit the same answer.
 - New-task language is calmer for first-time users. The task prompt now says Guildhall will ask follow-up questions before work starts, the field is `Project area (optional)`, and the selector defaults to `Let Guildhall choose` instead of silently preselecting the first coordinator domain.
 - Approval copy is getting more consistent across Thread and the drawer: `Project areas draft`, `Use these areas`, and `Guildhall's draft of your task` now replace some of the older internal phrasing that made the same approval state sound different in each surface.
 - Project-level action language is a little clearer too: the overflow action now says `Run one task` instead of `Finish one`, and the empty inbox state now reads `nothing is waiting on you right now` rather than coordinator-internal wording.
@@ -3462,15 +3763,21 @@ babysit setup/import/provider/release states across multiple pages.
   longer renders as accidental Markdown list buttons, and docs were checked
   against current route/provider/task-drawer code. During that audit the
   Settings tab's project/config/setup calls were switched to `projectFetch`
-  so project-scoped pages follow the same explicit `projectId` contract the
-  HTTP API now documents.
+  so project-scoped pages follow the same explicit `projectId` contract as
+  the browser service.
 - CLI surface simplification on `2026-05-17`: task mutation commands were
   removed from the shipped human-facing CLI (`intake`, `approve-spec`,
   `resume`, `meta-intake`, `approve-meta-intake`). The CLI now stays focused
   on service lifecycle, project registry/setup, and headless debug runs while
-  task creation, approval, and interview flows remain in the browser UI and
-  HTTP API. Added a CLI surface test to keep the smaller command list and help
+  task creation, approval, and interview flows remain in the browser UI.
+  Added a CLI surface test to keep the smaller command list and help
   output intentional.
+- Public docs/code audit on `2026-05-22`: the 0.7/Next docs were checked
+  against the current CLI, app labels, config schema, Corpus Map behavior,
+  and visible project workflows. Product-visible behavior stays documented in
+  guide/reference pages; the HTTP route inventory was removed from public
+  docs because browser backend routes are internal BE-to-FE implementation
+  details, not a supported user/API surface.
 - 0.5.1 release prep on `2026-05-17`: public docs no longer describe removed
   task-shaping CLI commands as active entrypoints, the runtime subsystem page
   now frames intake/meta-intake as dashboard-driven flows, and the pinned
@@ -3545,7 +3852,9 @@ shared `formatUserPath` display helper. The focused tests cover macOS, Linux,
 and Windows-style `C:\Users\...` normalization to slash-separated `~/...`
 display paths. The rebuilt Projects page was inspected in-browser with no
 `/Users/...` or `C:\Users...` strings in the rendered DOM, then
-`docs/assets/ui-audit/projects.png` was retaken from that page.
+`docs/assets/ui-audit/projects.png` was retaken from that page. The later
+0.7 docs refresh moved published references to
+`docs/assets/ui-audit/0-7-0/projects.png` to avoid stale browser image caches.
 
 Follow-up on `2026-05-19`: the Projects screenshot now has an AVIF sibling and
 docs pages render it through `<picture>` with the PNG retained as fallback.
@@ -3637,24 +3946,99 @@ dashboards, diagrams, and bounded micro-editors. While auditing this, the
 Markdown renderer was hardened because `marked` preserves raw HTML; current
 plain Markdown now sanitizes generated HTML before Svelte renders it.
 
+0.7.0 rich artifact guardrail seed on `2026-05-21`: added the first
+non-visual `guildhall-html-v1` protocol in `src/protocol/rich-artifacts.ts`.
+It validates required artifact metadata, rejects dangerous raw HTML, recognizes
+only the starter `gh-checklist` / `gh-step` / `gh-decision` / `gh-option`
+component tags, and compiles accepted agent output into a typed render-tree
+summary. This does not render rich artifacts in Thread yet; the remaining
+persistence, renderer, event, and browser-proof slices are specified in the
+0.8.0 design note.
+
+0.8.0 runtime isolation exploration on `2026-05-21`: captured the Podman
+project-runtime idea in `docs/design/podman-project-runtime.md`. The current
+bias is a Debian-based container per project, live-mounted host source, mounted
+host `~/.guildhall` for all durable Guildhall state/evidence, host UI
+supervision for lifecycle/ports/logs, an internal container service plus
+external host service for brokered tool calls, human-approved extra directory
+access, and explicit follow-up proof around macOS bind mounts, permissions,
+credentials, nested container use, and dev-server browser access.
+
+Live multi-project testing on `2026-05-21` surfaced a blocking context affordance
+bug in Looma + Knit: the spec agent asked the user to choose "Next batch from M6
+queue" without explaining what the M6 queue is or making the referenced
+`PROJECT_STATE.md` context inspectable enough from the question card. Thread
+now makes source references visibly actionable (`Open source note` with the
+file name and path) and promotes the fallback from faint `Ask for context` copy
+to a primary `Ask Guildhall to explain` action that keeps the question open.
+The remaining agent-quality bar is still: project-jargon questions must include
+an inline premise summary before the human is asked to choose.
+
+Source-note preview hardening on `2026-05-21`: clicking an imported source note
+could look frozen because Thread opened the modal only after the note request
+returned and then rendered up to 96k characters through Markdown in one pass.
+Thread now opens the source modal immediately with an `Opening source note...`
+state, ignores stale responses after close/switch, and bounds the rendered
+Markdown preview to keep the scroll frame responsive.
+
+Workspace-import approval regression on `2026-05-21`: live font-something and
+narrative-harness testing showed that approving an agent-curated import spec
+could still behave like approving the raw detector output (font-something added
+90 drafts from detector notes; narrative-harness marked the import done while
+adding zero useful tasks). Added endpoint coverage that approves an existing
+curated `task-workspace-import` spec with an empty request body and proves only
+the curated YAML task/goal/milestone are imported.
+
+Workspace-import schema hardening on `2026-05-21`: font-something also exposed a
+half-success import bug where a malformed `tasks` YAML fence could be silently
+dropped while valid goals/milestones were recorded and the import was marked
+done. `approveWorkspaceImport` now rejects malformed YAML fences before changing
+task state. The live font-something state was repaired from the 90 detector
+drafts back to the curated six-task import, and narrative-harness was reapproved
+from its valid eight-task curated import instead of staying as a zero-task done
+import.
+
+Spec fallback-question hardening on `2026-05-21`: narrative-harness exposed a
+bogus owner-question generator case where process narration ("I'll now finalize
+by..." and "required YAML fences for...") became Thread questions. Fallback
+question inference now skips those operational checklist prompts. The live
+narrative-harness meta-intake task was repaired by removing the two bogus
+fallback questions and returning the saved spec to `spec_review`.
+
+Work recent-progress scoping fix on `2026-05-21`: live navigation showed
+commerce-project progress cards ("Amazon competitor...") while the app was on a
+Looma/Knit route. The project files and Thread API were correctly scoped, so
+the bug was stale `WorkTab` component state: it fetched progress once using the
+current route project at mount time and did not reload when the rendered
+project changed. `WorkTab` now fetches progress with the explicit `detail.id`,
+resets to loading during project switches, ignores stale responses, and has a
+regression covering project-switch progress isolation.
+
 ## Narrative Harness Product Walkthrough — 2026-05-20
 
 Test target: `/Users/matthew/git/oss/narrative-harness`, opened through the
 local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-harness/thread`.
 
-- [ ] App header still shows `v0.6.0` while testing the 0.7 release candidate.
+- [x] App header still shows `v0.6.0` while testing the 0.7 release candidate.
   This may be technically correct because `package.json` is not bumped until
   publish, but it makes the test session feel stale. Consider an RC/dev build
-  indicator when running from an unpublished branch.
-- [ ] The setup checklist initially reads well, but after `Run checks` passes
+  indicator when running from an unpublished branch. Product decision on
+  `2026-05-21`: this is fine for now because the header should reflect the
+  package version until publish.
+- [x] The setup checklist initially reads well, but after `Run checks` passes
   the next visible item becomes a blocked imported/setup task. The transition
   from successful environment verification to "Worker is stuck" feels abrupt
-  and does not explain what Guildhall actually accomplished.
-- [ ] Blocked task copy is too implementation-shaped for a product user:
+  and does not explain what Guildhall actually accomplished. Setup recovery
+  cards now route to setup/readiness when that is the real blocker, and
+  no-visible-progress copy describes the recovery path before the agent
+  diagnostic.
+- [x] Blocked task copy is too implementation-shaped for a product user:
   "Spec agent made no visible progress after 3 passes" and "Task remained in
   exploring with no saved spec, note, or status transition" are useful audit
   facts, but the card should lead with a plain recovery explanation and keep
-  the internal reason secondary.
+  the internal reason secondary. Thread, Why Stuck, and Task Drawer now use
+  recovery copy for this lane: useful context may exist, but Guildhall needs
+  to retry or convert it into a durable draft.
 - [x] The blocked task drawer has no recovery path beyond `Pause task` and
   `Put aside`. For setup/import failures it needs an obvious next action such
   as retry, ask for context, continue with a simpler scan, or convert the
@@ -3662,10 +4046,12 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
   escalations now surface `Retry blocker` and `Resolve blocker` in the drawer
   footer, and meta-intake human-judgment escalations default to retrying from
   transcript notes.
-- [ ] The remaining setup cards ("Let Guildhall inspect the repo", "Give the
+- [x] The remaining setup cards ("Let Guildhall inspect the repo", "Give the
   project direction", "Review existing work", "Create the first task") show no
   visible action controls. Clicking the card title did nothing. The cards need
-  explicit buttons or a clearly clickable card treatment.
+  explicit buttons or a clearly clickable card treatment. Thread and Work now
+  expose explicit setup/review controls (`Open setup`, `Open import review`,
+  review/draft actions) instead of relying on hidden title clicks.
 - [x] The top-level `Start` button appears clickable in the blocked/setup
   state, but produced no visible state change or explanation. If blocked tasks
   prevent starting, the button should explain that; if it starts a background
@@ -3678,16 +4064,19 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
   bootstrap step is required and offer a direct path to do it, especially when
   the bootstrap/setup lane is blocked. First pass: the visible blocker pill
   links to setup or readiness as appropriate.
-- [ ] The project setup route has the real recovery action (`Resume`
+- [x] The project setup route has the real recovery action (`Resume`
   meta-intake because the coordinator is paused), but Thread and Work do not
   route the user there. Disabled `New task`, blocked setup cards, and
   escalation banners should link to this setup recovery state when bootstrap is
-  the blocker.
-- [ ] Clicking `Resume` on the setup route did not visibly change the
+  the blocker. Setup blockers now route to `/setup` when meta-intake is still
+  pending and to readiness when setup is initialized.
+- [x] Clicking `Resume` on the setup route did not visibly change the
   meta-intake state after several seconds. The page still showed
   "Coordinator paused", the same `LAST UPDATE`, and the same `No draft yet`
   output. Resume needs immediate feedback, error surfacing, or a visible
-  running state if work was actually restarted.
+  running state if work was actually restarted. Resume now sets an immediate
+  visible notice while the coordinator restart is requested and replaces it
+  with success/error feedback.
 - [x] The setup route labels the blocked meta-intake state as "Coordinator
   paused" and offers `Resume`, but backend state shows an unresolved
   `human_judgment_required` escalation. The page should name the actual blocker
@@ -3696,20 +4085,23 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
 - [x] Inbox `RESOLVE` for the meta-intake escalation only opens the task
   drawer. The drawer still has no resolve, retry, explain, or continue action,
   so the `RESOLVE` label overpromises and leaves the user stuck.
-- [ ] The escalation summary says the spec agent made "no visible progress",
+- [x] The escalation summary says the spec agent made "no visible progress",
   but the Transcript shows useful analysis: it identified Narrative Harness as
   a docs-only project and named the library-first / harness-prototype staging.
   The UI should distinguish "agent made useful observations but failed to save
   a durable draft" from "no progress", and offer to convert the transcript into
-  a draft or retry from the last useful note.
+  a draft or retry from the last useful note. The recovery copy now makes this
+  distinction explicit and the runtime reopens stale spec no-progress blocks
+  into intake from preserved transcript notes.
 - [x] `Put aside` on the blocked meta-intake drawer appeared to do nothing:
   the drawer stayed open, the task remained blocked, and no toast/error/saved
   state appeared. Destructive or state-changing controls now refresh project
   state, toast success, and close the drawer after shelving.
-- [ ] The Inbox housekeeping item `18 levers at system defaults` routes
+- [x] The Inbox housekeeping item `18 levers at system defaults` routes
   straight to dense Advanced settings. The review entry point should offer a
   digestible summary first: which defaults are fine, which few settings might
-  matter for this project, and why the user would change them.
+  matter for this project, and why the user would change them. Inbox now adds a
+  short defaults digest before sending the user into detailed settings.
 - [x] Advanced settings is not acceptable as a user-facing settings page in
   its current form. It exposes the internal lever registry almost raw:
   snake_case labels, monospace names, weak form structure, cramped typography,
@@ -3762,3 +4154,228 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
 - [x] `Jump to first draft` is a no-op when the import created zero drafts.
   Disabled or impossible actions should not be rendered as primary recovery
   actions.
+
+## 0.7.0 unattended project recovery pass — 2026-05-21
+
+- [x] Run another multi-agent user-testing pass with the main agent visible in
+  the Codex in-app browser. The 2026-05-21 pass covered Looma + Knit, Fair
+  Labor License, Font Something, and Narrative Harness. The main walkthrough
+  visibly inspected Looma + Knit Thread/Release, Fair Labor License Thread,
+  and Font Something Thread; subagents supplied read-only audits for the same
+  projects plus Narrative Harness.
+- [x] Load the shared UI package tokens before rendering shared package
+  components. Live Looma + Knit Release testing showed the Release page
+  falling back to raw text-like layout because `FrameCard`, `NoticeBand`,
+  `SectionHeader`, and related package components referenced `--gh-*` tokens
+  that the app bundle had not loaded. The app entrypoint now imports the UI
+  package stylesheet before local tokens.
+- [x] Make source-note failures visible instead of leaving the modal on
+  `Opening source note...` forever. Narrative Harness testing found a source
+  note modal stuck even though the backing endpoint could return content. The
+  Thread source-note loader now clears the loading state and renders the
+  bounded error path when a request fails or is interrupted.
+- [x] Align Work task-count semantics with Thread. Looma + Knit and Narrative
+  Harness testing showed Work counting `exploring` tasks as `agent-active`,
+  while Thread correctly treated them as shaping/queued work. Work now counts
+  only `in_progress`, `review`, and `gate_check` as agent-active and exposes
+  `exploring` as a separate shaping count.
+- [x] Release readiness should name unfinished work before design-system
+  absence when the backlog is still large. Looma + Knit showed `18/96 done`
+  but led with `Design system is not drafted yet`, hiding 38 unfinished
+  nonterminal tasks. Release now prioritizes unfinished task work in the
+  verdict reason, and keeps the design-system state in the summary/criteria.
+- [x] Completed workspace imports should render a completed/imported-context
+  summary or an explicit rerun mode. Narrative Harness currently opens
+  `/workspace-import` as an unsaved active wizard even though
+  `task-workspace-import` is done and imported drafts already exist. Covered
+  by the current follow-up pass: completed imports now reopen as completed
+  summaries instead of restarting the wizard.
+- [x] Approved workspace-import specs must not drop task-like proposed work.
+  Fair Labor License has a done workspace import and approved spec text with
+  proposed next tasks, but the persisted task queue has only 3 done tasks and
+  one shelved fixup. Guildhall should either materialize the approved tranche
+  as imported drafts/proposed tasks or surface an Inbox recovery item that the
+  import produced no runnable backlog. Covered by the current follow-up pass:
+  completed import status is counted from the saved curated spec and task-like
+  proposed work is preserved for review.
+- [x] Release/readiness should account for Guildhall-owned dirty checkout
+  residue on otherwise terminal projects. Fair Labor License reads caught up
+  and release-ready, but the target repo still contains Guildhall-created
+  metadata changes (`guildhall.yaml`, `memory/`, `.gitignore`). The UI should
+  either explain that residue as safe bookkeeping or route it to cleanup.
+  Covered by the current follow-up pass: release readiness now counts
+  Guildhall-owned dirty checkout files as release blockers.
+- [x] Start controls should explain import-draft review blockers before
+  attempting unattended work. Font Something has six imported drafts waiting
+  for review and no runnable tasks; the primary Start affordance should make
+  that reason explicit instead of implying Guildhall can just continue.
+  Covered by the current follow-up pass: project ticker copy and Start
+  blocking now surface imported drafts as task briefs that need review.
+- [x] Workspace/council readiness should distinguish workspace-shell checks
+  from child-project gates. Looma + Knit has a real workspace/child-project
+  contract, but root-level detected bootstrap metadata can still say package
+  manager or gates are unavailable at the workspace root, which makes the
+  healthy child setup contract look broken. Covered by the current follow-up
+  pass: Settings exposes workspace/council child-project bootstrap contracts.
+- [x] Looma + Knit shows `38 blocked, 40 shelved`, which is a terminal pile,
+  not an unattended project. Diagnose the shared blocker, repair the runtime
+  behavior that produced it, and re-run the project so useful work resumes.
+  The live project now normalizes old excess `in_progress` tasks back to
+  `ready` under serial dispatch and keeps only one worker-owned task active.
+- [x] Looma-domain tasks are inheriting the workspace-level Knit bootstrap
+  (`cd knit && pnpm install`) even though their task worktrees contain the
+  Looma subproject. Task-local worktree bootstrap should only keep workspace
+  commands that target the task project, and should fall back to that task
+  project's own install/gates when the workspace commands point elsewhere.
+- [x] Stale task-bootstrap blockers should be recoverable automatically once
+  the effective task bootstrap passes; Start should not keep reporting
+  `all_terminal` while a large set of Guildhall-created blocked tasks can now
+  be safely reopened. Recovery now also retries blockers that were already
+  rewritten to "project setup contract changed" after an earlier failed retry.
+- [x] Add first-class workspace shape without forcing the concept into normal
+  project setup: a workspace may contain child projects with separate paths and
+  bootstrap/gate contracts, plus an optional council that coordinates how those
+  projects influence each other.
+- [x] Several previously-reopened Looma tasks were blocked on agent/tool
+  context errors because immediate-resume instructions mixed main-checkout
+  files with task-worktree files. Resume target files are now translated into
+  the active task worktree before being shown to workers.
+- [x] Existing Looma tasks that were already blocked by the old mixed-path
+  prompts still need a recovery pass after the prompt fix; verify that one
+  previously affected task can resume without raising another path-mismatch
+  escalation. Fresh live proof on `2026-05-21`: `node dist/cli.js run
+  looma-knit --max-ticks 1` reopened the old path-mismatch blockers into the
+  runnable queue, normalized excess stale worker/spec claims, left Looma with
+  `0 blocked`, and advanced one previously affected worker task through a real
+  Codex tick without raising another path-mismatch escalation.
+- [x] Thread phase sticky labels regressed after the fixed shell padding pass:
+  labels pinned to the scrollport edge instead of the padded content edge.
+  The shell page and Thread both contribute padding, so phase headers now
+  subtract the shell/thread padding from the sticky inset instead of
+  double-counting the gap.
+- [x] Rework Projects home into a full-screen live-at-a-glance Guild hall
+  dashboard. The page no longer renders project descriptions in overview
+  cards, avoids ellipsized guild-member labels by using avatar icons with
+  tooltips, uses icon/count metrics with accessible labels, widens project
+  tiles to two columns on the desktop test viewport, removes ambiguous activity
+  squares, and only animates guild avatars when a project run is actually live.
+  Transient browser fetch failures now render as an explanatory service-restart
+  message instead of raw `Failed to fetch`.
+- [x] Let isolated task worktrees inherit explicit local runtime config.
+  Guildhall now detects likely local config filenames such as `.env.local` and
+  `appsettings.local.yaml` without reading their contents, asks during setup
+  which ones may be copied, exposes the same newline-separated include list in
+  Settings → Advanced, persists it under `worktree.include`, and copies those
+  files/globs into task worktrees before bootstrap.
+- [x] Keep worktree local-file includes project-scoped inside workspaces.
+  Looma + Knit exposed the bug: parent workspace candidates like `knit/.env`
+  would be saved as parent settings, then a Knit task would resolve them from
+  the Knit project root and look for `knit/knit/.env`. Worktree includes now
+  live on `projects[].worktree.include` for multi-project workspaces, Settings
+  requires a child project selection before saving, dispatch reads includes
+  from the task's resolved child project, and candidate discovery excludes
+  files tracked by nested Git roots instead of matching example filenames.
+- [x] Harden the project shell mobile/collapsed-rail layout. The in-app
+  browser reproduced a stale/specificity failure where `rail-collapsed`
+  left the main content in grid column 2 on a one-column mobile shell, crushing
+  Thread into a narrow strip. `mobile-rail-mode` now explicitly forces a
+  one-column grid, hides the rail, and places main content in column 1 outside
+  the breakpoint cascade; verified at the user's 773px CSS viewport with a
+  fresh in-app browser screenshot.
+- [x] Standardize count badges on the Projects home `Needs you` badge
+  geometry. Project-view status buttons and count-only chips no longer use
+  floating red bubbles or separate circle sizing; counts now cap at `99+` and
+  share the same inline pill shape used by the home action count.
+- [x] Fix wrapped project action bar / Thread sticky alignment. The project
+  action bar already lives as a real shell row, but Thread phase headers still
+  used a negative sticky offset that double-counted the shell and Thread
+  padding, tucking the header under a two-row action bar. Phase headers now
+  subtract only the shell page padding so they pin to the top of the content
+  scrollport without exposing a gap, and compact/detail timeline borders align
+  with the phase header left edge instead of starting indented.
+- [x] Fix Work list responsive layout at wrapped-toolbar widths. The Work
+  table still clipped right-side columns on mobile/tablet widths, so task rows
+  now switch to stacked scan cards up through 860px and keep Stage/Part/
+  Priority/Revisions/Updated visible without horizontal overflow.
+- [x] Regenerate the 0.7.0 Projects screenshot from representative fixture
+  data. The first refreshed asset proved the cards were compact, but the
+  screenshot still rendered only four all-paused projects in a single row and
+  made the dashboard look like a broken flat line. The fixture now needs
+  varied task states and enough projects to prove intrinsic cards wrap. The
+  regenerated asset uses representative task states, stretches every overview
+  row horizontally without vertical card stretching, and gives every
+  per-project work-bar segment title/ARIA labels.
+- [x] Split project-card selection from project navigation. Clicking the card
+  now selects it and opens an in-page project details panel; only the explicit
+  `Open project` action leaves the Projects & Workspaces dashboard.
+- [x] Make Projects & Workspaces dashboard signals explainable. Aggregate
+  metrics, color bars, legend dots, per-project work bars, activity bars,
+  guild avatars, chips, action buttons, and project sparks now expose
+  explanatory hover text/ARIA labels instead of relying on color alone. Project
+  cards and the details panel also surface Guildhall's inferred development
+  maturity state, such as Setup, Intake, Blueprint, Build, Inspect, Stable, or
+  Mixed.
+- [x] Make recovery cards actionable directly in Thread. A Narrative Harness
+  user-test showed `Needs recovery` cards told the user to review durable
+  worktree changes or restart, but exposed only `Add optional note` until the
+  task drawer was opened. Recovery cards now show `Inspect recovery`, `Add
+  recovery note`, and `Resume work` inline, and `Resume work` starts Guildhall
+  scoped to that task.
+- [x] Stop spec-agent completion narration from becoming fake owner questions.
+  Fresh Fair Labor License and Font Something audit passes showed fallback
+  recovery treating prose such as `Done — I took the durable blueprint steps`
+  and `Posted a focused scope question` as choice-card prompts, then rendering
+  implementation notes as if they were decisions for the user. The fallback
+  parser now rejects completed-work and already-posted-question narration while
+  preserving real `Pick one` / structured question recovery.
+- [x] Tighten reviewer/worker recovery loop after Narrative Harness resume.
+  Live retry from Thread successfully moved `foundation-schema-contracts` from
+  `Needs recovery` to `In flight`, then to `review`, but reviewer fanout sent
+  it back to `in_progress` and the worker kept producing no-change / empty
+  reply ticks until the run was stopped at tick 23. The UI path is now
+  discoverable, but unattended completion still needs a loop breaker that
+  turns repeated reviewer-returned work into a concrete diff, checkpoint, or
+  scoped blocker. Reviewer fan-out now routes repeated same-persona dissent
+  through coordinator adjudication even under strict policy, and escalates as a
+  scoped `review_worker_handoff_loop` if the same dissent returns after
+  coordinator adjudication instead of bouncing worker/reviewer forever.
+- [x] Extend the guild-glass treatment into project chrome and sticky phase
+  bars. The Thread phase headers now use translucent glass, backdrop blur,
+  reflected color highlights, soft internal etching, and light rounding while
+  preserving the existing sticky offset and layout. The global app header,
+  project toolbar, left rail, active rail stripe, and actions menu now share
+  the same glass/chrome language so cards are no longer the only polished
+  surfaces.
+- [x] Replace sticky phase header flash with a real pulse. The live sticky
+  header animation no longer snaps between a flat and glowing state at the
+  midpoint; it now uses a slower breathe animation plus a translucent internal
+  light layer so active sections feel alive without reading as an alert flash.
+- [x] Give overlapping dashboard hero panels the same glass contract as other
+  sticky chrome. The projects/workspaces hero now has translucent glass fill,
+  backdrop blur, a soft lower edge, and local sticky z-index so content can
+  scroll under it without looking like a hard opaque slab.
+- [x] Strengthen project-card hierarchy on the dashboard. Project names now
+  use the same larger display tier as dashboard metric labels, and project
+  cards get a slightly stronger glass-card contract so they read as the
+  primary sections instead of blending into the surrounding dashboard panels.
+- [x] Fix dashboard tooltip behavior instead of adding tooltip noise. The
+  shared tooltip now measures its bubble, flips/clamps placement inside the
+  viewport, and keeps glass styling without allowing off-screen bubbles.
+  Labeled buttons and visible legend text no longer spawn redundant tooltips;
+  tooltips stay on compact visual-only signals such as icons, avatars, count
+  metrics, work-mix segments, and sparklines.
+- [x] Make home project details use the room in the drawer. Project details
+  now show the full project summary instead of a cropped card blurb, use
+  status/maturity chips and chip-like count pills, and surface current status,
+  recently completed work, and the next likely work item from the same
+  highlights used by project cards.
+- [x] Give the shared side drawer a glass overlay treatment. Project details
+  now sit in the existing side drawer with translucent glass fill, backdrop
+  blur, soft reflected highlights, a lighter page scrim, and glass header/footer
+  chrome so overlapping dashboard content remains visible without feeling
+  blacked out.
+- [x] Move learning/memory docs out of the task-only IA. The Guide now places
+  Memory, learning, and recovery under How it works, the main How Guildhall
+  works page explains how Guildhall learns reusable habits, and the memory page
+  frames recovery as one use of the broader learning system instead of a task
+  subsection.

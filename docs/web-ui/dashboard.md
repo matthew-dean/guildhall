@@ -1,5 +1,5 @@
 ---
-title: Dashboard
+title: Projects home
 pageClass: gh-first-visit-page
 help_topic: web.dashboard
 help_summary: |
@@ -13,26 +13,41 @@ Guildhall behaves like a local service over projects, not a one-repo session.
 Attach a folder, scan what is moving, and open the shell that actually needs
 your eyes.
 
-## What the dashboard should answer quickly
+## What Projects & Workspaces answers quickly
 
 - **Can this project run at all?**
 - **What is blocked or on fire?**
 - **Which shell needs attention first?**
 
-If the page cannot answer those three questions fast, it is being decorative when it should be operational.
+If the page cannot answer those three questions fast, it is decorating instead
+of helping.
+
+## Current surface labels
+
+The current app labels this screen **Projects & Workspaces**. Its top row is
+the service-level readout:
+
+- **Guild hall**: registered project count and which guild roles are present.
+- **Work mix**: active, ready, needs-you, and done work across projects.
+- **Attention**: the first project that needs your answer.
+- **Running now**: which projects have live runs.
+- **Needs you**: opens the project that is waiting for your answer.
+
+Project cards then show their local state with chips such as **Paused**,
+**Queued**, **Needs task briefs**, **Mixed**, **Stable**, or **Inspect**.
 
 ## The actual job of each card
 
 - Project identity and whether the service still recognizes it
-- Run status and whether the guild is active, idle, paused, or unhappy
-- Blocked work and unresolved escalations
+- Run status and whether the project is live, paused, queued, stable, or needs inspection
+- Blocked work, imported drafts, and unresolved escalations
 - Enough signal to tell whether opening the shell is likely to be a quick check or a proper firefight
 
 <picture class="gh-doc-picture">
-  <source srcset="../assets/ui-audit/projects.avif" type="image/avif" />
-  <img src="../assets/ui-audit/projects.png" alt="Guildhall projects home showing multiple local projects with paused, stable, and ready states." />
+  <source srcset="../assets/ui-audit/0-7-0/projects.avif" type="image/avif" />
+  <img src="../assets/ui-audit/0-7-0/projects.png" alt="Guildhall projects home showing multiple local projects with paused, stable, and ready states." />
 </picture>
 
 The Projects home is deliberately shallow. It helps you choose where to look
-next; the detailed Thread, Work, Settings, Learning, and Release surfaces stay
+next; the detailed Thread, Work, Settings, Memory, and Release surfaces stay
 inside the project shell.

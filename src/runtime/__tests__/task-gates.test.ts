@@ -66,6 +66,88 @@ describe('resolveEffectiveTaskBootstrapBlock', () => {
       timeoutMs: 300_000,
     })
   })
+
+  it('uses task-local bootstrap when workspace bootstrap points at a sibling project', async () => {
+    const workspaceDir = tmpDir
+    const loomaDir = path.join(workspaceDir, 'looma')
+    const knitDir = path.join(workspaceDir, 'knit')
+    await fs.mkdir(loomaDir, { recursive: true })
+    await fs.mkdir(knitDir, { recursive: true })
+    await fs.writeFile(path.join(loomaDir, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n', 'utf8')
+    await fs.writeFile(
+      path.join(loomaDir, 'package.json'),
+      JSON.stringify({
+        name: 'looma',
+        scripts: {
+          typecheck: 'tsc --noEmit',
+          build: 'vite build',
+          test: 'vitest',
+          lint: 'eslint .',
+        },
+      }),
+      'utf8',
+    )
+
+    const result = resolveEffectiveTaskBootstrapBlock({
+      task: {
+        projectPath: loomaDir,
+      } as any,
+      workspaceProjectPath: workspaceDir,
+      workspaceBootstrap: {
+        commands: ['cd knit && pnpm install'],
+        successGates: [
+          'cd knit/web && pnpm typecheck',
+          'cd knit/web && pnpm build',
+          'cd knit && pnpm lint',
+        ],
+        timeoutMs: 300_000,
+        verifiedAt: '2026-05-03T00:00:00Z',
+        packageManager: 'pnpm',
+        install: { command: 'cd knit && pnpm install', status: 'ok' },
+      } as any,
+    })
+
+    expect(result).toEqual({
+      commands: ['pnpm install'],
+      successGates: ['pnpm typecheck', 'pnpm build', 'pnpm lint'],
+      timeoutMs: 300_000,
+    })
+  })
+
+  it('uses a first-class workspace project bootstrap when present', async () => {
+    const workspaceDir = tmpDir
+    const loomaDir = path.join(workspaceDir, 'looma')
+    await fs.mkdir(loomaDir, { recursive: true })
+
+    const result = resolveEffectiveTaskBootstrapBlock({
+      task: {
+        projectPath: loomaDir,
+      } as any,
+      workspaceProjectPath: workspaceDir,
+      workspaceBootstrap: {
+        commands: ['cd knit && pnpm install'],
+        successGates: ['cd knit/web && pnpm typecheck'],
+        timeoutMs: 300_000,
+      } as any,
+      workspaceProjects: [
+        {
+          id: 'looma',
+          path: loomaDir,
+          bootstrap: {
+            commands: ['pnpm install'],
+            successGates: ['pnpm typecheck', 'pnpm build'],
+            timeoutMs: 120_000,
+          },
+        } as any,
+      ],
+    })
+
+    expect(result).toEqual({
+      commands: ['pnpm install'],
+      successGates: ['pnpm typecheck', 'pnpm build'],
+      timeoutMs: 120_000,
+    })
+  })
 })
 
 describe('resolveEffectiveTaskSuccessGates', () => {

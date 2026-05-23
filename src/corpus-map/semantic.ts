@@ -68,7 +68,9 @@ async function parseSemanticResponse(
   indexer: CorpusSemanticIndexer,
 ): Promise<z.infer<typeof SemanticResponseSchema>> {
   try {
-    return SemanticResponseSchema.parse(parseSemanticJsonObject(raw))
+    const parsed = SemanticResponseSchema.parse(parseSemanticJsonObject(raw))
+    assertUsableSemanticResponse(parsed, map)
+    return parsed
   } catch (err) {
     if (!indexer.repairJson) throw err
     const message = err instanceof Error ? err.message : String(err)
@@ -78,8 +80,36 @@ async function parseSemanticResponse(
       schemaHint: semanticResponseSchemaHint(),
       map,
     })
-    return SemanticResponseSchema.parse(parseSemanticJsonObject(repaired))
+    const parsed = SemanticResponseSchema.parse(parseSemanticJsonObject(repaired))
+    assertUsableSemanticResponse(parsed, map)
+    return parsed
   }
+}
+
+function assertUsableSemanticResponse(
+  parsed: z.infer<typeof SemanticResponseSchema>,
+  map: CodebaseMap,
+): void {
+  const fileCount = Object.keys(map.files).length
+  if (fileCount === 0) return
+
+  const issues: string[] = []
+  if (parsed.readNext.length === 0) issues.push('readNext must name at least one file workers should inspect.')
+  if (parsed.workerGuidance.length === 0) issues.push('workerGuidance must include at least one concrete instruction.')
+  if (parsed.currentTruth.some((item) => looksTruncated(item))) {
+    issues.push('currentTruth contains a likely truncated item.')
+  }
+
+  if (issues.length > 0) {
+    throw new Error(`Semantic response is too thin to guide workers: ${issues.join(' ')}`)
+  }
+}
+
+function looksTruncated(text: string): boolean {
+  const trimmed = text.trim()
+  if (trimmed.length < 24) return false
+  if (/[.!?:;)"'`\]]$/.test(trimmed)) return false
+  return /\b(and|or|but|with|without|for|to|of|in|on|as|by|from|into|any|no|not|functional)$/i.test(trimmed)
 }
 
 export function buildSemanticIndexPrompt(map: CodebaseMap): string {
@@ -171,7 +201,7 @@ function repairJsonText(raw: string): string {
 
 function semanticResponseSchemaHint(): string {
   return [
-    'Return ONLY valid JSON matching this schema:',
+    'Return ONLY valid JSON matching this schema and quality bar:',
     '{',
     '  "corpusKind": "documentation" | "code" | "mixed" | "unknown",',
     '  "confidence": number from 0 to 1,',
@@ -184,6 +214,10 @@ function semanticResponseSchemaHint(): string {
     '  "workerGuidance": string[],',
     '  "needsBroaderRead": boolean',
     '}',
-    'Preserve the same substance; only repair JSON syntax or schema shape.',
+    'Quality requirements:',
+    '- readNext must name at least one canonical file workers should inspect.',
+    '- workerGuidance must include at least one concrete instruction.',
+    '- Remove or complete any truncated sentence fragments.',
+    'Preserve the same substance when possible; repair JSON syntax, schema shape, and unusably thin orientation.',
   ].join('\n')
 }

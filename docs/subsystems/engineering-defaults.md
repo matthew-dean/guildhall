@@ -12,7 +12,7 @@ help_summary: |
 
 **Source:** `src/engineering-defaults/`
 
-Every agent boot appends a block of best-practice guidance to the system prompt. The content is a set of short markdown files — one per topic — that ship with GuildHall and can be shadowed per-project.
+Every agent boot appends a block of best-practice guidance to the system prompt. The content is a set of short markdown files — one per topic — that ship with Guildhall and can be shadowed per-project.
 
 ## Topics
 

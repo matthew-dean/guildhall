@@ -5,9 +5,9 @@ pageClass: gh-first-visit-page
 
 # Many projects
 
-Guildhall runs as a local service over projects. You should be able to turn on
-more than one project, open them in separate tabs, and understand which one
-needs attention without relying on invisible selected state.
+Guildhall runs as a local service over your projects. You can keep several
+projects registered, open them in separate tabs, and see which one needs
+attention without guessing which hidden session is "selected."
 
 ## Register projects once
 
@@ -22,34 +22,34 @@ guildhall list
 ```
 
 The browser projects home reads that registry and opens each project by slug.
-Project URLs should stay project-scoped so a restart cannot silently jump a
-click into a different repo.
+Project URLs stay scoped by slug, so a restart cannot silently jump a click
+into the wrong repo.
 
 ## Use the projects home to triage
 
 <picture class="gh-doc-picture">
-  <source srcset="../assets/ui-audit/projects.avif" type="image/avif" />
-  <img src="../assets/ui-audit/projects.png" alt="Guildhall projects home with Looma + Knit, T minus t, Fair Labor License, and Font something visible as local project cards." />
+  <source srcset="../assets/ui-audit/0-7-0/projects.avif" type="image/avif" />
+  <img src="../assets/ui-audit/0-7-0/projects.png" alt="Guildhall projects home with Looma + Knit, Font something, Fair Labor License, Tiny demo, Narrative Harness, and Linecraft visible as local project cards." />
 </picture>
 
-The projects home should answer:
+The projects home answers:
 
-- which projects are active
-- which projects are blocked
-- which projects need you
-- which projects have fresh progress
-- which projects are ready for another start
+- what the overall **Work mix** looks like
+- which project owns the current **Attention** item
+- which projects are **Running now**
+- which projects have **Needs you** work
+- which project cards are paused, queued, stable, inspecting, or waiting on task briefs
 
-Open the project shell when you need details. The projects home should help
-you choose where to look next.
+Open the project shell when you need details. The projects home is just the map
+room: enough signal to choose where to look next.
 
 ## Keep concurrency separate from project state
 
-Starting one project should not make another project stop existing or lose its
-run state. Concurrency limits belong to agent capacity and queue scheduling,
-not to whether a project is allowed to be on.
+Starting one project does not make another project vanish or lose its run
+state. Concurrency limits belong to helper capacity and queue scheduling, not
+to whether a project is allowed to exist.
 
-When the service is busy, the UI should make that clear:
+When the service is busy, the UI shows where the pressure is:
 
 - project cards show their own activity
 - the project shell shows project-scoped live events
@@ -58,9 +58,9 @@ When the service is busy, the UI should make that clear:
 
 ## Let planning shape bigger queues
 
-As projects get larger, the right flow is not "run everything in created
-order." Guildhall should help shape smaller active sets and keep broad future
-work out of the runnable queue until it has a blueprint.
+As projects get larger, "run everything in created order" gets chaotic fast.
+Guildhall helps shape smaller active sets and keeps broad future work out of
+the runnable queue until it has a blueprint.
 
 Today, keep the first active set small and review imported drafts before
 approving them.

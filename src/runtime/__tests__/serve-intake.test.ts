@@ -148,6 +148,68 @@ describe('GET /api/project/source-note', () => {
     expect(body.truncated).toBe(false)
   })
 
+  it('renders directory source references as a bounded tree preview', async () => {
+    await fs.mkdir(path.join(tmpDir, 'supabase', 'migrations'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'supabase', 'migrations', '001_initial.sql'), 'create table profiles(id uuid);')
+    await fs.writeFile(path.join(tmpDir, 'supabase', 'migrations', '002_indexes.sql'), 'create index profiles_id_idx on profiles(id);')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/source-note?path=supabase%2Fmigrations')))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as { kind?: string; displayPath?: string; content?: string; truncated?: boolean }
+    expect(body.kind).toBe('directory')
+    expect(body.displayPath).toBe('supabase/migrations')
+    expect(body.content).toContain('# Directory: supabase/migrations')
+    expect(body.content).toContain('- 001_initial.sql')
+    expect(body.content).toContain('- 002_indexes.sql')
+    expect(body.truncated).toBe(false)
+  })
+
+  it('recovers moved source references by dropping stale leading path segments', async () => {
+    await fs.mkdir(path.join(tmpDir, 'supabase', 'migrations'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'supabase', 'migrations', '001_initial.sql'), 'create table profiles(id uuid);')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/source-note?path=database%2Fsupabase%2Fmigrations')))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as { displayPath?: string; content?: string; kind?: string }
+    expect(body.kind).toBe('directory')
+    expect(body.displayPath).toBe('supabase/migrations')
+    expect(body.content).toContain('Requested path: `database/supabase/migrations`')
+    expect(body.content).toContain('Resolved current path: `supabase/migrations`')
+  })
+
+  it('returns a helpful missing-source preview with nearby files instead of a dead 404', async () => {
+    await fs.mkdir(path.join(tmpDir, 'frontend', 'app', 'composables'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'frontend', 'app', 'composables', 'useSupabase.ts'), 'export const useSupabase = () => null')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/source-note?path=frontend%2Fapp%2Fcomposables%2FuseAuth.ts')))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as { missing?: boolean; displayPath?: string; content?: string }
+    expect(body.missing).toBe(true)
+    expect(body.displayPath).toBe('frontend/app/composables/useAuth.ts')
+    expect(body.content).toContain('# Source not found: useAuth.ts')
+    expect(body.content).toContain('- useSupabase.ts')
+  })
+
+  it('wraps code files in a language fence so previews render as code', async () => {
+    await fs.mkdir(path.join(tmpDir, 'frontend', 'app', 'composables'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'frontend', 'app', 'composables', 'useSupabase.ts'), 'export const useSupabase = () => null')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/source-note?path=frontend%2Fapp%2Fcomposables%2FuseSupabase.ts')))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as { content?: string }
+    expect(body.content).toContain('# File: frontend/app/composables/useSupabase.ts')
+    expect(body.content).toContain('```ts')
+    expect(body.content).toContain('export const useSupabase')
+  })
+
   it('rejects source note paths outside the current project', async () => {
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-source-outside-'))
     try {

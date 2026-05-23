@@ -31,23 +31,32 @@
     onclick,
     children,
   }: Props = $props()
+
+  const countLabel = $derived(
+    typeof count === 'number'
+      ? count > 99 ? '99+' : String(Math.max(0, count))
+      : '',
+  )
 </script>
 
-<button
-  type="button"
-  class="status-button tone-{tone}"
-  {disabled}
-  {onclick}
-  aria-label={ariaLabel}
-  {title}
->
-  <Icon name={icon} size={16} />
-  <span>{label}</span>
-  {#if typeof count === 'number'}
-    <span class="status-count" aria-hidden="true">{count}</span>
-  {/if}
-  {@render children?.()}
-</button>
+{#snippet statusButtonElement()}
+  <button
+    type="button"
+    class="status-button tone-{tone}"
+    {disabled}
+    {onclick}
+    aria-label={ariaLabel}
+  >
+    <Icon name={icon} size={16} />
+    <span>{label}</span>
+    {#if typeof count === 'number'}
+      <span class="status-count" aria-hidden="true"><span class="count-glyph">{countLabel}</span></span>
+    {/if}
+    {@render children?.()}
+  </button>
+{/snippet}
+
+{@render statusButtonElement()}
 
 <style>
   .status-button {
@@ -97,20 +106,25 @@
     background: color-mix(in srgb, var(--surface-danger) 34%, var(--bg-raised-2) 66%);
   }
   .status-count {
-    position: absolute;
-    top: calc(-1 * var(--s-2));
-    right: calc(-1 * var(--s-2));
-    display: inline-flex;
+    display: inline-grid;
     align-items: center;
     justify-content: center;
-    min-width: var(--s-4);
-    height: var(--s-4);
-    padding: 0;
-    border-radius: 50%;
-    background: var(--danger);
-    color: white;
+    place-items: center;
+    min-width: 1.15rem;
+    height: 1.15rem;
+    padding: 0 0.3rem;
+    box-sizing: border-box;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-base) 24%, transparent);
+    color: currentColor;
     font-size: var(--fs-0);
-    font-weight: 750;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    letter-spacing: 0;
+  }
+  .count-glyph {
+    display: block;
     line-height: 1;
   }
 </style>

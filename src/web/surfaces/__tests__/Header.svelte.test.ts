@@ -29,6 +29,8 @@ describe('Header', () => {
     render(Header)
 
     expect(screen.getByRole('button', { name: /projects home/i })).toHaveTextContent('Guildhall')
+    const brandIcon = document.querySelector('.brand-mark img')
+    expect(brandIcon).toHaveAttribute('src', '/icons/genfavicon-64.png')
     expect(screen.getByText('Looma knit')).toBeInTheDocument()
     await screen.findByText('v0.5.1')
 

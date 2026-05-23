@@ -132,10 +132,10 @@ function installBrowserFakes() {
   path.value = '/projects/looma-knit/thread'
 }
 
-function installFetchFakes() {
+function installFetchFakes(projectPayload: ProjectDetail = detail()) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://localhost')
-    if (url.pathname === '/api/project') return json(detail())
+    if (url.pathname === '/api/project') return json(projectPayload)
     if (url.pathname === '/api/project/inbox') {
       return json({
         blockers: { bootstrap: false, workspaceImport: false },
@@ -309,7 +309,7 @@ describe('ProjectView', () => {
     await renderProjectView('thread')
     await screen.findByText('Which controls belong in the link editor?')
 
-    await user.click(screen.getByRole('button', { name: 'URL input only' }))
+    await user.click(screen.getByRole('button', { name: /url input only/i }))
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/project/task/task-link-editor/answer-questions'),
@@ -341,6 +341,58 @@ describe('ProjectView', () => {
     await renderProjectView('thread', null, null)
 
     await waitFor(() => expect(path.value).toBe('/projects/looma-knit/thread'))
+  })
+
+  it('routes setup blockers with a pending meta-intake task to the setup recovery surface', async () => {
+    const user = userEvent.setup()
+    const projectPayload = detail({
+      startReadiness: { canStart: false, message: 'Resume project setup first' },
+      tasks: [
+        task({
+          id: 'task-meta-intake',
+          title: 'Inspect the repo',
+          status: 'blocked',
+          escalations: [{ id: 'esc-meta', summary: 'Human judgment required' }],
+        }),
+      ],
+    })
+    installFetchFakes(projectPayload)
+    await renderProjectView(
+      'thread',
+      null,
+      'looma-knit',
+      projectPayload,
+    )
+
+    await user.click(screen.getByRole('button', { name: /project setup needs attention/i }))
+    expect(path.value).toBe('/projects/looma-knit/setup')
+  })
+
+  it('routes imported-draft start blockers to the draft review surface', async () => {
+    const user = userEvent.setup()
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'import_drafts_waiting',
+        message: 'Review 6 imported drafts before starting.',
+        actionHref: '/task/task-import-1',
+      },
+      tasks: [
+        task({
+          id: 'task-import-1',
+          title: 'Imported draft',
+          status: 'import_draft',
+          escalations: [],
+        }),
+      ],
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+    await renderProjectView('thread', null, 'looma-knit', projectPayload)
+
+    const attention = screen.getByRole('button', { name: /imported drafts need review/i })
+    expect(attention).toHaveTextContent(/Review drafts/i)
+    await user.click(attention)
+    expect(path.value).toBe('/projects/looma-knit/task/task-import-1')
   })
 
   it('starts a continuous run and keeps the project id in the mutating request body', async () => {
@@ -401,12 +453,38 @@ describe('ProjectView', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await renderProjectView('thread', null, 'looma-knit', running)
+    expect(screen.getByRole('button', { name: /stop one-step run/i })).toHaveTextContent('Stop 1')
     await user.click(screen.getByRole('button', { name: /stop one-step run/i }))
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/stop'))).toBe(true)
     })
-    expect(screen.getByRole('button', { name: /stop one-step run/i })).toHaveTextContent('Stop 1')
+    expect(screen.getByRole('button', { name: /stopping/i })).toBeDisabled()
+  })
+
+  it('acknowledges stop immediately while the project run is stopping', async () => {
+    const user = userEvent.setup()
+    const running = detail({
+      run: { status: 'running', mode: 'continuous' },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return json(running)
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      if (url.pathname === '/api/project/thread') return json({ turns: [], activeTurnId: null })
+      if (url.pathname === '/api/project/stop') {
+        expect(init?.method).toBe('POST')
+        return json({ ok: true, status: 'stopping' })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await renderProjectView('thread', null, 'looma-knit', running)
+    await user.click(screen.getByRole('button', { name: /^stop$/i }))
+
+    await screen.findByRole('button', { name: /stopping/i })
+    expect(screen.getByRole('button', { name: /stopping/i })).toBeDisabled()
   })
 
   it('surfaces provider start failures with a direct Providers action', async () => {

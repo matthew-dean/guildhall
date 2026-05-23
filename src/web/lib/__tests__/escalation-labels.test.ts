@@ -10,6 +10,7 @@ import {
   roleLabel,
   roleBlurb,
   escalationPrimaryAction,
+  escalationRecoveryCopy,
 } from '../escalation-labels.js'
 
 describe('escalationReasonLabel', () => {
@@ -30,8 +31,8 @@ describe('escalationReasonLabel', () => {
     expect(escalationReasonLabel('')).toBe('Unknown')
   })
 
-  it('passes through unknown codes unchanged (graceful degradation)', () => {
-    expect(escalationReasonLabel('future_new_reason')).toBe('future_new_reason')
+  it('humanizes unknown codes through the shared identifier label map', () => {
+    expect(escalationReasonLabel('future_new_reason')).toBe('Future New Reason')
   })
 })
 
@@ -53,6 +54,21 @@ describe('escalationPrimaryAction', () => {
     ).toMatchObject({
       label: 'Resume worker',
       nextStatus: 'in_progress',
+    })
+  })
+})
+
+describe('escalationRecoveryCopy', () => {
+  it('separates useful transcript context from durable progress failures', () => {
+    expect(
+      escalationRecoveryCopy({
+        agentId: 'spec-agent',
+        summary: 'Spec agent made no visible progress after 3 passes.',
+        details: 'Task remained in exploring with no saved spec.',
+      }),
+    ).toEqual({
+      headline: 'Guildhall found context but did not save the next draft.',
+      detail: 'The transcript may contain useful observations. Retry from those notes or resolve the blocker after reviewing them.',
     })
   })
 })

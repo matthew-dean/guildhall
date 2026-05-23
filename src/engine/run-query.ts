@@ -366,6 +366,13 @@ function currentAgentId(
   return String(toolMetadata?.['current_agent_id'] ?? '').trim()
 }
 
+function strictLikelyTargetMutationGuardsEnabled(
+  toolMetadata: Record<string, unknown> | undefined,
+): boolean {
+  const agentId = currentAgentId(toolMetadata)
+  return agentId === '' || agentId === 'worker-agent'
+}
+
 function latestCheckpointNextAction(
   toolMetadata: Record<string, unknown> | undefined,
 ): string {
@@ -1358,11 +1365,13 @@ export async function* runQuery(
       const checkpointActionIsExploratory = looksExploratoryCheckpointAction(checkpointNextAction)
       const checkpointActionIsHandoff = looksLikeHandoffCheckpointAction(checkpointNextAction)
       const checkpointTaskId = currentTaskId(context.toolMetadata)
-      const mutationOrEscalationNudge = strictMutationOrEscalationNudge({
-        missingLikelyTarget,
-        inspectedLikelyTarget,
-        likelyTargetFiles,
-      })
+      const mutationOrEscalationNudge = strictLikelyTargetMutationGuardsEnabled(context.toolMetadata)
+        ? strictMutationOrEscalationNudge({
+            missingLikelyTarget,
+            inspectedLikelyTarget,
+            likelyTargetFiles,
+          })
+        : null
       const checkpointSpecificNoToolNudge =
         currentAgentId(context.toolMetadata) === 'worker-agent' &&
         checkpointNextAction.length > 0
@@ -1538,11 +1547,13 @@ export async function* runQuery(
       checkpointVerificationReadFollowThroughRemaining > 0 &&
       toolCalls.length > 1
     const shouldRefuseAfterMissingLikelyTarget =
+      strictLikelyTargetMutationGuardsEnabled(context.toolMetadata) &&
       missingLikelyTarget.length > 0 &&
       toolCalls.length > 0 &&
       toolCalls.every((tc) => isReadOnlyToolCall(context, tc.name, tc.input))
     const inspectedLikelyTarget = inspectedLikelyTargetFile(context.toolMetadata)
     const shouldRefuseAfterInspectingLikelyTarget =
+      strictLikelyTargetMutationGuardsEnabled(context.toolMetadata) &&
       inspectedLikelyTarget.length > 0 &&
       noProgressTurnNudges > 0 &&
       !checkpointScopedReadOnlyFollowThroughAllowed &&

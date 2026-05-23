@@ -9,7 +9,7 @@ the construction loop. The service asks coordinators what can move next,
 dispatches workers for trade work, collects inspections, and runs gates before
 work is called done.
 
-## From the dashboard
+## From Projects & Workspaces
 
 ```bash
 guildhall serve
@@ -23,9 +23,11 @@ From there, use the **Start** / **Stop** controls in the project shell. This
 is the main operating path: you can inspect Thread, Work, Needs you, task
 drawers, and release state without leaving the UI.
 
-The dashboard uses the same runtime as the CLI. Progress is appended to `memory/PROGRESS.md`, events are streamed to `memory/events.ndjson`, and the full transcript per task lives under `memory/transcripts/`.
+Projects & Workspaces uses the same runtime as the CLI. Progress is appended
+to `memory/PROGRESS.md`, events are streamed to `memory/events.ndjson`, and the
+full transcript per task lives under `memory/transcripts/`.
 
-Progress should also leave a durable artifact: a task blueprint, decision,
+Progress also leaves durable evidence: a task blueprint, decision,
 change order, implementation diff, verification result, review finding, or
 learning record. Transcript motion alone is not enough.
 

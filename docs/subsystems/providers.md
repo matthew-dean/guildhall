@@ -93,4 +93,4 @@ Typed exceptions for each provider let callers distinguish transient from fatal:
 
 ## Session & version headers
 
-The Claude client tags requests with a session id and client version so Anthropic-side logs correlate with GuildHall sessions; see `src/providers/claude-client.ts`.
+The Claude client tags requests with a session id and client version so Anthropic-side logs correlate with Guildhall sessions; see `src/providers/claude-client.ts`.

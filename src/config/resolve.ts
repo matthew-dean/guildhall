@@ -2,7 +2,7 @@ import { resolve, join, isAbsolute } from 'node:path'
 import { readGlobalConfig } from './global-config.js'
 import { readWorkspaceConfig, resolveMemoryDir, readAgentSettings } from './workspace-config.js'
 import { readProjectConfig } from './project-config.js'
-import { ResolvedConfig, mergeModels, resolveModelsForProvider, slugify } from './schemas.js'
+import { ResolvedConfig, defaultModelsForProvider, mergeModels, resolveModelsForProvider, slugify } from './schemas.js'
 import type { WorkspaceYamlConfig, AgentSettings } from './schemas.js'
 
 // ---------------------------------------------------------------------------
@@ -102,6 +102,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
   const models = mergeModels(
     resolveModelsForProvider(global.models, preferredProvider),
     resolveModelsForProvider(workspace.models, preferredProvider),
+    defaultModelsForProvider(preferredProvider),
   )
 
   // Resolve project path
@@ -130,11 +131,19 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
       : undefined,
   }))
 
+  const projects = workspace.projects.map(projectEntry => ({
+    ...projectEntry,
+    path: isAbsolute(projectEntry.path) ? projectEntry.path : join(projectPath, projectEntry.path),
+  }))
+
   const resolved: ResolvedConfig = ResolvedConfig.parse({
     workspaceId,
     workspaceName: workspace.name,
     workspacePath,
     projectPath,
+    kind: workspace.kind,
+    projects,
+    ...(workspace.council ? { council: workspace.council } : {}),
     landingBranch: project.landingBranch,
     memoryDir,
     models,
@@ -149,6 +158,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
     ...(workspace.hooks ? { hooks: workspace.hooks } : {}),
     ...(workspace.mcp ? { mcp: workspace.mcp } : {}),
     ...(workspace.bootstrap ? { bootstrap: workspace.bootstrap } : {}),
+    ...(workspace.worktree ? { worktree: workspace.worktree } : {}),
   })
 
   return resolved

@@ -42,24 +42,45 @@
 
 <style>
   .gh-side-drawer-backdrop {
+    --drawer-width: min(560px, 92vw);
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: transparent;
     z-index: calc(var(--z-drawer) + 1);
+  }
+
+  .gh-side-drawer-backdrop::before {
+    content: '';
+    position: absolute;
+    inset: 0 calc(var(--drawer-width) + (var(--s-2) * 2)) 0 0;
+    background:
+      radial-gradient(circle at 72% 18%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 34%),
+      rgba(0, 0, 0, 0.18);
+    pointer-events: none;
   }
 
   .gh-side-drawer {
     position: fixed;
-    top: 0;
-    right: 0;
+    top: var(--s-2);
+    right: var(--s-2);
     width: min(560px, 92vw);
-    height: 100vh;
-    background: var(--bg-raised);
-    border-left: 1px solid var(--border);
+    height: calc(100vh - (var(--s-2) * 2));
+    overflow: hidden;
+    background:
+      var(--glass-reflect-violet),
+      linear-gradient(180deg, color-mix(in srgb, white 5%, transparent), color-mix(in srgb, white 1.5%, transparent)),
+      color-mix(in srgb, var(--bg-raised) 72%, transparent);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r-2);
     z-index: calc(var(--z-drawer) + 2);
     display: flex;
     flex-direction: column;
-    box-shadow: -16px 0 48px rgba(0, 0, 0, 0.35);
+    box-shadow:
+      var(--glass-shadow),
+      var(--glass-etch),
+      -18px 0 52px rgba(0, 0, 0, 0.24);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
   }
 
   .gh-side-drawer-head {
@@ -68,7 +89,10 @@
     justify-content: space-between;
     gap: var(--s-3);
     padding: var(--s-4);
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--glass-border);
+    background: color-mix(in srgb, var(--bg-raised) 44%, transparent);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
   }
 
   .gh-side-drawer-head h3 {
@@ -88,12 +112,22 @@
     justify-content: flex-end;
     gap: var(--s-2);
     padding: var(--s-3) var(--s-4);
-    border-top: 1px solid var(--border);
-    background: var(--bg-sunken, var(--bg));
+    border-top: 1px solid var(--glass-border);
+    background: color-mix(in srgb, var(--bg-sunken, var(--bg)) 62%, transparent);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
   }
   @media (max-width: 800px) {
+    .gh-side-drawer-backdrop::before {
+      display: none;
+    }
+
     .gh-side-drawer {
+      top: 0;
+      right: 0;
       width: 100vw;
+      height: 100vh;
+      border-radius: 0;
     }
   }
 </style>

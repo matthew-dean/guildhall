@@ -1,4 +1,5 @@
 import type { EventEnvelope, ProjectDetail, ServiceProjectSummary, Task } from './types.js'
+import { friendlyTaskId, labelForIdentifier } from './identifier-labels.js'
 
 export type ProjectActivityTone = 'idle' | 'active' | 'ok' | 'warn' | 'danger'
 
@@ -18,7 +19,7 @@ function pluralize(count: number, singular: string, plural = `${singular}s`): st
 function titleForTask(tasks: Task[] | undefined, taskId: string | undefined): string | null {
   if (!taskId) return null
   const task = (tasks ?? []).find(item => item.id === taskId)
-  return task?.title ?? null
+  return task?.title ?? friendlyTaskId(taskId)
 }
 
 function parseTimeLabel(at: string | undefined, now: Date): string | null {
@@ -36,27 +37,23 @@ function parseTimeLabel(at: string | undefined, now: Date): string | null {
 }
 
 function agentLabel(agentName: string | undefined): string {
-  switch (agentName) {
-    case 'worker-agent':
-      return 'Worker'
-    case 'spec-agent':
-      return 'Spec agent'
-    case 'reviewer-agent':
-      return 'Reviewer'
-    case 'proposal-promoter':
-    case 'pre-rejection-policy':
-      return 'Coordinator'
-    default:
-      if (!agentName) return 'Guildhall'
-      if (agentName.includes('coord')) return 'Coordinator'
-      return agentName.replace(/[-_]/g, ' ').replace(/\bagent\b/i, '').trim() || 'Guildhall'
-  }
+  if (!agentName) return 'Guildhall'
+  return labelForIdentifier('agent', agentName).label
+}
+
+function runReasonLabel(reason: string | undefined): string {
+  if (!reason) return 'Run stopped'
+  return labelForIdentifier('run-reason', reason).label
 }
 
 function activeTaskCount(detail: ProjectDetail | null | undefined): number {
   return (detail?.tasks ?? []).filter(task =>
     ['exploring', 'spec_review', 'ready', 'in_progress', 'review', 'gate_check'].includes(task.status ?? ''),
   ).length
+}
+
+function importDraftCount(detail: ProjectDetail | null | undefined): number {
+  return (detail?.tasks ?? []).filter(task => (task.status ?? '') === 'import_draft').length
 }
 
 function blockedTaskCount(detail: ProjectDetail | null | undefined): number {
@@ -121,7 +118,9 @@ function lineFromEvent(
         pulse: true,
         actorLabel: agentLabel(typeof inner.agent_name === 'string' ? inner.agent_name : undefined),
         label: 'Live',
-        message: title ? `${title} moved to ${toStatus.replace(/_/g, ' ')}` : `Task moved to ${toStatus.replace(/_/g, ' ')}`,
+        message: title
+          ? `${title} moved to ${labelForIdentifier('status', toStatus).label.toLowerCase()}`
+          : `Task moved to ${labelForIdentifier('status', toStatus).label.toLowerCase()}`,
         timeLabel,
       }
     }
@@ -162,7 +161,9 @@ function lineFromEvent(
         pulse: false,
         actorLabel: 'Coordinator',
         label: 'Stopped',
-        message: typeof inner.reason === 'string' && inner.reason.length > 0 ? inner.reason : 'Run stopped',
+        message: typeof inner.message === 'string' && inner.message.length > 0
+          ? inner.message
+          : runReasonLabel(typeof inner.reason === 'string' ? inner.reason : undefined),
         timeLabel,
       }
     case 'supervisor_error':
@@ -226,11 +227,14 @@ export function buildProjectTicker(
     }
   }
 
-  const fromEvent = lineFromEvent(detail, latestEvent, now)
+  const active = activeTaskCount(detail)
+  const importDrafts = importDraftCount(detail)
+  const blocked = blockedTaskCount(detail)
+  const eventType = latestEvent?.event?.type ?? latestEvent?.type
+  const staleStoppedEvent = eventType === 'supervisor_stopped' && (importDrafts > 0 || blocked > 0 || active > 0)
+  const fromEvent = staleStoppedEvent ? null : lineFromEvent(detail, latestEvent, now)
   if (fromEvent) return fromEvent
 
-  const active = activeTaskCount(detail)
-  const blocked = blockedTaskCount(detail)
   if (detail?.run?.status === 'running') {
     return {
       tone: 'active',
@@ -251,6 +255,16 @@ export function buildProjectTicker(
       actorLabel: 'Blocked',
       label: 'Blocked',
       message: `${blocked} blocked ${pluralize(blocked, 'task')}`,
+      timeLabel: null,
+    }
+  }
+  if (importDrafts > 0) {
+    return {
+      tone: 'warn',
+      pulse: false,
+      actorLabel: 'Needs task briefs',
+      label: 'Drafts',
+      message: `${importDrafts} imported ${pluralize(importDrafts, 'draft')} ${importDrafts === 1 ? 'needs' : 'need'} task briefs`,
       timeLabel: null,
     }
   }

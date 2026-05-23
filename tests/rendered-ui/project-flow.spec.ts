@@ -16,6 +16,46 @@ test('projects home scrolls at mobile size and opens explicit project routes', a
   await expect(page.getByRole('heading', { name: 'Thread' })).toBeVisible()
 })
 
+test('projects home keeps project cards compact for scanability', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/projects')
+
+  await expect(page.getByRole('heading', { name: 'Projects & Workspaces' })).toBeVisible()
+  const panelBoxes = await page.locator('.dashboard-panel').evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const box = node.getBoundingClientRect()
+      return { height: box.height, top: box.top, right: box.right }
+    }),
+  )
+  expect(panelBoxes).toHaveLength(3)
+  expect(new Set(panelBoxes.map(box => Math.round(box.height))).size).toBe(1)
+  expect(Math.max(...panelBoxes.map(box => box.right))).toBeGreaterThan(1380)
+
+  const cards = page.locator('section.project-card')
+  await expect(cards).toHaveCount(6)
+
+  const boxes = await cards.evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const box = node.getBoundingClientRect()
+      return { height: box.height, width: box.width, top: box.top, left: box.left, right: box.right }
+    }),
+  )
+  expect(Math.max(...boxes.map(box => box.height))).toBeLessThan(260)
+  expect(new Set(boxes.map(box => Math.round(box.top))).size).toBeGreaterThan(1)
+  expect(Math.max(...boxes.map(box => box.top)) - Math.min(...boxes.map(box => box.top))).toBeLessThan(260)
+
+  const rows = new Map<number, typeof boxes>()
+  for (const box of boxes) {
+    const top = Math.round(box.top)
+    rows.set(top, [...(rows.get(top) ?? []), box])
+  }
+  for (const row of rows.values()) {
+    expect(row.length).toBeGreaterThan(1)
+    expect(Math.min(...row.map(box => box.width))).toBeGreaterThan(420)
+    expect(Math.max(...row.map(box => box.right))).toBeGreaterThan(1380)
+  }
+})
+
 test('legacy project routes canonicalize to the loaded project slug', async ({ page }) => {
   await page.goto('/project/thread')
   await expect(page).toHaveURL(/\/projects\/looma-knit\/thread$/)

@@ -4,9 +4,9 @@ title: Corpus Map
 
 # Corpus Map
 
-The Corpus Map is Guildhall’s compact index of a project. It helps agents reuse
-the right code, component, helper, package, test pattern, and convention without
-dumping the entire repo into every prompt.
+The Corpus Map is Guildhall’s compact index of a project. It helps the guild
+reuse the right code, component, helper, package, test pattern, and convention
+without dumping the entire repo into every prompt.
 
 It is Guildhall’s answer to a common agent failure: the worker sees one local
 file, invents a local solution, and misses the shared abstraction that already
@@ -37,7 +37,7 @@ The map contains:
   recommendations when a project design system exists
 - suggested verification commands
 
-It does **not** store full source contents. Agents still open source files when
+It does **not** store full source contents. Helpers still open source files when
 they need evidence.
 
 ## How Guildhall builds it
@@ -61,8 +61,8 @@ The builder starts with a Git-aware file list:
 The first refresh is a full build. Later refreshes can be partial.
 
 Semantic enrichment is optional and explicit. A normal refresh builds the
-deterministic map without spending model tokens. When the operator runs a
-semantic refresh, Guildhall first builds the deterministic map, then asks the
+deterministic map without spending model tokens. When you run a semantic
+refresh, Guildhall first builds the deterministic map, then asks the
 `contextIndexer` model to add purpose, current-truth notes, architecture areas,
 canonical abstractions, risks, read-next guidance, and worker guidance. The
 model output is validated as structured JSON and stored under the map's
@@ -81,10 +81,10 @@ from the task project or active worktree before rendering the prompt. After a
 worker changes files and hands work forward, the orchestrator refreshes the map
 from dirty files and checkpoint-touched files it can prove.
 
-Manual refresh remains available for debugging, repair, or explicit operator
-control, but normal projects should not need to remember to build the map first.
-If refresh fails, Guildhall keeps running and records stale status instead of
-blocking the task.
+Manual refresh remains available for debugging, repair, or explicit control,
+but normal projects do not need a "remember to build the map" chore. If refresh
+fails, Guildhall keeps running and records stale status instead of blocking the
+task.
 
 ## Partial refresh
 
@@ -94,7 +94,7 @@ entries, recomputes affected areas and abstractions, and leaves unrelated
 entries alone.
 
 Some changes force a full rebuild because they can change how the whole project
-should be interpreted:
+fits together:
 
 - `package.json`
 - lockfiles
@@ -141,7 +141,7 @@ Corpus fit required: before editing, name the existing primitive, helper,
 package, design token, component, or area you are extending.
 ```
 
-That block is intentionally small. It points the agent toward the right
+That block is intentionally small. It points the helper toward the right
 starting files and abstractions; it does not ask the model to trust the map
 blindly.
 
@@ -180,10 +180,18 @@ This uses the OpenAI-compatible provider configured in Guildhall and the
 model is configured for that provider, Guildhall uses the current live-ladder
 fallback for semantic enrichment.
 
+The semantic pass is intentionally allowed to spend tokens. Guildhall derives a
+generous completion budget from the compact Corpus Map prompt size, gives repair
+passes their own larger budget because they include both raw output and map
+context, and relies on schema plus usefulness checks to keep the saved map
+compact. The goal is not to starve the context indexer. The goal is to avoid
+runaway output while giving the model enough room to produce read-next guidance,
+worker guidance, and risks that agents can actually use.
+
 The project Settings screen also has a compact Codebase Map panel showing file,
 area, abstraction, and design-system maturity counts plus the last build time.
-The panel is meant to be quiet. It is there when you need it, not another
-dashboard you must babysit.
+The panel is deliberately quiet: useful when you need it, invisible when you
+do not.
 
 ## Design-system guidance
 
@@ -210,13 +218,13 @@ future maintenance.
 Corpus Map support lets Guildhall steer workers away from one-off
 solutionizing:
 
-- Specs can name the abstraction a task should reuse.
+- Specs can name the abstraction a task is expected to reuse.
 - Workers can start from mapped files before broad exploration.
 - Reviewers can reject parallel implementations when a mapped abstraction was
   ignored.
 - UI workers can see whether a project already has tokens and primitives before
   adding local styles.
-- Future agents can query the map instead of relearning the repo from scratch.
+- Future runs can query the map instead of relearning the repo from scratch.
 
 The goal is not a perfect static analysis database. The goal is a durable,
 inspectable orientation layer that makes the right code easier to reuse than

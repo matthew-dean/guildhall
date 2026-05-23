@@ -4,7 +4,7 @@ title: HTML artifacts and agent UI protocol
 
 # HTML artifacts and agent UI protocol
 
-**Status:** exploration candidate for `0.8.0`
+**Status:** `0.7.0` guardrail seed, `0.8.0` feature candidate
 
 This note explores whether Guildhall should move beyond Markdown for agent
 communication and planning artifacts. It is inspired by Claire Vo's ChatPRD
@@ -148,6 +148,27 @@ much user value.
 
 ## Proposed 0.8.0 Shape
 
+### 0. 0.7.0 Minimum Seed
+
+For `0.7.0`, Guildhall should only establish the contract and guardrail:
+
+- keep ordinary Markdown sanitized and prose-only;
+- add a `guildhall-html-v1` schema for rich artifacts;
+- require `title`, `fallbackMarkdown`, `createdBy`, and `schemaVersion`;
+- validate a strict allowlist of structural tags and safe attributes;
+- recognize only these component request tags:
+  - `gh-checklist`
+  - `gh-step`
+  - `gh-decision`
+  - `gh-option`
+- compile the accepted artifact into a typed render-tree summary;
+- reject scripts, inline event handlers, inline styles, iframes, unknown
+  `gh-*` tags, and unsafe URL schemes.
+
+This is intentionally not a user-visible renderer yet. It gives tests and
+agent contract work a real target while preventing "rich content" from slipping
+through the Markdown path.
+
 ### 1. Harden Plain Markdown
 
 Plain Markdown should remain allowed, but rendered output must be sanitized.
@@ -233,6 +254,8 @@ changes.
 
 ## 0.8.0 Candidate Slices
 
+Earlier sketch, preserved from the first planning note:
+
 1. **Markdown hardening:** sanitize current renderer and document the plain
    Markdown contract.
 2. **Artifact model:** add a persisted `ARTIFACTS.json` or per-task artifact
@@ -245,6 +268,45 @@ changes.
    submit deterministic answers.
 6. **First real use case:** generate a project blueprint / release map artifact
    for Looma + Knit, where Thread is currently too crowded.
+
+Updated implementation slices:
+
+1. **Artifact persistence:** add a project/task artifact store with original
+   source, compiled render tree, fallback Markdown, validation result,
+   provenance, and hash.
+2. **Read-only renderer:** map the typed render tree to Svelte components in a
+   drawer tab. Do not render arbitrary HTML strings.
+3. **Thread affordance:** show a compact artifact preview on the relevant task
+   card with one clear "Open artifact" action.
+4. **Component-tag expansion:** add tested render support for `gh-checklist`,
+   `gh-decision`, `gh-table`, and a simple diagram primitive.
+5. **Interactive artifact events:** allow `gh-decision` and checklist actions
+   to emit auditable task/project events.
+6. **Agent prompt contract:** teach coordinator/spec/reviewer agents when to
+   produce Markdown, JSON state, or a rich artifact.
+7. **First real use case:** generate a project blueprint / release map artifact
+   for Looma + Knit, where Thread is currently too crowded.
+8. **Browser proof:** cover artifact open, fallback rendering, keyboard focus,
+   and event submission with Playwright.
+
+## Required Tests Before User-Visible Rich Artifacts
+
+- Schema tests for required metadata and allowed artifact kinds.
+- Validator tests for rejected tags, unsafe attributes, unknown `gh-*` tags,
+  unsafe URLs, scripts, styles, iframes, forms, and SVG unless explicitly
+  sandboxed.
+- Compiler tests showing known `gh-*` tags become typed render-tree nodes.
+- Persistence tests showing source, compiled tree, fallback, provenance, hash,
+  and validation errors survive a service restart.
+- Renderer tests showing Svelte components render the typed tree without using
+  raw `{@html}` for interactive content.
+- Event tests proving artifact interactions emit deterministic events rather
+  than hidden local state.
+- Agent fixture tests with representative coordinator/spec/reviewer outputs:
+  one valid blueprint, one valid review dashboard, and several invalid
+  artifacts with useful errors.
+- Browser tests for opening an artifact from Thread/drawer, fallback behavior,
+  keyboard navigation, and no visual collision with surrounding task cards.
 
 ## Open Questions
 
@@ -270,4 +332,3 @@ The right `0.8.0` direction is not "replace Markdown with HTML." It is:
 > Keep Markdown for prose, keep JSON for state, and add a constrained rich
 > artifact protocol for plans, diagrams, design systems, and bounded
 > decision/editing surfaces.
-

@@ -6,6 +6,8 @@ describe('parseRoute', () => {
   it('routes top-level surfaces', () => {
     expect(parseRoute('/')).toEqual({ kind: 'projects' })
     expect(parseRoute('/projects')).toEqual({ kind: 'projects' })
+    expect(parseRoute('/needs-you')).toEqual({ kind: 'fleet-inbox' })
+    expect(parseRoute('/notifications')).toEqual({ kind: 'fleet-inbox' })
     expect(parseRoute('/setup')).toEqual({ kind: 'setup', projectId: null })
     expect(parseRoute('/projects/fair-labor-license/setup')).toEqual({
       kind: 'setup',
@@ -64,6 +66,17 @@ describe('parseRoute', () => {
     })
 
     expect(parseRoute('/projects/looma-knit/task/task-import-2')).toEqual({
+      kind: 'project',
+      projectId: 'looma-knit',
+      view: 'thread',
+      sub: null,
+      drawerTaskId: 'task-import-2',
+      backgroundPath: '/projects/looma-knit/thread',
+    })
+  })
+
+  it('ignores query strings and hashes when matching task drawer routes', () => {
+    expect(parseRoute('/projects/looma-knit/task/task-import-2?sourceNoteCheck=1#now')).toEqual({
       kind: 'project',
       projectId: 'looma-knit',
       view: 'thread',

@@ -4,6 +4,8 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  semanticCompletionBudget,
+  semanticRepairCompletionBudget,
   clearServiceRuntimeState,
   clearServiceRuntimeStateIfOwnedByPid,
   discoverServiceRuntimeState,
@@ -189,6 +191,22 @@ describe('CLI service lifecycle helpers', () => {
 })
 
 describe('Guildhall CLI surface', () => {
+  it('derives semantic context-indexer budgets from prompt size instead of fixed magic caps', () => {
+    const small = semanticCompletionBudget('short prompt')
+    const large = semanticCompletionBudget('x'.repeat(16_000))
+
+    expect(small).toBeGreaterThan(0)
+    expect(large).toBeGreaterThan(small)
+    expect(large).toBeGreaterThanOrEqual(4_000)
+  })
+
+  it('gives semantic repair its own budget because repair includes raw output plus map context', () => {
+    const prompt = 'x'.repeat(16_000)
+    const raw = 'y'.repeat(6_000)
+
+    expect(semanticRepairCompletionBudget(prompt, raw)).toBeGreaterThan(semanticCompletionBudget(prompt))
+  })
+
   it('keeps the shipped command list focused on service, project registry, and debug run controls', () => {
     expect(SHIPPED_CLI_COMMANDS).toEqual([
       'init',

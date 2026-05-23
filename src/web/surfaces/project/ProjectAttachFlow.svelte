@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ActionBar from '../../lib/ActionBar.svelte'
   import Button from '../../lib/Button.svelte'
   import { nav } from '../../lib/nav.svelte.js'
 
@@ -27,14 +28,14 @@
     {/if}
   </div>
 
-  <div class="actions">
+  <ActionBar align="start" className="attach-actions">
     <Button variant="primary" size="md" onclick={() => nav('/setup')}>
       Initialize this project
     </Button>
     <Button variant="secondary" size="md" onclick={() => nav('/')}>
       Back to Projects
     </Button>
-  </div>
+  </ActionBar>
 </section>
 
 <style>
@@ -79,13 +80,8 @@
     font-size: var(--fs-1);
     overflow-wrap: anywhere;
   }
-  .actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-3);
-  }
   @media (max-width: 720px) {
-    .actions {
+    :global(.attach-actions) {
       flex-direction: column;
     }
   }

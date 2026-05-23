@@ -34,6 +34,26 @@
     padding: var(--s-5);
     box-sizing: border-box;
   }
+  .projects-shell.projects-home {
+    gap: var(--s-2);
+    padding: var(--s-3);
+  }
+  .projects-shell.projects-home .projects-shell-hero {
+    position: sticky;
+    top: 0;
+    z-index: var(--z-sticky-local);
+    margin: calc(-1 * var(--s-3)) calc(-1 * var(--s-3)) 0;
+    padding: var(--s-3);
+    border-bottom: 1px solid var(--glass-border);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, white 4%, transparent), transparent 62%),
+      color-mix(in srgb, var(--bg-base) 72%, transparent);
+    box-shadow:
+      0 14px 28px color-mix(in srgb, var(--bg-base) 58%, transparent),
+      inset 0 -1px 0 color-mix(in srgb, white 5%, transparent);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+  }
   .projects-shell-hero,
   .projects-shell-notices,
   .projects-shell-body {
@@ -45,5 +65,8 @@
     overflow-y: auto;
     overflow-x: hidden;
     padding-bottom: var(--s-6);
+  }
+  .projects-shell.projects-home .projects-shell-body {
+    padding-bottom: var(--s-3);
   }
 </style>

@@ -31,7 +31,7 @@ under `~/.guildhall/`.
 ## Pages
 
 - [Setup wizard](./setup) — first-run onboarding.
-- [Dashboard](./dashboard) — service home and project launcher.
+- [Projects home](./dashboard) — `Projects & Workspaces`, service-level work mix, attention, running-now, and project launcher.
 - [Project view](./project-view) — main per-project shell.
 - [Task drawer](./task-drawer) — task detail pane.
 - [Providers page](./providers) — credential management.

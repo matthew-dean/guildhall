@@ -24,10 +24,49 @@
   --border-strong: #3a3a45;  /* card 1px outline / stronger edge */
   --accent: #7c6df0;
   --accent-2: #4ecca3;
+  --light-violet-warm: #8f65f2;
+  --signal-warn-strong: #ff8a32;
   --text: #e8e8f0;
+  --text-strong: #f4f4fa;
+  --text-readable: #d9d9e5;
+  --text-soft: #b9b9c8;
   --text-muted: #888899;
   --danger: #e05252;
   --warn: #d4a23c;
+
+  /* guild glass
+     Glass is a treatment over the existing geometry, not a new layout
+     language: keep current radii, padding, and control heights. Transparent
+     panels catch reflected light; strong controls emit it. */
+  --glass-bg: rgba(16, 17, 23, 0.46);
+  --glass-bg-strong: rgba(22, 23, 31, 0.58);
+  --glass-inset-bg: rgba(17, 18, 25, 0.38);
+  --glass-inset-bg-strong: rgba(25, 26, 35, 0.5);
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --glass-border-strong: rgba(255, 255, 255, 0.2);
+  --glass-inset-border: rgba(255, 255, 255, 0.09);
+  --glass-blur: blur(22px) saturate(118%);
+  --glass-shadow: 0 12px 32px color-mix(in srgb, black 24%, transparent);
+  --glass-inset-shadow: inset 0 1px 0 color-mix(in srgb, white 5%, transparent), 0 1px 0 color-mix(in srgb, white 3%, transparent);
+  --glass-etch:
+    inset 0 1px 0 color-mix(in srgb, white 11%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, white 2.5%, transparent);
+  --glass-inset-etch:
+    inset 0 1px 0 color-mix(in srgb, white 6%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, black 18%, transparent);
+  --glass-reflect-violet:
+    radial-gradient(circle at 84% 16%, color-mix(in srgb, var(--light-violet-warm) 15%, transparent), transparent 24%),
+    radial-gradient(circle at 92% 28%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 26%);
+  --glass-reflect-mint:
+    radial-gradient(circle at 14% 88%, color-mix(in srgb, var(--accent-2) 7%, transparent), transparent 30%);
+  --glass-reflect-warn:
+    radial-gradient(circle at 12% 16%, color-mix(in srgb, var(--signal-warn-strong) 16%, transparent), transparent 26%);
+  --light-emitted-accent:
+    0 0 14px color-mix(in srgb, var(--accent) 28%, transparent),
+    0 0 28px color-mix(in srgb, var(--accent) 12%, transparent);
+  --light-emitted-agent:
+    0 0 16px color-mix(in srgb, var(--accent-2) 28%, transparent),
+    0 0 30px color-mix(in srgb, var(--accent-2) 12%, transparent);
 
   /* semantic tints
      Surface treatments for notices, selected cards, and grouped emphasis.
@@ -68,7 +107,7 @@
      Kept as solid colors (not tints) so the stripe remains legible on
      elevated backgrounds. Bodies stay neutral; stripe + chip do the work. */
   --stripe-danger: #e05252;
-  --stripe-warn: #d4a23c;
+  --stripe-warn: var(--signal-warn-strong);
   --stripe-ok: #4ecca3;
   --stripe-accent: #7c6df0;
   --stripe-neutral: #3a3a45;
@@ -149,8 +188,9 @@ html {
 body {
   background: var(--bg);
   color: var(--text);
-  /* Rounded Sans - https://github.com/system-fonts/modern-font-stacks#rounded-sans */
-  font-family: ui-rounded, 'Hiragino Maru Gothic ProN', Quicksand, Comfortaa, Manjari, 'Arial Rounded MT', 'Arial Rounded MT Bold', Calibri, source-sans-pro, sans-serif;
+  /* System UI keeps punctuation metrics predictable. Rounded stacks made
+     text-overflow ellipses render visually off-center in compact controls. */
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
   font-size: var(--fs-2);
   line-height: var(--lh-body);
   min-height: 100vh;

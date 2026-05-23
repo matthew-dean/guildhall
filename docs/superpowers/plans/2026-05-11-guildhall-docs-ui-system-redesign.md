@@ -1,12 +1,12 @@
-# GuildHall Docs + UI System Redesign Implementation Plan
+# Guildhall Docs + UI System Redesign Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Redesign the GuildHall docs experience around a stronger product story while introducing a reusable `@guildhall/ui` Svelte package that can serve both branded docs surfaces and dense in-product operator views.
+**Goal:** Redesign the Guildhall docs experience around a stronger product story while introducing a reusable `@guildhall/ui` Svelte package that can serve both branded docs surfaces and dense in-product operator views.
 
-**Architecture:** Convert the current flat repo into a lightweight monorepo with a new `packages/ui` package, then drive the docs redesign from a structural audit of existing GuildHall screens. The docs site remains in VitePress, but it should visually and conceptually reflect the shared Svelte component system rather than inventing a docs-only design language.
+**Architecture:** Convert the current flat repo into a lightweight monorepo with a new `packages/ui` package, then drive the docs redesign from a structural audit of existing Guildhall screens. The docs site remains in VitePress, but it should visually and conceptually reflect the shared Svelte component system rather than inventing a docs-only design language.
 
-**Tech Stack:** VitePress, Svelte 5, TypeScript, existing GuildHall build/test tooling, local screenshot capture via browser automation or rendered docs assets.
+**Tech Stack:** VitePress, Svelte 5, TypeScript, existing Guildhall build/test tooling, local screenshot capture via browser automation or rendered docs assets.
 
 ---
 
@@ -96,7 +96,7 @@ Expected: workspace lockfile and package graph update cleanly
 Run: `pnpm --filter @guildhall/ui typecheck`
 Expected: PASS
 
-### Task 2: Audit Existing GuildHall UI Structure and Capture Screenshots
+### Task 2: Audit Existing Guildhall UI Structure and Capture Screenshots
 
 **Files:**
 - Create: `/Users/matthew/git/oss/guildhall-vitepress-ui-main-path/docs/design/ui-audit.md`
@@ -269,7 +269,7 @@ Expected: SVG files present
 
 ```md
 hero:
-  name: GuildHall
+  name: Guildhall
   text: Let the guild carry the work.
   tagline: As unattended as you want. As auditable as you need.
 ```
@@ -277,7 +277,7 @@ hero:
 - [ ] **Step 2: Add the once-only origin note**
 
 ```md
-GuildHall was built by an ADHD engineer who got overwhelmed by AI harnesses that demanded too much attention just to stay upright.
+Guildhall was built by an ADHD engineer who got overwhelmed by AI harnesses that demanded too much attention just to stay upright.
 ```
 
 - [ ] **Step 3: Re-sequence homepage sections**
@@ -360,7 +360,7 @@ Adopt shared primitives first in:
 <SectionHeader
   mode="operator"
   eyebrow="Projects"
-  title="Your local GuildHall service"
+  title="Your local Guildhall service"
   lede="Open a project, keep a few running, and see which ones need you."
 />
 ```

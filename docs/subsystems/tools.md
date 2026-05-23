@@ -45,7 +45,7 @@ Output is truncated at 12 KB (head + tail preserved with a `[... N bytes elided 
 
 ## Interaction tool
 
-`src/tools/interaction.ts` provides user-confirmation gates (`ask_user`, `confirm_destructive`) that surface as permission prompts in the dashboard or CLI.
+`src/tools/interaction.ts` provides user-confirmation gates (`ask_user`, `confirm_destructive`) that surface as permission prompts in the browser UI or CLI.
 
 ## Adding a custom tool
 

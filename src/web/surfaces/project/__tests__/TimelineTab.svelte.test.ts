@@ -74,7 +74,7 @@ describe('TimelineTab', () => {
     expect(rows.map(row => row.textContent)).toEqual(['15:02:00', '15:01:00', '15:00:00'])
     expect(screen.getByText('ERROR: bootstrap failed')).toBeTruthy()
 
-    await user.click(screen.getByRole('button', { name: /task-a ready/ }))
+    await user.click(screen.getByRole('button', { name: /Task A Ready/ }))
 
     expect(path.value).toBe('/projects/looma-knit/task/task-a')
     expect(path.state).toEqual({ backgroundPath: '/projects/looma-knit/timeline' })
@@ -112,7 +112,7 @@ describe('TimelineTab', () => {
       },
     })
 
-    expect(screen.getByText(/task-a ready/)).toBeTruthy()
+    expect(screen.getByText(/Task A Ready/)).toBeTruthy()
     expect(screen.queryByText(/provider health/i)).toBeNull()
     expect(screen.getByText('2 connection checks hidden.')).toBeTruthy()
   })

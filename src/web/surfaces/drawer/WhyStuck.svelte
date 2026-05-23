@@ -16,6 +16,7 @@
   import {
     escalationReasonLabel,
     escalationPrimaryAction,
+    escalationRecoveryCopy,
     roleLabel,
     roleBlurb,
   } from '../../lib/escalation-labels.js'
@@ -43,6 +44,9 @@
   }
 
   const headline = $derived.by(() => {
+    if (firstOpen) {
+      return escalationRecoveryCopy(firstOpen).headline
+    }
     if (task.status === 'blocked') {
       return stripEnumPrefix(task.blockReason ?? 'Blocked — waiting on human action.')
     }
@@ -65,11 +69,15 @@
     firstOpen ? roleBlurb(firstOpen.agentId) : '',
   )
   const primaryAction = $derived(escalationPrimaryAction(firstOpen))
+  const recoveryDetail = $derived(firstOpen ? escalationRecoveryCopy(firstOpen).detail : null)
 </script>
 
 <Card tone="danger" title="Why is this stuck?">
   <Stack gap="3">
     <p class="headline">{headline}</p>
+    {#if recoveryDetail}
+      <p class="copy">{recoveryDetail}</p>
+    {/if}
 
     {#if reasonChip || roleChip}
       <div class="chips">
@@ -125,6 +133,12 @@
     font-size: var(--fs-3);
     font-weight: 600;
     line-height: var(--lh-tight);
+  }
+  .copy {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
   }
   .chips {
     display: flex;

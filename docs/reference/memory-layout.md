@@ -53,13 +53,11 @@ when the workspace opts into project-local skills.
 Machine-wide user preferences and model-lane recommendations live outside the
 project in `~/.guildhall/learning.json`.
 
-Use Settings → Learning in the browser to inspect project memories,
+Use Settings → Memory in the browser to inspect project memories,
 cross-project preferences, project playbooks, and Guildhall product ideas. You
 can accept, dismiss, make project-wide, or reset learned records there. Product
 ideas can open a prefilled GitHub issue draft with **Give product feedback**,
-but they do not change runtime behavior by themselves. The API equivalents are
-`POST /api/project/learning/action` and
-`POST /api/project/skill-proposals/action`.
+but they do not change runtime behavior by themselves.
 
 A starter `.gitignore` snippet:
 
