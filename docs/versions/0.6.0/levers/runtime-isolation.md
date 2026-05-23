@@ -28,5 +28,5 @@ Whether fanned-out workers get isolated port/path slots.
 
 ## Related
 
-- `SlotAllocator` in `src/runtime/` — the component that hands out slots.
+- `SlotAllocator` in `./src/runtime/` — the component that hands out slots.
 - [`concurrent_task_dispatch`](./concurrent-task-dispatch) — `slot_allocation` only matters when fanning out.

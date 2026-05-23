@@ -13,11 +13,11 @@ Those policy settings are called **levers**. They decide things like how autonom
 
 ## The first-run flow
 
-1. **Setup wizard** creates the project shell: `guildhall.yaml`, local `.guildhall/` state, provider selection, and the initial route into the project shell.
+1. **Setup wizard** creates the project shell: `./guildhall.yaml`, local `./.guildhall/` state, provider selection, and the initial route into the project shell.
 2. **Meta-intake** asks focused project questions: what the major domains are, what each domain owns, what must be escalated, and how the project tends to treat risk.
 3. **The Spec Agent drafts YAML** for coordinators and inferred levers. It should infer from natural answers, not force you to choose every knob by name.
 4. **You approve the draft** from the browser UI or CLI.
-5. **Guildhall writes the result**: routing/coordinator structure and bootstrap commands go into `guildhall.yaml`; inferred levers go into `memory/agent-settings.yaml` with provenance.
+5. **Guildhall writes the result**: routing/coordinator structure and bootstrap commands go into `./guildhall.yaml`; inferred levers go into `./memory/agent-settings.yaml` with provenance.
 
 After that, the Settings area shows the current lever positions. You can
 change them later, but the first pass should feel like onboarding into a
@@ -39,7 +39,7 @@ If the agent cannot infer a lever with confidence, it leaves the system default 
 
 ## Where the settings land
 
-`memory/agent-settings.yaml` is the lever source of truth. Each lever entry records:
+`./memory/agent-settings.yaml` is the lever source of truth. Each lever entry records:
 
 ```yaml
 position: coordinator_sufficient
@@ -81,7 +81,7 @@ The result is not “the AI made a secret decision.” It is a visible proposal,
 ## Changing your mind
 
 Levers are not permanent. Use the Settings page for normal edits, or edit
-`memory/agent-settings.yaml` directly when you need a precise reviewable diff.
+`./memory/agent-settings.yaml` directly when you need a precise reviewable diff.
 
 When changing a lever by hand, update the `position`, `rationale`, `setAt`, and `setBy` together. The rationale matters because future you will want to know why the guild suddenly became more cautious, more autonomous, or more parallel.
 
@@ -89,5 +89,5 @@ When changing a lever by hand, update the `position`, `rationale`, `setAt`, and 
 
 - [Levers](../levers/) — every lever and position.
 - [Provenance](../levers/provenance) — what `setBy` values mean.
-- [`agent-settings.yaml`](../reference/agent-settings) — storage shape.
+- [`./memory/agent-settings.yaml`](../reference/agent-settings) — storage shape.
 - [Setup wizard](../web-ui/setup) — the browser onboarding surface.

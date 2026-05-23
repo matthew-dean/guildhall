@@ -3,13 +3,13 @@ title: Design tokens
 help_topic: web.design_tokens
 help_summary: |
   The UI uses CSS custom properties exclusively — colors, spacing, type
-  scale, control sizes, radii, status stripes. Defined in src/web/tokens.css
-  and mirrored in src/engineering-defaults/frontend.md.
+  scale, control sizes, radii, status stripes. Defined in ./src/web/tokens.css
+  and mirrored in ./src/engineering-defaults/frontend.md.
 ---
 
 # Design tokens
 
-All UI styling uses CSS custom properties declared in `src/web/tokens.css`. No component file contains hardcoded hex values, raw px sizes, or one-off radii — everything references a token.
+All UI styling uses CSS custom properties declared in `./src/web/tokens.css`. No component file contains hardcoded hex values, raw px sizes, or one-off radii — everything references a token.
 
 ## Token groups
 
@@ -72,4 +72,4 @@ The product UI uses a dependable system UI stack: `system-ui`, Apple system font
 - No raw px for font sizes or spacings.
 - If you need a new color or size, add a token first and use it everywhere; don't one-off.
 
-These rules are enforced culturally, not mechanically — but `src/engineering-defaults/frontend.md` ships the guidelines into every agent's system prompt so workers know the conventions.
+These rules are enforced culturally, not mechanically — but `./src/engineering-defaults/frontend.md` ships the guidelines into every agent's system prompt so workers know the conventions.

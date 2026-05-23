@@ -303,7 +303,6 @@
       radial-gradient(circle at 88% 10%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 28%),
       var(--glass-inset-bg);
     box-shadow: var(--glass-inset-etch), var(--glass-inset-shadow);
-    backdrop-filter: var(--glass-blur);
   }
   .question-head {
     display: flex;
@@ -359,7 +358,6 @@
     width: 100%;
     min-height: 42px;
     box-shadow: var(--glass-inset-etch);
-    backdrop-filter: var(--glass-blur);
   }
   .choice:hover:not(:disabled) {
     border-color: var(--accent);

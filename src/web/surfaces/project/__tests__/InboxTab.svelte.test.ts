@@ -37,7 +37,7 @@ describe('InboxTab', () => {
               severity: 'high',
               title: 'Choose link editor scope',
               detail: 'Coordinator needs a scope decision.',
-              actionHref: '/thread',
+              actionHref: '/task/task-migration?tab=current',
             },
             {
               id: 'cleanup',
@@ -65,12 +65,12 @@ describe('InboxTab', () => {
     render(InboxTab)
 
     await screen.findByText('Choose link editor scope')
-    expect(screen.getByText('Housekeeping')).toBeInTheDocument()
+    expect(screen.getByText('Optional cleanup')).toBeInTheDocument()
     expect(screen.getByText(/Safe defaults are active/)).toBeInTheDocument()
     expect(screen.getByText(/Review them only if you want to tune autonomy, recovery, or review strictness/)).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: 'Choose link editor scope' }))
-    expect(path.value).toBe('/projects/looma-knit/thread')
+    expect(window.location.pathname + window.location.search).toBe('/projects/looma-knit/task/task-migration?tab=current')
 
     path.value = '/projects/looma-knit/notifications'
     await userEvent.click(screen.getByRole('button', { name: 'Review imported notes' }))

@@ -9,8 +9,8 @@ help_summary: |
 
 # Task lifecycle
 
-Every task in `memory/TASKS.json` has a `status` field that tracks where it
-sits in the build pipeline. Statuses are enumerated in `src/core/task.ts` as
+Every task in `./memory/TASKS.json` has a `status` field that tracks where it
+sits in the build pipeline. Statuses are enumerated in `./src/core/task.ts` as
 `TaskStatus`.
 
 The construction model is the friendly mental model; the status is the runtime

@@ -113,7 +113,7 @@ ordinary thinking for it.
 
 - [Start here](./quick-start) for the first browser run.
 - [How Guildhall works](./how-guildhall-works) for the system model behind
-  context, agents, Corpus Map, and inspections.
+  context, agents, [Corpus Map](./corpus-map), and inspections.
 - [Agent context](./agent-context) for what agents receive before they act.
 - [Corpus Map](./corpus-map) for how Guildhall indexes codebase structure.
 - [New project](./new-project) for a clean or early repo.

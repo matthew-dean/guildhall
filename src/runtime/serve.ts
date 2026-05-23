@@ -68,7 +68,7 @@ import {
   resolveEscalation,
   updateDesignSystem,
 } from '@guildhall/tools'
-import { DesignSystem, summarizeDesignSystem } from '@guildhall/core'
+import { DesignSystem, summarizeDesignSystem, type Task } from '@guildhall/core'
 import {
   loadProjectGuildRoster,
   selectApplicableGuilds,
@@ -163,6 +163,8 @@ import {
 import { normalizeImportedDraftTask } from './import-drafts.js'
 import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
 import { buildThread } from './thread.js'
+import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
+import { repairStaleBlockersForProject } from './stale-blocker-repair.js'
 import {
   buildCoordinatorProjectPathMap,
   resolveTaskProjectPath,
@@ -660,6 +662,11 @@ async function buildProjectInboxSnapshot(input: {
   } catch {
     /* never let self-healing break an inbox read */
   }
+  try {
+    repairStaleBlockersForProject(input.projectPath)
+  } catch {
+    /* never let stale-blocker repair break an inbox read */
+  }
   const items = buildInbox({ projectPath: input.projectPath })
   const blockers = buildInboxBlockers(items)
   return { items, blockers }
@@ -988,6 +995,41 @@ export function filterEventsForTask<T extends { event?: unknown }>(
     const t = inner?.task_id ?? inner?.taskId
     return t === taskId
   })
+}
+
+function friendlyProjectEventToolName(tool: string): string {
+  switch (tool) {
+    case 'read-file': return 'file read'
+    case 'edit-file': return 'file edit'
+    case 'run-command': return 'command'
+    case 'search-files': return 'file search'
+    case 'list-files': return 'file list'
+    default: return tool.replace(/[-_]/g, ' ')
+  }
+}
+
+function summarizeProjectEvent(ev: Record<string, unknown> | undefined): string {
+  const type = String(ev?.type ?? '')
+  const tool = friendlyProjectEventToolName(typeof ev?.tool_name === 'string' ? ev.tool_name : '')
+  if ((type === 'tool_started' || type === 'tool_execution_started') && tool) return `Started ${tool}`
+  if ((type === 'tool_completed' || type === 'tool_execution_completed') && ev?.is_error && tool) return `Failed ${tool}`
+  if ((type === 'tool_completed' || type === 'tool_execution_completed') && tool) return `Finished ${tool}`
+  if (type === 'error') return String(ev?.message ?? 'Agent error')
+  if (type === 'line_complete') return String(ev?.message ?? 'Agent update')
+  return type.replace(/_/g, ' ') || 'Agent activity'
+}
+
+function toneForProjectEvent(
+  ev: Record<string, unknown> | undefined,
+): 'neutral' | 'running' | 'ok' | 'warn' | 'danger' {
+  const type = String(ev?.type ?? '')
+  if (type === 'error') {
+    return /empty assistant/i.test(String(ev?.message ?? '')) ? 'warn' : 'danger'
+  }
+  if (type === 'tool_completed' || type === 'tool_execution_completed') return ev?.is_error ? 'danger' : 'ok'
+  if (type === 'tool_started' || type === 'tool_execution_started') return 'running'
+  if (type === 'line_complete') return 'running'
+  return 'neutral'
 }
 
 function noteMatchesCanonicalAcceptance(
@@ -1454,7 +1496,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
   }
   const processStartedAt = new Date().toISOString()
 
-  app.get('/api/build-info', c => {
+  function servedBundleFreshnessPayload(): {
+    pid: number
+    processStartedAt: string
+    bootBuildMtimeMs: number
+    currentBuildMtimeMs: number
+    stale: boolean
+    distPath: string | null
+  } {
     let currentBuildMtimeMs = bootBuildMtimeMs
     try {
       if (distEntryPath) {
@@ -1463,14 +1512,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
     } catch {
       /* keep boot value */
     }
-    return c.json({
+    return {
       pid: process.pid,
       processStartedAt,
       bootBuildMtimeMs,
       currentBuildMtimeMs,
       stale: currentBuildMtimeMs > bootBuildMtimeMs,
       distPath: distEntryPath,
-    })
+    }
+  }
+
+  app.get('/api/build-info', c => {
+    return c.json(servedBundleFreshnessPayload())
+  })
+
+  app.get('/api/stale-server', c => {
+    return c.json(servedBundleFreshnessPayload())
   })
 
   // -------------------------------------------------------------------------
@@ -1943,6 +2000,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath)
     if (importDraftBlocker) return importDraftBlocker
 
+    const terminal = terminalStartState(input.projectPath)
+    if (terminal) {
+      return {
+        canStart: false,
+        code: terminal.code,
+        message: terminal.message,
+      }
+    }
+
     try {
       const settings = await loadLeverSettings({
         path: defaultAgentSettingsPath(input.projectPath),
@@ -2023,6 +2089,83 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  function terminalStartState(projectPath: string): {
+    canStart: false
+    code: 'all_terminal'
+    message: string
+    stopSummary: {
+      reason: 'all_terminal'
+      message: string
+      counts: {
+        total: number
+        done: number
+        blocked: number
+        shelved: number
+        actionable: number
+        terminal: number
+      }
+    }
+  } | null {
+    const tasksPath = join(projectPath, 'memory', 'TASKS.json')
+    if (!existsSync(tasksPath)) return null
+    let raw: unknown
+    try {
+      raw = JSON.parse(readFileSync(tasksPath, 'utf-8'))
+    } catch {
+      return null
+    }
+    const tasks = Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === 'object' && Array.isArray((raw as { tasks?: unknown }).tasks)
+        ? (raw as { tasks: unknown[] }).tasks
+        : []
+    if (tasks.length === 0) return null
+
+    let done = 0
+    let blocked = 0
+    let shelved = 0
+    let terminal = 0
+    for (const task of tasks) {
+      if (!task || typeof task !== 'object') return null
+      const status = String((task as { status?: unknown }).status ?? '')
+      if (status === 'done') {
+        done += 1
+        terminal += 1
+      } else if (status === 'blocked') {
+        blocked += 1
+        terminal += 1
+      } else if (status === 'shelved') {
+        shelved += 1
+        terminal += 1
+      }
+    }
+    const actionable = tasks.length - terminal
+    if (actionable > 0) return null
+
+    const detailMessage = `No actionable tasks remain: ${done} done, ${blocked} blocked, ${shelved} shelved.`
+    const message = done === tasks.length
+      ? 'All tasks are already finished.'
+      : detailMessage
+
+    return {
+      canStart: false,
+      code: 'all_terminal',
+      message,
+      stopSummary: {
+        reason: 'all_terminal',
+        message: detailMessage,
+        counts: {
+          total: tasks.length,
+          done,
+          blocked,
+          shelved,
+          actionable,
+          terminal,
+        },
+      },
+    }
+  }
+
   async function startBlockerForImportDrafts(projectPath: string): Promise<{
     canStart: false
     code: 'import_drafts_waiting'
@@ -2059,6 +2202,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.post('/api/project/start', async c => {
     try {
+      const body = await c.req.json().catch(() => ({})) as {
+        mode?: string
+        stopAfterOneTask?: boolean
+        taskId?: string
+      }
+      const existingRun = supervisor.get(project.id)
+      if (body.taskId && existingRun && (existingRun.status === 'running' || existingRun.status === 'stopping')) {
+        return c.json(
+          {
+            error: existingRun.status === 'running'
+              ? 'Guildhall is already running for this project. This task remains queued; stop the current run first if you need Guildhall to restart on this exact task.'
+              : 'Guildhall is stopping. Wait for it to stop before starting this specific task.',
+            code: 'run_already_active',
+            status: existingRun.status,
+          },
+          409,
+        )
+      }
       if (project.initializationNeeded) {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
@@ -2072,6 +2233,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
           },
           400,
         )
+      }
+      const terminal = terminalStartState(project.path)
+      if (terminal) {
+        return c.json({
+          status: 'stopped',
+          mode: 'continuous',
+          code: terminal.code,
+          stopSummary: terminal.stopSummary,
+        })
       }
       try {
         const settings = await loadLeverSettings({
@@ -2228,11 +2398,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
               `Guildhall swapped to models that ${providerLabelForAnyKey(effectiveProvider)} can actually serve for this run.`,
           })
         }
-      }
-      const body = await c.req.json().catch(() => ({})) as {
-        mode?: string
-        stopAfterOneTask?: boolean
-        taskId?: string
       }
       const stopAfterOneTask =
         body.stopAfterOneTask === true || body.mode === 'one_task'
@@ -3405,6 +3570,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ turns: [], activeTurnId: null, caughtUp: false })
       }
+      try {
+        repairStaleBlockersForProject(project.path)
+      } catch {
+        /* never let stale-blocker repair break a thread read */
+      }
       const thread = buildThread({
         projectPath: project.path,
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
@@ -3996,11 +4166,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         brief.approvedBy = 'human'
         brief.approvedAt = now
         task.productBrief = brief
-        const questions = Array.isArray(task.openQuestions) ? task.openQuestions : []
-        const hasUnansweredQuestions = questions.some((question) => {
-          if (!question || typeof question !== 'object') return false
-          return typeof (question as { answeredAt?: unknown }).answeredAt !== 'string'
-        })
+        const hasUnansweredQuestions = taskHasUnansweredVisibleQuestion(task as unknown as Task)
         const hasConcreteSpecDraft =
           typeof task.spec === 'string' &&
           task.spec.trim().length > 0 &&
@@ -4284,16 +4450,45 @@ export function buildServeApp(opts: ServeOptions = {}): {
         | Array<Record<string, unknown>>
       const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
       const counts: Record<string, number> = {}
-      const inFlight: Array<{ id: string; title: string; status: string; domain: string }> = []
+      const recentByTask = new Map<string, { at?: string; label?: string; tone?: 'neutral' | 'running' | 'ok' | 'warn' | 'danger' }>()
+      for (const envelope of supervisor.recent(project.id, undefined, project.path)) {
+        const event = envelope.event as Record<string, unknown> | undefined
+        const taskId = typeof event?.task_id === 'string'
+          ? event.task_id
+          : typeof event?.taskId === 'string'
+            ? event.taskId
+            : null
+        if (!taskId) continue
+        const label = summarizeProjectEvent(event)
+        recentByTask.set(taskId, {
+          ...(envelope.at ? { at: envelope.at } : {}),
+          ...(label ? { label } : {}),
+          tone: toneForProjectEvent(event),
+        })
+      }
+      const inFlight: Array<{
+        id: string
+        title: string
+        status: string
+        domain: string
+        lastActivityAt?: string
+        lastActivityLabel?: string
+        lastActivityTone?: 'neutral' | 'running' | 'ok' | 'warn' | 'danger'
+      }> = []
       for (const t of tasks) {
         const st = String((t as { status?: string }).status ?? 'unknown')
         counts[st] = (counts[st] ?? 0) + 1
         if (['in_progress', 'review', 'gate_check', 'spec_review', 'exploring'].includes(st)) {
+          const id = String((t as { id?: string }).id ?? '')
+          const recent = recentByTask.get(id)
           inFlight.push({
-            id: String((t as { id?: string }).id ?? ''),
+            id,
             title: String((t as { title?: string }).title ?? ''),
             status: st,
             domain: String((t as { domain?: string }).domain ?? ''),
+            ...(recent?.at ? { lastActivityAt: recent.at } : {}),
+            ...(recent?.label ? { lastActivityLabel: recent.label } : {}),
+            ...(recent?.tone ? { lastActivityTone: recent.tone } : {}),
           })
         }
       }

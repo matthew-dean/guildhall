@@ -10,7 +10,7 @@ export const THREAD_PHASE_LABELS: Record<ThreadPhase, string> = {
   ready: 'Ready',
   inflight: 'In flight',
   blocked: 'Blocked',
-  done: 'Done',
+  done: 'Completed updates',
 }
 
 export interface ThreadPhaseLike {
@@ -45,7 +45,11 @@ export function buildThreadPhaseGroups<T extends ThreadPhaseLike>(turns: T[]): A
             ? 'Needs recovery'
           : group.phase === 'inflight' &&
               group.turns.length > 0 &&
-              group.turns.every((turn) => turn.kind === 'inflight' && !turn.liveAgent)
+              !group.turns.some((turn) => turn.liveAgent) &&
+              (
+                group.turns.every((turn) => turn.kind === 'inflight') ||
+                group.turns.some((turn) => turn.kind === 'inflight' && turn.taskStatus === 'in_progress')
+              )
             ? 'Paused'
             : THREAD_PHASE_LABELS[group.phase],
     }))
@@ -81,6 +85,34 @@ export interface WorkSurfaceModel {
   needsMeta: boolean
   running: boolean
   events: EventEnvelope[]
+}
+
+export type ProjectActivityTone = 'neutral' | 'running' | 'ok' | 'warn' | 'danger'
+
+export interface ProjectActivityInFlightTask {
+  id: string
+  title?: string
+  status?: string
+  domain?: string
+  lastActivityAt?: string
+  lastActivityLabel?: string
+  lastActivityTone?: ProjectActivityTone
+}
+
+export interface ProjectActivitySummary {
+  running?: boolean
+  runStatus?: string
+  counts: Record<string, number>
+  inFlight: ProjectActivityInFlightTask[]
+}
+
+export function buildProjectActivitySummary(summary: ProjectActivitySummary): ProjectActivitySummary {
+  return {
+    running: summary.running,
+    runStatus: summary.runStatus,
+    counts: { ...summary.counts },
+    inFlight: summary.inFlight.map((task) => ({ ...task })),
+  }
 }
 
 export function buildWorkSurface(detail: ProjectDetail): WorkSurfaceModel {

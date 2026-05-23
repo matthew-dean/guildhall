@@ -28,7 +28,7 @@ models:
   gateChecker: qwen2.5-coder-7b-instruct
 ```
 
-Model IDs resolve against the catalog in `src/core/models.ts`.
+Model IDs resolve against the catalog in `./src/core/models.ts`.
 
 ## Cognitive profiles
 
@@ -46,4 +46,4 @@ Agents run under a [`PermissionMode`](../subsystems/engine#permission-modes):
 
 ## Persistence
 
-Every agent conversation is snapshotted to `memory/sessions/` per project. You can resume any agent from its last snapshot — see [Sessions](../subsystems/sessions).
+Every agent conversation is snapshotted to `./memory/sessions/` per project. You can resume any agent from its last snapshot — see [Sessions](../subsystems/sessions).

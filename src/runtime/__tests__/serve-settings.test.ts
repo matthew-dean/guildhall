@@ -530,6 +530,142 @@ describe('GET/POST /api/project/local-config', () => {
 })
 
 describe('POST /api/project/start', () => {
+  it('marks all-terminal projects as not startable', async () => {
+    const now = new Date().toISOString()
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'TASKS.json'),
+      JSON.stringify({
+        version: 1,
+        lastUpdated: now,
+        tasks: [
+          {
+            id: 'task-done-1',
+            title: 'Done one',
+            description: 'Finished already.',
+            domain: 'core',
+            status: 'done',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            escalations: [],
+            agentIssues: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: 'task-done-2',
+            title: 'Done two',
+            description: 'Also finished already.',
+            domain: 'core',
+            status: 'done',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            escalations: [],
+            agentIssues: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as { startReadiness?: { canStart?: boolean; code?: string; message?: string } }
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'all_terminal',
+      message: 'All tasks are already finished.',
+    })
+  })
+
+  it('returns a no-op start response when all tasks are terminal', async () => {
+    const now = new Date().toISOString()
+    await fs.writeFile(
+      path.join(tmpDir, 'memory', 'TASKS.json'),
+      JSON.stringify({
+        version: 1,
+        lastUpdated: now,
+        tasks: [
+          {
+            id: 'task-done-1',
+            title: 'Done one',
+            description: 'Finished already.',
+            domain: 'core',
+            status: 'done',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            escalations: [],
+            agentIssues: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: 'task-blocked-1',
+            title: 'Blocked one',
+            description: 'No action can be taken.',
+            domain: 'core',
+            status: 'blocked',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            escalations: [],
+            agentIssues: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as { status?: string; code?: string; stopSummary?: { reason?: string } }
+    expect(body).toMatchObject({
+      status: 'stopped',
+      code: 'all_terminal',
+      stopSummary: { reason: 'all_terminal' },
+    })
+  })
+
   it('points Start at imported draft review when no runnable work is available', async () => {
     const tasksPath = path.join(tmpDir, 'memory', 'TASKS.json')
     await fs.writeFile(
@@ -613,6 +749,28 @@ describe('POST /api/project/start', () => {
     expect(body.code).toBe('invalid_lever_combo')
     expect(body.error).toContain('fanout_N requires worktree_isolation')
     expect(body.actionHref).toBe('/settings/advanced')
+  })
+
+  it('rejects targeted task starts while a project run is already active', async () => {
+    const { app, supervisor } = buildServeApp({ projectPath: tmpDir })
+    supervisor.start({
+      workspaceId: PROJECT_ID,
+      workspacePath: tmpDir,
+    })
+
+    const res = await app.fetch(
+      new Request(scoped('/api/project/start'), {
+        method: 'POST',
+        body: JSON.stringify({ taskId: 'task-a', mode: 'continuous' }),
+      }),
+    )
+    expect(res.status).toBe(409)
+    const body = (await res.json()) as { code?: string; status?: string; error?: string }
+    expect(body.code).toBe('run_already_active')
+    expect(body.status).toBe('running')
+    expect(body.error).toContain('already running')
+
+    await supervisor.stop(PROJECT_ID, { waitMs: 1_000 })
   })
 })
 
@@ -834,6 +992,24 @@ describe('GET /api/version', () => {
     const body = (await res.json()) as { version?: string }
     expect(typeof body.version).toBe('string')
     expect((body.version ?? '').length).toBeGreaterThan(0)
+  })
+})
+
+describe('GET /api/stale-server', () => {
+  it('returns the served bundle freshness payload used by release smoke', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request('http://localhost/api/stale-server'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      stale?: boolean
+      processStartedAt?: string
+      bootBuildMtimeMs?: number
+      currentBuildMtimeMs?: number
+    }
+    expect(body.stale).toBe(false)
+    expect(typeof body.processStartedAt).toBe('string')
+    expect(typeof body.bootBuildMtimeMs).toBe('number')
+    expect(typeof body.currentBuildMtimeMs).toBe('number')
   })
 })
 

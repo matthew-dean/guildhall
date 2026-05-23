@@ -20,7 +20,7 @@ answer:
 - What verification or review standard applies?
 - What decisions or blockers must not be reopened?
 
-If the project does not have a Corpus Map yet, Guildhall creates one during
+If the project does not have a [Corpus Map](./corpus-map) yet, Guildhall creates one during
 context assembly from the task project or active worktree. The map is therefore
 available from the first meaningful agent pass in a normal project, not only
 after a manual setup command.
@@ -37,7 +37,7 @@ A typical worker or reviewer prompt can include these blocks:
 | Latest checkpoint | Last durable worker checkpoint, files touched, verification evidence, and next planned action. |
 | Active worktree | Dirty files to resume before broad exploration. |
 | Likely target files | Files inferred from spec text, commands, notes, and checkpoints. |
-| Corpus Map | Compact codebase orientation, existing abstractions, design-system maturity, and read-next pointers. |
+| [Corpus Map](./corpus-map) | Compact codebase orientation, existing abstractions, design-system maturity, and read-next pointers. |
 | Business envelope | Parent goal, success condition, and guardrails. |
 | Design system | Approved or draft UI primitives, tokens, copy voice, and accessibility baseline. |
 | Review rubrics | The inspection criteria selected for this task. |
@@ -58,7 +58,7 @@ The spec agent receives task state, relevant project memory, exploring
 transcript, applicable expert contributions, and enough project context to ask
 bounded questions or write a blueprint.
 
-It uses Corpus Map guidance as an abstraction inventory when the task already
+It uses [Corpus Map](./corpus-map) guidance as an abstraction inventory when the task already
 points at implementation areas. For UI work, that means checking whether the
 design system is absent, thin, emerging, or established before inventing new
 controls or styling rules. The map is a starting point, not a replacement for
@@ -83,7 +83,7 @@ The worker receives the strongest operational packet:
 - latest checkpoint
 - revision feedback
 - selected review rubrics
-- Corpus Map guidance
+- [Corpus Map](./corpus-map) guidance
 - design-system summary when relevant
 - verification expectations
 
@@ -94,14 +94,14 @@ small shared primitive because the same idea is now appearing
 in multiple places.
 
 After the worker changes files and hands the task forward, the orchestrator
-refreshes the Corpus Map from the touched-file evidence it has. That keeps the
+refreshes the [Corpus Map](./corpus-map) from the touched-file evidence it has. That keeps the
 next reviewer or worker oriented around what actually changed without forcing a
 full repo scan every time.
 
 ### Reviewer
 
 The reviewer receives the blueprint, review packet, selected rubrics, Corpus
-Map, and relevant context. Review is not only “does this compile?” It asks
+[Corpus Map](./corpus-map), and relevant context. Review is not only “does this compile?” It asks
 whether the work fits the accepted plan and the existing project architecture.
 
 If a worker ignored a relevant mapped abstraction and created a parallel

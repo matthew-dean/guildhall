@@ -37,6 +37,13 @@ function detail(tasks: Task[]): ProjectDetail {
   } as ProjectDetail
 }
 
+function runningDetail(tasks: Task[]): ProjectDetail {
+  return {
+    ...detail(tasks),
+    run: { status: 'running', mode: 'continuous' },
+  } as ProjectDetail
+}
+
 function installBrowserFakes(progress = 'Recent worker progress.') {
   window.history.replaceState({}, '', '/projects/looma-knit/work')
   path.value = '/projects/looma-knit/work'
@@ -119,10 +126,17 @@ describe('WorkTab', () => {
   it('uses explicit work summary labels instead of overloaded active/draft terms', async () => {
     render(WorkTab, {
       props: {
-        detail: detail([
+        detail: runningDetail([
           task({ id: 'task-brief', title: 'Shape brief', status: 'exploring' }),
           task({ id: 'task-build', title: 'Build contracts', status: 'in_progress' }),
-          task({ id: 'task-ready', title: 'Ready work', status: 'ready' }),
+          task({
+            id: 'task-ready',
+            title: 'Ready work',
+            status: 'ready',
+            spec: '## Summary\n\nBuild the ready work.',
+            productBrief: { userJob: 'Use the ready work.', successMetric: 'Ready work functions.', approvedAt: '2026-05-23T12:00:00.000Z' },
+            acceptanceCriteria: [{ description: 'Ready work functions.' }],
+          }),
           task({ id: 'task-import', title: 'Imported note', status: 'import_draft' }),
         ]),
       },
@@ -134,6 +148,73 @@ describe('WorkTab', () => {
     expect(screen.getByText('1 import draft')).toBeTruthy()
     expect(document.body.textContent).not.toContain('2 active')
     expect(document.body.textContent).not.toContain('1 imported drafts')
+  })
+
+  it('labels inactive in-progress work as paused when no project run is active', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'task-build', title: 'Build contracts', status: 'in_progress' }),
+        ]),
+      },
+    })
+
+    expect(await screen.findByText('1 paused task')).toBeTruthy()
+    expect(screen.queryByText('1 agent-active')).toBeNull()
+    expect(screen.getByText('Paused')).toBeTruthy()
+    expect(screen.queryByText('In progress')).toBeNull()
+  })
+
+  it('keeps stopped gate checks labeled as gate work instead of paused work', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({ id: 'task-gates', title: 'Implement minimal harness orchestration skeleton', status: 'gate_check' }),
+        ]),
+      },
+    })
+
+    expect(await screen.findByText('1 gates waiting')).toBeTruthy()
+    expect(screen.getByText('Gates waiting')).toBeTruthy()
+    expect(screen.queryByText('Paused')).toBeNull()
+  })
+
+  it('separates spec-thin ready tasks from worker-ready tasks', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-worker-ready',
+            title: 'Approved worker task',
+            status: 'ready',
+            description: 'Implement the approved path.',
+            spec: '## Summary\n\nImplement the approved path.',
+            productBrief: { userJob: 'Use the approved flow.', successMetric: 'Flow works.', approvedAt: '2026-05-23T12:00:00.000Z' },
+            acceptanceCriteria: [{ description: 'The approved flow works.' }],
+          }),
+          task({
+            id: 'task-needs-brief',
+            title: 'Needs brief cleanup',
+            status: 'ready',
+            description: 'Still needs acceptance criteria.',
+            productBrief: { userJob: 'Use the incomplete flow.', successMetric: 'Flow works.' },
+          }),
+          task({
+            id: 'task-needs-acceptance',
+            title: 'Needs acceptance cleanup',
+            status: 'ready',
+            description: 'Brief is approved, but acceptance criteria are missing.',
+            spec: '## Summary\n\nImplement the partially approved path.',
+            productBrief: { userJob: 'Use the partial flow.', successMetric: 'Flow works.', approvedAt: '2026-05-23T12:00:00.000Z' },
+            acceptanceCriteria: [],
+          }),
+        ]),
+      },
+    })
+
+    expect(await screen.findByText('1 ready for worker')).toBeTruthy()
+    expect(screen.getByText('2 need brief cleanup')).toBeTruthy()
+    expect(screen.queryByText('3 ready for worker')).toBeNull()
   })
 
   it('routes imported-draft review and view-mode controls through project-scoped links', async () => {
@@ -158,7 +239,7 @@ describe('WorkTab', () => {
 
     await screen.findByText('Imported draft queue')
     expect(screen.getByText(/1 more drafts are queued behind it/)).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: /review next draft/i }))
+    await userEvent.click(screen.getByRole('button', { name: /draft task brief/i }))
     expect(path.value).toBe('/projects/looma-knit/task/task-import-first')
 
     path.value = '/projects/looma-knit/work'

@@ -27,6 +27,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { toast } from 'svelte-sonner'
   import { activeEscalations } from '../lib/escalation.js'
+  import { escalationPrimaryAction } from '../lib/escalation-labels.js'
 
   interface Props {
     taskId: string
@@ -76,6 +77,35 @@
     const singleLine = value.replace(/\s+/g, ' ').trim()
     if (singleLine.length <= max) return singleLine
     return `${singleLine.slice(0, max - 1).trim()}...`
+  }
+
+  async function copyTaskLink(taskId: string): Promise<void> {
+    const href = currentTaskHref(taskId)
+    const absolute = typeof window === 'undefined'
+      ? href
+      : new URL(href, window.location.origin).toString()
+    try {
+      await navigator.clipboard?.writeText(absolute)
+      toast.success('Task link copied.')
+    } catch {
+      toast.error('Could not copy the task link.')
+    }
+  }
+
+  function requestedInitialTab(): DrawerTab | null {
+    if (typeof window === 'undefined') return null
+    const raw = new URLSearchParams(window.location.search).get('tab')
+    if (
+      raw === 'current' ||
+      raw === 'spec' ||
+      raw === 'transcript' ||
+      raw === 'experts' ||
+      raw === 'history' ||
+      raw === 'provenance'
+    ) {
+      return raw
+    }
+    return null
   }
 
   const BASE_TABS = [
@@ -255,12 +285,18 @@
       ? ([{ id: 'current', label: 'Now' }, ...BASE_TABS] as const)
       : BASE_TABS,
   )
-  const canPause = $derived(task && task.status !== 'done' && task.status !== 'shelved')
-  const canShelve = $derived(task && task.status !== 'done')
+  function isTerminalRunStatus(status: string | undefined): boolean {
+    return status === 'done' || status === 'shelved' || status === 'pending_pr'
+  }
+
+  const isTerminalRunTask = $derived(isTerminalRunStatus(task?.status))
+  const canPause = $derived(task && !isTerminalRunTask)
+  const canShelve = $derived(task && task.status !== 'done' && task.status !== 'pending_pr')
   const isShelved = $derived(task?.status === 'shelved')
   const isWorkspaceImportTask = $derived(task?.id === 'task-workspace-import')
   const openEscalations = $derived(task ? activeEscalations(task) : [])
   const firstOpenEscalation = $derived(openEscalations[0] ?? null)
+  const firstOpenEscalationAction = $derived(escalationPrimaryAction(firstOpenEscalation))
   const drawerOutcome = $derived.by(() => {
     if (!task) return null
     if (task.status === 'shelved') {
@@ -297,7 +333,7 @@
         tone: 'warn',
         eyebrow: 'Needs recovery',
         title: 'Guildhall did not produce a durable task update.',
-        detail: 'Check Transcript for useful observations, then retry or resolve the blocker from here.',
+        detail: 'Check Transcript for useful observations, then resume the task or mark the blocker resolved with a note.',
       }
     }
     return null
@@ -350,7 +386,12 @@
   $effect(() => {
     if (!payload) return
     if (initializedTabForTaskId === taskId) return
-    activeTab = hasCurrentTurns && !preferSpecTab ? 'current' : 'spec'
+    const requested = requestedInitialTab()
+    activeTab = requested && (requested !== 'current' || hasCurrentTurns)
+      ? requested
+      : hasCurrentTurns && !preferSpecTab
+        ? 'current'
+        : 'spec'
     initializedTabForTaskId = taskId
   })
 
@@ -381,7 +422,13 @@
           : undefined,
       })
       if (!res.ok) {
-        const b = await res.json().catch(() => ({}))
+        const b = await res.json().catch(() => ({})) as { code?: string; error?: string; status?: string }
+        if (b.code === 'run_already_active') {
+          toast.info('Guildhall is already running. This task stays queued for the coordinator.')
+          await project.refresh()
+          await load()
+          return
+        }
         runError = b.error ?? `${action === 'start' ? 'Start' : 'Stop'} failed (HTTP ${res.status})`
         return
       }
@@ -484,6 +531,7 @@
           {busy}
           {runBusy}
           {runError}
+          {runStatus}
           onApproveBrief={() => post('approve-brief')}
           onApproveSpec={handleApproveSpec}
           onRunTask={() => runProject('start', taskId)}
@@ -519,110 +567,122 @@
   {#if payload && task}
     <footer class="gh-drawer-foot">
       {#if isWorkspaceImportTask}
-        <Button
-          variant="primary"
-          size="sm"
-          onclick={() => {
-            window.history.pushState({}, '', currentProjectHref('/workspace-import'))
-            window.dispatchEvent(new PopStateEvent('popstate'))
-          }}
-        >
-          Open import review
-        </Button>
-        <a class="copy-link" href={currentTaskHref(task.id)}>copy link</a>
-      {:else}
-      <div class="run-controls">
-        {#if runError}
-          <span class="run-error">{runError}</span>
-        {/if}
-        {#if !hasCurrentTurns}
-          {#if runStatus === 'running'}
-            <Button
-              variant="danger"
-              size="sm"
-              disabled={runBusy}
-              onclick={() => runProject('stop')}
-            >
-              Stop run
-            </Button>
-          {:else}
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={runBusy || runStatus === 'stopping'}
-              onclick={() => runProject('start')}
-            >
-              Run this task
-            </Button>
-          {/if}
-        {/if}
-      </div>
-        {#if firstOpenEscalation}
+        <div class="footer-actions-left">
+          <Button variant="ghost" size="sm" onclick={() => copyTaskLink(task.id)}>
+            Copy link
+          </Button>
+        </div>
+        <div class="footer-actions-right">
           <Button
             variant="primary"
             size="sm"
-            disabled={busy}
-            onclick={() => handleResolveEscalation(firstOpenEscalation, 'retry')}
+            onclick={() => {
+              window.history.pushState({}, '', currentProjectHref('/workspace-import'))
+              window.dispatchEvent(new PopStateEvent('popstate'))
+            }}
           >
-            Retry blocker
+            Open import review
           </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={busy}
-            onclick={() => handleResolveEscalation(firstOpenEscalation, 'resolve')}
-          >
-            Resolve blocker
-          </Button>
-        {/if}
-        {#if isShelved}
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={busy}
-            onclick={handleUnshelve}
-          >
-            Unshelve
-          </Button>
-        {/if}
-        {#if canPause || (!isShelved && canShelve) || stageRerun}
-          <details class="more-actions">
-            <summary>More task actions</summary>
-            <div class="more-action-menu">
-              {#if canPause}
-                {#if stageRerun}
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={busy || rerunStageBusy !== null}
-                    onclick={() => rerunStage(stageRerun.stage)}
-                  >
-                    {rerunStageBusy === stageRerun.stage ? 'Re-running...' : stageRerun.label}
-                  </Button>
-                {/if}
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={busy}
-                  onclick={() => confirmed('Pause') && post('pause')}
-                >
-                  Pause task
-                </Button>
-              {/if}
-              {#if !isShelved && canShelve}
+        </div>
+      {:else}
+        <div class="footer-actions-left">
+          <div class="run-controls">
+            {#if runError}
+              <span class="run-error">{runError}</span>
+            {/if}
+            {#if !hasCurrentTurns && !isTerminalRunTask}
+              {#if runStatus === 'running'}
                 <Button
                   variant="danger"
                   size="sm"
-                  disabled={busy}
-                  onclick={handleShelve}
+                  disabled={runBusy}
+                  onclick={() => runProject('stop')}
                 >
-                  Put aside
+                  Stop run
+                </Button>
+              {:else}
+                <Button
+                  variant={firstOpenEscalation ? 'secondary' : 'primary'}
+                  size="sm"
+                  disabled={runBusy || runStatus === 'stopping'}
+                  onclick={() => runProject('start')}
+                >
+                  Run this task
                 </Button>
               {/if}
-            </div>
-          </details>
-        {/if}
-        <a class="copy-link" href={currentTaskHref(task.id)}>copy link</a>
+            {/if}
+          </div>
+          {#if canPause || (!isShelved && canShelve) || stageRerun}
+            <details class="more-actions">
+              <summary>More task actions</summary>
+              <div class="more-action-menu">
+                {#if canPause}
+                  {#if stageRerun}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={busy || rerunStageBusy !== null}
+                      onclick={() => rerunStage(stageRerun.stage)}
+                    >
+                      {rerunStageBusy === stageRerun.stage ? 'Re-running...' : stageRerun.label}
+                    </Button>
+                  {/if}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy}
+                    onclick={() => confirmed('Pause') && post('pause')}
+                  >
+                    Pause task
+                  </Button>
+                {/if}
+                {#if !isShelved && canShelve}
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    disabled={busy}
+                    onclick={handleShelve}
+                  >
+                    Put aside
+                  </Button>
+                {/if}
+              </div>
+            </details>
+          {/if}
+          <Button variant="ghost" size="sm" onclick={() => copyTaskLink(task.id)}>
+            Copy link
+          </Button>
+        </div>
+        <div class="footer-actions-right">
+          {#if firstOpenEscalation}
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={busy}
+              onclick={() => handleResolveEscalation(firstOpenEscalation, 'resolve')}
+            >
+              Mark resolved...
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={busy}
+              onclick={() => handleResolveEscalation(firstOpenEscalation, 'retry')}
+            >
+              {firstOpenEscalationAction.label}
+            </Button>
+          {/if}
+          {#if isShelved}
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={busy}
+              onclick={handleUnshelve}
+            >
+              Unshelve
+            </Button>
+          {/if}
+        </div>
       {/if}
     </footer>
   {/if}
@@ -735,17 +795,31 @@
   .gh-drawer-foot {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
     gap: var(--s-2);
     padding: var(--s-3) var(--s-4);
     border-top: 1px solid var(--border);
     background: var(--bg-sunken, var(--bg));
   }
+  .footer-actions-left,
+  .footer-actions-right {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    min-width: 0;
+  }
+  .footer-actions-left {
+    flex: 1 1 auto;
+    justify-content: flex-start;
+  }
+  .footer-actions-right {
+    flex: 0 0 auto;
+    justify-content: flex-end;
+  }
   .run-controls {
     display: flex;
     align-items: center;
     gap: var(--s-2);
-    margin-right: auto;
     min-width: 0;
   }
   .run-error {
@@ -790,7 +864,6 @@
     color: var(--text-muted);
     font-size: var(--fs-1);
     text-decoration: underline dotted;
-    margin-left: var(--s-2);
   }
   .error-stack {
     display: flex;
@@ -805,5 +878,23 @@
   }
   .error {
     color: var(--danger);
+  }
+  @media (max-width: 720px) {
+    .gh-drawer-foot,
+    .footer-actions-left,
+    .footer-actions-right {
+      align-items: stretch;
+    }
+    .gh-drawer-foot {
+      flex-direction: column;
+    }
+    .footer-actions-left,
+    .footer-actions-right {
+      width: 100%;
+      flex-wrap: wrap;
+    }
+    .footer-actions-right {
+      justify-content: flex-end;
+    }
   }
 </style>

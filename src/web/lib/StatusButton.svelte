@@ -5,6 +5,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
   import Icon, { type IconName } from './Icon.svelte'
+  import Tooltip from './Tooltip.svelte'
 
   type Tone = 'neutral' | 'warn' | 'danger'
 
@@ -15,6 +16,8 @@
     count?: number
     ariaLabel: string
     title?: string
+    tooltip?: boolean
+    showLabel?: boolean
     disabled?: boolean
     onclick?: (e: MouseEvent) => void
     children?: Snippet
@@ -27,6 +30,8 @@
     count,
     ariaLabel,
     title,
+    tooltip = false,
+    showLabel = true,
     disabled = false,
     onclick,
     children,
@@ -46,17 +51,25 @@
     {disabled}
     {onclick}
     aria-label={ariaLabel}
-  >
+>
     <Icon name={icon} size={16} />
-    <span>{label}</span>
+    {#if showLabel}
+      <span class="status-label">{label}</span>
+    {/if}
     {#if typeof count === 'number'}
       <span class="status-count" aria-hidden="true"><span class="count-glyph">{countLabel}</span></span>
     {/if}
     {@render children?.()}
-  </button>
+</button>
 {/snippet}
 
-{@render statusButtonElement()}
+{#if title && tooltip}
+  <Tooltip text={title}>
+    {@render statusButtonElement()}
+  </Tooltip>
+{:else}
+  {@render statusButtonElement()}
+{/if}
 
 <style>
   .status-button {

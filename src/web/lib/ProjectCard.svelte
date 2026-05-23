@@ -13,6 +13,7 @@
   import Card from './Card.svelte'
   import Chip from './Chip.svelte'
   import Tooltip from './Tooltip.svelte'
+  import { avatarToneForRole } from './avatar-palette.js'
   import type { ProjectCardSummary } from './project-summary.js'
 
   interface Props {
@@ -72,7 +73,7 @@
     ...(summary.counts.blocked > 0 || summary.counts.done > 0
       ? [{ role: 'Reviewer', initial: 'R', active: effectiveRunning && summary.counts.blocked > 0 }]
       : []),
-  ].slice(0, 4))
+  ].map(member => ({ ...member, tone: avatarToneForRole(member.role) })).slice(0, 4))
 
   const primaryTaskSignal = $derived(
     summary.counts.blocked > 0
@@ -120,6 +121,22 @@
 
   function totalTooltip(count = summary.counts.total): string {
     return `${count} total ${taskNoun(count, 'task')} tracked by Guildhall for this project.`
+  }
+
+  function guildMemberTooltip(member: { role: string; active: boolean }): string {
+    if (member.active) return `${member.role}: working now on ${summary.name}.`
+    switch (member.role) {
+      case 'Coordinator':
+        return `${member.role}: ${summary.counts.blocked} ${taskNoun(summary.counts.blocked, 'blocker')} to triage in ${summary.name}.`
+      case 'Spec':
+        return `${member.role}: ${summary.counts.draftReview} draft ${taskNoun(summary.counts.draftReview, 'brief')} awaiting review in ${summary.name}.`
+      case 'Builder':
+        return `${member.role}: ${summary.counts.active} active ${taskNoun(summary.counts.active, 'task')} waiting for a run in ${summary.name}.`
+      case 'Reviewer':
+        return `${member.role}: ${summary.counts.blocked} blocked and ${summary.counts.done} done ${taskNoun(summary.counts.done, 'task')} in ${summary.name}.`
+      default:
+        return `${member.role}: part of the ${summary.name} project workflow.`
+    }
   }
 
   function isInteractiveTarget(target: EventTarget | null, currentTarget: EventTarget | null): boolean {
@@ -220,11 +237,12 @@
         {#if projectGuildMembers.length > 0}
           <div class="project-guild" aria-label="Guild members assigned to this project">
             {#each projectGuildMembers as member (member.role)}
-              <Tooltip text={`${member.role}${member.active ? ': working now' : ': assigned or relevant'}`}>
+              {@const memberTooltip = guildMemberTooltip(member)}
+              <Tooltip text={memberTooltip}>
                 <span
-                  class="project-guild-member"
+                  class={`project-guild-member avatar-tone-${member.tone}`}
                   class:project-guild-member-active={member.active}
-                  aria-label={`${member.role}${member.active ? ': working now' : ': assigned or relevant'}`}
+                  aria-label={memberTooltip}
                 >
                   <span class="project-avatar">{member.initial}</span>
                 </span>
@@ -521,15 +539,14 @@
     overflow: hidden;
   }
   .project-guild-member {
+    --avatar-color: var(--avatar-system);
     display: inline-flex;
     align-items: center;
     padding: 0.12rem;
-    border: 1px solid var(--border);
+    border: 1px solid color-mix(in srgb, var(--avatar-color) 22%, var(--border));
     border-radius: 999px;
-    color: var(--text-muted);
-    background: color-mix(in srgb, var(--glass-bg-strong) 78%, transparent);
-    backdrop-filter: var(--glass-blur);
-    -webkit-backdrop-filter: var(--glass-blur);
+    color: color-mix(in srgb, var(--avatar-color) 76%, var(--text-muted));
+    background: color-mix(in srgb, var(--glass-bg-strong) 78%, var(--bg-raised));
   }
   .project-avatar {
     display: grid;
@@ -537,17 +554,26 @@
     width: 1.1rem;
     height: 1.1rem;
     border-radius: 999px;
-    background: color-mix(in srgb, var(--accent-2) 45%, var(--bg-raised));
-    color: var(--text);
+    background: color-mix(in srgb, var(--avatar-color) 24%, var(--bg-raised));
+    color: color-mix(in srgb, var(--avatar-color) 88%, white);
     font-size: 0.62rem;
+    font-weight: 800;
   }
   .project-guild-member-active {
-    color: var(--accent-2);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-2) 40%, transparent);
+    color: var(--avatar-color);
+    border-color: color-mix(in srgb, var(--avatar-color) 48%, var(--border));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--avatar-color) 40%, transparent);
   }
   .project-guild-member-active .project-avatar {
     animation: agent-pip-pulse 1.4s ease-in-out infinite;
   }
+  .avatar-tone-coordinator { --avatar-color: var(--avatar-coordinator); }
+  .avatar-tone-spec { --avatar-color: var(--avatar-spec); }
+  .avatar-tone-builder { --avatar-color: var(--avatar-builder); }
+  .avatar-tone-reviewer { --avatar-color: var(--avatar-reviewer); }
+  .avatar-tone-gate { --avatar-color: var(--avatar-gate); }
+  .avatar-tone-human { --avatar-color: var(--avatar-human); }
+  .avatar-tone-system { --avatar-color: var(--avatar-system); }
   @keyframes agent-pip-pulse {
     0%, 100% {
       opacity: 0.62;
@@ -556,6 +582,12 @@
     50% {
       opacity: 1;
       transform: scale(1);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(section.project-card.project-card-running) .workline,
+    .project-guild-member-active .project-avatar {
+      animation: none;
     }
   }
   .metrics {

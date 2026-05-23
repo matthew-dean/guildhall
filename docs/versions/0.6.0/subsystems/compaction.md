@@ -9,7 +9,7 @@ help_summary: |
 
 # Compaction
 
-**Source:** `src/compaction/`
+**Source:** `./src/compaction/`
 
 The engine calls a `Compactor` when token usage crosses a threshold (default: context window minus `AUTOCOMPACT_BUFFER_TOKENS = 4000`). Compaction replaces older messages with a summary message, freeing space for continued work.
 

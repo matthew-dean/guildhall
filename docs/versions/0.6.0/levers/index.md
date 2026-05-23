@@ -4,14 +4,14 @@ title: Levers
 
 # Levers
 
-Every behavioral knob in GuildHall is a **named lever** with a fixed set of **positions**. Levers are persisted in `memory/agent-settings.yaml` with full provenance (*who set it, when, why*).
+Every behavioral knob in GuildHall is a **named lever** with a fixed set of **positions**. Levers are persisted in `./memory/agent-settings.yaml` with full provenance (*who set it, when, why*).
 
 - 9 **project levers** — singleton per workspace.
 - 9 **domain levers** — per coordinator domain, with a `default` fallback.
 
 ## How levers get set
 
-On first run, GuildHall seeds every lever with `setBy: system-default` so there are no invisible defaults. During dashboard onboarding, meta-intake can infer better starting positions from the project interview. The Spec Agent emits a `levers:` YAML draft alongside coordinator definitions; when you approve it, GuildHall writes those positions to `memory/agent-settings.yaml` with `setBy: spec-agent-intake` and the agent's rationale.
+On first run, GuildHall seeds every lever with `setBy: system-default` so there are no invisible defaults. During dashboard onboarding, meta-intake can infer better starting positions from the project interview. The Spec Agent emits a `levers:` YAML draft alongside coordinator definitions; when you approve it, GuildHall writes those positions to `./memory/agent-settings.yaml` with `setBy: spec-agent-intake` and the agent's rationale.
 
 The agent should infer only what the conversation supports. Anything uncertain stays at the system default until you change it in Settings or edit the file directly. See [Onboarding and levers](../guide/onboarding-and-levers) for the end-to-end flow.
 

@@ -6,13 +6,21 @@ title: Core concepts
 
 A quick tour of the vocabulary. Each term links to a deeper page.
 
+## Agent harness
+
+The layer around AI models that gives them work, context, tools, state,
+permissions, review rules, and recovery paths. A chat assistant answers a
+conversation. An agent harness runs a workflow.
+
+Guildhall is an agent harness for local software projects.
+
 ## Project / workspace
 
 In the product, you mostly think in **projects**. In the runtime and config
 layers, the same unit is still often called a **workspace**.
 
-Either way, it means one directory containing a `guildhall.yaml` and a
-`memory/` folder. See [Workspaces](./workspaces).
+Either way, it means one directory containing a `./guildhall.yaml` and a
+`./memory/` folder. See [Workspaces](./workspaces).
 
 ## Task
 
@@ -42,7 +50,7 @@ A named slice of the project (e.g. `ui`, `backend`, `infra`) owned by one coordi
 
 ## Coordinator
 
-The general-contractor role for a domain. Defined in `guildhall.yaml` with a
+The general-contractor role for a domain. Defined in `./guildhall.yaml` with a
 **mandate**, **concerns**, and lists of **autonomous decisions** and
 **escalation triggers**. The coordinator decides whether tasks in its domain
 advance and keeps the local plan coherent; see
@@ -57,10 +65,14 @@ project-level overrides. See [Agents & models](./agents-and-models).
 
 ## Guild
 
-A persona with principles, a review rubric, and deterministic checks that sits
-at the table for relevant tasks. Examples: *Accessibility Specialist*, *Color
-Theorist*, *Frontend Engineer*. Guilds attach to tasks via an applicability
-predicate; multiple guilds can inspect one task (fan-out).
+The metaphor behind the product name. A guild hall is a shared place where
+different skilled trades coordinate work under common standards.
+
+In Guildhall, a **guild** is a specialist persona with principles, a review
+rubric, and deterministic checks for relevant tasks. Examples:
+*Accessibility Specialist*, *Color Theorist*, *Frontend Engineer*. Guilds
+attach to tasks via an applicability predicate; multiple guilds can inspect
+one task (fan-out).
 
 ## Change order
 
@@ -84,11 +96,11 @@ A named decision point — e.g. `merge_policy`, `reviewer_mode`, `worktree_isola
 
 ## Business envelope
 
-The project-level `Goals` + `Guardrails` document that defines what the guild is allowed to do and what it isn't. `business_envelope_strictness` controls enforcement mode.
+The project-level `Goals` + `Guardrails` document that defines what Guildhall is allowed to do and what it is not. `business_envelope_strictness` controls enforcement mode.
 
 ## Skill
 
-A bundled instruction set an agent can invoke. Skills are how you teach the guild reusable procedures without baking them into prompts.
+A bundled instruction set an agent can invoke. Skills are how you teach Guildhall reusable procedures without baking them into prompts.
 
 ## Hook
 

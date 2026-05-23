@@ -21,7 +21,7 @@ should.
 ## What it does well
 
 - **Service over projects**: the dashboard is not married to one repo. It runs as a local service and keeps multiple projects available from one place.
-- **File-backed, not hidden**: project state still lives in `guildhall.yaml`, `.guildhall/config.yaml`, and `memory/*`, while machine-wide state such as the registry and provider credentials lives in `~/.guildhall/`. The UI is a clearer window into that state, not a secret second database.
+- **File-backed, not hidden**: project state still lives in `./guildhall.yaml`, `./.guildhall/config.yaml`, and `./memory/*`, while machine-wide state such as the registry and provider credentials lives in `~/.guildhall/`. The UI is a clearer window into that state, not a secret second database.
 - **One operating surface**: the service home gets you into the right project, and the shell carries the detailed state without feeling like a separate product.
 - **Learning you can inspect**: Settings -> Learning shows project habits, cross-project preferences, project playbooks, and Guildhall product ideas without adding a new approval step to every task.
 

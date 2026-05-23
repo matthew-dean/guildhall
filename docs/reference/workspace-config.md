@@ -1,5 +1,5 @@
 ---
-title: guildhall.yaml
+title: ./guildhall.yaml
 help_topic: reference.workspace_config
 help_summary: |
   The project config file. Defines name, id, projectPath, model assignments
@@ -7,7 +7,7 @@ help_summary: |
   maxRevisions.
 ---
 
-# `guildhall.yaml` reference
+# `./guildhall.yaml` reference
 
 The main project config file. It normally lives at the project root.
 
@@ -112,7 +112,7 @@ models:
   contextIndexer: zai-org/GLM-4.6
 ```
 
-Each model role must resolve against the model catalog in `src/core/models.ts`.
+Each model role must resolve against the model catalog in `./src/core/models.ts`.
 See [Open model recommendations](../guide/open-models) for the currently tested
 role split and retesting notes.
 

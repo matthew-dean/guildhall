@@ -330,8 +330,8 @@ describe('shared detail primitives', () => {
     await userEvent.click(screen.getByRole('button', { name: /acceptance give the reviewer/i }))
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' })
 
-    await userEvent.click(screen.getByRole('button', { name: /^skip$/i }))
-    await userEvent.click(screen.getByRole('button', { name: /^resume$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^skip acceptance$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^resume brief$/i }))
     await userEvent.click(screen.getByRole('button', { name: /^hide$/i }))
 
     expect(screen.queryByText('Give the reviewer a finish line.')).not.toBeInTheDocument()

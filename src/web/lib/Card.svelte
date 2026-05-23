@@ -16,6 +16,7 @@
     role?: string
     tabindex?: number
     ariaLabel?: string
+    frosted?: boolean
     onclick?: (event: MouseEvent) => void
     onkeydown?: (event: KeyboardEvent) => void
     children?: Snippet
@@ -30,6 +31,7 @@
     role,
     tabindex,
     ariaLabel,
+    frosted = false,
     onclick,
     onkeydown,
     children,
@@ -39,7 +41,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <section
-  class={`card tone-${tone} ${className}`.trim()}
+  class={`card tone-${tone} ${frosted ? 'is-frosted' : ''} ${className}`.trim()}
   {role}
   {tabindex}
   aria-label={ariaLabel}
@@ -76,11 +78,13 @@
     border: 1px solid var(--glass-border);
     border-radius: var(--r-3);
     box-shadow: var(--glass-shadow), var(--glass-etch);
-    backdrop-filter: var(--glass-blur);
-    -webkit-backdrop-filter: var(--glass-blur);
     padding: var(--s-4);
     position: relative;
     overflow: clip;
+  }
+  .card.is-frosted {
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
   }
   /* Tone stripes are a 3px solid left border rendered via ::before so they
      don't shift content (padding stays constant across tones). */

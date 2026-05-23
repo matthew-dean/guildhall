@@ -25,7 +25,7 @@ How autonomous the orchestrator can be when recovering from a stall, crash, or u
 
 ## What counts as "destructive"
 
-Defined in `src/runtime/remediation.ts`: any action that removes or overwrites uncommitted work, force-pushes, reverts merged commits, or deletes files outside a worktree-scoped path.
+Defined in `./src/runtime/remediation.ts`: any action that removes or overwrites uncommitted work, force-pushes, reverts merged commits, or deletes files outside a worktree-scoped path.
 
 ## Related
 

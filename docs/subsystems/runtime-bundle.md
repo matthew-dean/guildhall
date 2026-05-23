@@ -9,7 +9,7 @@ help_summary: |
 
 # Runtime bundle
 
-**Source:** `src/runtime-bundle/`
+**Source:** `./src/runtime-bundle/`
 
 The runtime bundle is the assembly layer between config and running agents. It owns no state itself — it just wires a `QueryEngine` with the right tools, LLM client, permission checker, and session persistence.
 

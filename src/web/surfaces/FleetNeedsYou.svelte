@@ -40,7 +40,7 @@
       case 'open_escalation': return 'Resolve'
       case 'bootstrap_missing': return 'Configure'
       case 'lever_questions': return 'Review'
-      case 'spec_fill_pending': return item.taskId === 'task-workspace-import' ? 'Review import' : 'Open details'
+      case 'spec_fill_pending': return item.taskId === 'task-workspace-import' ? 'Review import' : 'Review checklist'
       default: return 'Open'
     }
   }

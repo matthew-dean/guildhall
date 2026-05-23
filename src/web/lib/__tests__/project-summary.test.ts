@@ -186,14 +186,15 @@ describe('summarizeProjects', () => {
       stageLabel: 'Needs attention',
       activityLabel: '1 blocked task needs attention.',
       recentLabel: 'Blocked on: Repair staging auth flow',
-      runActionLabel: 'Start',
+      runActionLabel: null,
+      canStart: false,
     })
     expect(summarizeProjects(service)[1]).toMatchObject({
       statusLabel: 'Stable',
       stageLabel: 'Stable',
       activityLabel: '4 of 4 tasks are done.',
       recentLabel: 'Recently completed: Audit primitive integration',
-      runActionLabel: 'Start',
+      runActionLabel: null,
     })
   })
 
@@ -216,7 +217,9 @@ describe('summarizeProjects', () => {
       stageLabel: 'Paused',
       activityLabel: '1 task is paused.',
       recentLabel: 'Working on: Build TypeScript-JSDoc round-trip conversion',
-      runActionLabel: 'Start',
+      maturityLabel: 'Paused',
+      maturityDescription: 'Work is ready or paused, but no agents are running right now.',
+      runActionLabel: 'Resume',
     })
   })
 

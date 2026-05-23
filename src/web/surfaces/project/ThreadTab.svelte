@@ -40,10 +40,12 @@
   import InteractionCardLayout from '../../lib/InteractionCardLayout.svelte'
   import { onEvent } from '../../lib/events.js'
   import { escalationRecoveryCopy } from '../../lib/escalation-labels.js'
+  import { briefDoneWhenForReaders, briefScopeForReaders } from '../../lib/brief-display.js'
   import { nav } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import { buildThreadPhaseGroups } from '../../lib/project-data.js'
   import {
+    hasIncompleteTaskChecklist,
     isImportedDraftShaping,
     isQueuedSpecRevision as isQueuedSpecRevisionTurn,
     needsRecovery as taskNeedsRecovery,
@@ -232,6 +234,11 @@
   const turnElements = new Map<string, HTMLDivElement>()
   const startReadiness = $derived(project.detail?.startReadiness ?? null)
   const runStatus = $derived(project.detail?.run?.status ?? 'stopped')
+  const allTerminalReadinessMessage = $derived(
+    startReadiness?.code === 'all_terminal'
+      ? startReadiness?.message ?? 'All tasks are already finished.'
+      : null,
+  )
 
   // Preserved draft answers for agent_question turns. New answers submit
   // immediately; this only keeps older saved drafts visible and sendable.
@@ -489,19 +496,20 @@
   }
 
   function isQueuedForGuildhall(t: Turn): boolean {
-    return t.kind === 'inflight' && t.status === 'active' && !t.liveAgent && !t.importedDraft && canStartTaskTurn(t)
+    return t.kind === 'inflight' && t.status === 'active' && !turnLiveAgent(t) && !t.importedDraft && t.taskStatus !== 'in_progress' && canStartTaskTurn(t)
   }
 
   function turnStatusChipLabel(t: Turn): string {
     if (t.status === 'done') return 'done'
     if (needsRecovery(t)) return 'Needs recovery'
-    if (t.kind === 'inflight' && t.taskId === 'task-meta-intake' && !t.liveAgent) {
+    if (t.kind === 'inflight' && t.taskId === 'task-meta-intake' && !turnLiveAgent(t)) {
       return t.status === 'active' ? 'needs setup' : 'setup next'
     }
-    if (t.kind === 'inflight' && t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !t.liveAgent) {
+    if (t.kind === 'inflight' && t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !turnLiveAgent(t)) {
       return 'needs you'
     }
-    if (t.kind === 'inflight' && t.status === 'active' && !t.liveAgent) {
+    if (t.kind === 'inflight' && t.status === 'active' && !turnLiveAgent(t)) {
+      if (t.taskStatus === 'in_progress') return runStatus === 'running' ? 'next' : 'paused'
       return canStartTaskTurn(t) ? 'queued' : 'paused'
     }
     if (t.kind === 'spec_review' && t.status === 'active') return 'awaiting approval'
@@ -511,14 +519,14 @@
   function turnStatusChipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' {
     if (t.status === 'done') return 'ok'
     if (needsRecovery(t)) return 'warn'
-    if (t.kind === 'inflight' && t.taskId === 'task-meta-intake' && !t.liveAgent) {
+    if (t.kind === 'inflight' && t.taskId === 'task-meta-intake' && !turnLiveAgent(t)) {
       return 'warn'
     }
-    if (t.kind === 'inflight' && t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !t.liveAgent) {
+    if (t.kind === 'inflight' && t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !turnLiveAgent(t)) {
       return 'accent'
     }
     if (isQueuedForGuildhall(t)) return 'accent'
-    if (t.kind === 'inflight' && t.status === 'active' && !t.liveAgent) return 'neutral'
+    if (t.kind === 'inflight' && t.status === 'active' && !turnLiveAgent(t)) return 'neutral'
     if (t.kind === 'spec_review' && t.status === 'active') return 'neutral'
     return t.status === 'active' ? 'neutral' : 'neutral'
   }
@@ -538,7 +546,7 @@
   }
 
   function showConstructionModeChip(t: Turn): boolean {
-    return Boolean(constructionModeLabel(t)) && !isQueuedForGuildhall(t)
+    return t.status !== 'done' && Boolean(constructionModeLabel(t)) && !isQueuedForGuildhall(t)
   }
 
   function showStatusChip(t: Turn): boolean {
@@ -559,6 +567,21 @@
     if (t.kind === 'inflight') {
       if (t.importedDraft && t.taskStatus === 'import_draft') {
         return 'Needs you'
+      }
+      if (t.taskStatus === 'in_progress' && !turnLiveAgent(t)) {
+        return runStatus === 'running' ? 'Guildhall next' : null
+      }
+      if (
+        !turnLiveAgent(t) &&
+        (runStatus === 'running' || runStatus === 'stopping') &&
+        (
+          t.taskStatus === 'ready' ||
+          t.taskStatus === 'review' ||
+          t.taskStatus === 'gate_check' ||
+          t.taskStatus === 'exploring'
+        )
+      ) {
+        return 'Guildhall next'
       }
       if (canStartTaskTurn(t)) return 'Queued'
     }
@@ -581,7 +604,7 @@
     if (
       group.phase === 'inflight' &&
       group.turns.length > 0 &&
-      group.turns.every(t => t.kind === 'inflight' && !t.liveAgent)
+      group.turns.every(t => t.kind === 'inflight' && !turnLiveAgent(t))
     ) {
       return 'neutral'
     }
@@ -597,6 +620,12 @@
     if (group.turns.some(t => needsRecovery(t))) {
       return { tone: 'warn', pulse: false, label: 'Needs recovery' }
     }
+    if (group.turns.some(t => t.kind === 'inflight' && t.taskStatus === 'in_progress' && !turnLiveAgent(t))) {
+      return { tone: 'idle', pulse: false, label: runStatus === 'running' ? 'Queued work' : 'Paused work' }
+    }
+    if (group.turns.some(t => t.kind === 'inflight' && t.status === 'active' && !turnLiveAgent(t))) {
+      return { tone: 'idle', pulse: false, label: runStatus === 'running' ? 'Queued work' : 'Paused work' }
+    }
     if (group.turns.some(t => t.status === 'active')) {
       const needsYou = group.turns.some(t => ownershipLabel(t) === 'Needs you')
       return { tone: needsYou ? 'warn' : 'active', pulse: !needsYou, label: needsYou ? 'Needs your input' : 'Active' }
@@ -608,6 +637,8 @@
   }
 
   function turnLiveAgent(t: Turn): LiveAgent | undefined {
+    if (t.status !== 'active') return undefined
+    if (runStatus !== 'running' && runStatus !== 'stopping') return undefined
     return 'liveAgent' in t ? t.liveAgent : undefined
   }
 
@@ -815,13 +846,14 @@
 
   function compactTurnDescription(t: Turn): string {
     if (t.kind === 'inflight') {
-      if (t.importedDraft && t.taskStatus === 'import_draft' && !t.liveAgent) {
+      if (t.importedDraft && t.taskStatus === 'import_draft' && !turnLiveAgent(t)) {
         return 'Needs task brief: turn this note into scope, evidence, and acceptance criteria.'
       }
-      if (t.importedDraft && t.taskStatus === 'exploring' && !t.liveAgent) {
+      if (t.importedDraft && t.taskStatus === 'exploring' && !turnLiveAgent(t)) {
         return 'Task brief in progress: continue shaping the imported note.'
       }
-      if (t.liveAgent) return liveAgentMessage(t.liveAgent)
+      const live = turnLiveAgent(t)
+      if (live) return liveAgentMessage(live)
       if (t.checklist) return `${t.checklist.title}: ${t.checklist.doneCount} of ${t.checklist.totalSteps} complete.`
       return taskStateDescription(t)
     }
@@ -1187,35 +1219,41 @@
   }
 
   function taskStateLabel(turn: InFlightTurn): string {
+    const live = turnLiveAgent(turn)
+    if (turn.status === 'done' || turn.taskStatus === 'done') return 'Done'
     if (needsRecovery(turn)) return 'Needs recovery'
-    if (turn.liveAgent?.name === 'spec-agent') return turn.importedDraft ? 'Shaping draft' : 'Drafting'
-    if (turn.taskId === 'task-meta-intake' && !turn.liveAgent) return 'Project setup'
-    if (turn.liveAgent?.name.startsWith('coordinator-')) return 'Ready'
-    if (turn.liveAgent?.name === 'worker-agent') return 'In flight'
-    if (turn.liveAgent?.name === 'reviewer-agent') return 'Review'
-    if (turn.liveAgent?.name === 'gate-checker-agent') return 'Gates'
+    if (live?.name === 'spec-agent') return turn.importedDraft ? 'Shaping draft' : 'Drafting'
+    if (turn.taskId === 'task-meta-intake' && !live) return 'Project setup'
+    if (live?.name.startsWith('coordinator-')) return 'Ready'
+    if (live?.name === 'worker-agent') return 'In flight'
+    if (live?.name === 'reviewer-agent') return 'Review'
+    if (live?.name === 'gate-checker-agent') return 'Gates'
     switch (turn.taskStatus) {
       case 'import_draft': return 'Needs task brief'
       case 'exploring': return turn.importedDraft ? 'Task brief in progress' : isQueuedSpecRevision(turn) ? 'Spec revision queued' : 'Intake'
-      case 'ready': return 'Ready'
+      case 'ready':
+        if (hasIncompleteTaskChecklist(turn)) return 'Needs task brief'
+        if (runStatus === 'running' || runStatus === 'stopping') return 'Queued for Guildhall'
+        return 'Ready'
       case 'gate_check': return 'Gates'
       case 'review': return 'Review'
-      case 'in_progress': return turn.liveAgent ? 'In flight' : 'Paused'
+      case 'in_progress': return live ? 'In flight' : 'Paused'
       default: return canStartTaskTurn(turn) ? 'Queued' : 'In flight'
     }
   }
 
   function taskStateDescription(turn: InFlightTurn): string {
+    const live = turnLiveAgent(turn)
     if (needsRecovery(turn)) {
       return 'Guildhall made partial progress, then the agent failed. Review the durable worktree changes or restart from that recovery point.'
     }
     if (
-      turn.liveAgent?.lastEventLabel === 'Waiting for the local model to respond.' &&
-      (turn.liveAgent.silentMs ?? 0) >= 60_000
+      live?.lastEventLabel === 'Waiting for the local model to respond.' &&
+      (live.silentMs ?? 0) >= 60_000
     ) {
       return 'Local model is still loading or generating.'
     }
-    if (turn.liveAgent?.name === 'spec-agent') {
+    if (live?.name === 'spec-agent') {
       if (turn.importedDraft) {
         return 'Guildhall is turning this imported note into a task brief now.'
       }
@@ -1223,21 +1261,21 @@
         ? 'Guildhall is turning your existing project notes into candidate tasks now.'
         : 'Guildhall is drafting this now.'
     }
-    if (turn.taskStatus === 'ready' && !turn.liveAgent) {
-      if (turn.checklist && turn.checklist.doneCount < turn.checklist.totalSteps) {
+    if (turn.taskStatus === 'ready' && !live) {
+      if (hasIncompleteTaskChecklist(turn)) {
         return 'This task is queued, but its brief/spec is still incomplete. Review the checklist before letting a worker treat it as approved.'
       }
       return runStatus === 'running'
         ? 'Approved and queued. Guildhall is running and can pick this up.'
         : 'Approved and queued. Start Guildhall when you want it to pick this up.'
     }
-    if (turn.taskId === 'task-meta-intake' && !turn.liveAgent) {
+    if (turn.taskId === 'task-meta-intake' && !live) {
       return turn.summary
     }
-    if (turn.taskStatus === 'import_draft' && !turn.liveAgent) {
+    if (turn.taskStatus === 'import_draft' && !live) {
       return 'Imported from your project notes, but not ready for a worker yet. Next step: turn this note into a task brief with scope, evidence, and acceptance criteria.'
     }
-    if (turn.taskStatus === 'exploring' && !turn.liveAgent) {
+    if (turn.taskStatus === 'exploring' && !live) {
       return turn.taskId === 'task-workspace-import'
         ? 'Guildhall already drafted part of this import review. Review it if you want, or press Start to let Guildhall keep turning your project notes into candidate tasks.'
         : turn.importedDraft
@@ -1246,17 +1284,17 @@
             ? 'Guildhall already has the draft spec plus your latest answers. Press Start when you want Guildhall to revise it.'
             : 'Guildhall drafted a first pass here. Review it if you want, or press Start to let Guildhall revise the draft.'
     }
-    if (turn.taskStatus === 'in_progress' && !turn.liveAgent) {
+    if (turn.taskStatus === 'in_progress' && !live) {
       return runStatus === 'running'
         ? 'Work is paused between worker passes. Guildhall is running and can resume it.'
         : 'Work is paused. Start Guildhall when you want it to continue.'
     }
-    if (turn.taskStatus === 'review' && !turn.liveAgent) {
+    if (turn.taskStatus === 'review' && !live) {
       return runStatus === 'running'
         ? 'Review is queued. Guildhall is running and can pick this up.'
         : 'Review is queued. Start Guildhall when you want it to continue.'
     }
-    if (turn.taskStatus === 'gate_check' && !turn.liveAgent) {
+    if (turn.taskStatus === 'gate_check' && !live) {
       return runStatus === 'running'
         ? 'Gate checks are queued. Guildhall is running and can pick this up.'
         : 'Gate checks are queued. Start Guildhall when you want it to continue.'
@@ -1275,9 +1313,24 @@
   }
 
   function canStartTaskTurn(turn: InFlightTurn): boolean {
-    return !turn.liveAgent && (
+    if (turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)) return false
+    if (projectRunBlocksTaskStart(turn)) return false
+    return !turnLiveAgent(turn) && (
       turn.taskStatus === 'ready' ||
       turn.taskStatus === 'import_draft' ||
+      turn.taskStatus === 'exploring' ||
+      turn.taskStatus === 'in_progress' ||
+      turn.taskStatus === 'review' ||
+      turn.taskStatus === 'gate_check'
+    )
+  }
+
+  function projectRunBlocksTaskStart(turn: InFlightTurn): boolean {
+    if (turnLiveAgent(turn)) return false
+    if (turn.taskStatus === 'import_draft') return false
+    if (runStatus !== 'running' && runStatus !== 'stopping') return false
+    return (
+      turn.taskStatus === 'ready' ||
       turn.taskStatus === 'exploring' ||
       turn.taskStatus === 'in_progress' ||
       turn.taskStatus === 'review' ||
@@ -1288,11 +1341,15 @@
   function startTaskLabel(turn: InFlightTurn): string {
     if (metaIntakeChecklistComplete(turn)) return 'Create split proposal'
     switch (turn.taskStatus) {
-      case 'ready': return 'Start work'
+      case 'ready':
+        if (hasIncompleteTaskChecklist(turn)) return 'Review checklist'
+        if (runStatus === 'running' || runStatus === 'stopping') return 'Already queued'
+        return 'Start work'
       case 'import_draft': return 'Draft task brief'
       case 'exploring':
         if (turn.taskId === 'task-meta-intake') return 'Let Guildhall keep setting this up'
-        return turn.importedDraft ? 'Continue task brief' : isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
+        if (turn.importedDraft || hasIncompleteTaskChecklist(turn)) return 'Continue task brief'
+        return isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
       case 'review': return 'Resume review'
       case 'gate_check': return 'Resume gates'
       case 'in_progress': return 'Resume work'
@@ -1314,7 +1371,7 @@
 
   function taskStateTone(turn: InFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
     if (needsRecovery(turn)) return 'warn'
-    if (turn.liveAgent) return 'running'
+    if (turnLiveAgent(turn)) return 'running'
     switch (turn.taskStatus) {
       case 'ready': return 'accent'
       case 'import_draft': return 'accent'
@@ -1331,7 +1388,7 @@
     step: { status: 'done' | 'active' | 'pending' | 'skipped' },
   ): 'ok' | 'running' | 'idle' {
     if (step.status === 'done') return 'ok'
-    if (step.status === 'active') return turn.liveAgent ? 'running' : 'idle'
+    if (step.status === 'active') return turnLiveAgent(turn) ? 'running' : 'idle'
     return 'idle'
   }
 
@@ -1341,7 +1398,7 @@
   ): string {
     if (step.status === 'done') return 'Done'
     if (step.status === 'active') {
-      if (turn.liveAgent) return 'Now'
+      if (turnLiveAgent(turn)) return 'Now'
       return runStatus === 'running' ? 'Queued' : 'Paused'
     }
     if (step.status === 'skipped') return 'Skipped'
@@ -1360,8 +1417,14 @@
           ...(taskId ? { taskId } : {}),
         }),
       })
-      const body = await res.json().catch(() => ({})) as { error?: string }
+      const body = await res.json().catch(() => ({})) as { code?: string; error?: string }
       if (!res.ok || body.error) {
+        if (body.code === 'run_already_active') {
+          toast.info('Guildhall is already running. This task stays queued for the coordinator.')
+          await load()
+          await refreshProject()
+          return
+        }
         runError = body.error ?? `Start failed (HTTP ${res.status})`
         return
       }
@@ -1484,7 +1547,9 @@
     </Card>
   {:else if turns.length === 0}
     <Card title="Nothing here yet">
-      <p class="muted">Add a task to start the thread.</p>
+      <p class="muted">
+        {allTerminalReadinessMessage ?? 'Add a task to start the thread.'}
+      </p>
     </Card>
   {:else}
     <Stack gap="3">
@@ -1748,19 +1813,20 @@
                   {/if}
 
               {:else if t.kind === 'brief_approval'}
-                <h3 class="prompt">Is this what you want?</h3>
-                {#if t.brief.userJob}
-                  <div class="field"><span class="field-label">What it thinks you want</span>
-                    <Markdown source={t.brief.userJob} />
-                  </div>
-                {/if}
-                {#if t.brief.successMetric || t.brief.successCriteria}
-                  <div class="field"><span class="field-label">How it'll know it's done</span>
-                    <Markdown source={t.brief.successMetric ?? t.brief.successCriteria ?? ''} />
+                {@const briefScope = briefScopeForReaders(t.brief, t.taskTitle)}
+                {@const briefDoneWhen = briefDoneWhenForReaders(t.brief)}
+                <h3 class="prompt">Review this task brief</h3>
+                <p class="lede">Approve it to queue the work, or tell Guildhall what to change.</p>
+                <div class="field"><span class="field-label">Scope</span>
+                  <Markdown source={briefScope} />
+                </div>
+                {#if briefDoneWhen}
+                  <div class="field"><span class="field-label">Done when</span>
+                    <Markdown source={briefDoneWhen} />
                   </div>
                 {/if}
                 {#if t.brief.antiPatterns && t.brief.antiPatterns.length > 0}
-                  <div class="field"><span class="field-label">Explicitly NOT</span>
+                  <div class="field"><span class="field-label">Out of scope</span>
                     <ul class="bullet">
                       {#each t.brief.antiPatterns as p}<li><Markdown source={p} inline /></li>{/each}
                     </ul>
@@ -1808,24 +1874,22 @@
                       {/if}
                     </Stack>
                   {:else}
-                    <div class="choices">
-                      <button
-                        type="button"
-                        class="choice"
-                        disabled={busyTurnId === t.id || blockedByQuestions}
-                        onclick={() => approveBrief(t)}
-                      >
-                        Yes, that's right
-                      </button>
-                      <button
-                        type="button"
-                        class="choice choice-other"
+                    <Row justify="end" gap="2">
+                      <Button
+                        variant="secondary"
                         disabled={busyTurnId === t.id}
                         onclick={() => (replyTurnId = t.id)}
                       >
                         No, change it
-                      </button>
-                    </div>
+                      </Button>
+                      <Button
+                        variant="primary"
+                        disabled={busyTurnId === t.id || blockedByQuestions}
+                        onclick={() => approveBrief(t)}
+                      >
+                        Yes, that's right
+                      </Button>
+                    </Row>
                   {/if}
                 {/if}
 
@@ -1870,7 +1934,7 @@
                       {/if}
                     </div>
                   {/if}
-                  <h3 class="prompt">{totalQuestions === 1 ? 'Question about this task' : `${totalQuestions} questions about this task`}</h3>
+                  <h3 class="prompt">{totalQuestions === 1 ? 'Before Guildhall continues' : `${totalQuestions} questions before Guildhall continues`}</h3>
                   <div class="question-context-actions">
                     {#if contextTurnId === t.id}
                       <Stack gap="2">
@@ -2179,7 +2243,7 @@
                     {/if}
                   </div>
                 {/if}
-                {#if t.taskId !== 'task-meta-intake' && t.taskStatus === 'exploring' && !t.liveAgent && !isQueuedSpecRevision(t)}
+                {#if t.taskId !== 'task-meta-intake' && t.taskStatus === 'exploring' && !turnLiveAgent(t) && !isQueuedSpecRevision(t)}
                   <Row justify="end" gap="2" wrap>
                     <Button variant="secondary" onclick={() => nav(currentTaskHref(t.taskId))}>
                       Inspect details
@@ -2187,10 +2251,14 @@
                     <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
                       Add optional note
                     </Button>
-                    <Button variant="agent" disabled={runBusy || busyTurnId === t.id} onclick={() => startTaskRun(t.taskId)}>
-                      <Icon name="sparkles" size={14} />
-                      {startTaskLabel(t)}
-                    </Button>
+                    {#if projectRunBlocksTaskStart(t)}
+                      <Button variant="secondary" disabled>Already queued</Button>
+                    {:else}
+                      <Button variant="agent" disabled={runBusy || busyTurnId === t.id} onclick={() => startTaskRun(t.taskId)}>
+                        <Icon name="sparkles" size={14} />
+                        {startTaskLabel(t)}
+                      </Button>
+                    {/if}
                   </Row>
                 {/if}
                 {#if t.activity?.length}
@@ -2217,7 +2285,7 @@
                         <div class="live-step" class:done={step.status === 'done'} class:active={step.status === 'active'}>
                           <StatusLight
                             tone={checklistStepTone(t, step)}
-                            pulse={step.status === 'active' && Boolean(t.liveAgent)}
+                            pulse={step.status === 'active' && Boolean(turnLiveAgent(t))}
                           />
                           <div class="live-step-copy">
                             <strong>{step.title}</strong>
@@ -2231,12 +2299,23 @@
                     </div>
                   </div>
                 {/if}
-                {#if replyTurnId === t.id}
+                {#if t.taskStatus === 'ready' && hasIncompleteTaskChecklist(t) && replyTurnId !== t.id}
+                  <Row justify="end" gap="2">
+                    <Button variant="human" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
+                      Review checklist
+                    </Button>
+                    <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
+                      Add optional note
+                    </Button>
+                  </Row>
+                {:else if replyTurnId === t.id}
                   <Stack gap="2">
                     <Textarea
                       value={replyDrafts[t.id] ?? ''}
                       rows={4}
-                      placeholder="Tell the agent what to do next"
+                      placeholder={needsRecovery(t)
+                        ? 'Add recovery context, constraints, or what the next attempt should inspect first'
+                        : 'Tell the agent what to do next'}
                       disabled={busyTurnId === t.id}
                       oninput={(v) => setReplyDraft(t.id, v)}
                     />
@@ -2244,12 +2323,12 @@
                       <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = null)}>
                         Cancel
                       </Button>
-                      <Button
-                        variant="primary"
-                        disabled={busyTurnId === t.id || !(replyDrafts[t.id] ?? '').trim()}
-                        onclick={() => sendTaskReply(t)}
-                      >
-                        Send
+                        <Button
+                          variant="primary"
+                          disabled={busyTurnId === t.id || !(replyDrafts[t.id] ?? '').trim()}
+                          onclick={() => sendTaskReply(t)}
+                        >
+                        {needsRecovery(t) ? 'Send recovery note' : 'Send'}
                       </Button>
                     </Row>
                     {#if replyErrors[t.id]}
@@ -2258,19 +2337,21 @@
                   </Stack>
               {:else}
                   <Row justify="end" gap="2">
-                    {#if needsRecovery(t) && !t.liveAgent}
+                    {#if needsRecovery(t) && !turnLiveAgent(t)}
                       <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
                         Inspect recovery
                       </Button>
                       <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
                         Add recovery note
                       </Button>
-                      {#if canStartTaskTurn(t)}
+                      {#if projectRunBlocksTaskStart(t)}
+                        <Button variant="secondary" disabled>Already queued</Button>
+                      {:else if canStartTaskTurn(t)}
                         <Button variant="primary" disabled={runBusy || busyTurnId === t.id} onclick={() => startTaskRun(t.taskId)}>
                           {startTaskLabel(t)}
                         </Button>
                       {/if}
-                    {:else if t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !t.liveAgent}
+                    {:else if t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !turnLiveAgent(t)}
                       <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
                         Inspect details
                       </Button>
@@ -2282,13 +2363,15 @@
                           <Icon name="sparkles" size={14} />
                           {startTaskLabel(t)}
                         </Button>
+                      {:else if projectRunBlocksTaskStart(t)}
+                        <Button variant="secondary" disabled>Already queued</Button>
                       {:else if canStartTaskTurn(t)}
                         <Button variant="agent" disabled={runBusy || busyTurnId === t.id} onclick={() => startTaskRun(t.taskId)}>
                           <Icon name="sparkles" size={14} />
                           {startTaskLabel(t)}
                         </Button>
                       {/if}
-                    {:else if t.taskId === 'task-meta-intake' && !t.liveAgent}
+                    {:else if t.taskId === 'task-meta-intake' && !turnLiveAgent(t)}
                       <Button variant="secondary" onclick={focusSetupPhase}>
                         Open setup
                       </Button>
@@ -2299,6 +2382,8 @@
                             {metaSetupActionLabel()}
                           </Button>
                         {/if}
+                      {:else if projectRunBlocksTaskStart(t)}
+                        <Button variant="secondary" disabled>Already queued</Button>
                       {:else if canStartTaskTurn(t)}
                         {#if metaIntakeChecklistComplete(t)}
                           <Button
@@ -2328,11 +2413,28 @@
                       <Button variant="secondary" onclick={() => nav(currentTaskHref(t.taskId))}>
                         Open details
                       </Button>
+                      {#if projectRunBlocksTaskStart(t)}
+                        <Button variant="secondary" disabled>Already queued</Button>
+                      {:else if canStartTaskTurn(t)}
+                        <Button variant="agent" disabled={runBusy || busyTurnId === t.id} onclick={() => startTaskRun(t.taskId)}>
+                          <Icon name="sparkles" size={14} />
+                          {startTaskLabel(t)}
+                        </Button>
+                      {/if}
                     {:else}
                       <Button variant={t.taskStatus === 'exploring' ? 'human' : 'secondary'} onclick={() => nav(currentTaskHref(t.taskId))}>
                         {t.taskStatus === 'exploring' ? 'Inspect details' : 'Open task'}
                       </Button>
-                      {#if canStartTaskTurn(t)}
+                      {#if t.taskStatus === 'ready' && hasIncompleteTaskChecklist(t)}
+                        <Button variant="human" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
+                          Review checklist
+                        </Button>
+                        <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
+                          Add optional note
+                        </Button>
+                      {:else if projectRunBlocksTaskStart(t)}
+                        <Button variant="secondary" disabled>Already queued</Button>
+                      {:else if canStartTaskTurn(t)}
                         <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
                           Add optional note
                         </Button>
@@ -2400,6 +2502,8 @@
             Agents are working.
           {:else if operationSummary.queued > 0 || operationSummary.drafts > 0}
             Guildhall has queued work ready for the next run.
+          {:else if allTerminalReadinessMessage}
+            {allTerminalReadinessMessage}
           {:else}
             All caught up — nothing is running right now.
           {/if}
@@ -2939,41 +3043,12 @@
       radial-gradient(circle at 90% 10%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 30%),
       var(--glass-inset-bg);
     box-shadow: var(--glass-inset-etch), var(--glass-inset-shadow);
-    backdrop-filter: var(--glass-blur);
   }
   .setup-form {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: var(--s-2);
     align-items: start;
-  }
-  .choices {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-2);
-    justify-content: flex-end;
-  }
-  .choice {
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    padding: var(--s-2) var(--s-3);
-    font: inherit;
-    font-size: var(--fs-2);
-    cursor: pointer;
-  }
-  .choice:hover:not(:disabled) {
-    border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 8%, var(--bg));
-  }
-  .choice:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-  .choice-other {
-    border-style: dashed;
-    color: var(--text-muted);
   }
   .answer { margin: 0; padding: var(--s-2); background: var(--bg-raised-2); border-radius: var(--r-1); font-size: var(--fs-2); }
   .bullet { padding-left: var(--s-4); margin: 0; font-size: var(--fs-2); }

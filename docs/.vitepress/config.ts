@@ -8,6 +8,9 @@ const stableVersion = resolveStableVersion(currentVersion)
 const currentBase = ''
 const stableBase = `/versions/${stableVersion}`
 const nextBase = '/next'
+const archiveVersionItems = listVersionDirs()
+  .filter((version) => version !== stableVersion)
+  .map((version) => ({ text: `v${version}`, link: `/versions/${version}/guide/quick-start` }))
 
 type SidebarSection = {
   text: string
@@ -50,13 +53,23 @@ function resolveStableVersion(version: string): string {
   return latest ? latest.slice(1) : version
 }
 
+function listVersionDirs(): string[] {
+  const versionDir = new URL('../versions', import.meta.url)
+  if (!existsSync(versionDir)) return []
+  return readdirSync(versionDir)
+    .filter((name) => /^\d+\.\d+\.\d+(-[\w.]+)?$/.test(name))
+    .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+}
+
 const guideStartItems = [
+  { text: 'What Guildhall is', link: '/guide/introduction' },
   { text: 'Start here', link: '/guide/quick-start' },
   { text: 'How Guildhall works', link: '/guide/how-guildhall-works' },
   { text: 'New project', link: '/guide/new-project' },
   { text: 'Existing project', link: '/guide/existing-project' },
   { text: 'First task set', link: '/guide/first-tasks' },
   { text: 'Many projects', link: '/guide/managing-projects' },
+  { text: 'Core concepts', link: '/guide/concepts' },
 ]
 
 const guideWorksItems = [
@@ -85,16 +98,14 @@ const guideSpecItems = [
   { text: 'Open model recommendations', link: '/guide/open-models' },
 ]
 
-const guideConceptItems = [
-  { text: 'Introduction', link: '/guide/introduction' },
-  { text: 'Core concepts', link: '/guide/concepts' },
-  { text: 'How Guildhall builds', link: '/guide/how-guildhall-builds' },
-]
-
 const guideSidebarSections = [
   {
     text: 'Guide',
     items: [{ text: 'Overview', link: '/guide/' }],
+  },
+  {
+    text: 'First read',
+    items: guideStartItems,
   },
   {
     text: 'Projects',
@@ -112,9 +123,39 @@ const guideSidebarSections = [
     text: 'Specs & policy',
     items: guideSpecItems,
   },
+]
+
+const guide060SidebarSections = [
+  {
+    text: 'Guide',
+    items: [{ text: 'Overview', link: '/guide/' }],
+  },
+  {
+    text: 'Projects',
+    items: guideOperateItems,
+  },
+  {
+    text: 'Tasks',
+    items: [
+      { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
+      { text: 'Memory and recovery', link: '/guide/memory-and-recovery' },
+    ],
+  },
+  {
+    text: 'Specs & policy',
+    items: [
+      { text: 'Onboarding and levers', link: '/guide/onboarding-and-levers' },
+      { text: 'Internal routing', link: '/guide/coordinators' },
+      { text: 'Agents & models', link: '/guide/agents-and-models' },
+    ],
+  },
   {
     text: 'Concepts',
-    items: guideConceptItems,
+    items: [
+      { text: 'Introduction', link: '/guide/introduction' },
+      { text: 'How Guildhall builds', link: '/guide/how-guildhall-builds' },
+      { text: 'Core concepts', link: '/guide/concepts' },
+    ],
   },
 ]
 
@@ -132,13 +173,6 @@ const stableGuideSidebarSections = guideSidebarSections.map((section) => section
           item.link !== '/guide/corpus-map'),
       }
   : section)
-
-const getStartedSidebarSections = [
-  {
-    text: 'Get started',
-    items: guideStartItems,
-  },
-]
 
 const referenceSidebarSections = [
   {
@@ -173,6 +207,72 @@ const referenceSidebarSections = [
     items: [
       { text: 'Levers ↗', link: '/levers/' },
       { text: 'Releases ↗', link: '/releases/' },
+    ],
+  },
+]
+
+const reference060SidebarSections = [
+  {
+    text: 'Guildhall app',
+    items: [
+      { text: 'Overview', link: '/web-ui/' },
+      { text: 'Dashboard', link: '/web-ui/dashboard' },
+      { text: 'Setup wizard', link: '/web-ui/setup' },
+      { text: 'Project view', link: '/web-ui/project-view' },
+      { text: 'Task drawer', link: '/web-ui/task-drawer' },
+      { text: 'Providers', link: '/web-ui/providers' },
+    ],
+  },
+  {
+    text: 'Command line',
+    items: [
+      { text: 'CLI overview', link: '/cli/' },
+      { text: 'Command reference', link: '/cli/reference' },
+    ],
+  },
+  {
+    text: 'Project state',
+    items: [
+      { text: 'guildhall.yaml', link: '/reference/workspace-config' },
+      { text: 'agent-settings.yaml', link: '/reference/agent-settings' },
+      { text: 'Environment variables', link: '/reference/env' },
+      { text: 'Memory layout', link: '/reference/memory-layout' },
+      { text: 'HTTP API', link: '/reference/http-api' },
+    ],
+  },
+  {
+    text: 'System reference',
+    items: [
+      { text: 'Levers ↗', link: '/levers/' },
+      { text: 'Subsystems ↗', link: '/subsystems/' },
+      { text: 'Releases ↗', link: '/releases/' },
+    ],
+  },
+]
+
+const subsystem060SidebarSections = [
+  {
+    text: 'Subsystems',
+    items: [
+      { text: 'Overview', link: '/subsystems/' },
+      { text: 'Agents', link: '/subsystems/agents' },
+      { text: 'Backend host', link: '/subsystems/backend-host' },
+      { text: 'Compaction', link: '/subsystems/compaction' },
+      { text: 'Config loader', link: '/subsystems/config' },
+      { text: 'Core', link: '/subsystems/core' },
+      { text: 'Engine', link: '/subsystems/engine' },
+      { text: 'Engineering defaults', link: '/subsystems/engineering-defaults' },
+      { text: 'Guilds', link: '/subsystems/guilds' },
+      { text: 'Hooks', link: '/subsystems/hooks' },
+      { text: 'Levers', link: '/subsystems/levers' },
+      { text: 'MCP', link: '/subsystems/mcp' },
+      { text: 'Protocol', link: '/subsystems/protocol' },
+      { text: 'Providers', link: '/subsystems/providers' },
+      { text: 'Runtime bundle', link: '/subsystems/runtime-bundle' },
+      { text: 'Runtime', link: '/subsystems/runtime' },
+      { text: 'Sessions', link: '/subsystems/sessions' },
+      { text: 'Skills', link: '/subsystems/skills' },
+      { text: 'Tools', link: '/subsystems/tools' },
     ],
   },
 ]
@@ -234,23 +334,51 @@ const stableReleaseSidebarSections = releaseSidebarSections.map((section) => ({
   items: section.items.filter((item) => item.link !== '/releases/0.7.0'),
 }))
 
+function guideSectionsForVersion(prefix: string, options: { includeNextOnlyPages?: boolean } = {}): SidebarSection[] {
+  if (options.includeNextOnlyPages) return guideSidebarSections
+  if (prefix === '' && stableVersion === '0.6.0') return guide060SidebarSections
+  if (prefix === '/versions/0.6.0') return guide060SidebarSections
+  return stableGuideSidebarSections
+}
+
+function referenceSectionsForVersion(prefix: string, options: { includeNextOnlyPages?: boolean } = {}): SidebarSection[] {
+  if (options.includeNextOnlyPages) return referenceSidebarSections
+  if (prefix === '' && stableVersion === '0.6.0') return reference060SidebarSections
+  if (prefix === '/versions/0.6.0') return reference060SidebarSections
+  return referenceSidebarSections
+}
+
+function subsystemSectionsForVersion(prefix: string, options: { includeNextOnlyPages?: boolean } = {}): SidebarSection[] | null {
+  if (options.includeNextOnlyPages) return null
+  if (prefix === '' && stableVersion === '0.6.0') return subsystem060SidebarSections
+  if (prefix === '/versions/0.6.0') return subsystem060SidebarSections
+  return null
+}
+
 function addVersionedSidebars(
   prefix: string,
   options: { includeStarted?: boolean; includeNextOnlyPages?: boolean } = {},
 ): Record<string, SidebarSection[]> {
   const includeStarted = options.includeStarted ?? true
-  const guideSections = options.includeNextOnlyPages ? guideSidebarSections : stableGuideSidebarSections
+  const guideSections = guideSectionsForVersion(prefix, options)
+  const referenceSections = referenceSectionsForVersion(prefix, options)
+  const subsystemSections = subsystemSectionsForVersion(prefix, options)
   const releaseSections = options.includeNextOnlyPages ? releaseSidebarSections : stableReleaseSidebarSections
   const sidebars: Record<string, SidebarSection[]> = {
     [`${prefix}/guide/`]: prefixSections(guideSections, prefix),
-    [`${prefix}/cli/`]: prefixSections(referenceSidebarSections, prefix),
-    [`${prefix}/web-ui/`]: prefixSections(referenceSidebarSections, prefix),
-    [`${prefix}/reference/`]: prefixSections(referenceSidebarSections, prefix),
+    [`${prefix}/cli/`]: prefixSections(referenceSections, prefix),
+    [`${prefix}/web-ui/`]: prefixSections(referenceSections, prefix),
+    [`${prefix}/reference/`]: prefixSections(referenceSections, prefix),
     [`${prefix}/levers/`]: prefixSections(leverSidebarSections, prefix),
     [`${prefix}/releases/`]: prefixSections(releaseSections, prefix),
   }
+  if (subsystemSections) {
+    sidebars[`${prefix}/subsystems/`] = prefixSections(subsystemSections, prefix)
+  }
   if (includeStarted) {
     for (const path of [
+      '/guide/introduction',
+      '/guide/concepts',
       '/guide/quick-start',
       '/guide/how-guildhall-works',
       '/guide/new-project',
@@ -258,7 +386,7 @@ function addVersionedSidebars(
       '/guide/first-tasks',
       '/guide/managing-projects',
     ]) {
-      sidebars[`${prefix}${path}`] = prefixSections(getStartedSidebarSections, prefix)
+      sidebars[`${prefix}${path}`] = prefixSections(guideSections, prefix)
     }
   }
   return sidebars
@@ -301,15 +429,15 @@ export default defineConfig({
   ],
   themeConfig: {
     nav: [
-      { text: 'Get started', link: '/guide/quick-start', activeMatch: '^(/next)?/guide/(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects)' },
-      { text: 'Guide', link: '/guide/', activeMatch: '^(/next)?/guide/(?!(quick-start|how-guildhall-builds|new-project|existing-project|first-tasks|managing-projects))' },
+      { text: 'Get started', link: '/guide/introduction', activeMatch: '^(/next)?/guide/(introduction|concepts|quick-start|how-guildhall-works|new-project|existing-project|first-tasks|managing-projects)' },
+      { text: 'Guide', link: '/guide/', activeMatch: '^(/next)?/guide/(?!(introduction|concepts|quick-start|how-guildhall-works|new-project|existing-project|first-tasks|managing-projects))' },
       { text: 'Reference', link: '/reference/', activeMatch: '^(/next)?/(reference|cli|web-ui|levers|releases)/' },
       {
         text: 'Version',
         items: [
-          { text: `Current (v${stableVersion})`, link: '/guide/quick-start' },
+          { text: `Current (v${stableVersion})`, link: '/guide/introduction' },
           { text: 'Next', link: `${nextBase}/guide/` },
-          { text: `Version archive v${stableVersion}`, link: `${stableBase}/guide/quick-start` },
+          ...archiveVersionItems,
         ],
       },
     ],

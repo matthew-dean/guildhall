@@ -593,10 +593,14 @@ describe('E2E 0.5.0: service over projects', () => {
         throw new Error(`start failed: ${JSON.stringify(await startRes.json())}`)
       }
       expect(startRes.status).toBe(200)
+      const startBody = (await startRes.json()) as { status?: string; code?: string; stopSummary?: { reason?: string } }
+      expect(startBody.status).toBe('stopped')
+      expect(startBody.code).toBe('all_terminal')
+      expect(startBody.stopSummary?.reason).toBe('all_terminal')
       const activityRes = await app.fetch(new Request('http://localhost/api/project/activity'))
       const activity = (await activityRes.json()) as { running?: boolean; runStatus?: string }
-      expect(activity.running).toBe(true)
-      expect(activity.runStatus).toBe('running')
+      expect(activity.running).toBe(false)
+      expect(activity.runStatus).toBe('stopped')
 
       const stopRes = await app.fetch(new Request('http://localhost/api/project/stop?projectId=service-proof', {
         method: 'POST',

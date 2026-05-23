@@ -23,7 +23,7 @@ Guildhall opens the setup wizard if the folder is not registered yet.
 Use a real project name and a stable slug. The slug keeps URLs scoped to this
 project, so do not tie it to a throwaway folder name.
 
-## 3. Choose how the guild does AI work
+## 3. Choose how Guildhall does AI work
 
 Pick the account, CLI, or local model Guildhall uses for the first run. You can
 change this later; the first run only needs one working path.
@@ -37,7 +37,7 @@ Start with a task blueprint that proves the system can move:
 - wire one test command
 - fix one known setup failure
 
-Avoid "build the whole app" as the first task. That belongs after the guild
+Avoid "build the whole app" as the first task. That belongs after Guildhall
 has enough project context and a shaped plan.
 
 ## 5. Start and watch

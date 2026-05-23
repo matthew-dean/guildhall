@@ -1,5 +1,6 @@
 import DefaultTheme from 'vitepress/theme'
-import { defineComponent, h, onBeforeUnmount, onMounted } from 'vue'
+import { useRoute } from 'vitepress'
+import { defineComponent, h, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
 
 import '../../../packages/ui/src/styles.css'
 import './custom.css'
@@ -9,6 +10,7 @@ import UiReferenceNav from './components/UiReferenceNav.vue'
 const GuildhallThemeLayout = defineComponent({
   name: 'GuildhallThemeLayout',
   setup(_props, { slots }) {
+    const route = useRoute()
     let observer: MutationObserver | null = null
 
     const syncTheme = () => {
@@ -25,14 +27,46 @@ const GuildhallThemeLayout = defineComponent({
       }
     }
 
+    const currentDocsPrefix = () => {
+      const match = route.path.match(/^\/guildhall(\/next|\/versions\/[^/]+)?\//)
+      return match?.[1] ?? ''
+    }
+
+    const syncVersionedNavLinks = () => {
+      const prefix = currentDocsPrefix()
+      if (!prefix) return
+
+      const sections = ['guide', 'reference', 'web-ui', 'cli', 'levers', 'releases']
+      for (const anchor of document.querySelectorAll<HTMLAnchorElement>('.VPNav a[href]')) {
+        if (anchor.closest('.VPFlyout')) continue
+        const href = anchor.getAttribute('href')
+        if (!href) continue
+        for (const section of sections) {
+          const root = `/guildhall/${section}`
+          if (href === root || href.startsWith(`${root}/`)) {
+            anchor.setAttribute('href', href.replace(root, `/guildhall${prefix}/${section}`))
+            break
+          }
+        }
+      }
+    }
+
     onMounted(() => {
       syncTheme()
+      syncVersionedNavLinks()
       observer = new MutationObserver(syncTheme)
       observer.observe(document.documentElement, {
         attributes: true,
         attributeFilter: ['class'],
       })
     })
+
+    watch(
+      () => route.path,
+      () => {
+        nextTick(syncVersionedNavLinks)
+      },
+    )
 
     onBeforeUnmount(() => {
       observer?.disconnect()

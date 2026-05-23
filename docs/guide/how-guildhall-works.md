@@ -13,11 +13,11 @@ do the work, inspect the work, and remember what changed.
 
 Each run pulls from a few kinds of state:
 
-1. **Project state**: the registered project, `guildhall.yaml`, provider setup,
+1. **Project state**: the registered project, `./guildhall.yaml`, provider setup,
    local commands, memory files, and current task queue.
 2. **Planning state**: project goals, task blueprints, open questions,
    acceptance criteria, out-of-scope boundaries, and change orders.
-3. **Codebase orientation**: the Corpus Map and likely target files that point
+3. **Codebase orientation**: the [Corpus Map](./corpus-map) and likely target files that point
    helpers toward existing modules, helpers, components, design tokens, tests,
    and conventions.
 4. **Execution state**: active worktree, checkpoint, previous attempts,
@@ -68,7 +68,7 @@ For example:
   answer.
 - A setting can inherit from your global defaults, stay project-specific, or
   become a new default when the same preference keeps showing up.
-- The Corpus Map can point to the likely helper, package, or component, while
+- The [Corpus Map](./corpus-map) can point to the likely helper, package, or component, while
   the worker still reads the files before editing.
 
 That is the middle path between "just chat with an agent" and "please enjoy
@@ -86,7 +86,7 @@ Good output usually comes from a chain of smaller wins:
    checkpoint, review finding, gate result, or decision.
 5. Another role or deterministic check inspects that evidence.
 
-That is why Guildhall invests in blueprints, context packets, Corpus Map,
+That is why Guildhall invests in blueprints, context packets, [Corpus Map](./corpus-map),
 design-system summaries, review rubrics, checkpoints, and gates. None of those
 exist to make the app feel busy. They exist because plausible-looking work is
 still wrong if it ignores the project around it.
@@ -200,7 +200,7 @@ Guildhall’s default loop is:
 2. Draft or revise the blueprint.
 3. Ask bounded questions only when your answer changes the plan.
 4. Promote ready work into implementation.
-5. Give the worker scoped context, likely files, and Corpus Map guidance.
+5. Give the worker scoped context, likely files, and [Corpus Map](./corpus-map) guidance.
 6. Record checkpoints and verification evidence as work changes.
 7. Inspect the result with reviewers and deterministic gates.
 8. Finish, revise, escalate, or record a change order.

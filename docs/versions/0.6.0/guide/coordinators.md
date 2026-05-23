@@ -29,7 +29,7 @@ Guildhall still needs a stable way to tell:
 - release/setup work from product-task work
 
 So the runtime stores internal slices under the existing `coordinators:` key in
-`guildhall.yaml`. That key is historical. The important product truth is:
+`./guildhall.yaml`. That key is historical. The important product truth is:
 
 - users manage projects, tasks, and decisions
 - Guildhall manages routing and review structure underneath

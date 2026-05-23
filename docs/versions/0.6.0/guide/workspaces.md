@@ -12,9 +12,9 @@ files that make a project durable across service restarts and agent sessions.
 
 A workspace is a directory containing:
 
-- a `guildhall.yaml` (committed) — coordinators, models, domains, ignore patterns
-- a `memory/` folder (committed) — the work queue, lever settings, transcripts
-- a `.guildhall/config.yaml` (gitignored) — machine-local project overrides
+- a `./guildhall.yaml` (committed) — coordinators, models, domains, ignore patterns
+- a `./memory/` folder (committed) — the work queue, lever settings, transcripts
+- a `./.guildhall/config.yaml` (gitignored) — machine-local project overrides
 
 ## Registering projects
 
@@ -28,7 +28,7 @@ guildhall unregister my-app              # remove
 ```
 
 `guildhall init` registers the project automatically. The projects view can
-also register an existing folder when it finds a `guildhall.yaml`.
+also register an existing folder when it finds a `./guildhall.yaml`.
 
 ## Multiple projects in the service
 
@@ -41,15 +41,15 @@ When you launch `guildhall serve` from a project folder, Guildhall usually
 opens that one project shell directly. The service view is still there when you
 want the broader fleet picture.
 
-Use the `tags` field in `guildhall.yaml` to keep related projects grouped in
+Use the `tags` field in `./guildhall.yaml` to keep related projects grouped in
 the registry metadata even before the UI grows into a fuller fleet view.
 
 ## Project files vs local machine config
 
 These layers can coexist, and they do different jobs:
 
-- **`guildhall.yaml` at the project root** — the committed project config.
-- **`.guildhall/config.yaml` inside the project** — local-only runtime
+- **`./guildhall.yaml` at the project root** — the committed project config.
+- **`./.guildhall/config.yaml` inside the project** — local-only runtime
   overrides for that one project.
 - **`~/.guildhall/config.yaml`** — user-global machine defaults across
   projects.
@@ -62,11 +62,11 @@ Provider secrets are no longer expected in the project-local file. Machine-wide
 provider choice belongs in `~/.guildhall/config.yaml`; the project-local file
 only overrides that when a single project truly needs different behavior, and
 it still holds local runtime selections such as `landingBranch`. See
-[`src/config`](../subsystems/config).
+[`./src/config`](../subsystems/config).
 
 ## Project settings on disk
 
-Lever settings live in `memory/agent-settings.yaml` and are scoped to the
+Lever settings live in `./memory/agent-settings.yaml` and are scoped to the
 workspace, not the global registry. Each project gets its own lever
 configuration, seeded with system defaults on first run and edited either
 through the Settings page or by direct YAML edit. See

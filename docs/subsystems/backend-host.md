@@ -9,7 +9,7 @@ help_summary: |
 
 # Backend host
 
-**Source:** `src/backend-host/`
+**Source:** `./src/backend-host/`
 
 The backend host connects a running runtime to the web UI. Events flow out (transcript items, state changes, tool executions); commands flow in (submit_line, permission responses, command selections).
 

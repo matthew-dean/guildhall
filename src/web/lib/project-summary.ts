@@ -176,10 +176,10 @@ function maturity(project: ServiceProjectSummary, counts: ProjectCardSummary['co
   }
   if (counts.active > 0) {
     return {
-      maturityLabel: project.run?.status === 'running' ? 'Build' : 'Queued',
+      maturityLabel: project.run?.status === 'running' ? 'Build' : 'Paused',
       maturityDescription: project.run?.status === 'running'
         ? 'Agents are actively building from the current task plan.'
-        : 'Runnable work exists, but the project is not currently running.',
+        : 'Work is ready or paused, but no agents are running right now.',
     }
   }
   if (counts.done > 0 && counts.done >= counts.total - counts.shelved) {
@@ -236,9 +236,12 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
     taskActivity: project.taskActivity ?? emptyTaskActivity(),
     ticker: buildProjectCardTicker(project),
     actionLabel: initializationNeeded ? 'Open setup' : 'Open project',
-    runActionLabel: initializationNeeded ? null : running ? 'Stop' : 'Start',
+    runActionLabel: initializationNeeded ? null : running ? 'Stop' : counts.active > 0 ? 'Resume' : counts.total === 0 ? 'Start' : null,
     canOpen: true,
-    canStart: !running && !initializationNeeded && !(counts.draftReview > 0 && counts.active === 0),
+    canStart: !running &&
+      !initializationNeeded &&
+      (counts.active > 0 || counts.total === 0) &&
+      !(counts.draftReview > 0 && counts.active === 0),
     canStop: running,
   }
 }

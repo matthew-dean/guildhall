@@ -24,7 +24,7 @@ How a completed task's accepted commits land on the configured landing branch.
 ## Notes
 
 - Guildhall can also read a project-level `landingBranch` override from
-  `.guildhall/config.yaml`. If unset, it lands onto whatever branch the repo
+  `./.guildhall/config.yaml`. If unset, it lands onto whatever branch the repo
   is currently on when the orchestrator starts.
 - Older files may still use the internal `merge_policy` key. Guildhall maps
   that forward for compatibility.

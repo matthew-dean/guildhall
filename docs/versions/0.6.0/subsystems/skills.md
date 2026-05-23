@@ -9,7 +9,7 @@ help_summary: |
 
 # Skills
 
-**Source:** `src/skills/`
+**Source:** `./src/skills/`
 
 A skill is a markdown document with YAML frontmatter describing a reusable procedure — "how to write a changelog entry", "how to convert a fixture to a factory", etc. Agents discover skills via the `skill_tool` and load them on demand.
 
@@ -31,8 +31,8 @@ trigger_patterns:
 
 ## Loading
 
-- **Bundled skills** — shipped in `src/skills/bundled/` and loaded by `loadBundledSkills()`.
-- **User skills** — placed under `memory/skills/*.md` (or `<workspace>/skills/*.md`) and loaded by the file-based loader.
+- **Bundled skills** — shipped in `./src/skills/bundled/` and loaded by `loadBundledSkills()`.
+- **User skills** — placed under `./memory/skills/*.md` (or `<workspace>/skills/*.md`) and loaded by the file-based loader.
 
 ## Registry
 

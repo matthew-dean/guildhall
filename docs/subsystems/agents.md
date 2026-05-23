@@ -4,14 +4,14 @@ help_topic: subsystem.agents
 help_summary: |
   Five agent roles — spec, coordinator, worker, reviewer, gate-checker — each
   a stateful, tool-using conversation backed by the engine. Models are
-  assigned per role in guildhall.yaml.
+  assigned per role in ./guildhall.yaml.
 ---
 
 # Agents
 
 Each agent is a `GuildhallAgent` wrapper around the [engine](./engine)'s `QueryEngine`, carrying message history, tool-carryover state, and an attached session for persistence.
 
-**Source:** `src/agents/`
+**Source:** `./src/agents/`
 
 ## Roles
 
@@ -44,7 +44,7 @@ new GuildhallAgent({
 
 ## Diff scope
 
-`src/agents/diff-scope.ts` categorizes proposed changes as *critical*, *complex*, or *routine*. The coordinator uses this to decide whether to invoke extra reviewer personas. Critical diffs always fan out to all applicable guilds; routine diffs may short-circuit to a single reviewer.
+`./src/agents/diff-scope.ts` categorizes proposed changes as *critical*, *complex*, or *routine*. The coordinator uses this to decide whether to invoke extra reviewer personas. Critical diffs always fan out to all applicable guilds; routine diffs may short-circuit to a single reviewer.
 
 ## Warm resume
 

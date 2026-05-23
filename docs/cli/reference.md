@@ -9,7 +9,7 @@ help_summary: |
 
 # CLI reference
 
-**Entry point:** `src/runtime/cli.ts` (bundled to `dist/cli.js` → `guildhall` bin).
+**Entry point:** `./src/runtime/cli.ts` (bundled to `dist/cli.js` → `guildhall` bin).
 
 The CLI talks to the same local service and project files as the browser UI.
 Use it for local service lifecycle, project registry management, and focused
@@ -19,7 +19,7 @@ UI rather than as separate human-facing CLI commands.
 ## `guildhall init [path]`
 
 Open the setup flow for a project. The default path launches the browser setup
-wizard; completing that flow creates `guildhall.yaml` and registers the
+wizard; completing that flow creates `./guildhall.yaml` and registers the
 project.
 
 Flags:
@@ -27,19 +27,19 @@ Flags:
 - `--port <n>` (default `7777`) — local service / browser UI port.
 - `--no-browser` — don't auto-open the browser.
 - `--cli-wizard` — use the text wizard instead of the web one.
-- `--no-serve` — with `--cli-wizard`, write `guildhall.yaml` and register the
+- `--no-serve` — with `--cli-wizard`, write `./guildhall.yaml` and register the
   project without launching the web wizard. Without `--cli-wizard`, Guildhall
   still serves the browser setup flow.
 
 ## `guildhall register <path>`
 
-Register an existing project (must contain `guildhall.yaml`) in
+Register an existing project (must contain `./guildhall.yaml`) in
 `~/.guildhall/registry.yaml`.
 
 ## `guildhall unregister <id|path>`
 
-Remove a project from the registry. Does not delete `memory/` or
-`guildhall.yaml`.
+Remove a project from the registry. Does not delete `./memory/` or
+`./guildhall.yaml`.
 
 ## `guildhall list`
 
@@ -90,7 +90,7 @@ Re-run the setup wizard against an existing project.
 
 ## `guildhall corpus-map refresh [--semantic] [path]`
 
-Rebuild the compact Corpus Map for a workspace. This is mostly a debugging or
+Rebuild the compact [Corpus Map](../guide/corpus-map) for a workspace. This is mostly a debugging or
 repair command; Guildhall also creates and refreshes maps during normal agent
 context assembly.
 
@@ -115,7 +115,7 @@ Default output:
 - `artifacts/model-bakeoff/model-bakeoff-report.json`
 - `artifacts/model-bakeoff/model-bakeoff-report.md`
 
-Use `--context-indexer` to compare semantic Corpus Map candidates. That writes
+Use `--context-indexer` to compare semantic [Corpus Map](../guide/corpus-map) candidates. That writes
 `artifacts/model-bakeoff/context-indexer-report.json` and a Markdown summary by
 default, using DeepInfra candidate lanes for choosing a cheap, fast indexing
 model. The report includes the real-project evaluation ladder:

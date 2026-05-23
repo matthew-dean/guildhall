@@ -34,8 +34,13 @@ journey screens.
   confirmations; use `--text-readable` / `--text-soft` for explanatory body
   copy and nested surfaces.
 - Glass is a surface treatment, not a layout change. Use `--glass-bg`,
-  `--glass-border`, `--glass-blur`, and `--glass-reflect-*` over existing
-  radii, padding, and control sizes instead of inventing larger "glass" cards.
+  `--glass-border`, and `--glass-reflect-*` over existing radii, padding, and
+  control sizes instead of inventing larger "glass" cards.
+- Live `backdrop-filter` blur is opt-in. Use it for chrome and true overlays:
+  sticky headers, rails, slide-over panels, drawers, popovers, tooltips, and
+  modal shells. Do not put live blur on repeated content cards, dashboard
+  panels, list items, avatar pips, question cards, or choice rows; those should
+  keep glass color/border/shadow without a compositor-heavy backdrop layer.
 - Use `--glass-inset-*` for "section within section" panes such as questions
   inside task cards or source inspectors inside drawers.
 - Strong controls emit light with `--light-emitted-accent` or

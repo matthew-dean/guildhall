@@ -8,6 +8,7 @@ export interface ProjectActivityLine {
   pulse: boolean
   label: string
   message: string
+  detail?: string | undefined
   actorLabel?: string
   timeLabel?: string | null
 }
@@ -161,9 +162,10 @@ function lineFromEvent(
         pulse: false,
         actorLabel: 'Coordinator',
         label: 'Stopped',
-        message: typeof inner.message === 'string' && inner.message.length > 0
+        message: `Run finished: ${runReasonLabel(typeof inner.reason === 'string' ? inner.reason : undefined)}`,
+        detail: typeof inner.message === 'string' && inner.message.length > 0
           ? inner.message
-          : runReasonLabel(typeof inner.reason === 'string' ? inner.reason : undefined),
+          : undefined,
         timeLabel,
       }
     case 'supervisor_error':
@@ -231,7 +233,11 @@ export function buildProjectTicker(
   const importDrafts = importDraftCount(detail)
   const blocked = blockedTaskCount(detail)
   const eventType = latestEvent?.event?.type ?? latestEvent?.type
-  const staleStoppedEvent = eventType === 'supervisor_stopped' && (importDrafts > 0 || blocked > 0 || active > 0)
+  const eventReason = latestEvent?.event?.reason ?? latestEvent?.reason
+  const staleStoppedEvent =
+    eventType === 'supervisor_stopped' &&
+    eventReason !== 'all_terminal' &&
+    (importDrafts > 0 || blocked > 0 || active > 0)
   const fromEvent = staleStoppedEvent ? null : lineFromEvent(detail, latestEvent, now)
   if (fromEvent) return fromEvent
 
@@ -272,9 +278,9 @@ export function buildProjectTicker(
     return {
       tone: 'idle',
       pulse: false,
-      actorLabel: 'Queued',
-      label: 'Queued',
-      message: `${active} ${pluralize(active, 'task')} queued to resume`,
+      actorLabel: 'Paused',
+      label: 'Paused',
+      message: `${active} ${pluralize(active, 'task')} paused until Guildhall starts`,
       timeLabel: null,
     }
   }

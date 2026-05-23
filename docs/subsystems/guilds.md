@@ -16,11 +16,11 @@ A **guild** is an expert persona with four pieces:
 3. **Deterministic checks** — pure functions (e.g. contrast math) executed at gate time.
 4. **Applicability predicate** — decides whether this guild cares about a given task.
 
-**Source:** `src/guilds/`
+**Source:** `./src/guilds/`
 
 ## Built-in roster
 
-Visible in `src/guilds/registry.ts` — Accessibility Specialist, Color Theorist, Frontend Engineer, and friends. Each has a `slug` (e.g. `"accessibility-specialist"`), a `role` (`engineer` / `designer` / `specialist` / `overseer`), and optional `specContribution` (extra questions for the Spec Agent's elicitation).
+Visible in `./src/guilds/registry.ts` — Accessibility Specialist, Color Theorist, Frontend Engineer, and friends. Each has a `slug` (e.g. `"accessibility-specialist"`), a `role` (`engineer` / `designer` / `specialist` / `overseer`), and optional `specContribution` (extra questions for the Spec Agent's elicitation).
 
 ## Custom guilds
 

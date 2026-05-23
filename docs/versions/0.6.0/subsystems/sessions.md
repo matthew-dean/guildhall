@@ -9,7 +9,7 @@ help_summary: |
 
 # Sessions
 
-**Source:** `src/sessions/`
+**Source:** `./src/sessions/`
 
 A `SessionSnapshot` captures everything needed to resume an agent:
 
@@ -42,14 +42,14 @@ import {
 } from 'guildhall/sessions'
 ```
 
-- `saveSessionSnapshot({ cwd, snapshot })` — atomic write via `src/sessions/atomic.ts`.
+- `saveSessionSnapshot({ cwd, snapshot })` — atomic write via `./src/sessions/atomic.ts`.
 - `loadSessionById(cwd, sessionId)` — returns `SessionSnapshot | null`.
 - `sanitizeConversationMessages(messages)` — strips tool-result contents flagged as sensitive before persistence.
 
 ## Tool-metadata allowlist
 
-Only keys in `PERSISTED_TOOL_METADATA_KEYS` (see `src/sessions/storage.ts`) survive persistence — e.g. `read_file_state`, `invoked_skills`. Everything else is dropped to avoid accidentally writing auth tokens or large in-memory buffers to disk.
+Only keys in `PERSISTED_TOOL_METADATA_KEYS` (see `./src/sessions/storage.ts`) survive persistence — e.g. `read_file_state`, `invoked_skills`. Everything else is dropped to avoid accidentally writing auth tokens or large in-memory buffers to disk.
 
 ## Atomic writes
 
-`src/sessions/atomic.ts` implements write-then-rename. A crash mid-write leaves the previous snapshot intact; a stray temp file is cleaned up on next load.
+`./src/sessions/atomic.ts` implements write-then-rename. A crash mid-write leaves the previous snapshot intact; a stray temp file is cleaned up on next load.

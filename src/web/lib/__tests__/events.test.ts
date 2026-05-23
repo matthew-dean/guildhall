@@ -71,7 +71,7 @@ describe('event stream wiring', () => {
     instances[0]!.onmessage?.({ data: '{not-json' })
     instances[0]!.onerror?.()
 
-    expect(statuses).toEqual(['connecting', 'live', 'error'])
+    expect(statuses).toEqual(['connecting', 'live', 'reconnecting'])
     expect(events).toEqual([
       {
         type: 'task_transition',
@@ -82,6 +82,37 @@ describe('event stream wiring', () => {
     ])
 
     offEvent()
+    offStatus()
+  })
+
+  it('marks a dropped live stream as reconnecting and restores live on the next open or message', () => {
+    const statuses: string[] = []
+    const offStatus = onStatus(status => statuses.push(status))
+
+    connectStream()
+    instances[0]!.onopen?.()
+    instances[0]!.onerror?.()
+    instances[0]!.onmessage?.({ data: JSON.stringify({ type: 'heartbeat' }) })
+    instances[0]!.onerror?.()
+    instances[0]!.onopen?.()
+
+    expect(statuses).toEqual(['connecting', 'live', 'reconnecting', 'live', 'reconnecting', 'live'])
+
+    offStatus()
+  })
+
+  it('keeps repeated retry errors visibly reconnecting after the stream has been live', () => {
+    const statuses: string[] = []
+    const offStatus = onStatus(status => statuses.push(status))
+
+    connectStream()
+    instances[0]!.onopen?.()
+    instances[0]!.onerror?.()
+    instances[0]!.onerror?.()
+
+    expect(statuses).toEqual(['connecting', 'live', 'reconnecting'])
+    expect(statuses.at(-1)).toBe('reconnecting')
+
     offStatus()
   })
 

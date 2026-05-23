@@ -14,6 +14,7 @@
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
   import { buildWorkSurface } from '../../lib/project-data.js'
+  import { isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
 
@@ -63,11 +64,17 @@
 
   const taskCounts = $derived.by(() => {
     const all = tasks
+    const running = detail.run?.status === 'running'
+    const readyTasks = all.filter(task => task.status === 'ready')
     return {
       total: all.length,
-      agentActive: all.filter(task => ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')).length,
+      agentActive: all.filter(task => running && ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')).length,
+      paused: all.filter(task => !running && task.status === 'in_progress').length,
+      reviewWaiting: all.filter(task => !running && task.status === 'review').length,
+      gatesWaiting: all.filter(task => !running && task.status === 'gate_check').length,
       shaping: all.filter(task => task.status === 'exploring').length,
-      readyForWorker: all.filter(task => task.status === 'ready').length,
+      readyForWorker: readyTasks.filter(isCompleteForWorkerHandoff).length,
+      needsSpecCleanup: readyTasks.filter(needsWorkerHandoffSpecCleanup).length,
       awaitingApproval: all.filter(task => task.status === 'spec_review').length,
       done: all.filter(task => ['done', 'pending_pr'].includes(task.status ?? '')).length,
     }
@@ -163,6 +170,40 @@
         return 'accent'
       default:
         return 'neutral'
+    }
+  }
+
+  function effectiveStatus(task: Task): string | undefined {
+    if (task.status === 'ready' && needsWorkerHandoffSpecCleanup(task)) {
+      return 'needs_spec_cleanup'
+    }
+    if (detail.run?.status !== 'running') {
+      if (task.status === 'in_progress') return 'paused'
+      if (task.status === 'review') return 'review_waiting'
+      if (task.status === 'gate_check') return 'gates_waiting'
+    }
+    return task.status
+  }
+
+  function effectiveStatusLabel(task: Task): string {
+    switch (effectiveStatus(task)) {
+      case 'paused': return 'Paused'
+      case 'review_waiting': return 'Review waiting'
+      case 'gates_waiting': return 'Gates waiting'
+      case 'needs_spec_cleanup': return 'Needs brief cleanup'
+      default: return friendlyStatus(task.status)
+    }
+  }
+
+  function effectiveStatusTone(task: Task): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
+    switch (effectiveStatus(task)) {
+      case 'paused': return 'neutral'
+      case 'review_waiting':
+      case 'gates_waiting':
+      case 'needs_spec_cleanup':
+        return 'warn'
+      default:
+        return statusTone(task.status)
     }
   }
 
@@ -276,9 +317,23 @@
 
       <div class="work-summary">
         <Chip label={`${taskCounts.total} tasks`} tone="neutral" />
-        <Chip label={countLabel(taskCounts.agentActive, 'agent-active', 'agent-active')} tone="accent" />
+        {#if taskCounts.agentActive > 0}
+          <Chip label={countLabel(taskCounts.agentActive, 'agent-active', 'agent-active')} tone="accent" />
+        {/if}
+        {#if taskCounts.paused > 0}
+          <Chip label={countLabel(taskCounts.paused, 'paused task')} tone="neutral" />
+        {/if}
+        {#if taskCounts.reviewWaiting > 0}
+          <Chip label={countLabel(taskCounts.reviewWaiting, 'review waiting', 'review waiting')} tone="warn" />
+        {/if}
+        {#if taskCounts.gatesWaiting > 0}
+          <Chip label={countLabel(taskCounts.gatesWaiting, 'gates waiting', 'gates waiting')} tone="warn" />
+        {/if}
         <Chip label={countLabel(taskCounts.shaping, 'shaping', 'shaping')} tone="neutral" />
         <Chip label={countLabel(taskCounts.readyForWorker, 'ready for worker', 'ready for worker')} tone="neutral" />
+        {#if taskCounts.needsSpecCleanup > 0}
+          <Chip label={countLabel(taskCounts.needsSpecCleanup, 'need brief cleanup', 'need brief cleanup')} tone="warn" />
+        {/if}
         <Chip label={`${taskCounts.awaitingApproval} awaiting approval`} tone="warn" />
         <Chip label={`${taskCounts.done} done`} tone="ok" />
         {#if importDraftCount > 0}
@@ -300,7 +355,7 @@
             </p>
           </div>
           <Button variant="secondary" size="sm" onclick={() => openImportedDraft(nextImportDraft)}>
-            {nextImportDraft.id === 'task-workspace-import' ? 'Open import review' : 'Review next draft'}
+            {nextImportDraft.id === 'task-workspace-import' ? 'Open import review' : 'Draft task brief'}
           </Button>
         </div>
       {/if}
@@ -344,7 +399,7 @@
                     <div class="task-subcopy">{taskSecondaryText(task)}</div>
                   </td>
                   <td class="cell-status">
-                    <Chip label={friendlyStatus(task.status)} tone={statusTone(task.status)} />
+                    <Chip label={effectiveStatusLabel(task)} tone={effectiveStatusTone(task)} />
                   </td>
                   <td class="cell-steward">{friendlyDomain(task.domain) || 'Project'}</td>
                   <td class="cell-priority">

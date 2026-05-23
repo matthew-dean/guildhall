@@ -24,8 +24,8 @@ is the main operating path: you can inspect Thread, Work, Needs you, task
 drawers, and release state without leaving the UI.
 
 Projects & Workspaces uses the same runtime as the CLI. Progress is appended
-to `memory/PROGRESS.md`, events are streamed to `memory/events.ndjson`, and the
-full transcript per task lives under `memory/transcripts/`.
+to `./memory/PROGRESS.md`, events are streamed to `./memory/events.ndjson`, and the
+full transcript per task lives under `./memory/transcripts/`.
 
 Progress also leaves durable evidence: a task blueprint, decision,
 change order, implementation diff, verification result, review finding, or

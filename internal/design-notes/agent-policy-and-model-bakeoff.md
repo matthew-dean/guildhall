@@ -874,7 +874,7 @@ Proof steps:
   user/global preference, product suggestion, or task audit only.
 - [x] Confirm a future run uses the approved project learning or skill.
 - [x] Confirm the user can inspect and reset the learning.
-- [x] Record the result in `docs/web-ui/flow-audit.md`.
+- [x] Record the result in `artifact:flow-audit`.
 
 Proof result:
 

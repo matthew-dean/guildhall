@@ -2,7 +2,7 @@
   Project-level providers sub-tab: SELECT which configured provider this
   project should prefer. Credentials live globally (~/.guildhall/providers.yaml)
   — this view is read-only for credentials and only writes
-  `preferredProvider` to the project's guildhall.yaml.
+  `preferredProvider` to the project's private .guildhall/config.yaml override.
 
   Providers that aren't configured globally are shown disabled with a hint
   to open the global /providers page.

@@ -338,6 +338,182 @@ describe('pickNextTask', () => {
     expect(pickNextTask(q)?.id).toBe('t-ready')
   })
 
+  it('does not treat operational receipts as unanswered user questions', async () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'now',
+      tasks: [
+        mkTask({
+          id: 't-exploring',
+          status: 'exploring',
+          openQuestions: [
+            {
+              kind: 'choice',
+              id: 'q-receipt',
+              askedBy: 'spec-agent',
+              askedAt: '2026-04-01T00:00:00Z',
+              prompt: 'Done — I took the durable blueprint steps:',
+              selectionMode: 'single',
+              choices: [
+                'Updated the product brief',
+                'Revised and strengthened the spec',
+                'Set task status to `spec_review`',
+                'Appended this turn to the exploring transcript',
+                'Logged a milestone in `PROGRESS.md`',
+              ],
+            },
+          ],
+        }),
+      ],
+    }
+    expect(pickNextTask(q)?.id).toBe('t-exploring')
+  })
+
+  it('does not treat output-promise choices as unanswered user questions', async () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'now',
+      tasks: [
+        mkTask({
+          id: 't-exploring',
+          status: 'exploring',
+          openQuestions: [
+            {
+              kind: 'choice',
+              id: 'q-promise',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-23T00:00:00Z',
+              prompt: 'Next, pick the output path:',
+              selectionMode: 'single',
+              choices: [
+                'I will draft the blueprint',
+                'I will update the product brief',
+                'I will persist progress with tools',
+              ],
+            },
+          ],
+        }),
+      ],
+    }
+    expect(pickNextTask(q)?.id).toBe('t-exploring')
+  })
+
+  it('does not treat persisted-progress receipts as unanswered user questions', async () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'now',
+      tasks: [
+        mkTask({
+          id: 't-exploring',
+          status: 'exploring',
+          openQuestions: [
+            {
+              kind: 'choice',
+              id: 'q-progress-receipt',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-23T00:00:00Z',
+              prompt: "I've now persisted progress with tools in this turn:",
+              selectionMode: 'single',
+              choices: [
+                'Appended the exploring message to the transcript',
+                'Read back the transcript to confirm it persisted',
+                'Logged the current progress state',
+              ],
+            },
+          ],
+        }),
+      ],
+    }
+    expect(pickNextTask(q)?.id).toBe('t-exploring')
+  })
+
+  it('does not treat output-menu promises as unanswered user questions', async () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'now',
+      tasks: [
+        mkTask({
+          id: 't-exploring',
+          status: 'exploring',
+          openQuestions: [
+            {
+              kind: 'choice',
+              id: 'q-output-menu',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-23T00:00:00Z',
+              prompt: "If you pick one, I'll immediately produce:",
+              selectionMode: 'single',
+              choices: [
+                'Full spec',
+                'Product brief',
+                'Move task to spec_review',
+              ],
+            },
+          ],
+        }),
+      ],
+    }
+    expect(pickNextTask(q)?.id).toBe('t-exploring')
+  })
+
+  it('keeps real owner-choice prompts visible even when they mention drafting and updating', async () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'now',
+      tasks: [
+        mkTask({
+          id: 't-exploring',
+          status: 'exploring',
+          openQuestions: [
+            {
+              kind: 'choice',
+              id: 'q-real-choice',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-23T00:00:00Z',
+              prompt: 'I can update the existing spec or draft a new one. Which should I do?',
+              selectionMode: 'single',
+              choices: [
+                'Update the existing spec',
+                'Draft a new spec',
+              ],
+            },
+          ],
+        }),
+        mkTask({ id: 't-ready', status: 'ready' }),
+      ],
+    }
+    expect(pickNextTask(q)?.id).toBe('t-ready')
+  })
+
+  it('keeps real payment model owner decisions visible', async () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'now',
+      tasks: [
+        mkTask({
+          id: 't-exploring',
+          status: 'exploring',
+          openQuestions: [
+            {
+              kind: 'choice',
+              id: 'q-payment-model',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-23T00:00:00Z',
+              prompt: 'Which Stripe payment model should v1 use?',
+              selectionMode: 'single',
+              choices: [
+                'One-time checkout',
+                'Recurring subscriptions',
+              ],
+            },
+          ],
+        }),
+        mkTask({ id: 't-ready', status: 'ready' }),
+      ],
+    }
+    expect(pickNextTask(q)?.id).toBe('t-ready')
+  })
+
   it('prioritizes higher priority within the same status', async () => {
     const q: TaskQueue = {
       version: 1,
@@ -2064,16 +2240,8 @@ describe('Orchestrator.tick — routing', () => {
     const fourth = await orch.tick()
     expect(fourth.kind).toBe('processed')
     if (fourth.kind === 'processed') {
-      expect(fourth.afterStatus).toBe('in_progress')
-      expect(fourth.transitioned).toBe(false)
-    }
-
-    expect((await orch.tick()).kind).toBe('processed')
-    const sixth = await orch.tick()
-    expect(sixth.kind).toBe('processed')
-    if (sixth.kind === 'processed') {
-      expect(sixth.afterStatus).toBe('in_progress')
-      expect(sixth.transitioned).toBe(false)
+      expect(fourth.afterStatus).toBe('blocked')
+      expect(fourth.transitioned).toBe(true)
     }
 
     const checkpointPath = path.join(memoryDir, 'tasks', 'worker-task', 'checkpoint.json')
@@ -2101,6 +2269,69 @@ describe('Orchestrator.tick — routing', () => {
     expect(checkpoint.resumeContext?.verification).toEqual([])
     expect(checkpoint.resumeContext?.safeNextMutationSurface).toContain('web/tests/unit/composables/use-presence.test.ts')
     expect(checkpoint.resumeContext?.workingHypothesis).toContain('safest next mutation surface')
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'worker-task')
+    expect(task?.status).toBe('blocked')
+    expect(task?.blockReason).toContain('empty assistant reply after verified progress')
+  })
+
+  it('stops unattended runs instead of churning empty replies after verified progress', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'worker-task')
+    await writeQueue([
+      mkTask({
+        id: 'worker-task',
+        status: 'in_progress',
+        worktreePath,
+      }),
+    ])
+    await fs.mkdir(path.join(worktreePath, 'src'), { recursive: true })
+    await fs.writeFile(path.join(worktreePath, 'src', 'feature.ts'), 'export const value = 1\n', 'utf8')
+    execFileSync('git', ['init'], { cwd: worktreePath, stdio: 'ignore' })
+
+    let resets = 0
+    const worker: StubAgent = {
+      name: 'worker-agent',
+      calls: [],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        throw new Error('Model returned an empty assistant message. The turn was ignored to keep the session healthy.')
+      },
+      resetConversation() {
+        resets += 1
+      },
+      getToolMetadata() {
+        return {
+          review_handoff_evidence: {
+            taskId: 'worker-task',
+            inspectedImplementationFile: true,
+            changedOrVerified: true,
+          },
+          recent_verified_work: [
+            'Ran bash command pnpm vitest src/feature.test.ts [PASS]',
+            `Edited file ${path.join(worktreePath, 'src', 'feature.ts')}`,
+          ],
+        }
+      },
+    }
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(false)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+    })
+
+    const result = await orch.run({ maxTicks: 8, tickDelayMs: 0 })
+
+    expect(result.stopReason).not.toBe('max_ticks')
+    expect(result.stopReason).toBe('all_terminal')
+    expect(resets).toBe(1)
+    expect(worker.calls.length).toBe(4)
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'worker-task')
+    expect(task?.status).toBe('blocked')
+    expect(task?.blockReason).toContain('empty assistant reply after verified progress')
   })
 
   it('prioritizes source and test files over repo metadata in the recovery checkpoint mutation surface', async () => {
@@ -2222,7 +2453,7 @@ describe('Orchestrator.tick — routing', () => {
       async generate(prompt: string) {
         this.calls.push({ prompt })
         calls += 1
-        if (calls === 6) {
+        if (calls === 3) {
           await mutateTask('worker-task', {
             status: 'blocked',
             blockReason: 'decision_required: unrelated repo-red',
@@ -2255,15 +2486,12 @@ describe('Orchestrator.tick — routing', () => {
 
     expect((await orch.tick()).kind).toBe('processed')
     expect((await orch.tick()).kind).toBe('processed')
-    expect((await orch.tick()).kind).toBe('processed')
-    expect((await orch.tick()).kind).toBe('processed')
-    expect((await orch.tick()).kind).toBe('processed')
 
-    const sixth = await orch.tick()
-    expect(sixth.kind).toBe('processed')
-    if (sixth.kind === 'processed') {
-      expect(sixth.afterStatus).toBe('blocked')
-      expect(sixth.transitioned).toBe(true)
+    const third = await orch.tick()
+    expect(third.kind).toBe('processed')
+    if (third.kind === 'processed') {
+      expect(third.afterStatus).toBe('blocked')
+      expect(third.transitioned).toBe(true)
     }
 
     const checkpointPath = path.join(memoryDir, 'tasks', 'worker-task', 'checkpoint.json')

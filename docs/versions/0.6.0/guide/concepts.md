@@ -11,8 +11,8 @@ A quick tour of the vocabulary. Each term links to a deeper page.
 In the product, you mostly think in **projects**. In the runtime and config
 layers, the same unit is still often called a **workspace**.
 
-Either way, it means one directory containing a `guildhall.yaml` and a
-`memory/` folder. See [Workspaces](./workspaces).
+Either way, it means one directory containing a `./guildhall.yaml` and a
+`./memory/` folder. See [Workspaces](./workspaces).
 
 ## Task
 
@@ -42,7 +42,7 @@ A named slice of the project (e.g. `ui`, `backend`, `infra`) owned by one coordi
 
 ## Coordinator
 
-The general-contractor role for a domain. Defined in `guildhall.yaml` with a
+The general-contractor role for a domain. Defined in `./guildhall.yaml` with a
 **mandate**, **concerns**, and lists of **autonomous decisions** and
 **escalation triggers**. The coordinator decides whether tasks in its domain
 advance and keeps the local plan coherent; see

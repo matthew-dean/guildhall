@@ -9,7 +9,7 @@ help_summary: |
 
 # Tools
 
-**Source:** `src/tools/`
+**Source:** `./src/tools/`
 
 Tools are what agents do with their turns. Every tool has a Zod schema, a handler, and a permission class (`read | write | shell | escalate | meta`).
 
@@ -21,7 +21,7 @@ Tools are what agents do with their turns. Every tool has a Zod schema, a handle
 | `files` | Read, write, append, list, stat, rename, delete. |
 | `search` | Keyword + regex code search across the project. |
 | `task_queue` | Add tasks, move them between statuses, attach spec items. |
-| `memory_tools` | Read/write entries under `memory/` (notes, transcripts). |
+| `memory_tools` | Read/write entries under `./memory/` (notes, transcripts). |
 | `escalation` | Raise an escalation with category + free text. |
 | `proposal` | Propose a design or scope change that a coordinator reviews. |
 | `checkpoint` | Save/restore named checkpoints mid-task. |
@@ -45,7 +45,7 @@ Output is truncated at 12 KB (head + tail preserved with a `[... N bytes elided 
 
 ## Interaction tool
 
-`src/tools/interaction.ts` provides user-confirmation gates (`ask_user`, `confirm_destructive`) that surface as permission prompts in the browser UI or CLI.
+`./src/tools/interaction.ts` provides user-confirmation gates (`ask_user`, `confirm_destructive`) that surface as permission prompts in the browser UI or CLI.
 
 ## Adding a custom tool
 

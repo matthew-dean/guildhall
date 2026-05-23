@@ -17,7 +17,7 @@ inspects, one enforces deterministic checks, and one enriches project context.
 | `worker` | Performs bounded trade work against the accepted blueprint. | Mid-to-high — coding-specific. |
 | `reviewer` | Inspects completed work against the blueprint + rubric. | Mid. |
 | `gateChecker` | Runs deterministic checks and custom gates. | Low — mostly shell/parse. |
-| `contextIndexer` | Summarizes code purpose, contracts, canonical abstractions, and read-next guidance for the Corpus Map. | Mid — code-aware, structured, fast enough for repeated indexing. |
+| `contextIndexer` | Summarizes code purpose, contracts, canonical abstractions, and read-next guidance for the [Corpus Map](./corpus-map). | Mid — code-aware, structured, fast enough for repeated indexing. |
 
 ## Assigning models
 
@@ -54,4 +54,4 @@ Agents run under a permission mode:
 
 ## Persistence
 
-Every agent conversation is snapshotted to `memory/sessions/` per project. You can resume any agent from its last snapshot.
+Every agent conversation is snapshotted to `./memory/sessions/` per project. You can resume any agent from its last snapshot.

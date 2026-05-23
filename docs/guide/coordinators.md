@@ -28,7 +28,7 @@ Guildhall still needs a stable way to tell:
 - release/setup work from product-task work
 
 Guildhall stores those slices under the existing `coordinators:` key in
-`guildhall.yaml`. That key is historical. The useful product rule is simpler:
+`./guildhall.yaml`. That key is historical. The useful product rule is simpler:
 
 - you manage projects, tasks, and decisions
 - Guildhall manages routing and review structure underneath

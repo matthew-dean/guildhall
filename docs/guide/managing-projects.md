@@ -11,7 +11,7 @@ attention without guessing which hidden session is "selected."
 
 ## Register projects once
 
-After a project has been set up and has a `guildhall.yaml`, it gets a stable
+After a project has been set up and has a `./guildhall.yaml`, it gets a stable
 id in the global registry under `~/.guildhall/`.
 
 ```bash

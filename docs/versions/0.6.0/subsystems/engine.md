@@ -9,7 +9,7 @@ help_summary: |
 
 # Engine
 
-**Source:** `src/engine/`
+**Source:** `./src/engine/`
 
 The engine is the bottom of the agent stack — the multi-turn loop that manages an LLM conversation.
 
@@ -66,7 +66,7 @@ Hooks can block (return `{ blocked: true, reason }`) or mutate nothing (pure obs
 
 ## Tool-metadata carryover
 
-`src/engine/tool-carryover.ts` persists per-tool state across turns — e.g. the `read_file_state` that tracks which file regions the agent has already seen, or `invoked_skills` that prevents a skill from being re-loaded repeatedly. This is what the session-persistence allowlist whitelists for disk storage.
+`./src/engine/tool-carryover.ts` persists per-tool state across turns — e.g. the `read_file_state` that tracks which file regions the agent has already seen, or `invoked_skills` that prevents a skill from being re-loaded repeatedly. This is what the session-persistence allowlist whitelists for disk storage.
 
 ## Compaction
 

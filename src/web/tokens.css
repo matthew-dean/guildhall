@@ -68,6 +68,17 @@
     0 0 16px color-mix(in srgb, var(--accent-2) 28%, transparent),
     0 0 30px color-mix(in srgb, var(--accent-2) 12%, transparent);
 
+  /* avatar palette
+     Stable role colors for compact people/agent pips. These intentionally
+     widen the main violet/mint palette without becoming a new page theme. */
+  --avatar-coordinator: var(--accent);
+  --avatar-spec: #d4a23c;
+  --avatar-builder: var(--accent-2);
+  --avatar-reviewer: #5fa8ff;
+  --avatar-gate: #7bd88f;
+  --avatar-human: #d88cff;
+  --avatar-system: #9292a8;
+
   /* semantic tints
      Surface treatments for notices, selected cards, and grouped emphasis.
      Keep these aligned with the core role families above. */

@@ -7,18 +7,21 @@ import { ModelConfigInputSchema } from './schemas.js'
 // ---------------------------------------------------------------------------
 // Project-local Guildhall config — <project>/.guildhall/config.yaml
 //
-// This file holds per-project Guildhall runtime state that does not belong in
-// `guildhall.yaml` (which is usually checked in): local overrides,
-// per-project landing-branch state, and escape-hatch runtime knobs.
-//
-// Guildhall never writes to a shared ~/.guildhall/ directory; version
-// isolation between projects is provided by each project's pinned
-// `node_modules/.bin/guildhall`. Cross-project aggregation lives in
-// guild-pro.
+// This file holds local/private overrides for this checkout. Shared project
+// contract belongs in `guildhall.yaml`; shared Guildhall metadata belongs in
+// other checked-in `.guildhall/*.yaml` files such as `artifacts.yaml`.
 // ---------------------------------------------------------------------------
 
 export const PROJECT_CONFIG_DIRNAME = '.guildhall'
 export const PROJECT_CONFIG_FILENAME = 'config.yaml'
+export const SHARED_PROJECT_METADATA_GITIGNORE_ENTRIES = [
+  `!${PROJECT_CONFIG_DIRNAME}/`,
+  `!${PROJECT_CONFIG_DIRNAME}/*.yaml`,
+] as const
+export const LOCAL_PROJECT_STATE_GITIGNORE_ENTRIES = [
+  `${PROJECT_CONFIG_DIRNAME}/${PROJECT_CONFIG_FILENAME}`,
+  `${PROJECT_CONFIG_DIRNAME}/worktrees/`,
+] as const
 
 export const ProjectGuildhallConfig = z.object({
   /** Default model assignments (merged with per-workspace models) */
@@ -107,27 +110,42 @@ export function projectConfigPath(projectPath: string): string {
 }
 
 /**
- * Ensure project-local Guildhall state is created and ignored by the host repo.
- * This is safe to call repeatedly from init/setup paths.
+ * Ensure the project-level `.guildhall/` file contract exists.
+ *
+ * `.guildhall/*.yaml` is intentionally trackable shared Guildhall metadata
+ * (`artifacts.yaml`, future worktree include metadata, etc.). Local checkout
+ * overrides and temporary worktrees stay ignored.
  */
-export function ensureProjectLocalStateIgnored(projectPath: string): void {
+export function ensureProjectGuildhallFilePolicy(projectPath: string): void {
   const projectRoot = resolve(projectPath)
   if (!existsSync(projectRoot)) mkdirSync(projectRoot, { recursive: true })
   const dir = projectConfigDir(projectRoot)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
 
   const rootGitignore = join(projectRoot, '.gitignore')
-  const entry = '.guildhall/'
   const existing = existsSync(rootGitignore) ? readFileSync(rootGitignore, 'utf8') : ''
-  const alreadyIgnored = existing
+  const wanted = [
+    ...SHARED_PROJECT_METADATA_GITIGNORE_ENTRIES,
+    ...LOCAL_PROJECT_STATE_GITIGNORE_ENTRIES,
+  ]
+  const normalizedLines = existing
     .split(/\r?\n/)
     .map((line) => line.replace(/\s+#.*$/, '').trim())
-    .some((line) => line === '.guildhall' || line === '.guildhall/' || line === '/.guildhall' || line === '/.guildhall/')
+    .filter(Boolean)
+  const missing = wanted.filter((entry) => !normalizedLines.includes(entry))
 
-  if (alreadyIgnored) return
+  if (missing.length === 0) return
 
   const prefix = existing.length === 0 ? '' : existing.endsWith('\n') ? existing : `${existing}\n`
-  writeFileSync(rootGitignore, `${prefix}${entry}\n`, 'utf8')
+  writeFileSync(rootGitignore, `${prefix}${missing.join('\n')}\n`, 'utf8')
+}
+
+/**
+ * Ensure project-local Guildhall state is created and ignored by the host repo.
+ * This is safe to call repeatedly from init/setup paths.
+ */
+export function ensureProjectLocalStateIgnored(projectPath: string): void {
+  ensureProjectGuildhallFilePolicy(projectPath)
 }
 
 /**

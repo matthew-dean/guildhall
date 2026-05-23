@@ -258,7 +258,8 @@ export type WorkspaceYamlConfig = z.infer<typeof WorkspaceYamlConfig>
 
 // ---------------------------------------------------------------------------
 // ~/.guildhall/config.yaml — global defaults
-// Applied to all workspaces unless overridden in guildhall.yaml.
+// Applied to all workspaces unless a checkout has a local/private override in
+// <project>/.guildhall/config.yaml.
 // ---------------------------------------------------------------------------
 
 export const GlobalConfig = z.object({
@@ -339,7 +340,7 @@ export type WorkspaceRegistry = z.infer<typeof WorkspaceRegistry>
 // Project-behavior fields are merged on top of guildhall.yaml during config
 // resolution. Model assignments are intentionally not agent-owned; they describe
 // the user's machine and belong in ~/.guildhall/config.yaml unless a human adds
-// an explicit workspace override.
+// an explicit local checkout override.
 //
 // Humans can inspect, edit, or revert this file — it is plain YAML.
 // Agents record the rationale for every change in DECISIONS.md so you always

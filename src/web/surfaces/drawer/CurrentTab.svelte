@@ -10,6 +10,7 @@
   import AgentQuestion from '../../lib/AgentQuestion.svelte'
   import Markdown from '../../lib/Markdown.svelte'
   import {
+    hasIncompleteTaskChecklist,
     isImportedDraftShaping,
     isQueuedSpecRevision,
     needsRecovery,
@@ -28,6 +29,7 @@
     busy?: boolean
     runBusy?: boolean
     runError?: string | null
+    runStatus?: string
     onApproveBrief: () => void
     onApproveSpec: () => void
     onRunTask: () => void
@@ -42,6 +44,7 @@
     busy = false,
     runBusy = false,
     runError = null,
+    runStatus = 'stopped',
     onApproveBrief,
     onApproveSpec,
     onRunTask,
@@ -83,7 +86,10 @@
     switch (turn.taskStatus) {
       case 'import_draft': return 'Needs task brief'
       case 'exploring': return isImportedDraftShaping(turn) ? 'Guildhall shaping' : isQueuedSpecRevision(turn) ? 'Spec revision queued' : 'Intake'
-      case 'ready': return 'Ready'
+      case 'ready':
+        if (hasIncompleteTaskChecklist(turn)) return 'Needs task brief'
+        if (isProjectRunActive()) return 'Queued for Guildhall'
+        return 'Ready'
       case 'gate_check': return 'Gates'
       case 'review': return 'Review'
       case 'in_progress': return turn.liveAgent ? 'In flight' : 'Paused'
@@ -106,6 +112,12 @@
       return 'Guildhall is drafting this now.'
     }
     if (turn.taskStatus === 'ready' && !turn.liveAgent) {
+      if (hasIncompleteTaskChecklist(turn)) {
+        return 'This task is approved, but its brief/spec is still incomplete and not ready for worker implementation. Review the checklist before Guildhall treats it as runnable work.'
+      }
+      if (isProjectRunActive()) {
+        return 'Approved and queued. Guildhall is already running for this project, so this task will stay in the queue until the coordinator picks it.'
+      }
       return 'Approved and queued. Start Guildhall when you want it to pick this up.'
     }
     if (turn.taskStatus === 'import_draft' && !turn.liveAgent) {
@@ -146,6 +158,8 @@
   }
 
   function canRunTask(turn: TaskThreadInFlightTurn): boolean {
+    if (turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)) return false
+    if (isProjectRunActive() && turn.taskStatus !== 'import_draft') return false
     return !turn.liveAgent && (
       turn.taskStatus === 'ready' ||
       turn.taskStatus === 'import_draft' ||
@@ -156,11 +170,23 @@
     )
   }
 
+  function isProjectRunActive(): boolean {
+    return runStatus === 'running' || runStatus === 'stopping'
+  }
+
+  function showsTaskAction(turn: TaskThreadInFlightTurn): boolean {
+    return canRunTask(turn) ||
+      (!turn.liveAgent && turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)) ||
+      (!turn.liveAgent && turn.taskStatus !== 'import_draft' && isProjectRunActive())
+  }
+
   function runLabel(turn: TaskThreadInFlightTurn): string {
     switch (turn.taskStatus) {
       case 'ready': return 'Start work'
       case 'import_draft': return 'Draft task brief'
-      case 'exploring': return turn.importedDraft ? 'Continue task brief' : isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
+      case 'exploring':
+        if (turn.importedDraft || hasIncompleteTaskChecklist(turn)) return 'Continue task brief'
+        return isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
       case 'review': return 'Resume review'
       case 'gate_check': return 'Resume gates'
       case 'in_progress': return 'Resume work'
@@ -328,12 +354,17 @@
                 </div>
               </div>
             {/if}
-            {#if canRunTask(turn)}
+            {#if showsTaskAction(turn)}
               <Row justify="end" gap="2">
-                {#if turn.importedDraft && !turn.liveAgent}
+                {#if turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)}
                   <Button variant="human" onclick={onOpenSpecTab}>
-                    Review draft...
+                    Review checklist
                   </Button>
+                {:else if turn.taskStatus !== 'import_draft' && isProjectRunActive()}
+                  <Button variant="secondary" disabled>
+                    Already queued
+                  </Button>
+                {:else if turn.importedDraft && !turn.liveAgent}
                   <Button
                     variant="agent"
                     disabled={runBusy}

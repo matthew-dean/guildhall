@@ -126,6 +126,7 @@ describe('DoThisNext', () => {
     render(DoThisNext)
 
     await screen.findByText('Shape the imported drafts')
+    expect(screen.getByRole('button', { name: /draft task brief/i })).toBeTruthy()
     const more = screen.getByRole('button', { name: /1 more in inbox/i })
     expect(more.className).not.toContain('more')
     await userEvent.click(more)

@@ -9,7 +9,7 @@ help_summary: |
 
 # Protocol
 
-**Source:** `src/protocol/`
+**Source:** `./src/protocol/`
 
 The protocol module is the wire vocabulary. Every provider normalizes its native shape into these types so the engine doesn't know (or care) which provider is backing the current turn.
 

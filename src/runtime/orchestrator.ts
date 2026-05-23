@@ -81,6 +81,8 @@ import { buildHookExecutor } from './hooks-loader.js'
 import { buildDefaultCompactor } from './compactor-builder.js'
 import { evaluateProposal, type PromotionAction } from './proposal-promotion.js'
 import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
+import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
+import { repairStaleBlockersInQueue } from './stale-blocker-repair.js'
 import {
   effectiveBootstrapGateCommands,
   renderTaskScopedGateInstructions,
@@ -427,7 +429,7 @@ function isRecoverableToolPathMismatchBlocker(task: Task): boolean {
       .filter((escalation) => !escalation.resolvedAt)
       .map((escalation) => `${escalation.summary ?? ''}\n${escalation.details ?? ''}`),
   ].join('\n')
-  return /tool (?:read|reads|layer|runtime|file\/write|file read\/write)|path mismatch|misrouted|intercepted|unrelated missing path|unrelated task file|different task worktree/i.test(text)
+  return /tool (?:read|reads|layer|runtime|file\/write|file read\/write)|cross-task tool guardrail|stale workspace path guardrail|tooling\/context routing|path mismatch|misrouted|intercepted|unrelated missing path|unrelated task file|different task worktree/i.test(text)
 }
 
 function isRecoverableBlueprintToolingBlocker(task: Task): boolean {
@@ -537,7 +539,7 @@ function resolveRecoverableToolPathMismatchEscalations(task: Task, resolvedAt: s
   for (const escalation of task.escalations ?? []) {
     if (escalation.resolvedAt) continue
     const text = `${escalation.summary ?? ''}\n${escalation.details ?? ''}`
-    if (/tool (?:read|reads|layer|runtime|file\/write|file read\/write)|path mismatch|misrouted|intercepted|unrelated missing path|unrelated task file|different task worktree/i.test(text)) {
+    if (/tool (?:read|reads|layer|runtime|file\/write|file read\/write)|cross-task tool guardrail|stale workspace path guardrail|tooling\/context routing|path mismatch|misrouted|intercepted|unrelated missing path|unrelated task file|different task worktree/i.test(text)) {
       escalation.resolvedAt = resolvedAt
       escalation.resolvedBy = 'system'
       escalation.resolution =
@@ -1346,7 +1348,7 @@ function taskHasDraftEvidence(task: Task): boolean {
 }
 
 function taskHasUnansweredUserQuestion(task: Task): boolean {
-  return (task.openQuestions ?? []).some((question) => !question.answeredAt)
+  return taskHasUnansweredVisibleQuestion(task)
 }
 
 function resumableTaskIdsForLabel(label: string, queue: TaskQueue): string[] {
@@ -2005,6 +2007,8 @@ export class Orchestrator {
     const resolvedCapacity = await this.resolveCapacity()
     queueBefore = await this.normalizeQueuedReviewOwnership(queueBefore, resolvedCapacity)
     queueBefore = await this.reopenRecoverableDirtyRepoTasks(queueBefore)
+    const staleRepair = repairStaleBlockersInQueue(queueBefore, this.now())
+    if (staleRepair.changed) await this.writeQueue(queueBefore)
     const capacity =
       opts.dispatchLimit === undefined
         ? resolvedCapacity
@@ -2893,6 +2897,22 @@ export class Orchestrator {
       if (/Model returned an empty assistant message/.test(message)) {
         const retries = (this.emptyAssistantRetries.get(retryKey) ?? 0) + 1
         this.emptyAssistantRetries.set(retryKey, retries)
+        const resets = this.emptyAssistantResets.get(retryKey) ?? 0
+        if (resets >= 1) {
+          const preserved = await this.preserveDurableProgressAfterEmptyAssistant({
+            taskId: task.id,
+            agentName: agent.name,
+            beforeStatus,
+            agentMetadata: typeof agent.getToolMetadata === 'function'
+              ? agent.getToolMetadata()
+              : undefined,
+          })
+          if (preserved) {
+            this.emptyAssistantRetries.delete(retryKey)
+            this.emptyAssistantResets.delete(retryKey)
+            return preserved
+          }
+        }
         if (retries <= 2) {
           await this.emitBackendEvent({
             type: 'line_complete',
@@ -2910,7 +2930,6 @@ export class Orchestrator {
             revisionCount: task.revisionCount,
           }
         }
-        const resets = this.emptyAssistantResets.get(retryKey) ?? 0
         if (resets < 1 && typeof agent.resetConversation === 'function') {
           agent.resetConversation()
           this.emptyAssistantResets.set(retryKey, resets + 1)
@@ -6490,7 +6509,7 @@ export class Orchestrator {
       !!task.productBrief &&
       typeof task.productBrief.userJob === 'string' &&
       task.productBrief.userJob.trim().length > 0
-    const hasOpenQuestion = (task.openQuestions ?? []).some((question) => !question.answeredAt)
+    const hasOpenQuestion = taskHasUnansweredVisibleQuestion(task)
     const hasDirtyWorktree =
       input.beforeStatus === 'in_progress' &&
       typeof task.worktreePath === 'string' &&
@@ -6630,6 +6649,34 @@ export class Orchestrator {
       metadata: input.agentMetadata,
       reason: 'empty assistant reply after verified progress',
     })
+    const blockReason =
+      'empty assistant reply after verified progress: The model stopped returning usable assistant text after tool progress. Guildhall saved a recovery checkpoint so the task can resume cleanly.'
+    const now = this.now()
+    let afterStatus: TaskStatus = task.status
+    if (task.status !== 'blocked') {
+      await this.withQueueWriteLock(async () => {
+        const queue = await this.readQueue()
+        const queuedTask = queue.tasks.find((candidate) => candidate.id === input.taskId)
+        if (!queuedTask || queuedTask.status === 'blocked') {
+          afterStatus = queuedTask?.status ?? task.status
+          return
+        }
+        queuedTask.status = 'blocked'
+        queuedTask.assignedTo = null
+        queuedTask.blockReason = blockReason
+        queuedTask.updatedAt = now
+        queuedTask.notes.push({
+          agentId: 'coordinator',
+          role: 'checkpoint',
+          content:
+            'Guildhall saved a recovery checkpoint after the model stopped responding clearly following verified worker progress. Resume the task to continue from that checkpoint.',
+          timestamp: now,
+        })
+        queue.lastUpdated = now
+        await this.writeQueue(queue)
+        afterStatus = 'blocked'
+      })
+    }
 
     await this.emitBackendEvent({
       type: 'line_complete',
@@ -6638,20 +6685,20 @@ export class Orchestrator {
       message:
         task.status === 'blocked'
           ? checkpointWritten
-            ? 'The model started ghosting after real worker edits or verification, but the task had already raised a blocker. Guildhall wrote a recovery checkpoint before leaving that blocked state intact.'
-            : 'The model started ghosting after real worker edits or verification, but the task had already raised a blocker. Guildhall is leaving that blocked state intact instead of layering on a fake hard failure.'
+            ? 'Saved a recovery checkpoint after the model stopped responding clearly. The existing blocker is still the task state to resolve.'
+            : 'The model stopped responding clearly after verified progress. The existing blocker is still the task state to resolve.'
           : checkpointWritten
-            ? 'The model started ghosting after real worker edits or verification. Guildhall wrote a recovery checkpoint and is keeping the task resumable instead of turning it into a fake hard failure.'
-            : 'The model started ghosting after real worker edits or verification. Guildhall is preserving that progress and keeping the task resumable instead of turning it into a fake hard failure.',
+            ? 'Saved a recovery checkpoint after the model stopped responding clearly.'
+            : 'The model stopped responding clearly after verified progress; Guildhall kept the task resumable.',
     })
 
-    const transitioned = task.status !== input.beforeStatus
+    const transitioned = afterStatus !== input.beforeStatus
     return {
       kind: 'processed',
       taskId: task.id,
       agent: input.agentName,
       beforeStatus: input.beforeStatus,
-      afterStatus: task.status,
+      afterStatus,
       transitioned,
       revisionCount: task.revisionCount,
     }
@@ -7006,7 +7053,7 @@ export class Orchestrator {
     metadata?: Record<string, unknown>
     reason: string
   }): Promise<boolean> {
-    if (input.task.status !== 'in_progress') return false
+    if (input.task.status !== 'in_progress' && input.task.status !== 'blocked') return false
 
     const effectiveProjectPath = resolveEffectiveTaskProjectPath(
       input.task,

@@ -23,8 +23,8 @@ Use it for the everyday loop:
 5. Inspect transcripts, reviews, gates, and provenance.
 6. Resolve escalations and tune settings.
 
-The app is still transparent: project state lands in `guildhall.yaml`,
-`.guildhall/config.yaml`, and `memory/*`, while machine-scoped state such as
+The app is still transparent: project state lands in `./guildhall.yaml`,
+`./.guildhall/config.yaml`, and `./memory/*`, while machine-scoped state such as
 the project registry, provider credentials, and default provider choice live
 under `~/.guildhall/`.
 

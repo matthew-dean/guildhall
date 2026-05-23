@@ -1,5 +1,5 @@
 ---
-title: guildhall.yaml
+title: ./guildhall.yaml
 help_topic: reference.workspace_config
 help_summary: |
   The project config file. Defines name, id, projectPath, model assignments
@@ -7,7 +7,7 @@ help_summary: |
   maxRevisions.
 ---
 
-# `guildhall.yaml` reference
+# `./guildhall.yaml` reference
 
 The main project config file. It normally lives at the project root.
 
@@ -45,7 +45,7 @@ models:
   gateChecker: qwen2.5-coder-7b-instruct
 ```
 
-Each of the five roles must resolve against the model catalog in `src/core/models.ts`.
+Each of the five roles must resolve against the model catalog in `./src/core/models.ts`.
 
 ## `coordinators`
 

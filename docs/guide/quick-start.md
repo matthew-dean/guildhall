@@ -5,7 +5,7 @@ pageClass: gh-first-visit-page
 
 # Start here
 
-Guildhall is a local app for handing real project work to AI helpers without
+Guildhall is a local app for handing real project work to AI agents without
 losing the plot. It keeps the plan, the work, the review, and the blockers in
 one visible place. You do not need to learn the internal machinery before your
 first run.
@@ -14,23 +14,42 @@ first run.
 
 ## The first mental model
 
-Think of Guildhall as a small construction office for software:
+Think of Guildhall as a small project office for AI-assisted software work.
+The name comes from a guild hall: a shared room where different skilled trades
+coordinate work and standards. In Guildhall, those "trades" are AI agents with
+different jobs.
+
+The pieces you touch first are:
 
 - **Projects** are your repos.
 - **Blueprints** are the accepted plans for what gets built and how it
   will be checked.
-- **Tasks** are framed pieces of work that can move through the guild.
-- **The guild** is the set of helpers that plan, build, inspect, and report.
-- **The shell** is the browser screen where you can see the job site.
+- **Tasks** are framed pieces of work that can move through planning,
+  implementation, review, and gates.
+- **Agents** are the helpers that plan, build, inspect, and report.
+- **The shell** is the browser screen where you see the current project.
 
 The goal of getting started is simple: open one project, give it one small
 task set, and see whether the work moves with clear evidence. Read
 [How Guildhall builds](./how-guildhall-builds) when you want the full mental
-model.
+model, or keep [Core concepts](./concepts) nearby as the glossary.
 
-Setup stays short. Guildhall can infer routine defaults, recommend a path,
-and save your attention for choices that change what you are building or how
-safe the run will be.
+Setup stays short by design. Guildhall can infer routine defaults and save
+your attention for choices that change what you are building, how safe the run
+is, or whether the result is good enough.
+
+## What a good first run proves
+
+Do not start by asking Guildhall to build an entire product. Start with one
+small task that can show the loop:
+
+1. Guildhall understands the project well enough to draft a blueprint.
+2. You can approve or correct that blueprint.
+3. A worker can make a bounded change.
+4. Reviewers and checks attach evidence.
+5. If the run stops, the blocker tells you why.
+
+That is the little heartbeat you want before asking for more ambitious work.
 
 ## Install
 
@@ -112,15 +131,15 @@ the repo and follow the local pattern.
 For an existing repo, Guildhall may find README sections, TODO files, roadmap
 notes, or old planning docs:
 
-> I found possible work in `README.md`, `docs/roadmap.md`, and `TODO.md`.
+> I found possible work in `README.md`, `./docs/roadmap.md`, and `TODO.md`.
 > Which source becomes task drafts?
 
 Useful answers:
 
-> Use `docs/roadmap.md` first. Treat `TODO.md` as scratch notes.
+> Use `./docs/roadmap.md` first. Treat `TODO.md` as scratch notes.
 
 > Ignore the old README checklist. The current source of truth is
-> `docs/release-plan.md`.
+> `./docs/release-plan.md`.
 
 This does not mean every note becomes runnable work. It means Guildhall can
 turn selected notes into draft task blueprints for review.
@@ -180,7 +199,8 @@ not a puzzle you were supposed to solve with vibes.
 
 ## A first-run example
 
-Here is what a healthy first run feels like.
+Here is what a healthy first run feels like. Tiny, useful, boring in the best
+way.
 
 1. You run `guildhall serve` inside `~/projects/my-app`.
 2. Guildhall asks for a project name, slug, and provider.
@@ -210,8 +230,20 @@ Here is what a healthy first run feels like.
    same task.
 9. If work stops, the blocker names the specific reason and the next choice.
 
-That is the feeling to look for: one project, one visible queue, one task state,
-and enough evidence that you can tell whether Guildhall is working or waiting.
+That is the feeling to look for: one project, one visible queue, one task
+state, and enough evidence that you can tell whether Guildhall is working or
+waiting.
+
+## Two ways to start
+
+If you are a developer, pick a task where you already know the verification
+path: a failing test, a small UI fix, a documentation/code mismatch, or one obvious
+setup problem. You are checking whether Guildhall respects the repo.
+
+If you are closer to product than code, pick a narrow outcome you can describe
+well: who it is for, what the user should be able to do, what is out of scope,
+and what would make you say “yes, that solves the problem.” You are checking
+whether Guildhall can turn your intent into usable technical work.
 
 ## Choose your path
 

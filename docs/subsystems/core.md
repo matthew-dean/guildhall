@@ -9,7 +9,7 @@ help_summary: |
 
 # Core
 
-**Source:** `src/core/`
+**Source:** `./src/core/`
 
 Core defines the shared data models — the vocabulary every other subsystem speaks.
 
@@ -70,7 +70,7 @@ interface Goal { id: string; description: string; priority: number }
 interface Guardrail { id: string; description: string; trigger: string }
 ```
 
-The envelope is declared in `memory/business-envelope.yaml`; `business_envelope_strictness` controls enforcement.
+The envelope is declared in `./memory/business-envelope.yaml`; `business_envelope_strictness` controls enforcement.
 
 ## DesignSystem
 
@@ -111,5 +111,5 @@ export default defineWorkspace({
 
 ## CoordinatorDomain & memory layout
 
-- `CoordinatorDomain` — the shape stored under `coordinators:` in `guildhall.yaml`.
-- `memory.ts` — canonical layout of the `memory/` directory (paths for `TASKS.json`, `agent-settings.yaml`, `sessions/`, `transcripts/`).
+- `CoordinatorDomain` — the shape stored under `coordinators:` in `./guildhall.yaml`.
+- `memory.ts` — canonical layout of the `./memory/` directory (paths for `TASKS.json`, `agent-settings.yaml`, `sessions/`, `transcripts/`).

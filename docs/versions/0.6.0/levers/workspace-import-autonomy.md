@@ -23,4 +23,4 @@ Controls how GuildHall behaves when it detects importable state from another wor
 
 ## What gets imported
 
-The importer detects recognized shapes — e.g. a `specs/` folder, a `TASKS.md` markdown backlog, or an external issue tracker export. Each shape has a module under `src/runtime/workspace-import/` (not shown in this survey) defining the detection and translation rules.
+The importer detects recognized shapes — e.g. a `specs/` folder, a `TASKS.md` markdown backlog, or an external issue tracker export. Each shape has a module under `./src/runtime/workspace-import/` (not shown in this survey) defining the detection and translation rules.

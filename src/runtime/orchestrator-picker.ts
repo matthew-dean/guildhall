@@ -17,11 +17,12 @@ import { type Task, type TaskQueue, type TaskStatus } from '@guildhall/core'
 import { hasOpenEscalation } from '@guildhall/tools'
 import { META_INTAKE_TASK_ID } from './meta-intake.js'
 import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
+import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
 
 export type TaskLane = 'spec' | 'worker' | 'review' | 'coordinator'
 
 function hasUnansweredOpenQuestion(task: Task): boolean {
-  return (task.openQuestions ?? []).some((question) => !question.answeredAt)
+  return taskHasUnansweredVisibleQuestion(task)
 }
 
 export function taskHasUnansweredOpenQuestion(task: Task): boolean {

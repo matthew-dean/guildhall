@@ -4,19 +4,19 @@ help_topic: subsystem.mcp
 help_summary: |
   Connect Model Context Protocol servers (stdio, HTTP, WebSocket) and expose
   their tools and resources to agents. Configured under mcp.servers in
-  guildhall.yaml.
+  ./guildhall.yaml.
 ---
 
 # MCP
 
-**Source:** `src/mcp/`
+**Source:** `./src/mcp/`
 
 Guildhall consumes [Model Context Protocol](https://modelcontextprotocol.io) servers. Any server you configure becomes available to agents as tools (and, for resources, as `list_mcp_resources` / `read_mcp_resource`).
 
 ## Configuration
 
 ```yaml
-# guildhall.yaml
+# ./guildhall.yaml
 mcp:
   servers:
     github:

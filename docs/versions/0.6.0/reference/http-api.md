@@ -2,14 +2,14 @@
 title: Web server routes
 help_topic: reference.http_api
 help_summary: |
-  The Hono server at src/runtime/serve.ts exposes REST + SSE endpoints the
+  The Hono server at ./src/runtime/serve.ts exposes REST + SSE endpoints the
   browser UI uses. Default port 7777. Project-scoped routes are anchored to
   explicit project ids for writes, and secrets are redacted in /api/config.
 ---
 
 # HTTP API
 
-Served by `src/runtime/serve.ts` (Hono). Default port `7777`. All routes are local-only unless you've explicitly bound externally.
+Served by `./src/runtime/serve.ts` (Hono). Default port `7777`. All routes are local-only unless you've explicitly bound externally.
 
 ## Service and page routes
 
@@ -64,7 +64,7 @@ project-route helpers when it is operating under `/projects/:id/...`.
 | `POST /api/project/meta-intake` | Kick off bootstrap. |
 | `POST /api/project/meta-intake/rerun` | Re-seed the bootstrap flow. |
 | `GET /api/project/meta-intake/draft` | Current spec + coordinator draft preview. |
-| `POST /api/project/meta-intake/approve` | Merge draft into `guildhall.yaml`. |
+| `POST /api/project/meta-intake/approve` | Merge draft into `./guildhall.yaml`. |
 | `POST /api/project/meta-intake/synthesize` | Compress draft signals into a cleaner draft. |
 | `GET /api/project/bootstrap/status` | Bootstrap verification status. |
 | `POST /api/project/bootstrap/run` | Run verified bootstrap synchronously. |
@@ -102,4 +102,4 @@ project-route helpers when it is operating under `/projects/:id/...`.
 
 ## Wire format
 
-Most responses are plain JSON. `GET /api/project/events` is `text/event-stream`; each event has a `type` field matching one of the types in [`src/backend-host/wire.ts`](../subsystems/backend-host).
+Most responses are plain JSON. `GET /api/project/events` is `text/event-stream`; each event has a `type` field matching one of the types in [`./src/backend-host/wire.ts`](../subsystems/backend-host).

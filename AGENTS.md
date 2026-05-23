@@ -2,8 +2,10 @@
 
 ## Task log discipline
 
-- Keep `/Users/matthew/git/oss/guildhall/internal/audits/flow-audit.md` as the
-  canonical live checklist for ongoing Guildhall UI/runtime hardening work.
+- Keep `artifact:flow-audit` as the canonical live checklist for ongoing
+  Guildhall UI/runtime hardening work. Resolve artifact IDs through the
+  project-checked-in `.guildhall/artifacts.yaml` registry instead of copying a
+  concrete path into new plans or handoff notes.
 - When you start a meaningful multi-step fix, add or update checklist items
   before you finish the turn.
 - When you complete, defer, or discover a new blocker during live testing,

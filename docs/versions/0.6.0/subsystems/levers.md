@@ -3,7 +3,7 @@ title: Levers
 help_topic: subsystem.levers
 help_summary: |
   Every behavioral knob in GuildHall is a named "lever" with enumerated
-  positions, persisted in memory/agent-settings.yaml with who-set-it, when,
+  positions, persisted in ./memory/agent-settings.yaml with who-set-it, when,
   and why. No hidden defaults.
 ---
 
@@ -11,8 +11,8 @@ help_summary: |
 
 The lever system is GuildHall's policy surface. Instead of scattered hardcoded defaults, every behavioral knob is a named decision point with an enumerated set of positions and full provenance.
 
-**Source:** `src/levers/`
-**Storage:** `memory/agent-settings.yaml`
+**Source:** `./src/levers/`
+**Storage:** `./memory/agent-settings.yaml`
 **Reference:** full list of levers in [Levers reference](../levers/).
 
 ## Schema

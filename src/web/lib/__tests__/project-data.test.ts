@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildProjectActivitySummary,
   buildCoordinatorsSurface,
   buildThreadPhaseGroups,
   buildWorkSurface,
@@ -32,6 +33,34 @@ describe('buildWorkSurface', () => {
       '2026-05-09T21:00:01.000Z',
       '2026-05-09T21:00:05.000Z',
     ])
+  })
+})
+
+describe('buildProjectActivitySummary', () => {
+  it('preserves live event metadata on in-flight task rows', () => {
+    const summary = buildProjectActivitySummary({
+      running: true,
+      runStatus: 'running',
+      counts: { in_progress: 1 },
+      inFlight: [
+        {
+          id: 'task-1',
+          title: 'Long worker loop',
+          status: 'in_progress',
+          domain: 'runtime',
+          lastActivityAt: '2026-05-23T18:01:00.000Z',
+          lastActivityLabel: 'Failed command',
+          lastActivityTone: 'danger',
+        },
+      ],
+    })
+
+    expect(summary.inFlight[0]).toMatchObject({
+      id: 'task-1',
+      lastActivityAt: '2026-05-23T18:01:00.000Z',
+      lastActivityLabel: 'Failed command',
+      lastActivityTone: 'danger',
+    })
   })
 })
 

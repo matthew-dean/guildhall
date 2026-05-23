@@ -23,7 +23,7 @@ From there, use the **Start** / **Stop** controls in the project shell. This
 is the main operating path: you can inspect Thread, Work, Needs you, task
 drawers, and release state without leaving the UI.
 
-The dashboard uses the same runtime as the CLI. Progress is appended to `memory/PROGRESS.md`, events are streamed to `memory/events.ndjson`, and the full transcript per task lives under `memory/transcripts/`.
+The dashboard uses the same runtime as the CLI. Progress is appended to `./memory/PROGRESS.md`, events are streamed to `./memory/events.ndjson`, and the full transcript per task lives under `./memory/transcripts/`.
 
 Progress should also leave a durable artifact: a task blueprint, decision,
 change order, implementation diff, verification result, review finding, or
@@ -78,4 +78,4 @@ Each tick:
 4. For any tasks in `gate_check`: run hard gates.
 5. Persist state; emit events.
 
-See [`src/runtime`](../subsystems/runtime) for the full state machine.
+See [`./src/runtime`](../subsystems/runtime) for the full state machine.

@@ -8,7 +8,7 @@ help_summary: |
 
 # CLI reference
 
-**Entry point:** `src/runtime/cli.ts` (bundled to `dist/cli.js` → `guildhall` bin).
+**Entry point:** `./src/runtime/cli.ts` (bundled to `dist/cli.js` → `guildhall` bin).
 
 The CLI talks to the same local service and project files as the browser UI.
 Use it for local service lifecycle, project registry management, and focused
@@ -18,7 +18,7 @@ UI and HTTP API rather than as separate human-facing CLI commands.
 ## `guildhall init [path]`
 
 Open the setup flow for a project. The default path launches the browser setup
-wizard; completing that flow creates `guildhall.yaml` and registers the
+wizard; completing that flow creates `./guildhall.yaml` and registers the
 project.
 
 Flags:
@@ -26,19 +26,19 @@ Flags:
 - `--port <n>` (default `7777`) — local service / browser UI port.
 - `--no-browser` — don't auto-open the browser.
 - `--cli-wizard` — use the text wizard instead of the web one.
-- `--no-serve` — with `--cli-wizard`, write `guildhall.yaml` and register the
+- `--no-serve` — with `--cli-wizard`, write `./guildhall.yaml` and register the
   project without launching the web wizard. Without `--cli-wizard`, Guildhall
   still serves the browser setup flow.
 
 ## `guildhall register <path>`
 
-Register an existing project (must contain `guildhall.yaml`) in
+Register an existing project (must contain `./guildhall.yaml`) in
 `~/.guildhall/registry.yaml`.
 
 ## `guildhall unregister <id|path>`
 
-Remove a project from the registry. Does not delete `memory/` or
-`guildhall.yaml`.
+Remove a project from the registry. Does not delete `./memory/` or
+`./guildhall.yaml`.
 
 ## `guildhall list`
 

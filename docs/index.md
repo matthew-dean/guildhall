@@ -2,157 +2,108 @@
 layout: page
 pageClass: gh-home-page
 title: Guildhall
-titleTemplate: Let the guild carry the work
-description: Local service where a guild of AI helpers plans, builds, reviews, and finishes software work with visible state.
+titleTemplate: An AI agent harness for real software work
+description: Local AI agent harness for planning, running, reviewing, and recovering software work across real projects with visible state.
 ---
 
 <section class="gh-home">
   <section class="gh-home-hero">
     <div class="gh-home-hero__copy">
-      <p class="gh-kicker">Local guild. Shared plans. Visible work.</p>
-      <h1>Let the guild carry the work.</h1>
-      <p class="gh-home-subhead">As unattended as you want. As auditable as you need.</p>
-      <p class="gh-home-lede">Guildhall runs over your projects from a local service. It surveys the repo, drafts the plan, frames the tasks, sends helpers to work, checks the result, and keeps the receipts attached.</p>
-      <p class="gh-home-version">You are reading Current docs for <a href="/guildhall/releases/0.6.0">Guildhall 0.6.0</a>. Want the work-in-progress 0.7 docs? Open <a href="/guildhall/next/guide/">Next</a>.</p>
+      <p class="gh-kicker">AI agents for real software work.</p>
+      <h1><span>Give AI agents a job site,</span><span>not just a chat box.</span></h1>
+      <p class="gh-home-subhead">Plan the task. Run the agents. Review the evidence. Recover when work gets stuck.</p>
+      <ul class="gh-home-proof-list" aria-label="Guildhall use cases">
+        <li>Feature slices, cleanup passes, docs alignment, and release prep.</li>
+        <li>Visible tasks, blockers, transcripts, reviews, and gates.</li>
+        <li>Enough structure to keep AI work from drifting into chat fog.</li>
+      </ul>
       <div class="gh-home-hero__actions">
         <div class="gh-cta-row">
           <a class="gh-cta gh-cta-primary" href="/guildhall/guide/quick-start">Get started</a>
-          <a class="gh-cta gh-cta-secondary" href="/guildhall/guide/new-project">New project</a>
-          <a class="gh-cta gh-cta-secondary" href="/guildhall/guide/existing-project">Existing project</a>
-          <a class="gh-cta gh-cta-secondary" href="/guildhall/next/guide/">Next docs</a>
-          <a class="gh-cta gh-cta-secondary" href="https://github.com/matthew-dean/guildhall">Read the code</a>
+          <a class="gh-cta gh-cta-secondary" href="/guildhall/guide/introduction">How it works</a>
+          <a class="gh-cta gh-cta-secondary" href="https://github.com/matthew-dean/guildhall">GitHub</a>
         </div>
+        <p class="gh-home-version">Current docs: <a href="/guildhall/releases/0.6.0">0.6.0</a>. Preview <a href="/guildhall/next/guide/">Next</a>.</p>
         <ul class="gh-home-hero__badges" aria-label="Guildhall strengths">
-          <li>Blueprints before build work</li>
-          <li>Trade work with receipts</li>
-          <li>Inspections before done</li>
+          <li>Shared agent state</li>
+          <li>Blueprints before changes</li>
+          <li>Reviews before done</li>
         </ul>
       </div>
     </div>
-    <div class="gh-home-hero__media">
-      <figure class="gh-doc-shot">
-        <picture>
-          <source srcset="./assets/ui-audit/0-7-0/projects.avif" type="image/avif" />
-          <img src="./assets/ui-audit/0-7-0/projects.png" alt="Guildhall projects home showing several local projects with status, activity, and start controls." />
-        </picture>
-        <figcaption>
-          <strong>The service starts with your projects.</strong>
-          Open the shell that needs attention, start another run, or attach a new repo without guessing which hidden session is active.
-        </figcaption>
-      </figure>
-      <div class="gh-home-hero__proof">
-        <p class="gh-kicker">What this buys you</p>
-        <h2>Less babysitting. More legible runs.</h2>
-        <ul>
-          <li>Run work from the Projects home instead of guessing which hidden session is alive.</li>
-          <li>Give agents a blueprint to build against instead of asking them to improvise the whole job.</li>
-          <li>Keep reviewer calls and transcripts close enough to challenge.</li>
-          <li>Turn autonomy up or down without handing your judgment to a mystery box.</li>
-        </ul>
-      </div>
+    <div class="gh-home-hero__media gh-home-hero__media-illustration">
+      <img class="gh-home-hero__illustration" src="./assets/illustrations/hall-3d-compressed.png" alt="A 3D illustrated guild hall with workers, banners, tools, and shared work areas." />
     </div>
   </section>
 
   <section class="gh-doc-section">
     <div class="gh-section-heading">
-      <p class="gh-kicker">Actual product</p>
-      <h2>Real state, early in the story.</h2>
-      <p>Guildhall earns trust by putting the moving parts where you can see them. Site survey, task blueprints, active trade work, inspections, release readiness, and the drawer full of evidence are part of the product.</p>
-    </div>
-    <figure class="gh-doc-shot">
-      <img src="./assets/ui-audit/0-7-0/thread.png" alt="Guildhall Thread view showing setup prompts, active work, and decisions in a single feed." />
-      <figcaption>
-        <strong>Real product, real state.</strong>
-        Thread, queue, and the inbox stay close enough together that you can see whether the next move belongs to the service or to you.
-      </figcaption>
-    </figure>
-  </section>
-
-  <section class="gh-origin-band">
-    <p>Guildhall was built by an ADHD engineer who got tired of AI harnesses that expected him to keep twelve tabs, three half-runs, and one fragile mental thread alive at all times.</p>
-  </section>
-
-  <section class="gh-doc-section">
-    <div class="gh-section-heading">
-      <p class="gh-kicker">Why it works</p>
-      <h2>Autonomy without amnesia.</h2>
-      <p>The goal is not to feel magical. The goal is to carry real work while keeping the state legible enough that you can trust a good run and catch a bad one early.</p>
+      <p class="gh-kicker">Why use it?</p>
+      <h2>Because AI work gets better when the project has a shape.</h2>
     </div>
     <div class="gh-signal-grid">
       <article class="gh-signal-card">
-        <h3>Blueprints before build work</h3>
-        <p>Guildhall shapes the work before it builds: goal, scope, non-goals, acceptance criteria, and checks.</p>
+        <h3>For software developers</h3>
+        <p>Hand off bounded work without losing architecture, tests, or review discipline. Guildhall nudges agents toward existing code, shared components, focused verification, and visible evidence.</p>
       </article>
       <article class="gh-signal-card">
-        <h3>Reviewers with teeth</h3>
-        <p>Work does not become done because a worker sounded confident. It becomes done because inspectors, checks, and release rules agree it can move forward.</p>
+        <h3>For product-minded builders</h3>
+        <p>Explain the product clearly, then let Guildhall turn that intent into smaller task blueprints. You can answer scope and taste questions without pretending to be the compiler.</p>
       </article>
       <article class="gh-signal-card">
-        <h3>Change orders, not drift</h3>
-        <p>When reality changes the plan, Guildhall names the old assumption, the new evidence, and what moves next.</p>
+        <h3>For messy real projects</h3>
+        <p>Keep work from scattering across chats, half-runs, and “wait, what did it change?” moments. Guildhall keeps the trail attached to the task.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="gh-origin-band">
+    <p>Guildhall borrows its name from a shared room for skilled work: different trades, common standards, visible progress. That is the product promise, minus the dust.</p>
+  </section>
+
+  <section class="gh-doc-section">
+    <div class="gh-section-heading">
+      <p class="gh-kicker">The core idea</p>
+      <h2>An agent harness wraps the model with workflow.</h2>
+      <p>A chat assistant answers a conversation. An agent harness decides what work exists, what context each agent gets, which tools are allowed, when review happens, and when the run should pause for you.</p>
+    </div>
+    <div class="gh-signal-grid">
+      <article class="gh-signal-card">
+        <h3>Plan</h3>
+        <p>Turn broad intent into a blueprint: goal, scope, non-goals, acceptance criteria, and checks.</p>
       </article>
       <article class="gh-signal-card">
-        <h3>Levers, not vibes</h3>
-        <p>Autonomy, reviewer strictness, remediation behavior, and fanout live in named settings instead of whatever mood the tool woke up in.</p>
+        <h3>Build</h3>
+        <p>Give workers focused context so they can make changes that fit the project instead of inventing a parallel universe.</p>
       </article>
       <article class="gh-signal-card">
-        <h3>Memory with receipts</h3>
-        <p>Project habits, cross-project preferences, and product suggestions stay inspectable, reversible, and scoped to the layer where they belong.</p>
-      </article>
-      <article class="gh-signal-card">
-        <h3>Visible state</h3>
-        <p>The blueprint, active build work, blockers, inspections, and release posture stay legible. Hidden state is funny only until it ships.</p>
+        <h3>Inspect</h3>
+        <p>Use reviewers and gates to attach findings, command output, and release evidence before calling work done.</p>
       </article>
     </div>
   </section>
 
   <section class="gh-doc-section">
     <div class="gh-section-heading">
-      <p class="gh-kicker">Personalities, not pageantry</p>
-      <h2>The guild has character because the work does.</h2>
-      <p>Coordinators, workers, specialists, and reviewers each carry a different job and point of view. That personality is there to sharpen decisions and reduce cognitive load, not to turn the product into theater.</p>
-    </div>
-    <div class="gh-guild-showcase">
-      <figure class="gh-guild-figure gh-guild-figure-primary">
-        <img src="./assets/illustrations/guild-overview.svg" alt="Illustration of Guildhall roles with coordinator, workers, and reviewers connected by visible lanes." />
-      </figure>
-      <div class="gh-guild-supporting">
-        <article class="gh-guild-copy">
-          <h3>Different roles, different instincts</h3>
-          <p>The coordinator keeps the job coherent, spec agents draft blueprints, workers perform trade work, reviewers inspect, and gates insist on evidence. That is the useful personality in the system.</p>
-        </article>
-        <figure class="gh-guild-figure gh-guild-figure-secondary">
-          <img src="./assets/illustrations/reviewer-flow.svg" alt="Illustration of Guildhall reviewer and release gate flow." />
-        </figure>
-        <article class="gh-guild-copy">
-          <h3>Less theater, more legibility</h3>
-          <p>The point of the personas is not lore. The point is to make Guildhall's reasoning readable enough that you can trust it or challenge it.</p>
-        </article>
-      </div>
-    </div>
-  </section>
-
-  <section class="gh-doc-section">
-    <div class="gh-section-heading">
-      <p class="gh-kicker">Honest limits</p>
-      <h2>Sharp where the state is hard. Still tightening where the shell is young.</h2>
-      <p>Guildhall is already good at making work visible, resumable, and reviewable. It is not pretending every surface is equally mature.</p>
+      <p class="gh-kicker">First steps</p>
+      <h2>Read just enough, then try one small task.</h2>
+      <p>The best first run is intentionally modest: one project, one task, one visible path from idea to review.</p>
     </div>
     <div class="gh-limit-grid">
       <article class="gh-limit-card">
-        <h3>Already strong</h3>
+        <h3>Start here</h3>
         <ul>
-          <li>Local service over real repos</li>
-          <li>Projects home for scanning several registered projects</li>
-          <li>Visible reviewer and release flow</li>
-          <li>Task transcripts, provenance, scoped memory, and inspectable guardrails</li>
+          <li><a href="/guildhall/guide/introduction">What Guildhall is</a></li>
+          <li><a href="/guildhall/guide/quick-start">Install and open one project</a></li>
+          <li><a href="/guildhall/guide/concepts">Core concepts glossary</a></li>
         </ul>
       </article>
       <article class="gh-limit-card">
-        <h3>Still being tightened</h3>
+        <h3>Then choose a path</h3>
         <ul>
-          <li>Some denser views still want calmer grouping and better rhythm.</li>
-          <li>The right amount of unattended behavior still depends on the project and how much control you want.</li>
+          <li><a href="/guildhall/guide/new-project">New project</a></li>
+          <li><a href="/guildhall/guide/existing-project">Existing project</a></li>
+          <li><a href="/guildhall/guide/first-tasks">First task set</a></li>
         </ul>
       </article>
     </div>

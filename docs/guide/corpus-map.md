@@ -4,7 +4,7 @@ title: Corpus Map
 
 # Corpus Map
 
-The Corpus Map is Guildhall’s compact index of a project. It helps the guild
+The Corpus Map is Guildhall’s compact index of a project. It helps agents
 reuse the right code, component, helper, package, test pattern, and convention
 without dumping the entire repo into every prompt.
 
@@ -14,15 +14,15 @@ exists somewhere else.
 
 ## What it stores
 
-Guildhall writes the map under `memory/`:
+Guildhall writes the map under `./memory/`:
 
 | File | Purpose |
 |---|---|
-| `memory/codebase-map.yaml` | Current compact map. |
-| `memory/codebase-map.history.jsonl` | Refresh history and why each refresh ran. |
-| `memory/codebase-map.stale.json` | Last refresh failure, if the map could not be rebuilt. |
-| `memory/codebase-map.overrides.yaml` | Human or learned corrections layered over automatic discovery. |
-| `memory/design-system.yaml` | Optional project design-system source summarized into the map. |
+| `./memory/codebase-map.yaml` | Current compact map. |
+| `./memory/codebase-map.history.jsonl` | Refresh history and why each refresh ran. |
+| `./memory/codebase-map.stale.json` | Last refresh failure, if the map could not be rebuilt. |
+| `./memory/codebase-map.overrides.yaml` | Human or learned corrections layered over automatic discovery. |
+| `./memory/design-system.yaml` | Optional project design-system source summarized into the map. |
 
 The map contains:
 
@@ -53,7 +53,7 @@ The builder starts with a Git-aware file list:
 6. Extract lightweight symbols and imports.
 7. Group files into areas.
 8. Detect reusable abstractions.
-9. Summarize the project design system when `memory/design-system.yaml`
+9. Summarize the project design system when `./memory/design-system.yaml`
    exists.
 10. Apply any overrides.
 11. Save the map and append a history event.
@@ -102,8 +102,8 @@ fits together:
 - TypeScript, Vite, Svelte, Vue, React, ESLint, or Prettier config
 - `.gitignore`
 - `AGENTS.md`
-- `guildhall.yaml`
-- `memory/design-system.yaml`
+- `./guildhall.yaml`
+- `./memory/design-system.yaml`
 - schema/version changes
 - very large touched-file sets
 - missing or corrupt previous maps
@@ -130,12 +130,12 @@ Mapped area:
 - Web UI: shared controls, surfaces, and UI conventions.
 
 Reuse / Extend:
-- Command buttons (src/web/lib/Button.svelte)
+- Command buttons (./src/web/lib/Button.svelte)
   - Use when: a user triggers an action from a toolbar, form, panel, drawer, or wizard.
   - Avoid: local button padding, radius, neutral backgrounds, or one-off action styles.
 
 Read next:
-- src/web/lib/Button.svelte: Reuse Command buttons
+- ./src/web/lib/Button.svelte: Reuse Command buttons
 
 Corpus fit required: before editing, name the existing primitive, helper,
 package, design token, component, or area you are extending.
@@ -196,7 +196,7 @@ do not.
 ## Design-system guidance
 
 The Corpus Map treats the design system as part of codebase orientation, not as
-a separate aesthetic checklist. When `memory/design-system.yaml` exists,
+a separate aesthetic checklist. When `./memory/design-system.yaml` exists,
 Guildhall records:
 
 - counts for color, spacing, typography, radius, and shadow tokens

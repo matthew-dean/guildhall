@@ -38,8 +38,9 @@
   import { buildProviderIndicator } from '../lib/provider-indicator.js'
   import { formatUserPath } from '../lib/display-path.js'
   import { humanizeProjectName } from '../lib/project-name.js'
+  import { isOperationalReceiptQuestion } from '../../shared/question-visibility.js'
   import type { InboxItem } from '../lib/inbox-item-key.js'
-  import type { EventEnvelope, ProjectView, ProviderStatus } from '../lib/types.js'
+  import type { AgentQuestion, EventEnvelope, ProjectView, ProviderStatus, Task } from '../lib/types.js'
 
   interface Props {
     initialView?: ProjectView
@@ -65,6 +66,8 @@
   let mobileRailOpen = $state(false)
   let railPreviewOpen = $state(false)
   let railPreference = $state<'collapsed' | 'expanded'>('collapsed')
+  let topbarLabelsCollapsed = $state(false)
+  let newTaskInOverflow = $state(false)
   const RAIL_PREFERENCE_KEY = 'guildhall:project-rail'
 
   // Inbox blockers drive disabled-state on top-bar actions so hard blockers
@@ -200,6 +203,22 @@
     return () => media.removeEventListener('change', sync)
   })
 
+  $effect(() => {
+    const compactLabels = window.matchMedia('(max-width: 720px)')
+    const overflowNewTask = window.matchMedia('(max-width: 640px)')
+    const sync = () => {
+      topbarLabelsCollapsed = compactLabels.matches
+      newTaskInOverflow = overflowNewTask.matches
+    }
+    sync()
+    compactLabels.addEventListener('change', sync)
+    overflowNewTask.addEventListener('change', sync)
+    return () => {
+      compactLabels.removeEventListener('change', sync)
+      overflowNewTask.removeEventListener('change', sync)
+    }
+  })
+
   function toggleRail(): void {
     if (railForcedCollapsed) return
     railPreference = railCollapsed ? 'expanded' : 'collapsed'
@@ -263,7 +282,7 @@
     id: ProjectView
     label: string
     icon: IconName
-    path: string
+    suffix: string
     subs?: Array<{ id: string; label: string; path: string }>
   }
 
@@ -271,15 +290,15 @@
   const needsMeta = $derived(coordinators.length === 0)
 
   const entries = $derived<NavEntry[]>([
-    { id: 'thread', label: 'Thread', icon: 'sparkles', path: currentProjectHref('/thread', activeProjectId) },
-    { id: 'inbox', label: 'Needs you', icon: 'inbox', path: currentProjectHref('/notifications', activeProjectId) },
-    { id: 'work', label: 'Work', icon: 'activity', path: currentProjectHref('/work', activeProjectId) },
-    { id: 'timeline', label: 'Timeline', icon: 'clock', path: currentProjectHref('/timeline', activeProjectId) },
+    { id: 'thread', label: 'Thread', icon: 'sparkles', suffix: '/thread' },
+    { id: 'inbox', label: 'Needs you', icon: 'inbox', suffix: '/notifications' },
+    { id: 'work', label: 'Work', icon: 'activity', suffix: '/work' },
+    { id: 'timeline', label: 'Timeline', icon: 'clock', suffix: '/timeline' },
     {
       id: 'release',
       label: 'Release',
       icon: 'rocket',
-      path: currentProjectHref('/release', activeProjectId),
+      suffix: '/release',
       subs: [
         { id: 'verdict', label: 'Verdict', path: currentProjectHref('/release', activeProjectId) },
         { id: 'criteria', label: 'Criteria', path: currentProjectHref('/release/criteria', activeProjectId) },
@@ -397,6 +416,15 @@
     return eventAtMillis(candidate) >= eventAtMillis(current) ? candidate : current
   }
 
+  function hasVisibleUnansweredQuestion(task: Task): boolean {
+    const status = task.status ?? ''
+    if (['done', 'shelved', 'blocked', 'pending_pr'].includes(status)) return false
+    return (task.openQuestions ?? []).some((question: AgentQuestion) =>
+      !question.answeredAt &&
+      !isOperationalReceiptQuestion(question),
+    )
+  }
+
   const detail = $derived(project.detail)
   $effect(() => {
     latestTickerEvent = (detail?.recentEvents ?? []).reduce<EventEnvelope | null>(
@@ -445,6 +473,12 @@
       ? `${providerHeaderLabel ?? 'Current provider'} has seen ${providerStatus.health.consecutiveFailures} consecutive pooled failures${providerStatus.health.lastError ? ` (${providerStatus.health.lastError})` : ''}.`
       : null,
   )
+  const allTerminalStart = $derived(startReadiness?.code === 'all_terminal')
+  const allTerminalReadinessMessage = $derived(
+    allTerminalStart
+      ? startReadiness?.message ?? 'All tasks are already finished.'
+      : null,
+  )
   const projectTicker = $derived(buildProjectTicker(detail, latestTickerEvent, new Date(tickerNow)))
   const currentStopSummary = $derived.by(() => {
     if (runStatus === 'running' || runStatus === 'stopping') return null
@@ -464,8 +498,7 @@
     }
     for (const task of tasks) {
       const status = task.status ?? ''
-      const unansweredQuestions = (task.openQuestions ?? []).filter(q => !q.answeredAt).length
-      if (unansweredQuestions > 0) counts.waitingOnUser += 1
+      if (hasVisibleUnansweredQuestion(task)) counts.waitingOnUser += 1
       if ((task.escalations ?? []).some(escalation => !escalation.resolvedAt)) counts.escalated += 1
       if (status === 'spec_review') counts.awaitingApproval += 1
       if (status === 'import_draft') counts.draftReview += 1
@@ -514,7 +547,7 @@
     const tasks = detail?.tasks ?? []
     return tasks.some((task) => {
       const status = task.status ?? ''
-      const hasUnansweredQuestion = (task.openQuestions ?? []).some((question) => !question.answeredAt)
+      const hasUnansweredQuestion = hasVisibleUnansweredQuestion(task)
       const hasOpenEscalation = (task.escalations ?? []).some((escalation) => !escalation.resolvedAt)
       return (
         hasUnansweredQuestion ||
@@ -609,7 +642,7 @@
   // done yet" (hard blockers open, or no coordinator) from "operating — just
   // not currently running". Gives the user a clear mental model of what the
   // controls actually do right now.
-  type Phase = 'setting-up' | 'paused' | 'running' | 'error'
+  type Phase = 'setting-up' | 'paused' | 'stable' | 'running' | 'error'
   const phase = $derived<Phase>(
     runStatus === 'error'
       ? 'error'
@@ -617,6 +650,8 @@
         ? 'running'
         : needsMeta || blockers.bootstrap
           ? 'setting-up'
+          : activeCount === 0 && awaitingApprovalCount === 0 && taskList.length > 0
+            ? 'stable'
           : 'paused',
   )
   const phaseLabel = $derived(
@@ -626,6 +661,8 @@
         ? 'Running'
         : phase === 'error'
           ? 'Error'
+          : phase === 'stable'
+            ? 'Stable'
           : 'Paused',
   )
   const phaseTone = $derived(
@@ -635,6 +672,8 @@
         ? 'danger'
         : phase === 'setting-up'
           ? 'warn'
+          : phase === 'stable'
+            ? 'ok'
           : 'neutral',
   )
   // Task counts for the top-bar indicator. Stuck = has at least one open
@@ -668,6 +707,8 @@
   const startDisabledReason = $derived(
     !startReadiness?.canStart
       ? startReadiness?.message ?? 'Finish setup before starting'
+      : activeCount === 0 && awaitingApprovalCount === 0 && taskList.length > 0
+        ? 'No tasks to start'
       : blockers.bootstrap && !metaIntakePending
         ? failedBootstrapStep
           ? 'Fix the bootstrap failure before starting'
@@ -696,10 +737,25 @@
       ? 'Imported drafts need review'
       : needsMeta || metaIntakePending
         ? 'Project setup needs attention'
+        : startDisabledReason === 'No tasks to start'
+          ? 'No tasks to start'
         : 'Readiness checks need attention',
   )
   const setupAttentionButtonLabel = $derived(
-    startReadiness?.code === 'import_drafts_waiting' ? 'Review drafts' : 'Setup',
+    startReadiness?.code === 'import_drafts_waiting'
+      ? 'Review drafts'
+      : startDisabledReason === 'No tasks to start'
+        ? 'Ready'
+        : 'Setup',
+  )
+  const showSetupAttention = $derived(
+    Boolean(!allTerminalStart && (newTaskDisabledReason || (runStatus !== 'running' && startDisabledReason && startDisabledReason !== 'No tasks to start'))),
+  )
+  const showRunButton = $derived(
+    runStatus === 'running' || runStatus === 'stopping' || (!allTerminalStart && startDisabledReason !== 'No tasks to start'),
+  )
+  const showAdvanceOneTaskAction = $derived(
+    !allTerminalStart,
   )
 </script>
 
@@ -785,12 +841,15 @@
           <Button
             variant="secondary"
             size="sm"
+            iconOnly={topbarLabelsCollapsed}
             onclick={() => go('/')}
             ariaLabel="Back to Projects"
             title="Back to Projects"
           >
             <Icon name="chevron-left" size={16} />
-            <span>Projects</span>
+            {#if !topbarLabelsCollapsed}
+              <span>Projects</span>
+            {/if}
           </Button>
         </div>
         <div class="topbar-leading"></div>
@@ -874,7 +933,7 @@
               type="button"
               class="rail-item"
               class:active
-              onclick={() => go(e.path)}
+              onclick={() => go(currentProjectHref(e.suffix, activeProjectId))}
               aria-label={e.label}
               aria-current={active ? 'page' : undefined}
             >
@@ -930,22 +989,27 @@
           <Button
             variant="secondary"
             size="sm"
+            iconOnly={topbarLabelsCollapsed}
             onclick={() => go('/')}
             ariaLabel="Back to Projects"
             title="Back to Projects"
           >
             <Icon name="chevron-left" size={16} />
-            <span>Projects</span>
+            {#if !topbarLabelsCollapsed}
+              <span>Projects</span>
+            {/if}
           </Button>
         </div>
         <div class="topbar-leading">
-          {#if newTaskDisabledReason || (runStatus !== 'running' && startDisabledReason)}
+          {#if showSetupAttention}
             <StatusButton
               tone="warn"
               icon="alert-triangle"
               label={setupAttentionButtonLabel}
+              showLabel={!topbarLabelsCollapsed}
+              tooltip={topbarLabelsCollapsed}
               onclick={() => go(setupAttentionHref)}
-              title={newTaskDisabledReason ?? startDisabledReason ?? ''}
+              title={setupAttentionLabel}
               ariaLabel={`${setupAttentionLabel}: ${newTaskDisabledReason ?? startDisabledReason ?? 'Review required'}`}
             />
           {/if}
@@ -954,6 +1018,8 @@
               tone="warn"
               icon="plug"
               label="Provider"
+              showLabel={!topbarLabelsCollapsed}
+              tooltip={topbarLabelsCollapsed}
               onclick={() => go(currentProjectHref('/settings/providers', activeProjectId))}
               title={providerTitle}
               ariaLabel={providerTitle}
@@ -965,8 +1031,10 @@
               icon="alert-triangle"
               label="Stuck"
               count={stuckCount}
+              showLabel={!topbarLabelsCollapsed}
+              tooltip={topbarLabelsCollapsed}
               onclick={() => go(currentProjectHref('/work', activeProjectId))}
-              title="Jump to Work"
+              title={`${stuckCount} stuck`}
               ariaLabel={`${activeCount} ${activeCountLabel}, ${awaitingApprovalCount} awaiting approval, ${stuckCount} stuck`}
             />
           {/if}
@@ -976,8 +1044,10 @@
               icon="inbox"
               label="Needs you"
               count={inboxActionableCount}
+              showLabel={!topbarLabelsCollapsed}
+              tooltip={topbarLabelsCollapsed}
               onclick={() => go(currentProjectHref('/notifications', activeProjectId))}
-              title="Jump to Notifications"
+              title={`${inboxActionableCount} need you`}
               ariaLabel={`${inboxActionableCount} notifications need you`}
             />
           {/if}
@@ -986,51 +1056,59 @@
               icon={awaitingApprovalCount > 0 ? 'check-circle-2' : 'list-checks'}
               label={awaitingApprovalCount > 0 ? 'Review' : 'Work'}
               count={awaitingApprovalCount > 0 ? awaitingApprovalCount : activeCount}
+              showLabel={!topbarLabelsCollapsed}
+              tooltip={topbarLabelsCollapsed}
               onclick={() => go(currentProjectHref('/work', activeProjectId))}
-              title="Jump to Work"
+              title={awaitingApprovalCount > 0 ? 'Review' : 'Work'}
               ariaLabel={`${activeCount} ${activeCountLabel}, ${awaitingApprovalCount} awaiting approval`}
             />
           {/if}
         </div>
         <div class="topbar-actions">
-          {#if newTaskDisabledReason === null}
+          {#if newTaskDisabledReason === null && !newTaskInOverflow}
             <Button
               variant="secondary"
               size="sm"
+              iconOnly={topbarLabelsCollapsed}
               disabled={busy}
               onclick={newTask}
               ariaLabel="New task"
               title="New task"
             >
               <Icon name="plus" size={16} />
-              <span>New task</span>
+              {#if !topbarLabelsCollapsed}
+                <span>New task</span>
+              {/if}
             </Button>
           {/if}
-          <Button
-            variant={runStatus === 'running' || runStatus === 'stopping' ? 'danger' : 'primary'}
-            size="sm"
-            disabled={busy || runStatus === 'stopping' || (runStatus !== 'running' && startDisabledReason !== null)}
-            onclick={runStatus === 'running' ? stop : () => start('continuous')}
-            ariaLabel={
-              runStatus === 'stopping'
-                ? 'Stopping'
-                : runStatus === 'running'
-                ? (runMode === 'one_task' ? 'Stop one-step run' : 'Stop')
-                : (startDisabledReason ?? 'Start')
-            }
-            title={
-              runStatus === 'stopping'
-                ? 'Stopping Guildhall'
-                : runStatus === 'running'
-                ? (runMode === 'one_task' ? 'Stop the current one-step run' : 'Stop Guildhall')
-                : (startDisabledReason ?? 'Let Guildhall advance this project')
-            }
-          >
-            <span class="btn-inner">
+          {#if showRunButton}
+            <Button
+              variant={runStatus === 'running' || runStatus === 'stopping' ? 'danger' : 'primary'}
+              size="sm"
+              iconOnly={topbarLabelsCollapsed}
+              disabled={busy || runStatus === 'stopping' || (runStatus !== 'running' && startDisabledReason !== null)}
+              onclick={runStatus === 'running' ? stop : () => start('continuous')}
+              ariaLabel={
+                runStatus === 'stopping'
+                  ? 'Stopping'
+                  : runStatus === 'running'
+                  ? (runMode === 'one_task' ? 'Stop one-step run' : 'Stop')
+                  : (startDisabledReason ?? 'Start')
+              }
+              title={
+                runStatus === 'stopping'
+                  ? 'Stopping Guildhall'
+                  : runStatus === 'running'
+                  ? (runMode === 'one_task' ? 'Stop the current one-step run' : 'Stop Guildhall')
+                  : (startDisabledReason ?? 'Let Guildhall advance this project')
+              }
+            >
               <Icon name={runStatus === 'running' || runStatus === 'stopping' ? 'square' : 'play'} size={16} />
-              {runStatus === 'stopping' ? 'Stopping...' : runStatus === 'running' ? (runMode === 'one_task' ? 'Stop 1' : 'Stop') : 'Start'}
-            </span>
-          </Button>
+              {#if !topbarLabelsCollapsed}
+                {runStatus === 'stopping' ? 'Stopping...' : runStatus === 'running' ? (runMode === 'one_task' ? 'Stop 1' : 'Stop') : 'Start'}
+              {/if}
+            </Button>
+          {/if}
           <div class="actions-menu" bind:this={actionsMenuEl}>
             <Button
               variant="ghost"
@@ -1044,16 +1122,29 @@
             </Button>
             {#if actionsMenuOpen}
               <div class="actions-menu-panel">
-                <button
-                  type="button"
-                  class="actions-menu-item"
-                  disabled={busy || startDisabledReason !== null || runStatus === 'running' || runStatus === 'stopping'}
-                  title={startDisabledReason ?? ''}
-                  onclick={() => { closeActionsMenu(); start('one_task') }}
-                >
-                  <Icon name="check-circle-2" size={16} />
-                  <span>Advance one task</span>
-                </button>
+                {#if newTaskDisabledReason === null && newTaskInOverflow}
+                  <button
+                    type="button"
+                    class="actions-menu-item"
+                    disabled={busy}
+                    onclick={() => { closeActionsMenu(); void newTask() }}
+                  >
+                    <Icon name="plus" size={16} />
+                    <span>New task</span>
+                  </button>
+                {/if}
+                {#if showAdvanceOneTaskAction}
+                  <button
+                    type="button"
+                    class="actions-menu-item"
+                    disabled={busy || startDisabledReason !== null || runStatus === 'running' || runStatus === 'stopping'}
+                    title={startDisabledReason ?? ''}
+                    onclick={() => { closeActionsMenu(); start('one_task') }}
+                  >
+                    <Icon name="check-circle-2" size={16} />
+                    <span>Advance one task</span>
+                  </button>
+                {/if}
               </div>
             {/if}
           </div>
@@ -1112,6 +1203,11 @@
             {/snippet}
           </NoticeBand>
         {/if}
+        {#if allTerminalReadinessMessage}
+          <NoticeBand tone="accent" icon="check-circle-2" density="compact">
+            <strong>{allTerminalReadinessMessage}</strong>
+          </NoticeBand>
+        {/if}
         {#if runStopSummaryText}
           <NoticeBand
             tone={runStopSummarySeverity === 'warn' ? 'warn' : runStopSummarySeverity === 'error' ? 'danger' : 'accent'}
@@ -1160,7 +1256,12 @@
         <div class="project-ticker-main">
           <StatusDot tone={projectTicker.tone} pulse={projectTicker.pulse} size="sm" />
           <span class="project-ticker-actor">{projectTicker.actorLabel ?? projectTicker.label}</span>
-          <span class="project-ticker-message">{projectTicker.message}</span>
+          <span class="project-ticker-message">
+            {projectTicker.message}
+            {#if projectTicker.detail}
+              <span class="project-ticker-detail"> - {projectTicker.detail}</span>
+            {/if}
+          </span>
         </div>
         {#if projectTicker.timeLabel}
           <span class="project-ticker-time">{projectTicker.timeLabel}</span>
@@ -1479,23 +1580,18 @@
       display: none;
     }
     .topbar {
-      grid-template-columns: auto auto;
-      grid-template-rows: auto auto;
-      row-gap: var(--s-2);
+      grid-template-columns: auto minmax(0, 1fr) auto;
     }
     .topbar-start {
       grid-column: 1;
-      grid-row: 1;
     }
     .topbar-actions {
-      grid-column: 2;
-      grid-row: 1;
+      grid-column: 3;
       justify-self: end;
     }
     .topbar-leading {
-      grid-column: 1 / -1;
-      grid-row: 2;
-      justify-self: stretch;
+      grid-column: 2;
+      justify-self: start;
       overflow-x: auto;
       scrollbar-width: none;
     }

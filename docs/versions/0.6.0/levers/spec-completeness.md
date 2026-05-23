@@ -19,7 +19,7 @@ How strict the coordinator is about spec completeness at each lifecycle stage.
 | Position | Behavior |
 |---|---|
 | `full_upfront` | Before leaving `exploring`: full acceptance criteria, test plan, edge cases, migration plan if applicable. |
-| `stage_appropriate` | Graduated. Acceptance criteria by `ready`; test plan by `review`; docs/migration by `gate_check`. Reasonable default. |
+| `stage_appropriate` | Graduated. Acceptance criteria by `ready`; test plan by `review`; documentation and migration notes by `gate_check`. Reasonable default. |
 | `emergent` | Spec can be a one-line intent. Worker fills in as they go; reviewer's job is heavier. |
 
 ## Stage-by-stage requirements

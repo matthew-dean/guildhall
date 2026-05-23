@@ -222,6 +222,7 @@ function installFetchFakes(
   options: {
     answerQuestionsResponse?: Response
     sourceNoteResponse?: Response | (() => Response | Promise<Response>)
+    caughtUp?: boolean
   } = {},
 ) {
   const calls: Array<{ url: string; init?: RequestInit; body?: Record<string, unknown> }> = []
@@ -230,7 +231,7 @@ function installFetchFakes(
     const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined
     calls.push({ url, init, body })
     if (url.startsWith('/api/project/thread')) {
-      return json({ turns, activeTurnId, caughtUp: false })
+      return json({ turns, activeTurnId, caughtUp: options.caughtUp ?? false })
     }
     if (url.startsWith('/api/project/source-note')) {
       if (options.sourceNoteResponse) {
@@ -558,6 +559,62 @@ describe('ThreadTab', () => {
     })
   })
 
+  it('keeps ready tasks with incomplete checklists out of worker-start actions', async () => {
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'turn-ready-incomplete',
+        taskId: 'task-ready-incomplete',
+        taskTitle: 'Knit: add link editor controls',
+        taskStatus: 'ready',
+        importedDraft: false,
+        phase: 'inflight',
+        summary: 'Ready for work.',
+        checklist: {
+          title: 'Task checklist',
+          doneCount: 2,
+          totalSteps: 4,
+          steps: [
+            { id: 'title', title: 'Give the task a title', why: 'Needed downstream.', status: 'done' },
+            { id: 'description', title: 'Describe the work', why: 'Needed downstream.', status: 'done' },
+            { id: 'success', title: 'Explain success', why: 'Review needs this.', status: 'active' },
+            { id: 'criteria', title: 'Add acceptance criteria', why: 'Review needs this.', status: 'pending' },
+          ],
+        },
+      }),
+    ], 'turn-ready-incomplete')
+
+    render(ThreadTab)
+
+    await screen.findByText('Needs task brief')
+    expect(screen.getByText(/brief\/spec is still incomplete/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Start work' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Review checklist' })).toBeTruthy()
+  })
+
+  it('does not offer task-specific starts while the project run is already active', async () => {
+    project.detail = {
+      ...(project.detail as any),
+      run: { status: 'running', mode: 'continuous' },
+    }
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'turn-exploring',
+        taskId: 'task-exploring',
+        taskTitle: 'Knit: add link editor controls',
+        taskStatus: 'exploring',
+        importedDraft: false,
+        phase: 'spec',
+        summary: 'Partial brief exists.',
+      }),
+    ], 'turn-exploring')
+
+    render(ThreadTab)
+
+    await screen.findByText('Spec revision queued')
+    expect(screen.queryByRole('button', { name: /continue drafting spec/i })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Already queued' }).hasAttribute('disabled')).toBe(true)
+  })
+
   it('opens source notes immediately and bounds large rendered previews', async () => {
     let resolveSourceNote: (response: Response) => void = () => {}
     const sourceNotePromise = new Promise<Response>(resolve => {
@@ -741,7 +798,105 @@ describe('ThreadTab', () => {
     expect(screen.getByText('Implementation checklist: 1 of 3 complete.')).toBeTruthy()
   })
 
+  it('renders completed compact rows as finished instead of active work', async () => {
+    const completedTurns = Array.from({ length: 8 }, (_, index) =>
+      workerTurn({
+        id: `done-compact-${index}`,
+        phase: 'done',
+        status: 'done',
+        taskId: `task-done-${index}`,
+        taskTitle: `Finished task ${index + 1}`,
+        taskStatus: 'done',
+        constructionMode: 'survey',
+        liveAgent: {
+          name: 'spec-agent',
+          startedAt: now,
+          lastEventLabel: 'No activity',
+          silentMs: 120_000,
+        },
+        summary: 'Run finished.',
+      }),
+    )
+    installFetchFakes(completedTurns, null, { caughtUp: true })
+
+    render(ThreadTab)
+
+    await userEvent.click(await screen.findByRole('button', { name: /completed updates/i }))
+    const compact = await screen.findByLabelText('Compact Completed updates operations')
+    expect(compact.textContent).toContain('Done')
+    expect(compact.textContent).not.toContain('Guildhall working')
+    expect(compact.textContent).not.toContain('Survey')
+    expect(compact.textContent).not.toContain('In flight')
+  })
+
+  it('treats stopped runtime in-progress and exploring turns as paused instead of agent-active', async () => {
+    installFetchFakes(
+      [
+        workerTurn({
+          id: 'stopped-worker',
+          taskStatus: 'in_progress',
+          liveAgent: {
+            name: 'worker-agent',
+            startedAt: now,
+            lastEventLabel: 'No activity',
+            silentMs: 129 * 60_000,
+          },
+          summary: 'Worker was stopped.',
+        }),
+        workerTurn({
+          id: 'stopped-exploring',
+          phase: 'spec',
+          taskId: 'task-stopped-exploring',
+          taskTitle: 'Basic project listing',
+          taskStatus: 'exploring',
+          liveAgent: undefined,
+          summary: 'Spec draft is waiting.',
+        }),
+      ],
+      'stopped-worker',
+    )
+
+    render(ThreadTab)
+
+    const summary = await screen.findByLabelText('Thread operations summary')
+    expect(summary.textContent).toContain('0 Agent-active')
+    expect(screen.queryByText('Guildhall working')).toBeNull()
+    expect(screen.queryByText(/No activity for 129m/)).toBeNull()
+    expect((await screen.findAllByText('Paused')).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('does not label stopped gate checks as live Guildhall work', async () => {
+    installFetchFakes(
+      [
+        workerTurn({
+          id: 'gate-check-stopped',
+          taskStatus: 'gate_check',
+          taskTitle: 'Narrative harness gate review',
+          liveAgent: {
+            name: 'gate-checker-agent',
+            startedAt: now,
+            lastEventLabel: 'Running gate checks',
+            silentMs: 90_000,
+          },
+          summary: 'Gate check is waiting for the next run.',
+        }),
+      ],
+      'gate-check-stopped',
+    )
+
+    render(ThreadTab)
+
+    const summary = await screen.findByLabelText('Thread operations summary')
+    expect(summary.textContent).toContain('0 Agent-active')
+    expect(screen.queryByText('Guildhall working')).toBeNull()
+    expect(screen.getByText('Gate checks are queued. Start Guildhall when you want it to continue.')).toBeTruthy()
+  })
+
   it('summarizes and prioritizes high-volume thread operations', async () => {
+    project.detail = {
+      ...(project.detail as any),
+      run: { status: 'running', mode: 'continuous' },
+    }
     const crowded = [
       importedDraftTurn({ id: 'draft-a', taskId: 'task-import-a', taskTitle: 'Draft A' }),
       importedDraftTurn({ id: 'draft-b', taskId: 'task-import-b', taskTitle: 'Draft B' }),
@@ -795,6 +950,27 @@ describe('ThreadTab', () => {
     expect(compactText.indexOf('Live spec task')).toBeLessThan(compactText.indexOf('Queued ready task'))
   })
 
+  it('does not call paused in-progress worker state queued or agent-active', async () => {
+    installFetchFakes(
+      [
+        workerTurn({
+          liveAgent: undefined,
+          taskStatus: 'in_progress',
+          summary: 'Waiting between worker passes.',
+        }),
+      ],
+      'worker-link-controls',
+    )
+
+    render(ThreadTab)
+
+    const summary = await screen.findByLabelText('Thread operations summary')
+    expect(summary.textContent).toContain('0 Agent-active')
+    expect(summary.textContent).toContain('0 Queued')
+    expect((await screen.findAllByText('Paused')).length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByText(/^queued$/i, { selector: '.chip' })).toBeNull()
+  })
+
   it('does not describe transcript-only escalation attempts as zero value progress', async () => {
     installFetchFakes(
       [
@@ -817,7 +993,7 @@ describe('ThreadTab', () => {
     installFetchFakes(
       [
         importedDraftTurn({ id: 'draft-stage', taskId: 'task-draft-stage', constructionMode: 'blueprint' }),
-        workerTurn({ id: 'worker-stage', taskId: 'task-worker-stage', constructionMode: 'build' }),
+        workerTurn({ id: 'worker-stage', taskId: 'task-worker-stage', constructionMode: 'build', taskStatus: 'ready' }),
       ],
       'draft-stage',
     )
@@ -825,7 +1001,6 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await screen.findByText('Blueprint')
-    await userEvent.click(screen.getByRole('button', { name: /paused/i }))
     expect(screen.getAllByText('Queued').length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByText('Guildhall next')).toBeNull()
     expect(screen.queryByText('Build')).toBeNull()
@@ -848,7 +1023,7 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await waitFor(() => expect(screen.getAllByText('2 questions about this task')).toHaveLength(2))
+    await waitFor(() => expect(screen.getAllByText('2 questions before Guildhall continues')).toHaveLength(2))
 
     await userEvent.click(screen.getByRole('button', { name: /drag handle is out of scope/i }))
     await waitFor(() => {
@@ -1009,6 +1184,44 @@ describe('ThreadTab', () => {
     })
   })
 
+  it('uses the shared secondary-left and primary-right brief decision buttons', async () => {
+    installFetchFakes([briefTurn()], 'brief-link-controls')
+
+    render(ThreadTab)
+    await screen.findByText('Edit links inline.')
+
+    const noButton = screen.getByRole('button', { name: /no, change it/i })
+    const yesButton = screen.getByRole('button', { name: /yes, that's right/i })
+
+    expect(noButton.classList.contains('v-secondary')).toBe(true)
+    expect(yesButton.classList.contains('v-primary')).toBe(true)
+    expect(noButton.compareDocumentPosition(yesButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('renders brief approvals as human-facing task briefs and hides operational receipt text', async () => {
+    installFetchFakes([
+      briefTurn({
+        taskTitle: 'Bootstrap database — run migrations, verify schema',
+        brief: {
+          userJob: 'Done — I persisted concrete progress with tools:',
+          successMetric: 'Migrations run cleanly and the schema matches the current application expectations.',
+          authoredBy: 'spec-agent',
+        },
+      }),
+    ], 'brief-link-controls')
+
+    render(ThreadTab)
+    await screen.findByText('Review this task brief')
+
+    expect(screen.queryByText('Is this what you want?')).toBeNull()
+    expect(screen.queryByText('What it thinks you want')).toBeNull()
+    expect(screen.queryByText('Done — I persisted concrete progress with tools:')).toBeNull()
+    expect(screen.getByText('Scope')).toBeTruthy()
+    expect(screen.getAllByText('Bootstrap database — run migrations, verify schema').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText('Done when')).toBeTruthy()
+    expect(screen.getByText('Migrations run cleanly and the schema matches the current application expectations.')).toBeTruthy()
+  })
+
   it('blocks brief and spec approval until task questions are answered', async () => {
     installFetchFakes(
       [
@@ -1023,7 +1236,7 @@ describe('ThreadTab', () => {
     )
 
     render(ThreadTab)
-    await screen.findByText('Is this what you want?')
+    await screen.findByText('Review this task brief')
     expect(screen.getByText(/Answer 1 open question in Thread before approving/)).toBeTruthy()
     expect((screen.getByRole('button', { name: /yes, that's right/i }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: /approve spec/i }) as HTMLButtonElement).disabled).toBe(true)
@@ -1064,6 +1277,10 @@ describe('ThreadTab', () => {
   })
 
   it('surfaces live and stalled worker activity on collapsed-looking work cards', async () => {
+    project.detail = {
+      ...(project.detail as any),
+      run: { status: 'running', mode: 'continuous' },
+    }
     installFetchFakes(
       [
         workerTurn({
@@ -1176,6 +1393,36 @@ describe('ThreadTab', () => {
     expect(screen.getByText('Guildhall shaping')).toBeTruthy()
     expect(screen.getByLabelText('0 cards waiting for input')).toBeTruthy()
     expect(screen.queryAllByText(/^Input cards$/)).toHaveLength(1)
+  })
+
+  it('surfaces all-terminal readiness without a start affordance when caught up', async () => {
+    project.detail = {
+      id: 'looma-knit',
+      name: 'Looma + Knit',
+      path: '/repo/looma-knit',
+      run: { status: 'stopped', mode: 'continuous' },
+      tasks: [
+        {
+          id: 'task-done',
+          title: 'Done task',
+          status: 'done',
+          openQuestions: [],
+          escalations: [],
+        },
+      ],
+      config: { coordinators: [{ id: 'knit', domain: 'knit' }] },
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'All tasks are already finished.',
+      },
+    }
+    installFetchFakes([], null, { caughtUp: true })
+
+    render(ThreadTab)
+
+    await screen.findByText('All tasks are already finished.')
+    expect(screen.queryByRole('button', { name: /start/i })).toBeNull()
   })
 
   it('shows start failures inline when a queued task cannot resume', async () => {

@@ -9,6 +9,7 @@
   import ProjectCard from '../lib/ProjectCard.svelte'
   import SideDrawer from '../lib/SideDrawer.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
+  import { avatarToneForRole } from '../lib/avatar-palette.js'
   import { summarizeProjects, type ProjectCardSummary } from '../lib/project-summary.js'
   import { projectHref } from '../lib/project-routes.js'
   import { setCachedService } from '../lib/service-cache.js'
@@ -20,14 +21,15 @@
   let busyId = $state<string | null>(null)
   let selectedProjectId = $state<string | null>(null)
   let optimisticRuns = $state<Record<string, boolean>>({})
-  let refreshHandle: ReturnType<typeof setInterval> | null = null
+  let refreshHandle: ReturnType<typeof setTimeout> | null = null
   let refreshTimer: ReturnType<typeof setTimeout> | null = null
   let refreshInFlight = false
   let refreshQueued = false
   let lastRefreshAt = 0
+  let lastServiceSignature: string | null = null
 
   const SERVICE_REFRESH_MIN_INTERVAL_MS = 1500
-  const SERVICE_REFRESH_POLL_MS = 15000
+  const SERVICE_REFRESH_POLL_MS = 30000
 
   function isMeaningfulProjectListEvent(type: string): boolean {
     return (
@@ -47,7 +49,27 @@
     return err instanceof Error ? err.message : String(err)
   }
 
+  function servicePayloadSignature(payload: ServiceDetail): string {
+    return JSON.stringify({
+      selectedProject: payload.selectedProject?.id ?? null,
+      projects: payload.projects.map(project => ({
+        id: project.id,
+        path: project.path,
+        name: project.name,
+        summary: project.summary,
+        taskCounts: project.taskCounts,
+        highlights: project.highlights,
+        run: project.run,
+      })),
+    })
+  }
+
+  function pageIsHidden(): boolean {
+    return typeof document !== 'undefined' && document.visibilityState === 'hidden'
+  }
+
   async function refresh(background = false): Promise<void> {
+    if (background && pageIsHidden()) return
     if (refreshInFlight) {
       refreshQueued = true
       return
@@ -57,8 +79,12 @@
     try {
       const response = await fetch('/api/service', { cache: 'no-store' })
       const payload = (await response.json()) as ServiceDetail
-      service = payload
-      setCachedService(payload)
+      const signature = servicePayloadSignature(payload)
+      if (signature !== lastServiceSignature || service == null) {
+        service = payload
+        setCachedService(payload)
+        lastServiceSignature = signature
+      }
       error = null
       lastRefreshAt = Date.now()
     } catch (err) {
@@ -157,12 +183,14 @@
   })
 
   $effect(() => {
-    if (refreshHandle) clearInterval(refreshHandle)
-    refreshHandle = setInterval(() => {
+    function poll() {
       void refresh(true)
-    }, SERVICE_REFRESH_POLL_MS)
+      refreshHandle = setTimeout(poll, SERVICE_REFRESH_POLL_MS)
+    }
+    if (refreshHandle) clearTimeout(refreshHandle)
+    refreshHandle = setTimeout(poll, SERVICE_REFRESH_POLL_MS)
     return () => {
-      if (refreshHandle) clearInterval(refreshHandle)
+      if (refreshHandle) clearTimeout(refreshHandle)
       if (refreshTimer) {
         clearTimeout(refreshTimer)
         refreshTimer = null
@@ -179,6 +207,15 @@
     return off
   })
 
+  $effect(() => {
+    if (typeof document === 'undefined') return
+    const onVisibilityChange = () => {
+      if (!pageIsHidden()) scheduleRefresh()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  })
+
   const cards = $derived(summarizeProjects(service))
   const overview = $derived({
     total: cards.length,
@@ -191,7 +228,7 @@
     shelved: cards.reduce((sum, card) => sum + card.counts.shelved, 0),
   })
   const readyTaskCount = $derived(Math.max(0, overview.taskTotal - overview.active - overview.blocked - overview.drafts - overview.done - overview.shelved))
-  const needsYouCount = $derived(overview.blocked + overview.drafts)
+  const needsYouCount = $derived(cards.filter(card => card.counts.blocked > 0 || card.counts.draftReview > 0).length)
   const firstNeedsYouProject = $derived(cards.find(card => card.counts.blocked > 0 || card.counts.draftReview > 0) ?? null)
   const selectedProject = $derived(cards.find(card => card.id === selectedProjectId) ?? null)
   const dashboardTotal = $derived(Math.max(1, overview.taskTotal))
@@ -218,7 +255,7 @@
     { role: 'Spec', state: overview.running > 0 && overview.drafts > 0 ? 'shaping briefs' : 'at table', initial: 'S', active: overview.running > 0 && overview.drafts > 0 },
     { role: 'Builder', state: overview.running > 0 && overview.active > 0 ? 'working' : 'at table', initial: 'B', active: overview.running > 0 && overview.active > 0 },
     { role: 'Reviewer', state: overview.running > 0 && overview.blocked > 0 ? 'inspecting blocks' : 'at table', initial: 'R', active: overview.running > 0 && overview.blocked > 0 },
-  ])
+  ].map(member => ({ ...member, tone: avatarToneForRole(member.role) })))
 
   function inspectProject(projectId: string): void {
     selectedProjectId = projectId
@@ -250,7 +287,7 @@
         variant={needsYouCount > 0 ? 'human' : 'secondary'}
         disabled={needsYouCount === 0}
         title={needsYouCount > 0
-          ? `${countLabel(needsYouCount, 'item')} need you across projects. Opens the grouped fleet inbox.`
+          ? `${countLabel(needsYouCount, 'project')} need you. Opens the grouped fleet inbox.`
           : 'No project needs your attention right now'}
         onclick={openNeedsYou}
       >
@@ -297,7 +334,7 @@
           {#each guildMembers as member (member.role)}
             <Tooltip text={`${member.role}: ${member.state}`}>
               <span
-                class="guild-member"
+                class={`guild-member avatar-tone-${member.tone}`}
                 class:guild-member-active={member.active}
                 aria-label={`${member.role}: ${member.state}`}
               >
@@ -350,7 +387,7 @@
           </div>
           <span class="panel-value">{countLabel(readyTaskCount, 'ready task')}</span>
         </div>
-        <div class="work-chart" aria-label={`Work mix across projects: ${overview.active} active, ${readyTaskCount} ready, ${needsYouCount} need attention, ${overview.done} done.`}>
+        <div class="work-chart" aria-label={`Work mix across projects: ${overview.active} active, ${readyTaskCount} ready, ${needsYouCount} projects need attention, ${overview.done} done.`}>
           {#if overview.active > 0}
             <Tooltip text={`${countLabel(overview.active, 'active task')}: active or in-progress work.`} style={chartFlex(overview.active)} className="chart-segment-tip">
               <span class="chart-segment chart-active" aria-label={`${countLabel(overview.active, 'active task')}: active or in-progress work.`}></span>
@@ -362,8 +399,8 @@
             </Tooltip>
           {/if}
           {#if needsYouCount > 0}
-            <Tooltip text={`${countLabel(needsYouCount, 'item needing attention', 'items needing attention')}: blocked tasks plus draft briefs.`} style={chartFlex(needsYouCount)} className="chart-segment-tip">
-              <span class="chart-segment chart-attention" aria-label={`${countLabel(needsYouCount, 'item needing attention', 'items needing attention')}: blocked tasks plus draft briefs.`}></span>
+            <Tooltip text={`${countLabel(needsYouCount, 'project needing attention', 'projects needing attention')}: projects with blocked work or draft briefs.`} style={chartFlex(needsYouCount)} className="chart-segment-tip">
+              <span class="chart-segment chart-attention" aria-label={`${countLabel(needsYouCount, 'project needing attention', 'projects needing attention')}: projects with blocked work or draft briefs.`}></span>
             </Tooltip>
           {/if}
           {#if overview.done > 0}
@@ -380,7 +417,7 @@
         <div class="chart-legend">
           <span><i class="dot chart-active"></i>{overview.active} active</span>
           <span><i class="dot chart-ready"></i>{readyTaskCount} ready</span>
-          <span><i class="dot chart-attention"></i>{needsYouCount} needs you</span>
+          <span><i class="dot chart-attention"></i>{needsYouCount} projects need you</span>
           <span><i class="dot chart-done"></i>{overview.done} done</span>
         </div>
       </div>
@@ -388,7 +425,7 @@
         <div class="panel-head">
           <div>
             <p class="panel-kicker">Attention</p>
-            <h2>{needsYouCount === 0 ? 'Clear' : countLabel(needsYouCount, 'item')}</h2>
+            <h2>{needsYouCount === 0 ? 'Clear' : countLabel(needsYouCount, 'project')}</h2>
           </div>
           <AlertTriangle size={18} />
         </div>
@@ -601,8 +638,6 @@
       linear-gradient(180deg, color-mix(in srgb, white 4%, transparent), color-mix(in srgb, white 1%, transparent)),
       var(--glass-bg);
     box-shadow: var(--glass-shadow), var(--glass-etch);
-    backdrop-filter: var(--glass-blur);
-    -webkit-backdrop-filter: var(--glass-blur);
   }
   .floor-head {
     min-width: 0;
@@ -640,11 +675,12 @@
     gap: var(--s-1);
   }
   .guild-member {
+    --avatar-color: var(--avatar-system);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     padding: 0.22rem;
-    border: 1px solid var(--glass-border);
+    border: 1px solid color-mix(in srgb, var(--avatar-color) 22%, var(--glass-border));
     border-radius: 999px;
     background: var(--glass-bg-strong);
     box-shadow: inset 0 1px 0 color-mix(in srgb, white 9%, transparent);
@@ -655,19 +691,26 @@
     width: 1.4rem;
     height: 1.4rem;
     border-radius: 999px;
-    background: color-mix(in srgb, var(--text-muted) 20%, transparent);
-    color: var(--text);
+    background: color-mix(in srgb, var(--avatar-color) 20%, transparent);
+    color: color-mix(in srgb, var(--avatar-color) 84%, white);
     font-size: var(--fs-0);
     font-weight: 800;
   }
   .guild-member-active {
-    border-color: color-mix(in srgb, var(--accent-2) 34%, var(--border));
+    border-color: color-mix(in srgb, var(--avatar-color) 42%, var(--border));
   }
   .guild-member-active .guild-avatar {
-    background: color-mix(in srgb, var(--accent-2) 28%, transparent);
-    color: var(--accent-2);
+    background: color-mix(in srgb, var(--avatar-color) 30%, transparent);
+    color: var(--avatar-color);
     animation: guild-member-working 1.6s ease-in-out infinite;
   }
+  .avatar-tone-coordinator { --avatar-color: var(--avatar-coordinator); }
+  .avatar-tone-spec { --avatar-color: var(--avatar-spec); }
+  .avatar-tone-builder { --avatar-color: var(--avatar-builder); }
+  .avatar-tone-reviewer { --avatar-color: var(--avatar-reviewer); }
+  .avatar-tone-gate { --avatar-color: var(--avatar-gate); }
+  .avatar-tone-human { --avatar-color: var(--avatar-human); }
+  .avatar-tone-system { --avatar-color: var(--avatar-system); }
   @keyframes guild-member-working {
     0%, 100% {
       transform: translateX(0);
@@ -676,6 +719,11 @@
     50% {
       transform: translateX(2px);
       box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-2) 12%, transparent);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .guild-member-active .guild-avatar {
+      animation: none;
     }
   }
   .floor-metrics {
@@ -741,8 +789,6 @@
       linear-gradient(180deg, color-mix(in srgb, white 4%, transparent), color-mix(in srgb, white 1%, transparent)),
       var(--glass-bg);
     box-shadow: var(--glass-etch);
-    backdrop-filter: var(--glass-blur);
-    -webkit-backdrop-filter: var(--glass-blur);
   }
   .panel-head {
     min-width: 0;

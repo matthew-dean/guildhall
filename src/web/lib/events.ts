@@ -17,7 +17,7 @@ const listeners = new Set<Listener>()
 let current: EventSource | null = null
 let currentUrl: string | null = null
 
-export type SseStatus = 'connecting' | 'live' | 'error'
+export type SseStatus = 'connecting' | 'live' | 'reconnecting' | 'error'
 type StatusListener = (s: SseStatus) => void
 const statusListeners = new Set<StatusListener>()
 let status: SseStatus = 'connecting'
@@ -48,7 +48,7 @@ export function connectStream(): void {
   const es = new EventSource(nextUrl)
   current = es
   es.onopen = () => setStatus('live')
-  es.onerror = () => setStatus('error')
+  es.onerror = () => setStatus(status === 'live' || status === 'reconnecting' ? 'reconnecting' : 'error')
   es.onmessage = e => {
     setStatus('live')
     try {

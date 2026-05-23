@@ -9,7 +9,7 @@ help_summary: |
 
 # Hooks
 
-**Source:** `src/hooks/`
+**Source:** `./src/hooks/`
 
 A hook is user-defined logic that fires at a lifecycle event. Four types:
 

@@ -408,21 +408,8 @@
 
 .gh-home-hero {
   display: grid;
-  gap: var(--gh-space-6);
-  padding: clamp(var(--gh-space-5), 3cqi, var(--gh-space-7));
-  border: 1px solid var(--gh-glass-border);
-  border-radius: var(--gh-radius-3);
-  background:
-    radial-gradient(circle at 84% 16%, color-mix(in srgb, var(--gh-light-violet-warm) 15%, transparent), transparent 24%),
-    radial-gradient(circle at 14% 88%, color-mix(in srgb, var(--gh-color-action-secondary) 7%, transparent), transparent 30%),
-    linear-gradient(180deg, color-mix(in srgb, white 4%, transparent), color-mix(in srgb, white 1%, transparent)),
-    var(--gh-glass-bg);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 11%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, white 2.5%, transparent),
-    0 18px 42px rgba(0, 0, 0, 0.24);
-  backdrop-filter: var(--gh-glass-blur);
-  -webkit-backdrop-filter: var(--gh-glass-blur);
+  gap: clamp(var(--gh-space-4), 3.2vw, var(--gh-space-7));
+  padding: clamp(var(--gh-space-4), 3cqi, var(--gh-space-7)) 0;
   align-items: start;
 }
 
@@ -431,6 +418,7 @@
 .gh-home-hero__proof,
 .gh-home-hero__actions,
 .gh-home-hero__badges,
+.gh-home-proof-list,
 .gh-section-heading,
 .gh-proof-card,
 .gh-signal-card,
@@ -440,6 +428,15 @@
   display: grid;
   gap: var(--gh-space-3);
   min-inline-size: 0;
+}
+
+.gh-home-hero__media {
+  place-items: center;
+}
+
+.gh-home-hero__media-illustration {
+  align-self: center;
+  justify-items: center;
 }
 
 .gh-section-heading {
@@ -456,17 +453,48 @@
 }
 
 .gh-home-hero h1 {
-  max-inline-size: 11ch;
-  font-size: clamp(3rem, 5.8vw, 4.9rem);
-  line-height: 0.94;
-  text-wrap: balance;
+  max-inline-size: 13.5em;
+  font-size: clamp(3rem, 5.1vw, 4.7rem);
+  line-height: 0.96;
+  text-wrap: pretty;
+}
+
+.gh-home-hero h1 span {
+  display: block;
 }
 
 .gh-home-subhead {
   color: var(--gh-color-text-primary);
-  font-size: clamp(1.2rem, 2.3vw, 1.5rem);
+  max-inline-size: 34rem;
+  font-size: clamp(1.15rem, 2.1vw, 1.45rem);
   font-weight: var(--gh-type-weight-strong);
   line-height: var(--gh-type-line-height-tight);
+}
+
+.gh-home-proof-list {
+  gap: 0.45rem;
+  max-inline-size: 36rem;
+  padding: 0;
+  color: var(--gh-color-text-secondary);
+  font-size: var(--gh-type-size-2);
+  line-height: var(--gh-type-line-height-body);
+  list-style: none;
+}
+
+.gh-home-proof-list li {
+  position: relative;
+  padding-inline-start: 1rem;
+}
+
+.gh-home-proof-list li::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-start: 0.68em;
+  inline-size: 0.36rem;
+  block-size: 0.36rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gh-color-action-secondary) 76%, white);
 }
 
 .gh-home-lede,
@@ -486,13 +514,28 @@
 .gh-home-version {
   max-inline-size: max-content;
   color: var(--gh-color-text-muted);
-  font-size: var(--gh-type-size-1);
+  font-size: 0.82rem;
   line-height: var(--gh-type-line-height-normal);
 }
 
 .gh-home-version a {
   color: var(--gh-color-link);
   font-weight: var(--gh-type-weight-strong);
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in srgb, var(--gh-color-link) 34%, transparent);
+  text-underline-offset: 0.16em;
+  text-decoration-thickness: 1px;
+  transition: color 140ms ease, text-decoration-color 140ms ease, text-underline-offset 140ms ease;
+}
+
+.gh-home-version a:hover,
+.gh-home-version a:focus-visible,
+.gh-limit-card a:hover,
+.gh-limit-card a:focus-visible {
+  color: color-mix(in srgb, var(--gh-color-link) 74%, white);
+  text-decoration-line: underline;
+  text-decoration-color: currentColor;
+  text-underline-offset: 0.24em;
 }
 
 .gh-home-hero__actions {
@@ -515,11 +558,18 @@
   border-radius: var(--gh-radius-2);
   font-weight: var(--gh-type-weight-strong);
   text-decoration: none;
-  transition: transform 140ms ease, border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+  transition: transform 140ms ease, border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease, filter 140ms ease;
 }
 
-.gh-cta:hover {
+.gh-cta:hover,
+.gh-cta:focus-visible {
   transform: translateY(-1px);
+}
+
+.gh-cta:focus-visible,
+.gh-home a:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--gh-color-action-primary) 72%, white);
+  outline-offset: 3px;
 }
 
 .gh-cta-primary {
@@ -532,6 +582,15 @@
     inset 0 1px 0 color-mix(in srgb, white 18%, transparent);
 }
 
+.gh-cta-primary:hover,
+.gh-cta-primary:focus-visible {
+  filter: brightness(1.06) saturate(1.04);
+  box-shadow:
+    0 0 18px color-mix(in srgb, var(--gh-color-action-primary) 34%, transparent),
+    0 12px 28px color-mix(in srgb, var(--gh-color-action-primary) 18%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 22%, transparent);
+}
+
 .gh-cta-secondary {
   border-color: var(--gh-glass-border);
   background:
@@ -542,22 +601,59 @@
   -webkit-backdrop-filter: var(--gh-glass-blur);
 }
 
+.gh-cta-secondary:hover,
+.gh-cta-secondary:focus-visible {
+  border-color: color-mix(in srgb, var(--gh-color-action-primary) 36%, var(--gh-glass-border));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, white 12%, transparent), transparent 48%),
+    color-mix(in srgb, var(--gh-color-action-primary) 10%, var(--gh-glass-bg-strong));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 12%, transparent),
+    0 10px 22px color-mix(in srgb, black 16%, transparent);
+}
+
 .gh-home-hero__badges {
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-  gap: var(--gh-space-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  max-inline-size: 36rem;
   padding: 0;
   list-style: none;
 }
 
 .gh-home-hero__badges li {
-  padding: 0.7rem 0.85rem;
-  border: 1px solid var(--gh-glass-border);
-  border-radius: var(--gh-radius-2);
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 2rem;
+  padding: 0.42rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--gh-glass-border) 70%, transparent);
+  border-radius: 999px;
   background:
-    linear-gradient(180deg, color-mix(in srgb, white 5%, transparent), transparent 54%),
-    color-mix(in srgb, var(--gh-glass-bg-strong) 82%, transparent);
+    radial-gradient(circle at 16% 10%, color-mix(in srgb, var(--gh-color-action-primary) 9%, transparent), transparent 44%),
+    linear-gradient(180deg, color-mix(in srgb, white 8%, transparent), color-mix(in srgb, white 2%, transparent)),
+    color-mix(in srgb, var(--gh-glass-bg-strong) 74%, transparent);
   color: var(--gh-color-text-secondary);
-  font-size: var(--gh-type-size-1);
+  font-size: var(--gh-type-size-2);
+  line-height: var(--gh-type-line-height-tight);
+  white-space: nowrap;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, white 2.5%, transparent),
+    0 8px 18px color-mix(in srgb, black 9%, transparent);
+}
+
+:root[data-gh-theme='light'] .gh-home-hero__badges li {
+  border-color: color-mix(in srgb, var(--gh-color-action-primary) 16%, var(--gh-color-border-subtle));
+  background:
+    radial-gradient(circle at 16% 10%, color-mix(in srgb, var(--gh-color-action-primary) 10%, transparent), transparent 42%),
+    linear-gradient(180deg, color-mix(in srgb, white 72%, transparent), color-mix(in srgb, var(--gh-color-surface-raised-alt) 58%, transparent)),
+    color-mix(in srgb, white 34%, var(--gh-color-surface-raised-alt));
+  color: color-mix(in srgb, var(--gh-color-text-primary) 82%, var(--gh-color-action-primary));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 86%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, white 34%, transparent),
+    0 8px 18px color-mix(in srgb, var(--gh-color-action-primary) 7%, transparent),
+    0 2px 6px color-mix(in srgb, black 6%, transparent);
 }
 
 .gh-doc-shot {
@@ -573,14 +669,34 @@
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, white 9%, transparent),
     0 16px 30px rgba(0, 0, 0, 0.2);
-  backdrop-filter: var(--gh-glass-blur);
-  -webkit-backdrop-filter: var(--gh-glass-blur);
 }
 
 .gh-doc-shot img {
   display: block;
   inline-size: 100%;
   block-size: auto;
+}
+
+.gh-home-hero .gh-doc-shot img {
+  aspect-ratio: 16 / 10;
+  block-size: auto;
+  object-fit: cover;
+  object-position: 50% 0%;
+}
+
+.gh-home-hero__illustration {
+  display: block;
+  inline-size: min(100%, 38rem);
+  block-size: auto;
+  filter:
+    drop-shadow(0 28px 42px color-mix(in srgb, black 30%, transparent))
+    drop-shadow(0 0 28px color-mix(in srgb, var(--gh-color-action-primary) 14%, transparent));
+}
+
+:root[data-gh-theme='light'] .gh-home-hero__illustration {
+  filter:
+    drop-shadow(0 28px 34px color-mix(in srgb, black 14%, transparent))
+    drop-shadow(0 0 24px color-mix(in srgb, var(--gh-color-action-primary) 12%, transparent));
 }
 
 .gh-doc-shot figcaption {
@@ -600,8 +716,6 @@
     linear-gradient(180deg, color-mix(in srgb, white 4%, transparent), color-mix(in srgb, white 1%, transparent)),
     var(--gh-glass-bg-strong);
   box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
-  backdrop-filter: var(--gh-glass-blur);
-  -webkit-backdrop-filter: var(--gh-glass-blur);
 }
 
 .gh-home-hero__proof > * {
@@ -675,8 +789,6 @@
     radial-gradient(circle at 94% 18%, color-mix(in srgb, var(--gh-color-feedback-accent) 12%, transparent), transparent 26%),
     linear-gradient(180deg, color-mix(in srgb, white 4%, transparent), color-mix(in srgb, white 1%, transparent)),
     var(--gh-glass-bg);
-  backdrop-filter: var(--gh-glass-blur);
-  -webkit-backdrop-filter: var(--gh-glass-blur);
 }
 
 .gh-origin-band p {
@@ -704,8 +816,16 @@
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, white 9%, transparent),
     0 10px 24px rgba(0, 0, 0, 0.14);
-  backdrop-filter: var(--gh-glass-blur);
-  -webkit-backdrop-filter: var(--gh-glass-blur);
+}
+
+.gh-limit-card a {
+  color: var(--gh-color-link);
+  font-weight: var(--gh-type-weight-semibold);
+  text-decoration-line: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 0.18em;
+  text-decoration-thickness: 1px;
+  transition: color 140ms ease, text-decoration-color 140ms ease, text-underline-offset 140ms ease;
 }
 
 .gh-signal-card h3,
@@ -806,7 +926,6 @@
 }
 
 @container (min-width: 48rem) {
-  .gh-home-hero,
   .gh-guild-layout,
   .gh-doc-grid {
     grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.9fr);
@@ -841,10 +960,6 @@
     gap: var(--gh-space-4);
   }
 
-  .gh-home-hero h1 {
-    font-size: 5.4rem;
-  }
-
   .gh-home-subhead {
     font-size: 1.5rem;
   }
@@ -862,6 +977,42 @@
 
   .gh-signal-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 54rem) {
+  .gh-home-hero {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .gh-home-hero__copy {
+    inline-size: min(calc(100% + 14rem), 72rem);
+    z-index: 1;
+  }
+
+  .gh-home-hero h1 span {
+    white-space: nowrap;
+  }
+
+  .gh-home-hero__media {
+    align-self: center;
+    padding-block-start: clamp(2.5rem, 5vw, 5.5rem);
+  }
+}
+
+@media (min-width: 78rem) {
+  .gh-home-hero h1 {
+    max-inline-size: 13.5em;
+    font-size: clamp(4.2rem, 4.7vw, 5.25rem);
+  }
+
+  .gh-home-hero__copy {
+    inline-size: min(calc(100% + 20rem), 80rem);
+  }
+
+  .gh-home-hero__illustration {
+    inline-size: min(112%, 44rem);
   }
 }
 

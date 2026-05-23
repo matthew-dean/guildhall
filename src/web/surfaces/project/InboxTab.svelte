@@ -127,12 +127,12 @@
     bootstrap_missing: 'Configure',
     workspace_import_pending: 'Review import',
     agent_question_pending: 'Answer question',
-    import_draft_queue: 'Review next draft',
-    brief_approval: 'Review in Thread',
-    spec_approval: 'Review in Thread',
+    import_draft_queue: 'Draft task brief',
+    brief_approval: 'Review brief',
+    spec_approval: 'Review spec',
     open_escalation: 'Resolve',
     lever_questions: 'Review',
-    spec_fill_pending: 'Open details',
+    spec_fill_pending: 'Review checklist',
   }
 
   function actionVerb(item: InboxItem): string {
@@ -146,14 +146,13 @@
     if (item.kind === 'lever_questions') {
       return 'Safe defaults are active. Review them only if you want to tune autonomy, recovery, or review strictness.'
     }
+    if (item.kind === 'spec_fill_pending') {
+      return null
+    }
     return null
   }
 
   function goTo(item: InboxItem): void {
-    if (item.kind === 'brief_approval' || item.kind === 'spec_approval') {
-      nav(projectActionHref('/thread'))
-      return
-    }
     if (item.actionHref) {
       const href = projectActionHref(item.actionHref)
       const route = href.split('?')[0]?.split('#')[0] ?? href
@@ -187,7 +186,7 @@
   {:else}
     {#if priorityItems.length === 0}
       <Card tone="neutral">
-        <p class="muted">Nothing is blocked right now. The remaining items are optional housekeeping.</p>
+        <p class="muted">Nothing is blocked right now. The remaining items are optional cleanup.</p>
       </Card>
     {/if}
 
@@ -247,7 +246,7 @@
     {#if housekeepingItems.length > 0}
       <section class="housekeeping">
         <header class="subhead">
-          <h3>Housekeeping</h3>
+          <h3>Optional cleanup</h3>
           <span class="count">({housekeepingItems.length})</span>
         </header>
         <ul class="list list-housekeeping">

@@ -172,8 +172,8 @@ describe('buildProjectTicker', () => {
       ),
     ).toMatchObject({
       tone: 'idle',
-      actorLabel: 'Queued',
-      message: '2 tasks queued to resume',
+      actorLabel: 'Paused',
+      message: '2 tasks paused until Guildhall starts',
     })
 
     expect(
@@ -220,6 +220,55 @@ describe('buildProjectTicker', () => {
       actorLabel: 'Blocked',
       message: 'Blocked on bootstrap failure',
     })
+  })
+
+  it('surfaces immediate all-terminal supervisor stop details', () => {
+    const detail: ProjectDetail = {
+      run: { status: 'stopped' },
+      tasks: [{ id: 'done-1', status: 'done', title: 'Done one' }],
+    }
+
+    const result = buildProjectTicker(
+      detail,
+      {
+        at: '2026-05-12T13:00:15.000Z',
+        event: {
+          type: 'supervisor_stopped',
+          reason: 'all_terminal',
+          message: 'No actionable tasks remain: 1 done, 0 blocked, 0 shelved.',
+        },
+      },
+      now,
+    )
+
+    expect(result.message).toContain('Run finished')
+    expect(result.detail).toContain('No actionable tasks remain')
+  })
+
+  it('keeps all-terminal supervisor stop details when terminal blocked tasks exist', () => {
+    const detail: ProjectDetail = {
+      run: { status: 'stopped' },
+      tasks: [
+        { id: 'done-1', status: 'done', title: 'Done one' },
+        { id: 'blocked-1', status: 'blocked', title: 'Blocked one' },
+      ],
+    }
+
+    const result = buildProjectTicker(
+      detail,
+      {
+        at: '2026-05-12T13:00:15.000Z',
+        event: {
+          type: 'supervisor_stopped',
+          reason: 'all_terminal',
+          message: 'No actionable tasks remain: 1 done, 1 blocked, 0 shelved.',
+        },
+      },
+      now,
+    )
+
+    expect(result.message).toContain('Run finished')
+    expect(result.detail).toContain('No actionable tasks remain')
   })
 
   it('shows a waiting-on-you state when the run stopped for human input', () => {

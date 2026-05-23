@@ -59,6 +59,9 @@ export function tickOutcomeToBackendEvent(outcome: TickOutcome): BackendEvent | 
         message: humanizeAgentError(outcome.agent, outcome.taskId, outcome.error),
         task_id: outcome.taskId,
         agent_name: outcome.agent,
+        ...(/empty assistant reply after verified progress/i.test(outcome.error)
+          ? { reason: 'empty_assistant_after_verified_progress' }
+          : {}),
       }
 
     case 'provider-backoff':
@@ -135,6 +138,9 @@ function humanizeAgentError(agent: string, taskId: string, error: string): strin
       `${agent} ran its step budget (${maxTurnsMatch[1]} steps) on ${taskId} and saved progress. ` +
       `The next coordinator pass will pick up where it left off — no action needed.`
     )
+  }
+  if (/empty assistant reply after verified progress/i.test(error)) {
+    return 'Saved a recovery checkpoint after the model stopped responding clearly.'
   }
   if (/Model returned an empty assistant message/.test(error)) {
     return (

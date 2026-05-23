@@ -6,9 +6,10 @@ title: Practices, deep intake, and worker modes
 
 **Status:** `0.8.0` exploration candidate
 
-This note captures a 0.8.0 direction for making Guildhall better at pulling
-project knowledge out of the user's head, choosing the right work style, and
-keeping agents from treating every task like generic implementation.
+This note captures a 0.8.0 direction for making Guildhall better at pressure
+testing project ideas, pulling locked-away knowledge out of the user's head,
+choosing the right work style, and keeping agents from treating every task like
+generic implementation.
 
 The inspiration comes from small, composable agent workflows such as
 Matt Pocock's skills repo:
@@ -31,8 +32,9 @@ inspect, when to build, when to debug, and when to step back.
 
 For 0.8.0, that means:
 
-- the coordinator can run a deep intake when a project or feature is still
-  under-explained;
+- the coordinator can run a pressure-test intake that interviews across every
+  relevant domain until the project, feature, or spec is airtight enough to
+  build from;
 - workers can enter task-appropriate modes such as diagnosis or TDD instead of
   always using the same build prompt;
 - Guildhall can propose new practices and personas when repeated work shows a
@@ -48,7 +50,7 @@ For 0.8.0, that means:
 
 - Do not add a slash-command layer.
 - Do not make users pick practices before every task.
-- Do not turn intake into a long mandatory questionnaire for small projects.
+- Do not turn routine mechanical edits into intake rituals.
 - Do not blindly copy external wording or structure.
 - Do not let practices bypass the existing blueprint, review, gate, memory, or
   Corpus Map contracts.
@@ -127,6 +129,23 @@ If the practice is project-specific, it can live with the project. If the same
 practice proves useful across projects, Guildhall can suggest copying or
 promoting it to global defaults.
 
+The draft should be reviewed by a built-in **Practice Designer** persona before
+activation. This persona's job is not to make every practice sound impressive;
+it is to keep practices small, useful, scoped, and evidence-producing.
+
+Practice Designer should check:
+
+- is this really a reusable loop, or is it a one-time task?
+- does it have a clear trigger and clear "do not use when" boundary?
+- does the operating loop produce evidence a reviewer can inspect?
+- is the scope project/task/global justified by source evidence?
+- does it duplicate an existing practice or built-in worker mode?
+- does it risk prompt bloat or ceremony creep?
+- can a future agent follow it without needing hidden context?
+
+If a proposed practice fails that bar, Guildhall should revise it, keep it as a
+task-local note, or decline to activate it.
+
 ### Practice Scope
 
 Practices need scope because a brilliant local habit can become noise
@@ -177,6 +196,49 @@ doNotUseWhen:
 The schema should be strict enough for validation but friendly enough to edit
 by hand.
 
+### Practice Participation Rules
+
+Practices need explicit participation rules so they do not become vibes in the
+prompt. A practice should define when it is:
+
+- **suggested:** Guildhall may propose it, but should not change the task shape
+  without approval;
+- **automatic:** Guildhall can apply it quietly because the trigger is reliable
+  and low-cost;
+- **manual:** the user or coordinator must explicitly request it;
+- **suppressed:** Guildhall should not apply it even if weak signals match.
+
+Rules should be structured underneath, but explainable in plain language. The
+matching inputs can include:
+
+- task kind: bug, feature spec, release intake, investigation, implementation;
+- task state: exploring, ready, in progress, review, gate check;
+- changed files, file types, route names, package names, or detected languages;
+- Corpus Map areas and project domains;
+- failure signals: failing command, browser repro, flaky run, provider throttle;
+- user intent phrases: "debug carefully," "ask me everything," "write tests
+  first," "prototype this";
+- project levers and settings;
+- recent reviewer findings or repeated task history;
+- cost and model budget.
+
+A practice rule should produce a decision record:
+
+```yaml
+practiceMatch:
+  practice: pressure-test-intake
+  decision: suggested | automatic | manual | suppressed
+  confidence: high | medium | low
+  reason: User is proposing a 0.9.0 release direction, not a ready implementation task.
+  matchedSignals:
+    - intakeTarget.type=release
+    - user text mentions 0.9.0
+  blockedBy: []
+```
+
+This gives Guildhall an auditable "why this practice?" answer without asking
+the user to understand predicates.
+
 ## User-Defined Personas
 
 Guildhall should also support new personas. Personas are not practices.
@@ -223,19 +285,142 @@ Guildhall can propose a persona when:
 - reviewers repeatedly miss a domain-specific concern;
 - the user keeps asking for the same review lens;
 - a project has a clear domain that built-in personas do not cover;
-- Deep Intake records a recurring quality bar that maps to an expert lens;
+- Pressure-Test Intake records a recurring quality bar that maps to an expert
+  lens;
 - a failed release or review points to a missing specialist.
 
 The proposal should be reviewed like a small spec:
 
 1. Guildhall explains the gap.
 2. Guildhall drafts the persona and rubric.
-3. Copywriter reviews labels and tone.
-4. The user chooses project or global scope.
-5. Guildhall activates it and records provenance.
+3. Persona Designer reviews the draft for role clarity, trigger quality,
+   overreach, rubric usefulness, and cost.
+4. Copywriter reviews labels and tone.
+5. The user chooses project or global scope.
+6. Guildhall activates it and records provenance.
 
 Personas should not automatically fan out on every task. They need triggers and
 cost awareness, just like other reviewers.
+
+Guildhall should ship a built-in **Persona Designer** persona for this review.
+Its job is to make sure a new persona is a real expert lens, not a vague vibe or
+an expensive duplicate of an existing reviewer.
+
+Persona Designer should check:
+
+- what distinctive judgment does this persona add?
+- what evidence should it inspect before speaking?
+- when should it participate, and when should it stay out?
+- does the rubric produce actionable findings rather than generic advice?
+- does the persona have severity guidance and examples of good/bad findings?
+- does it duplicate, conflict with, or overrule an existing persona?
+- should the persona be task-local, project-scoped, or global?
+- what cost/model lane is justified by its expected value?
+
+If the draft fails, Guildhall should refine the persona or keep the need as a
+watch item until repeated evidence justifies a real persona.
+
+### Persona Participation Rules
+
+Personas should use the same participation model as practices, but the decision
+answers a slightly different question: should this expert lens inspect the
+work?
+
+A persona can participate in different phases:
+
+- **spec contribution:** ask domain-specific questions while the task is still
+  being shaped;
+- **worker persona:** guide implementation when the work strongly belongs to
+  that specialty;
+- **reviewer fanout:** inspect completed work independently;
+- **gate checks:** run deterministic checks when the persona owns them.
+
+The first implementation can build on the existing guild pattern: each persona
+has an applicability predicate over task/project signals, and Guildhall records
+which signals matched. User-defined personas should start with friendly rule
+builders instead of raw code:
+
+- "Use this persona when changed files include..."
+- "Use this persona when the task mentions..."
+- "Use this persona for these project domains..."
+- "Use this persona when reviewers flag..."
+- "Do not use this persona when..."
+
+Advanced users can inspect or edit the structured rule later, but the ordinary
+surface should say:
+
+> Story continuity reviewer joins when a task changes plot, character arcs, or
+> continuity notes. It does not join for build tooling or release packaging.
+
+Every persona run should record why it joined or why it was skipped. For costly
+personas, low-confidence matches should become suggestions instead of automatic
+fanout.
+
+### User-Requested Personas
+
+Guildhall should let the user add one or more personas to a specific unit of
+work, even when automatic applicability did not pick them.
+
+This is useful when the user knows the work has a concern the signals cannot
+see yet: "have Security look at this," "also ask the Copywriter," "I want the
+Story Continuity reviewer on this release," or "run Accessibility on this modal
+even if it looks backend-heavy."
+
+Manual persona assignment should be:
+
+- **additive:** it adds a lens; it does not remove automatically required
+  reviewers or deterministic gates;
+- **task-scoped by default:** the override applies to this task/release/spec
+  unless the user explicitly promotes it to a project rule;
+- **phase-aware:** the user can request the persona for spec shaping, worker
+  guidance, final review, gate checks, or "all relevant phases";
+- **cost-aware:** Guildhall should show when the request adds model calls or a
+  stronger model lane;
+- **audited:** the task should record who requested the persona, why, and which
+  phase it joined;
+- **correctable:** if a user repeatedly adds the same persona for the same
+  pattern, Guildhall can propose turning that into a participation rule.
+
+The UI can expose this in the task drawer or spec review surface as **Add
+review lens** / **Add persona**. The default list should show likely personas
+first, followed by search. The user should not need to understand guild routing
+to say "bring in an accessibility reviewer."
+
+The spec should also auto-fill the planned persona roster before work starts.
+During spec review, Guildhall should show:
+
+- automatically matched personas, with "why this lens applies";
+- manually requested personas already attached to the unit of work;
+- likely-but-not-selected personas as suggestions;
+- phase labels: spec, worker, review, gate, or all relevant phases;
+- estimated cost/model impact when a selection adds extra calls.
+
+This turns persona assignment into part of approving the spec. The user can see
+the default roster, add another lens smoothly, and then let Guildhall carry that
+review plan through implementation and review.
+
+The spec record should persist the planned roster:
+
+```yaml
+personaPlan:
+  auto:
+    - persona: accessibility-specialist
+      phases: [spec, review, gate]
+      reason: Changed UI surfaces include keyboard/focus-sensitive modal work.
+  requested:
+    - persona: security-engineer
+      phases: [review]
+      requestedBy: user
+      reason: User wants an extra auth/permission pass.
+  suggested:
+    - persona: copywriter
+      reason: Task includes visible labels and status copy.
+```
+
+Manual requests should still respect hard safety limits. If the persona is
+disabled, unavailable, too costly for the current settings, or missing the
+required evidence, Guildhall should explain that and offer a narrower option
+instead of silently ignoring the request.
 
 ## Practice And Persona Library UI
 
@@ -247,73 +432,379 @@ Likely surfaces:
   last used, and evidence.
 - **Settings -> Personas:** built-in and user-defined personas, participation
   rules, model lane, and rubric preview.
+- **Built-in builders:** Practice Designer and Persona Designer appear as
+  guardrail personas for creating high-quality practices/personas, not as
+  ordinary reviewers on every task.
 - **Proposal cards:** "Guildhall noticed this keeps coming up. Save it as a
   project practice?"
 - **Promotion cards:** "This practice worked in three projects. Use it
   everywhere?"
 - **Task drawer:** which practice and personas were used on this task, and why.
+- **Add persona:** task/spec/release surfaces let the user add an extra review
+  lens for this unit of work without changing global participation rules.
+- **Spec roster preview:** spec review shows auto-selected, requested, and
+  suggested personas before the user approves the work.
 
 This should stay optional. Most users should never have to manage the library
 unless they want that level of control.
 
-## Deep Intake
+The UI should expose participation rules in layers:
 
-Deep Intake is the Guildhall version of "interview me until we really
-understand the project." It should be calm, guided, and optional. The user
-should feel like Guildhall is helping them clarify the work, not interrogating
-them.
+- **Default view:** plain-language "Used when..." and "Not used when..."
+  summaries, last-used timestamp, and an enable/disable toggle.
+- **Decision view:** on a task, show "Why did this run?" with matched signals
+  and a short reason.
+- **Adjustment view:** simple chips and selectors for file patterns, task kinds,
+  project domains, keywords, and reviewer-finding triggers.
+- **Advanced view:** raw YAML/JSON for users who want exact control.
 
-### When to Trigger
+This keeps the common case light while still making Guildhall accountable. The
+user should not have to author predicates, but they should be able to understand
+and correct them.
 
-The coordinator should suggest Deep Intake when:
+## Pressure-Test Intake
 
-- a new project has little or no project memory;
-- the task is broad, product-heavy, or strategically important;
+Pressure-Test Intake is the Guildhall version of "interview me until the spec
+cannot hide fuzzy thinking anymore." It is not just for under-explained
+projects. Most projects will not already have this level of detail, because
+most agents ask surface-level questions and stop before the useful follow-up.
+
+The goal is to make a project, feature, release, or task spec airtight,
+comprehensive, and detailed enough that workers and reviewers are not guessing
+from polite summary prose. Guildhall should reason about the domains it needs
+to understand, inspect the repo and docs for answers first, then interview the
+user one question at a time until each domain is clear or explicitly deferred.
+
+### When to Use It
+
+The coordinator should suggest Pressure-Test Intake when:
+
+- a project, feature, release, or task needs a serious spec before build work;
+- the work depends on product taste, domain judgment, user workflows, risk
+  tolerance, or operational details that may live in the user's head;
+- a previous spec looks plausible but could still be missing edge cases,
+  non-goals, constraints, success signals, or failure modes;
 - the user keeps correcting assumptions;
-- multiple tasks depend on the same missing context;
+- multiple tasks depend on the same unstated project knowledge;
 - the Corpus Map finds code but not purpose;
 - docs exist but do not explain product intent;
 - the coordinator cannot choose the next tranche without guessing.
 
-It should not trigger for:
+It should not run for:
 
 - tiny mechanical edits;
-- tasks with a clear accepted blueprint;
-- repeat work where the project already has enough memory;
-- urgent fixes where the first move should be diagnosis.
+- urgent fixes where the first move should be diagnosis;
+- tasks where the user explicitly asks to skip intake and accept the risk;
+- repeat work where a prior Pressure-Test Intake already covered the same
+  domain and no new facts have appeared.
 
-### Intake Topics
+### Starting A New Intake Later
 
-Deep Intake should gather:
+Pressure-Test Intake is not a one-shot setup ceremony. A project can need a new
+intake months later for a release, feature, strategy change, redesign, risky
+migration, or product idea. For example, "I have ideas for Guildhall 0.9.0"
+should start a release-level intake, not become a narrow implementation task.
+
+The UI does not need a separate **New Spec** button. **New Task** can stay the
+plain entry point if the modal branches first by intent. The first step should
+establish what kind of work the user is creating:
+
+- **Implementation task:** a concrete change that is ready to become a task
+  brief and acceptance criteria.
+- **Bug or failure:** a broken behavior that should enter diagnose mode.
+- **Release or milestone idea:** a larger body of work, such as `0.9.0`, that
+  needs release-level Pressure-Test Intake before task splitting.
+- **Feature or product spec:** a proposed capability that needs domain
+  interview, edge cases, non-goals, and acceptance criteria before build work.
+- **Question or investigation:** something Guildhall should answer or research
+  before deciding whether work exists.
+- **Memory or preference:** durable project knowledge that should update memory,
+  Language Map, practices, or personas rather than create immediate work.
+- **Note or parking lot item:** useful context that should be saved without
+  pretending it is ready to build.
+
+The modal can infer this from the user's free text, but it should show the
+classification before committing the item. If Guildhall is unsure, it should ask
+one routing question such as "What kind of work is this?" and then reflow the
+draft into the right lane.
+
+The output of routing should be a typed intake target:
+
+```yaml
+intakeTarget:
+  type: release | feature | task | bug | investigation | memory | note
+  title: Guildhall 0.9.0
+  source: new-task-modal
+  pressureTestRequired: true
+  nextStep: pressure-test-intake
+```
+
+That keeps the product surface simple while giving the runtime the right shape:
+users still click **New Task**, but Guildhall may create a release intake,
+feature spec, investigation, memory candidate, or ordinary task depending on
+what the user is actually trying to do.
+
+### Domain Map
+
+Before asking the user anything, Guildhall should draft a domain map for the
+thing being specified. The domains vary by project, but common ones include:
 
 - product goals and non-goals;
 - intended audience and user workflows;
 - domain terms and forbidden/ambiguous terms;
+- data model, data ownership, migrations, and lifecycle;
+- permissions, roles, privacy, security, and compliance constraints;
 - existing architecture and why it is shaped that way;
+- integration boundaries, APIs, local services, and external dependencies;
 - design-system expectations;
 - testing and release expectations;
-- privacy, security, and data-safety constraints;
 - operational constraints, such as local services or expensive commands;
 - product taste, tone, and "please never do that again" preferences;
 - known risks, traps, and weird history;
 - success signals for the current project stage.
 
+For each domain, Guildhall should first inspect the codebase, docs, Corpus Map,
+project memory, prior decisions, and accepted plans. If that evidence answers
+the question, Guildhall should use it and ask only for confirmation when the
+answer affects important behavior.
+
 ### Question Behavior
 
-Deep Intake should ask one meaningful question at a time. Every question should
-include:
+Pressure-Test Intake should follow the useful part of the grill-me pattern:
+
+- ask questions one at a time;
+- if a question can be answered by exploring the codebase, explore the codebase
+  instead;
+- ask a follow-up when the answer suggests there is more detail to uncover;
+- after each domain seems covered, ask "Is there anything else I should know
+  about X?";
+- keep asking until the domain is either clear, explicitly deferred, or no
+  longer relevant to the spec.
+
+Every user-facing question should include:
 
 - why Guildhall is asking;
-- the recommended answer when Guildhall has enough evidence;
+- the evidence Guildhall already found, when relevant;
+- the recommended answer or hypothesis when Guildhall has enough evidence;
 - a short set of choices when choices are clearer than free text;
 - an escape hatch to skip, defer, or answer in the user's own words.
 
-If the answer can be found by inspecting the repo, docs, prior memory, or
-Corpus Map, Guildhall should inspect first and ask only for confirmation.
+The loop should not batch a giant questionnaire into Thread. It should keep the
+conversation answerable while still being exhaustive over time.
+
+### LLM Operating Contract
+
+Pressure-Test Intake needs stronger instructions than "ask good questions."
+The agent should receive an explicit operating contract:
+
+1. Build a domain map for the spec before asking the user anything.
+2. For the active domain, inspect available evidence before drafting a question.
+3. Ask exactly one question.
+4. After the user answers, decide whether the answer:
+   - resolves the domain;
+   - opens a useful follow-up;
+   - contradicts repo/docs evidence;
+   - reveals a new domain;
+   - should become an assumption, decision, task split, Language Map entry, or
+     memory candidate.
+5. Stay in the same domain while useful follow-ups remain.
+6. Ask "Is there anything else I should know about X?" before closing that
+   domain.
+7. Move to the next domain only after closing, deferring, or dropping the
+   current domain.
+8. Produce an intake-state update after every answer, even when the next move is
+   another question.
+
+The context packet should frame the agent's job as discovery and pressure
+testing, not as drafting a spec as quickly as possible. A useful instruction is:
+
+> Your goal is to find the missing facts, edge cases, constraints, domain
+> language, and user-held judgment that would make this spec fail later. Do not
+> optimize for fewer questions. Optimize for asking the next highest-leverage
+> question, one at a time, after checking whether the answer is already in the
+> repo or project memory.
+
+That keeps the LLM from treating "ask one question at a time" as permission to
+ask one shallow question and then proceed.
+
+### Persistent Intake State
+
+The intake loop should persist its own state so the next agent turn can resume
+without reconstructing the interview from transcript prose. A minimal state
+shape:
+
+```yaml
+pressureTestIntake:
+  id: intake-id
+  target:
+    type: project | release | feature | task
+    id: target-id
+  status: active | paused | complete
+  activeDomainId: product-workflows
+  domains:
+    - id: product-workflows
+      title: Product workflows
+      whyItMatters: The worker needs to know which user journey defines success.
+      status: active | open | closed | deferred | dropped
+      knownFacts:
+        - fact: Users create a project from a rough idea.
+          source: docs/guide/new-project.md
+      openUnknowns:
+        - What counts as enough detail before task generation?
+      askedQuestions:
+        - questionId: q-123
+          prompt: What should Guildhall do when the user gives only a rough idea?
+          answered: true
+      followUpCandidates:
+        - The answer mentions approval gates but not who can approve them.
+      closeoutAsked: false
+  newDomains:
+    - billing-and-entitlements
+  outputs:
+    assumptions: []
+    decisions: []
+    languageMapCandidates: []
+    taskSplitCandidates: []
+```
+
+This state should be the source of truth for the next question. Transcript is
+evidence, not the planner.
+
+### Domain Loop
+
+Each domain should move through a small state machine:
+
+1. **Seeded:** Guildhall thinks this domain may matter.
+2. **Inspected:** repo/docs/memory evidence has been checked.
+3. **Active:** the agent is asking one question at a time in this domain.
+4. **Follow-up:** an answer created a more specific question worth asking before
+   leaving the domain.
+5. **Closeout:** Guildhall asks whether there is anything else it should know
+   about the domain.
+6. **Closed:** the domain has enough detail for the current spec.
+7. **Deferred:** the user or coordinator explicitly postpones it.
+8. **Reopened:** later answers or code evidence show the domain was not actually
+   settled.
+
+The important instruction is that "next domain" is a deliberate transition, not
+the LLM drifting because it has a list of topics. The agent should name the
+domain it is currently pressure testing in the question metadata and in the
+intake-state update.
+
+### Interviewer And Producer Roles
+
+Pressure-Test Intake should feel less like one agent filling out a form and
+more like an interviewer working with a producer.
+
+The **interviewer** owns the live conversation:
+
+- asks the current domain's next question;
+- listens for concrete facts, examples, tensions, and hidden assumptions;
+- asks follow-ups when the answer opens a door;
+- keeps the user-facing flow calm and one-question-at-a-time;
+- records the answer, source, and immediate interpretation.
+
+The **producer** owns the pressure:
+
+- reviews the interviewer's notes before the domain closes;
+- asks what was interesting, vague, contradictory, or underexplored;
+- checks whether the interviewer accepted surface-level language too quickly;
+- points out missed follow-up paths;
+- compares the answer against repo/docs/memory evidence;
+- decides whether the domain is ready for closeout, needs another question, or
+  exposed a new domain.
+
+Prefer implementing this first as a single agent with an explicit producer
+self-critique step after each answer. That keeps the loop simple, cheap, and
+easy to reason about while the product behavior is still being proven. If live
+use shows the self-critique is too soft, repetitive, or prone to accepting its
+own shallow interview, the role can split into a second agent or reviewer pass.
+The product contract matters more than the implementation shape: the interview
+should gather material substance, and the producer should challenge whether the
+interview went deep enough.
+
+The producer should be especially alert for:
+
+- a phrase that sounds meaningful but has no concrete example;
+- a workflow mentioned only from the happy path;
+- a constraint with no owner, threshold, or enforcement point;
+- an answer that names a risk but not the mitigation;
+- a domain that was closed without asking the closeout question;
+- an interesting aside the interviewer failed to follow up on.
+
+After every answered question, the producer should choose one of four outcomes:
+
+- **continue domain:** the answer deserves a follow-up in the same domain;
+- **closeout domain:** the next question should ask whether there is anything
+  else to know about this domain;
+- **open new domain:** the answer exposed a separate area that needs its own
+  interview loop;
+- **advance:** the domain is closed or deferred and the intake can move on.
+
+This keeps "ask one question at a time" from becoming shallow. The interviewer
+controls the pace; the producer protects the depth.
+
+### Follow-Up Heuristics
+
+The agent should ask a follow-up when an answer contains:
+
+- a new actor, role, workflow, data object, integration, risk, or exception;
+- a vague adjective such as "fast," "safe," "simple," "good," "strict," or
+  "polished" without a concrete threshold;
+- a decision with an unstated owner or approval rule;
+- a non-goal that implies an edge case;
+- an operational phrase such as "local," "staging," "release," "migration," or
+  "credential" without the exact environment boundary;
+- a product-quality phrase such as "feels right," "clear," or "friendly"
+  without examples;
+- a contradiction with discovered code/docs evidence;
+- a phrase that sounds like user-held history: "usually," "never again,"
+  "last time," "the weird part," or "this always breaks."
+
+The agent should not ask a follow-up when:
+
+- the answer is fully supported by repo/docs evidence;
+- the question would only ask the user to restate implementation details the
+  code can reveal;
+- the domain is not needed for the current spec;
+- the user explicitly defers the domain.
+
+### Prompt And Context Framing
+
+The prompt should give the LLM a compact, persistent frame instead of the full
+interview history:
+
+- current target and draft spec;
+- active domain id, title, status, and why it matters;
+- known facts with source references;
+- unresolved unknowns in the active domain;
+- previous questions and answers for the active domain only;
+- closed domains with one-line summaries;
+- new domains discovered but not yet opened;
+- allowed next actions: inspect evidence, ask one question, update intake
+  state, close/defer/reopen a domain, or produce the pressure-tested spec.
+
+The model should be discouraged from producing long interview plans as user
+messages. Planning belongs in intake state. The user should see the next
+question, the reason it matters, and enough evidence context to answer well.
+
+### Completion Bar
+
+Pressure-Test Intake is complete when:
+
+- each relevant domain is closed, deferred, or explicitly dropped;
+- every closed domain has a short summary, source-backed facts, and captured
+  user decisions;
+- unresolved assumptions and deferrals are named in the spec;
+- the Language Map has captured important project terms, aliases, and forbidden
+  wording discovered during intake;
+- the resulting spec includes workflows, non-goals, edge cases, risks,
+  acceptance criteria, and verification expectations with enough detail for a
+  worker and reviewer to act without guessing.
 
 ### Outputs
 
-Deep Intake can produce:
+Pressure-Test Intake can produce:
 
 - project brief updates;
 - accepted decisions;
@@ -324,7 +815,9 @@ Deep Intake can produce:
 - design-system notes;
 - suggested levers;
 - architecture notes or ADR candidates;
-- a clearer active tranche.
+- a clearer active tranche;
+- a pressure-tested spec with domain coverage, assumptions, deferrals, and
+  known unknowns.
 
 Nothing broad should silently become policy. Cross-project preferences and
 global defaults still need explicit approval.
@@ -490,6 +983,8 @@ Triage turns messy input into a clear next state. It should classify:
 
 - is this a task, a question, a note, a bug, a product idea, or a memory
   candidate?
+- is this an implementation task, release intake, feature spec, investigation,
+  memory update, or parking-lot note?
 - is it ready, blocked, too broad, duplicate, or waiting on a decision?
 - what is the smallest useful next move?
 
@@ -528,7 +1023,7 @@ Before dispatching a worker, the coordinator should choose a worker mode:
 | Risky behavior change | `tdd` |
 | Ambiguous UX or algorithm | `prototype` |
 | Repeated one-off patterns | `architecture_improve` |
-| Broad unclear project ask | Deep Intake before worker dispatch |
+| Serious spec or feature framing | Pressure-Test Intake before worker dispatch |
 
 The coordinator should explain unusual mode choices in one sentence. Ordinary
 choices should stay quiet.
@@ -563,8 +1058,14 @@ The UI should expose practices lightly:
   separately from ordinary project memories.
 - In Settings -> Practices and Settings -> Personas, let users review,
   enable, disable, edit, promote, or remove project/global modules.
-- In setup/onboarding, offer Deep Intake as an optional way to teach Guildhall
-  the project.
+- Show participation summaries as "Used when..." and "Not used when..." first,
+  with matched-signal details behind a task-level "Why did this run?" view.
+- Let users add an extra persona from the task drawer/spec review surface, with
+  the override shown as task-scoped unless promoted later.
+- In spec review, show the auto-filled persona plan and let the user add or
+  remove optional lenses before approving the spec.
+- In setup/onboarding and spec review, offer Pressure-Test Intake as an
+  optional way to teach Guildhall the project or harden a proposed spec.
 - In Needs you, surface intake questions as normal answer cards, not a giant
   form.
 
@@ -596,6 +1097,11 @@ completedAt: 2026-05-22T00:00:00Z
 
 This can begin as task-local evidence. It does not need a new database surface
 on day one.
+
+Pressure-Test Intake should also record the domain-level interview state. The
+state does not need to be beautiful, but it must be durable enough for another
+agent turn to answer: which domain are we in, what do we know, what did we ask,
+what follow-ups remain, and why are we allowed to move on?
 
 Practice and persona definitions need their own provenance:
 
@@ -636,8 +1142,9 @@ they need to be calm, short, and consistent.
   matters.
 - **Prompt bloat:** dumping every practice into every task would waste context.
   Mitigation: inject only the selected mode.
-- **Over-questioning:** Deep Intake could become exhausting. Mitigation: ask
-  one question at a time, inspect first, and let users skip or pause.
+- **Over-questioning:** Pressure-Test Intake could become exhausting.
+  Mitigation: ask one question at a time, inspect first, explain why each
+  question matters, and let users skip or pause.
 - **False confidence:** using TDD or diagnosis language does not guarantee good
   work. Mitigation: reviewers check evidence, not labels.
 - **Memory pollution:** every answer could become a bad global rule. Mitigation:
@@ -650,6 +1157,9 @@ they need to be calm, short, and consistent.
 - **Cost creep:** more personas can mean more model calls. Mitigation: default
   to project scope, trigger only when relevant, and show last-used/cost signals
   in settings.
+- **Invisible routing:** users may not understand why a practice or persona
+  intervened. Mitigation: every match records a plain-language reason and
+  matched signals, and Settings shows editable "Used when..." summaries.
 
 ## 0.8.0 Candidate Slices
 
@@ -672,11 +1182,27 @@ they need to be calm, short, and consistent.
 - Inject red-green-refactor instructions only when selected.
 - Capture red/green evidence in task notes or gate results.
 
-### Slice 4: Deep Intake
+### Slice 4: Pressure-Test Intake
 
-- Add optional intake flow for new or under-explained projects.
-- Store answers as project brief updates, decisions, questions, memories, and
-  Language Map candidates.
+- Add optional pressure-test flow for serious project, feature, release, and
+  task specs.
+- Let **New Task** branch by intent before creating work, so release ideas such
+  as `0.9.0`, feature specs, bugs, investigations, memory candidates, and
+  concrete implementation tasks enter different intake lanes.
+- Have the coordinator draft a domain map, inspect repo/docs/memory first, then
+  interview the user one question at a time across each relevant domain.
+- Support follow-up questions and per-domain closeout prompts such as "Is
+  there anything else I should know about X?"
+- Persist intake state with active domain, inspected evidence, known facts,
+  open unknowns, asked questions, follow-up candidates, closeout state,
+  discovered domains, assumptions, and decisions.
+- Frame the LLM context around the active domain and allowed next actions so it
+  persists in the domain until it has a reason to close, defer, or reopen it.
+- Add an interviewer/producer review loop so the live interviewer gathers
+  substance and a producer pass challenges missed follow-ups, vague answers,
+  contradictions, and premature domain closure.
+- Store answers as project brief updates, decisions, questions, memories,
+  assumptions, deferrals, and Language Map candidates.
 - Keep intake resumable and non-blocking.
 
 ### Slice 5: Project Language Map
@@ -699,6 +1225,8 @@ they need to be calm, short, and consistent.
 - Add proposal cards for new practices.
 - Add Settings -> Practices for reviewing, enabling, disabling, editing, and
   promoting practices.
+- Add participation rules with suggested, automatic, manual, and suppressed
+  decisions, plus task-level reason records.
 - Inject only active, relevant practice instructions into context packets.
 
 ### Slice 8: Persona Library
@@ -707,6 +1235,12 @@ they need to be calm, short, and consistent.
 - Add proposal flow for missing expert lenses.
 - Add Settings -> Personas for participation rules, model lane, and rubric
   preview.
+- Expose friendly rule builders for task kind, project domain, file pattern,
+  keyword, and reviewer-finding triggers, with advanced raw editing later.
+- Allow task-scoped user-requested persona assignments for spec, worker,
+  review, gate, or all relevant phases.
+- Persist a persona plan on the spec with auto-selected, user-requested, and
+  suggested personas plus phase labels and reasons.
 - Route reviewers through user-defined personas only when trigger rules match.
 
 ## Acceptance Criteria
@@ -714,16 +1248,31 @@ they need to be calm, short, and consistent.
 - Guildhall can select `build`, `diagnose`, or `tdd` before worker dispatch.
 - Worker context includes only the chosen mode's loop.
 - Reviewer output checks mode-specific evidence.
-- Deep Intake can ask a user one focused question and store the answer with
-  provenance.
+- Pressure-Test Intake can build a domain map, answer discoverable questions by
+  inspecting repo/docs/memory, ask the remaining questions one at a time, and
+  store each answer with provenance.
+- Pressure-Test Intake can ask follow-up questions and close each domain by
+  asking whether there is anything else Guildhall should know about it.
 - A project can maintain a small Language Map and inject relevant terms into
   worker context.
 - Practice runs appear in the task trail or drawer without overwhelming the
   main flow.
 - Guildhall can draft a new project-scoped practice from repeated evidence and
   keep it inactive until approved.
+- Practice Designer can review a proposed practice for scope, triggers,
+  evidence, duplication, prompt cost, and clear exit criteria before activation.
 - Guildhall can draft a new project-scoped persona with a rubric and trigger
   rules, then expose it in Settings -> Personas.
+- Persona Designer can review a proposed persona for distinctive judgment,
+  evidence needs, participation rules, rubric quality, overreach, duplication,
+  and cost before activation.
+- Practices and personas record why they applied or did not apply, and the UI
+  can show the reason without exposing raw predicates by default.
+- A user can add an extra persona to a task/spec/release as a task-scoped review
+  lens, and Guildhall records the request without removing automatically
+  applicable reviewers.
+- Spec review shows the planned persona roster before approval and lets the user
+  add optional personas smoothly.
 - Users can skip intake or continue with ordinary work.
 - Broad learned behavior still requires approval before becoming global.
 
@@ -735,8 +1284,8 @@ they need to be calm, short, and consistent.
   proves it wants that style?
 - How much of the Language Map should be model-generated versus deterministic
   from accepted answers and docs?
-- Should Deep Intake produce ADR candidates automatically, or only suggest
-  them when a decision has real architectural weight?
+- Should Pressure-Test Intake produce ADR candidates automatically, or only
+  suggest them when a decision has real architectural weight?
 - Should practice names be visible to users, or should the UI translate them
   into plain status phrases such as "Debugging carefully" and "Writing the test
   first"?
