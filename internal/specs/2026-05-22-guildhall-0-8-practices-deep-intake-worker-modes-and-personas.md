@@ -11,6 +11,9 @@ testing project ideas, pulling locked-away knowledge out of the user's head,
 choosing the right work style, and keeping agents from treating every task like
 generic implementation.
 
+Related intake/routing spec:
+`internal/specs/2026-05-23-guildhall-request-intake-and-thread-actions.md`.
+
 The inspiration comes from small, composable agent workflows such as
 Matt Pocock's skills repo:
 
