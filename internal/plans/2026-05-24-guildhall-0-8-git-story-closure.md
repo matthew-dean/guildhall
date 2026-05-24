@@ -14,7 +14,9 @@ Thread, Provenance, and policy-gated closure endpoints are in place. The
 project policy endpoint returns a copied-from-system view without rewriting
 project config while `.gitignore` cleanup is happening in a separate lane.
 Completed task work auto-commits when the resolved project policy says
-`commit: auto`; `ask` and `never` still avoid automatic git writes. Automatic
+`commit: auto`; auto-generated commit messages now run through the Commit Story
+practice so they describe the completed work instead of using generic
+placeholders. `ask` and `never` still avoid automatic git writes. Automatic
 push/open-PR orchestration remains behind explicit policy-aware callers for the
 0.8.0 MVP.
 

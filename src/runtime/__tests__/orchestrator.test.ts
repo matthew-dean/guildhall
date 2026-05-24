@@ -6419,6 +6419,7 @@ describe('Orchestrator.run — full loops', () => {
     await writeQueue([
       mkTask({
         id: 'task-auto',
+        title: 'Implement feature workflow',
         status: 'gate_check',
         worktreePath,
         branchName: 'guildhall/task-auto',
@@ -6465,7 +6466,15 @@ describe('Orchestrator.run — full loops', () => {
     expect(gitDriver.state.commits).toEqual([
       expect.objectContaining({
         repoRoot: worktreePath,
-        message: 'chore(guildhall): commit completed work for task-auto',
+        message: [
+          'Implement feature workflow',
+          '',
+          'Task: task-auto',
+          'Changes: 2 changed',
+          'Paths:',
+          '- src/feature.ts',
+          '- src/feature.test.ts',
+        ].join('\n'),
       }),
     ])
     const q = await readQueue()

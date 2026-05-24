@@ -103,6 +103,9 @@ MVP contract:
   project policy says to do so. The shipped system default should ask first,
   but users can change their system default to automate more and opt specific
   projects out.
+- Auto-generated commit messages use the built-in Commit Story practice:
+  describe the actual completed work, fall back to changed-path context when
+  the task title is weak, stay concise, and never add AI attribution.
 - Guildhall never force-pushes, rebases shared branches, or rewrites published
   history unless the user explicitly configures that dangerous behavior for the
   project and confirms it at the point of use.

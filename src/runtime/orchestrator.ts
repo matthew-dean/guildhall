@@ -127,6 +127,7 @@ import {
   NodeGitDriver,
   type GitDriver,
 } from './git-driver.js'
+import { buildCommitStoryMessage } from './commit-story.js'
 import {
   ensureWorktreeForDispatch,
   cleanupWorktreeForTerminal,
@@ -6191,7 +6192,7 @@ export class Orchestrator {
     if (status.clean) return { ok: true }
     const result = await this.gitDriver.commitAll(
       repoRoot,
-      `chore(guildhall): commit completed work for ${task.id}`,
+      buildCommitStoryMessage({ task, status }),
     )
     if (!result.ok) return { ok: false, detail: result.detail }
     task.notes.push({
