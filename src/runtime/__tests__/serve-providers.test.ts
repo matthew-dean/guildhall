@@ -13,7 +13,7 @@ vi.mock('node:os', async (importOriginal) => {
   return { ...actual, homedir: () => TMP_HOME }
 })
 
-const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig, resolveModelsForProvider, updateProjectConfig, registerWorkspace } =
+const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPath, readWorkspaceConfig, readGlobalConfig, updateGlobalConfig, resolveModelsForProvider, updateProjectConfig, registerWorkspace } =
   await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
 const { clearProviderClientPool } = await import('../provider-client-pool.js')
@@ -746,6 +746,65 @@ describe('POST /api/project/start preflight', () => {
       },
       allowPaidProviderFallback: true,
     })
+  })
+
+  it('includes machine default provider and model status in the service payload', async () => {
+    updateGlobalConfig({
+      ...readGlobalConfig(),
+      preferredProvider: 'openai-api',
+      models: {
+        'openai-api': {
+          worker: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+        },
+      },
+    })
+    registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
+    const { app } = buildServeApp({})
+    const res = await app.fetch(new Request('http://localhost/api/service'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      defaultProviderStatus?: {
+        preferredProvider?: string
+        preferredProviderLabel?: string
+        activeModel?: string
+        models?: { worker?: string; reviewer?: string }
+        warnings?: Array<{ code?: string }>
+      } | null
+    }
+    expect(body.defaultProviderStatus).toMatchObject({
+      preferredProvider: 'openai-api',
+      preferredProviderLabel: 'OpenAI-compatible API',
+      activeModel: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+    })
+    expect(body.defaultProviderStatus?.models?.worker).toBe('Qwen/Qwen3-235B-A22B-Instruct-2507')
+    expect(body.defaultProviderStatus?.models?.reviewer).toBe('gpt-4o-mini')
+    expect(body.defaultProviderStatus?.warnings).toBeUndefined()
+  })
+
+  it('warns when provider-scoped model overrides do not match the preferred provider', async () => {
+    updateGlobalConfig({
+      ...readGlobalConfig(),
+      preferredProvider: 'codex',
+      models: {
+        'openai-api': {
+          worker: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+        },
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(new Request('http://localhost/api/project'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      providerStatus?: {
+        warnings?: Array<{ code?: string; severity?: string; message?: string }>
+      } | null
+    }
+    expect(body.providerStatus?.warnings?.[0]).toMatchObject({
+      code: 'provider_model_scope_mismatch',
+      severity: 'warn',
+    })
+    expect(body.providerStatus?.warnings?.[0]?.message).toMatch(/OpenAI-compatible API/)
+    expect(body.providerStatus?.warnings?.[0]?.message).toMatch(/Codex/)
   })
 
   it('reports effective reviewer fanout without surfacing config-clamp chatter in the UI payload', async () => {

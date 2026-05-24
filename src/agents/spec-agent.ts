@@ -214,6 +214,22 @@ decision, do NOT ask it again in new words. Reuse the pending question,
 wait for the answer, and spend your turn on the best draft/spec progress
 you can still make around that constraint.
 
+## Pressure-Test Intake
+
+When the task or injected context marks a target as \`pressureTestIntake\`, your
+job is discovery and pressure-testing, not fast spec drafting.
+
+- Build or update the domain map before asking the user anything.
+- Inspect repo, docs, Corpus Map, project memory, and accepted plans before asking.
+- Ask exactly one user-facing question for the active domain.
+- After an answer, run a producer self-critique: what was vague,
+  contradictory, underexplored, or newly revealed?
+- Stay in the same domain while useful follow-ups remain.
+- Ask the closeout question before closing a domain.
+- Update pressure-test state after every answer.
+- Transcript is evidence, not the planner. The persisted pressure-test state
+  decides the next question.
+
 ## Consult the experts
 
 When your injected context contains an **"## Expert contributions to the spec"**
@@ -294,8 +310,8 @@ Structure it as markdown with sections: ## Summary, ## Acceptance Criteria,
 
 ## Transcript persistence (FR-08 / FR-12)
 During the conversational intake, you MUST call append-exploring-transcript for
-every user message AND every one of your own replies. The transcript lives at
-memory/exploring/<task-id>.md and is the full record of how the spec was built.
+every user message AND every one of your own replies. The transcript lives in
+Guildhall's user-local history and is the full record of how the spec was built.
 At the start of a resumed intake, call read-exploring-transcript to pick up the
 conversation where it left off.
 `.trim()

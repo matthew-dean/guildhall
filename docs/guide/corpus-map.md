@@ -14,15 +14,17 @@ exists somewhere else.
 
 ## What it stores
 
-Guildhall writes the map under `./memory/`:
+Guildhall writes the shared map under `./.guildhall/` and keeps bulky refresh
+history local:
 
 | File | Purpose |
 |---|---|
-| `./memory/codebase-map.yaml` | Current compact map. |
-| `./memory/codebase-map.history.jsonl` | Refresh history and why each refresh ran. |
-| `./memory/codebase-map.stale.json` | Last refresh failure, if the map could not be rebuilt. |
-| `./memory/codebase-map.overrides.yaml` | Human or learned corrections layered over automatic discovery. |
-| `./memory/design-system.yaml` | Optional project design-system source summarized into the map. |
+| `./.guildhall/codebase-map.yaml` | Current compact map. |
+| `~/.guildhall/data/projects/<project-hash>/codebase-map/codebase-map.full.yaml` | Full local map snapshot when the committed map is compacted. |
+| `~/.guildhall/data/projects/<project-hash>/codebase-map.history.jsonl` | Refresh history and why each refresh ran. |
+| `~/.guildhall/data/projects/<project-hash>/codebase-map.stale.json` | Last refresh failure, if the map could not be rebuilt. |
+| `./.guildhall/codebase-map.overrides.yaml` | Human or learned corrections layered over automatic discovery. |
+| `./.guildhall/design-system.yaml` | Optional project design-system source summarized into the map. |
 
 The map contains:
 
@@ -53,7 +55,7 @@ The builder starts with a Git-aware file list:
 6. Extract lightweight symbols and imports.
 7. Group files into areas.
 8. Detect reusable abstractions.
-9. Summarize the project design system when `./memory/design-system.yaml`
+9. Summarize the project design system when `./.guildhall/design-system.yaml`
    exists.
 10. Apply any overrides.
 11. Save the map and append a history event.
@@ -103,7 +105,7 @@ fits together:
 - `.gitignore`
 - `AGENTS.md`
 - `./guildhall.yaml`
-- `./memory/design-system.yaml`
+- `./.guildhall/design-system.yaml`
 - schema/version changes
 - very large touched-file sets
 - missing or corrupt previous maps
@@ -196,7 +198,7 @@ do not.
 ## Design-system guidance
 
 The Corpus Map treats the design system as part of codebase orientation, not as
-a separate aesthetic checklist. When `./memory/design-system.yaml` exists,
+a separate aesthetic checklist. When `./.guildhall/design-system.yaml` exists,
 Guildhall records:
 
 - counts for color, spacing, typography, radius, and shadow tokens

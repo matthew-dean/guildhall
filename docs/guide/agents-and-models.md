@@ -54,4 +54,7 @@ Agents run under a permission mode:
 
 ## Persistence
 
-Every agent conversation is snapshotted to `./memory/sessions/` per project. You can resume any agent from its last snapshot.
+Agent conversations and checkpoints are snapshotted under
+`~/.guildhall/data/projects/<project-hash>/` per project. Shared project state
+stays in `./.guildhall/`, but raw conversation history is local so it does not
+balloon commits.

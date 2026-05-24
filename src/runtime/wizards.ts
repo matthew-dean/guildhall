@@ -33,6 +33,7 @@ import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { readGlobalProviders, type ProviderKind } from '@guildhall/config'
 import { bootstrapNeeded, readBootstrapStatus } from './bootstrap-runner.js'
+import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // Facts / snapshot
@@ -66,15 +67,15 @@ export interface ProjectSnapshot {
   bootstrapVerified?: boolean
   /** Whether any non-oauth provider has a stored credential in the global store. */
   hasProvider: boolean
-  /** Whether `memory/project-brief.md` exists and has > 40 chars of substance. */
+  /** Whether `.guildhall/project-brief.md` exists and has > 40 chars of substance. */
   hasDirection: boolean
   /**
-   * Whether `memory/workspace-goals.json` has been written (approve action)
+   * Whether `.guildhall/workspace-goals.json` has been written (approve action)
    * OR a dismiss marker is present — either counts as "reviewed".
    * Also considered done if no repo anchors were detected (nothing to review).
    */
   workspaceImportReviewed: boolean
-  /** Number of non-reserved user/project tasks in memory/TASKS.json. */
+  /** Number of non-reserved user/project tasks in .guildhall/TASKS.json. */
   taskCount: number
   /** Wizard-scoped persisted state (skip markers + completedAt stamps). */
   wizardState: WizardsState
@@ -474,7 +475,7 @@ function readYamlSafe(path: string): unknown {
 }
 
 export function readWizardsState(projectPath: string): WizardsState {
-  const path = join(projectPath, 'memory', 'wizards.yaml')
+  const path = join(getProjectStateDir(projectPath), 'wizards.yaml')
   if (!existsSync(path)) return emptyWizardsState()
   const raw = readYamlSafe(path) as Partial<WizardsState> | null
   if (!raw || typeof raw !== 'object') return emptyWizardsState()
@@ -526,7 +527,7 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
     const successGates = Array.isArray((cfg.bootstrap as { successGates?: unknown }).successGates)
       ? ((cfg.bootstrap as { successGates?: string[] }).successGates ?? [])
       : []
-    const memoryDir = join(projectPath, 'memory')
+    const memoryDir = getProjectStateDir(projectPath)
     const status = readBootstrapStatus(memoryDir)
     if (status?.success && !bootstrapNeeded(memoryDir, projectPath, commands, successGates)) {
       bootstrapVerified = true
@@ -560,7 +561,9 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
   }
 
   // direction
-  const briefPath = join(projectPath, 'memory', 'project-brief.md')
+  const projectStateDir = getProjectStateDir(projectPath)
+  const localHistoryDir = getProjectLocalHistoryDir(projectPath)
+  const briefPath = join(projectStateDir, 'project-brief.md')
   let hasDirection = false
   if (existsSync(briefPath)) {
     try {
@@ -572,8 +575,8 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
   }
 
   // workspace import: goals.json written, OR dismiss marker, OR no anchors at all.
-  const goalsPath = join(projectPath, 'memory', 'workspace-goals.json')
-  const dismissPath = join(projectPath, 'memory', 'workspace-import-dismissed')
+  const goalsPath = join(projectStateDir, 'workspace-goals.json')
+  const dismissPath = join(localHistoryDir, 'workspace-import-dismissed')
   let workspaceImportReviewed = existsSync(goalsPath) || existsSync(dismissPath)
   if (!workspaceImportReviewed) {
     const anchors = ['README.md', 'pnpm-workspace.yaml', 'package.json', 'packages', 'skills', 'ROADMAP.md']
@@ -586,7 +589,7 @@ export function buildSnapshot(opts: BuildSnapshotOptions): ProjectSnapshot {
   // contains Guildhall's own housekeeping. Do not exclude by domain alone:
   // starter projects can route the user's first real spec-shaping task through
   // `_meta` until richer project lanes exist.
-  const tasksPath = join(projectPath, 'memory', 'TASKS.json')
+  const tasksPath = join(projectStateDir, 'TASKS.json')
   const tasksRaw = readJsonSafe(tasksPath)
   const tasks = Array.isArray(tasksRaw)
     ? tasksRaw

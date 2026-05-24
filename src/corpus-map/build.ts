@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { DesignSystem } from '@guildhall/core'
+import { getProjectStateDir } from '@guildhall/sessions'
 import {
   discoverProjectFiles,
   indexFile,
@@ -53,7 +54,7 @@ export async function buildCodebaseMap(input: BuildCodebaseMapInput): Promise<Co
 
 export async function refreshCodebaseMap(input: RefreshCodebaseMapInput): Promise<RefreshCodebaseMapResult> {
   const projectRoot = path.resolve(input.projectRoot)
-  const memoryDir = input.memoryDir ?? path.join(projectRoot, 'memory')
+  const memoryDir = input.memoryDir ?? getProjectStateDir(projectRoot)
   const now = input.now ?? new Date()
   try {
     const previous = await loadCodebaseMap(memoryDir)

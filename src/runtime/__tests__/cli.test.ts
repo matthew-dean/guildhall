@@ -220,6 +220,7 @@ describe('Guildhall CLI surface', () => {
       'open',
       'config',
       'corpus-map',
+      'memory',
       'model-bakeoff',
     ])
   })
@@ -236,6 +237,7 @@ describe('Guildhall CLI surface', () => {
     expect(help).not.toContain('guildhall resume')
     expect(help).not.toContain('guildhall meta-intake')
     expect(help).not.toContain('guildhall approve-meta-intake')
+    expect(help).toContain('guildhall memory migrate-0.8.0')
   })
 
   it('writes a model bakeoff report as json plus markdown', () => {

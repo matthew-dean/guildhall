@@ -25,10 +25,11 @@ Use it for the everyday loop:
 
 The app is still transparent: the shared project contract lands in
 `./guildhall.yaml`, shared Guildhall metadata can live in checked-in
-`./.guildhall/*.yaml` files, project memory lands in `./memory/*`, and
+`./.guildhall/` files, compact project memory lands in `./.guildhall/`, and
 local/private checkout overrides stay in `./.guildhall/config.yaml`.
 Machine-scoped state such as the project registry, provider credentials, and
-default provider choice live under `~/.guildhall/`.
+default provider choice live under `~/.guildhall/`; transcripts and bulky run
+history live under `~/.guildhall/data/projects/`.
 
 ## Pages
 

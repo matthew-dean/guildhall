@@ -19,8 +19,10 @@ Guildhall is an agent harness for local software projects.
 In the product, you mostly think in **projects**. In the runtime and config
 layers, the same unit is still often called a **workspace**.
 
-Either way, it means one directory containing a `./guildhall.yaml` and a
-`./memory/` folder. See [Workspaces](./workspaces).
+Either way, it means one directory containing a `./guildhall.yaml` and shared
+Guildhall project state under `./.guildhall/`. Local transcripts and bulky run
+history live under `~/.guildhall/data/projects/`. See
+[Workspaces](./workspaces).
 
 ## Task
 

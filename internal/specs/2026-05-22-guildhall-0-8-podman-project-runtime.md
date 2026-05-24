@@ -6,6 +6,11 @@ title: Podman project runtime
 
 **Status:** `0.8.0` exploration candidate
 
+**Release scope:** use
+`internal/plans/2026-05-24-guildhall-0-8-mvp-tracker.md` as the current 0.8.0
+MVP source of truth. Podman/container runtime work is deferred to 0.9.0 or
+later unless a narrow manual spike is needed to de-risk the next release.
+
 This note captures a possible runtime direction for Guildhall: make the agent
 execution environment a local Podman container instead of a long-running
 Guildhall service that executes directly on the host.

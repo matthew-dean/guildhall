@@ -6,6 +6,11 @@ title: Practices, deep intake, and worker modes
 
 **Status:** `0.8.0` exploration candidate
 
+**Release scope:** use
+`internal/plans/2026-05-24-guildhall-0-8-mvp-tracker.md` as the current 0.8.0
+MVP source of truth. This spec preserves broader design context; candidate
+slices not named in the tracker are deferred to 0.9.0 or later.
+
 This note captures a 0.8.0 direction for making Guildhall better at pressure
 testing project ideas, pulling locked-away knowledge out of the user's head,
 choosing the right work style, and keeping agents from treating every task like
@@ -44,6 +49,8 @@ For 0.8.0, that means:
   gap in the current library;
 - the system can grow a project language map from user answers, docs, code, and
   decisions;
+- blockers that require external human action become guided operational
+  checklists with exact next steps instead of dead-end "blocked" states;
 - zoom-out and triage become ordinary coordinator moves, not ad hoc chat
   habits;
 - every practice leaves evidence: what was asked, what was learned, what mode
@@ -915,6 +922,39 @@ Exit criteria:
 - fix verified against the failing path;
 - regression protection exists or the absence is explained.
 
+### `operational_unblock`
+
+Human-in-the-loop environment or provider unblock mode.
+
+Use when:
+
+- the task is blocked by an external service, credential, deploy setting,
+  database migration, hosted environment, GitHub secret, or provider action;
+- Guildhall can inspect enough project context to recommend a concrete safe
+  path, but cannot or should not perform the action itself;
+- the next useful move is for the user to run a command, click through a
+  provider UI, approve an external action, or provide access/output.
+
+Operating loop:
+
+1. Inspect repo scripts, provider config, migrations, workflows, docs, memory,
+   and previous blocker notes.
+2. Classify the blocker and name the external system involved.
+3. Pick the easiest safe path and explain why that path fits this project.
+4. Present one user action at a time with exact command/UI path, expected
+   output, risk, and alternate path.
+5. Wait for `I've done that`, `This failed`, `Show another way`, or `I don't
+   have access`.
+6. Verify directly when possible, or ask for the smallest proof needed.
+7. Advance, recover, or mark the blocker deferred with evidence.
+
+Exit criteria:
+
+- blocker cleared and verified;
+- user-facing steps exhausted and a precise access/tooling gap remains;
+- user defers the operational work;
+- the blocker turns out to be a code defect and is rerouted to `diagnose`.
+
 ### `tdd`
 
 Test-first feature or fix mode.
@@ -1023,6 +1063,7 @@ Before dispatching a worker, the coordinator should choose a worker mode:
 |---|---|
 | Clear feature slice | `build` or `tdd` |
 | Bug, failing test, runtime issue | `diagnose` |
+| External provider, deploy, migration, or access blocker | `operational_unblock` |
 | Risky behavior change | `tdd` |
 | Ambiguous UX or algorithm | `prototype` |
 | Repeated one-off patterns | `architecture_improve` |
@@ -1152,6 +1193,17 @@ they need to be calm, short, and consistent.
   work. Mitigation: reviewers check evidence, not labels.
 - **Memory pollution:** every answer could become a bad global rule. Mitigation:
   scoped suggestions, provenance, and explicit approval for broad lessons.
+- **Memory sprawl:** project memory could become a giant committed transcript
+  archive. Mitigation: separate semantic/project facts from local episodic
+  history, compact before committing, default bulky history to user-system
+  metadata, and warn before large generated memory diffs land in PRs.
+- **Operational abandonment:** external provider work could leave tasks blocked
+  without helping the user. Mitigation: route provider, migration, deploy, and
+  credential blockers into `operational_unblock` with inspected steps,
+  user-action buttons, and verification.
+- **YAML distrust:** over-quoted generated config can make Guildhall state feel
+  machine-owned and suspicious. Mitigation: enforce idiomatic YAML output,
+  stable field order, minimal quoting, and narrow diffs in tests.
 - **Persona sprawl:** every annoyance could become a new reviewer. Mitigation:
   require trigger rules, examples, and user approval before activation.
 - **Self-modifying prompt drift:** agents could make their own instructions
@@ -1208,21 +1260,37 @@ they need to be calm, short, and consistent.
   assumptions, deferrals, and Language Map candidates.
 - Keep intake resumable and non-blocking.
 
-### Slice 5: Project Language Map
+### Slice 5: Guided Operational Unblockers
+
+- Add `operational_unblock` as a coordinator-selected mode for provider,
+  migration, deploy, credential, and access blockers.
+- Teach intake/routing to distinguish "blocked because the user must do an
+  external step" from "blocked because the agent failed."
+- Inspect project-specific evidence before suggesting steps: scripts, migration
+  directories, Supabase/Vercel config, GitHub workflows, docs, memory, and
+  previous blocker notes.
+- Render a blocker card with one step at a time, `I've done that`, `This
+  failed`, `Show another way`, and `I don't have access` actions.
+- Verify the step directly when tools allow it, or ask for the smallest proof
+  needed before advancing.
+- Persist the blocker, inspected evidence, user steps, alternates, and
+  verification state so another agent can resume the runbook.
+
+### Slice 6: Project Language Map
 
 - Create a compact language-map file under project memory.
 - Build deterministic extraction from docs and accepted intake answers.
 - Add semantic enrichment later if cheap enough.
 - Inject only relevant language entries into worker/reviewer context.
 
-### Slice 6: Coordinator Triage And Zoom-Out
+### Slice 7: Coordinator Triage And Zoom-Out
 
 - Add triage classification for messy user input.
 - Add zoom-out trigger when tasks touch shared architecture or repeated
   concepts.
 - Record mode-selection reasons and task-split recommendations.
 
-### Slice 7: Practice Library
+### Slice 8: Practice Library
 
 - Add project/global practice definitions with schema validation.
 - Add proposal cards for new practices.
@@ -1232,7 +1300,7 @@ they need to be calm, short, and consistent.
   decisions, plus task-level reason records.
 - Inject only active, relevant practice instructions into context packets.
 
-### Slice 8: Persona Library
+### Slice 9: Persona Library
 
 - Add project/global persona definitions with rubric validation.
 - Add proposal flow for missing expert lenses.
@@ -1251,6 +1319,10 @@ they need to be calm, short, and consistent.
 - Guildhall can select `build`, `diagnose`, or `tdd` before worker dispatch.
 - Worker context includes only the chosen mode's loop.
 - Reviewer output checks mode-specific evidence.
+- Provider, migration, deploy, credential, and access blockers can enter
+  `operational_unblock`, where Guildhall inspects project evidence and gives the
+  user exact step-by-step actions with verification instead of simply marking
+  the work blocked.
 - Pressure-Test Intake can build a domain map, answer discoverable questions by
   inspecting repo/docs/memory, ask the remaining questions one at a time, and
   store each answer with provenance.
@@ -1258,6 +1330,21 @@ they need to be calm, short, and consistent.
   asking whether there is anything else Guildhall should know about it.
 - A project can maintain a small Language Map and inject relevant terms into
   worker context.
+- Project memory distinguishes committed semantic/procedural facts from local
+  episodic history and bulky archival logs, with `.guildhall/` as the default
+  project-owned state root for new writes.
+- A teammate who clones the repo with Guildhall project state can see the
+  current staging, planning, tasks, specs, decisions, settings, and active
+  intake summaries without inheriting private transcripts or rerunning project
+  intake from scratch.
+- Local history retention is generous but bounded: Guildhall warns before
+  user-system history grows too large, preserves pinned audit records, compacts
+  old noisy events lazily, and offers visible cleanup/export controls.
+- Guildhall warns before large generated memory diffs or raw transcript/tool-log
+  files are committed.
+- Generated project YAML uses minimal quoting, stable ordering, and narrow
+  diffs, with tests covering representative `guildhall.yaml`, practice,
+  persona, language-map, and memory outputs.
 - Practice runs appear in the task trail or drawer without overwhelming the
   main flow.
 - Guildhall can draft a new project-scoped practice from repeated evidence and

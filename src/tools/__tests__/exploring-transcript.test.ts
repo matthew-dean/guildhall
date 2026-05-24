@@ -15,19 +15,23 @@ import {
 // ---------------------------------------------------------------------------
 
 let memoryDir: string
+let dataDir: string
 
 beforeEach(async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-expl-'))
   memoryDir = path.join(tmp, 'memory')
+  dataDir = path.join(tmp, '.guildhall', 'data')
+  process.env.GUILDHALL_DATA_DIR = dataDir
   await fs.mkdir(memoryDir, { recursive: true })
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
   await fs.rm(path.dirname(memoryDir), { recursive: true, force: true })
 })
 
 describe('appendExploringTranscript', () => {
-  it('creates memory/exploring/<task-id>.md on first write', async () => {
+  it('creates a user-local exploring transcript on first write', async () => {
     const result = await appendExploringTranscript({
       memoryDir,
       taskId: 'task-001',
@@ -36,10 +40,10 @@ describe('appendExploringTranscript', () => {
     })
     expect(result.success).toBe(true)
     expect(result.created).toBe(true)
-    const expected = path.join(memoryDir, 'exploring', 'task-001.md')
-    expect(result.path).toBe(expected)
+    expect(result.path).toBeTruthy()
+    expect(result.path).toContain(path.join(dataDir, 'projects'))
 
-    const content = await fs.readFile(expected, 'utf-8')
+    const content = await fs.readFile(result.path!, 'utf-8')
     expect(content).toContain('# Exploring transcript: task-001')
     expect(content).toContain('## [')
     expect(content).toContain('user')
@@ -62,10 +66,7 @@ describe('appendExploringTranscript', () => {
     expect(second.success).toBe(true)
     expect(second.created).toBe(false)
 
-    const content = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'task-001.md'),
-      'utf-8',
-    )
+    const content = await fs.readFile(second.path!, 'utf-8')
     expect(content).toContain('first message')
     expect(content).toContain('second message')
     // Header should only appear once.
@@ -73,8 +74,7 @@ describe('appendExploringTranscript', () => {
     expect(matches).toHaveLength(1)
   })
 
-  it('creates the exploring subdirectory automatically', async () => {
-    // Fresh memoryDir without a pre-existing exploring/ folder.
+  it('creates the local transcript subdirectory automatically', async () => {
     const result = await appendExploringTranscript({
       memoryDir,
       taskId: 'task-abc',
@@ -82,7 +82,7 @@ describe('appendExploringTranscript', () => {
       content: 'hi',
     })
     expect(result.success).toBe(true)
-    const stat = await fs.stat(path.join(memoryDir, 'exploring'))
+    const stat = await fs.stat(path.dirname(result.path!))
     expect(stat.isDirectory()).toBe(true)
   })
 
@@ -99,14 +99,8 @@ describe('appendExploringTranscript', () => {
       role: 'user',
       content: 'beta',
     })
-    const a = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'task-001.md'),
-      'utf-8',
-    )
-    const b = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'task-002.md'),
-      'utf-8',
-    )
+    const a = (await readExploringTranscript({ memoryDir, taskId: 'task-001' })).content ?? ''
+    const b = (await readExploringTranscript({ memoryDir, taskId: 'task-002' })).content ?? ''
     expect(a).toContain('alpha')
     expect(a).not.toContain('beta')
     expect(b).toContain('beta')
@@ -114,16 +108,13 @@ describe('appendExploringTranscript', () => {
   })
 
   it('stamps each entry with an ISO timestamp', async () => {
-    await appendExploringTranscript({
+    const result = await appendExploringTranscript({
       memoryDir,
       taskId: 'task-001',
       role: 'user',
       content: 'x',
     })
-    const content = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'task-001.md'),
-      'utf-8',
-    )
+    const content = await fs.readFile(result.path!, 'utf-8')
     // ISO-8601 timestamp inside brackets
     expect(content).toMatch(/## \[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/)
   })
@@ -139,10 +130,7 @@ describe('appendExploringTranscript', () => {
       })
       expect(r.success).toBe(true)
     }
-    const content = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'task-001.md'),
-      'utf-8',
-    )
+    const content = (await readExploringTranscript({ memoryDir, taskId: 'task-001' })).content ?? ''
     for (const role of roles) {
       expect(content).toContain(`msg from ${role}`)
     }
@@ -150,6 +138,39 @@ describe('appendExploringTranscript', () => {
 })
 
 describe('readExploringTranscript', () => {
+  it('writes and reads transcripts from user-local history by default', async () => {
+    const projectRoot = path.dirname(memoryDir)
+    const result = await appendExploringTranscript({
+      memoryDir,
+      taskId: 'task-local',
+      role: 'user',
+      content: 'keep this out of git',
+    })
+    expect(result.success).toBe(true)
+    expect(result.path).not.toContain(`${path.sep}memory${path.sep}exploring${path.sep}`)
+
+    await expect(
+      fs.access(path.join(memoryDir, 'exploring', 'task-local.md')),
+    ).rejects.toThrow()
+
+    const read = await readExploringTranscript({ memoryDir, taskId: 'task-local' })
+    expect(read.content).toContain('keep this out of git')
+    expect(read.path).toBe(result.path)
+    expect(read.path).toContain(path.join('.guildhall', 'data', 'projects').replaceAll('/', path.sep))
+    expect(read.path).toContain(path.basename(projectRoot))
+  })
+
+  it('falls back to the legacy project memory transcript before migration', async () => {
+    const legacyPath = path.join(memoryDir, 'exploring', 'legacy-task.md')
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true })
+    await fs.writeFile(legacyPath, '# Exploring transcript: legacy-task\n\nlegacy context\n', 'utf8')
+
+    const result = await readExploringTranscript({ memoryDir, taskId: 'legacy-task' })
+
+    expect(result.content).toContain('legacy context')
+    expect(result.path).toBe(legacyPath)
+  })
+
   it('returns content of an existing transcript', async () => {
     await appendExploringTranscript({
       memoryDir,
@@ -168,16 +189,16 @@ describe('readExploringTranscript', () => {
     })
     expect(result.content).toBeNull()
     expect(result.error).toBeUndefined()
-    expect(result.path).toBe(
-      path.join(memoryDir, 'exploring', 'never-existed.md'),
-    )
+    expect(result.path).toContain(path.join(dataDir, 'projects'))
+    expect(result.path.endsWith(path.join('transcripts', 'exploring', 'never-existed.md'))).toBe(true)
   })
 })
 
 describe('exploringTranscriptPath', () => {
-  it('returns the canonical <memory>/exploring/<task-id>.md path', () => {
+  it('returns the canonical user-local transcript path', () => {
     const p = exploringTranscriptPath('/abs/memory', 'my-task')
-    expect(p).toBe(path.join('/abs/memory', 'exploring', 'my-task.md'))
+    expect(p).toContain(path.join(dataDir, 'projects'))
+    expect(p.endsWith(path.join('transcripts', 'exploring', 'my-task.md'))).toBe(true)
   })
 })
 
@@ -223,10 +244,7 @@ describe('engine tool wrappers', () => {
       },
     )
     expect(result.is_error).toBe(false)
-    const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'task-meta.md'),
-      'utf-8',
-    )
+    const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-meta' })).content ?? ''
     expect(transcript).toContain('hello from metadata defaults')
   })
 
@@ -244,10 +262,7 @@ describe('engine tool wrappers', () => {
       },
     )
     expect(result.is_error).toBe(false)
-    const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'task-meta-inferred.md'),
-      'utf-8',
-    )
+    const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-meta-inferred' })).content ?? ''
     expect(transcript).toContain('spec-agent')
     expect(transcript).toContain('Please pick one of the structured options.')
   })
@@ -270,10 +285,7 @@ describe('engine tool wrappers', () => {
       },
     )
     expect(result.is_error).toBe(false)
-    const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'task-meta-item.md'),
-      'utf-8',
-    )
+    const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-meta-item' })).content ?? ''
     expect(transcript).toContain('spec-agent')
     expect(transcript).toContain('I think the remaining question is whether Knit should expose Looma tables unchanged.')
   })

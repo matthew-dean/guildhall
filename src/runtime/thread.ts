@@ -35,6 +35,9 @@ import { shouldUseImportDraftState } from './import-drafts.js'
 import { META_INTAKE_TASK_ID, parseCoordinatorDraft } from './meta-intake.js'
 import { visibleOpenQuestions } from './question-visibility.js'
 import { thresholdMs } from './liveness.js'
+import { listPressureTestIntakes } from './pressure-test-intake.js'
+import { getProjectStateDir } from '@guildhall/sessions'
+import type { GitStorySnapshot } from './git-story.js'
 
 // ---------------------------------------------------------------------------
 // Turn shape
@@ -101,6 +104,7 @@ export interface BriefTurn extends TurnBase {
   taskId: string
   taskTitle: string
   constructionMode: ConstructionMode
+  gitStory?: GitStorySnapshot | undefined
   brief: {
     userJob?: string | undefined
     successMetric?: string | undefined
@@ -123,6 +127,7 @@ export interface AgentQuestionTurn extends TurnBase {
   taskId: string
   taskTitle: string
   constructionMode: ConstructionMode
+  gitStory?: GitStorySnapshot | undefined
   taskDescription?: string | undefined
   sourceNote?: TaskSourceNote | undefined
   liveAgent?: { name: string; startedAt?: string | undefined } | undefined
@@ -151,6 +156,7 @@ export interface SpecReviewTurn extends TurnBase {
   taskId: string
   taskTitle: string
   constructionMode: ConstructionMode
+  gitStory?: GitStorySnapshot | undefined
   spec: string
   draftCoordinators?: Array<{
     id: string
@@ -168,6 +174,7 @@ export interface EscalationTurn extends TurnBase {
   taskId: string
   taskTitle: string
   constructionMode: ConstructionMode
+  gitStory?: GitStorySnapshot | undefined
   escalationId: string
   summary: string
   details?: string | undefined
@@ -180,6 +187,7 @@ export interface ReviewFeedbackTurn extends TurnBase {
   taskId: string
   taskTitle: string
   constructionMode: ConstructionMode
+  gitStory?: GitStorySnapshot | undefined
   summary: string
   feedback: string
   revisionCount?: number | undefined
@@ -191,6 +199,7 @@ export interface InFlightTurn extends TurnBase {
   taskId: string
   taskTitle: string
   constructionMode: ConstructionMode
+  gitStory?: GitStorySnapshot | undefined
   taskDescription?: string | undefined
   sourceNote?: TaskSourceNote | undefined
   taskStatus?: string | undefined
@@ -220,8 +229,33 @@ export interface InFlightTurn extends TurnBase {
   } | undefined
 }
 
+export interface RequestTurn extends TurnBase {
+  kind: 'request'
+  requestId: string
+  rawRequest: string
+  title: string
+  routingSummary: string
+}
+
+export interface PressureTestQuestionTurn extends TurnBase {
+  kind: 'pressure_test_question'
+  intakeId: string
+  targetTitle: string
+  domainId: string
+  domainTitle: string
+  question: {
+    id: string
+    prompt: string
+    why: string
+    evidence: string[]
+  }
+  answerEndpoint: string
+}
+
 export type ThreadTurn =
   | SetupStepTurn
+  | RequestTurn
+  | PressureTestQuestionTurn
   | BriefTurn
   | AgentQuestionTurn
   | SpecReviewTurn
@@ -305,6 +339,7 @@ function isHumanOwnedActiveTurn(turn: ThreadTurn): boolean {
     case 'brief_approval':
     case 'spec_review':
     case 'escalation':
+    case 'pressure_test_question':
       return true
     case 'inflight':
       return Boolean(turn.importedDraft)
@@ -681,7 +716,7 @@ const SETUP_STEP_ACTIONS: Record<string, SetupAction> = {
 function setupCurrentValue(stepId: string, snap: ProjectSnapshot, projectPath: string): string | undefined {
   if (stepId === 'identity') return snap.config?.name ?? ''
   if (stepId !== 'direction') return undefined
-  const briefPath = join(projectPath, 'memory', 'project-brief.md')
+  const briefPath = join(getProjectStateDir(projectPath), 'project-brief.md')
   if (!existsSync(briefPath)) return guessedProjectDirection(projectPath)
   try {
     const existing = readFileSync(briefPath, 'utf8').trim()
@@ -748,6 +783,7 @@ function setupContextSummary(
 }
 
 function phaseForTurn(turn: ThreadTurn): TurnPhase {
+  if (turn.kind === 'request' || turn.kind === 'pressure_test_question') return 'intake'
   if (turn.kind === 'review_feedback') return turn.phase
   if (turn.status === 'done') return 'done'
   switch (turn.kind) {
@@ -767,6 +803,49 @@ function phaseForTurn(turn: ThreadTurn): TurnPhase {
       if (turn.taskStatus === 'exploring' || turn.taskStatus === 'import_draft') return 'intake'
       return 'inflight'
   }
+}
+
+function pressureTestTurns(projectPath: string): ThreadTurn[] {
+  const intakes = listPressureTestIntakes(getProjectStateDir(projectPath))
+  return intakes.flatMap((intake) => {
+    const turns: ThreadTurn[] = [{
+      kind: 'request',
+      id: `request:${intake.id}`,
+      requestId: intake.id,
+      rawRequest: intake.rawRequest,
+      title: intake.target.title,
+      routingSummary: 'Routed to Pressure-Test Intake',
+      at: intake.createdAt,
+      persona: 'intake',
+      status: 'done',
+      phase: 'intake',
+    }]
+
+    if (intake.status === 'active' && intake.pendingQuestion) {
+      const domain = intake.domains.find(d => d.id === intake.pendingQuestion?.domainId)
+      turns.push({
+        kind: 'pressure_test_question',
+        id: `pressure-test:${intake.id}:${intake.pendingQuestion.id}`,
+        intakeId: intake.id,
+        targetTitle: intake.target.title,
+        domainId: intake.pendingQuestion.domainId,
+        domainTitle: domain?.title ?? intake.pendingQuestion.domainId,
+        question: {
+          id: intake.pendingQuestion.id,
+          prompt: intake.pendingQuestion.prompt,
+          why: intake.pendingQuestion.why,
+          evidence: intake.pendingQuestion.evidence,
+        },
+        answerEndpoint: `/api/project/pressure-test/${encodeURIComponent(intake.id)}/answer`,
+        at: intake.pendingQuestion.askedAt,
+        persona: 'intake',
+        status: 'active',
+        phase: 'intake',
+      })
+    }
+
+    return turns
+  })
 }
 
 function friendlyAgentName(agentName: string | undefined): string {
@@ -1092,8 +1171,9 @@ function latestSupervisorActivity(
 export function buildThread(opts: BuildThreadOptions): Thread {
   const snap = opts.snapshot ?? buildSnapshot({ projectPath: opts.projectPath })
   const turns: ThreadTurn[] = []
-  const tasksPath = join(opts.projectPath, 'memory', 'TASKS.json')
+  const tasksPath = join(getProjectStateDir(opts.projectPath), 'TASKS.json')
   const tasks = existsSync(tasksPath) ? tasksArray(readJsonSafe(tasksPath)) : []
+  turns.push(...pressureTestTurns(opts.projectPath))
   const activityCutoffs = currentActivityCutoffs(tasks)
   const liveAgents = liveAgentsByTask(opts.recentEvents, activityCutoffs)
   const liveActivity = activityByTask(opts.recentEvents, activityCutoffs)

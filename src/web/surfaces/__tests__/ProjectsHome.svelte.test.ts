@@ -9,6 +9,14 @@ import type { ServiceDetail } from '../../lib/types.js'
 
 const servicePayload: ServiceDetail = {
   pid: 1234,
+  defaultProviderStatus: {
+    preferredProvider: 'openai-api',
+    preferredProviderLabel: 'OpenAI-compatible API',
+    activeModel: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+    models: {
+      worker: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+    },
+  },
   selectedProject: { id: 'looma-knit', path: '/repo/looma-knit', name: 'Looma + Knit' },
   projects: [
     {
@@ -120,6 +128,21 @@ describe('ProjectsHome', () => {
 
     expect(path.value).toBe('/needs-you')
     expect(window.location.pathname).toBe('/needs-you')
+  })
+
+  it('shows the machine default model group and links to global providers', async () => {
+    const fetchMock = vi.fn(async () => json(servicePayload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+    await screen.findByText('OpenAI-compatible API')
+
+    expect(screen.getByText('Qwen3-235B-A22B-Instruct-2507')).toBeTruthy()
+
+    await userEvent.click(screen.getByRole('button', { name: /machine default models/i }))
+
+    expect(path.value).toBe('/providers')
+    expect(window.location.pathname).toBe('/providers')
   })
 
   it('counts needs-you projects, not every grouped draft item', async () => {

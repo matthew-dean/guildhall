@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { logProgress } from '@guildhall/tools'
+import { getProjectLocalHistoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-29 / AC-20: local-only mode.
@@ -24,7 +25,7 @@ import { logProgress } from '@guildhall/tools'
 export const LOCAL_ONLY_FILENAME = 'local-only.json'
 
 export function localOnlyPath(memoryDir: string): string {
-  return path.join(memoryDir, LOCAL_ONLY_FILENAME)
+  return path.join(getProjectLocalHistoryDir(inferProjectRootFromMemoryDir(memoryDir)), LOCAL_ONLY_FILENAME)
 }
 
 export interface LocalOnlyState {

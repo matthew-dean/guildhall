@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onEvent } from '../lib/events.js'
   import { nav } from '../lib/nav.svelte.js'
-  import { Activity, AlertTriangle, CheckCircle2, FileClock, FolderPlus, Inbox, PlayCircle, Users } from 'lucide-svelte'
+  import { Activity, AlertTriangle, CheckCircle2, Cpu, FileClock, FolderPlus, Inbox, PlayCircle, Users } from 'lucide-svelte'
   import ActionBar from '../lib/ActionBar.svelte'
   import Button from '../lib/Button.svelte'
   import Chip from '../lib/Chip.svelte'
@@ -52,6 +52,7 @@
   function servicePayloadSignature(payload: ServiceDetail): string {
     return JSON.stringify({
       selectedProject: payload.selectedProject?.id ?? null,
+      defaultProviderStatus: payload.defaultProviderStatus,
       projects: payload.projects.map(project => ({
         id: project.id,
         path: project.path,
@@ -232,6 +233,14 @@
   const firstNeedsYouProject = $derived(cards.find(card => card.counts.blocked > 0 || card.counts.draftReview > 0) ?? null)
   const selectedProject = $derived(cards.find(card => card.id === selectedProjectId) ?? null)
   const dashboardTotal = $derived(Math.max(1, overview.taskTotal))
+  const defaultProviderStatus = $derived(service?.defaultProviderStatus ?? null)
+  const defaultProviderWarning = $derived(defaultProviderStatus?.warnings?.[0] ?? null)
+  const defaultProviderLabel = $derived(defaultProviderStatus?.preferredProviderLabel ?? defaultProviderStatus?.activeProviderLabel ?? 'Providers')
+  const defaultWorkerModel = $derived(compactModelLabel(defaultProviderStatus?.activeModel ?? defaultProviderStatus?.models?.worker))
+  const defaultProviderTitle = $derived(
+    defaultProviderWarning?.message ??
+      `Machine default models: ${defaultProviderLabel}${defaultWorkerModel ? `, worker ${defaultWorkerModel}` : ''}.`,
+  )
 
   function countLabel(count: number, singular: string, plural = `${singular}s`): string {
     return `${count} ${count === 1 ? singular : plural}`
@@ -248,6 +257,14 @@
   function projectSparkTitle(project: ProjectCardSummary): string {
     const running = project.canStop || optimisticRuns[project.id]
     return `${project.name}: ${running ? 'running now' : 'not running now'}. ${project.activityLabel}`
+  }
+
+  function compactModelLabel(model: string | null | undefined): string {
+    if (!model) return ''
+    const trimmed = model.trim()
+    if (!trimmed) return ''
+    const slash = trimmed.lastIndexOf('/')
+    return slash >= 0 ? trimmed.slice(slash + 1) : trimmed
   }
 
   const guildMembers = $derived([
@@ -283,6 +300,27 @@
       <p class="lede">Guild members, project queues, and blockers across your local work.</p>
     </div>
     <div class="hero-actions">
+      {#if defaultProviderStatus}
+        <Button
+          variant="secondary"
+          className={`default-model-button ${defaultProviderWarning ? 'default-model-button-warn' : ''}`}
+          title={defaultProviderTitle}
+          ariaLabel={`Machine default models: ${defaultProviderLabel}${defaultWorkerModel ? `, ${defaultWorkerModel}` : ''}`}
+          onclick={() => nav('/providers')}
+        >
+          {#if defaultProviderWarning}
+            <AlertTriangle size={15} />
+          {:else}
+            <Cpu size={15} />
+          {/if}
+          <span class="default-model-copy">
+            <span class="default-model-label">{defaultProviderLabel}</span>
+            {#if defaultWorkerModel}
+              <span class="default-model-worker">{defaultWorkerModel}</span>
+            {/if}
+          </span>
+        </Button>
+      {/if}
       <Button
         variant={needsYouCount > 0 ? 'human' : 'secondary'}
         disabled={needsYouCount === 0}
@@ -563,6 +601,36 @@
     height: 34px;
     min-height: 34px;
     align-items: center;
+  }
+  .hero-actions :global(.default-model-button) {
+    gap: var(--s-1);
+    max-width: min(28rem, 100%);
+  }
+  .hero-actions :global(.default-model-button-warn) {
+    border-color: color-mix(in srgb, var(--warn) 52%, var(--button-secondary-border));
+    color: color-mix(in srgb, var(--warn) 72%, var(--text));
+    box-shadow:
+      0 0 12px color-mix(in srgb, var(--warn) 14%, transparent),
+      inset 0 1px 0 color-mix(in srgb, white 9%, transparent);
+  }
+  .default-model-copy {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-1);
+    overflow: hidden;
+  }
+  .default-model-label,
+  .default-model-worker {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .default-model-worker {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    font-weight: 650;
   }
   .action-count {
     display: inline-flex;

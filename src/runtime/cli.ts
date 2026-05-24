@@ -5,6 +5,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { fileURLToPath } from 'node:url'
 import { runOrchestrator } from './orchestrator.js'
 import { renderBakeoffMarkdown, runContextIndexerBakeoff, runModelBakeoff } from './model-bakeoff.js'
+import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
+import { compactProjectState } from './project-state-compaction.js'
 import { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
 import { runInit } from './init.js'
 import { runServe } from './serve.js'
@@ -23,6 +25,7 @@ import { exec, spawn } from 'node:child_process'
 import { platform } from 'node:os'
 import { buildSemanticIndexPrompt, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
 import { OpenAICompatibleClient } from '@guildhall/providers'
+import { getProjectStateDir } from '@guildhall/sessions'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`
@@ -263,6 +266,9 @@ export function resolveServiceLifecycleIntent(
 //   guildhall config [id|path]          — re-run the init wizard on an existing workspace
 //   guildhall corpus-map refresh [--semantic] [path]
 //                                      — rebuild memory/codebase-map.yaml for a workspace
+//   guildhall memory migrate-0.8.0 [--apply] [--delete-source] [--update-gitignore] [path]
+//   guildhall memory migrate-local-history [--apply] [--delete-source] [--update-gitignore] [path]
+//                                      — move old transcripts/events/sessions into ~/.guildhall
 //   guildhall model-bakeoff [--context-indexer] [output]
 //                                      — write replay model bakeoff JSON + Markdown
 // ---------------------------------------------------------------------------
@@ -279,6 +285,7 @@ export const SHIPPED_CLI_COMMANDS = [
   'open',
   'config',
   'corpus-map',
+  'memory',
   'model-bakeoff',
 ] as const
 
@@ -339,6 +346,15 @@ Usage:
   guildhall config [id|path]         Re-run the init wizard on an existing workspace
   guildhall corpus-map refresh [--semantic] [path]
                                   Rebuild compact codebase map context
+  guildhall memory migrate-0.8.0 [path]
+                                  Bring a project onto the 0.8.0 storage layout
+  guildhall memory migrate-local-history [path]
+                                  Compatibility alias for the 0.8.0 storage migration
+  guildhall memory compact-project-state [path]
+                                  Archive terminal tasks and move heartbeat progress local
+    --apply                      Write files. Without this, prints a dry run
+    --delete-source              Remove migrated old memory/ files after copying
+    --update-gitignore           Write/refresh Guildhall's managed .gitignore block
   guildhall model-bakeoff [--context-indexer] [output]
                                   Write replay model bakeoff JSON + Markdown
 
@@ -350,6 +366,8 @@ Examples:
   guildhall run looma
   guildhall serve
   guildhall corpus-map refresh --semantic .
+  guildhall memory migrate-0.8.0 --apply --delete-source --update-gitignore .
+  guildhall memory compact-project-state --apply .
   guildhall model-bakeoff artifacts/model-bakeoff/report.json
   guildhall model-bakeoff --context-indexer
 `.trim()
@@ -632,7 +650,7 @@ async function cmdCorpusMap() {
   const semanticIndexer = semantic ? createSemanticIndexer(projectPath) : undefined
   const result = await refreshCodebaseMap({
     projectRoot: projectPath,
-    memoryDir: join(projectPath, 'memory'),
+    memoryDir: getProjectStateDir(projectPath),
     reason: 'manual',
     ...(semanticIndexer ? { semanticIndexer } : {}),
   })
@@ -643,7 +661,102 @@ async function cmdCorpusMap() {
   if (result.map.semantic) {
     console.log(`[guildhall] Semantic: ${result.map.semantic.corpusKind} via ${result.map.semantic.modelId}`)
   }
-  console.log(`[guildhall] Written: ${join(projectPath, 'memory', 'codebase-map.yaml')}`)
+  console.log(`[guildhall] Written: ${join(getProjectStateDir(projectPath), 'codebase-map.yaml')}`)
+}
+
+async function cmdMemory() {
+  const pos = positionals()
+  const subcommand = pos[0] ?? 'migrate-0.8.0'
+  if (!['migrate-0.8.0', 'migrate-local-history', 'compact-project-state'].includes(subcommand)) {
+    console.error('[guildhall] Usage: guildhall memory <migrate-0.8.0|migrate-local-history|compact-project-state> [--apply] [id|path]')
+    process.exit(1)
+  }
+  const idOrPath = pos[1]
+  let projectPath: string
+  if (idOrPath) {
+    const entry = findWorkspace(idOrPath)
+    projectPath = resolve(expandPath(entry?.path ?? idOrPath))
+  } else {
+    projectPath = process.cwd()
+  }
+  const dryRun = !args.includes('--apply')
+  if (subcommand === 'migrate-0.8.0') {
+    const migration = await migrateLegacyMemoryToLocalHistory({
+      projectRoot: projectPath,
+      dryRun,
+      deleteSource: args.includes('--delete-source'),
+      updateGitignore: args.includes('--update-gitignore'),
+    })
+    const compaction = dryRun
+      ? await compactProjectState({ projectRoot: projectPath, dryRun: true })
+      : migration.compaction ?? await compactProjectState({ projectRoot: projectPath, dryRun: false })
+
+    console.log(`[guildhall] 0.8.0 project storage migration ${dryRun ? 'dry run' : 'complete'}.`)
+    console.log(`[guildhall] Project: ${migration.projectRoot}`)
+    console.log(`[guildhall] Local history: ${migration.localHistoryDir}`)
+    console.log(`[guildhall] Legacy memory files found: ${migration.filesToCopy.length}`)
+    console.log(`[guildhall] Active tasks kept: ${compaction.activeTasksKept}`)
+    console.log(`[guildhall] Terminal tasks archived: ${compaction.archivedTasks}`)
+    console.log(`[guildhall] Archived task files compacted: ${compaction.archivedTaskFilesCompacted}`)
+    console.log(`[guildhall] Codebase map compacted: ${compaction.codebaseMapCompacted ? 'yes' : 'no'}`)
+    console.log(`[guildhall] Heartbeat blocks moved: ${compaction.progressHeartbeatsMoved}`)
+    console.log(`[guildhall] Shared state bytes: ${compaction.bytesBefore} -> ${compaction.bytesAfter}`)
+    if (!dryRun) {
+      console.log(`[guildhall] Legacy files copied: ${migration.copied}`)
+      console.log(`[guildhall] Legacy source files deleted: ${migration.deleted}`)
+      console.log(`[guildhall] .gitignore updated: ${migration.gitignoreUpdated ? 'yes' : 'no'}`)
+      if (migration.gitignoreRoots.length > 0) {
+        console.log(`[guildhall] .gitignore roots: ${migration.gitignoreRoots.join(', ')}`)
+      }
+    } else {
+      console.log('[guildhall] Re-run with --apply to perform this migration.')
+    }
+    return
+  }
+  if (subcommand === 'compact-project-state') {
+    const result = await compactProjectState({ projectRoot: projectPath, dryRun })
+    console.log(`[guildhall] Project state compaction ${dryRun ? 'dry run' : 'complete'}.`)
+    console.log(`[guildhall] Project: ${result.projectRoot}`)
+    console.log(`[guildhall] State dir: ${result.stateDir}`)
+    console.log(`[guildhall] Local history: ${result.localHistoryDir}`)
+    console.log(`[guildhall] Active tasks kept: ${result.activeTasksKept}`)
+    console.log(`[guildhall] Terminal tasks archived: ${result.archivedTasks}`)
+    console.log(`[guildhall] Archived task files compacted: ${result.archivedTaskFilesCompacted}`)
+    console.log(`[guildhall] Codebase map compacted: ${result.codebaseMapCompacted ? 'yes' : 'no'}`)
+    console.log(`[guildhall] Heartbeat blocks moved: ${result.progressHeartbeatsMoved}`)
+    console.log(`[guildhall] Shared TASKS/PROGRESS bytes: ${result.bytesBefore} -> ${result.bytesAfter}`)
+    if (dryRun) {
+      console.log('[guildhall] Re-run with --apply to compact these files.')
+    }
+    return
+  }
+  const result = await migrateLegacyMemoryToLocalHistory({
+    projectRoot: projectPath,
+    dryRun,
+    deleteSource: args.includes('--delete-source'),
+    updateGitignore: args.includes('--update-gitignore'),
+  })
+
+  console.log(`[guildhall] Legacy memory migration ${dryRun ? 'dry run' : 'complete'}.`)
+  console.log(`[guildhall] Project: ${result.projectRoot}`)
+  console.log(`[guildhall] Local history: ${result.localHistoryDir}`)
+  console.log(`[guildhall] Files found: ${result.filesToCopy.length}`)
+  if (!dryRun) {
+    console.log(`[guildhall] Files copied: ${result.copied}`)
+    console.log(`[guildhall] Source files deleted: ${result.deleted}`)
+    console.log(`[guildhall] .gitignore updated: ${result.gitignoreUpdated ? 'yes' : 'no'}`)
+    if (result.gitignoreRoots.length > 0) {
+      console.log(`[guildhall] .gitignore roots: ${result.gitignoreRoots.join(', ')}`)
+    }
+    if (result.compaction) {
+      console.log(`[guildhall] Terminal tasks archived: ${result.compaction.archivedTasks}`)
+      console.log(`[guildhall] Archived task files compacted: ${result.compaction.archivedTaskFilesCompacted}`)
+      console.log(`[guildhall] Codebase map compacted: ${result.compaction.codebaseMapCompacted ? 'yes' : 'no'}`)
+      console.log(`[guildhall] Heartbeat blocks moved: ${result.compaction.progressHeartbeatsMoved}`)
+    }
+  } else if (result.filesToCopy.length > 0) {
+    console.log('[guildhall] Re-run with --apply to copy these files.')
+  }
 }
 
 function createSemanticIndexer(projectPath: string): CorpusSemanticIndexer {
@@ -810,6 +923,7 @@ async function main() {
     case 'serve-internal': return cmdServeInternal()
     case 'config':  return cmdConfig()
     case 'corpus-map': return cmdCorpusMap()
+    case 'memory': return cmdMemory()
     case 'model-bakeoff': return cmdModelBakeoff()
     default:
       console.error(`[guildhall] Unknown command: ${command}`)

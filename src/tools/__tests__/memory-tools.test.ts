@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
+import { getProjectProgressHeartbeatsPath } from '@guildhall/sessions'
 import {
   logProgress,
   logDecision,
@@ -16,18 +17,22 @@ const ctx = { cwd: '/tmp', metadata: {} }
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-memory-test-'))
+  process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, 'data')
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
 describe('logProgress', () => {
-  it('appends a heartbeat entry to PROGRESS.md', async () => {
-    const progressPath = path.join(tmpDir, 'PROGRESS.md')
+  it('stores heartbeat entries in local history instead of committed PROGRESS.md', async () => {
+    const projectRoot = path.join(tmpDir, 'project')
+    const progressPath = path.join(projectRoot, '.guildhall', 'PROGRESS.md')
+    await fs.mkdir(path.dirname(progressPath), { recursive: true })
     await fs.writeFile(progressPath, '# Progress\n', 'utf-8')
 
-    await logProgress({
+    const result = await logProgress({
       progressPath,
       entry: {
         timestamp: '2026-04-11T10:00:00Z',
@@ -40,10 +45,13 @@ describe('logProgress', () => {
     })
 
     const content = await fs.readFile(progressPath, 'utf-8')
-    expect(content).toContain('HEARTBEAT')
-    expect(content).toContain('worker-agent')
-    expect(content).toContain('Implemented ghost button variant.')
-    expect(content).toContain('task-001')
+    expect(content).not.toContain('HEARTBEAT')
+    const heartbeats = await fs.readFile(getProjectProgressHeartbeatsPath(projectRoot), 'utf-8')
+    expect(result.path).toBe(getProjectProgressHeartbeatsPath(projectRoot))
+    expect(heartbeats).toContain('HEARTBEAT')
+    expect(heartbeats).toContain('worker-agent')
+    expect(heartbeats).toContain('Implemented ghost button variant.')
+    expect(heartbeats).toContain('task-001')
   })
 
   it('uses correct emoji for each entry type', async () => {
@@ -64,12 +72,14 @@ describe('logProgress', () => {
           type,
         },
       })
-      const content = await fs.readFile(p, 'utf-8')
+      const content = type === 'heartbeat'
+        ? await fs.readFile(getProjectProgressHeartbeatsPath(tmpDir), 'utf-8')
+        : await fs.readFile(p, 'utf-8')
       expect(content).toContain(emoji)
     }
   })
 
-  it('creates file if it does not exist', async () => {
+  it('creates local heartbeat file if it does not exist', async () => {
     const progressPath = path.join(tmpDir, 'new-progress.md')
     const result = await logProgress({
       progressPath,
@@ -83,7 +93,7 @@ describe('logProgress', () => {
     })
     expect(result.success).toBe(true)
     const exists = await fs
-      .access(progressPath)
+      .access(getProjectProgressHeartbeatsPath(tmpDir))
       .then(() => true)
       .catch(() => false)
     expect(exists).toBe(true)

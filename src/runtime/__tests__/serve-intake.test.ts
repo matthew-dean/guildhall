@@ -132,6 +132,48 @@ describe('POST /api/project/intake', () => {
   })
 })
 
+describe('POST /api/project/request', () => {
+  it('starts pressure-test intake for release ideas', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/request'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ask: 'For 0.8.0, pressure-test intake is my top priority.' }),
+    }))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      routedActions?: Array<{ kind?: string; intakeTarget?: { type?: string; pressureTestRequired?: boolean } }>
+      pressureTestIntake?: { status?: string; activeDomainId?: string }
+    }
+    expect(body.routedActions?.[0]).toMatchObject({
+      kind: 'pressure_test_intake',
+      intakeTarget: { type: 'release', pressureTestRequired: true },
+    })
+    expect(body.pressureTestIntake).toMatchObject({
+      status: 'active',
+      activeDomainId: 'product-goals',
+    })
+  })
+
+  it('preserves ordinary task intake behavior', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/request'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ask: 'Add a loading spinner to Providers.' }),
+    }))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      routedActions?: Array<{ kind?: string }>
+      taskId?: string
+    }
+    expect(body.routedActions?.[0]?.kind).toBe('task_spec')
+    expect(body.taskId).toMatch(/^task-/)
+  })
+})
+
 describe('GET /api/project/source-note', () => {
   it('returns a project-scoped source note for in-app preview', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs'), { recursive: true })

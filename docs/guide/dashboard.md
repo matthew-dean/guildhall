@@ -26,10 +26,11 @@ hold the whole run in your head.
   **Running now**; the project cards carry state chips such as **Paused**,
   **Queued**, **Needs task briefs**, **Mixed**, **Stable**, and **Inspect**.
 - **File-backed, not hidden**: the shared contract lives in `./guildhall.yaml`,
-  shared Guildhall metadata can live in committed `./.guildhall/*.yaml` files,
-  project memory lives in `./memory/*`, and local/private overrides live in
+  compact shared Guildhall state lives in committed `./.guildhall/` files,
+  and local/private overrides live in
   `./.guildhall/config.yaml`. Machine-wide state such as the registry and
-  provider credentials lives in `~/.guildhall/`. The UI is a clearer window
+  provider credentials lives in `~/.guildhall/`; raw transcripts and bulky run
+  history live under `~/.guildhall/data/projects/`. The UI is a clearer window
   into that state, not a secret second database.
 - **One operating place**: the service home gets you into the right project, and the shell carries the detailed state without feeling like a separate product.
 - **Memory you can inspect**: Settings -> Memory shows project habits, cross-project preferences, project playbooks, and Guildhall product ideas without adding a new approval step to every task.

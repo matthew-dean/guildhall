@@ -38,7 +38,7 @@ Register an existing project (must contain `./guildhall.yaml`) in
 
 ## `guildhall unregister <id|path>`
 
-Remove a project from the registry. Does not delete `./memory/` or
+Remove a project from the registry. Does not delete `./.guildhall/` or
 `./guildhall.yaml`.
 
 ## `guildhall list`
@@ -103,6 +103,35 @@ Use `--semantic` to run the model-assisted `contextIndexer` enrichment pass
 after the deterministic map is built. That pass writes purpose, architecture,
 canonical abstraction, risk, and read-next guidance into the map's `semantic`
 section.
+
+## `guildhall memory migrate-0.8.0 [path]`
+
+Dry-run or apply the 0.8.0 project-state migration. The migration moves legacy
+`./memory/` content into the new split, compacts committed `.guildhall` state,
+seals terminal tasks into small archive records, moves full evidence to local
+history, and keeps heartbeat/progress noise out of committed files.
+
+```bash
+guildhall memory migrate-0.8.0 .
+guildhall memory migrate-0.8.0 --apply --delete-source --update-gitignore .
+```
+
+Flags:
+
+- `--apply` — write changes. Without it, the command reports a dry run.
+- `--delete-source` — remove migrated legacy `./memory/` files after copying.
+- `--update-gitignore` — write or refresh Guildhall's managed `.gitignore`
+  block for shared `.guildhall` state and local/private ignores.
+
+## `guildhall memory compact-project-state [path]`
+
+Run the compaction half of the migration against a project that already uses
+`.guildhall`. This is safe as a maintenance command when a project has had many
+task transitions.
+
+```bash
+guildhall memory compact-project-state --apply .
+```
 
 ## `guildhall model-bakeoff [--context-indexer] [output.json]`
 

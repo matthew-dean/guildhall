@@ -4,6 +4,9 @@ export {
   GlobalConfig,
   WorkspaceRegistryEntry,
   WorkspaceRegistry,
+  GitStoryAutomationLevel,
+  GitStoryCompletionTarget,
+  GitStoryPolicy,
   AgentSettings,
   AgentCoordinatorOverride,
   AgentSettingEntry,
@@ -59,6 +62,10 @@ export {
   PROJECT_CONFIG_FILENAME,
   SHARED_PROJECT_METADATA_GITIGNORE_ENTRIES,
   LOCAL_PROJECT_STATE_GITIGNORE_ENTRIES,
+  GUILDHALL_GITIGNORE_BEGIN,
+  GUILDHALL_GITIGNORE_END,
+  guildhallGitignoreManagedBlock,
+  applyGuildhallGitignorePolicy,
   projectConfigDir,
   projectConfigPath,
   ensureProjectGuildhallFilePolicy,
@@ -103,3 +110,8 @@ export type {
 export { resolveConfig } from './resolve.js'
 export type { ResolveOptions } from './resolve.js'
 export type { ModelConfigInput, ProviderModelShortcut, ProviderModelAssignments } from './schemas.js'
+export type {
+  GitStoryAutomationLevel as GitStoryAutomationLevelType,
+  GitStoryCompletionTarget as GitStoryCompletionTargetType,
+  GitStoryPolicy as GitStoryPolicyType,
+} from './schemas.js'

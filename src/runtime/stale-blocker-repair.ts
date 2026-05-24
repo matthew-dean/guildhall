@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, getProjectStateDir } from '@guildhall/sessions'
 import type { Task, TaskQueue } from '@guildhall/core'
 import { TaskQueue as TaskQueueSchema } from '@guildhall/core'
 
@@ -147,7 +147,7 @@ export function repairStaleBlockersInQueue(
 }
 
 export function repairStaleBlockersForProject(projectPath: string): StaleBlockerRepairResult {
-  const tasksPath = join(projectPath, 'memory', 'TASKS.json')
+  const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
   if (!existsSync(tasksPath)) return { changed: false, repairs: [] }
 
   const queue = TaskQueueSchema.parse(JSON.parse(readFileSync(tasksPath, 'utf8')))

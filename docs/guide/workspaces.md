@@ -31,8 +31,13 @@ A workspace is a directory containing:
   task-worktree include paths
 - optional `./.guildhall/*.yaml` metadata (committed when present) — Guildhall
   metadata that is shared with the repo, such as `artifacts.yaml`
-- a `./memory/` folder (committed) — the work queue, lever settings, transcripts
+- a `./.guildhall/` folder (committed where appropriate) — compact shared state:
+  active tasks, sealed task summaries, lever settings, project memory,
+  decisions, progress summaries, and shared Guildhall metadata
 - a `./.guildhall/config.yaml` (gitignored) — local/private checkout overrides
+- local history under `~/.guildhall/data/projects/<project-hash>/` — transcripts,
+  events, checkpoints, heartbeats, and bulky evidence that should not inflate
+  project commits
 
 ## Registering projects
 
@@ -88,8 +93,15 @@ These layers can coexist, and they do different jobs:
 - **`./.guildhall/artifacts.yaml` inside the project** — committed Guildhall
   metadata for stable project-relative artifact IDs. Future shared Guildhall
   metadata can live beside it.
+- **`./.guildhall/TASKS.json` inside the project** — the active task queue.
+  Completed and shelved tasks are sealed into compact records under
+  `./.guildhall/tasks/archive/`.
+- **`./.guildhall/agent-settings.yaml` inside the project** — committed lever
+  settings with provenance.
 - **`./.guildhall/config.yaml` inside the project** — local/private runtime
   overrides for this checkout only.
+- **`~/.guildhall/data/projects/<project-hash>/`** — local transcripts, events,
+  debug snapshots, checkpoints, and full archive evidence.
 - **`~/.guildhall/config.yaml`** — user-global machine defaults across
   projects.
 - **`~/.guildhall/providers.yaml`** — machine-scoped provider credentials
@@ -106,7 +118,7 @@ selections such as `landingBranch`.
 
 ## Project settings on disk
 
-Lever settings live in `./memory/agent-settings.yaml` and are scoped to the
+Lever settings live in `./.guildhall/agent-settings.yaml` and are scoped to the
 workspace, not the global registry. Each project gets its own lever
 configuration, seeded with system defaults on first run and edited either
 through the Settings page or by direct YAML edit. See

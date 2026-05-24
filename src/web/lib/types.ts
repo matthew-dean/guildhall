@@ -76,6 +76,58 @@ export interface ShelveReason {
   detail?: string
 }
 
+export type GitStoryClosureState =
+  | 'clean'
+  | 'dirty_uncommitted'
+  | 'committed_local'
+  | 'no_upstream'
+  | 'pushed'
+  | 'pr_open'
+  | 'merged'
+  | 'local_only'
+  | 'deferred'
+  | 'conflict'
+  | 'unknown'
+
+export interface GitStorySnapshot {
+  state?: GitStoryClosureState
+  repoRoot?: string
+  inspectedPath?: string
+  branch?: string
+  upstream?: string
+  ahead?: number
+  behind?: number
+  changedCount?: number
+  untrackedCount?: number
+  samplePaths?: string[]
+  localCommits?: Array<{ sha?: string; subject?: string }>
+  pr?: { url?: string; state?: string; mergeStateStatus?: string }
+  taskId?: string
+  taskTitle?: string
+  worktreePath?: string
+  mergeRecordResult?: string
+  overrideReason?: string
+  reason?: string
+  nextAction?: string
+  inspectedAt?: string
+}
+
+export interface GitStoryBlocker {
+  id?: string
+  label?: string
+  state?: GitStoryClosureState
+  reason?: string
+  nextAction?: string
+  taskId?: string
+}
+
+export interface GitStorySummary {
+  ready?: boolean
+  state?: GitStoryClosureState
+  blockers?: GitStoryBlocker[]
+  snapshots?: GitStorySnapshot[]
+}
+
 export interface Task {
   id: string
   title?: string
@@ -136,6 +188,7 @@ export interface Task {
     headline?: string
     detail?: string
   }
+  gitStory?: GitStorySnapshot
   origination?: string
   proposedBy?: string
   proposalRationale?: string
@@ -513,6 +566,7 @@ export interface ProjectDetail {
   inbox?: ProjectInbox
   run?: ProjectRun | null
   providerStatus?: ProviderStatus | null
+  gitStory?: GitStorySummary | null
   startReadiness?: StartReadiness | null
   bootstrapStatus?: BootstrapStatus
   recentEvents?: EventEnvelope[]
@@ -549,10 +603,12 @@ export interface ServiceProjectSummary {
     }>
   }
   run?: ProjectRun | null
+  gitStory?: GitStorySummary | null
 }
 
 export interface ServiceDetail {
   pid?: number
+  defaultProviderStatus?: ProviderStatus | null
   selectedProject?: Pick<ServiceProjectSummary, 'id' | 'path' | 'name' | 'initializationNeeded'> | null
   foregroundProject?: Pick<ServiceProjectSummary, 'id' | 'path' | 'name' | 'initializationNeeded'> | null
   projects?: ServiceProjectSummary[]

@@ -141,7 +141,7 @@ import {
   resolveLandingStrategy,
   type LandingStrategy,
 } from './merge-dispatcher.js'
-import { atomicWriteText, loadSessionById, type SessionSnapshot } from '@guildhall/sessions'
+import { atomicWriteText, getProjectStateDir, loadSessionById, type SessionSnapshot } from '@guildhall/sessions'
 import {
   pickNextTasks,
   resolveFanoutCapacity,
@@ -3671,8 +3671,34 @@ export class Orchestrator {
       // a fixup task queued) — `afterStatus` is updated so the post-merge
       // cleanup / progress logging see the final state.
       if (afterStatus === 'done' && beforeStatus !== 'done') {
+        const autoCommit = await this.maybeAutoCommitCompletedTaskWork(taskAfter)
+        if (!autoCommit.ok) {
+          taskAfter.status = 'blocked'
+          taskAfter.assignedTo = null
+          taskAfter.blockReason =
+            `Guildhall could not auto-commit completed work: ${autoCommit.detail ?? 'unknown git error'}.`
+          taskAfter.notes.push({
+            agentId: 'coordinator',
+            role: 'git-story',
+            content:
+              `Auto-commit was required by project Git Story policy, but it failed: ${autoCommit.detail ?? 'unknown git error'}.`,
+            timestamp: this.now(),
+          })
+          afterStatus = 'blocked'
+        }
         const landingStrategy = await this.resolveLandingStrategySafe()
-        if (worktreeMode === 'none') {
+        if (afterStatus === 'blocked') {
+          if (!taskAfter.mergeRecord) {
+            taskAfter.mergeRecord = {
+              fromBranch: taskAfter.branchName ?? '<unknown>',
+              toBranch: taskAfter.baseBranch ?? '<unknown>',
+              strategy: landingStrategy,
+              result: 'skipped',
+              mergedAt: this.now(),
+              detail: 'auto-commit failed before landing',
+            }
+          }
+        } else if (worktreeMode === 'none') {
           const repoClean = await this.gitDriver.isClean(effectiveTaskProjectPath)
           if (!repoClean) {
             const recovered = await this.recoverDirtyRepoIntoTaskBranch({
@@ -4141,7 +4167,7 @@ export class Orchestrator {
       // FR-28: an external tool (systemd, remote operator, another guildhall
       // process) may write the marker file directly. Treat it the same as an
       // in-memory stopSignal flip so operators don't need signal delivery.
-      if (isStopRequested(path.join(this.opts.config.projectPath, 'memory'))) {
+      if (isStopRequested(getProjectStateDir(this.opts.config.projectPath))) {
         finalResult = {
           ticks: 0,
           stopReason: 'stop_marker',
@@ -6150,6 +6176,33 @@ export class Orchestrator {
       branchName,
       ...(checkpoint.commitSha ? { commitSha: checkpoint.commitSha } : {}),
     }
+  }
+
+  private async maybeAutoCommitCompletedTaskWork(task: Task): Promise<{
+    ok: boolean
+    detail?: string
+  }> {
+    if (this.opts.config.gitStory?.commit !== 'auto') return { ok: true }
+    const repoRoot =
+      typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
+        ? task.worktreePath.trim()
+        : resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
+    const status = await this.gitDriver.statusSummary(repoRoot)
+    if (status.clean) return { ok: true }
+    const result = await this.gitDriver.commitAll(
+      repoRoot,
+      `chore(guildhall): commit completed work for ${task.id}`,
+    )
+    if (!result.ok) return { ok: false, detail: result.detail }
+    task.notes.push({
+      agentId: 'coordinator',
+      role: 'git-story',
+      content:
+        `Auto-committed completed task work${result.commitSha ? ` at ${result.commitSha}` : ''} because project Git Story policy sets commit=auto.`,
+      timestamp: this.now(),
+    })
+    task.updatedAt = this.now()
+    return { ok: true }
   }
 
   /**

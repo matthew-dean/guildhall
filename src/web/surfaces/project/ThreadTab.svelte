@@ -51,6 +51,7 @@
     needsRecovery as taskNeedsRecovery,
   } from '../../lib/task-state.js'
   import { project } from '../../lib/project.svelte.js'
+  import type { GitStorySnapshot } from '../../lib/types.js'
   import { toast } from 'svelte-sonner'
 
   interface Props {
@@ -100,6 +101,7 @@
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string
     constructionMode?: ConstructionMode | undefined
+    gitStory?: GitStorySnapshot | undefined
     brief: {
       userJob?: string; successMetric?: string; successCriteria?: string
       antiPatterns?: string[]; rolloutPlan?: string; authoredBy?: string
@@ -112,6 +114,7 @@
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string
     constructionMode?: ConstructionMode | undefined
+    gitStory?: GitStorySnapshot | undefined
     taskDescription?: string | undefined
     sourceNote?: { description?: string | undefined; references: string[] } | undefined
     liveAgent?: LiveAgent | undefined
@@ -131,6 +134,7 @@
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string; spec: string
     constructionMode?: ConstructionMode | undefined
+    gitStory?: GitStorySnapshot | undefined
     draftCoordinators?: Array<{
       id: string
       name?: string
@@ -145,6 +149,7 @@
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string; escalationId: string
     constructionMode?: ConstructionMode | undefined
+    gitStory?: GitStorySnapshot | undefined
     summary: string; details?: string
     activity?: LiveActivity[] | undefined
   }
@@ -153,6 +158,7 @@
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string
     constructionMode?: ConstructionMode | undefined
+    gitStory?: GitStorySnapshot | undefined
     summary: string; feedback: string; revisionCount?: number | undefined
   }
   interface InFlightTurn {
@@ -160,6 +166,7 @@
     id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
     taskId: string; taskTitle: string; taskStatus?: string; summary: string
     constructionMode?: ConstructionMode | undefined
+    gitStory?: GitStorySnapshot | undefined
     taskDescription?: string | undefined
     sourceNote?: { description?: string | undefined; references: string[] } | undefined
     importedDraft?: boolean | undefined
@@ -178,6 +185,29 @@
       }>
     } | undefined
   }
+  interface RequestTurn {
+    kind: 'request'
+    id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
+    requestId: string
+    rawRequest: string
+    title: string
+    routingSummary: string
+  }
+  interface PressureTestQuestionTurn {
+    kind: 'pressure_test_question'
+    id: string; at: string; persona: TurnPersona; status: TurnStatus; phase: TurnPhase
+    intakeId: string
+    targetTitle: string
+    domainId: string
+    domainTitle: string
+    question: {
+      id: string
+      prompt: string
+      why: string
+      evidence: string[]
+    }
+    answerEndpoint: string
+  }
   type Turn =
     | SetupStepTurn
     | BriefTurn
@@ -186,6 +216,8 @@
     | ReviewFeedbackTurn
     | EscalationTurn
     | InFlightTurn
+    | RequestTurn
+    | PressureTestQuestionTurn
 
   let turns = $state<Turn[]>([])
   let activeTurnId = $state<string | null>(null)
@@ -203,6 +235,8 @@
   let contextTurnId = $state<string | null>(null)
   let contextDrafts = $state<Record<string, string>>({})
   let contextErrors = $state<Record<string, string>>({})
+  let pressureTestAnswers = $state<Record<string, string>>({})
+  let pressureTestErrors = $state<Record<string, string>>({})
   const SOURCE_PREVIEW_RENDER_CHAR_LIMIT = 32_000
 
   let sourcePreview = $state<{ ref: string; displayPath: string; content: string | null; truncated: boolean; loading: boolean } | null>(null)
@@ -560,6 +594,7 @@
     if (needsRecovery(t)) return 'Needs recovery'
     if (guildhallShaping(t)) return 'Guildhall shaping'
     if (t.kind === 'setup_step') return t.status === 'done' ? null : 'Needs you'
+    if (t.kind === 'pressure_test_question') return t.status === 'done' ? null : 'Needs you'
     if (t.kind === 'agent_question' || t.kind === 'brief_approval' || t.kind === 'spec_review' || t.kind === 'escalation') {
       return t.status === 'done' ? null : 'Needs you'
     }
@@ -832,6 +867,8 @@
     if (owner) return owner
     if (t.kind === 'inflight') return taskStateLabel(t)
     if (t.kind === 'agent_question') return 'Question'
+    if (t.kind === 'request') return 'Request'
+    if (t.kind === 'pressure_test_question') return 'Pressure-test question'
     if (t.kind === 'brief_approval') return 'Task brief ready'
     if (t.kind === 'spec_review') return 'Spec review'
     if (t.kind === 'escalation') return 'Blocked'
@@ -841,7 +878,9 @@
   }
 
   function compactTurnTitle(t: Turn): string {
-    return 'taskTitle' in t ? displayTaskTitle(t) : t.title
+    if ('taskTitle' in t) return displayTaskTitle(t)
+    if (t.kind === 'pressure_test_question') return t.domainTitle
+    return t.title
   }
 
   function compactTurnDescription(t: Turn): string {
@@ -861,6 +900,8 @@
       const count = questionsForTurn(t).length
       return count === 1 ? 'Needs one answer before the task can continue.' : `Needs ${count} answers before the task can continue.`
     }
+    if (t.kind === 'request') return t.routingSummary
+    if (t.kind === 'pressure_test_question') return t.question.prompt
     if (t.kind === 'brief_approval') return 'Review the task brief; approve it to queue worker execution.'
     if (t.kind === 'spec_review') return t.taskId === 'task-meta-intake' ? 'Review the starter project split.' : 'Review the spec before worker execution.'
     if (t.kind === 'escalation') return t.summary
@@ -1302,6 +1343,45 @@
     return turn.summary
   }
 
+  function gitStoryVisible(turn: Turn): boolean {
+    if (!('gitStory' in turn) || !turn.gitStory?.state) return false
+    return turn.gitStory.state !== 'clean' && turn.gitStory.state !== 'merged'
+  }
+
+  function gitStoryLabel(story: GitStorySnapshot): string {
+    switch (story.state) {
+      case 'dirty_uncommitted': return 'Dirty tree'
+      case 'committed_local': return 'Local commits'
+      case 'no_upstream': return 'No upstream'
+      case 'pushed': return 'Pushed'
+      case 'pr_open': return 'PR open'
+      case 'local_only': return 'Local only'
+      case 'deferred': return 'Deferred'
+      case 'conflict': return 'Conflict'
+      case 'unknown': return 'Unknown'
+      default: return 'Git story'
+    }
+  }
+
+  function gitStoryTone(story: GitStorySnapshot): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' {
+    switch (story.state) {
+      case 'local_only':
+      case 'deferred':
+      case 'pushed':
+      case 'pr_open':
+        return 'neutral'
+      case 'conflict':
+      case 'unknown':
+        return 'danger'
+      default:
+        return 'warn'
+    }
+  }
+
+  function gitStorySummary(story: GitStorySnapshot): string {
+    return story.reason ?? story.nextAction ?? 'Git story needs closure.'
+  }
+
   function metaIntakeChecklistComplete(turn: InFlightTurn): boolean {
     return Boolean(
       turn.taskId === 'task-meta-intake' &&
@@ -1448,6 +1528,46 @@
         replyErrors = { ...replyErrors, [turn.id]: body.error ?? `HTTP ${res.status}` }
         return
       }
+      await load()
+      await refreshProject()
+    } finally {
+      busyTurnId = null
+    }
+  }
+
+  function setPressureTestAnswer(turnId: string, value: string): void {
+    pressureTestAnswers = { ...pressureTestAnswers, [turnId]: value }
+    if (pressureTestErrors[turnId]) {
+      const next = { ...pressureTestErrors }
+      delete next[turnId]
+      pressureTestErrors = next
+    }
+  }
+
+  async function answerPressureTestQuestion(turn: PressureTestQuestionTurn): Promise<void> {
+    const answer = (pressureTestAnswers[turn.id] ?? '').trim()
+    if (!answer) return
+    busyTurnId = turn.id
+    try {
+      const r = await scopedProjectFetch(turn.answerEndpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          questionId: turn.question.id,
+          answer,
+        }),
+      })
+      const body = await r.json().catch(() => ({})) as { error?: string }
+      if (!r.ok || body.error) {
+        pressureTestErrors = { ...pressureTestErrors, [turn.id]: body.error ?? `HTTP ${r.status}` }
+        return
+      }
+      const nextAnswers = { ...pressureTestAnswers }
+      delete nextAnswers[turn.id]
+      pressureTestAnswers = nextAnswers
+      const nextErrors = { ...pressureTestErrors }
+      delete nextErrors[turn.id]
+      pressureTestErrors = nextErrors
       await load()
       await refreshProject()
     } finally {
@@ -1729,6 +1849,17 @@
                   />
                 {/if}
               {/snippet}
+              {#if gitStoryVisible(t) && 'gitStory' in t && t.gitStory}
+                <div class="git-story-callout" aria-label="Git story">
+                  <div class="git-story-main">
+                    <Chip label={gitStoryLabel(t.gitStory)} tone={gitStoryTone(t.gitStory)} />
+                    <span>{gitStorySummary(t.gitStory)}</span>
+                  </div>
+                  {#if t.gitStory.nextAction}
+                    <span class="git-story-next">{t.gitStory.nextAction}</span>
+                  {/if}
+                </div>
+              {/if}
                 {#if t.kind === 'setup_step'}
                   <div class="setup-title">
                     <h3 class="prompt"><Markdown source={t.title} inline /></h3>
@@ -1811,6 +1942,59 @@
                       </Button>
                     </Row>
                   {/if}
+
+              {:else if t.kind === 'request'}
+                <h3 class="prompt">New request</h3>
+                <div class="field">
+                  <span class="field-label">Request</span>
+                  <Markdown source={t.rawRequest} />
+                </div>
+                <StateSummary label="Request saved" description={t.routingSummary} tone="ok" />
+
+              {:else if t.kind === 'pressure_test_question'}
+                <h3 class="prompt">Pressure-test question</h3>
+                <div class="field">
+                  <span class="field-label">Target</span>
+                  <p class="detail">{t.targetTitle}</p>
+                </div>
+                <div class="field">
+                  <span class="field-label">{t.domainTitle}</span>
+                  <Markdown source={t.question.prompt} />
+                </div>
+                <p class="why">{t.question.why}</p>
+                {#if t.question.evidence.length}
+                  <div class="field">
+                    <span class="field-label">Evidence</span>
+                    <ul class="bullet">
+                      {#each t.question.evidence as item}
+                        <li><Markdown source={item} inline /></li>
+                      {/each}
+                    </ul>
+                  </div>
+                {/if}
+                {#if t.status === 'active'}
+                  <Stack gap="2">
+                    <Textarea
+                      value={pressureTestAnswers[t.id] ?? ''}
+                      rows={4}
+                      placeholder="Answer this pressure-test question"
+                      disabled={busyTurnId === t.id}
+                      oninput={(v) => setPressureTestAnswer(t.id, v)}
+                    />
+                    <Row justify="end" gap="2">
+                      <Button
+                        variant="primary"
+                        disabled={busyTurnId === t.id || !(pressureTestAnswers[t.id] ?? '').trim()}
+                        onclick={() => answerPressureTestQuestion(t)}
+                      >
+                        {busyTurnId === t.id ? 'Saving...' : 'Save answer'}
+                      </Button>
+                    </Row>
+                    {#if pressureTestErrors[t.id]}
+                      <p class="error">{pressureTestErrors[t.id]}</p>
+                    {/if}
+                  </Stack>
+                {/if}
 
               {:else if t.kind === 'brief_approval'}
                 {@const briefScope = briefScopeForReaders(t.brief, t.taskTitle)}
@@ -2858,6 +3042,34 @@
     line-height: inherit;
   }
   .why { margin: 0; color: var(--text-muted); font-size: var(--fs-2); line-height: var(--lh-body); }
+  .git-story-callout {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+    padding: var(--s-2);
+    border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--border));
+    border-radius: var(--r-1);
+    background: color-mix(in srgb, var(--warning) 8%, var(--bg));
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-normal);
+  }
+  .git-story-main {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+  }
+  .git-story-main span:last-child {
+    overflow-wrap: anywhere;
+  }
+  .git-story-next {
+    color: var(--text);
+    font-weight: 650;
+  }
   .setup-context {
     display: grid;
     gap: var(--s-2);

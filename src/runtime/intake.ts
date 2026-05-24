@@ -7,12 +7,14 @@ import {
   resolveEscalation,
 } from '@guildhall/tools'
 import { normalizeImportedDraftTask, promoteImportDraftToExploring } from './import-drafts.js'
+import { createPressureTestIntake, type PressureTestIntake } from './pressure-test-intake.js'
+import { routeRequest, type RouteRequestResult, type RoutedAction } from './request-routing.js'
 
 // ---------------------------------------------------------------------------
 // FR-12: exploratory task intake.
 //
 // A fuzzy user ask becomes a task in the `exploring` state, with a transcript
-// seed at memory/exploring/<task-id>.md. The Spec Agent picks it up on the next
+// seed in user-local Guildhall history. The Spec Agent picks it up on the next
 // orchestrator tick and drives a conversational intake.
 //
 // Approval transitions: exploring → spec_review. Until approved, the
@@ -121,10 +123,55 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
   return { taskId: id, transcriptPath: appendResult.path }
 }
 
+export interface RoutedRequestResult {
+  routedActions: RoutedAction[]
+  routingDecision: RouteRequestResult['routingDecision']
+  taskId?: string
+  transcriptPath?: string
+  pressureTestIntake?: PressureTestIntake
+}
+
+export async function createRoutedRequest(input: IntakeInput): Promise<RoutedRequestResult> {
+  const routed = routeRequest({
+    raw: input.ask,
+    source: 'api',
+    routeContext: { route: '/api/project/request' },
+  })
+  const action = routed.actions[0]
+  if (action?.kind === 'pressure_test_intake') {
+    const pressureTestIntake = await createPressureTestIntake({
+      memoryDir: input.memoryDir,
+      target: {
+        type: action.intakeTarget.type === 'release' ? 'release' : 'feature',
+        id: slugId(action.intakeTarget.title),
+        title: action.intakeTarget.title,
+      },
+      rawRequest: input.ask,
+    })
+    return {
+      routedActions: routed.actions,
+      routingDecision: routed.routingDecision,
+      pressureTestIntake,
+    }
+  }
+
+  const task = await createExploringTask(input)
+  return {
+    routedActions: routed.actions,
+    routingDecision: routed.routingDecision,
+    taskId: task.taskId,
+    transcriptPath: task.transcriptPath,
+  }
+}
+
 function truncateTitle(ask: string): string {
   const firstLine = ask.split(/\n/)[0] ?? ask
   if (firstLine.length <= 60) return firstLine.trim()
   return firstLine.slice(0, 57).trim() + '...'
+}
+
+function slugId(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'request'
 }
 
 export interface ApproveSpecInput {

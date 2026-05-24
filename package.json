@@ -46,6 +46,7 @@
     "docs:dev": "npm run docs:extract-help && vitepress dev docs",
     "docs:build": "npm run docs:check-copy && npm run docs:extract-help && vitepress build docs",
     "docs:preview": "vitepress preview docs",
+    "memory:migrate": "node scripts/migrations/0.8.0-project-state.mjs",
     "service:install": "node ./scripts/install-launch-agent.mjs",
     "service:uninstall": "node ./scripts/uninstall-launch-agent.mjs"
   },

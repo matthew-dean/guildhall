@@ -1,0 +1,136 @@
+import { describe, expect, it } from 'vitest'
+import { InMemoryGitDriver } from '../git-driver.js'
+import {
+  classifyGitStoryState,
+  inspectGitStory,
+  summarizeGitStories,
+} from '../git-story.js'
+
+describe('classifyGitStoryState', () => {
+  it('reports dirty work before unpublished commits', () => {
+    expect(classifyGitStoryState({
+      changedCount: 2,
+      untrackedCount: 1,
+      ahead: 3,
+      hasUpstream: true,
+    })).toBe('dirty_uncommitted')
+  })
+
+  it('reports no upstream when the branch has no upstream and no dirty work', () => {
+    expect(classifyGitStoryState({
+      changedCount: 0,
+      untrackedCount: 0,
+      ahead: 0,
+      hasUpstream: false,
+    })).toBe('no_upstream')
+  })
+
+  it('reports local commits ahead of upstream', () => {
+    expect(classifyGitStoryState({
+      changedCount: 0,
+      untrackedCount: 0,
+      ahead: 2,
+      hasUpstream: true,
+    })).toBe('committed_local')
+  })
+
+  it('reports open PR before pushed', () => {
+    expect(classifyGitStoryState({
+      changedCount: 0,
+      untrackedCount: 0,
+      ahead: 0,
+      hasUpstream: true,
+      prState: 'OPEN',
+    })).toBe('pr_open')
+  })
+
+  it('lets explicit local-only and deferred overrides win', () => {
+    expect(classifyGitStoryState({
+      changedCount: 4,
+      untrackedCount: 0,
+      ahead: 0,
+      hasUpstream: true,
+      override: 'local_only',
+    })).toBe('local_only')
+    expect(classifyGitStoryState({
+      changedCount: 0,
+      untrackedCount: 0,
+      ahead: 2,
+      hasUpstream: true,
+      override: 'deferred',
+    })).toBe('deferred')
+  })
+
+  it('reports merged when mergeRecord proves landing', () => {
+    expect(classifyGitStoryState({
+      changedCount: 0,
+      untrackedCount: 0,
+      ahead: 0,
+      hasUpstream: true,
+      mergeRecordResult: 'merged',
+    })).toBe('merged')
+  })
+})
+
+describe('inspectGitStory', () => {
+  it('summarizes dirty paths from the git driver', async () => {
+    const driver = new InMemoryGitDriver()
+    driver.setStatusSummary('/repo', {
+      branch: 'feature/work',
+      upstream: 'origin/feature/work',
+      changedCount: 1,
+      untrackedCount: 1,
+      samplePaths: ['src/a.ts', 'src/b.ts'],
+      clean: false,
+    })
+
+    const snapshot = await inspectGitStory(driver, { repoRoot: '/repo', inspectPr: false })
+
+    expect(snapshot.state).toBe('dirty_uncommitted')
+    expect(snapshot.samplePaths).toEqual(['src/a.ts', 'src/b.ts'])
+    expect(snapshot.reason).toContain('2 changed files')
+  })
+
+  it('includes local commits when a branch is ahead', async () => {
+    const driver = new InMemoryGitDriver()
+    driver.setStatusSummary('/repo', {
+      branch: 'feature/work',
+      upstream: 'origin/feature/work',
+      ahead: 2,
+    })
+    driver.setLocalCommits('/repo', [
+      { sha: 'abc123', subject: 'first change' },
+      { sha: 'def456', subject: 'second change' },
+    ])
+
+    const snapshot = await inspectGitStory(driver, { repoRoot: '/repo', inspectPr: false })
+
+    expect(snapshot.state).toBe('committed_local')
+    expect(snapshot.localCommits.map(commit => commit.subject)).toEqual(['first change', 'second change'])
+  })
+
+  it('marks explicit local-only work as non-blocking', async () => {
+    const driver = new InMemoryGitDriver()
+    driver.setStatusSummary('/repo', {
+      branch: 'feature/work',
+      upstream: 'origin/feature/work',
+      changedCount: 3,
+      clean: false,
+    })
+
+    const snapshot = await inspectGitStory(driver, {
+      repoRoot: '/repo',
+      inspectPr: false,
+      task: {
+        id: 'task-1',
+        title: 'Keep fixture local',
+        gitStory: { override: 'local_only', reason: 'Fixture scratchpad only.' },
+      },
+    })
+    const summary = summarizeGitStories([snapshot])
+
+    expect(snapshot.state).toBe('local_only')
+    expect(summary.ready).toBe(true)
+    expect(summary.blockers).toEqual([])
+  })
+})

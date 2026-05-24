@@ -40,6 +40,12 @@ export interface ProjectCardSummary {
   canOpen: boolean
   canStart: boolean
   canStop: boolean
+  gitStory?: {
+    state?: string
+    label: string
+    title: string
+    blockerCount: number
+  } | null
 }
 
 function emptyTaskActivity(): ProjectCardSummary['taskActivity'] {
@@ -206,6 +212,14 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
   const running = project.run?.status === 'running'
   const initializationNeeded = Boolean(project.initializationNeeded)
   const maturityState = maturity(project, counts)
+  const gitStory = project.gitStory && project.gitStory.state && project.gitStory.state !== 'clean' && project.gitStory.state !== 'merged'
+    ? {
+        state: project.gitStory.state,
+        label: gitStoryLabel(project.gitStory.state),
+        title: project.gitStory.blockers?.[0]?.reason ?? 'Git story needs closure.',
+        blockerCount: project.gitStory.blockers?.length ?? 0,
+      }
+    : null
   return {
     id: project.id,
     name: humanizeProjectName(project.name),
@@ -243,6 +257,22 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
       (counts.active > 0 || counts.total === 0) &&
       !(counts.draftReview > 0 && counts.active === 0),
     canStop: running,
+    gitStory,
+  }
+}
+
+function gitStoryLabel(state: string): string {
+  switch (state) {
+    case 'dirty_uncommitted': return 'Dirty'
+    case 'committed_local': return 'Unpushed'
+    case 'no_upstream': return 'No upstream'
+    case 'pr_open': return 'PR open'
+    case 'pushed': return 'Pushed'
+    case 'local_only': return 'Local-only'
+    case 'deferred': return 'Deferred'
+    case 'conflict': return 'Git conflict'
+    case 'unknown': return 'Git unknown'
+    default: return 'Git story'
   }
 }
 

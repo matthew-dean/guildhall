@@ -23,7 +23,7 @@ description: Local AI agent harness for planning, running, reviewing, and recove
           <a class="gh-cta gh-cta-secondary" href="/guildhall/guide/introduction">How it works</a>
           <a class="gh-cta gh-cta-secondary" href="https://github.com/matthew-dean/guildhall">GitHub</a>
         </div>
-        <p class="gh-home-version">Current docs: <a href="/guildhall/releases/0.6.0">0.6.0</a>. Preview <a href="/guildhall/next/guide/">Next</a>.</p>
+        <p class="gh-home-version">Current docs: <a href="/guildhall/releases/0.7.0">0.7.0</a>. Preview <a href="/guildhall/next/guide/">Next (0.8.0)</a>.</p>
         <ul class="gh-home-hero__badges" aria-label="Guildhall strengths">
           <li>Shared agent state</li>
           <li>Blueprints before changes</li>

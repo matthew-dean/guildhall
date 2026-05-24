@@ -21,7 +21,7 @@ runtime recovers from problems.
 3. **The Spec Agent drafts settings** for coordinators and inferred levers. You
    answer in normal language; Guildhall turns that into settings.
 4. **You approve the draft** from the browser UI or CLI.
-5. **Guildhall writes the result**: routing/coordinator structure and bootstrap commands go into `./guildhall.yaml`; inferred levers go into `./memory/agent-settings.yaml` with provenance.
+5. **Guildhall writes the result**: routing/coordinator structure and bootstrap commands go into `./guildhall.yaml`; inferred levers go into `./.guildhall/agent-settings.yaml` with provenance.
 
 After that, the Settings area shows the current lever positions. You can
 change them later, but the first pass feels like onboarding into a project, not
@@ -45,7 +45,7 @@ is inspectable later.
 
 ## Where the settings land
 
-`./memory/agent-settings.yaml` is the lever source of truth. Each lever entry records:
+`./.guildhall/agent-settings.yaml` is the lever source of truth. Each lever entry records:
 
 ```yaml
 position: coordinator_sufficient
@@ -89,7 +89,7 @@ surprises you.
 ## Changing your mind
 
 Levers are not permanent. Use the Settings page for normal edits, or edit
-`./memory/agent-settings.yaml` directly when you need a precise reviewable diff.
+`./.guildhall/agent-settings.yaml` directly when you need a precise reviewable diff.
 
 When changing a lever by hand, update the `position`, `rationale`, `setAt`, and `setBy` together. The rationale matters because future you will want to know why Guildhall suddenly became more cautious, more autonomous, or more parallel.
 
@@ -97,5 +97,5 @@ When changing a lever by hand, update the `position`, `rationale`, `setAt`, and 
 
 - [Levers](../levers/) — every lever and position.
 - [Provenance](../levers/provenance) — what `setBy` values mean.
-- [`./memory/agent-settings.yaml`](../reference/agent-settings) — storage shape.
+- [`./.guildhall/agent-settings.yaml`](../reference/agent-settings) — storage shape.
 - [Setup wizard](../web-ui/setup) — the browser onboarding surface.

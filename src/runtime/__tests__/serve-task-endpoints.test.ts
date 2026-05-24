@@ -3,7 +3,12 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
-import { writeCheckpoint } from '@guildhall/tools'
+import {
+  getProjectContextDebugLedgerPath,
+  getProjectRecentEventsPath,
+  getProjectStateDir,
+} from '@guildhall/sessions'
+import { readExploringTranscript, writeCheckpoint } from '@guildhall/tools'
 import { buildServeApp, filterEventsForTask } from '../serve.js'
 
 // Integration tests for the v0.2 UI endpoints:
@@ -50,11 +55,13 @@ async function seedTask(id: string, overrides: Record<string, any> = {}): Promis
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-tasks-'))
+  process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, '.guildhall-data')
   projectId = bootstrapWorkspace(tmpDir, { name: 'Task Endpoints Test' }).id ?? path.basename(tmpDir)
-  memoryDir = path.join(tmpDir, 'memory')
+  memoryDir = getProjectStateDir(tmpDir)
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -85,7 +92,8 @@ describe('GET /api/project/task/:id', () => {
 
   it('returns recent context debug records for the task', async () => {
     await seedTask('task-1')
-    const ledgerPath = path.join(memoryDir, 'context-debug.jsonl')
+    const ledgerPath = getProjectContextDebugLedgerPath(tmpDir)
+    await fs.mkdir(path.dirname(ledgerPath), { recursive: true })
     await fs.writeFile(
       ledgerPath,
       [
@@ -483,6 +491,34 @@ it('hides placeholder checkpoint next-action values in task detail responses', a
   })
 })
 
+describe('POST /api/project/task/:id/git-story/:closureAction', () => {
+  it('records a local-only git story override with a required reason', async () => {
+    await seedTask('task-1', { status: 'done' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const missingReason = await app.fetch(new Request(projectUrl('/api/project/task/task-1/git-story/local-only'), {
+      method: 'POST',
+      body: JSON.stringify({ reason: '' }),
+      headers: { 'content-type': 'application/json' },
+    }))
+    expect(missingReason.status).toBe(400)
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1/git-story/local-only'), {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'Fixture-only scratch work.' }),
+      headers: { 'content-type': 'application/json' },
+    }))
+    expect(res.status).toBe(200)
+
+    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    expect(raw.tasks[0]?.gitStory).toMatchObject({
+      override: 'local_only',
+      reason: 'Fixture-only scratch work.',
+      recordedBy: 'user',
+    })
+  })
+})
+
 describe('filterEventsForTask (drawer live feed)', () => {
   it('matches wire-protocol snake_case task_id', () => {
     const events = [
@@ -638,7 +674,7 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
     const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
     expect(raw.tasks[0]?.status).toBe('exploring')
     expect(raw.tasks[0]?.notes?.at(-1)?.content).toMatch(/fresh spec pass/i)
-    const transcript = await fs.readFile(path.join(memoryDir, 'exploring', 'task-1.md'), 'utf8')
+    const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
     expect(transcript).toMatch(/fresh spec pass/i)
   })
 
@@ -719,10 +755,7 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.ok).toBe(true)
-    const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'task-1.md'),
-      'utf8',
-    )
+    const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
     expect(transcript).toMatch(/respect DOM ordering/)
   })
 
@@ -745,10 +778,7 @@ describe('POST /api/project/task/:id/resume', () => {
     ) as { tasks: Array<Record<string, any>> }
     expect(queue.tasks[0]!.status).toBe('in_progress')
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('current failure')
-    const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'task-1.md'),
-      'utf8',
-    )
+    const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
     expect(transcript).toMatch(/current failure/)
   })
 
@@ -779,10 +809,7 @@ describe('POST /api/project/task/:id/resume', () => {
     ) as { tasks: Array<Record<string, any>> }
     expect(queue.tasks[0]!.status).toBe('exploring')
     expect(queue.tasks[0]!.notes?.at(-1)?.role).toBe('shaping-request')
-    const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'task-1.md'),
-      'utf8',
-    )
+    const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
     expect(transcript).toMatch(/Imported from project notes/)
 
     const detailRes = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
@@ -1240,8 +1267,10 @@ describe('GET /api/project/activity', () => {
       ],
     }
     await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+    const recentEventsPath = getProjectRecentEventsPath(tmpDir)
+    await fs.mkdir(path.dirname(recentEventsPath), { recursive: true })
     await fs.writeFile(
-      path.join(memoryDir, 'recent-events.jsonl'),
+      recentEventsPath,
       [
         JSON.stringify({
           at: older,

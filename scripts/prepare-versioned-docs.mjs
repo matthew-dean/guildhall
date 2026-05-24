@@ -114,6 +114,16 @@ async function rewriteCurrentDocLinks(root, version) {
   }
 }
 
+async function rewriteNextHomeStableLinks(root, currentVersion) {
+  const file = join(root, 'index.md')
+  if (!existsSync(file)) return
+  const raw = await readFile(file, 'utf8')
+  const next = raw
+    .replaceAll(`/guildhall/next/releases/${currentVersion}`, `/guildhall/releases/${currentVersion}`)
+    .replaceAll(`/next/releases/${currentVersion}`, `/releases/${currentVersion}`)
+  if (next !== raw) await writeFile(file, next, 'utf8')
+}
+
 async function main() {
   for (const dir of GENERATED_DIRS) {
     await rm(dir, { recursive: true, force: true })
@@ -127,6 +137,7 @@ async function main() {
   const nextRoot = join(DOCS, 'next')
   await copyEntries(DOCS, nextRoot, NEXT_ENTRIES, NEXT_EXCLUDES)
   await rewriteAbsoluteDocLinks(nextRoot, '/next')
+  await rewriteNextHomeStableLinks(nextRoot, currentVersion)
 
   console.log(`docs: prepared /current/ from ${currentVersion} and /next/ from current docs`)
 }

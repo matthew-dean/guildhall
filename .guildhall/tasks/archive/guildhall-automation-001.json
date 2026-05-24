@@ -1,0 +1,49 @@
+{
+  "id": "guildhall-automation-001",
+  "title": "Reduce workspace-import noise and preserve subproject scope",
+  "description": "Tighten workspace import so recursive repo scanning produces a sane backlog. Preserve subproject identity from nested docs, skip obvious formatting junk, and make the detector/hypothesis layer emit task candidates that belong to the right project area instead of a flat core bucket.",
+  "domain": "runtime",
+  "projectPath": ".",
+  "status": "done",
+  "priority": "critical",
+  "dependsOn": [],
+  "outOfScope": [
+    "Agent-side importer refinement prompts",
+    "PR/merge automation",
+    "General UI polish outside import review surfaces"
+  ],
+  "acceptanceCriteria": [
+    {
+      "id": "ac-1",
+      "description": "Workspace import draft preserves subproject/domain hints from nested planning docs",
+      "verifiedBy": "review",
+      "met": true
+    },
+    {
+      "id": "ac-2",
+      "description": "Obvious formatting junk and placeholder signals are filtered before draft tasks are created",
+      "verifiedBy": "review",
+      "met": true
+    },
+    {
+      "id": "ac-3",
+      "description": "Focused workspace-import hypothesis tests cover domain preservation and junk filtering",
+      "verifiedBy": "automated",
+      "command": "pnpm vitest run src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/workspace-import/__tests__/detect.test.ts",
+      "met": true
+    }
+  ],
+  "notes": [
+    {
+      "agentId": "worker-agent",
+      "role": "worker",
+      "timestamp": "2026-05-02T16:17:40Z",
+      "content": "Completed importer cleanup pass: defaulted nested doc scanning to single-project unless multiple roots are clearly present, preserved real subproject hints for Looma/Knit, filtered migration-guide/spec-template/section-header junk, and fuzzily deduped near-identical planning tasks from the same file. Live Looma/Knit import draft improved from 677/583 to 312/219 (input/drafted)."
+    }
+  ],
+  "gateResults": [],
+  "revisionCount": 0,
+  "createdAt": "2026-05-02T16:01:41Z",
+  "updatedAt": "2026-05-02T16:17:40Z",
+  "completedAt": "2026-05-02T16:17:40Z"
+}

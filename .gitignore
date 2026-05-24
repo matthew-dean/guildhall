@@ -151,3 +151,21 @@ vite.config.ts.timestamp-*
 .playwright-fixtures/
 test-results/
 playwright-report/
+
+# BEGIN Guildhall managed
+# Shared Guildhall project state is trackable by default.
+!.guildhall/
+!.guildhall/**
+# Local/private Guildhall state stays out of git.
+.guildhall/config.yaml
+.guildhall/worktrees/
+.guildhall/local/
+.guildhall/cache/
+.guildhall/tmp/
+.guildhall/logs/
+.guildhall/sessions/
+.guildhall/transcripts/
+.guildhall/context-debug/
+.guildhall/events/
+.guildhall/checkpoints/
+# END Guildhall managed

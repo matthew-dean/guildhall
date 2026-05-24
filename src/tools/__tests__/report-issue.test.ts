@@ -11,6 +11,7 @@ import {
 } from '../report-issue.js'
 import { readTasks } from '../task-queue.js'
 import type { Task } from '@guildhall/core'
+import { getProjectProgressHeartbeatsPath } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-31 agent-issue channel tests.
@@ -65,12 +66,14 @@ async function writeSeed(tasks: Task[]): Promise<void> {
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-issue-'))
+  process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, 'data')
   tasksPath = path.join(tmpDir, 'TASKS.json')
   progressPath = path.join(tmpDir, 'PROGRESS.md')
   await writeSeed([seedTask()])
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -161,7 +164,7 @@ describe('reportIssue', () => {
     expect(ids).toEqual(['iss-task-001-1', 'iss-task-001-2'])
   })
 
-  it('writes a heartbeat-type PROGRESS entry when progressPath is provided', async () => {
+  it('writes a heartbeat-type local progress entry when progressPath is provided', async () => {
     await reportIssue({
       tasksPath,
       progressPath,
@@ -171,7 +174,7 @@ describe('reportIssue', () => {
       severity: 'warn',
       detail: 'AC-3 contradicts the summary',
     })
-    const progress = await fs.readFile(progressPath, 'utf-8')
+    const progress = await fs.readFile(getProjectProgressHeartbeatsPath(tmpDir), 'utf-8')
     expect(progress).toMatch(/ISSUE \[warn\/spec_incoherent\]/)
     expect(progress).toMatch(/AC-3 contradicts the summary/)
     // heartbeat, NOT blocked — FR-31 distinction

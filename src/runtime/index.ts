@@ -1,4 +1,5 @@
 export { runOrchestrator, Orchestrator } from './orchestrator.js'
+export * from './git-story.js'
 export type {
   OrchestratorOptions,
   OrchestratorAgent,
@@ -118,6 +119,12 @@ export {
   runBootstrap as runStructuralBootstrap,
   writeBootstrapResult,
 } from './bootstrap.js'
+export * from './request-routing.js'
+export * from './pressure-test-intake.js'
+export * from './language-map.js'
+export * from './worker-modes.js'
+export * from './artifact-store.js'
+export * from './capability-requests.js'
 export type {
   PackageManager,
   GateName,

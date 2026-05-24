@@ -16,9 +16,9 @@ title: Reference
 ## Project state
 
 - [`./guildhall.yaml`](./workspace-config) — project config schema.
-- [`./memory/agent-settings.yaml`](./agent-settings) — lever storage shape.
+- [`./.guildhall/agent-settings.yaml`](./agent-settings) — lever storage shape.
 - [Environment variables](./env) — every env var the CLI reads.
-- [Memory layout](./memory-layout) — what lives under `./memory/`.
+- [Memory layout](./memory-layout) — what lives in `./.guildhall/` and local history.
 
 ## System reference
 

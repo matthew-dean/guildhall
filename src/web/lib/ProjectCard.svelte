@@ -172,6 +172,13 @@
     <div class="top-chips" aria-label="Project status">
       <Chip label={displayStatusLabel} tone={statusTone} title={`Project status: ${displayStatusLabel}`} />
       <Chip label={summary.maturityLabel} tone="accent" title={`Development maturity: ${summary.maturityDescription}`} />
+      {#if summary.gitStory}
+        <Chip
+          label={summary.gitStory.label}
+          tone={summary.gitStory.blockerCount > 0 ? 'warn' : 'neutral'}
+          title={summary.gitStory.title}
+        />
+      {/if}
     </div>
   {/snippet}
 

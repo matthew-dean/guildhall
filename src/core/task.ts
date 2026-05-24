@@ -597,6 +597,15 @@ export const Task = z.object({
     })
     .optional(),
 
+  gitStory: z
+    .object({
+      override: z.enum(['local_only', 'deferred']).optional(),
+      reason: z.string().optional(),
+      recordedAt: z.string().optional(),
+      recordedBy: z.string().optional(),
+    })
+    .optional(),
+
   createdAt: z.string(),
   updatedAt: z.string(),
   completedAt: z.string().optional(),

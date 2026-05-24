@@ -4,7 +4,7 @@ help_topic: subsystem.runtime
 help_summary: |
   The Orchestrator is the top-level state machine. Each tick evaluates every
   domain, dispatches workers, runs reviewer fanout, executes gates, and
-  persists state to ./memory/.
+  persists shared state to ./.guildhall/ and local history to ~/.guildhall/data/projects/.
 ---
 
 # Runtime
@@ -17,7 +17,7 @@ The runtime is the top-level orchestration layer. It owns the task state machine
 
 `Orchestrator` (see `./src/runtime/orchestrator.ts`) is the main state machine. Its loop:
 
-1. Load current state from `./memory/`.
+1. Load current shared state from `./.guildhall/`.
 2. For each domain: ask the coordinator agent to evaluate its queue.
 3. For each `ready` task: dispatch a worker (respecting [`concurrent_task_dispatch`](../levers/concurrent-task-dispatch)).
 4. For each `review` task: run reviewer fanout.
@@ -33,7 +33,7 @@ Call `runOrchestrator({ cwd, maxTicks, domainFilter })` to drive one or more tic
 
 - Applicable guilds (via `selectApplicableGuilds`).
 - Current design system (`./src/core/design-system.ts`).
-- Workspace memory (recent transcripts, relevant prior tasks).
+- Project memory (shared summaries plus relevant local transcripts and prior tasks).
 - Current lever positions.
 
 This keeps prompts tight — agents get only what they need for the current decision, not the whole project state.

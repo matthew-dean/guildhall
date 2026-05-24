@@ -358,7 +358,7 @@
           placeholder="Answer a question, add a requirement, correct a misunderstanding..."
         />
         <Row justify="end" gap="2" align="center">
-          <span class="hint">Appends to memory/exploring/{task.id}.md</span>
+          <span class="hint">Appends to local Guildhall transcript history</span>
           <Button variant="primary" disabled={busy || followup.trim().length === 0} onclick={send}>
             Send
           </Button>

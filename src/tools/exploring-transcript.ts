@@ -1,4 +1,9 @@
 import { defineTool } from '@guildhall/engine'
+import {
+  getLegacyProjectTranscriptPath,
+  getProjectTranscriptPath,
+  inferProjectRootFromMemoryDir,
+} from '@guildhall/sessions'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -9,8 +14,9 @@ import path from 'node:path'
 // During the `exploring` phase, the Spec Agent drives a conversation with the
 // user to elicit outcome, acceptance criteria, scope, happy path, blast radius,
 // required skills, and escalation triggers. That back-and-forth is persisted
-// at `memory/exploring/<task-id>.md` so the conversation survives restarts
-// and can be audited after the fact.
+// in user-local Guildhall history so the conversation survives restarts without
+// committing private transcript scrollback to the project repo. Legacy
+// `memory/exploring/<task-id>.md` files remain readable until migrated.
 //
 // Structure of the transcript file:
 //
@@ -62,7 +68,12 @@ export interface EnsureExploringTranscriptEntryResult
 }
 
 function transcriptPath(memoryDir: string, taskId: string): string {
-  return path.join(memoryDir, 'exploring', `${taskId}.md`)
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  return getProjectTranscriptPath(projectRoot, 'exploring', taskId)
+}
+
+function legacyTranscriptPath(memoryDir: string, taskId: string): string {
+  return getLegacyProjectTranscriptPath(memoryDir, 'exploring', taskId)
 }
 
 function resolveTranscriptTarget(
@@ -194,7 +205,7 @@ export async function ensureExploringTranscriptEntry(
 export const appendExploringTranscriptTool = defineTool({
   name: 'append-exploring-transcript',
   description:
-    "Append a message to the exploring-phase conversation transcript at memory/exploring/<task-id>.md. Call this for every user message and every spec-agent reply during intake — the transcript must be a complete record of the conversation.",
+    "Append a message to the exploring-phase conversation transcript in user-local Guildhall history. Call this for every user message and every spec-agent reply during intake — the transcript must be a complete record of the conversation.",
   inputSchema: appendExploringTranscriptInputSchema,
   jsonSchema: { type: 'object' },
   isReadOnly: () => false,
@@ -251,16 +262,19 @@ export async function readExploringTranscript(
     }
   }
   const filePath = transcriptPath(input.memoryDir, input.taskId)
-  try {
-    const content = await fs.readFile(filePath, 'utf-8')
-    return { content, path: filePath }
-  } catch (err) {
-    const msg = String(err)
-    if (msg.includes('ENOENT')) {
-      return { content: null, path: filePath }
+  const legacyPath = legacyTranscriptPath(input.memoryDir, input.taskId)
+  for (const candidate of [filePath, legacyPath]) {
+    try {
+      const content = await fs.readFile(candidate, 'utf-8')
+      return { content, path: candidate }
+    } catch (err) {
+      const msg = String(err)
+      if (!msg.includes('ENOENT')) {
+        return { content: null, path: candidate, error: msg }
+      }
     }
-    return { content: null, path: filePath, error: msg }
   }
+  return { content: null, path: filePath }
 }
 
 export const readExploringTranscriptTool = defineTool({

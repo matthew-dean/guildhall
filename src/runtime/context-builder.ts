@@ -25,6 +25,8 @@ import {
 import { readProjectSkillProposals, selectRelevantProjectSkills } from '@guildhall/skills'
 import { loadGoalForTask } from './business-envelope.js'
 import { loadDesignSystem } from './design-system-store.js'
+import { loadLanguageMap, renderLanguageMapContext } from './language-map.js'
+import { renderWorkerMode, selectWorkerMode, type SelectedWorkerMode } from './worker-modes.js'
 
 // ---------------------------------------------------------------------------
 // Just-in-time context builder
@@ -569,6 +571,8 @@ export interface BuiltContext {
    * find existing primitives, helpers, and area conventions before editing.
    */
   corpusMap: string
+  workerMode?: SelectedWorkerMode
+  languageMap?: string
   reviewPacket?: string
   /** Concatenated string ready to prepend to an agent message */
   formatted: string
@@ -686,7 +690,7 @@ export async function buildContext(
     }
   }
 
-  const [memory, progress, decisions, exploring, goal, ds, worktreeResume, checkpoint, codebaseMap] = await Promise.all([
+  const [memory, progress, decisions, exploring, goal, ds, worktreeResume, checkpoint, codebaseMap, languageMapData] = await Promise.all([
     readSafe('MEMORY.md'),
     readSafe('PROGRESS.md'),
     readSafe('DECISIONS.md'),
@@ -705,6 +709,7 @@ export async function buildContext(
           .catch(() => null)
       : Promise.resolve(null),
     loadOrCreateCodebaseMap(memoryDir, task).catch(() => null),
+    loadLanguageMap(memoryDir).catch(() => null),
   ])
   const reviewPacket =
     task.status === 'review' || task.status === 'gate_check'
@@ -856,6 +861,17 @@ export async function buildContext(
     status: task.status,
     blocker: task.blockReason,
   })
+  const workerMode = task.status === 'in_progress' ? selectWorkerMode(task) : undefined
+  const workerModePrompt = workerMode ? renderWorkerMode(workerMode) : ''
+  const languageMap = languageMapData
+    ? renderLanguageMapContext(languageMapData, [
+        task.title,
+        task.description,
+        task.spec ?? '',
+        task.productBrief?.userJob ?? '',
+        task.productBrief?.successMetric ?? '',
+      ].join('\n'))
+    : ''
 
   const taskSummary = [
     `## Current Task: ${task.id}`,
@@ -911,6 +927,8 @@ export async function buildContext(
     '',
     personaPrompt,
     '',
+    workerModePrompt,
+    '',
     envelope ? `## Business Envelope (FR-23)\n${envelope}` : '',
     '',
     designSystem ? `## Design System\n${designSystem}` : '',
@@ -920,6 +938,8 @@ export async function buildContext(
     reviewPacket ? `## Review Packet\n${reviewPacket}` : '',
     '',
     corpusMap,
+    '',
+    languageMap,
     '',
     projectMemory ? `## Relevant Project Memory\n${projectMemory}` : '',
     '',
@@ -948,6 +968,8 @@ export async function buildContext(
     designSystem,
     reviewRubrics,
     corpusMap,
+    workerMode,
+    languageMap,
     reviewPacket,
     formatted,
   }

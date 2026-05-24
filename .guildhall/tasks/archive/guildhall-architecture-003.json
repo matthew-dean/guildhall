@@ -1,0 +1,55 @@
+{
+  "id": "guildhall-architecture-003",
+  "title": "Add provider capability manifests for routing and explainability",
+  "description": "Represent provider abilities and limits explicitly so lane routing, fallback, and UI status can rely on capability truth instead of hand-coded provider names.",
+  "domain": "runtime",
+  "projectPath": ".",
+  "status": "done",
+  "priority": "high",
+  "dependsOn": [
+    "guildhall-architecture-002"
+  ],
+  "outOfScope": [
+    "Distributed workers",
+    "Provider marketplace features"
+  ],
+  "acceptanceCriteria": [
+    {
+      "id": "ac-1",
+      "description": "Resolved provider runtime includes a compact capability manifest covering streaming, tool calls, reasoning behavior, resumable sessions, and recommended concurrency",
+      "verifiedBy": "review",
+      "met": true
+    },
+    {
+      "id": "ac-2",
+      "description": "Project/task UI can surface why a provider was selected or rejected using capability-based reasons",
+      "verifiedBy": "review",
+      "met": true
+    }
+  ],
+  "notes": [
+    {
+      "agentId": "worker-agent",
+      "role": "worker",
+      "timestamp": "2026-05-02T16:49:00Z",
+      "content": "Started the provider capability-manifest slice. Added a static capability record per provider family/key and threaded preferred/active capability snapshots into RuntimeProviderConfig, ProviderRunStatus, /api/project, and the UI types. This is groundwork for capability-based routing and clearer operator messaging."
+    },
+    {
+      "agentId": "worker-agent",
+      "role": "worker",
+      "timestamp": "2026-05-02T16:55:00Z",
+      "content": "Capability manifests now affect real runtime behavior: reviewer fanout is clamped through a shared provider-aware policy, and provider status explains requested vs effective reviewer concurrency instead of only issuing a generic warning."
+    },
+    {
+      "agentId": "worker-agent",
+      "role": "worker",
+      "timestamp": "2026-05-02T17:02:00Z",
+      "content": "Finished the provider-capability slice by replacing loose fallback reason strings with structured routing decisions in provider status. The Project view now surfaces capability- and compatibility-based provider selection decisions directly, so operators can see why a provider was chosen or rejected."
+    }
+  ],
+  "gateResults": [],
+  "revisionCount": 0,
+  "createdAt": "2026-05-02T17:45:00Z",
+  "updatedAt": "2026-05-02T17:02:00Z",
+  "completedAt": "2026-05-02T17:02:00Z"
+}

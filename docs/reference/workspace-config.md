@@ -94,6 +94,13 @@ council:
 The parent workspace coordinates planning. Tasks still bind to a child project
 for setup, worktree creation, gates, and verification.
 
+Git policy follows the same shape. In a multi-project workspace, Guildhall
+keeps the workspace-level `.guildhall/` state at the parent so planning and
+tasks stay coherent, but local/private ignore rules are written at the actual
+Git-backed child project roots from `projects[].path`. If the workspace folder
+is only a container, its `.gitignore` does not need to pretend it owns those
+repos.
+
 Child-project settings are project settings. If a workspace coordinates
 multiple buildable projects, put local worktree files under the matching
 `projects[]` entry so paths stay relative to that child project. Do not put

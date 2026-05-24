@@ -13,6 +13,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
 import { parse as parseYaml } from 'yaml'
 import type { Task } from '@guildhall/core'
 import { activeEscalations } from '@guildhall/tools'
@@ -136,7 +137,7 @@ function bootstrapOutputLine(output: string): string | undefined {
 }
 
 function failedBootstrapDetail(projectPath: string): string | null {
-  const status = readJsonSafe(join(projectPath, 'memory', 'bootstrap.json')) as BootstrapStatus | null
+  const status = readJsonSafe(join(getProjectLocalHistoryDir(projectPath), 'bootstrap.json')) as BootstrapStatus | null
   if (!status || status.success !== false) return null
   const failed = status.steps.find(s => s.result === 'fail')
   if (!failed) return 'The last readiness check failed. Open readiness checks to rerun the project checks.'
@@ -254,7 +255,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     }
   }
 
-  const tasksPath = join(projectPath, 'memory', 'TASKS.json')
+  const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
   const tasks = tasksArray(readJsonSafe(tasksPath))
   const workspaceImportTask = tasks.find(t => t?.id === 'task-workspace-import')
   const workspaceImportTaskStatus =
@@ -279,7 +280,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   }
 
   // --- workspace_import_pending --------------------------------------------
-  const goalsPath = join(projectPath, 'memory', 'workspace-goals.json')
+  const goalsPath = join(getProjectStateDir(projectPath), 'workspace-goals.json')
   const hasGoals = existsSync(goalsPath)
   const anchors = detectRepoAnchors(projectPath)
   const hasReadme = anchors.includes('README.md')
@@ -483,7 +484,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   }
 
   // --- lever_questions -----------------------------------------------------
-  const settingsPath = join(projectPath, 'memory', 'agent-settings.yaml')
+  const settingsPath = join(getProjectStateDir(projectPath), 'agent-settings.yaml')
   if (existsSync(settingsPath)) {
     const raw = readYamlSafe(settingsPath) as
       | {

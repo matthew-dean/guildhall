@@ -45,6 +45,10 @@ import { PermissionChecker } from './permissions.js'
 import { recordToolCarryover } from './tool-carryover.js'
 import type { AnyTool, ToolExecutionContext, ToolRegistry } from './tools.js'
 import { parseAuthoritativeCommands, reconcileShellCommandWithAuthority } from '@guildhall/core'
+import {
+  getProjectLocalHistoryDir,
+  getProjectStateDir,
+} from '@guildhall/sessions'
 
 const REACTIVE_COMPACT_STATUS_MESSAGE =
   'Prompt too long; compacting conversation memory and retrying.'
@@ -240,24 +244,25 @@ function hydrateProjectToolInput(
   toolMetadata?: Record<string, unknown>,
 ): Record<string, unknown> {
   let next = { ...rawInput }
+  const projectStateDir = getProjectStateDir(cwd)
   if (PROJECT_TASK_TOOLS.has(toolName)) {
-    next.tasksPath = join(cwd, 'memory', 'TASKS.json')
+    next.tasksPath = join(projectStateDir, 'TASKS.json')
   }
   if (PROJECT_PROGRESS_TOOLS.has(toolName)) {
-    next.progressPath = join(cwd, 'memory', 'PROGRESS.md')
+    next.progressPath = join(projectStateDir, 'PROGRESS.md')
     if (toolName === 'log-progress') {
       next = normalizeLogProgressInput(next, toolMetadata)
     }
   }
   if (PROJECT_DECISION_TOOLS.has(toolName)) {
-    next.decisionsPath = join(cwd, 'memory', 'DECISIONS.md')
+    next.decisionsPath = join(projectStateDir, 'DECISIONS.md')
     next = normalizeLogDecisionInput(next, toolMetadata)
   }
   if (toolName === 'raise-escalation') {
     next = normalizeRaiseEscalationInput(next, toolMetadata)
   }
   if (PROJECT_MEMORY_TOOLS.has(toolName)) {
-    next.memoryDir = join(cwd, 'memory')
+    next.memoryDir = getProjectLocalHistoryDir(cwd)
   }
   return next
 }

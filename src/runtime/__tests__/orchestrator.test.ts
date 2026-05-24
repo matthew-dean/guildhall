@@ -28,6 +28,7 @@ import { appendFailureClassificationNote, classifyAgentFailure } from '../policy
 import { commandEvidence, touchedFiles } from './policy-fixtures.js'
 import { readProjectLearning } from '../learning.js'
 import { loadCodebaseMap } from '@guildhall/corpus-map'
+import { getProjectProgressHeartbeatsPath } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // Orchestrator feedback-loop tests
@@ -46,6 +47,7 @@ let progressPath: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-orch-test-'))
+  process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, 'data')
   memoryDir = path.join(tmpDir, 'memory')
   await fs.mkdir(memoryDir, { recursive: true })
   tasksPath = path.join(memoryDir, 'TASKS.json')
@@ -82,6 +84,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   delete process.env.GUILDHALL_CONFIG_DIR
+  delete process.env.GUILDHALL_DATA_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -3218,7 +3221,7 @@ describe('Orchestrator.tick — revision counting', () => {
 })
 
 describe('Orchestrator.tick — progress logging (FR-09)', () => {
-  it('appends a typed HEARTBEAT entry on a routine forward transition', async () => {
+  it('writes a typed HEARTBEAT entry to local progress on a routine forward transition', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
     const worker = stubAgent('worker-agent', async () => {
       await mutateTask('a', { status: 'review' })
@@ -3229,7 +3232,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
       now: () => '2026-04-20T12:00:00Z',
     })
     await orch.tick()
-    const progress = await fs.readFile(progressPath, 'utf-8')
+    const progress = await fs.readFile(getProjectProgressHeartbeatsPath(tmpDir), 'utf-8')
     expect(progress).toContain('HEARTBEAT')
     expect(progress).toContain('2026-04-20T12:00:00Z')
     expect(progress).toContain('worker-agent')
@@ -6411,6 +6414,116 @@ describe('Orchestrator.run — full loops', () => {
     expect(q.tasks.find((t) => t.id === 'b')?.status).toBe('ready')
   })
 
+  it('auto-commits dirty task worktree changes when Git Story policy says commit auto', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-auto')
+    await writeQueue([
+      mkTask({
+        id: 'task-auto',
+        status: 'gate_check',
+        worktreePath,
+        branchName: 'guildhall/task-auto',
+        baseBranch: 'main',
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    gitDriver.setStatusSummary(worktreePath, {
+      branch: 'guildhall/task-auto',
+      upstream: undefined,
+      changedCount: 2,
+      untrackedCount: 0,
+      samplePaths: ['src/feature.ts', 'src/feature.test.ts'],
+      clean: false,
+    })
+    const gateChecker = stubAgent('gate-checker-agent', async () => {
+      await mutateTask('task-auto', { status: 'done' })
+    })
+
+    const orch = new Orchestrator({
+      config: baseConfig({
+        gitStory: {
+          completionTarget: 'open_pr',
+          commit: 'auto',
+          push: 'ask',
+          pullRequest: 'ask',
+          merge: 'ask',
+          localOnlyAllowed: true,
+          deferAllowed: true,
+          requireCleanRelease: true,
+          allowForcePush: false,
+          allowSharedBranchRebase: false,
+          discoveredFrom: [],
+        },
+      }),
+      agents: agentSet({ gateChecker }),
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    expect(gitDriver.state.commits).toEqual([
+      expect.objectContaining({
+        repoRoot: worktreePath,
+        message: 'chore(guildhall): commit completed work for task-auto',
+      }),
+    ])
+    const q = await readQueue()
+    expect(q.tasks[0]?.notes.some((note) =>
+      note.role === 'git-story' &&
+      note.content.includes('Auto-committed completed task work'),
+    )).toBe(true)
+  })
+
+  it('does not auto-commit dirty task worktree changes when Git Story policy is ask', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-ask')
+    await writeQueue([
+      mkTask({
+        id: 'task-ask',
+        status: 'gate_check',
+        worktreePath,
+        branchName: 'guildhall/task-ask',
+        baseBranch: 'main',
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    gitDriver.setStatusSummary(worktreePath, {
+      branch: 'guildhall/task-ask',
+      changedCount: 1,
+      untrackedCount: 0,
+      samplePaths: ['src/feature.ts'],
+      clean: false,
+    })
+    const gateChecker = stubAgent('gate-checker-agent', async () => {
+      await mutateTask('task-ask', { status: 'done' })
+    })
+
+    const orch = new Orchestrator({
+      config: baseConfig({
+        gitStory: {
+          completionTarget: 'open_pr',
+          commit: 'ask',
+          push: 'ask',
+          pullRequest: 'ask',
+          merge: 'ask',
+          localOnlyAllowed: true,
+          deferAllowed: true,
+          requireCleanRelease: true,
+          allowForcePush: false,
+          allowSharedBranchRebase: false,
+          discoveredFrom: [],
+        },
+      }),
+      agents: agentSet({ gateChecker }),
+      gitDriver,
+    })
+
+    await orch.tick()
+
+    expect(gitDriver.state.commits).toEqual([])
+  })
+
   it('stopAfterOneTask stops immediately when exploring work is waiting on the user', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', domain: 'knit' })])
 
@@ -7346,7 +7459,7 @@ describe('Orchestrator.tick — FR-21 proposal promotion', () => {
       now: () => '2026-04-20T12:00:00Z',
     })
     await orch.tick()
-    const progress = await fs.readFile(progressPath, 'utf-8')
+    const progress = await fs.readFile(getProjectProgressHeartbeatsPath(tmpDir), 'utf-8')
     expect(progress).toContain('HEARTBEAT')
     expect(progress).toContain('proposal-promoter')
     expect(progress).toContain('auto_promote')
@@ -7619,7 +7732,7 @@ describe('Orchestrator.tick — FR-22 pre-rejection policy', () => {
       now: () => '2026-04-20T12:00:00Z',
     })
     await orch.tick()
-    const progress = await fs.readFile(progressPath, 'utf-8')
+    const progress = await fs.readFile(getProjectProgressHeartbeatsPath(tmpDir), 'utf-8')
     expect(progress).toContain('HEARTBEAT')
     expect(progress).toContain('pre-rejection-policy')
     expect(progress).toContain('requeue_lower_priority')

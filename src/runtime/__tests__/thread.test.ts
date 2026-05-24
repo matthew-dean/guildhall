@@ -7,6 +7,74 @@ import { buildThread } from '../thread.js'
 import { emptyWizardsState, type ProjectSnapshot } from '../wizards.js'
 
 describe('buildThread', () => {
+  it('projects active pressure-test intake as request and question turns', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, 'memory', 'pressure-test-intake'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, 'memory', 'pressure-test-intake', 'pti-guildhall-0-8-0.json'),
+        JSON.stringify({
+          id: 'pti-guildhall-0-8-0',
+          rawRequest: '0.8.0 should prioritize pressure-test intake.',
+          target: { type: 'release', id: 'guildhall-0-8-0', title: 'Guildhall 0.8.0' },
+          status: 'active',
+          activeDomainId: 'product-goals',
+          pendingQuestion: {
+            id: 'product-goals-q-1',
+            domainId: 'product-goals',
+            prompt: 'What must Pressure-Test Intake get right first?',
+            why: 'This decides the release slice.',
+            evidence: [],
+            askedAt: '2026-05-23T00:00:00.000Z',
+          },
+          domains: [{
+            id: 'product-goals',
+            title: 'Product goals',
+            whyItMatters: 'This decides the release slice.',
+            status: 'active',
+            knownFacts: [],
+            openUnknowns: [],
+            askedQuestions: [],
+            followUpCandidates: [],
+            closeoutAsked: false,
+          }],
+          outputs: { assumptions: [], decisions: [], languageMapCandidates: [], taskSplitCandidates: [] },
+          createdAt: '2026-05-23T00:00:00.000Z',
+          updatedAt: '2026-05-23T00:00:00.000Z',
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 0,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      expect(thread.turns.find(t => t.id === 'request:pti-guildhall-0-8-0')).toMatchObject({
+        kind: 'request',
+        status: 'done',
+      })
+      expect(thread.turns.find(t => t.id === 'pressure-test:pti-guildhall-0-8-0:product-goals-q-1')).toMatchObject({
+        kind: 'pressure_test_question',
+        status: 'active',
+      })
+      expect(thread.activeTurnId).toBe('pressure-test:pti-guildhall-0-8-0:product-goals-q-1')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('surfaces active task work once setup is already complete', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

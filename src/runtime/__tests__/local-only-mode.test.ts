@@ -21,6 +21,7 @@ let progressPath: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-localonly-'))
+  process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, 'data')
   memoryDir = path.join(tmpDir, 'memory')
   await fs.mkdir(memoryDir, { recursive: true })
   progressPath = path.join(memoryDir, 'PROGRESS.md')
@@ -28,6 +29,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -157,7 +159,8 @@ describe('attemptRemoteSync — the AC-20 gate', () => {
 })
 
 describe('localOnlyPath', () => {
-  it('resolves under memory dir', () => {
-    expect(localOnlyPath(memoryDir)).toBe(path.join(memoryDir, 'local-only.json'))
+  it('resolves under user-local project history', () => {
+    expect(localOnlyPath(memoryDir)).toMatch(path.join(tmpDir, 'data', 'projects'))
+    expect(localOnlyPath(memoryDir)).toMatch(/local-only\.json$/)
   })
 })

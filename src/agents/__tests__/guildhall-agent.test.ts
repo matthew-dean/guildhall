@@ -403,6 +403,15 @@ describe('agent factories', () => {
     expect(prompt).toContain('starting inventory')
   })
 
+  it('createSpecAgent includes the pressure-test intake operating contract', () => {
+    const a = createSpecAgent(llm)
+    const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('Pressure-Test Intake')
+    expect(prompt).toContain('Ask exactly one user-facing question')
+    expect(prompt).toContain('producer self-critique')
+    expect(prompt).toContain('Transcript is evidence, not the planner')
+  })
+
   it('createWorkerAgent registers shell + file tools', async () => {
     const a = createWorkerAgent(llm)
     expect(a.name).toBe('worker-agent')

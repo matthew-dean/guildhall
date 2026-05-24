@@ -200,6 +200,80 @@ function reviewFeedbackTurn(overrides: Record<string, unknown> = {}) {
   }
 }
 
+interface RequestTurnForTest {
+  kind: 'request'
+  id: string
+  at: string
+  persona: 'intake'
+  status: 'done' | 'active' | 'pending'
+  phase: 'intake'
+  requestId: string
+  title: string
+  rawRequest: string
+  routingSummary: string
+}
+
+interface PressureTestQuestionTurnForTest {
+  kind: 'pressure_test_question'
+  id: string
+  at: string
+  persona: 'intake'
+  status: 'done' | 'active' | 'pending'
+  phase: 'intake'
+  intakeId: string
+  targetTitle: string
+  domainId: string
+  domainTitle: string
+  question: {
+    id: string
+    prompt: string
+    why: string
+    evidence: string[]
+  }
+  answerEndpoint: string
+}
+
+function requestTurn(overrides: Partial<RequestTurnForTest> = {}): RequestTurnForTest {
+  return {
+    kind: 'request',
+    id: 'request:pti-guildhall-0-8-0',
+    at: now,
+    persona: 'intake',
+    status: 'done',
+    phase: 'intake',
+    requestId: 'pti-guildhall-0-8-0',
+    title: 'Guildhall 0.8.0',
+    rawRequest: '0.8.0 should prioritize pressure-test intake.',
+    routingSummary: 'Pressure-test intake is checking the request before task split.',
+    ...overrides,
+  }
+}
+
+function pressureTestQuestionTurn(
+  overrides: Partial<PressureTestQuestionTurnForTest> = {},
+): PressureTestQuestionTurnForTest {
+  return {
+    kind: 'pressure_test_question',
+    id: 'pressure-test:pti-guildhall-0-8-0:product-goals-q-1',
+    at: now,
+    persona: 'intake',
+    status: 'active',
+    phase: 'intake',
+    intakeId: 'pti-guildhall-0-8-0',
+    targetTitle: 'Guildhall 0.8.0',
+    domainId: 'product-goals',
+    domainTitle: 'Product goals',
+    question: {
+      id: 'product-goals-q-1',
+      prompt: 'What must Pressure-Test Intake get right first?',
+      why: 'This decides the release slice.',
+      evidence: ['internal/plans/guildhall-0-8.md: release goals'],
+    },
+    answerEndpoint: '/api/project/pressure-test/pti-guildhall-0-8-0/answer',
+    ...overrides,
+  }
+}
+
 function installBrowserFakes(url = '/projects/looma-knit/thread') {
   window.history.replaceState({}, '', url)
   path.value = url
@@ -259,6 +333,9 @@ function installFetchFakes(
       if (options.answerQuestionsResponse) return options.answerQuestionsResponse
       return json({ ok: true })
     }
+    if (url.startsWith('/api/project/pressure-test/') && url.includes('/answer')) {
+      return json({ intake: { id: 'pti-guildhall-0-8-0', pendingQuestion: null } })
+    }
     if (url.startsWith('/api/project/meta-intake/synthesize')) return json({ ok: true })
     if (url.startsWith('/api/setup/')) return json({ ok: true })
     if (url.startsWith('/api/project')) {
@@ -309,6 +386,51 @@ describe('ThreadTab', () => {
     expect(setupCall?.body).toMatchObject({
       name: 'Looma + Knit Docs',
     })
+  })
+
+  it('renders request and active pressure-test question turns as owner input', async () => {
+    installFetchFakes([
+      requestTurn(),
+      pressureTestQuestionTurn(),
+    ], 'pressure-test:pti-guildhall-0-8-0:product-goals-q-1')
+
+    render(ThreadTab)
+
+    const summary = await screen.findByLabelText('Thread operations summary')
+    expect(summary.textContent).toContain('1 Input cards')
+    expect(screen.getByText('New request')).toBeTruthy()
+    expect(screen.getByText('0.8.0 should prioritize pressure-test intake.')).toBeTruthy()
+    expect(screen.getByText('Pressure-test question')).toBeTruthy()
+    expect(screen.getByText('Product goals')).toBeTruthy()
+    expect(screen.getByText('What must Pressure-Test Intake get right first?')).toBeTruthy()
+    expect(screen.getByText('This decides the release slice.')).toBeTruthy()
+    expect(screen.getByText('internal/plans/guildhall-0-8.md: release goals')).toBeTruthy()
+    expect(screen.getByText('Needs you')).toBeTruthy()
+  })
+
+  it('posts pressure-test answers, refreshes Thread and project, and clears the local answer', async () => {
+    const { calls } = installFetchFakes([
+      requestTurn(),
+      pressureTestQuestionTurn(),
+    ], 'pressure-test:pti-guildhall-0-8-0:product-goals-q-1')
+
+    render(ThreadTab)
+    await screen.findByText('What must Pressure-Test Intake get right first?')
+
+    const answer = screen.getByPlaceholderText('Answer this pressure-test question')
+    await userEvent.type(answer, 'Keep the request visible and ask one focused question at a time.')
+    await userEvent.click(screen.getByRole('button', { name: /save answer/i }))
+
+    await waitFor(() => {
+      expect(calls.some(call => (
+        call.url.includes('/api/project/pressure-test/pti-guildhall-0-8-0/answer') &&
+        call.body?.questionId === 'product-goals-q-1' &&
+        call.body?.answer === 'Keep the request visible and ask one focused question at a time.'
+      ))).toBe(true)
+    })
+    expect(calls.filter(call => call.url.startsWith('/api/project/thread')).length).toBeGreaterThan(1)
+    expect(calls.some(call => call.url.startsWith('/api/project?projectId=looma-knit'))).toBe(true)
+    await waitFor(() => expect((answer as HTMLTextAreaElement).value).toBe(''))
   })
 
   it('clears the first spec shaping input after the idea is submitted', async () => {
@@ -557,6 +679,23 @@ describe('ThreadTab', () => {
         ),
       ).toBe(true)
     })
+  })
+
+  it('shows unresolved git story state on task cards', async () => {
+    installFetchFakes([
+      importedDraftTurn({
+        gitStory: {
+          state: 'dirty_uncommitted',
+          reason: '3 changed files are still uncommitted.',
+          nextAction: 'Review the diff, then commit the scoped files or mark local-only/deferred.',
+        },
+      }),
+    ], 'draft-link-controls')
+
+    render(ThreadTab)
+    await screen.findByText('Dirty tree')
+    expect(screen.getByText('3 changed files are still uncommitted.')).toBeTruthy()
+    expect(screen.getByText('Review the diff, then commit the scoped files or mark local-only/deferred.')).toBeTruthy()
   })
 
   it('keeps ready tasks with incomplete checklists out of worker-start actions', async () => {

@@ -17,15 +17,18 @@ let tmpDir: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-stop-'))
+  process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, 'data')
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
 describe('stop-requested marker', () => {
-  it('resolves the path under the memory directory', () => {
-    expect(stopRequestedPath(tmpDir)).toBe(path.join(tmpDir, STOP_REQUESTED_FILENAME))
+  it('resolves the path under user-local project history', () => {
+    expect(stopRequestedPath(tmpDir)).toMatch(path.join(tmpDir, 'data', 'projects'))
+    expect(stopRequestedPath(tmpDir)).toMatch(new RegExp(`${STOP_REQUESTED_FILENAME}$`))
   })
 
   it('isStopRequested returns false for a clean workspace', () => {

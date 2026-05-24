@@ -14,7 +14,7 @@ help_summary: |
 |---|---|
 | `HOME` | Used for `~` expansion. |
 | `GUILDHALL_CONFIG_DIR` | Override global config root (default `~/.guildhall`). |
-| `GUILDHALL_DATA_DIR` | Override data/memory/cache root (sessions, transcripts). |
+| `GUILDHALL_DATA_DIR` | Override data/history/cache root (sessions, transcripts, checkpoints, local evidence). |
 | `GUILDHALL_LOGS_DIR` | Override log directory. |
 
 ## Provider selection

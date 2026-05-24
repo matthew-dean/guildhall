@@ -40,6 +40,18 @@
       files: string[]
       error?: string
     }
+    gitStory?: {
+      ready?: boolean
+      state?: string
+      blockers?: Array<{
+        id?: string
+        label?: string
+        state?: string
+        reason?: string
+        nextAction?: string
+        taskId?: string
+      }>
+    }
     statusCounts: Record<string, number>
     totals: {
       blockingCount: number
@@ -47,6 +59,7 @@
       unfinishedCount?: number
       designSystemBlockingCount?: number
       dirtyCheckoutBlockingCount?: number
+      gitStoryBlockingCount?: number
       tasks: number
       done: number
     }
@@ -159,6 +172,7 @@
     }, 0)
   })
   const dirtyCheckoutCount = $derived(data?.dirtyCheckout?.ownedCount ?? 0)
+  const gitStoryBlockers = $derived(data?.gitStory?.blockers ?? [])
 
   const verdict = $derived.by(() => {
     if (!data) return { label: 'Loading', tone: 'neutral' as const, reason: '' }
@@ -188,6 +202,13 @@
         label: 'Blocked',
         tone: 'warn' as const,
         reason: `${dirtyCheckoutCount} Guildhall-owned project file${dirtyCheckoutCount === 1 ? '' : 's'} still need cleanup or landing.`,
+      }
+    }
+    if (gitStoryBlockers.length > 0) {
+      return {
+        label: 'Blocked',
+        tone: 'warn' as const,
+        reason: `${gitStoryBlockers.length} git stor${gitStoryBlockers.length === 1 ? 'y needs' : 'ies need'} closure.`,
       }
     }
     if (!dsLabel().clear) {
@@ -312,12 +333,36 @@
               />
             </div>
           {/if}
+          {#if data.gitStory}
+            <div class="summary-stat">
+              <span class="summary-label">Git story</span>
+              <StatusPill
+                label={gitStoryBlockers.length > 0 ? `${gitStoryBlockers.length} unresolved` : 'closed'}
+                tone={gitStoryBlockers.length > 0 ? 'warn' : 'ok'}
+              />
+            </div>
+          {/if}
         </div>
         {#if data.dirtyCheckout && dirtyCheckoutCount > 0}
           <p class="dirty-detail">
             Guildhall-owned metadata is still present in the project checkout:
             {data.dirtyCheckout.files.slice(0, 4).join(', ')}{dirtyCheckoutCount > 4 ? ', …' : ''}.
           </p>
+        {/if}
+        {#if gitStoryBlockers.length > 0}
+          <div class="git-story-detail">
+            <strong>Git story needs closure</strong>
+            <ul>
+              {#each gitStoryBlockers as blocker, index (`${blocker.id ?? 'git'}:${index}`)}
+                <li>
+                  <span>{blocker.label ?? blocker.state ?? 'Git story'}</span>
+                  {#if blocker.nextAction}
+                    <small>{blocker.nextAction}</small>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          </div>
         {/if}
       </FrameCard>
     {/if}
@@ -375,6 +420,38 @@
               </span>
               <StatusPill label={dsLabel().label} tone={dsLabel().tone} />
             </div>
+          </li>
+          <li class="crit-row">
+            <details class="crit-det" open={false}>
+              <summary class="crit-summary" aria-disabled={gitStoryBlockers.length === 0}>
+                <span class="crit-copy">
+                  <span class="crit-label">Git story</span>
+                  <span class="crit-detail">
+                    {gitStoryBlockers.length === 0 ? 'No unresolved git stories.' : `${gitStoryBlockers.length} unresolved git stor${gitStoryBlockers.length === 1 ? 'y' : 'ies'}.`}
+                  </span>
+                </span>
+                <StatusPill
+                  label={gitStoryBlockers.length === 0 ? 'clear' : `${gitStoryBlockers.length} open`}
+                  tone={gitStoryBlockers.length === 0 ? 'ok' : 'warn'}
+                />
+              </summary>
+              {#if gitStoryBlockers.length > 0}
+                <ul class="crit-items">
+                  {#each gitStoryBlockers as blocker, index (`${blocker.id ?? 'git'}:${index}`)}
+                    <li>
+                      {#if blocker.taskId}
+                        <button type="button" class="link" onclick={() => openTask(blocker.taskId ?? '')}>
+                          {blocker.label ?? blocker.taskId}
+                        </button>
+                      {:else}
+                        <span>{blocker.label ?? blocker.state ?? 'Git story'}</span>
+                      {/if}
+                      <span class="muted">{blocker.nextAction ?? blocker.reason ?? ''}</span>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </details>
           </li>
         </ul>
       </FrameCard>
@@ -452,6 +529,30 @@
     color: var(--text-muted);
     font-size: var(--fs-2);
     line-height: var(--lh-body);
+  }
+
+  .git-story-detail {
+    display: grid;
+    gap: var(--gh-space-2);
+    margin: var(--gh-space-3) 0 0;
+    color: var(--text);
+    font-size: var(--fs-2);
+  }
+
+  .git-story-detail ul {
+    display: grid;
+    gap: var(--gh-space-1);
+    margin: 0;
+    padding-inline-start: 1.1rem;
+  }
+
+  .git-story-detail li {
+    display: grid;
+    gap: 0.1rem;
+  }
+
+  .git-story-detail small {
+    color: var(--text-muted);
   }
 
   .criteria {

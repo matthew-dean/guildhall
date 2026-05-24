@@ -3,10 +3,12 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runBootstrap, readBootstrapStatus, computeLockfileHash } from '../bootstrap-runner.js'
+import { getProjectLocalHistoryDir } from '@guildhall/sessions'
 
 function makeTmp(): string {
   const d = mkdtempSync(join(tmpdir(), 'guildhall-bootstrap-'))
   mkdirSync(join(d, 'memory'))
+  process.env.GUILDHALL_DATA_DIR = join(d, 'data')
   return d
 }
 
@@ -16,6 +18,7 @@ describe('computeLockfileHash', () => {
     dir = makeTmp()
   })
   afterEach(() => {
+    delete process.env.GUILDHALL_DATA_DIR
     rmSync(dir, { recursive: true, force: true })
   })
 
@@ -46,6 +49,7 @@ describe('runBootstrap', () => {
     dir = makeTmp()
   })
   afterEach(() => {
+    delete process.env.GUILDHALL_DATA_DIR
     rmSync(dir, { recursive: true, force: true })
   })
 
@@ -116,7 +120,7 @@ describe('runBootstrap', () => {
     expect(res.steps[0]?.result).toBe('pass')
   })
 
-  it('persists status to memory/bootstrap.json with lockfileHash', () => {
+  it('persists status to user-local history with lockfileHash', () => {
     writeFileSync(join(dir, 'pnpm-lock.yaml'), 'x')
     runBootstrap({
       projectPath: dir,
@@ -125,7 +129,7 @@ describe('runBootstrap', () => {
       successGates: [],
       timeoutMs: 5_000,
     })
-    const statusPath = join(dir, 'memory', 'bootstrap.json')
+    const statusPath = join(getProjectLocalHistoryDir(dir), 'bootstrap.json')
     expect(existsSync(statusPath)).toBe(true)
     const status = JSON.parse(readFileSync(statusPath, 'utf-8')) as {
       success: boolean

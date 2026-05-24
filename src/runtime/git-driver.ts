@@ -70,6 +70,8 @@ export interface PushResult {
 export interface PullRequestResult {
   ok: boolean
   url?: string
+  state?: string
+  mergeStateStatus?: string
   detail?: string
 }
 
@@ -79,11 +81,30 @@ export interface CheckpointResult {
   detail?: string
 }
 
+export interface GitStatusSummary {
+  branch?: string
+  upstream?: string
+  ahead: number
+  behind: number
+  changedCount: number
+  untrackedCount: number
+  samplePaths: string[]
+  clean: boolean
+}
+
 export interface GitDriver {
   /** Current branch name in the repo root (e.g. `main`, `master`). */
   currentBranch(repoRoot: string): Promise<string>
   /** True when the repo root has no uncommitted changes. */
   isClean(repoRoot: string): Promise<boolean>
+  /** Read branch/upstream/dirty status without changing git state. */
+  statusSummary(repoRoot: string): Promise<GitStatusSummary>
+  /** Read local commits ahead of upstream. */
+  localCommits(repoRoot: string, upstream: string): Promise<Array<{ sha: string; subject: string }>>
+  /** Read PR metadata for a branch, if the GitHub CLI can resolve one. */
+  pullRequestForBranch(repoRoot: string, branch: string): Promise<PullRequestResult>
+  /** Commit the current branch's dirty work without changing branches. */
+  commitAll(repoRoot: string, message: string): Promise<CheckpointResult>
   /** Create a new worktree at `worktreePath` with a fresh branch off `baseBranch`. */
   createWorktree(repoRoot: string, opts: CreateWorktreeOptions): Promise<void>
   /** Attach an existing branch to a worktree path. */
@@ -129,19 +150,99 @@ export class NodeGitDriver implements GitDriver {
   }
 
   async isClean(repoRoot: string): Promise<boolean> {
+    return (await this.statusSummary(repoRoot)).clean
+  }
+
+  async statusSummary(repoRoot: string): Promise<GitStatusSummary> {
     const gitRoot = await resolveGitTopLevel(repoRoot)
-    const { stdout } = await execFileP('git', ['status', '--porcelain'], {
+    const { stdout } = await execFileP('git', ['status', '--porcelain=v1', '-b'], {
       cwd: gitRoot,
     })
-    const lines = stdout
+    const rawLines = stdout
       .split('\n')
       .map((line) => line.trimEnd())
       .filter((line) => line.trim().length > 0)
-    const meaningful = lines.filter((line) => {
-      const file = line.slice(3).trim()
+    const header = rawLines.find((line) => line.startsWith('## '))
+    const parsedHeader = parseStatusHeader(header)
+    const meaningful = rawLines.filter((line) => {
+      if (line.startsWith('## ')) return false
+      const file = line.slice(3).trim().replace(/^"|"$/g, '')
       return !isIgnorableGuildhallStatePath(file.replace(/\/$/, ''))
     })
-    return meaningful.length === 0
+    return {
+      branch: parsedHeader.branch,
+      upstream: parsedHeader.upstream,
+      ahead: parsedHeader.ahead,
+      behind: parsedHeader.behind,
+      changedCount: meaningful.filter((line) => !line.startsWith('??')).length,
+      untrackedCount: meaningful.filter((line) => line.startsWith('??')).length,
+      samplePaths: meaningful.map((line) => line.slice(3).trim().replace(/^"|"$/g, '')).slice(0, 10),
+      clean: meaningful.length === 0,
+    }
+  }
+
+  async localCommits(repoRoot: string, upstream: string): Promise<Array<{ sha: string; subject: string }>> {
+    const gitRoot = await resolveGitTopLevel(repoRoot)
+    const { stdout } = await execFileP('git', ['log', '--format=%H%x09%s', `${upstream}..HEAD`], {
+      cwd: gitRoot,
+    })
+    return stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [sha = '', ...subjectParts] = line.split('\t')
+        return { sha, subject: subjectParts.join('\t') }
+      })
+      .filter((commit) => commit.sha.length > 0)
+  }
+
+  async pullRequestForBranch(repoRoot: string, branch: string): Promise<PullRequestResult> {
+    try {
+      const gitRoot = await resolveGitTopLevel(repoRoot)
+      const { stdout } = await execFileP(
+        'gh',
+        ['pr', 'view', branch, '--json', 'url,state,mergeStateStatus'],
+        { cwd: gitRoot },
+      )
+      const parsed = JSON.parse(stdout) as { url?: string; state?: string; mergeStateStatus?: string }
+      return {
+        ok: Boolean(parsed.url),
+        url: parsed.url,
+        state: parsed.state,
+        mergeStateStatus: parsed.mergeStateStatus,
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        detail: err instanceof Error ? err.message : String(err),
+      }
+    }
+  }
+
+  async commitAll(repoRoot: string, message: string): Promise<CheckpointResult> {
+    const gitRoot = await resolveGitTopLevel(repoRoot)
+    try {
+      await execFileP('git', ['add', '-A'], { cwd: gitRoot })
+      await execFileP(
+        'git',
+        ['reset', '--quiet', 'HEAD', '--', '.guildhall', 'memory', 'guildhall.yaml'],
+        { cwd: gitRoot },
+      )
+      let hasStagedChanges = true
+      try {
+        await execFileP('git', ['diff', '--cached', '--quiet'], { cwd: gitRoot })
+        hasStagedChanges = false
+      } catch {
+        hasStagedChanges = true
+      }
+      if (!hasStagedChanges) return { ok: true }
+      await execFileP('git', ['commit', '--no-verify', '-m', message], { cwd: gitRoot })
+      const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: gitRoot })
+      return { ok: true, commitSha: stdout.trim() }
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) }
+    }
   }
 
   async createWorktree(
@@ -368,6 +469,28 @@ export class NodeGitDriver implements GitDriver {
   }
 }
 
+function parseStatusHeader(header: string | undefined): {
+  branch?: string
+  upstream?: string
+  ahead: number
+  behind: number
+} {
+  if (!header) return { ahead: 0, behind: 0 }
+  const withoutPrefix = header.replace(/^##\s+/, '')
+  const [branchPart, trackingPart = ''] = withoutPrefix.split('...')
+  const branch = branchPart && branchPart !== 'HEAD (no branch)' ? branchPart : undefined
+  if (!trackingPart) return { branch, ahead: 0, behind: 0 }
+  const upstream = trackingPart.replace(/\s+\[.*\]$/, '').trim() || undefined
+  const aheadMatch = trackingPart.match(/ahead\s+(\d+)/)
+  const behindMatch = trackingPart.match(/behind\s+(\d+)/)
+  return {
+    branch,
+    upstream,
+    ahead: aheadMatch ? Number(aheadMatch[1]) : 0,
+    behind: behindMatch ? Number(behindMatch[1]) : 0,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // InMemoryGitDriver — for tests. Records every call, plus a few controllable
 // failure knobs so merge/push behavior can be scripted per scenario.
@@ -375,6 +498,10 @@ export class NodeGitDriver implements GitDriver {
 
 export interface InMemoryGitDriverState {
   currentBranch: string
+  statuses: Record<string, GitStatusSummary>
+  localCommits: Record<string, Array<{ sha: string; subject: string }>>
+  pullRequests: Record<string, PullRequestResult>
+  commits: Array<{ repoRoot: string; message: string; result: CheckpointResult }>
   createdWorktrees: CreateWorktreeOptions[]
   attachedWorktrees: AttachWorktreeOptions[]
   checkpoints: Array<CheckpointDirtyWorkOptions & { result: CheckpointResult }>
@@ -406,6 +533,10 @@ export class InMemoryGitDriver implements GitDriver {
   constructor(opts: InMemoryGitDriverOptions = {}) {
     this.state = {
       currentBranch: opts.currentBranch ?? 'main',
+      statuses: {},
+      localCommits: {},
+      pullRequests: {},
+      commits: [],
       createdWorktrees: [],
       attachedWorktrees: [],
       checkpoints: [],
@@ -434,6 +565,24 @@ export class InMemoryGitDriver implements GitDriver {
   setClean(clean: boolean): void {
     this.clean = clean
   }
+  setStatusSummary(repoRoot: string, summary: Partial<GitStatusSummary>): void {
+    this.state.statuses[repoRoot] = {
+      branch: summary.branch ?? this.state.currentBranch,
+      upstream: summary.upstream,
+      ahead: summary.ahead ?? 0,
+      behind: summary.behind ?? 0,
+      changedCount: summary.changedCount ?? 0,
+      untrackedCount: summary.untrackedCount ?? 0,
+      samplePaths: summary.samplePaths ?? [],
+      clean: summary.clean ?? ((summary.changedCount ?? 0) + (summary.untrackedCount ?? 0) === 0),
+    }
+  }
+  setLocalCommits(repoRoot: string, commits: Array<{ sha: string; subject: string }>): void {
+    this.state.localCommits[repoRoot] = commits
+  }
+  setPullRequest(repoRoot: string, result: PullRequestResult): void {
+    this.state.pullRequests[repoRoot] = result
+  }
 
   async currentBranch(_repoRoot: string): Promise<string> {
     return this.state.currentBranch
@@ -441,6 +590,48 @@ export class InMemoryGitDriver implements GitDriver {
 
   async isClean(_repoRoot: string): Promise<boolean> {
     return this.clean
+  }
+
+  async statusSummary(repoRoot: string): Promise<GitStatusSummary> {
+    return this.state.statuses[repoRoot] ?? {
+      branch: this.state.currentBranch,
+      upstream: 'origin/main',
+      ahead: 0,
+      behind: 0,
+      changedCount: this.clean ? 0 : 1,
+      untrackedCount: 0,
+      samplePaths: this.clean ? [] : ['changed.ts'],
+      clean: this.clean,
+    }
+  }
+
+  async localCommits(repoRoot: string, _upstream: string): Promise<Array<{ sha: string; subject: string }>> {
+    return this.state.localCommits[repoRoot] ?? []
+  }
+
+  async pullRequestForBranch(repoRoot: string, _branch: string): Promise<PullRequestResult> {
+    return this.state.pullRequests[repoRoot] ?? { ok: false }
+  }
+
+  async commitAll(repoRoot: string, message: string): Promise<CheckpointResult> {
+    const result: CheckpointResult = {
+      ok: true,
+      commitSha: `commit-${this.state.commits.length + 1}`,
+    }
+    this.state.commits.push({ repoRoot, message, result })
+    this.clean = true
+    const existing = this.state.statuses[repoRoot]
+    this.state.statuses[repoRoot] = {
+      branch: existing?.branch ?? this.state.currentBranch,
+      upstream: existing?.upstream,
+      ahead: existing?.ahead ?? 1,
+      behind: existing?.behind ?? 0,
+      changedCount: 0,
+      untrackedCount: 0,
+      samplePaths: [],
+      clean: true,
+    }
+    return result
   }
 
   async createWorktree(

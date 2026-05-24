@@ -9,9 +9,9 @@ help_summary: |
 
 # Task lifecycle
 
-Every task in `./memory/TASKS.json` has a `status` field that tracks where it
-sits in the build pipeline. Statuses are enumerated in `./src/core/task.ts` as
-`TaskStatus`.
+Every active task in `./.guildhall/TASKS.json` has a `status` field that tracks
+where it sits in the build pipeline. Statuses are enumerated in
+`./src/core/task.ts` as `TaskStatus`.
 
 The construction model is the friendly mental model; the status is the runtime
 state. A task moves from idea, to blueprint, to worker slot, to trade work, to
@@ -36,6 +36,11 @@ Terminal states:
 - `shelved` — explicitly parked (user action or pre-rejection policy).
 - `blocked` — max revisions exceeded or unresolvable blocker raised.
 
+When a task reaches a terminal state, Guildhall seals it. The active queue stays
+small, a compact durable task record lands under `./.guildhall/tasks/archive/`,
+and full evidence such as notes, review verdicts, adjudications, gate history,
+and issue details moves to local history under `~/.guildhall/data/projects/`.
+
 ## Stage-appropriate spec fidelity
 
 The [`spec_completeness`](../levers/spec-completeness) lever controls how complete a spec must be at each stage:
@@ -45,7 +50,8 @@ The [`spec_completeness`](../levers/spec-completeness) lever controls how comple
 - `emergent` — high tolerance for incomplete specs; coordinator fills gaps mid-task.
 
 Even in `emergent` mode, progress leaves durable evidence. A transcript line
-that says the agent will write the blueprint later is not enough.
+that says the agent will write the blueprint later is not enough, and raw
+transcripts are not the committed project contract.
 
 ## Revisions
 

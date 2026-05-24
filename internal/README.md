@@ -15,6 +15,8 @@ If a note belongs in public docs, move or rewrite it deliberately under
 `docs/`. Do not assume a planning note is publishable just because it is
 written in Markdown.
 
-Current 0.8.0 planning lives in `internal/specs/`.
+The current 0.8.0 MVP tracker is
+`internal/plans/2026-05-24-guildhall-0-8-mvp-tracker.md`. Broader 0.8.0
+design sources live in `internal/specs/`.
 Live product/runtime audit checklists live in `internal/audits/`.
 Older exploratory design notes live in `internal/design-notes/`.

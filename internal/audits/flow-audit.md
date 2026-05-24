@@ -57,6 +57,50 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Ship Git Story Closure as a 0.8.0 MVP blocker. The single release tracker
+  now lives at `internal/plans/2026-05-24-guildhall-0-8-mvp-tracker.md` and
+  keeps Pressure-Test Intake as the top priority while making git closure the
+  end-of-work trust contract: every project/task should expose whether work is
+  dirty, committed-only, missing upstream, pushed, in PR, merged, local-only,
+  deferred, conflicted, or unknown. Release readiness should block unresolved
+  git stories. The 0.8.0 implementation adds the Git Story snapshot model,
+  project summary API, copied-from-system policy endpoint, project/task
+  surfaces on Projects Home, Thread, Provenance, and Release, plus
+  policy-gated commit/push/open-PR/local-only/deferred endpoints. Verification:
+  focused runtime and UI suites passed, `pnpm typecheck` passed, `pnpm build`
+  passed, `git diff --check` passed, and a local browser smoke on
+  `http://localhost:7777` showed registered project cards with `GIT UNKNOWN`
+  and `DIRTY` chips. The implementation plan lives at
+  `internal/plans/2026-05-24-guildhall-0-8-git-story-closure.md`.
+- [x] Restore the machine default provider to DeepInfra/OpenAI-compatible and
+  make provider/model-scope mismatches visible. The live global config had
+  drifted from `preferredProvider: openai-api` to `preferredProvider: codex`
+  while the model overrides still lived under `models.openai-api`, causing
+  Guildhall to resolve Codex defaults like `gpt-5.3-codex`. The global config
+  is back on `openai-api`, and the project provider status now emits a
+  persistent warning when global or project model overrides are scoped to a
+  different provider than the preferred provider. Projects home now also shows
+  the machine-default provider/model chip and routes it to `/providers`, so the
+  default model group is visible before opening a project.
+- [x] Build the 0.8.0 Pressure-Test Intake foundation from
+  `internal/plans/2026-05-23-guildhall-0-8-pressure-test-intake.md`. Keep this
+  as the top-priority 0.8.0 slice: New request routing, persisted domain-loop
+  intake state, Thread cards, one-question-at-a-time answering, and browser
+  proof on the active target project before moving on to broader practices,
+  personas, Podman runtime, or rich-artifact work. Implemented the 0.8.0 MVP
+  surface: `/api/project/request` now routes release/feature-style asks into
+  persisted `memory/pressure-test-intake` state, classifies settings,
+  persona/practice, repair, clarification, and multi-intent asks, records
+  existing-card reuse evidence, closes and advances pressure-test domains,
+  inspects memory/docs evidence before asking, and emits language-map
+  candidates. Thread projects request and pressure-test question cards, the
+  modal posts ordinary asks as freeform New requests without up-front type
+  selection, and the Spec Agent prompt now carries the Pressure-Test Intake
+  operating contract. Added the minimum adjacent 0.8.0 runtime proof for worker
+  modes (`build`, `diagnose`, `tdd`), project `language-map.json` context
+  injection, durable `guildhall-html-v1` artifact storage, `gh-table` and
+  `gh-diagram` protocol primitives, and fake `mount_directory` capability
+  request/grant records. Verified with the combined focused Vitest suite.
 - [x] Replace the homepage hero's old project-dashboard screenshot card with
   the generated 3D guild hall illustration and keep the desktop hero as a
   balanced 50/50 copy-and-visual split. The source homepage now uses

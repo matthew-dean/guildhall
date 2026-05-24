@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }
 const currentVersion = pkg.version
 const stableVersion = resolveStableVersion(currentVersion)
+const nextVersion = resolveNextMinorVersion(stableVersion)
 const currentBase = ''
 const stableBase = `/versions/${stableVersion}`
 const nextBase = '/next'
@@ -51,6 +52,15 @@ function resolveStableVersion(version: string): string {
     .split(/\r?\n/)
     .find((tag) => /^v\d+\.\d+\.\d+$/.test(tag))
   return latest ? latest.slice(1) : version
+}
+
+function resolveNextMinorVersion(version: string): string {
+  const match = version.match(/^(\d+)\.(\d+)\.(\d+)(-[\w.]+)?$/)
+  if (!match) return 'Next'
+  const major = Number(match[1])
+  const minor = Number(match[2])
+  if (!Number.isFinite(major) || !Number.isFinite(minor)) return 'Next'
+  return `${major}.${minor + 1}.0`
 }
 
 function listVersionDirs(): string[] {
@@ -436,7 +446,7 @@ export default defineConfig({
         text: 'Version',
         items: [
           { text: `Current (v${stableVersion})`, link: '/guide/introduction' },
-          { text: 'Next', link: `${nextBase}/guide/` },
+          { text: `Next (v${nextVersion})`, link: `${nextBase}/guide/` },
           ...archiveVersionItems,
         ],
       },

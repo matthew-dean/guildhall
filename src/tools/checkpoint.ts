@@ -9,6 +9,10 @@ import {
   type Task,
   type TaskStatus,
 } from '@guildhall/core'
+import {
+  getProjectTaskLocalHistoryDir,
+  inferProjectRootFromMemoryDir,
+} from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-33 Crash-safe task checkpointing
@@ -33,7 +37,7 @@ export const CHECKPOINTS_DIRNAME = 'tasks'
 
 /** Resolve the directory that holds a task's checkpoint. */
 export function checkpointDir(memoryDir: string, taskId: string): string {
-  return path.join(memoryDir, CHECKPOINTS_DIRNAME, taskId)
+  return getProjectTaskLocalHistoryDir(inferProjectRootFromMemoryDir(memoryDir), taskId)
 }
 
 /** Resolve the full path to a task's checkpoint file. */

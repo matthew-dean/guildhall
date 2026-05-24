@@ -41,6 +41,34 @@ describe('rich artifact protocol', () => {
     })
   })
 
+  it('compiles gh-table and gh-diagram component primitives', () => {
+    const result = compileRichArtifact({
+      contentType: 'guildhall-html-v1',
+      artifactKind: 'diagram',
+      title: 'System map',
+      html: `
+        <section>
+          <gh-table title="Signals"></gh-table>
+          <gh-diagram title="Flow" mode="flow">Request to Intake to Thread</gh-diagram>
+        </section>
+      `,
+      fallbackMarkdown: 'Request to Intake to Thread',
+      createdBy: 'coordinator-agent',
+      schemaVersion: 1,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.renderTree?.components).toContainEqual({
+      type: 'gh-table',
+      props: { title: 'Signals' },
+    })
+    expect(result.renderTree?.components).toContainEqual({
+      type: 'gh-diagram',
+      props: { title: 'Flow', mode: 'flow' },
+      text: 'Request to Intake to Thread',
+    })
+  })
+
   it('rejects raw dangerous HTML before it can become a renderable artifact', () => {
     const result = validateRichArtifact({
       contentType: 'guildhall-html-v1',

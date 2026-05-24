@@ -47,6 +47,18 @@
     ['Detail', task.mergeRecord?.detail ?? null],
   ])
 
+  const gitStoryLines = $derived<Array<readonly [string, string | null]>>([
+    ['State', task.gitStory?.state ? labelForIdentifier('status', task.gitStory.state).label : null],
+    ['Reason', task.gitStory?.reason ?? null],
+    ['Next action', task.gitStory?.nextAction ?? null],
+    ['Branch', task.gitStory?.branch ?? null],
+    ['Upstream', task.gitStory?.upstream ?? null],
+    ['Ahead / behind', task.gitStory ? `${task.gitStory.ahead ?? 0} / ${task.gitStory.behind ?? 0}` : null],
+    ['Changed files', task.gitStory ? String((task.gitStory.changedCount ?? 0) + (task.gitStory.untrackedCount ?? 0)) : null],
+    ['PR URL', task.gitStory?.pr?.url ?? null],
+    ['Inspected at', task.gitStory?.inspectedAt ?? null],
+  ])
+
   function toneForWarnings(warnings: ContextHealthWarning[]): 'default' | 'warn' | 'danger' {
     if (warnings.some((warning) => warning.severity === 'error')) return 'danger'
     if (warnings.some((warning) => warning.severity === 'warn')) return 'warn'
@@ -84,6 +96,24 @@
         </header>
         {#if task.shelveReason.detail}
           <p>{task.shelveReason.detail}</p>
+        {/if}
+      </Stack>
+    </Card>
+  {/if}
+
+  {#if task.gitStory && task.gitStory.state && task.gitStory.state !== 'clean'}
+    <Card title="Git story" tone={task.gitStory.state === 'conflict' || task.gitStory.state === 'unknown' ? 'danger' : task.gitStory.state === 'local_only' || task.gitStory.state === 'deferred' ? 'default' : 'warn'}>
+      <Stack gap="3">
+        <DefinitionList items={gitStoryLines} />
+        {#if task.gitStory.samplePaths?.length}
+          <div>
+            <h5>Changed paths</h5>
+            <ul>
+              {#each task.gitStory.samplePaths as file}
+                <li><code>{file}</code></li>
+              {/each}
+            </ul>
+          </div>
         {/if}
       </Stack>
     </Card>

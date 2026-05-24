@@ -224,7 +224,7 @@ describe('projectLeverInvariantError', () => {
 })
 
 describe('defaultAgentSettingsPath', () => {
-  it('builds the expected path under memory/', () => {
-    expect(defaultAgentSettingsPath('/tmp/proj')).toBe('/tmp/proj/memory/agent-settings.yaml')
+  it('builds the expected path under .guildhall/', () => {
+    expect(defaultAgentSettingsPath('/tmp/proj')).toBe('/tmp/proj/.guildhall/agent-settings.yaml')
   })
 })

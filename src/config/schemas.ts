@@ -106,6 +106,34 @@ const WorktreeConfig = z.object({
   include: z.array(z.string()).default([]),
 }).default({})
 
+export const GitStoryAutomationLevel = z.enum(['ask', 'auto', 'never'])
+export type GitStoryAutomationLevel = z.infer<typeof GitStoryAutomationLevel>
+
+export const GitStoryCompletionTarget = z.enum([
+  'leave_dirty',
+  'commit_local',
+  'push_branch',
+  'open_pr',
+  'merge_landing_branch',
+])
+export type GitStoryCompletionTarget = z.infer<typeof GitStoryCompletionTarget>
+
+export const GitStoryPolicy = z.object({
+  completionTarget: GitStoryCompletionTarget.default('open_pr'),
+  commit: GitStoryAutomationLevel.default('ask'),
+  push: GitStoryAutomationLevel.default('ask'),
+  pullRequest: GitStoryAutomationLevel.default('ask'),
+  merge: GitStoryAutomationLevel.default('ask'),
+  localOnlyAllowed: z.boolean().default(true),
+  deferAllowed: z.boolean().default(true),
+  requireCleanRelease: z.boolean().default(true),
+  allowForcePush: z.boolean().default(false),
+  allowSharedBranchRebase: z.boolean().default(false),
+  copiedFromSystemAt: z.string().optional(),
+  discoveredFrom: z.array(z.string()).default([]),
+}).default({})
+export type GitStoryPolicy = z.infer<typeof GitStoryPolicy>
+
 const WorkspaceProjectConfig = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/),
   label: z.string().optional(),
@@ -253,6 +281,11 @@ export const WorkspaceYamlConfig = z.object({
   // ignored/untracked runtime config such as `.env` or
   // `appsettings.local.yaml`; never inferred silently.
   worktree: WorktreeConfig.optional(),
+
+  // How Guildhall should close the git story after task work completes.
+  // Workspace config may pin a shared project preference; otherwise project
+  // discovery copies the system/global config into local project config.
+  gitStory: GitStoryPolicy.optional(),
 })
 export type WorkspaceYamlConfig = z.infer<typeof WorkspaceYamlConfig>
 
@@ -292,6 +325,11 @@ export const GlobalConfig = z.object({
   // to another paid/cloud provider. Default is deliberately false; projects
   // can opt in through their local .guildhall/config.yaml.
   allowPaidProviderFallback: z.boolean().default(false),
+
+  // Machine-wide default for how completed Guildhall work should be committed,
+  // pushed, or turned into PRs. New projects copy this into their local project
+  // policy during discovery, then can override per-repo.
+  gitStory: GitStoryPolicy.default({}),
 
   /**
    * Advanced override for reviewer persona fan-out. Omit to let Guildhall pick
@@ -496,6 +534,7 @@ export const ResolvedConfig = z.object({
   // when the lockfile hash changes; `successGates` verify testability.
   bootstrap: BootstrapConfig.optional(),
   worktree: WorktreeConfig.optional(),
+  gitStory: GitStoryPolicy.optional(),
 })
 export type ResolvedConfig = z.infer<typeof ResolvedConfig>
 

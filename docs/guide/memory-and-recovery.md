@@ -39,6 +39,12 @@ future inspection.
 
 ## Memory layers
 
+Guildhall uses two storage lanes. Compact shared state lives in `./.guildhall/`
+so another checkout can understand the same project without a fresh intake.
+Bulky or private history lives under `~/.guildhall/data/projects/<project-hash>/`
+so transcripts, checkpoints, debug snapshots, and full task evidence do not
+fill every pull request.
+
 Guildhall separates lessons by scope, because “remember this” can mean very
 different things:
 
