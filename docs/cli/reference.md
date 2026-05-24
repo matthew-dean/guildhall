@@ -121,7 +121,9 @@ Flags:
 - `--apply` — write changes. Without it, the command reports a dry run.
 - `--delete-source` — remove migrated legacy `./memory/` files after copying.
 - `--update-gitignore` — write or refresh Guildhall's managed `.gitignore`
-  block for shared `.guildhall` state and local/private ignores.
+  block for shared `.guildhall` state and local/private ignores. If this makes
+  an already tracked local/private file ignored, Guildhall removes it from the
+  Git index and leaves the local copy on disk; commit that deletion.
 
 ## `guildhall memory compact-project-state [path]`
 

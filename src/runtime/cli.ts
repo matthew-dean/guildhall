@@ -708,6 +708,9 @@ async function cmdMemory() {
       if (migration.gitignoreRoots.length > 0) {
         console.log(`[guildhall] .gitignore roots: ${migration.gitignoreRoots.join(', ')}`)
       }
+      if (migration.untrackedIgnoredFiles.length > 0) {
+        console.log(`[guildhall] Tracked ignored files removed from Git index: ${migration.untrackedIgnoredFiles.length}`)
+      }
     } else {
       console.log('[guildhall] Re-run with --apply to perform this migration.')
     }
@@ -747,6 +750,9 @@ async function cmdMemory() {
     console.log(`[guildhall] .gitignore updated: ${result.gitignoreUpdated ? 'yes' : 'no'}`)
     if (result.gitignoreRoots.length > 0) {
       console.log(`[guildhall] .gitignore roots: ${result.gitignoreRoots.join(', ')}`)
+    }
+    if (result.untrackedIgnoredFiles.length > 0) {
+      console.log(`[guildhall] Tracked ignored files removed from Git index: ${result.untrackedIgnoredFiles.length}`)
     }
     if (result.compaction) {
       console.log(`[guildhall] Terminal tasks archived: ${result.compaction.archivedTasks}`)

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
 
 import {
   getProjectContextDebugLedgerPath,
@@ -179,5 +180,34 @@ describe('migrateLegacyMemoryToLocalHistory', () => {
     expect(await fs.readFile(path.join(loomaRoot, '.gitignore'), 'utf8')).toContain('dist')
     expect(await fs.readFile(path.join(loomaRoot, '.gitignore'), 'utf8')).toContain('.guildhall/worktrees/')
     expect(await fs.readFile(path.join(knitRoot, '.gitignore'), 'utf8')).toContain('.guildhall/worktrees/')
+  })
+
+  it('stops tracking local Guildhall files that become ignored during migration', async () => {
+    await fs.mkdir(path.join(projectRoot, '.guildhall'), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, '.guildhall', 'config.yaml'), 'local: true\n', 'utf8')
+    await fs.writeFile(path.join(projectRoot, 'tracked-build.log'), 'keep tracked\n', 'utf8')
+    await fs.writeFile(path.join(projectRoot, '.gitignore'), 'tracked-build.log\n', 'utf8')
+    execFileSync('git', ['init'], { cwd: projectRoot, stdio: 'ignore' })
+    execFileSync('git', ['add', '-f', '.guildhall/config.yaml', 'tracked-build.log'], { cwd: projectRoot, stdio: 'ignore' })
+
+    const result = await migrateLegacyMemoryToLocalHistory({
+      projectRoot,
+      dryRun: false,
+      deleteSource: false,
+      updateGitignore: true,
+    })
+
+    expect(result.untrackedIgnoredFiles).toContain('.guildhall/config.yaml')
+    await expect(fs.access(path.join(projectRoot, '.guildhall', 'config.yaml'))).resolves.toBeUndefined()
+    const tracked = execFileSync('git', ['ls-files', '.guildhall/config.yaml'], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+    }).trim()
+    expect(tracked).toBe('')
+    const unrelatedTracked = execFileSync('git', ['ls-files', 'tracked-build.log'], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+    }).trim()
+    expect(unrelatedTracked).toBe('tracked-build.log')
   })
 })

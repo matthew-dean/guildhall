@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 
 import {
   getProjectContextDebugLedgerPath,
@@ -13,10 +15,13 @@ import {
 } from '@guildhall/sessions'
 import {
   applyGuildhallGitignorePolicy,
+  LOCAL_PROJECT_STATE_GITIGNORE_ENTRIES,
   readWorkspaceConfig,
   type WorkspaceYamlConfig,
 } from '@guildhall/config'
 import { compactProjectState, type ProjectStateCompactionResult } from './project-state-compaction.js'
+
+const execFileP = promisify(execFile)
 
 export interface MemoryMigrationCopy {
   source: string
@@ -40,6 +45,7 @@ export interface MemoryMigrationResult {
   deleted: number
   gitignoreUpdated: boolean
   gitignoreRoots: string[]
+  untrackedIgnoredFiles: string[]
   compaction: ProjectStateCompactionResult | null
 }
 
@@ -330,6 +336,51 @@ async function updateGitignores(projectRoot: string): Promise<string[]> {
   return updated
 }
 
+async function listTrackedIgnoredFiles(gitRoot: string): Promise<string[]> {
+  if (!existsSync(path.join(gitRoot, '.git'))) return []
+  try {
+    const { stdout } = await execFileP(
+      'git',
+      ['ls-files', '-ci', '--exclude-standard', '-z'],
+      { cwd: gitRoot, maxBuffer: 1024 * 1024 * 10 },
+    )
+    return stdout
+      .split('\0')
+      .map(file => file.trim())
+      .filter(Boolean)
+      .filter(isGuildhallLocalIgnoredFile)
+  } catch {
+    return []
+  }
+}
+
+function isGuildhallLocalIgnoredFile(file: string): boolean {
+  const normalized = file.replace(/\\/g, '/').replace(/^\.\//, '')
+  return LOCAL_PROJECT_STATE_GITIGNORE_ENTRIES
+    .filter(entry => !entry.startsWith('#'))
+    .some((entry) => {
+      const pattern = entry.replace(/\\/g, '/').replace(/^\.\//, '')
+      return pattern.endsWith('/')
+        ? normalized.startsWith(pattern)
+        : normalized === pattern
+    })
+}
+
+async function stopTrackingIgnoredFiles(gitRoots: string[]): Promise<string[]> {
+  const untracked: string[] = []
+  for (const gitRoot of gitRoots) {
+    const files = await listTrackedIgnoredFiles(gitRoot)
+    if (files.length === 0) continue
+    await execFileP(
+      'git',
+      ['rm', '--cached', '--ignore-unmatch', '--', ...files],
+      { cwd: gitRoot, maxBuffer: 1024 * 1024 * 10 },
+    )
+    untracked.push(...files)
+  }
+  return untracked
+}
+
 export async function migrateLegacyMemoryToLocalHistory(
   opts: MemoryMigrationOptions,
 ): Promise<MemoryMigrationResult> {
@@ -342,6 +393,7 @@ export async function migrateLegacyMemoryToLocalHistory(
   let copied = 0
   let deleted = 0
   let gitignoreRoots: string[] = []
+  let untrackedIgnoredFiles: string[] = []
   let compaction: ProjectStateCompactionResult | null = null
 
   if (!dryRun) {
@@ -359,6 +411,7 @@ export async function migrateLegacyMemoryToLocalHistory(
     }
     if (opts.updateGitignore) {
       gitignoreRoots = await updateGitignores(projectRoot)
+      untrackedIgnoredFiles = await stopTrackingIgnoredFiles(gitignoreRoots)
     }
     compaction = await compactProjectState({ projectRoot, dryRun: false })
   }
@@ -373,6 +426,7 @@ export async function migrateLegacyMemoryToLocalHistory(
     deleted,
     gitignoreUpdated: gitignoreRoots.length > 0,
     gitignoreRoots,
+    untrackedIgnoredFiles,
     compaction,
   }
 }

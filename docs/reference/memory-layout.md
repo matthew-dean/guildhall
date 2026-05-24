@@ -93,6 +93,11 @@ the old root `memory/` directory. It also compacts the shared state it just
 created, archiving terminal tasks into sharded files and moving heartbeat
 progress into local history.
 
+When `--update-gitignore` makes a previously committed local/private file
+ignored, the migration also removes that file from the Git index while leaving
+the working-tree copy in place. Commit the resulting deletion so future clones
+stop tracking machine-local Guildhall state.
+
 You can run the same compaction later as a maintenance step:
 
 ```sh
