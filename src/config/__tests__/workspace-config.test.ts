@@ -131,6 +131,52 @@ describe('workspace-config', () => {
       expect(() => readWorkspaceConfig(wsDir)).toThrow(/guildhall.yaml not found/)
     })
 
+    it('keeps project-shaped settings on child projects in a workspace', () => {
+      const wsDir = join(TMP, 'workspace-child-settings')
+      mkdirSync(wsDir)
+
+      writeWorkspaceConfig(wsDir, {
+        name: 'Workspace Child Settings',
+        id: 'workspace-child-settings',
+        kind: 'workspace',
+        projects: [
+          {
+            id: 'looma',
+            path: 'looma',
+            bootstrap: {
+              commands: ['pnpm install'],
+              successGates: ['pnpm lint'],
+            },
+            worktree: {
+              include: ['.env'],
+            },
+            gitStory: {
+              completionTarget: 'open_pr',
+              commit: 'ask',
+              push: 'auto',
+              pullRequest: 'ask',
+            },
+          },
+          {
+            id: 'knit',
+            path: 'knit',
+          },
+        ],
+      } as any)
+
+      const parsed = readWorkspaceConfig(wsDir)
+      expect(parsed.kind).toBe('workspace')
+      expect(parsed.bootstrap).toBeUndefined()
+      expect(parsed.worktree).toBeUndefined()
+      expect(parsed.gitStory).toBeUndefined()
+      expect(parsed.projects[0]?.bootstrap?.successGates).toEqual(['pnpm lint'])
+      expect(parsed.projects[0]?.worktree?.include).toEqual(['.env'])
+      expect(parsed.projects[0]?.gitStory?.push).toBe('auto')
+      expect(parsed.projects[1]?.bootstrap).toBeUndefined()
+      expect(parsed.projects[1]?.worktree).toBeUndefined()
+      expect(parsed.projects[1]?.gitStory).toBeUndefined()
+    })
+
     it('explains YAML parse and schema validation failures', () => {
       const parseDir = join(TMP, 'bad-yaml')
       mkdirSync(parseDir)

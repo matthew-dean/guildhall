@@ -9,6 +9,7 @@ import type { Task } from '@guildhall/core'
 import { writeCheckpoint } from '@guildhall/tools'
 import { proposeProjectSkill, activateProjectSkillProposal } from '@guildhall/skills'
 import { loadCodebaseMap, saveCodebaseMap, type CodebaseMap } from '@guildhall/corpus-map'
+import { getProjectTaskLocalHistoryDir } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // Context builder tests (AC-04)
@@ -571,7 +572,7 @@ describe('buildContext — task summary', () => {
 
   it('surfaces the latest checkpoint and uses its touched files as likely targets for resumed tasks', async () => {
     const worktreePath = path.join(tmpDir, 'worktree')
-    const memoryTasksDir = path.join(tmpDir, 'tasks', 'task-001')
+    const memoryTasksDir = getProjectTaskLocalHistoryDir(tmpDir, 'task-001')
     await fs.mkdir(worktreePath, { recursive: true })
     await fs.mkdir(memoryTasksDir, { recursive: true })
     await fs.writeFile(
@@ -619,7 +620,7 @@ describe('buildContext — task summary', () => {
 
   it('ignores stale checkpoints written before the task was updated', async () => {
     const worktreePath = path.join(tmpDir, 'worktree')
-    const memoryTasksDir = path.join(tmpDir, 'tasks', 'task-001')
+    const memoryTasksDir = getProjectTaskLocalHistoryDir(tmpDir, 'task-001')
     await fs.mkdir(worktreePath, { recursive: true })
     await fs.mkdir(memoryTasksDir, { recursive: true })
     await fs.writeFile(

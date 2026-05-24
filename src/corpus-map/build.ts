@@ -253,7 +253,7 @@ function buildAbstractions(files: CorpusFileEntry[], designSystem?: CorpusDesign
       id: 'design-system',
       title: 'Design system tokens and primitives',
       kind: 'design-system',
-      canonicalPath: designSystem.sourcePath ?? 'memory/design-system.yaml',
+      canonicalPath: designSystem.sourcePath ?? '.guildhall/design-system.yaml',
       useWhen: [
         'A UI change introduces color, spacing, typography, radius, shadow, copy voice, accessibility, or reusable component behavior.',
         'Use just-in-time systemization: extend shared tokens or primitives when repetition is stable or the same UI idea appears in multiple places.',
@@ -276,6 +276,7 @@ async function loadDesignSystemSummary(
   files: Record<string, CorpusFileEntry>,
 ): Promise<CorpusDesignSystemSummary | undefined> {
   const sourcePath = path.join(memoryDir, 'design-system.yaml')
+  const sourceLabel = `${path.basename(memoryDir)}/design-system.yaml`
   const componentFiles = Object.keys(files)
     .filter((file) =>
       (file.endsWith('.svelte') || file.endsWith('.vue') || file.endsWith('.tsx')) &&
@@ -301,7 +302,7 @@ async function loadDesignSystemSummary(
       ...ds.tokens.shadow.map((token) => `shadow.${token.name}=${token.value}`),
     ].slice(0, 16)
     const summary: CorpusDesignSystemSummary = {
-      sourcePath: 'memory/design-system.yaml',
+      sourcePath: sourceLabel,
       revision: ds.revision,
       approved: Boolean(ds.approvedAt),
       tokenCounts,

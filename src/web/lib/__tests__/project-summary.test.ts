@@ -48,6 +48,7 @@ describe('summarizeProjects', () => {
         maturityDescription: 'Some work needs triage before Guildhall can treat the project as flowing cleanly.',
         blurb: 'Guildhall runs autonomous engineering workflows over local projects.',
         tags: ['cli', 'orchestrator'],
+        gitStory: null,
         counts: { total: 10, active: 2, draftReview: 0, blocked: 1, done: 6, shelved: 1 },
         taskActivity: {
           windowLabel: 'Last 30 days',

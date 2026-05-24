@@ -20,7 +20,7 @@ decision live in one place.
 - **Thread**: the command surface. Setup prompts, spec approvals, live worker trouble, and “you need to answer this now” all gather here.
 - **Work**: the queue and movement surface. This is where you judge whether the guild is making progress or just manufacturing elegant confusion.
 - **Release**: the verdict lane. If something is about to ship, this surface
-  tells you why it deserves the privilege.
+  tells you why it deserves the privilege, including unresolved Git stories.
 - **Settings**: the setup and behavior layer. Ready checks, Providers,
   Coordinators, Facts, Memory, Advanced settings, and the knobs that determine
   how much autonomy the guild gets.
@@ -30,6 +30,8 @@ decision live in one place.
 - Make the next real action obvious
 - Keep your questions and the run's progress in the same narrative lane
 - Surface release and reviewer state before it becomes an unpleasant surprise
+- Keep Git closure visible when work is dirty, local-only, deferred, pushed,
+  waiting on a PR, or blocked by a conflict
 - Let you drill into transcripts and provenance without leaving the shell
 
 ![Guildhall task drawer showing transcript, spec, history, and provenance.](../assets/ui-audit/0-7-0/task-drawer.png)
@@ -42,6 +44,24 @@ decision live in one place.
 
 - Left-rail shell structure
 - Task drawer inspection model
-- Release and reviewer visibility
+- Release, reviewer, and Git Story visibility
+
+## Thread as the intake lane
+
+Thread is where New Request routing and Pressure-Test Intake show up. A broad
+release or feature ask becomes a **New request** card, then a sequence of
+**Pressure-test question** cards. Each question is answered in place, one at a
+time, with evidence and the reason Guildhall is asking.
+
+Those answers are not trapped in the transcript. They update persisted intake
+state so the eventual spec can name assumptions, decisions, deferrals, and the
+domains that were actually covered.
+
+## Release as the closure lane
+
+Release readiness now treats Git state as part of the verdict. Dirty files,
+local commits, branches without upstreams, pending PRs, skipped merges, stale
+task worktrees, and unknown inspection failures are blockers until you close
+them or deliberately mark them local-only or deferred.
 
 > Still tightening: some denser views need stronger grouping, better type rhythm, and calmer summary bands. The shell already tells the truth; now it needs to tell it with more grace.

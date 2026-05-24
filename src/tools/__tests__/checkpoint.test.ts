@@ -13,6 +13,7 @@ import {
   RECLAIM_AUTO_ESCALATE_MS,
 } from '../checkpoint.js'
 import { Checkpoint, type Task } from '@guildhall/core'
+import { getProjectTaskLocalHistoryDir } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-33 crash-safe checkpointing tests.
@@ -27,6 +28,7 @@ import { Checkpoint, type Task } from '@guildhall/core'
 // ---------------------------------------------------------------------------
 
 let tmpDir: string
+let dataDir: string
 let memoryDir: string
 let tasksPath: string
 
@@ -65,14 +67,18 @@ async function writeSeed(tasks: Task[]): Promise<void> {
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-checkpoint-'))
-  memoryDir = path.join(tmpDir, 'memory')
-  tasksPath = path.join(tmpDir, 'TASKS.json')
+  dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
+  process.env.GUILDHALL_DATA_DIR = dataDir
+  memoryDir = path.join(tmpDir, '.guildhall')
+  tasksPath = path.join(memoryDir, 'TASKS.json')
   await fs.mkdir(memoryDir, { recursive: true })
   await writeSeed([seedTask()])
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
+  await fs.rm(dataDir, { recursive: true, force: true })
 })
 
 describe('writeCheckpoint', () => {
@@ -88,7 +94,7 @@ describe('writeCheckpoint', () => {
     expect(result.success).toBe(true)
     expect(result.step).toBe(1)
     expect(result.path).toBe(
-      path.join(memoryDir, 'tasks', 'task-001', 'checkpoint.json'),
+      path.join(getProjectTaskLocalHistoryDir(tmpDir, 'task-001'), 'checkpoint.json'),
     )
     const raw = await fs.readFile(result.path!, 'utf-8')
     const parsed = Checkpoint.parse(JSON.parse(raw))
@@ -251,7 +257,7 @@ describe('writeCheckpoint', () => {
       intent: 'x',
       nextPlannedAction: 'x',
     })
-    const dir = path.join(memoryDir, 'tasks', 'task-001')
+    const dir = getProjectTaskLocalHistoryDir(tmpDir, 'task-001')
     const entries = await fs.readdir(dir)
     expect(entries).toEqual(['checkpoint.json'])
   })

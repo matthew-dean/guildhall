@@ -19,6 +19,24 @@ a routing map to decide:
 That map is there to keep work pointed in the right direction. You usually do
 not need to manage it directly.
 
+## What New Request can become
+
+The New Request path uses routing before Guildhall creates work. A request can
+become:
+
+- a normal task brief;
+- a Pressure-Test Intake for a broad release or feature;
+- a project question;
+- a settings proposal;
+- a practice or review-lens proposal;
+- repair triage;
+- a clarification card.
+
+If the request contains more than one intent, Guildhall splits it into
+reviewable actions. If a similar card already exists, it can reuse that card so
+the project does not grow a second copy of the same conversation in a fake
+moustache.
+
 ## What the routing map is for
 
 Guildhall still needs a stable way to tell:

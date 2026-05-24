@@ -25,6 +25,7 @@ import {
   makeDefaultSettings,
   saveLeverSettings,
 } from '@guildhall/levers'
+import { getProjectTranscriptPath } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-14 coordinator bootstrapping via meta-intake
@@ -37,18 +38,23 @@ import {
 // ---------------------------------------------------------------------------
 
 let tmpDir: string
+let dataDir: string
 let memoryDir: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-meta-intake-'))
+  dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
+  process.env.GUILDHALL_DATA_DIR = dataDir
   // Bootstrap a fresh workspace with no coordinators — this is the common
   // entry point for meta-intake.
   bootstrapWorkspace(tmpDir, { name: 'Meta Intake Test' })
-  memoryDir = path.join(tmpDir, 'memory')
+  memoryDir = path.join(tmpDir, '.guildhall')
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
+  await fs.rm(dataDir, { recursive: true, force: true })
 })
 
 async function readQueue(): Promise<TaskQueue> {
@@ -99,7 +105,7 @@ describe('createMetaIntakeTask', () => {
     expect(result.taskId).toBe(META_INTAKE_TASK_ID)
     expect(result.alreadyExists).toBe(false)
     expect(result.transcriptPath).toBe(
-      path.join(memoryDir, 'exploring', `${META_INTAKE_TASK_ID}.md`),
+      getProjectTranscriptPath(tmpDir, 'exploring', META_INTAKE_TASK_ID),
     )
 
     const queue = await readQueue()
@@ -111,9 +117,9 @@ describe('createMetaIntakeTask', () => {
   })
 
   it('writes the seed message into the exploring transcript', async () => {
-    await createMetaIntakeTask({ memoryDir, projectPath: tmpDir })
+    const result = await createMetaIntakeTask({ memoryDir, projectPath: tmpDir })
     const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', `${META_INTAKE_TASK_ID}.md`),
+      result.transcriptPath,
       'utf-8',
     )
     expect(transcript).toContain('internal routing slices')
@@ -131,13 +137,13 @@ describe('createMetaIntakeTask', () => {
   })
 
   it('honors a custom seed message when provided', async () => {
-    await createMetaIntakeTask({
+    const result = await createMetaIntakeTask({
       memoryDir,
       projectPath: tmpDir,
       seedMessage: 'CUSTOM SEED PROMPT',
     })
     const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', `${META_INTAKE_TASK_ID}.md`),
+      result.transcriptPath,
       'utf-8',
     )
     expect(transcript).toContain('CUSTOM SEED PROMPT')

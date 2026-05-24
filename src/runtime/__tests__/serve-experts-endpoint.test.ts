@@ -89,7 +89,7 @@ async function seedDesignSystem(): Promise<void> {
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-experts-'))
   bootstrapWorkspace(tmpDir, { name: 'Experts Endpoint Test' })
-  memoryDir = path.join(tmpDir, 'memory')
+  memoryDir = path.join(tmpDir, '.guildhall')
 })
 
 afterEach(async () => {

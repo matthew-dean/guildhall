@@ -56,7 +56,7 @@ describe('project artifact registry', () => {
 
     const entries = readFileSync(join(project, '.gitignore'), 'utf8').split(/\r?\n/).filter(Boolean)
     expect(entries).toContain('!.guildhall/')
-    expect(entries).toContain('!.guildhall/*.yaml')
+    expect(entries).toContain('!.guildhall/**')
     expect(entries).toContain('.guildhall/config.yaml')
     expect(entries).not.toContain('.guildhall/*')
   })

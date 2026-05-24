@@ -41,6 +41,25 @@ small, a compact durable task record lands under `./.guildhall/tasks/archive/`,
 and full evidence such as notes, review verdicts, adjudications, gate history,
 and issue details moves to local history under `~/.guildhall/data/projects/`.
 
+## Git closure after done
+
+`done` means the task passed its workflow. It does not automatically mean the
+Git story is closed.
+
+After work completes, Guildhall inspects the project or task worktree and shows
+whether changes are dirty, committed only locally, missing an upstream, pushed,
+in an open PR, merged, local-only, deferred, conflicted, or unknown. Release
+readiness blocks on unresolved Git stories so a task cannot silently look
+finished while its branch is still wandering around with a backpack.
+
+Closure actions are controlled by the project's Git Story policy. Guildhall may
+commit, push, or open a PR only when that policy allows it. The default is to
+ask; if the project policy says `commit: auto`, completed task work can be
+auto-committed with a Commit Story message. Local-only and deferred closures
+need a reason so intentional leftovers do not look like forgotten ones.
+
+See [Git Story Closure](./git-story-closure).
+
 ## Stage-appropriate spec fidelity
 
 The [`spec_completeness`](../levers/spec-completeness) lever controls how complete a spec must be at each stage:

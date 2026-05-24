@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { dump as yamlDump, load as yamlLoad } from 'js-yaml'
 import { TaskQueue, type Task } from '@guildhall/core'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, getProjectTranscriptPath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 import { readWorkspaceConfig, writeWorkspaceConfig } from '@guildhall/config'
 import { appendExploringTranscript } from '@guildhall/tools'
 import {
@@ -195,11 +195,8 @@ async function writeMetaIntakeTranscript(
   memoryDir: string,
   seedMessage?: string,
 ): Promise<string> {
-  const transcriptPath = path.join(
-    memoryDir,
-    'exploring',
-    `${META_INTAKE_TASK_ID}.md`,
-  )
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  const transcriptPath = getProjectTranscriptPath(projectRoot, 'exploring', META_INTAKE_TASK_ID)
   await fs.mkdir(path.dirname(transcriptPath), { recursive: true })
   await fs.writeFile(transcriptPath, `${seedMessage ?? META_INTAKE_SEED}\n`, 'utf-8')
   return transcriptPath
@@ -216,10 +213,10 @@ export async function createMetaIntakeTask(
   const queue = await readQueue(input.memoryDir)
   const existing = queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)
 
-  const transcriptPath = path.join(
-    input.memoryDir,
+  const transcriptPath = getProjectTranscriptPath(
+    input.projectPath,
     'exploring',
-    `${META_INTAKE_TASK_ID}.md`,
+    META_INTAKE_TASK_ID,
   )
 
   if (existing) {

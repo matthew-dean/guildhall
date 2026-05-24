@@ -560,12 +560,12 @@ describe('ProjectView', () => {
     await waitFor(() => {
       expect(topbar).not.toHaveTextContent('Projects')
     })
-    expect(topbar).not.toHaveTextContent('New task')
+    expect(topbar).not.toHaveTextContent('New request')
     expect(topbar).not.toHaveTextContent('Start')
     expect(topbar).not.toHaveTextContent('Needs you')
   })
 
-  it('moves New task into the overflow menu at narrow toolbar widths', async () => {
+  it('moves New request into the overflow menu at narrow toolbar widths', async () => {
     const user = userEvent.setup()
     installViewportMatchMedia(600)
 
@@ -574,9 +574,9 @@ describe('ProjectView', () => {
     render(ProjectView, { initialView: 'thread', initialSub: null, projectId: 'looma-knit' })
     await waitFor(() => expect(screen.getByRole('button', { name: 'Open actions menu' })).toBeInTheDocument())
 
-    expect(screen.queryByRole('button', { name: 'New task' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'New request' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Open actions menu' }))
-    expect(screen.getByRole('button', { name: 'New task' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New request' })).toBeInTheDocument()
   })
 
   it('labels a running one-task pass as Stop 1 and stops the scoped project run', async () => {

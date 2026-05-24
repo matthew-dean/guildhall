@@ -5,6 +5,7 @@ import {
   inspectGitStory,
   summarizeGitStories,
 } from '../git-story.js'
+import { effectiveGitStoryPolicy } from '../git-story-policy.js'
 
 describe('classifyGitStoryState', () => {
   it('reports dirty work before unpublished commits', () => {
@@ -32,6 +33,17 @@ describe('classifyGitStoryState', () => {
       ahead: 2,
       hasUpstream: true,
     })).toBe('committed_local')
+  })
+
+  it('treats a clean main branch with an upstream as closed', () => {
+    expect(classifyGitStoryState({
+      changedCount: 0,
+      untrackedCount: 0,
+      ahead: 0,
+      hasUpstream: true,
+      branch: 'main',
+      upstream: 'origin/main',
+    })).toBe('clean')
   })
 
   it('reports open PR before pushed', () => {
@@ -132,5 +144,58 @@ describe('inspectGitStory', () => {
     expect(snapshot.state).toBe('local_only')
     expect(summary.ready).toBe(true)
     expect(summary.blockers).toEqual([])
+  })
+})
+
+describe('effectiveGitStoryPolicy', () => {
+  it('prefers the matching workspace child project policy for task git closure', () => {
+    const policy = effectiveGitStoryPolicy({
+      workspacePath: '/workspace',
+      workspaceProjectPath: '/workspace',
+      workspaceGitStory: {
+        completionTarget: 'open_pr',
+        commit: 'ask',
+        push: 'ask',
+        pullRequest: 'ask',
+        merge: 'ask',
+        localOnlyAllowed: true,
+        deferAllowed: true,
+        requireCleanRelease: true,
+        allowForcePush: false,
+        allowSharedBranchRebase: false,
+        discoveredFrom: [],
+      },
+      workspaceProjects: [
+        {
+          id: 'looma',
+          path: '/workspace/looma',
+          gitStory: {
+            completionTarget: 'open_pr',
+            commit: 'auto',
+            push: 'ask',
+            pullRequest: 'ask',
+            merge: 'ask',
+            localOnlyAllowed: true,
+            deferAllowed: true,
+            requireCleanRelease: true,
+            allowForcePush: false,
+            allowSharedBranchRebase: false,
+            discoveredFrom: [],
+          },
+        },
+        {
+          id: 'knit',
+          path: '/workspace/knit',
+        },
+      ],
+      task: {
+        domain: 'looma',
+        projectPath: '/workspace/looma',
+      },
+    })
+
+    expect(policy.commit).toBe('auto')
+    expect(policy.policyRoot).toBe('/workspace/looma')
+    expect(policy.source).toBe('workspace-project')
   })
 })

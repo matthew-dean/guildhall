@@ -369,7 +369,7 @@
             </Button>
           </div>
         {:else}
-          <p class="muted">No tasks yet — <strong>New task</strong> to begin.</p>
+          <p class="muted">No tasks yet — <strong>New request</strong> to begin.</p>
         {/if}
       {:else}
         <div class="task-table-wrap">

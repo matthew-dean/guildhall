@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { bootstrapWorkspace } from '@guildhall/config'
+import { bootstrapWorkspace, writeWorkspaceConfig } from '@guildhall/config'
 import {
   getProjectContextDebugLedgerPath,
   getProjectRecentEventsPath,
@@ -492,6 +492,46 @@ it('hides placeholder checkpoint next-action values in task detail responses', a
 })
 
 describe('POST /api/project/task/:id/git-story/:closureAction', () => {
+  it('uses the matching workspace child gitStory policy for task git actions', async () => {
+    const loomaPath = path.join(tmpDir, 'looma')
+    await fs.mkdir(loomaPath, { recursive: true })
+    writeWorkspaceConfig(tmpDir, {
+      name: 'Task Endpoints Test',
+      id: projectId,
+      kind: 'workspace',
+      projects: [
+        {
+          id: 'looma',
+          path: 'looma',
+          gitStory: {
+            completionTarget: 'open_pr',
+            commit: 'never',
+            push: 'ask',
+            pullRequest: 'ask',
+            merge: 'ask',
+            localOnlyAllowed: true,
+            deferAllowed: true,
+            requireCleanRelease: true,
+            allowForcePush: false,
+            allowSharedBranchRebase: false,
+            discoveredFrom: [],
+          },
+        },
+      ],
+    } as any)
+    await seedTask('task-1', { status: 'done', domain: 'looma', projectPath: loomaPath })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1/git-story/commit'), {
+      method: 'POST',
+      body: JSON.stringify({ confirmed: true, message: 'test', files: ['src/a.ts'] }),
+      headers: { 'content-type': 'application/json' },
+    }))
+
+    expect(res.status).toBe(403)
+    expect(await res.json()).toMatchObject({ error: 'Project policy disables commit.' })
+  })
+
   it('records a local-only git story override with a required reason', async () => {
     await seedTask('task-1', { status: 'done' })
     const { app } = buildServeApp({ projectPath: tmpDir })

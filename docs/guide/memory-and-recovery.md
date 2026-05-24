@@ -59,6 +59,19 @@ Project facts do not silently become global preferences. Product ideas do not
 silently change how Guildhall runs. If a behavior would increase autonomy or
 apply more broadly, it needs explicit approval.
 
+Cross-project preferences use a flexible shape instead of a fixed list of
+software categories. A preference can describe a package manager, a game engine,
+a writing tone, a release habit, or any other subject Guildhall has evidence
+for. The useful parts are the same: what area the preference belongs to, what
+you prefer, what you avoid, how strong the signal is, and whether there are
+exceptions.
+
+For example, one preference might say you prefer `pnpm` and avoid `npm` for
+JavaScript package management. Another might say you prefer a lightweight game
+engine and avoid an editor-first engine unless the project already uses it.
+Guildhall keeps those as suggestions until you choose to use them everywhere or
+only in the current project.
+
 ## Memory and habits
 
 Open **Settings -> Memory** inside a project to review what Guildhall wants to

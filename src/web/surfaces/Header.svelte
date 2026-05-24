@@ -1,7 +1,7 @@
 <!--
   Global app header. Trimmed to the workspace-level brand + the SSE live
   indicator. Project-level controls (name chip, run status, Start/Stop,
-  New Task) live inside ProjectView's top bar now. Providers navigation
+  New request) live inside ProjectView's top bar now. Providers navigation
   moved to the bottom of the left rail.
 -->
 <script lang="ts">

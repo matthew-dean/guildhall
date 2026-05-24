@@ -554,6 +554,76 @@ users still click **New Task**, but Guildhall may create a release intake,
 feature spec, investigation, memory candidate, or ordinary task depending on
 what the user is actually trying to do.
 
+### Global Preference Review
+
+Pressure-Test Intake stays focused on the thing being specified, but coordinators
+also need a small zoom-out move for user-wide preferences. Guildhall should run
+Global Preference Review when:
+
+- the user states a broad preference directly, such as a preferred tool, avoided
+  framework, favorite runtime, genre taste, art-direction dislike, review style,
+  or recurring "please never do that again";
+- several project-level corrections point at the same durable preference;
+- a new project asks Guildhall to choose a stack, engine, toolchain, style, or
+  process where an existing user preference might apply;
+- a coordinator is about to promote a project habit into a cross-project default.
+
+The review should mostly synthesize evidence automatically. It should ask at
+most one or two questions, and only when the answer changes future behavior. A
+good question names the evidence and asks for scope:
+
+> I have seen you prefer `pnpm` over `npm` and avoid React/Tailwind-style UI
+> defaults. Should I treat that as a global software preference, only a habit
+> for this workspace, or just context for this project?
+
+Global Preference Review should not become a first-run personality quiz. During
+the first project setup, Guildhall may explain that reusable preferences will be
+suggested when evidence appears, then keep going with the project intake.
+Questions should appear when the preference matters, not because a form has an
+empty slot.
+
+Structured preferences should use a generic envelope with an open taxonomy, not
+web-development-specific keys:
+
+```yaml
+kind: preference
+subject:
+  domain: game-development
+  area: engine
+  item: runtime
+position:
+  prefer:
+    - item: Godot
+      strength: strong
+    - item: Bevy
+      strength: medium
+  avoid:
+    - item: Unity
+      strength: strong
+      exceptions:
+        - existing Unity project
+        - user explicitly asks for Unity
+    - item: Unreal Blueprints
+      strength: medium
+  ranking: ordered
+scope: user_global
+approvalState: suggested
+```
+
+Stable fields are `kind`, `subject`, `position`, `scope`, `confidence`,
+`sourceEvidence`, and `approvalState`. The `subject` taxonomy is dynamic:
+software, game-development, writing, product-design, infrastructure, research,
+management, and future domains should all fit without schema changes.
+
+`prefer` and `avoid` are arrays. Each item may carry a strength and exceptions.
+Ordering is explicit: if order matters, set `ranking: ordered`; otherwise the
+list is a set of preferences rather than a priority ladder.
+
+Nothing broad should silently become active. A direct user instruction can create
+a suggested global preference with high confidence, but applying it everywhere
+still requires approval through Memory unless the user explicitly says to use it
+globally now.
+
 ### Domain Map
 
 Before asking the user anything, Guildhall should draft a domain map for the
@@ -822,6 +892,7 @@ Pressure-Test Intake can produce:
 - task splits;
 - project memory candidates;
 - language-map entries;
+- structured global preference candidates;
 - design-system notes;
 - suggested levers;
 - architecture notes or ADR candidates;

@@ -11,17 +11,23 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
+import { getProjectStateDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 
 let tmpDir: string
+let dataDir: string
 let projectId: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-wizards-'))
+  dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
+  process.env.GUILDHALL_DATA_DIR = dataDir
   projectId = bootstrapWorkspace(tmpDir, { name: 'Wizards Test' }).id ?? path.basename(tmpDir)
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
+  await fs.rm(dataDir, { recursive: true, force: true })
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -57,7 +63,7 @@ describe('GET /api/project/wizards', () => {
 })
 
 describe('POST /api/project/wizards/:id/skip', () => {
-  it('marks a skippable step as skipped and writes memory/wizards.yaml', async () => {
+  it('marks a skippable step as skipped and writes .guildhall/wizards.yaml', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
       new Request(projectUrl('/api/project/wizards/onboard/skip'), {
@@ -67,7 +73,7 @@ describe('POST /api/project/wizards/:id/skip', () => {
       }),
     )
     expect(res.status).toBe(200)
-    expect(existsSync(path.join(tmpDir, 'memory', 'wizards.yaml'))).toBe(true)
+    expect(existsSync(path.join(getProjectStateDir(tmpDir), 'wizards.yaml'))).toBe(true)
 
     // Next GET reflects the skip.
     const res2 = await app.fetch(new Request('http://localhost/api/project/wizards'))
@@ -208,7 +214,7 @@ describe('GET /api/project/brief', () => {
 })
 
 describe('POST /api/project/brief', () => {
-  it('writes memory/project-brief.md when content is substantive', async () => {
+  it('writes .guildhall/project-brief.md when content is substantive', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
       new Request(projectUrl('/api/project/brief'), {
@@ -221,7 +227,7 @@ describe('POST /api/project/brief', () => {
       }),
     )
     expect(res.status).toBe(200)
-    const briefPath = path.join(tmpDir, 'memory', 'project-brief.md')
+    const briefPath = path.join(getProjectStateDir(tmpDir), 'project-brief.md')
     expect(existsSync(briefPath)).toBe(true)
     expect(readFileSync(briefPath, 'utf8')).toMatch(/## Users/)
 

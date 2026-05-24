@@ -28,7 +28,13 @@ import { appendFailureClassificationNote, classifyAgentFailure } from '../policy
 import { commandEvidence, touchedFiles } from './policy-fixtures.js'
 import { readProjectLearning } from '../learning.js'
 import { loadCodebaseMap } from '@guildhall/corpus-map'
-import { getProjectProgressHeartbeatsPath } from '@guildhall/sessions'
+import {
+  getProjectContextDebugLedgerPath,
+  getProjectLocalHistoryDir,
+  getProjectProgressHeartbeatsPath,
+  getProjectTaskLocalHistoryDir,
+  getProjectTranscriptPath,
+} from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // Orchestrator feedback-loop tests
@@ -41,14 +47,17 @@ import { getProjectProgressHeartbeatsPath } from '@guildhall/sessions'
 // ---------------------------------------------------------------------------
 
 let tmpDir: string
+let dataDir: string
 let memoryDir: string
 let tasksPath: string
 let progressPath: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-orch-test-'))
-  process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, 'data')
-  memoryDir = path.join(tmpDir, 'memory')
+  dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
+  process.env.GUILDHALL_CONFIG_DIR = path.join(dataDir, 'config')
+  process.env.GUILDHALL_DATA_DIR = dataDir
+  memoryDir = path.join(tmpDir, '.guildhall')
   await fs.mkdir(memoryDir, { recursive: true })
   tasksPath = path.join(memoryDir, 'TASKS.json')
   progressPath = path.join(memoryDir, 'PROGRESS.md')
@@ -86,6 +95,7 @@ afterEach(async () => {
   delete process.env.GUILDHALL_CONFIG_DIR
   delete process.env.GUILDHALL_DATA_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
+  await fs.rm(dataDir, { recursive: true, force: true })
 })
 
 function baseConfig(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
@@ -111,6 +121,10 @@ function baseConfig(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
     servePort: 7777,
     ...overrides,
   }
+}
+
+function taskHistoryPath(taskId: string, ...parts: string[]): string {
+  return path.join(getProjectTaskLocalHistoryDir(tmpDir, taskId), ...parts)
 }
 
 function mkTask(overrides: Partial<Task> = {}): Task {
@@ -242,7 +256,7 @@ describe('context debug records', () => {
     await orch.tick()
     await orch.tick()
 
-    const ledger = await fs.readFile(path.join(memoryDir, 'context-debug.jsonl'), 'utf8')
+    const ledger = await fs.readFile(getProjectContextDebugLedgerPath(tmpDir), 'utf8')
     const records = ledger
       .trim()
       .split('\n')
@@ -282,7 +296,7 @@ describe('context debug records', () => {
     await orch.tick()
 
     const map = await loadCodebaseMap(memoryDir)
-    const history = await fs.readFile(path.join(memoryDir, 'codebase-map.history.jsonl'), 'utf8')
+    const history = await fs.readFile(path.join(getProjectLocalHistoryDir(tmpDir), 'codebase-map.history.jsonl'), 'utf8')
     const events = history.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>)
 
     expect(map?.files['src/feature.ts']?.summary).toContain('feature.ts')
@@ -998,7 +1012,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.openQuestions?.[0] && 'prompt' in task.openQuestions[0] ? task.openQuestions[0].prompt : '').toContain('Pick one')
 
     const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'a.md'),
+      getProjectTranscriptPath(tmpDir, 'exploring', 'a'),
       'utf-8',
     )
     expect(transcript).toContain('Pick one: should this cover only the happy path')
@@ -1088,7 +1102,7 @@ describe('Orchestrator.tick — routing', () => {
       selectionMode: 'single',
     })
 
-    const transcript = await fs.readFile(path.join(memoryDir, 'exploring', 'a.md'), 'utf-8')
+    const transcript = await fs.readFile(getProjectTranscriptPath(tmpDir, 'exploring', 'a'), 'utf-8')
     expect(transcript).toContain('Pick one: happy path only, or error cases too?')
     expect(transcript).not.toContain("I'm blocked on tool-schema details")
   })
@@ -2247,7 +2261,7 @@ describe('Orchestrator.tick — routing', () => {
       expect(fourth.transitioned).toBe(true)
     }
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-task', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-task', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       intent: string
       nextPlannedAction: string
@@ -2413,7 +2427,7 @@ describe('Orchestrator.tick — routing', () => {
       await orch.tick()
     }
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-task', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-task', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       nextPlannedAction: string
       resumeContext?: {
@@ -2497,7 +2511,7 @@ describe('Orchestrator.tick — routing', () => {
       expect(third.transitioned).toBe(true)
     }
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-task', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-task', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       intent: string
       nextPlannedAction: string
@@ -2559,7 +2573,7 @@ describe('Orchestrator.tick — routing', () => {
     const third = await orch.tick()
     expect(third.kind).toBe('processed')
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-clean-verified', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-clean-verified', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       intent: string
       nextPlannedAction: string
@@ -2860,7 +2874,7 @@ describe('Orchestrator.tick — feedback loop', () => {
     await orch.tick()
     await orch.tick()
 
-    const packet = await fs.readFile(path.join(memoryDir, 'tasks', 'a', 'review-packet.md'), 'utf-8')
+    const packet = await fs.readFile(taskHistoryPath('a', 'review-packet.md'), 'utf-8')
     expect(packet).toContain('## Changed File Excerpts')
     expect(packet).toContain('use-presence.test.ts')
     expect(packet).toContain('## Latest Self-Critique')
@@ -2973,7 +2987,7 @@ describe('Orchestrator.tick — feedback loop', () => {
     await orch.tick()
     await orch.tick()
 
-    const packet = await fs.readFile(path.join(memoryDir, 'tasks', 'a', 'review-packet.md'), 'utf-8')
+    const packet = await fs.readFile(taskHistoryPath('a', 'review-packet.md'), 'utf-8')
     expect(packet).toContain('use-collections.test.ts')
     expect(packet).toContain('added focused use-collections coverage')
     expect(packet).not.toContain('pnpm --filter @knit-app test -- tests')
@@ -3602,7 +3616,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     const task = queue.tasks.find((candidate) => candidate.id === 'worker-progress')
     expect(task?.updatedAt).not.toBe('2026-04-01T00:00:00Z')
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-progress', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-progress', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       intent: string
       nextPlannedAction: string
@@ -3679,7 +3693,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     const task = queue.tasks.find((candidate) => candidate.id === 'worker-likely-target-progress')
     expect(task?.updatedAt).not.toBe('2026-04-01T00:00:00Z')
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-likely-target-progress', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-likely-target-progress', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       intent: string
       nextPlannedAction: string
@@ -3752,7 +3766,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     const task = queue.tasks.find((candidate) => candidate.id === 'worker-clean-progress')
     expect(task?.updatedAt).not.toBe('2026-04-01T00:00:00Z')
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-clean-progress', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-clean-progress', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       intent: string
       nextPlannedAction: string
@@ -3825,7 +3839,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     const task = queue.tasks.find((candidate) => candidate.id === 'worker-project-progress')
     expect(task?.updatedAt).not.toBe('2026-04-01T00:00:00Z')
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-project-progress', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-project-progress', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       intent: string
       nextPlannedAction: string
@@ -3895,7 +3909,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
 
     await orch.tick()
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-persona-self-critique', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-persona-self-critique', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       nextPlannedAction: string
     }
@@ -3989,7 +4003,7 @@ it('filters node_modules noise out of recovery checkpoints and falls back to met
     expect((await orch.tick()).kind).toBe('processed')
     expect((await orch.tick()).kind).toBe('processed')
 
-    const checkpointPath = path.join(memoryDir, 'tasks', 'worker-node-modules-noise', 'checkpoint.json')
+    const checkpointPath = taskHistoryPath('worker-node-modules-noise', 'checkpoint.json')
     const checkpoint = JSON.parse(await fs.readFile(checkpointPath, 'utf8')) as {
       filesTouched: string[]
     }
@@ -4061,7 +4075,7 @@ it('filters node_modules noise out of recovery checkpoints and falls back to met
       agents: agentSet({ worker }),
     })
     await orch.tick()
-    const progress = await fs.readFile(progressPath, 'utf-8')
+    const progress = await fs.readFile(getProjectProgressHeartbeatsPath(tmpDir), 'utf-8')
     expect(progress).toContain('knit-web')
   })
 })
@@ -4338,7 +4352,7 @@ describe('Orchestrator.run — full loops', () => {
     const q = await readQueue()
     expect(q.tasks[0]!.status).toBe('done')
     const packet = await fs.readFile(
-      path.join(memoryDir, 'tasks', 'a', 'review-packet.md'),
+      taskHistoryPath('a', 'review-packet.md'),
       'utf-8',
     )
     expect(packet).toContain('# Review packet: Do a thing')
@@ -5207,7 +5221,7 @@ describe('Orchestrator.run — full loops', () => {
       }),
     ])
 
-    const checkpointDir = path.join(tmpDir, 'memory', 'tasks', 'a')
+    const checkpointDir = getProjectTaskLocalHistoryDir(tmpDir, 'a')
     await fs.mkdir(checkpointDir, { recursive: true })
     await fs.writeFile(
       path.join(checkpointDir, 'checkpoint.json'),
@@ -5617,7 +5631,7 @@ describe('Orchestrator.run — full loops', () => {
       }),
     ])
 
-    const taskDir = path.join(memoryDir, 'tasks', 'a')
+    const taskDir = getProjectTaskLocalHistoryDir(tmpDir, 'a')
     await fs.mkdir(taskDir, { recursive: true })
     await fs.writeFile(path.join(taskDir, 'checkpoint.json'), JSON.stringify({
       taskId: 'a',
@@ -6015,6 +6029,8 @@ describe('Orchestrator.run — full loops', () => {
         domain: 'knit',
         projectPath: subrepo,
         worktreePath: worktree,
+        branchName: 'guildhall/task-a',
+        baseBranch: 'main',
         spec: 'Implement the invite flow in `web/app/pages/settings.vue`.',
       }),
     ])
@@ -6049,7 +6065,7 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.notes.at(-1)?.role).toBe('bootstrap-verification')
 
     const checkpoint = JSON.parse(
-      await fs.readFile(path.join(memoryDir, 'tasks', 'a', 'checkpoint.json'), 'utf8'),
+      await fs.readFile(taskHistoryPath('a', 'checkpoint.json'), 'utf8'),
     ) as {
       nextPlannedAction: string
       filesTouched: string[]
@@ -6484,6 +6500,85 @@ describe('Orchestrator.run — full loops', () => {
     )).toBe(true)
   })
 
+  it('auto-commits dirty task worktree changes from matching workspace child Git Story policy', async () => {
+    const loomaPath = path.join(tmpDir, 'looma')
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-child-auto')
+    await writeQueue([
+      mkTask({
+        id: 'task-child-auto',
+        title: 'Implement child feature workflow',
+        status: 'gate_check',
+        domain: 'looma',
+        projectPath: loomaPath,
+        worktreePath,
+        branchName: 'guildhall/task-child-auto',
+        baseBranch: 'main',
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    gitDriver.setStatusSummary(worktreePath, {
+      branch: 'guildhall/task-child-auto',
+      upstream: undefined,
+      changedCount: 1,
+      untrackedCount: 0,
+      samplePaths: ['src/child-feature.ts'],
+      clean: false,
+    })
+    const gateChecker = stubAgent('gate-checker-agent', async () => {
+      await mutateTask('task-child-auto', { status: 'done' })
+    })
+
+    const orch = new Orchestrator({
+      config: baseConfig({
+        kind: 'workspace',
+        gitStory: {
+          completionTarget: 'open_pr',
+          commit: 'ask',
+          push: 'ask',
+          pullRequest: 'ask',
+          merge: 'ask',
+          localOnlyAllowed: true,
+          deferAllowed: true,
+          requireCleanRelease: true,
+          allowForcePush: false,
+          allowSharedBranchRebase: false,
+          discoveredFrom: [],
+        },
+        projects: [
+          {
+            id: 'looma',
+            path: loomaPath,
+            gitStory: {
+              completionTarget: 'open_pr',
+              commit: 'auto',
+              push: 'ask',
+              pullRequest: 'ask',
+              merge: 'ask',
+              localOnlyAllowed: true,
+              deferAllowed: true,
+              requireCleanRelease: true,
+              allowForcePush: false,
+              allowSharedBranchRebase: false,
+              discoveredFrom: [],
+            },
+          },
+        ],
+      }),
+      agents: agentSet({ gateChecker }),
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    expect(gitDriver.state.commits).toEqual([
+      expect.objectContaining({
+        repoRoot: worktreePath,
+      }),
+    ])
+  })
+
   it('does not auto-commit dirty task worktree changes when Git Story policy is ask', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-ask')
     await writeQueue([
@@ -6641,7 +6736,7 @@ describe('Orchestrator.run — full loops', () => {
     await writeQueue([mkTask({ id: 'a', status: 'in_progress', domain: 'looma' })])
 
     let ticks = 0
-    const markerPath = path.join(memoryDir, 'stop-requested')
+    const markerPath = path.join(getProjectLocalHistoryDir(tmpDir), 'stop-requested')
     const stopSignal = { stopRequested: false }
 
     const agents: OrchestratorAgentSet = {
@@ -8137,7 +8232,7 @@ describe('Orchestrator — FR-33 reclaim detection', () => {
       filesTouched: string[]
     }> = {},
   ): Promise<void> {
-    const dir = path.join(memoryDir, 'tasks', taskId)
+    const dir = getProjectTaskLocalHistoryDir(tmpDir, taskId)
     await fs.mkdir(dir, { recursive: true })
     const cp = {
       taskId,

@@ -23,6 +23,11 @@ import {
   loadProjectGuildRoster,
 } from '@guildhall/guilds'
 import { readProjectSkillProposals, selectRelevantProjectSkills } from '@guildhall/skills'
+import {
+  getProjectTaskLocalHistoryDir,
+  getProjectTranscriptPath,
+  inferProjectRootFromMemoryDir,
+} from '@guildhall/sessions'
 import { loadGoalForTask } from './business-envelope.js'
 import { loadDesignSystem } from './design-system-store.js'
 import { loadLanguageMap, renderLanguageMapContext } from './language-map.js'
@@ -690,13 +695,14 @@ export async function buildContext(
     }
   }
 
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
   const [memory, progress, decisions, exploring, goal, ds, worktreeResume, checkpoint, codebaseMap, languageMapData] = await Promise.all([
     readSafe('MEMORY.md'),
     readSafe('PROGRESS.md'),
     readSafe('DECISIONS.md'),
     // Only bother with the transcript when we're actually in the exploring phase.
     task.status === 'exploring'
-      ? readSafe(path.join('exploring', `${task.id}.md`))
+      ? fs.readFile(getProjectTranscriptPath(projectRoot, 'exploring', task.id), 'utf-8').catch(() => readSafe(path.join('exploring', `${task.id}.md`)))
       : Promise.resolve(''),
     // FR-23: resolve the task's parent goal. Missing-goal cases become
     // `undefined` — the summary renderer omits the envelope block.
@@ -713,7 +719,8 @@ export async function buildContext(
   ])
   const reviewPacket =
     task.status === 'review' || task.status === 'gate_check'
-      ? await readSafe(path.join('tasks', task.id, 'review-packet.md'))
+      ? await fs.readFile(path.join(getProjectTaskLocalHistoryDir(projectRoot, task.id), 'review-packet.md'), 'utf-8')
+          .catch(() => readSafe(path.join('tasks', task.id, 'review-packet.md')))
       : ''
 
   const projectMemory = extractRelevantMemorySections(memory, task)

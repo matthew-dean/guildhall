@@ -46,7 +46,9 @@ Setting up your first project? Start with [Start here](./quick-start).
 
 ## Tasks
 
+- [Pressure-Test Intake](./pressure-test-intake) — how broad requests become buildable specs without turning uncertainty into invisible guesswork.
 - [Task lifecycle](./task-lifecycle) — how a task moves from idea to done.
+- [Git Story Closure](./git-story-closure) — how Guildhall shows whether completed work is dirty, local, pushed, in a PR, merged, local-only, or deferred.
 
 ## Specs And Levers
 

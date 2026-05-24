@@ -13,6 +13,7 @@ documented without promising it to users who installed the current npm package.
 Historical release notes stay versioned with their docs snapshot. The current
 stable snapshot is [Guildhall 0.7.0](/versions/0.7.0/guide/quick-start).
 
+- [0.8.0](./0.8.0) — Pressure-Test Intake, Git Story Closure, Commit Story messages, and clearer provider defaults for the Next docs preview.
 - [0.7.0](./0.7.0) — project planning, scoped lever settings, [Corpus Map](../guide/corpus-map) integration, context-indexer model lane, workspace import cleanup, and calmer project-shell state.
 - [0.6.0](./0.6.0) — bounded recovery, scoped learning, project playbooks, product feedback drafts, and model comparison evidence.
 - [0.5.1](./0.5.1) — focused CLI surface, clearer first-run docs, and route-contract cleanup after the 0.5.0 service pivot.

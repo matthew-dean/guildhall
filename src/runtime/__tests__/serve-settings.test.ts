@@ -7,6 +7,7 @@ import { promisify } from 'node:util'
 import { bootstrapWorkspace, readProjectConfig, readWorkspaceConfig, writeProjectConfig, writeWorkspaceConfig } from '@guildhall/config'
 import { defaultAgentSettingsPath, loadLeverSettings, makeDefaultSettings } from '@guildhall/levers'
 import { proposeProjectSkill } from '@guildhall/skills'
+import { getProjectLocalHistoryDir, getProjectTranscriptPath } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { persistLearningCandidates } from '../learning.js'
 import type { LearningCandidate } from '../policy.js'
@@ -20,6 +21,8 @@ const execFileP = promisify(execFile)
 
 let tmpDir: string
 let previousHome: string | undefined
+let previousConfigDir: string | undefined
+let systemDir: string
 const PROJECT_ID = 'settings-test'
 
 function scoped(pathname: string): string {
@@ -28,7 +31,7 @@ function scoped(pathname: string): string {
 }
 
 async function readTasks(tmpPath: string): Promise<Array<Record<string, any>>> {
-  const tasksPath = path.join(tmpPath, 'memory', 'TASKS.json')
+  const tasksPath = path.join(tmpPath, '.guildhall', 'TASKS.json')
   const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as
     | Array<Record<string, any>>
     | { tasks?: Array<Record<string, any>> }
@@ -37,8 +40,11 @@ async function readTasks(tmpPath: string): Promise<Array<Record<string, any>>> {
 
 beforeEach(async () => {
   previousHome = process.env.HOME
+  previousConfigDir = process.env.GUILDHALL_CONFIG_DIR
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-'))
+  systemDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-system-'))
   process.env.HOME = tmpDir
+  process.env.GUILDHALL_CONFIG_DIR = systemDir
   bootstrapWorkspace(tmpDir, { name: 'Settings Test' })
   await execFileP('git', ['init', '-b', 'main'], { cwd: tmpDir })
   await execFileP('git', ['config', 'user.name', 'Guildhall Test'], { cwd: tmpDir })
@@ -50,7 +56,10 @@ beforeEach(async () => {
 afterEach(async () => {
   if (previousHome === undefined) delete process.env.HOME
   else process.env.HOME = previousHome
+  if (previousConfigDir === undefined) delete process.env.GUILDHALL_CONFIG_DIR
+  else process.env.GUILDHALL_CONFIG_DIR = previousConfigDir
   await fs.rm(tmpDir, { recursive: true, force: true })
+  await fs.rm(systemDir, { recursive: true, force: true })
 })
 
 describe('GET /api/config/levers', () => {
@@ -84,8 +93,8 @@ describe('GET /api/config/levers', () => {
     expect(concurrent?.setBy).toBe('system-default')
   })
 
-  it('seeds memory/agent-settings.yaml on first call if missing', async () => {
-    const settingsPath = path.join(tmpDir, 'memory', 'agent-settings.yaml')
+  it('seeds .guildhall/agent-settings.yaml on first call if missing', async () => {
+    const settingsPath = path.join(tmpDir, '.guildhall', 'agent-settings.yaml')
     await expect(fs.access(settingsPath)).rejects.toThrow()
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request('http://localhost/api/config/levers'))
@@ -208,7 +217,7 @@ describe('general project status endpoints', () => {
     expect(body.frameworks).toContain('svelte')
 
     await fs.writeFile(
-      path.join(tmpDir, 'memory', 'codebase-map.yaml'),
+      path.join(tmpDir, '.guildhall', 'codebase-map.yaml'),
       [
         'version: 1',
         'generatedAt: 2026-05-21T12:00:00.000Z',
@@ -408,7 +417,7 @@ describe('general project status endpoints', () => {
       openaiApiKey: 'sk-openai-secret',
     })
     await fs.writeFile(
-      path.join(tmpDir, 'memory', 'PROGRESS.md'),
+      path.join(tmpDir, '.guildhall', 'PROGRESS.md'),
       [
         '# Progress',
         '',
@@ -533,7 +542,7 @@ describe('POST /api/project/start', () => {
   it('marks all-terminal projects as not startable', async () => {
     const now = new Date().toISOString()
     await fs.writeFile(
-      path.join(tmpDir, 'memory', 'TASKS.json'),
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
       JSON.stringify({
         version: 1,
         lastUpdated: now,
@@ -600,7 +609,7 @@ describe('POST /api/project/start', () => {
   it('returns a no-op start response when all tasks are terminal', async () => {
     const now = new Date().toISOString()
     await fs.writeFile(
-      path.join(tmpDir, 'memory', 'TASKS.json'),
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
       JSON.stringify({
         version: 1,
         lastUpdated: now,
@@ -667,7 +676,7 @@ describe('POST /api/project/start', () => {
   })
 
   it('points Start at imported draft review when no runnable work is available', async () => {
-    const tasksPath = path.join(tmpDir, 'memory', 'TASKS.json')
+    const tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
     await fs.writeFile(
       tasksPath,
       JSON.stringify({
@@ -780,7 +789,7 @@ describe('POST /api/project/start', () => {
 // re-seeds from defaults so the UI can recover without shelling in.
 describe('POST /api/config/levers/reset', () => {
   it('rewrites the lever file with default positions so subsequent reads succeed', async () => {
-    const settingsPath = path.join(tmpDir, 'memory', 'agent-settings.yaml')
+    const settingsPath = path.join(tmpDir, '.guildhall', 'agent-settings.yaml')
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     // Corrupt the file beyond self-heal (bad YAML). Missing-key corruption
@@ -889,16 +898,16 @@ describe('GET /api/project/facts', () => {
   })
 
   it('counts saved completed workspace-import specs in the memory check-in facts', async () => {
-    await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
     await fs.writeFile(
-      path.join(tmpDir, 'memory', 'workspace-goals.json'),
+      path.join(tmpDir, '.guildhall', 'workspace-goals.json'),
       JSON.stringify({
         goals: [{ id: 'old-goal', title: 'Old goal' }],
       }),
       'utf8',
     )
     await fs.writeFile(
-      path.join(tmpDir, 'memory', 'TASKS.json'),
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
       JSON.stringify(
         {
           version: 1,
@@ -1064,9 +1073,9 @@ describe('Workspace Import review endpoints', () => {
       'utf8',
     )
     // Prime TASKS.json with the reserved importer task — empty spec.
-    await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
     await fs.writeFile(
-      path.join(tmpDir, 'memory', 'TASKS.json'),
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
       JSON.stringify(
         {
           version: 1,
@@ -1133,9 +1142,9 @@ describe('Workspace Import review endpoints', () => {
       JSON.stringify({ name: 'curated-import' }),
       'utf8',
     )
-    await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
     await fs.writeFile(
-      path.join(tmpDir, 'memory', 'TASKS.json'),
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
       JSON.stringify(
         {
           version: 1,
@@ -1217,9 +1226,9 @@ describe('Workspace Import review endpoints', () => {
 
   it('status counts a completed importer task from its saved curated spec', async () => {
     await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'completed-import-status' }), 'utf8')
-    await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
     await fs.writeFile(
-      path.join(tmpDir, 'memory', 'TASKS.json'),
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
       JSON.stringify(
         {
           version: 1,
@@ -1355,12 +1364,12 @@ describe('Workspace Import review endpoints', () => {
       'utf8',
     )
     await fs.writeFile(
-      path.join(tmpDir, 'memory', 'workspace-goals.json'),
+      path.join(tmpDir, '.guildhall', 'workspace-goals.json'),
       JSON.stringify({ dismissed: true, dismissedAt: '2026-01-01T00:00:00Z' }, null, 2),
       'utf8',
     )
     await fs.writeFile(
-      path.join(tmpDir, 'memory', 'TASKS.json'),
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
       JSON.stringify(
         {
           version: 1,
@@ -1414,7 +1423,7 @@ describe('Workspace Import review endpoints', () => {
     expect(importTask?.status).toBe('exploring')
 
     const goalsState = JSON.parse(
-      await fs.readFile(path.join(tmpDir, 'memory', 'workspace-goals.json'), 'utf8'),
+      await fs.readFile(path.join(tmpDir, '.guildhall', 'workspace-goals.json'), 'utf8'),
     ) as { dismissed?: boolean }
     expect(goalsState.dismissed).toBeUndefined()
   })
@@ -1474,7 +1483,7 @@ describe('GET/POST /api/project/learning', () => {
   })
 
   it('lists learning records and supports accept, dismiss, reset, and make-project-wide', async () => {
-    const memoryDir = path.join(tmpDir, 'memory')
+    const memoryDir = path.join(tmpDir, '.guildhall')
     const projectCandidate: LearningCandidate = {
       id: 'project-invite-path',
       source: 'task',
@@ -1631,7 +1640,7 @@ describe('GET/POST /api/project/learning', () => {
 describe('POST /api/project/meta-intake/rerun', () => {
   it('resets the reserved task back to exploring and reseeds the transcript', async () => {
     await fs.writeFile(
-      path.join(tmpDir, 'memory', 'TASKS.json'),
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
       JSON.stringify(
         {
           version: 1,
@@ -1676,12 +1685,9 @@ describe('POST /api/project/meta-intake/rerun', () => {
       ),
       'utf8',
     )
-    await fs.mkdir(path.join(tmpDir, 'memory', 'exploring'), { recursive: true })
-    await fs.writeFile(
-      path.join(tmpDir, 'memory', 'exploring', 'task-meta-intake.md'),
-      'stale transcript\n',
-      'utf8',
-    )
+    const transcriptPath = getProjectTranscriptPath(tmpDir, 'exploring', 'task-meta-intake')
+    await fs.mkdir(path.dirname(transcriptPath), { recursive: true })
+    await fs.writeFile(transcriptPath, 'stale transcript\n', 'utf8')
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
@@ -1698,10 +1704,7 @@ describe('POST /api/project/meta-intake/rerun', () => {
     expect(metaTask?.spec).toBeUndefined()
     expect(metaTask?.completedAt).toBeUndefined()
 
-    const transcript = await fs.readFile(
-      path.join(tmpDir, 'memory', 'exploring', 'task-meta-intake.md'),
-      'utf8',
-    )
+    const transcript = await fs.readFile(transcriptPath, 'utf8')
     expect(transcript).toMatch(/You are bootstrapping a new Guildhall workspace/i)
     expect(transcript).not.toMatch(/stale transcript/)
   })
@@ -1743,8 +1746,9 @@ describe('GET /api/project/inbox — blockers', () => {
 
 describe('GET /api/project — bootstrap status', () => {
   it('includes the last bootstrap run status so the shell can explain async start failures', async () => {
+    const bootstrapPath = path.join(getProjectLocalHistoryDir(tmpDir), 'bootstrap.json')
     await fs.writeFile(
-      path.join(tmpDir, 'memory', 'bootstrap.json'),
+      bootstrapPath,
       JSON.stringify({
         success: false,
         lastRunAt: '2026-04-25T00:00:00Z',
@@ -1777,7 +1781,7 @@ describe('GET /api/project — bootstrap status', () => {
   })
 
   it('includes the same inbox snapshot as /api/project/inbox', async () => {
-    const tasksPath = path.join(tmpDir, 'memory', 'TASKS.json')
+    const tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
     await fs.writeFile(
       tasksPath,
       JSON.stringify({

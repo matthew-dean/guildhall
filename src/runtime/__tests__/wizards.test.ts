@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { getProjectLocalHistoryDir } from '@guildhall/sessions'
 import {
   onboardWizard,
   progressFor,
@@ -179,13 +180,18 @@ describe('onboardWizard.progress', () => {
 
 describe('buildSnapshot', () => {
   let tmp: string
+  let dataDir: string
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), 'wizards-test-'))
-    mkdirSync(join(tmp, 'memory'), { recursive: true })
+    dataDir = join(tmpdir(), `guildhall-data-${tmp.split('/').at(-1)}`)
+    process.env.GUILDHALL_DATA_DIR = dataDir
+    mkdirSync(join(tmp, '.guildhall'), { recursive: true })
   })
   afterEach(() => {
+    delete process.env.GUILDHALL_DATA_DIR
     rmSync(tmp, { recursive: true, force: true })
+    rmSync(dataDir, { recursive: true, force: true })
   })
 
   it('reads guildhall.yaml identity + bootstrap', () => {
@@ -241,7 +247,7 @@ describe('buildSnapshot', () => {
   })
 
   it('hasDirection=true only when brief has substance (>40 chars)', () => {
-    writeFileSync(join(tmp, 'memory', 'project-brief.md'), 'short')
+    writeFileSync(join(tmp, '.guildhall', 'project-brief.md'), 'short')
     let snap = buildSnapshot({
       projectPath: tmp,
       readProviders: () => ({ providers: {} }),
@@ -250,7 +256,7 @@ describe('buildSnapshot', () => {
     expect(snap.hasDirection).toBe(false)
 
     writeFileSync(
-      join(tmp, 'memory', 'project-brief.md'),
+      join(tmp, '.guildhall', 'project-brief.md'),
       'We are building X so that users can do Y. Done looks like Z.',
     )
     snap = buildSnapshot({
@@ -280,7 +286,7 @@ describe('buildSnapshot', () => {
     expect(snap.workspaceImportReviewed).toBe(false)
 
     // Dismiss marker → reviewed true.
-    writeFileSync(join(tmp, 'memory', 'workspace-import-dismissed'), '')
+    writeFileSync(join(getProjectLocalHistoryDir(tmp), 'workspace-import-dismissed'), '')
     snap = buildSnapshot({
       projectPath: tmp,
       readProviders: () => ({ providers: {} }),
@@ -290,7 +296,7 @@ describe('buildSnapshot', () => {
   })
 
   it('taskCount handles both array and {tasks:[]} shapes', () => {
-    writeFileSync(join(tmp, 'memory', 'TASKS.json'), JSON.stringify([
+    writeFileSync(join(tmp, '.guildhall', 'TASKS.json'), JSON.stringify([
       { id: 'a' },
       { id: 'b' },
       { id: 'task-meta-intake', domain: '_meta' },
@@ -303,7 +309,7 @@ describe('buildSnapshot', () => {
     expect(snap.taskCount).toBe(2)
 
     writeFileSync(
-      join(tmp, 'memory', 'TASKS.json'),
+      join(tmp, '.guildhall', 'TASKS.json'),
       JSON.stringify({
         tasks: [
           { id: 'a' },
@@ -323,7 +329,7 @@ describe('buildSnapshot', () => {
 
   it('counts user-created starter tasks even when they are routed through the meta lane', () => {
     writeFileSync(
-      join(tmp, 'memory', 'TASKS.json'),
+      join(tmp, '.guildhall', 'TASKS.json'),
       JSON.stringify({
         tasks: [
           { id: 'task-meta-intake', domain: '_meta' },
@@ -348,7 +354,7 @@ describe('buildSnapshot', () => {
 
   it('reads wizards.yaml into snapshot.wizardState', () => {
     writeFileSync(
-      join(tmp, 'memory', 'wizards.yaml'),
+      join(tmp, '.guildhall', 'wizards.yaml'),
       'version: 1\nskipped:\n  onboard:\n    - direction\ncompletedAt: {}\n',
     )
     const snap = buildSnapshot({
@@ -365,7 +371,7 @@ describe('buildSnapshot', () => {
       'id: demo\nname: Demo\nbootstrap: {}\n',
     )
     writeFileSync(
-      join(tmp, 'memory', 'bootstrap.json'),
+      join(getProjectLocalHistoryDir(tmp), 'bootstrap.json'),
       JSON.stringify({
         success: true,
         lastRunAt: '2026-05-11T00:00:00.000Z',

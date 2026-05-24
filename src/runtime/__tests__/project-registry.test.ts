@@ -13,6 +13,7 @@ vi.mock('node:os', async (importOriginal) => {
 
 const { bootstrapWorkspace, listWorkspaces } = await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
+const { getProjectStateDir } = await import('@guildhall/sessions')
 
 let tmpProject: string
 
@@ -142,9 +143,6 @@ describe('POST /api/service/select-project', () => {
 
       const { app } = buildServeApp({ projectPath: firstProject })
 
-      await fs.mkdir(path.join(firstProject, 'memory'), { recursive: true })
-      await fs.mkdir(path.join(secondProject, 'memory'), { recursive: true })
-
       const saveBrief = await app.fetch(new Request('http://localhost/api/project/brief?projectId=second-project', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -152,10 +150,10 @@ describe('POST /api/service/select-project', () => {
       }))
       expect(saveBrief.status).toBe(200)
 
-      const secondBrief = await fs.readFile(path.join(secondProject, 'memory', 'project-brief.md'), 'utf8')
+      const secondBrief = await fs.readFile(path.join(getProjectStateDir(secondProject), 'project-brief.md'), 'utf8')
       expect(secondBrief).toBe('Second brief only, and it is definitely long enough to save.\n')
 
-      const firstBriefPath = path.join(firstProject, 'memory', 'project-brief.md')
+      const firstBriefPath = path.join(getProjectStateDir(firstProject), 'project-brief.md')
       expect(existsSync(firstBriefPath)).toBe(false)
 
       const selected = await app.fetch(new Request('http://localhost/api/project'))

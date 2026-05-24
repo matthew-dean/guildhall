@@ -32,15 +32,21 @@ the service-level readout:
 - **Attention**: the first project that needs your answer.
 - **Running now**: which projects have live runs.
 - **Needs you**: opens the project that is waiting for your answer.
+- **Provider**: the machine-default provider and worker model group, with a
+  route to global Providers when the default or model lane needs attention.
 
 Project cards then show their local state with chips such as **Paused**,
-**Queued**, **Needs task briefs**, **Mixed**, **Stable**, or **Inspect**.
+**Queued**, **Needs task briefs**, **Mixed**, **Stable**, or **Inspect**. In
+0.8.0, cards can also surface Git Story health: dirty work, local commits,
+branches without upstreams, open PRs, and task worktrees that still need a
+clear ending.
 
 ## The actual job of each card
 
 - Project identity and whether the service still recognizes it
 - Run status and whether the project is live, paused, queued, stable, or needs inspection
 - Blocked work, imported drafts, and unresolved escalations
+- Git closure state when the repo or a task worktree is not yet cleanly closed
 - Enough signal to tell whether opening the shell is likely to be a quick check or a proper firefight
 
 <picture class="gh-doc-picture">
@@ -51,3 +57,16 @@ Project cards then show their local state with chips such as **Paused**,
 The Projects home is deliberately shallow. It helps you choose where to look
 next; the detailed Thread, Work, Settings, Memory, and Release surfaces stay
 inside the project shell.
+
+## Provider defaults on the home view
+
+The home view shows the configured default provider before you enter a project.
+If OpenAI-compatible models are the default, you see that lane and the active
+worker model group there. The chip opens global Providers, because a bad
+machine default is a service-level problem, not a thing you should hunt for in
+every project.
+
+When the preferred provider is unavailable, or the model lane points somewhere
+that does not match the selected provider, Guildhall keeps a warning visible.
+The run may still have a fallback path, but the mismatch should not be a secret
+stowaway.

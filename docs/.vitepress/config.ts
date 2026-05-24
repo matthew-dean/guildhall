@@ -98,7 +98,9 @@ const guideOperateItems = [
 ]
 
 const guideTaskItems = [
+  { text: 'Pressure-Test Intake', link: '/guide/pressure-test-intake' },
   { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
+  { text: 'Git Story Closure', link: '/guide/git-story-closure' },
 ]
 
 const guideSpecItems = [
@@ -330,6 +332,7 @@ const releaseSidebarSections = [
     text: 'Releases',
     items: [
       { text: 'Overview', link: '/releases/' },
+      { text: '0.8.0', link: '/releases/0.8.0' },
       { text: '0.7.0', link: '/releases/0.7.0' },
       { text: '0.6.0', link: '/releases/0.6.0' },
       { text: '0.5.1', link: '/releases/0.5.1' },
@@ -341,7 +344,7 @@ const releaseSidebarSections = [
 
 const stableReleaseSidebarSections = releaseSidebarSections.map((section) => ({
   ...section,
-  items: section.items.filter((item) => item.link !== '/releases/0.7.0'),
+  items: section.items.filter((item) => item.link !== '/releases/0.8.0' && item.link !== '/releases/0.7.0'),
 }))
 
 function guideSectionsForVersion(prefix: string, options: { includeNextOnlyPages?: boolean } = {}): SidebarSection[] {

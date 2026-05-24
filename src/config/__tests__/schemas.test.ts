@@ -207,6 +207,12 @@ describe('WorkspaceYamlConfig', () => {
           worktree: {
             include: ['.env'],
           },
+          gitStory: {
+            completionTarget: 'open_pr',
+            commit: 'ask',
+            push: 'ask',
+            pullRequest: 'ask',
+          },
         },
         {
           id: 'knit',
@@ -237,6 +243,7 @@ describe('WorkspaceYamlConfig', () => {
       'pnpm lint',
     ])
     expect(config.projects[0]?.worktree?.include).toEqual(['.env'])
+    expect(config.projects[0]?.gitStory?.completionTarget).toBe('open_pr')
     expect(config.council?.coordinationRules[0]?.from).toBe('knit')
   })
 

@@ -9,11 +9,13 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { stringify as stringifyYaml } from 'yaml'
+import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
 
 import { buildInbox, buildInboxBlockers, type InboxItem } from '../inbox.js'
 
 let tmpDir: string
-let memoryDir: string
+let dataDir: string
+let projectStateDir: string
 
 async function writeYaml(rel: string, value: unknown): Promise<void> {
   const p = path.join(tmpDir, rel)
@@ -31,6 +33,12 @@ async function writeFile(rel: string, contents: string): Promise<void> {
   const p = path.join(tmpDir, rel)
   await fs.mkdir(path.dirname(p), { recursive: true })
   await fs.writeFile(p, contents, 'utf8')
+}
+
+async function writeLocalHistoryJson(rel: string, value: unknown): Promise<void> {
+  const p = path.join(getProjectLocalHistoryDir(tmpDir), rel)
+  await fs.mkdir(path.dirname(p), { recursive: true })
+  await fs.writeFile(p, JSON.stringify(value, null, 2), 'utf8')
 }
 
 function buildInboxWithProviderSetup(): InboxItem[] {
@@ -97,12 +105,16 @@ async function writeCompleteBootstrap(): Promise<void> {
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-inbox-'))
-  memoryDir = path.join(tmpDir, 'memory')
-  await fs.mkdir(memoryDir, { recursive: true })
+  dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
+  process.env.GUILDHALL_DATA_DIR = dataDir
+  projectStateDir = getProjectStateDir(tmpDir)
+  await fs.mkdir(projectStateDir, { recursive: true })
 })
 
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true })
+  await fs.rm(dataDir, { recursive: true, force: true })
+  delete process.env.GUILDHALL_DATA_DIR
 })
 
 describe('buildInbox', () => {
@@ -110,7 +122,7 @@ describe('buildInbox', () => {
     await writeCompleteBootstrap()
     // Suppress workspace-import: also write workspace-goals.json so the check
     // short-circuits before we look at signal files.
-    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     // An agent-settings.yaml with no system-defaults: mark every entry as
     // user-direct so lever_questions doesn't trip.
     const userSet = fullSystemDefaultSettings() as {
@@ -119,8 +131,8 @@ describe('buildInbox', () => {
     }
     for (const e of Object.values(userSet.project)) e.setBy = 'user-direct'
     for (const e of Object.values(userSet.domains.default)) e.setBy = 'user-direct'
-    await writeYaml('memory/agent-settings.yaml', userSet)
-    await writeJson('memory/TASKS.json', { version: 1, lastUpdated: '', tasks: [] })
+    await writeYaml('.guildhall/agent-settings.yaml', userSet)
+    await writeJson('.guildhall/TASKS.json', { version: 1, lastUpdated: '', tasks: [] })
 
     const items = buildInbox({
       projectPath: tmpDir,
@@ -149,7 +161,7 @@ describe('buildInbox', () => {
         },
       },
     })
-    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     const items = buildInbox({
       projectPath: tmpDir,
       snapshotOptions: {
@@ -171,7 +183,7 @@ describe('buildInbox', () => {
         gates: { lint: { command: 'pnpm lint', available: true } },
       },
     })
-    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     const items = buildInbox({
       projectPath: tmpDir,
       snapshotOptions: {
@@ -184,7 +196,7 @@ describe('buildInbox', () => {
 
   it('bootstrap_missing: emitted when guildhall.yaml has no bootstrap block', async () => {
     await writeYaml('guildhall.yaml', { name: 'x', id: 'x', coordinators: [] })
-    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
 
     const items = buildInbox({
       projectPath: tmpDir,
@@ -202,8 +214,8 @@ describe('buildInbox', () => {
 
   it('bootstrap_missing: reports the last failed bootstrap gate even when config was previously verified', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/bootstrap.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeLocalHistoryJson('bootstrap.json', {
       success: false,
       lastRunAt: '2026-04-25T00:00:00Z',
       durationMs: 10,
@@ -247,7 +259,7 @@ describe('buildInbox', () => {
         successGates: ['pnpm build'],
       },
     })
-    await writeJson('memory/bootstrap.json', {
+    await writeLocalHistoryJson('bootstrap.json', {
       success: true,
       lastRunAt: '2026-05-11T00:00:00.000Z',
       durationMs: 10,
@@ -255,7 +267,7 @@ describe('buildInbox', () => {
       lockfileHash: 'b',
       steps: [],
     })
-    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
 
     const items = buildInbox({
       projectPath: tmpDir,
@@ -296,8 +308,8 @@ describe('buildInbox', () => {
 
   it('brief_approval: emitted for tasks whose productBrief has no approvedAt', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -323,8 +335,8 @@ describe('buildInbox', () => {
 
   it('brief_approval: suppressed while the same task has an unanswered question', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -356,8 +368,8 @@ describe('buildInbox', () => {
 
   it('agent_question_pending: emitted when a task has an unanswered agent question', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -389,8 +401,8 @@ describe('buildInbox', () => {
 
   it('agent_question_pending: ignores operational receipt prose mistaken for a question', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -425,8 +437,8 @@ describe('buildInbox', () => {
 
   it('agent_question_pending: ignores operational receipt questions', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -461,8 +473,8 @@ describe('buildInbox', () => {
 
   it('agent_question_pending: ignores output-promise choices', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -504,9 +516,9 @@ describe('buildInbox', () => {
         gates: ['pnpm typecheck'],
       },
     })
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeFile('memory/project-brief.md', 'Fair Labor License helps projects ship with a fair labor license.')
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeFile('.guildhall/project-brief.md', 'Fair Labor License helps projects ship with a fair labor license.')
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -551,8 +563,8 @@ describe('buildInbox', () => {
         gates: ['pnpm typecheck'],
       },
     })
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -578,8 +590,8 @@ describe('buildInbox', () => {
 
   it('suppresses import_draft_queue while the reserved workspace import question still needs an answer', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -623,9 +635,9 @@ describe('buildInbox', () => {
         gates: ['pnpm typecheck'],
       },
     })
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeFile('memory/project-brief.md', 'Looma and Knit are one coordinated product effort.')
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeFile('.guildhall/project-brief.md', 'Looma and Knit are one coordinated product effort.')
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -660,8 +672,8 @@ describe('buildInbox', () => {
 
   it('suppresses obsolete meta-intake routing questions once a valid routing draft already exists', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -700,8 +712,8 @@ coordinators:
 
   it('brief_approval: not emitted once the task has moved beyond intake', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -732,8 +744,8 @@ coordinators:
 
   it('spec_fill_pending: not emitted once work has started even if the brief is still sparse', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -760,8 +772,8 @@ coordinators:
 
   it('spec_approval: emitted for tasks in status=spec_review', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [{ id: 'task-b', title: 'Wire auth', status: 'spec_review' }],
@@ -776,8 +788,8 @@ coordinators:
 
   it('spec_approval: suppressed while a spec-review task still has an unanswered question', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [{
@@ -802,8 +814,8 @@ coordinators:
 
   it('spec_approval: not suppressed by a stale starter-task focus question once a concrete spec exists', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [{
@@ -838,8 +850,8 @@ coordinators:
 
   it('open_escalation: one item per unresolved escalation', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -867,8 +879,8 @@ coordinators:
 
   it('open_escalation: surfaces blocked tasks that only have a block reason', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -892,8 +904,8 @@ coordinators:
 
   it('lever_questions: single summary item when any lever is system-default', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeYaml('memory/agent-settings.yaml', fullSystemDefaultSettings())
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeYaml('.guildhall/agent-settings.yaml', fullSystemDefaultSettings())
 
     const items = buildInbox({ projectPath: tmpDir })
     const hits = items.filter(i => i.kind === 'lever_questions')
@@ -908,8 +920,8 @@ coordinators:
 
   it('spec_fill_pending: emitted for an open task missing acceptance criteria', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -941,8 +953,8 @@ coordinators:
 
   it('spec_fill_pending: NOT emitted while the same task has an unanswered question', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -977,8 +989,8 @@ coordinators:
 
   it('spec_fill_pending: NOT emitted when brief is awaiting approval (dedupe)', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -999,8 +1011,8 @@ coordinators:
 
   it('spec_fill_pending: NOT emitted for terminal tasks', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -1018,8 +1030,8 @@ coordinators:
 
   it('spec_fill_pending: NOT emitted for blocked tasks', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [
@@ -1039,7 +1051,7 @@ coordinators:
 
   it('spec_fill_pending: capped at 3 per pass to avoid flooding the inbox', async () => {
     await writeCompleteBootstrap()
-    await writeJson('memory/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
     const tasks = Array.from({ length: 6 }).map((_, i) => ({
       id: `t-${i}`,
       title: `Task ${i}`,
@@ -1052,7 +1064,7 @@ coordinators:
       status: 'ready',
       acceptanceCriteria: [],
     }))
-    await writeJson('memory/TASKS.json', { version: 1, lastUpdated: '', tasks })
+    await writeJson('.guildhall/TASKS.json', { version: 1, lastUpdated: '', tasks })
     const items = buildInbox({ projectPath: tmpDir })
     const hits = items.filter(i => i.kind === 'spec_fill_pending')
     expect(hits).toHaveLength(3)
@@ -1061,9 +1073,9 @@ coordinators:
   it('severity ordering: high → medium → low', async () => {
     // No bootstrap (high), brief awaiting approval (medium), defaults (low).
     await writeYaml('guildhall.yaml', { name: 'x', id: 'x', coordinators: [] })
-    await writeJson('memory/workspace-goals.json', { goals: [] })
-    await writeYaml('memory/agent-settings.yaml', fullSystemDefaultSettings())
-    await writeJson('memory/TASKS.json', {
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeYaml('.guildhall/agent-settings.yaml', fullSystemDefaultSettings())
+    await writeJson('.guildhall/TASKS.json', {
       version: 1,
       lastUpdated: '',
       tasks: [

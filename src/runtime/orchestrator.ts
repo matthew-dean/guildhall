@@ -128,6 +128,7 @@ import {
   type GitDriver,
 } from './git-driver.js'
 import { buildCommitStoryMessage } from './commit-story.js'
+import { effectiveGitStoryPolicy } from './git-story-policy.js'
 import {
   ensureWorktreeForDispatch,
   cleanupWorktreeForTerminal,
@@ -142,7 +143,14 @@ import {
   resolveLandingStrategy,
   type LandingStrategy,
 } from './merge-dispatcher.js'
-import { atomicWriteText, getProjectStateDir, loadSessionById, type SessionSnapshot } from '@guildhall/sessions'
+import {
+  atomicWriteText,
+  getProjectStateDir,
+  getProjectTaskLocalHistoryDir,
+  inferProjectRootFromMemoryDir,
+  loadSessionById,
+  type SessionSnapshot,
+} from '@guildhall/sessions'
 import {
   pickNextTasks,
   resolveFanoutCapacity,
@@ -6183,7 +6191,14 @@ export class Orchestrator {
     ok: boolean
     detail?: string
   }> {
-    if (this.opts.config.gitStory?.commit !== 'auto') return { ok: true }
+    const policy = effectiveGitStoryPolicy({
+      workspacePath: this.opts.config.workspacePath,
+      workspaceProjectPath: this.opts.config.projectPath,
+      ...(this.opts.config.gitStory ? { workspaceGitStory: this.opts.config.gitStory } : {}),
+      workspaceProjects: this.opts.config.projects ?? [],
+      task,
+    })
+    if (policy.commit !== 'auto') return { ok: true }
     const repoRoot =
       typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
         ? task.worktreePath.trim()
@@ -6297,7 +6312,10 @@ export class Orchestrator {
   private async maybeWriteReviewPacket(task: Task): Promise<void> {
     if (!new Set<TaskStatus>(['review', 'gate_check', ...ONE_TASK_STOP_STATUSES]).has(task.status)) return
 
-    const taskDir = path.join(this.opts.config.memoryDir, 'tasks', task.id)
+    const taskDir = getProjectTaskLocalHistoryDir(
+      inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
+      task.id,
+    )
     await fs.mkdir(taskDir, { recursive: true })
     atomicWriteText(
       path.join(taskDir, 'review-packet.md'),

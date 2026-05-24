@@ -44,6 +44,12 @@ import { PermissionMode } from '@guildhall/engine'
 import { LivenessTracker } from '../liveness.js'
 import { buildServeApp } from '../serve.js'
 import { InMemoryGitDriver } from '../git-driver.js'
+import {
+  getProjectProgressHeartbeatsPath,
+  getProjectStateDir,
+  getProjectTaskLocalHistoryDir,
+  getProjectTranscriptPath,
+} from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // End-to-end integration tests
@@ -64,25 +70,35 @@ let tmpDir: string
 let memoryDir: string
 let tasksPath: string
 let progressPath: string
+let heartbeatPath: string
 let originalHome: string | undefined
+let originalDataDir: string | undefined
 let testHomeDir: string
+let testDataDir: string
 
 beforeEach(async () => {
   originalHome = process.env.HOME
+  originalDataDir = process.env.GUILDHALL_DATA_DIR
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-e2e-'))
   testHomeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-home-'))
+  testDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-data-'))
   process.env.HOME = testHomeDir
+  process.env.GUILDHALL_DATA_DIR = testDataDir
   bootstrapWorkspace(tmpDir, { name: 'E2E Workspace' })
-  memoryDir = path.join(tmpDir, 'memory')
+  memoryDir = getProjectStateDir(tmpDir)
   tasksPath = path.join(memoryDir, 'TASKS.json')
   progressPath = path.join(memoryDir, 'PROGRESS.md')
+  heartbeatPath = getProjectProgressHeartbeatsPath(tmpDir)
 })
 
 afterEach(async () => {
   if (originalHome === undefined) delete process.env.HOME
   else process.env.HOME = originalHome
+  if (originalDataDir === undefined) delete process.env.GUILDHALL_DATA_DIR
+  else process.env.GUILDHALL_DATA_DIR = originalDataDir
   await fs.rm(tmpDir, { recursive: true, force: true })
   await fs.rm(testHomeDir, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(testDataDir, { recursive: true, force: true }).catch(() => {})
 })
 
 async function readQueue(): Promise<TaskQueue> {
@@ -288,7 +304,7 @@ describe('E2E AC-03: task lifecycle exploring → done', () => {
 
     // FR-08 exploring transcript persisted across the whole run.
     const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', `${intake.taskId}.md`),
+      getProjectTranscriptPath(tmpDir, 'exploring', intake.taskId),
       'utf-8',
     )
     expect(transcript).toContain('Add a ghost button variant')
@@ -422,8 +438,10 @@ coordinators:
     ])
 
     // 7. PROGRESS.md captured HEARTBEAT and MILESTONE entries.
+    const heartbeats = await fs.readFile(heartbeatPath, 'utf-8')
+    expect(heartbeats).toContain('HEARTBEAT')
+    expect(heartbeats).toContain('looma')
     const progress = await fs.readFile(progressPath, 'utf-8')
-    expect(progress).toContain('HEARTBEAT')
     expect(progress).toContain('MILESTONE')
     expect(progress).toContain('gate_check → done')
     expect(progress).toContain('looma')
@@ -439,7 +457,7 @@ coordinators:
 
     // 9. The exploring transcript is still on disk with the approval note.
     const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', `${intake.taskId}.md`),
+      getProjectTranscriptPath(tmpDir, 'exploring', intake.taskId),
       'utf-8',
     )
     expect(transcript).toContain('Add a ghost button variant')
@@ -465,9 +483,10 @@ describe('E2E 0.5.0: service over projects', () => {
         },
       ],
     })
-    memoryDir = path.join(tmpDir, 'memory')
+    memoryDir = getProjectStateDir(tmpDir)
     tasksPath = path.join(memoryDir, 'TASKS.json')
     progressPath = path.join(memoryDir, 'PROGRESS.md')
+    heartbeatPath = getProjectProgressHeartbeatsPath(tmpDir)
 
     const intake = await createExploringTask({
       memoryDir,
@@ -819,7 +838,7 @@ describe('E2E AC-22: report_issue → coordinator remediation inbox', () => {
     expect(taskAfter.agentIssues[0]!.broadcast).toBe(false)
     expect(taskAfter.agentIssues[0]!.detail).toContain('spec says X')
 
-    const progress = await fs.readFile(progressPath, 'utf-8')
+    const progress = await fs.readFile(heartbeatPath, 'utf-8')
     expect(progress).toContain('ISSUE [warn/stuck]')
 
     // Step 2: orchestrator next tick inbox sees the issue as a trigger.
@@ -1009,8 +1028,8 @@ describe('E2E AC-15: proposeTask → orchestrator tick → status per task_origi
       const final = afterTick.tasks.find((t) => t.id === c.id)!
       expect(final.status).toBe(c.expectedStatus)
 
-      // 5. PROGRESS.md records the promotion with the governing lever.
-      const progress = await fs.readFile(progressPath, 'utf-8')
+      // 5. Local progress heartbeats record the promotion with the governing lever.
+      const progress = await fs.readFile(heartbeatPath, 'utf-8')
       expect(progress).toContain(`Proposal ${c.id}: proposed → ${c.expectedStatus}`)
       expect(progress).toContain(`lever=${c.position}`)
     }
@@ -1599,12 +1618,7 @@ describe('E2E AC-23: crash → checkpoint → reclaim → restart_from_checkpoin
     // Manually backdate the checkpoint's writtenAt so the age calculation
     // exceeds 24h. writeCheckpoint stamps `new Date().toISOString()` — we
     // rewrite the file to control the timestamp.
-    const cpPath = path.join(
-      memoryDir,
-      'tasks',
-      'task-old',
-      'checkpoint.json',
-    )
+    const cpPath = path.join(getProjectTaskLocalHistoryDir(tmpDir, 'task-old'), 'checkpoint.json')
     const raw = JSON.parse(await fs.readFile(cpPath, 'utf-8'))
     raw.writtenAt = '2026-04-19T00:00:00Z'
     await fs.writeFile(cpPath, JSON.stringify(raw, null, 2), 'utf-8')

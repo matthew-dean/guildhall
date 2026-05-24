@@ -41,7 +41,7 @@ beforeEach(async () => {
       },
     ],
   }).id ?? path.basename(tmpDir)
-  tasksPath = path.join(tmpDir, 'memory', 'TASKS.json')
+  tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
 })
 
 afterEach(async () => {

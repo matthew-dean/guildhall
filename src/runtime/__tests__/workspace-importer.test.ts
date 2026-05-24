@@ -19,16 +19,21 @@ import type { WorkspaceInventory } from '../workspace-import/detect.js'
 import type { WorkspaceSignal } from '../workspace-import/types.js'
 
 let tmpDir: string
+let dataDir: string
 let memoryDir: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-ws-import-'))
+  dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
+  process.env.GUILDHALL_DATA_DIR = dataDir
   bootstrapWorkspace(tmpDir, { name: 'Import Test' })
-  memoryDir = path.join(tmpDir, 'memory')
+  memoryDir = path.join(tmpDir, '.guildhall')
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
   await fs.rm(tmpDir, { recursive: true, force: true })
+  await fs.rm(dataDir, { recursive: true, force: true })
 })
 
 async function readQueue(): Promise<TaskQueue> {

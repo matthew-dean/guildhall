@@ -32,6 +32,7 @@ tags?: string[]
 skills?: ProjectSkillsConfig
 runtime?: RuntimeSlotConfig
 worktree?: WorktreeConfig
+gitStory?: GitStoryPolicy
 ```
 
 ## Identity
@@ -81,6 +82,11 @@ projects:
     worktree:
       include:
         - .env
+    gitStory:
+      completionTarget: open_pr
+      commit: ask
+      push: ask
+      pullRequest: ask
 
 council:
   mandate: Keep Looma generic while letting Knit needs drive priority.
@@ -106,6 +112,11 @@ multiple buildable projects, put local worktree files under the matching
 `projects[]` entry so paths stay relative to that child project. Do not put
 `knit/.env` in the parent workspace include list; a Knit task resolves includes
 from the Knit project root, so the child setting should be `.env`.
+
+The same rule applies to setup and Git closure policy. Put child-specific
+`bootstrap`, `worktree`, and `gitStory` blocks on the matching `projects[]`
+entry. Keep top-level versions only for single-project workspaces or truly
+workspace-wide defaults.
 
 ## `models`
 
@@ -185,6 +196,40 @@ filenames during setup, but it only copies paths listed here. Parent-directory
 paths are rejected, missing files are skipped, and symlinks are not copied.
 
 You can edit this list in **Settings → Advanced → Task worktree local files**.
+
+## `gitStory`
+
+Git Story policy tells Guildhall how completed work should be closed. It can
+live at the top level for a single-project workspace, or under a `projects[]`
+entry when a parent workspace coordinates several Git-backed child projects.
+
+```yaml
+gitStory:
+  completionTarget: open_pr
+  commit: ask
+  push: ask
+  pullRequest: ask
+  merge: ask
+  localOnlyAllowed: true
+  deferAllowed: true
+  requireCleanRelease: true
+  allowForcePush: false
+  allowSharedBranchRebase: false
+```
+
+`completionTarget` can be `leave_dirty`, `commit_local`, `push_branch`,
+`open_pr`, or `merge_landing_branch`. The action fields use `ask`, `auto`, or
+`never`.
+
+The default posture is ask-first. If `commit` is `auto`, Guildhall can
+auto-commit completed task work with a Commit Story message. Push and PR
+creation still follow their own policy fields. `localOnlyAllowed` and
+`deferAllowed` let you record intentional leftovers with a reason instead of
+leaving them to look like forgotten work.
+
+Dangerous history moves are off by default. Leave `allowForcePush` and
+`allowSharedBranchRebase` false unless a project has a very deliberate reason
+to permit them.
 
 ## `runtime`
 

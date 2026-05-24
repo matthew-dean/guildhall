@@ -32,6 +32,13 @@ fixed lifecycle: `proposed → exploring → spec_review → ready → in_progre
 review → gate_check → done` (terminal: `done`, `shelved`, `blocked`). See
 [Task lifecycle](./task-lifecycle).
 
+## Pressure-Test Intake
+
+The one-question-at-a-time intake path for broad releases, features, and risky
+product asks. Guildhall routes the request, inspects what it can, asks focused
+questions in Thread, persists assumptions and deferrals, and turns the result
+into a buildable spec. See [Pressure-Test Intake](./pressure-test-intake).
+
 ## Blueprint
 
 An accepted plan for a project, release, phase, or task. A blueprint names what
@@ -81,6 +88,13 @@ one task (fan-out).
 An explicit revision to the accepted plan. Use a change order when new evidence
 changes scope, sequencing, assumptions, or task shape. Change orders stay
 visible because silent drift destroys trust.
+
+## Git Story
+
+The closure state for project or task changes: clean, dirty, local commits, no
+upstream, pushed, PR open, merged, local-only, deferred, conflict, or unknown.
+It is the bit that tells you whether "done" also means the repo is in an
+intentional state. See [Git Story Closure](./git-story-closure).
 
 ## Punch list
 

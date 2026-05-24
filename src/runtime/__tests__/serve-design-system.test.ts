@@ -5,6 +5,7 @@ import os from 'node:os'
 import yaml from 'js-yaml'
 import { bootstrapWorkspace } from '@guildhall/config'
 import { DesignSystem } from '@guildhall/core'
+import { getProjectStateDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 
 // Integration tests for the project-scoped design-system endpoints:
@@ -13,19 +14,24 @@ import { buildServeApp } from '../serve.js'
 //   POST /api/project/design-system/approve  → stamps approvedBy='human' + approvedAt
 
 let tmpDir: string
+let dataDir: string
 let projectId: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-ds-'))
+  dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
+  process.env.GUILDHALL_DATA_DIR = dataDir
   projectId = bootstrapWorkspace(tmpDir, { name: 'DS Test' }).id ?? path.basename(tmpDir)
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
+  await fs.rm(dataDir, { recursive: true, force: true })
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
 async function readDS(): Promise<DesignSystem> {
-  const raw = await fs.readFile(path.join(tmpDir, 'memory', 'design-system.yaml'), 'utf-8')
+  const raw = await fs.readFile(path.join(getProjectStateDir(tmpDir), 'design-system.yaml'), 'utf-8')
   return DesignSystem.parse(yaml.load(raw) ?? {})
 }
 

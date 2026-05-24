@@ -6,7 +6,14 @@ import { z } from 'zod'
 import type { WorkspaceImportReview } from './workspace-import/review.js'
 import type { WorkspaceImportDraft } from './workspace-import/index.js'
 import type { Task } from '@guildhall/core'
-import type { LearningCandidate } from './policy.js'
+import type {
+  LearningCandidate,
+  PolicyConfidence,
+  PreferenceItem,
+  PreferencePosition,
+  PreferenceSubject,
+  StructuredPreference,
+} from './policy.js'
 
 const TaskSelectionMode = z.enum(['all', 'tight'])
 
@@ -43,6 +50,29 @@ const EvidenceRefSchema = z.object({
   ref: z.string().optional(),
 })
 
+const PreferenceItemSchema = z.object({
+  item: z.string().min(1),
+  strength: z.enum(['weak', 'medium', 'strong']).optional(),
+  exceptions: z.array(z.string().min(1)).optional(),
+})
+
+const StructuredPreferenceSchema = z.object({
+  kind: z.literal('preference'),
+  subject: z.object({
+    domain: z.string().min(1),
+    area: z.string().min(1).optional(),
+    item: z.string().min(1).optional(),
+  }),
+  position: z.object({
+    prefer: z.array(PreferenceItemSchema).optional(),
+    avoid: z.array(PreferenceItemSchema).optional(),
+    ranking: z.enum(['ordered', 'unordered']).optional(),
+  }).refine(
+    position => (position.prefer?.length ?? 0) > 0 || (position.avoid?.length ?? 0) > 0,
+    'Structured preferences must prefer or avoid at least one item.',
+  ),
+})
+
 const SuggestedLearningSchema = z.object({
   id: z.string(),
   source: z.enum(['task', 'blocker', 'user_correction', 'review', 'gate', 'model_eval']),
@@ -65,6 +95,7 @@ const SuggestedLearningSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   dismissedAt: z.string().optional(),
+  preference: StructuredPreferenceSchema.optional(),
 })
 
 const LearningRecordSchema = z.object({
@@ -81,6 +112,7 @@ export type CoordinatorSuggestion = z.infer<typeof CoordinatorSuggestionSchema>
 export type ProductSuggestion = z.infer<typeof ProductSuggestionSchema>
 export type SuggestedLearning = z.infer<typeof SuggestedLearningSchema>
 export type LearningRecord = z.infer<typeof LearningRecordSchema>
+export type { PreferenceItem, PreferencePosition, PreferenceSubject, StructuredPreference }
 
 export interface ReflectionTrigger {
   source:
@@ -171,6 +203,7 @@ function upsertSuggestedLearning(
     status: 'suggested',
     createdAt: now,
     updatedAt: now,
+    preference: candidate.preference,
   })
   const existing = record.suggestedLearnings.find((item) => item.id === candidate.id)
   const next = existing
@@ -442,6 +475,51 @@ export async function recordUserCorrection(input: {
   }
 
   await writeLearningFile(globalLearningPath(), nextRecord)
+}
+
+export async function recordStructuredUserPreference(input: {
+  memoryDir: string
+  id: string
+  summary: string
+  evidenceSummary: string
+  subject: PreferenceSubject
+  prefer?: PreferenceItem[]
+  avoid?: PreferenceItem[]
+  ranking?: PreferencePosition['ranking']
+  confidence?: PolicyConfidence
+}): Promise<LearningSnapshot> {
+  const preference = StructuredPreferenceSchema.parse({
+    kind: 'preference',
+    subject: input.subject,
+    position: {
+      prefer: input.prefer,
+      avoid: input.avoid,
+      ranking: input.ranking,
+    },
+  }) satisfies StructuredPreference
+
+  return persistLearningCandidates({
+    memoryDir: input.memoryDir,
+    candidates: [
+      {
+        id: input.id,
+        source: 'user_correction',
+        summary: input.summary,
+        evidence: [
+          {
+            kind: 'task',
+            summary: input.evidenceSummary,
+          },
+        ],
+        proposedScope: 'user_global',
+        proposedDestination: 'user_preference',
+        confidence: input.confidence ?? 'medium',
+        risk: 'low',
+        requiresApproval: true,
+        preference,
+      },
+    ],
+  })
 }
 
 function parseRecoveryPlaybookNote(content: string): Record<string, unknown> | null {

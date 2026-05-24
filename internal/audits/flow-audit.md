@@ -57,6 +57,23 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Audit registered projects for Guildhall memory/git-state hygiene. Checked
+  the registry projects and their child git roots, inferred missing local Git
+  Story policies into ignored `.guildhall/config.yaml` files, removed legacy
+  root-level Guildhall scratch files where they were still untracked, confirmed
+  local-only buckets such as `.guildhall/config.yaml`, worktrees, cache, logs,
+  sessions, transcripts, and old `memory/` roots are not tracked, normalized
+  tracked Guildhall state away from machine-specific project paths, and closed
+  each project according to policy: pushed remote-backed branches or committed
+  locally for the no-remote Commerce project.
+- [x] Add structured Global Preference Review to the learning/intake contract.
+  Guildhall can now persist user-global preference candidates with a generic
+  `subject` taxonomy and array-based `prefer`/`avoid` positions, so preferences
+  can cover software tooling, game-development engines, writing tone, release
+  habits, or other domains without hardcoded web-stack keys. The runtime keeps
+  these records suggested until approval, and the 0.8.0 intake spec now tells
+  coordinators when to zoom out and ask whether repeated evidence should become
+  a project-only or cross-project preference.
 - [x] Ship Git Story Closure as a 0.8.0 MVP blocker. The single release tracker
   now lives at `internal/plans/2026-05-24-guildhall-0-8-mvp-tracker.md` and
   keeps Pressure-Test Intake as the top priority while making git closure the

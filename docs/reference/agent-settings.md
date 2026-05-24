@@ -21,6 +21,12 @@ cross-project preferences, project playbooks, and product ideas. Suggested
 records stay off until you choose to use them; `./.guildhall/agent-settings.yaml` remains
 the explicit lever file.
 
+User/global preference records may include a structured `preference` payload.
+That payload uses an open `subject` taxonomy plus array-based `prefer` and
+`avoid` positions, so the same record shape can describe software tooling,
+game-development engines, writing style, release habits, or another domain
+without adding a new hardcoded key.
+
 ## Shape
 
 ```yaml

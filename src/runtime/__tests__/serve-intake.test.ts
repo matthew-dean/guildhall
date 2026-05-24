@@ -4,14 +4,18 @@ import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
 import { TaskQueue } from '@guildhall/core'
+import { getProjectStateDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 
 let tmpDir: string
+let dataDir: string
 let tasksPath: string
 let projectId: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-intake-'))
+  dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
+  process.env.GUILDHALL_DATA_DIR = dataDir
   projectId = bootstrapWorkspace(tmpDir, {
     name: 'Intake Test',
     coordinators: [
@@ -37,10 +41,12 @@ beforeEach(async () => {
       },
     ],
   }).id ?? path.basename(tmpDir)
-  tasksPath = path.join(tmpDir, 'memory', 'TASKS.json')
+  tasksPath = path.join(getProjectStateDir(tmpDir), 'TASKS.json')
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
+  await fs.rm(dataDir, { recursive: true, force: true })
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 

@@ -604,7 +604,8 @@
   }
   .hero-actions :global(.default-model-button) {
     gap: var(--s-1);
-    max-width: min(28rem, 100%);
+    min-width: 0;
+    max-width: min(30rem, 100%);
   }
   .hero-actions :global(.default-model-button-warn) {
     border-color: color-mix(in srgb, var(--warn) 52%, var(--button-secondary-border));
@@ -627,7 +628,12 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .default-model-label {
+    flex: 0 0 auto;
+  }
   .default-model-worker {
+    flex: 1 1 auto;
+    max-inline-size: clamp(8rem, 18vw, 16rem);
     color: var(--text-muted);
     font-size: var(--fs-1);
     font-weight: 650;

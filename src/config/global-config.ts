@@ -23,6 +23,8 @@ import type { ZodError } from 'zod'
 // ---------------------------------------------------------------------------
 
 export function guildhallHomeDir(): string {
+  const override = process.env.GUILDHALL_CONFIG_DIR?.trim()
+  if (override) return override
   return join(homedir(), '.guildhall')
 }
 

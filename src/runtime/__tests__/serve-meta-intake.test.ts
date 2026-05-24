@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace, readWorkspaceConfig } from '@guildhall/config'
+import { getProjectStateDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { createMetaIntakeTask, META_INTAKE_TASK_ID } from '../meta-intake.js'
 import type { TaskQueue } from '@guildhall/core'
@@ -17,6 +18,7 @@ import type { TaskQueue } from '@guildhall/core'
 // ---------------------------------------------------------------------------
 
 let tmpDir: string
+let dataDir: string
 let memoryDir: string
 let projectId: string
 
@@ -39,11 +41,15 @@ async function writeDraftSpec(spec: string): Promise<void> {
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-meta-'))
+  dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
+  process.env.GUILDHALL_DATA_DIR = dataDir
   projectId = bootstrapWorkspace(tmpDir, { name: 'Meta Serve Test' }).id ?? path.basename(tmpDir)
-  memoryDir = path.join(tmpDir, 'memory')
+  memoryDir = getProjectStateDir(tmpDir)
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
+  await fs.rm(dataDir, { recursive: true, force: true })
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 

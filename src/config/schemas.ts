@@ -142,6 +142,7 @@ const WorkspaceProjectConfig = z.object({
   coordinator: z.string().optional(),
   bootstrap: BootstrapConfig.optional(),
   worktree: WorktreeConfig.optional(),
+  gitStory: GitStoryPolicy.optional(),
 })
 
 const CouncilConfig = z.object({

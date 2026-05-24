@@ -11,6 +11,7 @@ import {
 } from '../intake.js'
 import { TaskQueue } from '@guildhall/core'
 import { raiseEscalation } from '@guildhall/tools'
+import { getProjectStateDir, getProjectTranscriptPath } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-12 exploratory task intake
@@ -21,12 +22,15 @@ import { raiseEscalation } from '@guildhall/tools'
 // ---------------------------------------------------------------------------
 
 let tmpDir: string
+let dataDir: string
 let memoryDir: string
 let tasksPath: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-intake-'))
-  memoryDir = path.join(tmpDir, 'memory')
+  dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
+  process.env.GUILDHALL_DATA_DIR = dataDir
+  memoryDir = getProjectStateDir(tmpDir)
   await fs.mkdir(memoryDir, { recursive: true })
   tasksPath = path.join(memoryDir, 'TASKS.json')
   // Bootstrap seeds TASKS.json as a bare `[]`, so test that path directly too.
@@ -34,6 +38,8 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  delete process.env.GUILDHALL_DATA_DIR
+  await fs.rm(dataDir, { recursive: true, force: true })
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -52,7 +58,7 @@ describe('createExploringTask', () => {
     })
     expect(result.taskId).toBe('task-001')
     expect(result.transcriptPath).toBe(
-      path.join(memoryDir, 'exploring', 'task-001.md'),
+      getProjectTranscriptPath(tmpDir, 'exploring', 'task-001'),
     )
 
     const queue = await readQueue()
@@ -195,7 +201,7 @@ describe('approveSpec', () => {
       approvalNote: 'ship it',
     })
     const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'task-001.md'),
+      getProjectTranscriptPath(tmpDir, 'exploring', 'task-001'),
       'utf-8',
     )
     expect(transcript).toContain('Spec approved')
@@ -346,7 +352,7 @@ describe('resumeExploring', () => {
     })
     expect(result.success).toBe(true)
     const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'task-001.md'),
+      getProjectTranscriptPath(tmpDir, 'exploring', 'task-001'),
       'utf-8',
     )
     expect(transcript).toContain('first ask')
@@ -386,7 +392,7 @@ describe('resumeExploring', () => {
     expect(queue.tasks[0]!.status).toBe('in_progress')
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('summarize the failing test')
     const transcript = await fs.readFile(
-      path.join(memoryDir, 'exploring', 'task-001.md'),
+      getProjectTranscriptPath(tmpDir, 'exploring', 'task-001'),
       'utf-8',
     )
     expect(transcript).toContain('summarize the failing test')

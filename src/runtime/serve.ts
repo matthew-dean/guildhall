@@ -175,6 +175,10 @@ import {
   summarizeGitStories,
   type GitStorySummary,
 } from './git-story.js'
+import {
+  effectiveGitStoryPolicy,
+  resolveWorkspaceProjectPaths,
+} from './git-story-policy.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
 import { repairStaleBlockersForProject } from './stale-blocker-repair.js'
 import {
@@ -1219,13 +1223,22 @@ function taskForGitStory(task: Record<string, unknown>): Parameters<typeof inspe
   }
 }
 
+function taskGitStoryRepoPath(projectPath: string, task: Record<string, unknown>): string {
+  const worktreePath = typeof task.worktreePath === 'string' && task.worktreePath.trim()
+    ? task.worktreePath.trim()
+    : ''
+  if (worktreePath) return worktreePath
+  const taskProjectPath = typeof task.projectPath === 'string' && task.projectPath.trim()
+    ? task.projectPath.trim()
+    : ''
+  return taskProjectPath || projectPath
+}
+
 async function gitStoryForTask(projectPath: string, task: Record<string, unknown>) {
   const driver = new NodeGitDriver()
-  const inspectedPath = typeof task.worktreePath === 'string' && task.worktreePath.trim()
-    ? task.worktreePath.trim()
-    : projectPath
+  const inspectedPath = taskGitStoryRepoPath(projectPath, task)
   return inspectGitStory(driver, {
-    repoRoot: projectPath,
+    repoRoot: typeof task.projectPath === 'string' && task.projectPath.trim() ? task.projectPath.trim() : projectPath,
     inspectedPath,
     task: taskForGitStory(task),
     inspectPr: false,
@@ -1260,18 +1273,19 @@ async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Re
   return summarizeGitStories(snapshots)
 }
 
-function effectiveGitStoryPolicy(projectPath: string): Record<string, unknown> {
-  const systemPolicy = readGlobalConfig().gitStory
-  const projectPolicy = readProjectConfig(projectPath).gitStory
-  return {
-    ...systemPolicy,
-    ...(projectPolicy ?? {}),
-    copiedFromSystem: !projectPolicy,
-  }
-}
-
-function gitStoryAutomationFor(projectPath: string, action: 'commit' | 'push' | 'pullRequest'): 'ask' | 'auto' | 'never' {
-  const policy = effectiveGitStoryPolicy(projectPath)
+function gitStoryAutomationFor(
+  projectPath: string,
+  workspaceConfig: ReturnType<typeof readWorkspaceConfig> | null,
+  task: Record<string, unknown>,
+  action: 'commit' | 'push' | 'pullRequest',
+): 'ask' | 'auto' | 'never' {
+  const policy = effectiveGitStoryPolicy({
+    workspacePath: projectPath,
+    workspaceProjectPath: projectPath,
+    ...(workspaceConfig?.gitStory ? { workspaceGitStory: workspaceConfig.gitStory } : {}),
+    workspaceProjects: workspaceConfig ? resolveWorkspaceProjectPaths(projectPath, workspaceConfig) : [],
+    task,
+  })
   const value = policy[action]
   return value === 'auto' || value === 'never' ? value : 'ask'
 }
@@ -1283,10 +1297,12 @@ function isSafeRelativeGitPath(file: string): boolean {
 
 function policyAllowsGitWrite(
   projectPath: string,
+  workspaceConfig: ReturnType<typeof readWorkspaceConfig> | null,
+  task: Record<string, unknown>,
   action: 'commit' | 'push' | 'pullRequest',
   body: { confirmed?: boolean; automationSource?: string },
 ): { ok: true } | { ok: false; error: string; status: number } {
-  const mode = gitStoryAutomationFor(projectPath, action)
+  const mode = gitStoryAutomationFor(projectPath, workspaceConfig, task, action)
   if (mode === 'never') return { ok: false, error: `Project policy disables ${action}.`, status: 403 }
   if (mode === 'auto' && body.automationSource === 'project_policy') return { ok: true }
   if (body.confirmed === true) return { ok: true }
@@ -4285,13 +4301,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!task) return c.json({ error: 'task not found' }, 404)
       const now = new Date().toISOString()
       if (closureAction === 'commit') {
-        const allowed = policyAllowsGitWrite(project.path, 'commit', body)
+        const allowed = policyAllowsGitWrite(project.path, project.config, task, 'commit', body)
         if (!allowed.ok) return c.json({ error: allowed.error }, allowed.status as 403 | 409)
         const message = typeof body.message === 'string' ? body.message.trim() : ''
         const files = Array.isArray(body.files) ? body.files.filter((file): file is string => typeof file === 'string' && isSafeRelativeGitPath(file)) : []
         if (!message) return c.json({ error: 'message is required' }, 400)
         if (files.length === 0) return c.json({ error: 'files are required' }, 400)
-        const cwd = typeof task.worktreePath === 'string' && task.worktreePath.trim() ? task.worktreePath.trim() : project.path
+        const cwd = taskGitStoryRepoPath(project.path, task)
         const result = await commitGitStoryFiles({ cwd, files, message })
         if (!result.ok) return c.json({ error: result.detail ?? 'commit failed' }, 500)
         const notes = Array.isArray(task.notes) ? [...(task.notes as unknown[])] : []
@@ -4303,12 +4319,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ ok: true, commitSha: result.commitSha, task: await enrichTaskForServe(project.path, task) })
       }
       if (closureAction === 'push') {
-        const allowed = policyAllowsGitWrite(project.path, 'push', body)
+        const allowed = policyAllowsGitWrite(project.path, project.config, task, 'push', body)
         if (!allowed.ok) return c.json({ error: allowed.error }, allowed.status as 403 | 409)
+        const cwd = taskGitStoryRepoPath(project.path, task)
         const branch = typeof task.branchName === 'string' && task.branchName.trim()
           ? task.branchName.trim()
-          : await new NodeGitDriver().currentBranch(project.path)
-        const result = await new NodeGitDriver().push(project.path, branch)
+          : await new NodeGitDriver().currentBranch(cwd)
+        const result = await new NodeGitDriver().push(cwd, branch)
         if (!result.ok) {
           const fetchFirst = /fetch first|non-fast-forward|rejected/i.test(result.detail ?? '')
           return c.json({
@@ -4319,14 +4336,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ ok: true, branch, task: await enrichTaskForServe(project.path, task) })
       }
       if (closureAction === 'open-pr') {
-        const allowed = policyAllowsGitWrite(project.path, 'pullRequest', body)
+        const allowed = policyAllowsGitWrite(project.path, project.config, task, 'pullRequest', body)
         if (!allowed.ok) return c.json({ error: allowed.error }, allowed.status as 403 | 409)
+        const cwd = taskGitStoryRepoPath(project.path, task)
         const branch = typeof task.branchName === 'string' && task.branchName.trim()
           ? task.branchName.trim()
-          : await new NodeGitDriver().currentBranch(project.path)
+          : await new NodeGitDriver().currentBranch(cwd)
         const baseBranch = typeof task.baseBranch === 'string' && task.baseBranch.trim() ? task.baseBranch.trim() : 'main'
         const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : String(task.title ?? id)
-        const result = await new NodeGitDriver().openPullRequest(project.path, {
+        const result = await new NodeGitDriver().openPullRequest(cwd, {
           branch,
           baseBranch,
           title,
@@ -5351,7 +5369,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     error?: string
   }> {
     try {
-      const { stdout } = await execFileP('git', ['status', '--short', '--untracked-files=all', '--', 'guildhall.yaml', 'memory', '.gitignore'], {
+      const { stdout } = await execFileP('git', ['status', '--short', '--untracked-files=all', '--', 'guildhall.yaml', '.guildhall', 'memory', '.gitignore'], {
         cwd: projectPath,
         timeout: 2000,
       })

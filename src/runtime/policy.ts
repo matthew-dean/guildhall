@@ -42,6 +42,33 @@ export interface EvidenceRef {
   ref?: string
 }
 
+export type PreferenceStrength = 'weak' | 'medium' | 'strong'
+export type PreferenceRanking = 'ordered' | 'unordered'
+
+export interface PreferenceItem {
+  item: string
+  strength?: PreferenceStrength
+  exceptions?: string[]
+}
+
+export interface PreferenceSubject {
+  domain: string
+  area?: string
+  item?: string
+}
+
+export interface PreferencePosition {
+  prefer?: PreferenceItem[]
+  avoid?: PreferenceItem[]
+  ranking?: PreferenceRanking
+}
+
+export interface StructuredPreference {
+  kind: 'preference'
+  subject: PreferenceSubject
+  position: PreferencePosition
+}
+
 export interface FailureClassification {
   class: FailureClass
   confidence: PolicyConfidence
@@ -94,6 +121,7 @@ export interface LearningCandidate {
   confidence: PolicyConfidence
   risk: 'low' | 'medium' | 'high'
   requiresApproval: boolean
+  preference?: StructuredPreference
 }
 
 export interface AgentDecisionPacket {

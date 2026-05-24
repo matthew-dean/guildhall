@@ -5,7 +5,7 @@
       primary nav entries + accordion sub-nav + Settings pinned as a utility
       to the bottom.
     · Top bar (slim): workspace name chip + run-status chip + Start/Stop
-      + New Task. No tab strip.
+      + New request. No tab strip.
     · Main: the active view component (sub-paths pass a `subView` prop to
       surfaces that support it).
 -->
@@ -717,11 +717,11 @@
   )
   const newTaskDisabledReason = $derived(
     needsMeta
-      ? 'Finish project setup before adding tasks'
+      ? 'Finish project setup before creating a request'
       : blockers.bootstrap
         ? failedBootstrapStep
-          ? 'Fix the bootstrap failure before adding tasks'
-          : 'Complete bootstrap in Thread before adding tasks'
+          ? 'Fix the bootstrap failure before creating a request'
+          : 'Complete bootstrap in Thread before creating a request'
         : null,
   )
   const setupAttentionHref = $derived(
@@ -1072,12 +1072,12 @@
               iconOnly={topbarLabelsCollapsed}
               disabled={busy}
               onclick={newTask}
-              ariaLabel="New task"
-              title="New task"
+              ariaLabel="New request"
+              title="New request"
             >
               <Icon name="plus" size={16} />
               {#if !topbarLabelsCollapsed}
-                <span>New task</span>
+                <span>New request</span>
               {/if}
             </Button>
           {/if}
@@ -1130,7 +1130,7 @@
                     onclick={() => { closeActionsMenu(); void newTask() }}
                   >
                     <Icon name="plus" size={16} />
-                    <span>New task</span>
+                    <span>New request</span>
                   </button>
                 {/if}
                 {#if showAdvanceOneTaskAction}

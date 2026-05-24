@@ -54,6 +54,7 @@ export interface GitStoryClassificationInput {
   untrackedCount: number
   ahead: number
   hasUpstream: boolean
+  branch?: string
   upstream?: string
   prState?: string
   mergeRecordResult?: string
@@ -71,6 +72,7 @@ export function classifyGitStoryState(input: GitStoryClassificationInput): GitSt
   if (!input.hasUpstream) return 'no_upstream'
   if (input.ahead > 0) return 'committed_local'
   if (input.prState && input.prState.toUpperCase() === 'OPEN') return 'pr_open'
+  if (input.upstream && ['main', 'master', 'trunk'].includes(input.branch ?? '')) return 'clean'
   if (input.upstream) return 'pushed'
   return 'clean'
 }
@@ -199,6 +201,7 @@ export async function inspectGitStory(
       untrackedCount: status.untrackedCount,
       ahead: status.ahead,
       hasUpstream: Boolean(status.upstream),
+      branch: status.branch,
       upstream: status.upstream,
       prState,
       mergeRecordResult,

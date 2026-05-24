@@ -2140,13 +2140,14 @@
                           >
                             Cancel
                           </Button>
-                          <Button
-                            variant="secondary"
-                            disabled={busyTurnId === t.id || !(contextDrafts[t.id] ?? '').trim()}
-                            onclick={() => askQuestionContext(t)}
-                          >
-                            Ask for context
-                          </Button>
+                        <Button
+                          variant="agent"
+                          disabled={busyTurnId === t.id || !(contextDrafts[t.id] ?? '').trim()}
+                          onclick={() => askQuestionContext(t)}
+                        >
+                          <Icon name="sparkles" size={14} />
+                          Ask for context
+                        </Button>
                         </Row>
                         {#if contextErrors[t.id]}
                           <p class="error">{contextErrors[t.id]}</p>
@@ -2531,7 +2532,8 @@
                       {#if projectRunBlocksTaskStart(t)}
                         <Button variant="secondary" disabled>Already queued</Button>
                       {:else if canStartTaskTurn(t)}
-                        <Button variant="primary" disabled={runBusy || busyTurnId === t.id} onclick={() => startTaskRun(t.taskId)}>
+                        <Button variant="agent" disabled={runBusy || busyTurnId === t.id} onclick={() => startTaskRun(t.taskId)}>
+                          <Icon name="sparkles" size={14} />
                           {startTaskLabel(t)}
                         </Button>
                       {/if}
@@ -2636,7 +2638,8 @@
                             {startTaskLabel(t)}
                           </Button>
                         {:else}
-                          <Button variant="primary" disabled={runBusy || busyTurnId === t.id} onclick={() => startTaskRun(t.taskId)}>
+                          <Button variant="agent" disabled={runBusy || busyTurnId === t.id} onclick={() => startTaskRun(t.taskId)}>
+                            <Icon name="sparkles" size={14} />
                             {startTaskLabel(t)}
                           </Button>
                         {/if}

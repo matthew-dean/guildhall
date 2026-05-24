@@ -53,7 +53,7 @@ export interface BuildInboxOptions {
 /**
  * High-severity blockers that gate downstream actions in the UI.
  *
- * When true, the UI disables specific controls (Start, + New Task, etc.) with
+ * When true, the UI disables specific controls (Start, + New request, etc.) with
  * a tooltip pointing the user back at the relevant Inbox item. Kept as a
  * narrow, explicit shape — derived from the Inbox items themselves — rather
  * than letting every consumer re-derive the rules.
