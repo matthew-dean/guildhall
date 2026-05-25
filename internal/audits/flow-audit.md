@@ -69,6 +69,10 @@ babysit setup/import/provider/release states across multiple pages.
   `guildhall review-calibration escaped-miss` now records human-found missed
   review findings as escaped-miss audit events, so misses can feed corpus-case,
   planner, bakeoff, or deterministic-gate follow-up without hand-editing state.
+  The corpus loader now recurses through nested case folders, and the seed
+  corpus includes non-UX cases for accessibility, tenant security, API
+  compatibility, data idempotency, performance, and docs truth with matching
+  versioned calibration recipes.
   The initial UX corpus includes ambiguous primary action, missing error
   recovery, cross-surface state contradiction, and a CLI negative-control case.
 - [x] Surface stored review plans in task details. Real orchestrator runs now

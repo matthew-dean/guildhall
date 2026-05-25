@@ -1,0 +1,43 @@
+id: cross-tenant-export
+title: Cross-tenant export leak
+domain: security
+productType: analytics
+surfaceType: api
+userGoal: Export only the current workspace's report data.
+scenario: An export endpoint filters rows by report id but does not also enforce workspace ownership.
+artifacts:
+  - id: route-summary
+    kind: document_excerpt
+    description: Endpoint implementation summary.
+    content: "GET /reports/:reportId/export selects rows where report_id = :reportId and streams CSV. Caller workspace is available on session.workspaceId but not used in the query."
+reviewLanes:
+  - security
+  - privacy
+  - data_integrity
+knownFindings:
+  - id: missing-tenant-boundary
+    lane: security
+    severity: critical
+    summary: The export does not enforce tenant ownership on the requested report.
+    impact: A caller who guesses or obtains another report id can export another workspace's data.
+    minimumUsefulFix: Scope the export lookup by authenticated workspace and fail closed when ownership does not match.
+    matchHints:
+      - tenant
+      - workspace
+      - ownership
+      - report id
+falsePositiveTraps:
+  - id: not-just-rate-limit
+    summary: Rate limiting does not fix the authorization boundary.
+source:
+  kind: synthetic
+  citation: Created for cross-domain review calibration.
+labelGovernance:
+  labeledBy: review-calibration
+  labeledAt: 2026-05-25T12:00:00.000Z
+  reviewStatus: seed
+privacyClassification: public
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2026-11-25
+  reason: Authorization contracts may evolve with the product.

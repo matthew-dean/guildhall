@@ -1,0 +1,42 @@
+id: unbounded-list-query
+title: Unbounded list query
+domain: performance
+productType: operations-dashboard
+surfaceType: web-app
+userGoal: Open an incident dashboard quickly during an outage.
+scenario: The dashboard fetches every incident ever created on initial load and filters in the browser.
+artifacts:
+  - id: query-summary
+    kind: document_excerpt
+    description: Dashboard data-loading summary.
+    content: "Initial load calls GET /incidents without pagination, date bounds, or workspace limits. Browser filters closed incidents client-side."
+reviewLanes:
+  - performance
+  - api_contract
+knownFindings:
+  - id: unbounded-initial-load
+    lane: performance
+    severity: high
+    summary: Initial load is unbounded and grows with all historical incident data.
+    impact: The dashboard can become slow or unavailable exactly when users need it during incidents.
+    minimumUsefulFix: Add server-side pagination or date bounds and load only the active/recent incident set by default.
+    matchHints:
+      - unbounded
+      - pagination
+      - initial load
+      - server-side
+falsePositiveTraps:
+  - id: not-premature-optimization
+    summary: This is not a micro-optimization; the request grows without bound on a critical path.
+source:
+  kind: synthetic
+  citation: Created for cross-domain review calibration.
+labelGovernance:
+  labeledBy: review-calibration
+  labeledAt: 2026-05-25T12:00:00.000Z
+  reviewStatus: seed
+privacyClassification: public
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2026-11-25
+  reason: Data volume and dashboard expectations may change.

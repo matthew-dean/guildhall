@@ -174,6 +174,72 @@ export const defaultReviewCalibrationRecipes: ReviewCalibrationRecipe[] = [
     calibratedCaseIds: ['cross-surface-state-contradiction'],
     knownWeaknesses: ['Needs at least two surface artifacts to be meaningful.'],
   },
+  {
+    id: 'accessibility-keyboard-path',
+    version: 'v1',
+    lanes: ['accessibility', 'ux_comprehension'],
+    purpose: 'Check whether reviewers catch keyboard reachability and visible-focus failures in interactive flows.',
+    contextPacket: 'click_path_artifacts',
+    promptVersion: 'accessibility-keyboard-v1',
+    requiredArtifactKinds: ['flow_steps'],
+    calibratedCaseIds: ['missing-keyboard-focus'],
+    knownWeaknesses: ['Needs interaction traces or DOM/focus evidence to avoid guessing from screenshots alone.'],
+  },
+  {
+    id: 'security-tenant-boundary',
+    version: 'v1',
+    lanes: ['security', 'privacy', 'data_integrity'],
+    purpose: 'Check whether reviewers catch missing authenticated ownership boundaries across tenants or workspaces.',
+    contextPacket: 'zero_context_artifacts_only',
+    promptVersion: 'security-tenant-boundary-v1',
+    requiredArtifactKinds: ['document_excerpt'],
+    calibratedCaseIds: ['cross-tenant-export'],
+    knownWeaknesses: ['Can over-prescribe public API ceremony when the issue is a concrete authorization boundary.'],
+  },
+  {
+    id: 'api-compatibility-contract',
+    version: 'v1',
+    lanes: ['api_contract', 'docs_truth'],
+    purpose: 'Check whether reviewers catch response-shape or status-code changes that break existing clients.',
+    contextPacket: 'zero_context_artifacts_only',
+    promptVersion: 'api-compatibility-v1',
+    requiredArtifactKinds: ['document_excerpt'],
+    calibratedCaseIds: ['backward-incompatible-status'],
+    knownWeaknesses: ['Needs enough before/after contract evidence to distinguish real breakage from an internal-only change.'],
+  },
+  {
+    id: 'data-idempotent-side-effects',
+    version: 'v1',
+    lanes: ['data_integrity', 'migration_safety'],
+    purpose: 'Check whether reviewers catch retry paths that can duplicate externally visible side effects.',
+    contextPacket: 'click_path_artifacts',
+    promptVersion: 'data-idempotency-v1',
+    requiredArtifactKinds: ['flow_steps'],
+    calibratedCaseIds: ['non-idempotent-retry'],
+    knownWeaknesses: ['Can suggest logging-only mitigations unless the rubric emphasizes prevention.'],
+  },
+  {
+    id: 'performance-critical-path',
+    version: 'v1',
+    lanes: ['performance', 'api_contract'],
+    purpose: 'Check whether reviewers catch unbounded critical-path data loading and server/client responsibility drift.',
+    contextPacket: 'zero_context_artifacts_only',
+    promptVersion: 'performance-critical-path-v1',
+    requiredArtifactKinds: ['document_excerpt'],
+    calibratedCaseIds: ['unbounded-list-query'],
+    knownWeaknesses: ['Needs product criticality context so reviewers do not dismiss growth issues as premature optimization.'],
+  },
+  {
+    id: 'docs-truth-quickstart',
+    version: 'v1',
+    lanes: ['docs_truth', 'copy_clarity'],
+    purpose: 'Check whether reviewers catch public setup instructions that no longer match shipped commands or package metadata.',
+    contextPacket: 'zero_context_artifacts_only',
+    promptVersion: 'docs-truth-quickstart-v1',
+    requiredArtifactKinds: ['document_excerpt'],
+    calibratedCaseIds: ['stale-install-command'],
+    knownWeaknesses: ['Can drift into tone feedback unless the rubric asks for factual command verification.'],
+  },
 ]
 
 export function buildCalibrationReviewPacket(calibrationCase: CalibrationCase): CalibrationReviewPacket {
@@ -340,9 +406,13 @@ export async function loadCalibrationCasesFromDirectory(directory: string): Prom
   const entries = await fs.readdir(directory, { withFileTypes: true })
   const cases: CalibrationCase[] = []
   for (const entry of entries) {
+    const filePath = path.join(directory, entry.name)
+    if (entry.isDirectory()) {
+      cases.push(...await loadCalibrationCasesFromDirectory(filePath))
+      continue
+    }
     if (!entry.isFile()) continue
     if (!/\.(ya?ml|json)$/i.test(entry.name)) continue
-    const filePath = path.join(directory, entry.name)
     const raw = await fs.readFile(filePath, 'utf8')
     const parsed = /\.json$/i.test(entry.name) ? JSON.parse(raw) : parseYaml(raw)
     cases.push(CalibrationCase.parse(parsed))

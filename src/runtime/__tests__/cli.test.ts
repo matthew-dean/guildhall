@@ -254,12 +254,13 @@ describe('Guildhall CLI surface', () => {
     try {
       const result = await validateReviewCalibrationCorpus({
         projectPath: project,
-        casesDir: resolve(process.cwd(), 'internal/calibration/cases/ux'),
         recordedBy: 'calibration:test',
         now: () => new Date('2026-05-25T12:00:00.000Z'),
       })
 
       expect(result.summary.missingCaseIds).toEqual([])
+      expect(result.summary.caseCount).toBeGreaterThanOrEqual(8)
+      expect(result.summary.laneCoverage.security).toBeGreaterThan(0)
       expect(result.record.ref.path).toContain(join(dataDir, 'projects'))
       expect(result.record.payload.variantSet).toBe('review-calibration-corpus')
     } finally {

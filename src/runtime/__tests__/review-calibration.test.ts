@@ -267,6 +267,24 @@ describe('review calibration cases', () => {
     }
   })
 
+  it('loads nested calibration corpus directories so cases are not UX-only', async () => {
+    const cases = await loadCalibrationCasesFromDirectory(
+      path.resolve('internal/calibration/cases'),
+    )
+
+    expect(cases.length).toBeGreaterThanOrEqual(8)
+    expect(cases.flatMap((item) => item.reviewLanes)).toEqual(expect.arrayContaining([
+      'ux_comprehension',
+      'accessibility',
+      'security',
+      'api_contract',
+      'data_integrity',
+      'performance',
+      'docs_truth',
+    ]))
+    expect(new Set(cases.map((item) => item.productType)).size).toBeGreaterThan(3)
+  })
+
   it('ships a small UX seed corpus with hidden findings and at least one negative control', async () => {
     const cases = await loadCalibrationCasesFromDirectory(
       path.resolve('internal/calibration/cases/ux'),
@@ -296,11 +314,11 @@ describe('review calibration cases', () => {
       'copy_clarity',
     ])
 
-    expect(selected.map((recipe) => recipe.id)).toEqual([
+    expect(selected.map((recipe) => recipe.id)).toEqual(expect.arrayContaining([
       'ux-zero-context-comprehension',
       'ux-error-recovery',
       'ux-cross-surface-consistency',
-    ])
+    ]))
     expect(selected[0]).toMatchObject({
       version: 'v1',
       contextPacket: 'zero_context_artifacts_only',
@@ -309,10 +327,23 @@ describe('review calibration cases', () => {
     expect(selected.flatMap((recipe) => recipe.requiredArtifactKinds)).toEqual(
       expect.arrayContaining(['copy_snippet']),
     )
+
+    const crossDomain = selectCalibrationRecipesForLanes([
+      'security',
+      'api_contract',
+      'performance',
+      'docs_truth',
+    ])
+    expect(crossDomain.map((recipe) => recipe.id)).toEqual(expect.arrayContaining([
+      'security-tenant-boundary',
+      'api-compatibility-contract',
+      'performance-critical-path',
+      'docs-truth-quickstart',
+    ]))
   })
 
   it('summarizes corpus coverage and records validation through the review audit store facade', async () => {
-    const casesDir = path.resolve(process.cwd(), 'internal/calibration/cases/ux')
+    const casesDir = path.resolve(process.cwd(), 'internal/calibration/cases')
     const cases = await loadCalibrationCasesFromDirectory(casesDir)
     const summary = buildCalibrationCorpusSummary(cases)
 
@@ -350,6 +381,12 @@ describe('review calibration cases', () => {
         'ux-zero-context-comprehension',
         'ux-error-recovery',
         'ux-cross-surface-consistency',
+        'accessibility-keyboard-path',
+        'security-tenant-boundary',
+        'api-compatibility-contract',
+        'data-idempotent-side-effects',
+        'performance-critical-path',
+        'docs-truth-quickstart',
       ],
       recordedBy: 'calibration:test',
     })

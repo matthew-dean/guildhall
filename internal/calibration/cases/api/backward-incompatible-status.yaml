@@ -1,0 +1,42 @@
+id: backward-incompatible-status
+title: Backward-incompatible status response
+domain: api
+productType: developer-tooling
+surfaceType: api
+userGoal: Poll a job endpoint without changing existing client code.
+scenario: A job-status endpoint changes the success response from HTTP 200 with body status=queued to HTTP 202 with a different body shape, without a migration path.
+artifacts:
+  - id: api-change-note
+    kind: document_excerpt
+    description: API diff summary.
+    content: "Old: 200 { status: 'queued' | 'running' | 'done' }. New: 202 { state: 'pending' } for queued jobs. Existing clients parse status."
+reviewLanes:
+  - api_contract
+  - docs_truth
+knownFindings:
+  - id: incompatible-response-contract
+    lane: api_contract
+    severity: high
+    summary: The response contract changes status code and field names for existing clients.
+    impact: Existing polling clients can treat queued jobs as failures or parse undefined state.
+    minimumUsefulFix: Preserve the old response contract or version the new shape with migration notes and compatibility handling.
+    matchHints:
+      - backward compatible
+      - status code
+      - field name
+      - existing clients
+falsePositiveTraps:
+  - id: not-documentation-only
+    summary: Documentation alone is insufficient if existing clients are already depending on the contract.
+source:
+  kind: synthetic
+  citation: Created for cross-domain review calibration.
+labelGovernance:
+  labeledBy: review-calibration
+  labeledAt: 2026-05-25T12:00:00.000Z
+  reviewStatus: seed
+privacyClassification: public
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2026-11-25
+  reason: API compatibility policy may change by product maturity.

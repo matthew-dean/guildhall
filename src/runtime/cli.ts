@@ -381,7 +381,7 @@ Usage:
     --apply                      Write files. Without this, prints a dry run
   guildhall review-calibration validate [id|path]
                                   Validate and record calibration corpus coverage
-    --cases <dir>                Corpus directory (default: internal/calibration/cases/ux)
+    --cases <dir>                Corpus directory (default: internal/calibration/cases)
   guildhall review-calibration escaped-miss [id|path]
                                   Record a missed review finding for calibration follow-up
     --task <id>                  Task where the miss escaped review
@@ -838,7 +838,9 @@ export async function validateReviewCalibrationCorpus(input: {
   now?: () => Date
 }) {
   const projectPath = resolve(expandPath(input.projectPath))
-  const casesDir = resolve(projectPath, input.casesDir ?? 'internal/calibration/cases/ux')
+  const casesDir = input.casesDir
+    ? resolve(projectPath, input.casesDir)
+    : resolve(process.cwd(), 'internal/calibration/cases')
   const store = createReviewAuditStore({
     projectRoot: projectPath,
     persistence: new FileBackedGuildhallPersistence(),
