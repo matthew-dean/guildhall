@@ -108,12 +108,12 @@
   }
   .tone-agent {
     background: color-mix(in srgb, var(--accent-2) 68%, var(--bg-base));
-    color: var(--bg-base);
+    color: var(--text-strong);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-2) 54%, white 10%);
   }
   .tone-agent-attention {
     background: color-mix(in srgb, var(--accent-2) 62%, var(--chip-warn-bg) 28%);
-    color: var(--bg-base);
+    color: var(--text-strong);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-2) 44%, var(--warn) 22%);
   }
 </style>

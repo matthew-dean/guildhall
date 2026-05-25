@@ -21,4 +21,12 @@ describe('Chip visual contract', () => {
     expect(chipSource).toContain('agent-attention: Guildhall-owned state that needs a handoff')
     expect(chipSource).toContain('warn: human decision or risk state')
   })
+
+  it('uses the system strong-text token on automation chips because their fills are dark status surfaces', () => {
+    const agentBlock = chipSource.match(/\.tone-agent\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+    const agentAttentionBlock = chipSource.match(/\.tone-agent-attention\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+
+    expect(agentBlock).toContain('color: var(--text-strong)')
+    expect(agentAttentionBlock).toContain('color: var(--text-strong)')
+  })
 })

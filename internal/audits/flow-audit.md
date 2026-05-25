@@ -57,6 +57,12 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Tighten the dark-theme text contrast ladder from the Fair Labor License
+  Thread walkthrough. Supporting copy was too dim against near-white headings,
+  so the system text tokens now keep primary/strong text slightly softer and
+  raise muted/soft text closer to the body color. Automation chips now use the
+  same strong-text token instead of local hard white, keeping status labels
+  readable without making them shout over surrounding task context.
 - [x] Wire review planning into the work-review path behind an optional audit
   store. When a task reaches `review`, the orchestrator now ensures a review
   plan exists before automated-review shortcut, fan-out, or legacy reviewer
