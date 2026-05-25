@@ -314,7 +314,7 @@ export interface DrawerPayload {
   }
 }
 
-export type DrawerTab = 'current' | 'spec' | 'transcript' | 'experts' | 'history' | 'provenance'
+export type DrawerTab = 'current' | 'spec' | 'journey' | 'transcript' | 'experts' | 'history' | 'provenance'
 
 export interface TaskTurnLiveAgent {
   name: string

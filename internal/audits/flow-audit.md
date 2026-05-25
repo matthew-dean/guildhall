@@ -148,6 +148,11 @@ babysit setup/import/provider/release states across multiple pages.
   overlapping interactive controls; the planner signal rules now cover those
   terms and the balanced frontier is required to have no high-stakes lane
   misses on the seed corpus.
+- [x] Add a task Journey view for done-work readability. The drawer now separates
+  the human-readable task journey from Transcript and History: Journey shows the
+  planned review, worker pass, changed files, reviewer pass, verification, and
+  final outcome; Transcript remains what agents said; History remains the
+  lower-level revisions/gates/escalations log.
 - [x] Tighten the dark-theme text contrast ladder from the Fair Labor License
   Thread walkthrough. Supporting copy was too dim against near-white headings,
   so the system text tokens now keep primary/strong text slightly softer and

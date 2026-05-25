@@ -19,9 +19,10 @@ place so you do not have to reconstruct what happened from scattered logs.
 |---|---|
 | **Now** | What is happening right now? Shows active handoffs, questions, live work, or resume actions when current context exists. |
 | **Spec** | What is the task supposed to accomplish? Shows intent, acceptance criteria, and hard or soft gates. Editable when the task status allows it. |
-| **Transcript** | What did the agent actually do and say? Shows the task conversation and tool-use trail. |
+| **Journey** | What happened from start to finish? Shows the planned review, worker pass, changed files, reviewer pass, verification, and outcome as a readable story. |
+| **Transcript** | What did the agent actually say? Shows the exploring conversation and durable task notes. |
 | **Experts** | Who reviewed this and what did they think? Shows applicable guilds, review status, and reviewer feedback. |
-| **History** | How did the task move through the system? Shows status changes, review verdicts, escalations, and gate outcomes. |
+| **History** | What does the lower-level log say? Shows revisions, gate output, and escalations. |
 | **Provenance** | Which project policies shaped this task? Shows lever positions, who set them, and when. |
 
 ## Review plan

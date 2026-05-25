@@ -16,6 +16,7 @@
   import Stack from '../lib/Stack.svelte'
   import SpecTab from './drawer/SpecTab.svelte'
   import CurrentTab from './drawer/CurrentTab.svelte'
+  import JourneyTab from './drawer/JourneyTab.svelte'
   import TranscriptTab from './drawer/TranscriptTab.svelte'
   import HistoryTab from './drawer/HistoryTab.svelte'
   import ExpertsTab from './drawer/ExpertsTab.svelte'
@@ -120,6 +121,7 @@
     if (
       raw === 'current' ||
       raw === 'spec' ||
+      raw === 'journey' ||
       raw === 'transcript' ||
       raw === 'experts' ||
       raw === 'history' ||
@@ -132,6 +134,7 @@
 
   const BASE_TABS = [
     { id: 'spec', label: 'Spec' },
+    { id: 'journey', label: 'Journey' },
     { id: 'transcript', label: 'Transcript' },
     { id: 'experts', label: 'Experts' },
     { id: 'history', label: 'History' },
@@ -401,6 +404,18 @@
         eyebrow: 'Finished',
         title: task.terminalSummary.headline,
         detail: task.terminalSummary.detail ?? 'This task has a terminal result.',
+      }
+    }
+    if (isTerminalRunStatus(task.status)) {
+      return {
+        tone: task.status === 'shelved' ? 'warn' : 'ok',
+        eyebrow: task.status === 'done' ? 'Finished' : 'Closed',
+        title: task.status === 'done'
+          ? 'This task is done.'
+          : `This task is ${friendlyStatus(task.status)}.`,
+        detail: task.completedAt
+          ? `Completed at ${task.completedAt}.`
+          : 'Guildhall has no active next step for this task.',
       }
     }
     if (firstOpenEscalation) {
@@ -683,6 +698,8 @@
           onSendFollowUp={handleSendFollowUp}
           onAddAcceptance={handleAddAcceptance}
         />
+      {:else if activeTab === 'journey'}
+        <JourneyTab task={payload.task} />
       {:else if activeTab === 'transcript'}
         <TranscriptTab task={payload.task} exploringTranscript={payload.exploringTranscript} />
       {:else if activeTab === 'experts'}

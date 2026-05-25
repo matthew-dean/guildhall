@@ -224,6 +224,90 @@ describe('TaskDrawer', () => {
     expect(screen.getByText(/browser-or-screenshot-evidence/)).toBeInTheDocument()
   })
 
+  it('shows a readable task journey for completed work', async () => {
+    const payload = drawerPayload({
+      threadTurns: [],
+      task: {
+        ...drawerPayload().task,
+        status: 'done',
+        assignedTo: 'worker-agent',
+        completedAt: '2026-05-25T12:40:00.000Z',
+        latestCheckpoint: {
+          step: 4,
+          agentId: 'worker-agent',
+          intent: 'Implement the link editor controls and verify the toolbar path.',
+          nextPlannedAction: 'Hand off to review.',
+          filesTouched: [
+            'src/web/surfaces/editor/Toolbar.svelte',
+            'src/web/surfaces/editor/toolbar.css',
+          ],
+          writtenAt: '2026-05-25T12:20:00.000Z',
+        },
+        reviewPlan: {
+          taskId: 'task-link-editor',
+          effort: 'balanced',
+          depth: 'standard',
+          selectedLanes: ['ux_comprehension', 'visual_design', 'test_adequacy'],
+          requiredRecipes: [{
+            recipeId: 'product-ux-zero-context',
+            version: 'v1',
+            lanes: ['ux_comprehension', 'visual_design'],
+            blocking: 'high',
+          }],
+          deterministicChecks: ['browser-or-screenshot-evidence'],
+          requiredArtifacts: ['visual-evidence'],
+          budget: { maxReviewerAgents: 4 },
+        },
+        reviewAuditSummary: {
+          reviewerRunCount: 2,
+          reviseCount: 0,
+          escapedMissCount: 0,
+        },
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          reason: 'The Product UX reviewer approved.',
+          recordedAt: '2026-05-25T12:30:00.000Z',
+        }],
+        gateResults: [{
+          gateId: 'typecheck',
+          type: 'verification',
+          passed: true,
+          checkedAt: '2026-05-25T12:35:00.000Z',
+        }],
+        mergeRecord: {
+          result: 'pushed',
+          commitSha: 'abc1234',
+          mergedAt: '2026-05-25T12:39:00.000Z',
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await userEvent.click(await screen.findByRole('tab', { name: 'Journey' }))
+
+    expect(screen.getByText('Task journey')).toBeInTheDocument()
+    expect(screen.queryByText('Checkpoint saved')).not.toBeInTheDocument()
+    expect(screen.getByText(/Worker pass/)).toBeInTheDocument()
+    expect(screen.getByText(/src\/web\/surfaces\/editor\/Toolbar.svelte/)).toBeInTheDocument()
+    expect(screen.getByText(/Balanced review/)).toBeInTheDocument()
+    expect(screen.getByText(/2 reviewer runs/)).toBeInTheDocument()
+    expect(screen.getByText(/typecheck/)).toBeInTheDocument()
+    expect(screen.getByText(/Pushed/)).toBeInTheDocument()
+  })
+
   it('opens the Action tab when a question notification deep-links to the current surface', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=current')
     path.value = '/projects/looma-knit/task/task-link-editor'
