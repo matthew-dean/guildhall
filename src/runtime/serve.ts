@@ -1533,6 +1533,7 @@ async function enrichTaskForServe(
   return {
     ...normalized,
     ...(reviewAudit?.plan ? { reviewPlan: reviewAudit.plan.payload } : {}),
+    ...(reviewAudit ? { reviewAuditSummary: buildReviewAuditSummary(reviewAudit) } : {}),
     ...(latestReviewerSummary ? { latestReviewerSummary } : {}),
     ...(latestSelfCritique ? { latestSelfCritique } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
@@ -1549,6 +1550,33 @@ async function enrichTaskForServe(
           },
         }
       : {}),
+  }
+}
+
+function buildReviewAuditSummary(reviewAudit: {
+  reviewerRuns: Array<{
+    recordedAt?: string
+    payload?: {
+      verdict?: string
+      recordedAt?: string
+    }
+  }>
+  escapedMisses: readonly unknown[]
+}): {
+  reviewerRunCount: number
+  reviseCount: number
+  escapedMissCount: number
+  latestReviewerRunAt?: string
+} {
+  const runTimes = reviewAudit.reviewerRuns
+    .map((run) => run.payload?.recordedAt ?? run.recordedAt)
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .sort()
+  return {
+    reviewerRunCount: reviewAudit.reviewerRuns.length,
+    reviseCount: reviewAudit.reviewerRuns.filter((run) => run.payload?.verdict === 'revise').length,
+    escapedMissCount: reviewAudit.escapedMisses.length,
+    ...(runTimes.length > 0 ? { latestReviewerRunAt: runTimes[runTimes.length - 1] } : {}),
   }
 }
 

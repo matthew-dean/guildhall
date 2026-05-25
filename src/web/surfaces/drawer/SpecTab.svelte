@@ -77,6 +77,7 @@
   const latestSelfCritique = $derived((task.latestSelfCritique ?? '').trim())
   const latestCheckpoint = $derived(task.latestCheckpoint ?? null)
   const reviewPlan = $derived(task.reviewPlan ?? null)
+  const reviewAuditSummary = $derived(task.reviewAuditSummary ?? null)
   const reviewPlanLanes = $derived(reviewPlan?.selectedLanes ?? [])
   const reviewPlanHiddenLaneCount = $derived(Math.max(0, reviewPlanLanes.length - 4))
   const reviewPlanRecipeCount = $derived(reviewPlan?.requiredRecipes?.length ?? 0)
@@ -159,6 +160,19 @@
     ].filter((part): part is string => Boolean(part))
     return parts.length > 0 ? parts.join(' · ') : 'No budget recorded.'
   }
+
+  function reviewAuditSummaryText(): string {
+    if (!reviewAuditSummary) return ''
+    const reviewerRunCount = reviewAuditSummary.reviewerRunCount ?? 0
+    const reviseCount = reviewAuditSummary.reviseCount ?? 0
+    const escapedMissCount = reviewAuditSummary.escapedMissCount ?? 0
+    const parts = [
+      `${reviewerRunCount} reviewer run${reviewerRunCount === 1 ? '' : 's'}`,
+      `${reviseCount} revision request${reviseCount === 1 ? '' : 's'}`,
+      escapedMissCount > 0 ? `${escapedMissCount} escaped miss${escapedMissCount === 1 ? '' : 'es'}` : null,
+    ].filter((part): part is string => Boolean(part))
+    return parts.join(' · ')
+  }
 </script>
 
 <Stack gap="4">
@@ -225,6 +239,9 @@
         <p class="explainer">
           Guildhall planned these review lenses before handing the task to reviewers, so the review budget and skipped areas are auditable.
         </p>
+        {#if reviewAuditSummary}
+          <p class="checkpoint-line">{reviewAuditSummaryText()}</p>
+        {/if}
         <details class="review-plan-more">
           <summary>Show review details</summary>
           <Stack gap="2">

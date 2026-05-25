@@ -103,6 +103,13 @@ export interface ReviewPlan {
   createdBy?: string
 }
 
+export interface ReviewAuditSummary {
+  reviewerRunCount?: number
+  reviseCount?: number
+  escapedMissCount?: number
+  latestReviewerRunAt?: string
+}
+
 export interface TaskNote {
   role?: string
   agentId?: string
@@ -194,6 +201,7 @@ export interface Task {
   gateResults?: GateResult[]
   reviewVerdicts?: ReviewVerdict[]
   reviewPlan?: ReviewPlan
+  reviewAuditSummary?: ReviewAuditSummary
   escalations?: Escalation[]
   notes?: TaskNote[]
   latestReviewerSummary?: string

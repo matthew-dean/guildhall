@@ -190,6 +190,12 @@ describe('TaskDrawer', () => {
           skippedLanes: [{ lane: 'security', reason: 'No matching signal.' }],
           budget: { maxReviewerAgents: 4, maxWallClockMinutes: 18, maxEstimatedTokens: 45000 },
         },
+        reviewAuditSummary: {
+          reviewerRunCount: 2,
+          reviseCount: 1,
+          escapedMissCount: 0,
+          latestReviewerRunAt: '2026-05-25T12:02:00.000Z',
+        },
       },
     })
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -211,6 +217,7 @@ describe('TaskDrawer', () => {
     expect(screen.getByText(/4 reviewers/)).toBeInTheDocument()
     expect(screen.getByText('UX Comprehension')).toBeInTheDocument()
     expect(screen.getByText('+1 more')).toBeInTheDocument()
+    expect(screen.getByText('2 reviewer runs · 1 revision request')).toBeInTheDocument()
 
     await userEvent.click(screen.getByText('Show review details'))
     expect(screen.getByText('Reviewer groups')).toBeInTheDocument()

@@ -172,6 +172,57 @@ describe('GET /api/project/task/:id', () => {
     })
   })
 
+  it('includes a compact review audit summary in the task drawer payload', async () => {
+    await seedTask('task-1', { status: 'review' })
+    const store = createReviewAuditStore({
+      projectRoot: tmpDir,
+      persistence: new FileBackedGuildhallPersistence(),
+      now: () => new Date('2026-05-25T12:00:00.000Z'),
+    })
+    await store.saveReviewerRun({
+      taskId: 'task-1',
+      recipeId: 'product-ux-zero-context',
+      recipeVersion: 'v1',
+      lanes: ['ux_comprehension'],
+      verdict: 'revise',
+      findings: [{
+        lane: 'ux_comprehension',
+        severity: 'high',
+        summary: 'Primary action is ambiguous.',
+      }],
+      recordedAt: '2026-05-25T12:01:00.000Z',
+      recordedBy: 'reviewer-fanout:component-designer',
+    })
+    await store.saveReviewerRun({
+      taskId: 'task-1',
+      recipeId: 'product-ux-zero-context',
+      recipeVersion: 'v1',
+      lanes: ['copy_clarity'],
+      verdict: 'approve',
+      recordedAt: '2026-05-25T12:02:00.000Z',
+      recordedBy: 'reviewer-fanout:copywriter',
+    })
+    await store.linkEscapedMiss({
+      taskId: 'task-1',
+      missedLane: 'ux_comprehension',
+      humanFinding: 'Reviewer missed that the setup action was unclear.',
+      nextCalibrationAction: 'create_case',
+      recordedBy: 'human:test',
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+
+    expect(body.task?.reviewAuditSummary).toEqual({
+      reviewerRunCount: 2,
+      reviseCount: 1,
+      escapedMissCount: 1,
+      latestReviewerRunAt: '2026-05-25T12:02:00.000Z',
+    })
+  })
+
   it('returns the exploring transcript artifact for the task drawer', async () => {
     await seedTask('task-1')
     await fs.mkdir(path.join(memoryDir, 'exploring'), { recursive: true })

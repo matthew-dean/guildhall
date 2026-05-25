@@ -73,6 +73,9 @@ babysit setup/import/provider/release states across multiple pages.
   stored review plan through the persistence facade, and the Spec/task-details
   tab shows a compact Review plan card with effort, depth, budget, lanes,
   reviewer groups, checks, evidence, and skipped lenses behind a disclosure.
+  The same payload now includes a compact review-audit summary, and the card
+  shows reviewer-run, revision-request, and escaped-miss counts without
+  exposing raw local-history evidence.
 - [x] Feed stored review plans into reviewer fan-out. The orchestrator now
   returns the existing or newly recorded review plan from the audit hook,
   passes it to reviewer fan-out, and includes a compact planned-scope block in
