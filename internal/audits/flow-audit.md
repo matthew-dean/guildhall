@@ -57,6 +57,13 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Add the first review-calibration corpus harness. `review-calibration`
+  now validates hidden-answer-key cases, builds reviewer-safe packets without
+  leaking known findings or false-positive traps, grades pass/partial/miss/
+  false-positive-heavy outcomes, summarizes one-variable quality/cost
+  frontiers, and loads repo-local YAML/JSON seed cases. The initial UX corpus
+  includes ambiguous primary action, missing error recovery, cross-surface
+  state contradiction, and a CLI negative-control case.
 - [x] Surface stored review plans in task details. Real orchestrator runs now
   pass a file-backed review audit store, the task drawer payload reads the
   stored review plan through the persistence facade, and the Spec/task-details

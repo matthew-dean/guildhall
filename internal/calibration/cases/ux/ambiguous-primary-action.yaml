@@ -1,0 +1,41 @@
+id: ambiguous-primary-action
+title: Ambiguous primary action
+domain: ux
+productType: project-management
+surfaceType: web-app
+userGoal: Continue the next safe unit of work without understanding queue internals.
+scenario: A task card presents Start and Resume with equal visual weight even though Resume continues existing work and Start may restart the task.
+artifacts:
+  - id: task-card-copy
+    kind: copy_snippet
+    description: Visible task-card text.
+    content: "Task ready. Start. Resume."
+reviewLanes:
+  - ux_comprehension
+  - copy_clarity
+knownFindings:
+  - id: primary-action-ambiguity
+    lane: ux_comprehension
+    severity: high
+    summary: The card does not make the safe next action clear.
+    impact: A user can restart work instead of continuing the existing task.
+    minimumUsefulFix: Make Resume the only primary action and explain why when needed.
+    matchHints:
+      - safe next action
+      - primary action
+      - resume
+falsePositiveTraps:
+  - id: button-count
+    summary: Do not fail the case merely because there are two actions; fail it because the safe action is unclear.
+source:
+  kind: synthetic
+  citation: Created for Guildhall review calibration.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-05-25T12:00:00.000Z
+  reviewStatus: seed
+privacyClassification: public
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2026-11-25
+  reason: Interaction conventions may change.

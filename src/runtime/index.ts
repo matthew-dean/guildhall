@@ -136,6 +136,24 @@ export type {
   EnsureTaskReviewPlanRecordedInput,
   EnsureTaskReviewPlanRecordedResult,
 } from './review-planner.js'
+export {
+  CalibrationArtifact,
+  CalibrationCase,
+  CalibrationFalsePositiveTrap,
+  CalibrationKnownFinding,
+  buildCalibrationReviewPacket,
+  gradeCalibrationRun,
+  loadCalibrationCasesFromDirectory,
+  summarizeCalibrationFrontier,
+} from './review-calibration.js'
+export type {
+  CalibrationFrontierRun,
+  CalibrationFrontierSummary,
+  CalibrationGrade,
+  CalibrationOutcome,
+  CalibrationReviewerFinding,
+  CalibrationReviewPacket,
+} from './review-calibration.js'
 export { selectApiClient } from './provider-selection.js'
 export type {
   SelectApiClientOptions,
