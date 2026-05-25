@@ -6,8 +6,10 @@ import path from 'node:path'
 import {
   CalibrationCase,
   buildCalibrationReviewPacket,
+  defaultReviewCalibrationRecipes,
   gradeCalibrationRun,
   loadCalibrationCasesFromDirectory,
+  selectCalibrationRecipesForLanes,
   summarizeCalibrationFrontier,
 } from '../review-calibration.js'
 
@@ -276,5 +278,34 @@ describe('review calibration cases', () => {
       'ux_comprehension',
       'copy_clarity',
     ]))
+  })
+
+  it('selects versioned calibration recipes by risk lane and required artifacts', () => {
+    expect(defaultReviewCalibrationRecipes.map((recipe) => recipe.id)).toEqual(
+      expect.arrayContaining([
+        'ux-zero-context-comprehension',
+        'ux-error-recovery',
+        'ux-cross-surface-consistency',
+      ]),
+    )
+
+    const selected = selectCalibrationRecipesForLanes([
+      'ux_comprehension',
+      'copy_clarity',
+    ])
+
+    expect(selected.map((recipe) => recipe.id)).toEqual([
+      'ux-zero-context-comprehension',
+      'ux-error-recovery',
+      'ux-cross-surface-consistency',
+    ])
+    expect(selected[0]).toMatchObject({
+      version: 'v1',
+      contextPacket: 'zero_context_artifacts_only',
+      calibratedCaseIds: expect.arrayContaining(['ambiguous-primary-action']),
+    })
+    expect(selected.flatMap((recipe) => recipe.requiredArtifactKinds)).toEqual(
+      expect.arrayContaining(['copy_snippet']),
+    )
   })
 })

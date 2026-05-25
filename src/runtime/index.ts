@@ -141,9 +141,12 @@ export {
   CalibrationCase,
   CalibrationFalsePositiveTrap,
   CalibrationKnownFinding,
+  ReviewCalibrationRecipe,
   buildCalibrationReviewPacket,
+  defaultReviewCalibrationRecipes,
   gradeCalibrationRun,
   loadCalibrationCasesFromDirectory,
+  selectCalibrationRecipesForLanes,
   summarizeCalibrationFrontier,
 } from './review-calibration.js'
 export type {
@@ -153,6 +156,7 @@ export type {
   CalibrationOutcome,
   CalibrationReviewerFinding,
   CalibrationReviewPacket,
+  ReviewCalibrationRecipe as ReviewCalibrationRecipeType,
 } from './review-calibration.js'
 export { selectApiClient } from './provider-selection.js'
 export type {

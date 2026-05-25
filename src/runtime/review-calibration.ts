@@ -111,6 +111,59 @@ export interface CalibrationFrontierSummary {
   }>
 }
 
+export const ReviewCalibrationRecipe = z.object({
+  id: z.string().min(1),
+  version: z.string().min(1),
+  lanes: z.array(ReviewRiskLane).min(1),
+  purpose: z.string().min(1),
+  contextPacket: z.enum([
+    'zero_context_artifacts_only',
+    'click_path_artifacts',
+    'cross_surface_artifacts',
+  ]),
+  promptVersion: z.string().min(1),
+  requiredArtifactKinds: z.array(CalibrationArtifact.shape.kind).default([]),
+  calibratedCaseIds: z.array(z.string().min(1)).default([]),
+  knownWeaknesses: z.array(z.string().min(1)).default([]),
+})
+export type ReviewCalibrationRecipe = z.infer<typeof ReviewCalibrationRecipe>
+
+export const defaultReviewCalibrationRecipes: ReviewCalibrationRecipe[] = [
+  {
+    id: 'ux-zero-context-comprehension',
+    version: 'v1',
+    lanes: ['ux_comprehension', 'copy_clarity'],
+    purpose: 'Check whether a reviewer can identify the user goal, safe next action, and confusing copy from artifacts alone.',
+    contextPacket: 'zero_context_artifacts_only',
+    promptVersion: 'ux-zero-context-v1',
+    requiredArtifactKinds: ['copy_snippet'],
+    calibratedCaseIds: ['ambiguous-primary-action', 'clear-retry-negative-control'],
+    knownWeaknesses: ['May under-detect cross-surface contradictions without multiple artifacts.'],
+  },
+  {
+    id: 'ux-error-recovery',
+    version: 'v1',
+    lanes: ['ux_comprehension', 'copy_clarity'],
+    purpose: 'Check whether failure states explain cause, preserve progress, and name a recovery path.',
+    contextPacket: 'zero_context_artifacts_only',
+    promptVersion: 'ux-error-recovery-v1',
+    requiredArtifactKinds: ['copy_snippet', 'flow_steps'],
+    calibratedCaseIds: ['error-without-recovery', 'clear-retry-negative-control'],
+    knownWeaknesses: ['Can over-prescribe copy length unless negative controls are included.'],
+  },
+  {
+    id: 'ux-cross-surface-consistency',
+    version: 'v1',
+    lanes: ['ux_comprehension', 'copy_clarity'],
+    purpose: 'Check whether surfaces agree on ownership, state, and the next action.',
+    contextPacket: 'cross_surface_artifacts',
+    promptVersion: 'ux-cross-surface-v1',
+    requiredArtifactKinds: ['copy_snippet', 'screenshot'],
+    calibratedCaseIds: ['cross-surface-state-contradiction'],
+    knownWeaknesses: ['Needs at least two surface artifacts to be meaningful.'],
+  },
+]
+
 export function buildCalibrationReviewPacket(calibrationCase: CalibrationCase): CalibrationReviewPacket {
   return {
     caseId: calibrationCase.id,
@@ -125,6 +178,14 @@ export function buildCalibrationReviewPacket(calibrationCase: CalibrationCase): 
     source: { ...calibrationCase.source },
     privacyClassification: calibrationCase.privacyClassification,
   }
+}
+
+export function selectCalibrationRecipesForLanes(
+  lanes: Array<z.infer<typeof ReviewRiskLane> | string>,
+  recipes: readonly ReviewCalibrationRecipe[] = defaultReviewCalibrationRecipes,
+): ReviewCalibrationRecipe[] {
+  const laneSet = new Set(lanes)
+  return recipes.filter((recipe) => recipe.lanes.some((lane) => laneSet.has(lane)))
 }
 
 export function gradeCalibrationRun(input: {
