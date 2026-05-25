@@ -130,6 +130,12 @@ babysit setup/import/provider/release states across multiple pages.
   `guildhall review-calibration draft-case` to print the draft without writing
   ad hoc corpus files; actual persistence remains in the escaped-miss audit
   event until a reviewed case is intentionally added to the corpus.
+- [x] Make reviewer fan-out proactively look for missing concerns. Default
+  reviewer prompts now include a completeness pass that asks each reviewer to
+  call out missing risk lanes, evidence, deterministic checks, reviewer
+  recipes, pitfalls, footguns, rollout risks, docs/audit/storage concerns, and
+  non-blocking follow-ups when those concerns matter for the task. This bakes
+  the "what else are we missing?" squeeze into the work-review flow.
 - [x] Tighten the dark-theme text contrast ladder from the Fair Labor License
   Thread walkthrough. Supporting copy was too dim against near-white headings,
   so the system text tokens now keep primary/strong text slightly softer and

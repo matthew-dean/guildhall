@@ -8536,6 +8536,9 @@ function renderReviewPlanForReviewerPrompt(reviewPlan: ReviewPlanRecord): string
     '',
     `Required checks: ${reviewPlan.deterministicChecks.join(', ') || 'none'}`,
     `Evidence expected: ${reviewPlan.requiredArtifacts.join(', ') || 'none'}`,
+    '',
+    'Completeness pass: before deciding, state whether this plan appears to have any missing risk lane, required evidence, deterministic check, or reviewer recipe that matters for this task.',
+    'If you see a task-local pitfall, footgun, rollout risk, docs/audit/storage concern, or follow-up that another reviewer might miss, include it as a blocking finding when it affects acceptance or as a non-blocking follow-up idea when it should not block.',
   ].join('\n')
 }
 

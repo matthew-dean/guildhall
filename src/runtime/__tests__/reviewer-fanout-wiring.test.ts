@@ -355,6 +355,9 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     expect(requestText).toContain('ux_comprehension')
     expect(requestText).toContain('product-ux-zero-context')
     expect(requestText).toContain('ux-zero-context-comprehension')
+    expect(requestText).toContain('Completeness pass')
+    expect(requestText).toContain('missing risk lane')
+    expect(requestText).toContain('pitfall')
   })
 
   it('times out a hanging persona call instead of stalling review forever', async () => {
