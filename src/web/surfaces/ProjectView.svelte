@@ -785,9 +785,7 @@
   const runButtonIdleLabel = $derived(
     startReadiness?.code === 'owner_input_required'
       ? 'Waiting on answer'
-      : activeCount > 0
-        ? `Start ${activeCount} ${activeCount === 1 ? 'task' : 'tasks'}`
-        : 'Start run',
+      : 'Start',
   )
   const showAdvanceOneTaskAction = $derived(
     !allTerminalStart,

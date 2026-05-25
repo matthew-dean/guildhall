@@ -855,11 +855,13 @@ describe('TaskDrawer', () => {
     await screen.findByText('Tests failed.')
     const footerRetry = screen.getAllByRole('button', { name: /^retry gates$/i }).at(-1)
     expect(footerRetry).toBeDefined()
+    expect(footerRetry!.classList.contains('v-agent')).toBe(true)
     await userEvent.click(footerRetry!)
     await screen.findByText('Guildhall will close this blocker and continue from the step this recovery action is built for.')
     expect(screen.queryByLabelText('Resume at')).toBeNull()
     const modalRetry = screen.getAllByRole('button', { name: /^retry gates$/i }).at(-1)
     expect(modalRetry).toBeDefined()
+    expect(modalRetry!.classList.contains('v-agent')).toBe(true)
     await userEvent.click(modalRetry!)
 
     await waitFor(() => {

@@ -1,7 +1,7 @@
 <script lang="ts">
   import Chip from './Chip.svelte'
 
-  type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running'
+  type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' | 'agent' | 'agent-attention'
 
   interface Props {
     label: string

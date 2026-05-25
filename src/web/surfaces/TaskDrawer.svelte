@@ -733,11 +733,12 @@
                 </Button>
               {:else}
                 <Button
-                  variant={firstOpenEscalation ? 'secondary' : 'primary'}
+                  variant="agent"
                   size="sm"
                   disabled={runBusy || runStatus === 'stopping'}
                   onclick={() => runProject('start')}
                 >
+                  <Icon name="sparkles" size={14} />
                   Run this task
                 </Button>
               {/if}
@@ -769,11 +770,12 @@
                 {#if canHold}
                   {#if stageRerun}
                     <Button
-                      variant="secondary"
+                      variant="agent"
                       size="sm"
                       disabled={busy || rerunStageBusy !== null}
                       onclick={() => rerunStage(stageRerun.stage)}
                     >
+                      <Icon name="sparkles" size={14} />
                       {rerunStageBusy === stageRerun.stage ? 'Re-running...' : stageRerun.label}
                     </Button>
                   {/if}
@@ -835,14 +837,12 @@
               I handled this...
             </Button>
             <Button
-              variant={firstOpenEscalationGuidance.actionOwner === 'guildhall' ? 'agent' : 'primary'}
+              variant="agent"
               size="sm"
               disabled={busy}
               onclick={() => handleResolveEscalation(firstOpenEscalation, 'retry')}
             >
-              {#if firstOpenEscalationGuidance.actionOwner === 'guildhall'}
-                <Icon name="sparkles" size={14} />
-              {/if}
+              <Icon name="sparkles" size={14} />
               {firstOpenEscalationAction.label}
             </Button>
           {/if}
@@ -858,11 +858,12 @@
           {/if}
           {#if isHeld}
             <Button
-              variant="primary"
+              variant="agent"
               size="sm"
               disabled={busy}
               onclick={handleResumeHold}
             >
+              <Icon name="sparkles" size={14} />
               Resume task
             </Button>
           {/if}

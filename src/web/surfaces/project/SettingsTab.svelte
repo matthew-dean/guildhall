@@ -18,6 +18,7 @@
   import Byline from '../../lib/Byline.svelte'
   import LogViewer from '../../lib/LogViewer.svelte'
   import DefinitionList from '../../lib/DefinitionList.svelte'
+  import Icon from '../../lib/Icon.svelte'
   import FactsTab from './FactsTab.svelte'
   import ProjectProvidersSection from './ProjectProvidersSection.svelte'
   import Help from '../../lib/Help.svelte'
@@ -1028,7 +1029,8 @@
                 tone={bootstrapShellTone}
               />
               {#if !bootstrapReady}
-                <Button variant="secondary" size="sm" onclick={runBootstrap} disabled={bootstrapRunning}>
+                <Button variant="agent" size="sm" onclick={runBootstrap} disabled={bootstrapRunning}>
+                  <Icon name="sparkles" size={14} />
                   {bootstrapRunning ? 'Running…' : 'Run bootstrap'}
                 </Button>
               {/if}
@@ -1164,7 +1166,8 @@
             {/if}
 
             <Row justify="end">
-              <Button onclick={runBootstrap} disabled={bootstrapRunning}>
+              <Button variant="agent" onclick={runBootstrap} disabled={bootstrapRunning}>
+                <Icon name="sparkles" size={14} />
                 {bootstrapRunning ? 'Running…' : 'Re-run bootstrap'}
               </Button>
             </Row>

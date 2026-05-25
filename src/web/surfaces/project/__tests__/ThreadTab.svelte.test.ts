@@ -652,7 +652,9 @@ describe('ThreadTab', () => {
     await userEvent.click(screen.getByRole('button', { name: /save direction/i }))
     await userEvent.selectOptions(screen.getByRole('combobox'), 'project-manager')
     await userEvent.click(screen.getByRole('button', { name: /add coordinator/i }))
-    await userEvent.click(screen.getByRole('button', { name: /run checks/i }))
+    const runChecksButton = screen.getByRole('button', { name: /run checks/i })
+    expect(runChecksButton.classList.contains('v-agent')).toBe(true)
+    await userEvent.click(runChecksButton)
 
     await waitFor(() => {
       expect(calls.some(call => call.url.includes('/api/setup/direction') && call.body?.content === 'Knit owns the editor UI.')).toBe(true)
@@ -704,7 +706,9 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
     await screen.findByText('Project check-in needed')
-    await userEvent.click(screen.getByRole('button', { name: /start project check-in/i }))
+    const startCheckInButton = screen.getByRole('button', { name: /start project check-in/i })
+    expect(startCheckInButton.classList.contains('v-agent')).toBe(true)
+    await userEvent.click(startCheckInButton)
 
     await waitFor(() => {
       expect(calls.some(call => call.url.includes('/api/project/project-check-in'))).toBe(true)
@@ -859,7 +863,9 @@ describe('ThreadTab', () => {
     render(ThreadTab)
 
     await screen.findByText('Needs brief')
-    expect(screen.getByText('Needs brief')).toBeTruthy()
+    const needsBriefChip = screen.getByText('Needs brief')
+    expect(needsBriefChip).toBeTruthy()
+    expect(needsBriefChip.classList.contains('tone-agent-attention')).toBe(true)
     expect(screen.getByText('Brief checklist')).toBeTruthy()
     expect(screen.queryByText('No upstream')).toBeNull()
     expect(screen.queryByText(/has no upstream branch/)).toBeNull()
@@ -1592,7 +1598,9 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
     await screen.findByText('Repo inspection')
-    await userEvent.click(screen.getAllByRole('button', { name: /create split proposal/i })[0]!)
+    const splitProposalButton = screen.getAllByRole('button', { name: /create split proposal/i })[0]!
+    expect(splitProposalButton.classList.contains('v-agent')).toBe(true)
+    await userEvent.click(splitProposalButton)
 
     await waitFor(() => {
       expect(calls.some(call => call.url.includes('/api/project/meta-intake/synthesize'))).toBe(true)
@@ -1660,7 +1668,9 @@ describe('ThreadTab', () => {
     expect(screen.getByText(/partial progress/i)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Inspect recovery' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Add recovery note' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Resume work' })).toBeTruthy()
+    const resumeWorkButton = screen.getByRole('button', { name: 'Resume work' })
+    expect(resumeWorkButton).toBeTruthy()
+    expect(resumeWorkButton.classList.contains('v-agent')).toBe(true)
     expect(screen.queryAllByText(/^Queued$/)).toHaveLength(0)
   })
 

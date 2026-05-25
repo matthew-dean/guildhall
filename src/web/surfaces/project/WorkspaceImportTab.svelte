@@ -819,7 +819,8 @@
       <Stack gap="4">
         <p class="muted">Guildhall did not find any importable planning material yet.</p>
         <Row justify="end" gap="3" wrap>
-          <Button variant="secondary" onclick={rerun} disabled={busy !== null}>
+          <Button variant="agent" onclick={rerun} disabled={busy !== null}>
+            <Icon name="sparkles" size={14} />
             {busy === 'rerun' ? 'Re-reading...' : 'Re-read project notes'}
           </Button>
         </Row>
@@ -905,7 +906,8 @@
           </p>
         {/if}
         <Row justify="end" gap="3" wrap>
-          <Button variant="secondary" onclick={rerun} disabled={busy !== null}>
+          <Button variant="agent" onclick={rerun} disabled={busy !== null}>
+            <Icon name="sparkles" size={14} />
             {busy === 'rerun' ? 'Re-reading…' : 'Re-run import'}
           </Button>
           <Button variant="secondary" onclick={() => nav(projectActionHref('/work'))}>

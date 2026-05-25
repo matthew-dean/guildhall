@@ -5473,6 +5473,24 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     variant and sparkle icon across the project header, project cards, setup
     wizard, thread cards, and current drawer; optional user notes stay
     secondary/left of the agent handoff.
+  - [x] Follow-up audit found more Guildhall handoff controls still styled as
+    human/secondary actions: task drawer `Run this task` / `Resume task` /
+    recovery retries, setup `Run checks`, meta-intake split synthesis,
+    Settings bootstrap runs, setup-wizard resume, and workspace-import reruns.
+    Those now use the agent variant and sparkle icon; ordinary load retries,
+    navigation, approvals, and user answer/save actions keep their existing
+    human-facing styles.
+  - [x] Project header Start regressed to visible count copy (`Start 1 task`)
+    even though its accessible label was just `Start`, and small topbar buttons
+    used a smaller font token than card buttons. The header now shows exactly
+    `Start`, and small/medium buttons share the same font-size token so action
+    text does not drift by placement.
+  - [x] Automation-state chips now follow the same actor semantics as actions
+    without becoming as loud as buttons. Passive Guildhall states such as
+    `Queued`, `Queued for Guildhall`, and `Guildhall shaping` use a quieter
+    agent tone; Guildhall-owned handoff states such as `Brief cleanup needed`
+    use `agent-attention`; user decisions, approvals, and recovery risks remain
+    warning/human-attention states.
   - [ ] Add the follow-on global scheduler that fairly spends the provider
     budget across all turned-on projects instead of requiring each project to
     be manually started and budgeted in isolation.

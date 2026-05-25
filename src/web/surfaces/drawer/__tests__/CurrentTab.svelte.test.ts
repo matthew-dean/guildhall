@@ -105,7 +105,9 @@ describe('CurrentTab', () => {
     const props = renderCurrentWithTask(readyTaskNeedingBriefCleanup(), [])
 
     expect(screen.getByText('Needs brief cleanup')).toBeTruthy()
-    expect(screen.getByText('Brief cleanup needed')).toBeTruthy()
+    const briefCleanupChip = screen.getByText('Brief cleanup needed')
+    expect(briefCleanupChip).toBeTruthy()
+    expect(briefCleanupChip.classList.contains('tone-agent-attention')).toBe(true)
     expect(screen.getByText(/marked ready, but its brief\/spec is not complete enough/i)).toBeTruthy()
     const viewButton = screen.getByRole('button', { name: /view brief/i })
     const startButton = screen.getByRole('button', { name: 'Start' })
@@ -316,7 +318,9 @@ describe('CurrentTab', () => {
     expect(screen.queryByText(/Open the task/i)).toBeNull()
     expect(screen.queryByRole('button', { name: /Review task details/i })).toBeNull()
 
-    await userEvent.click(screen.getByRole('button', { name: /^Rework spec$/i }))
+    const reworkButton = screen.getByRole('button', { name: /^Rework spec$/i })
+    expect(reworkButton.classList.contains('v-agent')).toBe(true)
+    await userEvent.click(reworkButton)
     await userEvent.click(screen.getByRole('button', { name: /View spec and evidence/i }))
 
     expect(props.onOpenEscalationAction).toHaveBeenCalledWith('esc-1', 'retry')
@@ -505,7 +509,9 @@ describe('CurrentTab', () => {
       { runStatus: 'running' },
     )
 
-    expect(screen.getByText('Queued for Guildhall')).toBeTruthy()
+    const queuedChip = screen.getByText('Queued for Guildhall')
+    expect(queuedChip).toBeTruthy()
+    expect(queuedChip.classList.contains('tone-agent')).toBe(true)
     expect(screen.getByRole('button', { name: /already queued/i })).toHaveProperty('disabled', true)
     expect(screen.queryByRole('button', { name: /start work/i })).toBeNull()
   })
@@ -586,7 +592,9 @@ describe('CurrentTab', () => {
     ])
 
     expect(screen.getByText('Spec revision queued')).toBeTruthy()
-    await userEvent.click(screen.getByRole('button', { name: /revise spec/i }))
+    const reviseButton = screen.getByRole('button', { name: /revise spec/i })
+    expect(reviseButton.classList.contains('v-agent')).toBe(true)
+    await userEvent.click(reviseButton)
 
     expect(props.onRunTask).toHaveBeenCalledOnce()
   })

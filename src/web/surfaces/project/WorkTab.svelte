@@ -194,13 +194,14 @@
     }
   }
 
-  function effectiveStatusTone(task: Task): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' {
+  function effectiveStatusTone(task: Task): 'accent' | 'ok' | 'warn' | 'danger' | 'neutral' | 'agent' | 'agent-attention' {
     switch (effectiveStatus(task)) {
       case 'paused': return 'neutral'
       case 'review_waiting':
       case 'gates_waiting':
+        return 'agent'
       case 'needs_spec_cleanup':
-        return 'warn'
+        return 'agent-attention'
       default:
         return statusTone(task.status)
     }
@@ -317,7 +318,7 @@
       <div class="work-summary">
         <Chip label={`${taskCounts.total} tasks`} tone="neutral" />
         {#if taskCounts.agentActive > 0}
-          <Chip label={countLabel(taskCounts.agentActive, 'Guildhall working', 'Guildhall working')} tone="accent" />
+          <Chip label={countLabel(taskCounts.agentActive, 'Guildhall working', 'Guildhall working')} tone="agent" />
         {/if}
         {#if taskCounts.paused > 0}
           <Chip label={countLabel(taskCounts.paused, 'paused task')} tone="neutral" />
@@ -328,10 +329,10 @@
         {#if taskCounts.gatesWaiting > 0}
           <Chip label={countLabel(taskCounts.gatesWaiting, 'gates waiting', 'gates waiting')} tone="warn" />
         {/if}
-        <Chip label={countLabel(taskCounts.shaping, 'being shaped', 'being shaped')} tone="neutral" />
-        <Chip label={countLabel(taskCounts.readyForWorker, 'ready to start', 'ready to start')} tone="neutral" />
+        <Chip label={countLabel(taskCounts.shaping, 'being shaped', 'being shaped')} tone="agent" />
+        <Chip label={countLabel(taskCounts.readyForWorker, 'ready to start', 'ready to start')} tone="agent" />
         {#if taskCounts.needsSpecCleanup > 0}
-          <Chip label={countLabel(taskCounts.needsSpecCleanup, 'need brief cleanup', 'need brief cleanup')} tone="warn" />
+          <Chip label={countLabel(taskCounts.needsSpecCleanup, 'need brief cleanup', 'need brief cleanup')} tone="agent-attention" />
         {/if}
         <Chip label={`${taskCounts.awaitingApproval} awaiting approval`} tone="warn" />
         <Chip label={`${taskCounts.done} done`} tone="ok" />

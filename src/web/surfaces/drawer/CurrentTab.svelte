@@ -155,15 +155,16 @@
     return turn.summary
   }
 
-  function taskStateTone(turn: TaskThreadInFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
+  function taskStateTone(turn: TaskThreadInFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' | 'agent' | 'agent-attention' {
     if (needsRecovery(turn)) return 'warn'
     if (turn.liveAgent) return 'running'
+    if (turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)) return 'agent-attention'
     switch (turn.taskStatus) {
-      case 'ready': return 'accent'
-      case 'import_draft': return 'accent'
-      case 'gate_check': return 'warn'
-      case 'review': return 'warn'
-      case 'exploring': return 'accent'
+      case 'ready': return 'agent'
+      case 'import_draft': return 'agent-attention'
+      case 'gate_check': return 'agent'
+      case 'review': return 'agent'
+      case 'exploring': return 'agent'
       case 'in_progress': return 'neutral'
       default: return 'neutral'
     }
@@ -286,7 +287,7 @@
         <StateSummary
           label="Brief cleanup needed"
           description="Guildhall needs to turn the source notes into a usable task brief before implementation."
-          tone="warn"
+          tone="agent-attention"
         />
         <p class="detail-copy">
           The Work board sent you here because this task is marked ready, but its brief/spec is not complete enough for a worker yet. Start lets Guildhall clean up the brief before implementation.
@@ -410,13 +411,11 @@
                 </Button>
               {/if}
               <Button
-                variant={guidance.actionOwner === 'guildhall' ? 'agent' : 'primary'}
+                variant="agent"
                 disabled={busy}
                 onclick={() => onOpenEscalationAction(turn.escalationId, 'retry')}
               >
-                {#if guidance.actionOwner === 'guildhall'}
-                  <Icon name="sparkles" size={14} />
-                {/if}
+                <Icon name="sparkles" size={14} />
                 {recoveryAction.label}
               </Button>
             </Row>
@@ -510,10 +509,13 @@
                   </Button>
                 {:else}
                   <Button
-                    variant="primary"
+                    variant="agent"
                     disabled={runBusy}
                     onclick={turn.taskStatus === 'import_draft' ? onShapeDraft : onRunTask}
-                  >{runLabel(turn)}</Button>
+                  >
+                    <Icon name="sparkles" size={14} />
+                    {runLabel(turn)}
+                  </Button>
                 {/if}
               </Row>
               {#if runError}

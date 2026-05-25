@@ -640,7 +640,8 @@
                     Open recovery
                   </Button>
                 {:else}
-                  <Button variant="primary" disabled={bootstrapBusy} onclick={resumeBootstrap}>
+                  <Button variant="agent" disabled={bootstrapBusy} onclick={resumeBootstrap}>
+                    <Icon name="sparkles" size={14} />
                     {bootstrapBusy ? 'Resuming...' : 'Resume'}
                   </Button>
                 {/if}

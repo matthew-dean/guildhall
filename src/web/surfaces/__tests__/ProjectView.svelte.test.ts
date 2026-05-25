@@ -548,6 +548,8 @@ describe('ProjectView', () => {
     await renderProjectView('thread')
     const startButton = screen.getByRole('button', { name: /^start$/i })
     expect(startButton.classList.contains('v-agent')).toBe(true)
+    expect(startButton).toHaveTextContent(/^Start$/)
+    expect(startButton).not.toHaveTextContent(/task/i)
     await user.click(startButton)
 
     await waitFor(() => {

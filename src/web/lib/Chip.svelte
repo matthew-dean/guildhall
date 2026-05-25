@@ -5,7 +5,27 @@
 <script lang="ts">
   import Tooltip from './Tooltip.svelte'
 
-  type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running'
+  type Tone =
+    | 'neutral'
+    | 'ok'
+    | 'warn'
+    | 'danger'
+    | 'accent'
+    | 'running'
+    | 'agent'
+    | 'agent-attention'
+
+  /*
+   * Chip tone taxonomy:
+   * - agent: passive Guildhall automation state. Use for queued/running/shaping
+   *   information where Guildhall is or will be the actor, but the chip is not
+   *   itself a call to action.
+   * - agent-attention: Guildhall-owned state that needs a handoff before it can
+   *   proceed, such as brief cleanup needed. It shares the automation hue, but
+   *   remains quieter than an agent button so the button still wins.
+   * - warn: human decision or risk state. Use when the user must answer,
+   *   approve, triage, or handle a real blocker.
+   */
 
   interface Props {
     label: string
@@ -85,5 +105,15 @@
   .tone-accent {
     background: var(--chip-accent-bg);
     color: var(--chip-accent-fg);
+  }
+  .tone-agent {
+    background: color-mix(in srgb, var(--accent-2) 68%, var(--bg-base));
+    color: var(--bg-base);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-2) 54%, white 10%);
+  }
+  .tone-agent-attention {
+    background: color-mix(in srgb, var(--accent-2) 62%, var(--chip-warn-bg) 28%);
+    color: var(--bg-base);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-2) 44%, var(--warn) 22%);
   }
 </style>

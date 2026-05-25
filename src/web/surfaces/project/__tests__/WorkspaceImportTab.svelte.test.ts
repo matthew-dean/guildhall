@@ -526,7 +526,9 @@ describe('WorkspaceImportTab', () => {
     render(WorkspaceImportTab)
     await screen.findByText('Guildhall did not find any importable planning material yet.')
 
-    await userEvent.click(screen.getByRole('button', { name: /re-read project notes/i }))
+    const rereadButton = screen.getByRole('button', { name: /re-read project notes/i })
+    expect(rereadButton.classList.contains('v-agent')).toBe(true)
+    await userEvent.click(rereadButton)
     await waitFor(() => {
       expect(calls.some(call => call.url.startsWith('/api/project/workspace-import/rerun'))).toBe(true)
     })

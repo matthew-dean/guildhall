@@ -126,7 +126,9 @@ describe('SettingsTab', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Providers' }))
     expect(path.value).toBe('/projects/looma-knit/settings/providers')
 
-    await userEvent.click(screen.getByRole('button', { name: /^run bootstrap$/i }))
+    const runBootstrapButton = screen.getByRole('button', { name: /^run bootstrap$/i })
+    expect(runBootstrapButton.classList.contains('v-agent')).toBe(true)
+    await userEvent.click(runBootstrapButton)
 
     await screen.findByText('Bootstrap verified (pnpm): test, build')
     expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/bootstrap/run'))).toBe(true)
@@ -263,7 +265,9 @@ describe('SettingsTab', () => {
     await screen.findByRole('heading', { name: /ready to start/i })
     expect(screen.getByText('2/3 ready')).toBeInTheDocument()
     expect(screen.getAllByText('re-run needed')).toHaveLength(2)
-    expect(screen.getByRole('button', { name: /^run bootstrap$/i })).toBeInTheDocument()
+    const rerunBootstrapButton = screen.getByRole('button', { name: /^run bootstrap$/i })
+    expect(rerunBootstrapButton).toBeInTheDocument()
+    expect(rerunBootstrapButton.classList.contains('v-agent')).toBe(true)
   })
 
   it('saves advanced identity, resets lever errors, and approves a design-system draft', async () => {

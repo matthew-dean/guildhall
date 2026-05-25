@@ -12,6 +12,7 @@
   import Stack from '../../lib/Stack.svelte'
   import Field from '../../lib/Field.svelte'
   import Chip from '../../lib/Chip.svelte'
+  import Icon from '../../lib/Icon.svelte'
   import { escalationPrimaryAction, escalationReasonLabel, roleLabel } from '../../lib/escalation-labels.js'
   import type { Escalation } from '../../lib/types.js'
 
@@ -120,7 +121,8 @@
   {#snippet footer()}
     <Button variant="ghost" disabled={busy} onclick={onClose}>Cancel</Button>
     {#if mode === 'retry'}
-      <Button variant="primary" disabled={busy} onclick={handleRetry}>
+      <Button variant="agent" disabled={busy} onclick={handleRetry}>
+        <Icon name="sparkles" size={14} />
         {primaryAction.label}
       </Button>
     {:else}

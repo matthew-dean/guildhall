@@ -553,16 +553,16 @@
     return t.status === 'active' ? 'now' : 'next'
   }
 
-  function turnStatusChipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' {
+  function turnStatusChipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' | 'agent' | 'agent-attention' {
     if (t.status === 'done') return 'ok'
     if (needsRecovery(t)) return 'warn'
     if (t.kind === 'inflight' && t.taskId === 'task-meta-intake' && !turnLiveAgent(t)) {
       return 'warn'
     }
     if (t.kind === 'inflight' && t.importedDraft && (t.taskStatus === 'import_draft' || t.taskStatus === 'exploring') && !turnLiveAgent(t)) {
-      return 'accent'
+      return 'agent-attention'
     }
-    if (isQueuedForGuildhall(t)) return 'accent'
+    if (isQueuedForGuildhall(t)) return 'agent'
     if (t.kind === 'inflight' && t.status === 'active' && !turnLiveAgent(t)) return 'neutral'
     if (t.kind === 'spec_review' && t.status === 'active') return 'neutral'
     return t.status === 'active' ? 'neutral' : 'neutral'
@@ -655,11 +655,12 @@
     return null
   }
 
-  function ownershipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' | 'running' {
+  function ownershipTone(t: Turn): 'ok' | 'warn' | 'neutral' | 'accent' | 'running' | 'agent' | 'agent-attention' {
     if (turnLiveAgent(t)) return 'running'
     const label = ownershipLabel(t)
-    if (label === 'Needs you' || label === 'Needs recovery' || label === 'Needs brief') return 'warn'
-    if (label === 'Queued' || label === 'Queued for Guildhall' || label === 'Guildhall shaping' || label === 'Guildhall can continue') return 'accent'
+    if (label === 'Needs you' || label === 'Needs recovery') return 'warn'
+    if (label === 'Needs brief') return 'agent-attention'
+    if (label === 'Queued' || label === 'Queued for Guildhall' || label === 'Guildhall shaping' || label === 'Guildhall can continue') return 'agent'
     return 'neutral'
   }
 
@@ -1553,15 +1554,16 @@
     }
   }
 
-  function taskStateTone(turn: InFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' {
+  function taskStateTone(turn: InFlightTurn): 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running' | 'agent' | 'agent-attention' {
     if (needsRecovery(turn)) return 'warn'
     if (turnLiveAgent(turn)) return 'running'
+    if (turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)) return 'agent-attention'
     switch (turn.taskStatus) {
-      case 'ready': return 'accent'
-      case 'import_draft': return 'accent'
-      case 'gate_check': return 'warn'
-      case 'review': return 'warn'
-      case 'exploring': return 'accent'
+      case 'ready': return 'agent'
+      case 'import_draft': return 'agent-attention'
+      case 'gate_check': return 'agent'
+      case 'review': return 'agent'
+      case 'exploring': return 'agent'
       case 'in_progress': return 'neutral'
       default: return 'neutral'
     }
@@ -2005,7 +2007,8 @@
                       </Stack>
                     {:else if t.affordance === 'inline-button'}
                       <Row justify="end" gap="2">
-                        <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
+                        <Button variant="agent" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
+                          <Icon name="sparkles" size={14} />
                           {busyTurnId === t.id ? (t.stepId === 'projectCheckIn' ? 'Starting...' : 'Verifying...') : t.actionLabel}
                         </Button>
                       </Row>
@@ -2028,7 +2031,8 @@
                   {:else if t.status !== 'done'}
                     <Row justify="end" gap="2">
                       {#if t.stepId === 'projectCheckIn' && t.affordance === 'inline-button'}
-                        <Button variant="primary" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
+                        <Button variant="agent" disabled={busyTurnId === t.id} onclick={() => submitSetup(t)}>
+                          <Icon name="sparkles" size={14} />
                           {busyTurnId === t.id ? 'Starting...' : t.actionLabel}
                         </Button>
                       {:else}
@@ -2887,10 +2891,11 @@
                         </Button>
                         {#if metaIntakeChecklistComplete(t)}
                           <Button
-                            variant="primary"
+                            variant="agent"
                             disabled={busyTurnId === t.id}
                             onclick={() => synthesizeMetaIntake(t)}
                           >
+                            <Icon name="sparkles" size={14} />
                             {startTaskLabel(t)}
                           </Button>
                         {:else if t.taskStatus === 'import_draft'}
