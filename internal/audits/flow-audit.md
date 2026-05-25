@@ -57,6 +57,13 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Add the first coordinator-facing review planner shape. The pure
+  `buildReviewPlan` path now turns task text, changed-file hints, priority,
+  requested effort, and optional budget overrides into selected risk lanes,
+  grouped reviewer recipes, deterministic checks, required artifacts,
+  aggregation policy, skipped-lane reasons, and an explicit review budget.
+  Focused tests cover lean docs work, grouped UX review, release-critical
+  auth/data migration work, and custom review-budget overrides.
 - [x] Add the first review-audit consumer of the persistence boundary.
   `createReviewAuditStore` now stores compact review plans and escaped-miss
   audit events in shared project persistence, while raw reviewer/frontier runs

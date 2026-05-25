@@ -130,6 +130,8 @@ export type {
   FrontierRunRecord as FrontierRunRecordType,
   EscapedMissRecord as EscapedMissRecordType,
 } from './review-audit-store.js'
+export { buildReviewPlan } from './review-planner.js'
+export type { BuildReviewPlanInput } from './review-planner.js'
 export { selectApiClient } from './provider-selection.js'
 export type {
   SelectApiClientOptions,
