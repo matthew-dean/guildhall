@@ -1,0 +1,25 @@
+id: evidence-redaction-plan
+title: Evidence redaction review plan
+task:
+  id: task-evidence-redaction
+  title: Store review screenshots and prompts
+  description: Add audit evidence records for screenshots, logs, traces, prompts, and transcripts with redaction.
+  priority: normal
+  changedFiles:
+    - src/runtime/review-audit-store.ts
+expected:
+  requiredLanes:
+    - evidence_privacy
+    - privacy
+    - data_integrity
+    - test_adequacy
+  deterministicChecks:
+    - secret-and-sensitive-evidence-scan
+  strictLanes:
+    - privacy
+    - data_integrity
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

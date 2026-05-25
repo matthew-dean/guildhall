@@ -1,0 +1,25 @@
+id: visual-responsive-toolbar-plan
+title: Responsive toolbar review plan
+task:
+  id: task-visual-responsive-toolbar
+  title: Fix mobile editor toolbar layout
+  description: The responsive toolbar overlaps buttons on mobile and needs clearer icon spacing.
+  priority: normal
+  changedFiles:
+    - src/web/surfaces/editor/Toolbar.svelte
+    - src/web/surfaces/editor/toolbar.css
+expected:
+  requiredLanes:
+    - visual_design
+    - ux_comprehension
+    - accessibility
+    - test_adequacy
+  requiredArtifacts:
+    - visual-evidence
+  deterministicChecks:
+    - browser-or-screenshot-evidence
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

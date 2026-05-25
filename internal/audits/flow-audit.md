@@ -117,6 +117,12 @@ babysit setup/import/provider/release states across multiple pages.
   idempotency, and rollout fallback. Frontier validation records
   `balanced_split_ux_copy` alongside lean/balanced/thorough effort variants so
   grouped-reviewer tradeoffs can be tested instead of guessed.
+- [x] Expand the planning corpus to the planned 15-case minimum. The harness
+  now includes additional cases for responsive visual design, privacy consent,
+  migration rollback, evidence redaction, model cost control, calibration
+  prompt governance, and implementation-handoff completeness. This gives the
+  review planner frontier enough cross-lane examples to catch regressions when
+  effort or reviewer-bundle settings change.
 - [x] Tighten the dark-theme text contrast ladder from the Fair Labor License
   Thread walkthrough. Supporting copy was too dim against near-white headings,
   so the system text tokens now keep primary/strong text slightly softer and

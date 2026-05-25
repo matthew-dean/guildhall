@@ -1,0 +1,20 @@
+id: calibration-prompt-change-plan
+title: Calibration prompt change review plan
+task:
+  id: task-calibration-prompt-change
+  title: Update reviewer calibration prompt
+  description: Change the reviewer prompt rubric and model settings for calibration evals.
+  priority: normal
+  changedFiles:
+    - src/runtime/review-calibration.ts
+expected:
+  requiredLanes:
+    - calibration_governance
+    - cost_control
+    - test_adequacy
+    - plan_completeness
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

@@ -1,0 +1,19 @@
+id: cost-model-budget-plan
+title: Model budget review plan
+task:
+  id: task-cost-model-budget
+  title: Tune reviewer model token budget
+  description: Adjust provider model settings, token budget, rate limit, and LLM cost controls for review.
+  priority: normal
+  changedFiles:
+    - src/runtime/review-planner.ts
+expected:
+  requiredLanes:
+    - cost_control
+    - calibration_governance
+    - test_adequacy
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

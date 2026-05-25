@@ -64,15 +64,22 @@ describe('review planning calibration', () => {
       path.join(process.cwd(), 'internal/calibration/planning'),
     )
 
-    expect(cases.length).toBeGreaterThanOrEqual(8)
+    expect(cases.length).toBeGreaterThanOrEqual(15)
     expect(cases.map((planningCase) => planningCase.id)).toEqual(expect.arrayContaining([
       'ux-settings-review-effort',
       'accessibility-keyboard-modal-plan',
+      'visual-responsive-toolbar-plan',
       'security-tenant-export-plan',
+      'privacy-telemetry-consent-plan',
       'api-status-compatibility-plan',
       'data-idempotent-retry-plan',
+      'migration-backfill-rollback-plan',
       'docs-install-command-plan',
       'performance-unbounded-query-plan',
+      'evidence-redaction-plan',
+      'cost-model-budget-plan',
+      'calibration-prompt-change-plan',
+      'plan-completeness-handoff-plan',
       'release-rollout-fallback-plan',
     ]))
   })
