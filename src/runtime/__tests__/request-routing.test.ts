@@ -22,6 +22,22 @@ describe('routeRequest', () => {
     expect(result.routingDecision.reason).toContain('release')
   })
 
+  it('keeps the named project on versioned pressure-test requests', () => {
+    const result = routeRequest({
+      raw: 'Pressure-test Commerce Project 0.9.0 checkout wording assumptions.',
+      source: 'thread',
+      routeContext: { projectId: 'commerce-project', route: '/projects/commerce-project/thread' },
+    })
+
+    expect(result.actions[0]).toMatchObject({
+      kind: 'pressure_test_intake',
+      intakeTarget: {
+        type: 'release',
+        title: 'Commerce Project 0.9.0',
+      },
+    })
+  })
+
   it('keeps a small concrete implementation ask on the normal task path', () => {
     const result = routeRequest({
       raw: 'Add a loading spinner to the Providers page.',

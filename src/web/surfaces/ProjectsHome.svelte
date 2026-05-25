@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onEvent } from '../lib/events.js'
   import { nav } from '../lib/nav.svelte.js'
-  import { Activity, AlertTriangle, CheckCircle2, Cpu, FileClock, FolderPlus, Inbox, PlayCircle, Users } from 'lucide-svelte'
+  import { Activity, AlertTriangle, CheckCircle2, Cpu, FileClock, FolderPlus, Folders, Inbox, PlayCircle } from 'lucide-svelte'
   import ActionBar from '../lib/ActionBar.svelte'
   import Button from '../lib/Button.svelte'
   import Chip from '../lib/Chip.svelte'
@@ -51,7 +51,6 @@
 
   function servicePayloadSignature(payload: ServiceDetail): string {
     return JSON.stringify({
-      selectedProject: payload.selectedProject?.id ?? null,
       defaultProviderStatus: payload.defaultProviderStatus,
       projects: payload.projects.map(project => ({
         id: project.id,
@@ -61,6 +60,9 @@
         taskCounts: project.taskCounts,
         highlights: project.highlights,
         run: project.run,
+        providerStatus: project.providerStatus,
+        gitStory: project.gitStory,
+        projectCheckIn: project.projectCheckIn,
       })),
     })
   }
@@ -112,7 +114,7 @@
   async function openProject(projectId: string): Promise<void> {
     busyId = projectId
     try {
-      nav(projectHref(projectId, '/thread'))
+      nav(projectHref(projectId, '/overview'))
     } finally {
       busyId = null
     }
@@ -171,7 +173,7 @@
       }
       if (payload?.cancelled) return
       await refresh()
-      if (typeof payload?.selectedProject?.id === 'string') nav(projectHref(payload.selectedProject.id, '/thread'))
+      if (typeof payload?.project?.id === 'string') nav(projectHref(payload.project.id, '/overview'))
     } catch (err) {
       error = requestErrorMessage(err)
     } finally {
@@ -229,8 +231,8 @@
     shelved: cards.reduce((sum, card) => sum + card.counts.shelved, 0),
   })
   const readyTaskCount = $derived(Math.max(0, overview.taskTotal - overview.active - overview.blocked - overview.drafts - overview.done - overview.shelved))
-  const needsYouCount = $derived(cards.filter(card => card.counts.blocked > 0 || card.counts.draftReview > 0).length)
-  const firstNeedsYouProject = $derived(cards.find(card => card.counts.blocked > 0 || card.counts.draftReview > 0) ?? null)
+  const needsYouCount = $derived(cards.filter(card => card.counts.blocked > 0 || card.counts.draftReview > 0 || card.projectCheckIn?.needed || card.provider?.tone === 'warn').length)
+  const firstNeedsYouProject = $derived(cards.find(card => card.counts.blocked > 0 || card.counts.draftReview > 0 || card.projectCheckIn?.needed || card.provider?.tone === 'warn') ?? null)
   const selectedProject = $derived(cards.find(card => card.id === selectedProjectId) ?? null)
   const dashboardTotal = $derived(Math.max(1, overview.taskTotal))
   const defaultProviderStatus = $derived(service?.defaultProviderStatus ?? null)
@@ -239,7 +241,7 @@
   const defaultWorkerModel = $derived(compactModelLabel(defaultProviderStatus?.activeModel ?? defaultProviderStatus?.models?.worker))
   const defaultProviderTitle = $derived(
     defaultProviderWarning?.message ??
-      `Machine default models: ${defaultProviderLabel}${defaultWorkerModel ? `, worker ${defaultWorkerModel}` : ''}.`,
+      'Open model settings.',
   )
 
   function countLabel(count: number, singular: string, plural = `${singular}s`): string {
@@ -305,7 +307,7 @@
           variant="secondary"
           className={`default-model-button ${defaultProviderWarning ? 'default-model-button-warn' : ''}`}
           title={defaultProviderTitle}
-          ariaLabel={`Machine default models: ${defaultProviderLabel}${defaultWorkerModel ? `, ${defaultWorkerModel}` : ''}`}
+          ariaLabel="Open model settings"
           onclick={() => nav('/providers')}
         >
           {#if defaultProviderWarning}
@@ -314,10 +316,7 @@
             <Cpu size={15} />
           {/if}
           <span class="default-model-copy">
-            <span class="default-model-label">{defaultProviderLabel}</span>
-            {#if defaultWorkerModel}
-              <span class="default-model-worker">{defaultWorkerModel}</span>
-            {/if}
+            <span class="default-model-prefix">Models</span>
           </span>
         </Button>
       {/if}
@@ -332,7 +331,7 @@
         <Inbox size={15} />
         Needs you
         {#if needsYouCount > 0}
-          <span class="action-count"><span class="count-glyph">{needsYouCount > 99 ? '99+' : needsYouCount}</span></span>
+          <span class="action-count"><span class="count-glyph">{needsYouCount > 99 ? '99+' : `${needsYouCount} project${needsYouCount === 1 ? '' : 's'}`}</span></span>
         {/if}
       </Button>
       <Button variant="secondary" disabled={busyId === '__attach__'} title="Attach another local project to Guildhall" onclick={attachProject}>
@@ -362,7 +361,7 @@
         <p class="floor-kicker">Guild hall</p>
         <Tooltip text={countLabel(overview.total, 'project')}>
           <strong aria-label={countLabel(overview.total, 'project')}>
-            <Users size={18} />
+            <Folders size={18} />
             <span>{overview.total}</span>
           </strong>
         </Tooltip>
@@ -536,6 +535,20 @@
             <p class="drawer-muted">{selectedProject.recentLabel}</p>
           {/if}
         </section>
+        {#if selectedProject.projectCheckIn?.needed || selectedProject.provider?.tone === 'warn' || selectedProject.gitStory}
+          <section class="drawer-section">
+            <h3>Needs attention</h3>
+            {#if selectedProject.projectCheckIn?.needed}
+              <p><strong>{selectedProject.projectCheckIn.title ?? 'Project check-in needed'}:</strong> {selectedProject.projectCheckIn.detail ?? 'Answer the first project questions in Thread.'}</p>
+            {/if}
+            {#if selectedProject.provider?.tone === 'warn'}
+              <p><strong>Provider:</strong> {selectedProject.provider.title}</p>
+            {/if}
+            {#if selectedProject.gitStory}
+              <p><strong>{selectedProject.gitStory.label}:</strong> {selectedProject.gitStory.title}</p>
+            {/if}
+          </section>
+        {/if}
         <section class="drawer-section">
           <h3>Recent and next</h3>
           <div class="drawer-work-grid">
@@ -605,7 +618,8 @@
   .hero-actions :global(.default-model-button) {
     gap: var(--s-1);
     min-width: 0;
-    max-width: min(30rem, 100%);
+    max-width: min(22rem, 100%);
+    padding-inline: var(--s-2);
   }
   .hero-actions :global(.default-model-button-warn) {
     border-color: color-mix(in srgb, var(--warn) 52%, var(--button-secondary-border));
@@ -621,30 +635,22 @@
     gap: var(--s-1);
     overflow: hidden;
   }
-  .default-model-label,
-  .default-model-worker {
+  .default-model-prefix {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .default-model-label {
-    flex: 0 0 auto;
-  }
-  .default-model-worker {
-    flex: 1 1 auto;
-    max-inline-size: clamp(8rem, 18vw, 16rem);
-    color: var(--text-muted);
+    color: var(--text);
+    font-weight: 800;
     font-size: var(--fs-1);
-    font-weight: 650;
   }
   .action-count {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     min-width: 1.15rem;
-    height: 1.15rem;
-    padding: 0 0.3rem;
+    min-height: 1.15rem;
+    padding: 0.08rem 0.42rem;
     box-sizing: border-box;
     border-radius: 999px;
     background: color-mix(in srgb, var(--bg-base) 24%, transparent);

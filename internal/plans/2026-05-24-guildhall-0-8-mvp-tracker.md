@@ -3,7 +3,7 @@
 **Status:** active release tracker  
 **Owner:** Guildhall 0.8.0 release work  
 **Primary priority:** Pressure-Test Intake  
-**New release blocker:** Git Story Closure
+**New release blockers:** Git Story Closure; Task State Boundary
 
 This tracker is the single internal truth for what belongs in the 0.8.0 MVP.
 The older 0.8.0 specs remain useful design sources, but they are no longer a
@@ -15,6 +15,11 @@ promise that every candidate slice ships in 0.8.0.
   detailed implementation plan for the primary 0.8.0 slice.
 - `internal/plans/2026-05-24-guildhall-0-8-git-story-closure.md` is the
   detailed implementation plan for the 0.8.0 Git Story Closure blocker.
+- `internal/plans/2026-05-24-task-schema-runtime-evidence-split.md` is the
+  detailed implementation plan for the 0.8.0 Task State Boundary blocker.
+- `internal/audits/2026-05-24-task-schema-boundary-audit.md` is the evidence
+  audit for why task definitions must split from runtime, git/workspace state,
+  and evidence history.
 - `internal/specs/2026-05-22-guildhall-0-8-practices-deep-intake-worker-modes-and-personas.md`
   is the broader design source for practices, worker modes, Pressure-Test
   Intake, operational unblockers, language maps, practices, and personas.
@@ -24,9 +29,10 @@ promise that every candidate slice ships in 0.8.0.
 - `internal/specs/2026-05-22-guildhall-0-8-html-artifacts-and-agent-ui-protocol.md`
   is the design source for rich artifacts. Only the smallest safe artifact
   proof belongs in 0.8.0.
-- `internal/specs/2026-05-22-guildhall-0-8-podman-project-runtime.md` is a
-  future runtime-isolation direction. It is not part of the 0.8.0 MVP unless a
-  narrow manual spike is needed to de-risk the next release.
+- `internal/specs/2026-05-22-guildhall-0-8-podman-project-runtime.md` is the
+  deferred Podman/runtime-isolation source spec. It is not part of the 0.8.0
+  MVP; it now belongs to the proposed 0.9.0 task-shaping and finishability
+  direction.
 - `internal/audits/flow-audit.md` remains the live checklist and evidence log.
 
 ## MVP Thesis
@@ -42,6 +48,9 @@ deferrals.
 At the end, a finished task should not leave the user guessing whether the
 repo is dirty, committed, pushed, in a PR, merged, deferred, or blocked. That
 is Git Story Closure.
+
+Across the whole lifecycle, a task should mean "the work", not "every runtime
+thing Guildhall did while working on it." That is Task State Boundary.
 
 ## 0.8.0 Must Ship
 
@@ -208,7 +217,48 @@ Implementation notes:
 - Projects Home, Thread, Provenance, and Release readiness now surface
   unresolved Git Story state.
 
-### 3. Provider Default Visibility
+### 3. Task State Boundary
+
+**Status:** audit and implementation plan complete; implementation required
+before 0.8.0 can be called release-ready.
+
+Problem:
+
+Project-local `TASKS.json` currently mixes task definition, runtime execution
+state, worktree/git placement, and evidence history. In live projects this has
+put machine paths, `~/.guildhall` worktree paths, notes, review verdicts,
+adjudications, escalations, gate results, and remediation counters into a file
+that should describe the work. That directly caused the FLL git inspection bug
+and undermines Git Story Closure because task records can carry stale runtime
+placement as if it were task truth.
+
+MVP contract:
+
+- Project-local `TASKS.json` remains the portable task-definition file.
+- System-local project history stores runtime state, task workspaces, git
+  provenance, notes, gate output, review verdicts, adjudications, escalations,
+  agent issues, merge records, and checkpoints.
+- Old task files continue to render and run through compatibility projection.
+- New writers stop adding runtime/evidence fields to project-local task
+  definitions.
+- Task Drawer, Thread, Overview, and Release use effective task projections
+  backed by runtime/evidence APIs.
+- A migration can extract legacy runtime/evidence fields idempotently and
+  rewrite project-local task definitions only after system-local evidence is
+  safely written.
+
+Release bar:
+
+- FLL-style legacy task records with many verdicts, adjudications, notes,
+  escalations, worktree paths, and retry counters project correctly.
+- New task ticks do not recreate legacy runtime/evidence fields in
+  project-local `TASKS.json`.
+- Git Story inspection resolves task workspace state from system-local runtime
+  storage, not task-local `worktreePath`.
+- Evidence tabs still show history, expert review, gates, and provenance.
+- Migration has a dry-run and an apply path with backup and idempotency tests.
+
+### 4. Provider Default Visibility
 
 **Status:** implemented in the current 0.8.0 branch; keep in MVP.
 
@@ -273,7 +323,9 @@ export/delete controls, and large-scale compaction.
   promotion.
 - Full persona library with task-scoped participation rules and reviewer
   roster editing.
-- Podman/containerized project runtime as a default execution environment.
+- Podman/containerized project runtime as a default execution environment;
+  tracked forward in
+  `internal/plans/2026-05-24-guildhall-0-9-task-shaping-and-finishability.md`.
 - Host-tool broker and real mount-grant workflows.
 - Full rich artifact renderer with interactive decisions/checklists.
 - Long-thread virtualization and complete local history management UI.
@@ -288,6 +340,18 @@ export/delete controls, and large-scale compaction.
 - [x] Pressure-Test Intake foundation is represented in the live flow audit.
 - [x] Provider default visibility is represented in the live flow audit.
 - [x] Git Story Closure implementation plan exists.
+- [x] Task State Boundary audit exists.
+- [x] Task State Boundary implementation plan exists.
+- [x] Task runtime/evidence stores exist under system-local project history.
+- [x] Compatibility projection supports legacy task files.
+- [ ] New writers no longer persist runtime/evidence fields to project-local
+  `TASKS.json`. Current slice mirrors high-value evidence/workspace writes to
+  the new stores while preserving legacy writes for compatibility; the
+  remaining work is to flip canonical writers over fully.
+- [x] Task-state migration is idempotent and covered by live-shaped fixtures.
+- [ ] Task Drawer, Thread, Overview, and Release render from effective task
+  projections. Current slice adds evidence/review/history/git-story endpoints
+  and Git Story workspace-store reads; drawer/surface rewiring remains.
 - [x] Git Story Snapshot model and tests exist.
 - [x] Project/service API exposes git story summary.
 - [x] Thread and Provenance render git story state.

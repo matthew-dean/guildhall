@@ -111,7 +111,7 @@ function routeSingleRequest(input: RouteRequestInput): RouteRequestResult {
   ) {
     return withReuse(input, one({
       kind: 'pressure_test_intake',
-      title: releaseMatch ? `Guildhall ${releaseMatch[1]}` : title,
+      title: releaseMatch ? inferVersionedTitle(raw, releaseMatch) : title,
       safety: 'project-write',
       targetType: releaseMatch ? 'release' : 'feature',
       pressureTestRequired: true,
@@ -250,6 +250,28 @@ function inferTitle(raw: string): string {
   const firstLine = raw.split(/\n/)[0]?.trim() ?? 'New request'
   if (firstLine.length <= 72) return firstLine
   return `${firstLine.slice(0, 69).trim()}...`
+}
+
+function inferVersionedTitle(raw: string, match: RegExpMatchArray): string {
+  const version = match[1] ?? match[0].replace(/^v/i, '')
+  const index = typeof match.index === 'number' ? match.index : raw.indexOf(match[0])
+  const beforeVersion = index >= 0 ? raw.slice(0, index) : ''
+  let candidate = beforeVersion
+    .replace(/[^\p{L}\p{N}/._ -]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  const scoped = candidate.match(/\b(?:for|about|around|on)\s+(.+)$/i)
+  if (scoped?.[1]) candidate = scoped[1].trim()
+
+  candidate = candidate
+    .replace(/^(?:please\s+)?(?:pressure[- ]test|test|shape|draft|plan|spec|release)\s+/i, '')
+    .replace(/^(?:i\s+)?(?:have|got)\s+ideas?\s+(?:for|about)\s+/i, '')
+    .trim()
+
+  const words = candidate.split(/\s+/).filter(Boolean)
+  const title = words.slice(Math.max(0, words.length - 5)).join(' ').trim()
+  return title ? `${title} ${version}` : version
 }
 
 function slugify(value: string): string {

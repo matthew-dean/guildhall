@@ -4,7 +4,7 @@ help_topic: lever.rejection_dampening
 help_summary: |
   Suppresses noise from tasks that get rejected repeatedly. After N
   rejections, `soft_penalty` deprioritizes the task; `hard_suppress`
-  removes it from the queue entirely until a human revives it.
+  removes it from the queue entirely until you revive it.
 ---
 
 # `rejection_dampening`
@@ -19,7 +19,7 @@ What happens when the same task is rejected (pre-rejection or review reject) N t
 |---|---|
 | `off` | No dampening. Task stays in queue at same priority indefinitely. |
 | `soft_penalty_after_N` | After N rejections, lower the task's priority so other work gets picked first. |
-| `hard_suppress_after_N` | After N rejections, remove the task from the queue until a human manually revives it. |
+| `hard_suppress_after_N` | After N rejections, remove the task from the queue until you manually revive it. |
 
 ## Storage shape
 

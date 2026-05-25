@@ -6,7 +6,7 @@ import { DesignSystem, DESIGN_SYSTEM_FILE } from '@guildhall/core'
 // ---------------------------------------------------------------------------
 // Design-system storage
 //
-// memory/design-system.yaml is the single source of truth. YAML so humans
+// .guildhall/design-system.yaml is the single source of truth. YAML so humans
 // can hand-edit it without fighting JSON quoting; the schema is validated on
 // load so bad edits surface at runtime instead of silently drifting into
 // agent prompts.

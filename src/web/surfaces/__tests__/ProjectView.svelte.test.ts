@@ -262,7 +262,7 @@ async function renderProjectView(
   project.detail = initialDetail
   project.error = null
   render(ProjectView, { initialView: view, initialSub: sub, projectId })
-  await waitFor(() => expect(screen.getByText('Looma + Knit')).toBeInTheDocument())
+  await waitFor(() => expect(screen.getAllByText('Looma + Knit').length).toBeGreaterThan(0))
 }
 
 function installMobileBrowserFakes() {
@@ -342,6 +342,7 @@ describe('ProjectView', () => {
   })
 
   it.each([
+    ['overview', 'Work mix'],
     ['inbox', 'Choose link editor scope'],
     ['work', 'Knit: add link editor controls'],
     ['planner', 'Knit: add link editor controls'],
@@ -359,12 +360,35 @@ describe('ProjectView', () => {
   })
 
   it('canonicalizes legacy project routes to the explicit project slug', async () => {
-    path.value = '/project/thread'
-    window.history.replaceState({}, '', '/project/thread')
+    path.value = '/project'
+    window.history.replaceState({}, '', '/project')
 
-    await renderProjectView('thread', null, null)
+    await renderProjectView('overview', null, null)
 
-    await waitFor(() => expect(path.value).toBe('/projects/looma-knit/thread'))
+    await waitFor(() => expect(path.value).toBe('/projects/looma-knit/overview'))
+  })
+
+  it('does not foreground resolved git runtime errors in Overview', async () => {
+    const projectPayload = detail({
+      recentEvents: [
+        {
+          at: now,
+          event: { type: 'supervisor_error', message: 'spawn git ENOENT' },
+        },
+      ],
+      gitStory: {
+        ready: true,
+        state: 'clean',
+        blockers: [],
+        snapshots: [{ state: 'clean', reason: 'No local changes or unpublished branch work detected.' }],
+      },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('overview', null, 'looma-knit', projectPayload)
+
+    expect(screen.queryByText('Guildhall could not find git while inspecting this project.')).toBeNull()
+    expect(screen.queryByText('spawn git ENOENT')).toBeNull()
   })
 
   it('routes setup blockers with a pending meta-intake task to the setup recovery surface', async () => {
@@ -768,8 +792,8 @@ describe('ProjectView', () => {
   it('keeps collapsed rail navigation accessible by name', async () => {
     await renderProjectView('work')
 
+    expect(screen.getByRole('button', { name: 'Overview' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Thread' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Needs you' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Work' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Release' })).toBeInTheDocument()
@@ -777,12 +801,12 @@ describe('ProjectView', () => {
     expect(screen.queryByRole('button', { name: 'Project provider settings' })).not.toBeInTheDocument()
   })
 
-  it('routes the rail Needs you item to the notifications surface', async () => {
+  it('routes the top-bar Needs you indicator to the project overview', async () => {
     await renderProjectView('thread')
 
-    await userEvent.click(screen.getByRole('button', { name: 'Needs you' }))
+    await userEvent.click(screen.getByRole('button', { name: /notifications need you/i }))
 
-    expect(path.value).toBe('/projects/looma-knit/notifications')
+    expect(path.value).toBe('/projects/looma-knit/overview')
   })
 
   it('keeps Settings pinned in the rail utility section instead of expanding settings subsections there', async () => {

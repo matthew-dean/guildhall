@@ -3,7 +3,7 @@ title: Provenance
 help_topic: lever.provenance
 help_summary: |
   Every lever records who set it — system-default (boot), spec-agent-intake
-  (Spec Agent during exploring), user-direct (human), or coordinator:<name>
+  (Spec Agent during exploring), user-direct (you), or coordinator:<name>
   (mid-project coordinator decision) — plus an ISO timestamp and rationale.
 ---
 
@@ -21,7 +21,7 @@ Every lever entry records:
 |---|---|
 | `system-default` | The seed value written at workspace init. Edit freely. |
 | `spec-agent-intake` | Set by the Spec Agent while refining a task in `exploring`. |
-| `user-direct` | Set by a human — CLI, browser UI, or hand-edited YAML. |
+| `user-direct` | Set by you through the CLI, browser UI, or hand-edited YAML. |
 | `coordinator:<name>` | Set mid-project by a coordinator agent acting within its autonomy. |
 
 ## Why it matters

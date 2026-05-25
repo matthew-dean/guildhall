@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { TaskQueue, type Task, type TaskStatus } from '@guildhall/core'
+import { TaskQueue, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
 import { atomicWriteText } from '@guildhall/sessions'
 import {
   appendExploringTranscript,
@@ -61,6 +61,8 @@ export interface IntakeInput {
   taskId?: string
   /** Optional explicit title; defaults to a shortened ask */
   title?: string
+  /** User-facing routed request metadata for Thread projection. */
+  request?: TaskRequest
 }
 
 export interface IntakeResult {
@@ -102,6 +104,7 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
     revisionCount: 0,
     remediationAttempts: 0,
     origination: 'human',
+    ...(input.request ? { request: input.request } : {}),
     createdAt: now,
     updatedAt: now,
   }
@@ -155,7 +158,20 @@ export async function createRoutedRequest(input: IntakeInput): Promise<RoutedReq
     }
   }
 
-  const task = await createExploringTask(input)
+  const task = await createExploringTask({
+    ...input,
+    title: input.title?.trim() || action?.label,
+    ...(action ? {
+      request: {
+        id: `request-${Date.now().toString(36)}-${slugId(action.label)}`,
+        raw: input.ask,
+        kind: action.kind,
+        title: action.label,
+        routingSummary: routingSummaryForAction(action),
+        createdAt: new Date().toISOString(),
+      },
+    } : {}),
+  })
   return {
     routedActions: routed.actions,
     routingDecision: routed.routingDecision,
@@ -172,6 +188,25 @@ function truncateTitle(ask: string): string {
 
 function slugId(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'request'
+}
+
+function routingSummaryForAction(action: RoutedAction): string {
+  switch (action.kind) {
+    case 'task_spec':
+      return 'Routed to Task Intake'
+    case 'project_question':
+      return 'Routed to Project Question'
+    case 'settings_proposal':
+      return 'Routed to Settings Proposal'
+    case 'persona_practice_proposal':
+      return 'Routed to Persona/Practice Proposal'
+    case 'repair_triage':
+      return 'Routed to Repair Triage'
+    case 'clarification':
+      return 'Routed to Clarification'
+    case 'pressure_test_intake':
+      return 'Routed to Pressure-Test Intake'
+  }
 }
 
 export interface ApproveSpecInput {
@@ -370,6 +405,18 @@ export interface ShapeImportDraftResult {
   error?: string
 }
 
+export interface ReframeTaskInput {
+  memoryDir: string
+  taskId: string
+  reason?: string | undefined
+}
+
+export interface ReframeTaskResult {
+  success: boolean
+  newStatus?: TaskStatus
+  error?: string
+}
+
 /**
  * Resume an exploring-phase conversation: optionally resolve a pending
  * escalation, optionally append a new user message to the transcript, and
@@ -397,13 +444,16 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
     if (!result.success) return { success: false, error: result.error ?? 'unknown' }
   }
 
-  if (input.message && input.preserveStatus) {
+  if (input.message) {
     task.notes.push({
       agentId: 'human',
       role: 'human',
       content: input.message,
       timestamp: new Date().toISOString(),
     })
+  }
+
+  if (input.message && input.preserveStatus) {
     await appendExploringTranscript({
       memoryDir: input.memoryDir,
       taskId: task.id,
@@ -431,6 +481,98 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
   }
 
   return { success: true }
+}
+
+export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskResult> {
+  const queue = await readQueue(input.memoryDir)
+  const task = queue.tasks.find((t) => t.id === input.taskId)
+  if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+  if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
+    return { success: false, error: `Task ${input.taskId} is ${task.status}` }
+  }
+
+  const now = new Date().toISOString()
+  const oldStatus = task.status
+  const oldTitle = task.title
+  const reason = input.reason?.trim()
+  const reframeRequest = [
+    'Reframe this existing task from the current project memory and source state.',
+    '',
+    'The current task is too hard for a person to understand or act on. Rebuild the task brief/spec in plain language before any implementation work continues.',
+    '',
+    'Use the current project memory, resolved user answers, source notes, current code state, and the task origin. Do not preserve stale recovery wording, old imported-roadmap fragments, duplicate questions, or internal process terms as the user-facing explanation.',
+    '',
+    'The reframed task must answer these questions in normal language:',
+    '- What are we trying to ship or decide?',
+    '- Why does it matter?',
+    '- What is the next concrete step?',
+    '- If user input is needed, what exact decision is needed, what are the choices, and how should the user answer?',
+    '',
+    'Write new acceptance criteria only after the task is understandable. Keep provenance in notes/history; do not make the user read raw checkpoint or handoff packets to understand the work.',
+    ...(reason ? ['', `User note: ${reason}`] : []),
+  ].join('\n')
+
+  const notes = Array.isArray(task.notes) ? [...task.notes] : []
+  notes.push({
+    agentId: 'human',
+    role: 'human',
+    content: reason
+      ? `Asked Guildhall to reframe this task. Reason: ${reason}`
+      : 'Asked Guildhall to reframe this task from current project memory.',
+    timestamp: now,
+  })
+
+  const questions = Array.isArray(task.openQuestions) ? [...task.openQuestions] : []
+  task.openQuestions = questions.map(question => (
+    question.answeredAt
+      ? question
+      : {
+          ...question,
+          answeredAt: now,
+          answer: 'Superseded by a task reframe request.',
+        }
+  ))
+
+  if (Array.isArray(task.escalations)) {
+    task.escalations = task.escalations.map(escalation => (
+      escalation.resolvedAt
+        ? escalation
+        : {
+            ...escalation,
+            resolvedAt: now,
+            resolvedBy: 'human',
+            resolution: 'Superseded by a task reframe request.',
+          }
+    ))
+  }
+
+  delete task.blockReason
+  task.status = 'exploring'
+  task.assignedTo = 'spec-agent'
+  task.productBrief = undefined
+  task.spec = undefined
+  task.acceptanceCriteria = []
+  task.notes = notes
+  task.updatedAt = now
+  queue.lastUpdated = now
+
+  await appendExploringTranscript({
+    memoryDir: input.memoryDir,
+    taskId: task.id,
+    role: 'user',
+    content: reframeRequest,
+  })
+  await writeQueue(input.memoryDir, queue)
+
+  notes.push({
+    agentId: 'system',
+    role: 'system',
+    content: `Reframe requested for "${oldTitle}" from ${oldStatus}. Guildhall will rebuild the task in plain language before continuing.`,
+    timestamp: now,
+  })
+  await writeQueue(input.memoryDir, queue)
+
+  return { success: true, newStatus: 'exploring' }
 }
 
 export async function shapeImportDraft(

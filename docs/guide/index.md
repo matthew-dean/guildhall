@@ -43,11 +43,13 @@ Setting up your first project? Start with [Start here](./quick-start).
 - [Agent context](./agent-context) — what agents receive before they act.
 - [Corpus Map](./corpus-map) — how Guildhall indexes a project without dumping the whole repo into every prompt.
 - [Memory, learning, and recovery](./memory-and-recovery) — how Guildhall learns reusable habits without turning them into mystery behavior.
+- [External agents and MCP](./external-agents) — how Codex, Claude Code, and other MCP-aware tools can read Guildhall project context.
 
 ## Tasks
 
 - [Pressure-Test Intake](./pressure-test-intake) — how broad requests become buildable specs without turning uncertainty into invisible guesswork.
 - [Task lifecycle](./task-lifecycle) — how a task moves from idea to done.
+- [Cleaner project notes](./task-state-boundary) — how Guildhall keeps shared project notes readable without losing the receipts.
 - [Git Story Closure](./git-story-closure) — how Guildhall shows whether completed work is dirty, local, pushed, in a PR, merged, local-only, or deferred.
 
 ## Specs And Levers

@@ -29,7 +29,7 @@ afterEach(async () => {
 })
 
 describe('POST /api/service/attach-project', () => {
-  it('registers and selects an existing initialized project by path', async () => {
+  it('registers an existing initialized project by path', async () => {
     bootstrapWorkspace(tmpProject, { name: 'Attached Project' })
     const { app } = buildServeApp({ projectPath: tmpProject })
 
@@ -40,14 +40,14 @@ describe('POST /api/service/attach-project', () => {
     }))
 
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { ok?: boolean; selectedProject?: { id?: string; initializationNeeded?: boolean } }
+    const body = (await res.json()) as { ok?: boolean; project?: { id?: string; initializationNeeded?: boolean } }
     expect(body.ok).toBe(true)
-    expect(body.selectedProject?.id).toBe('attached-project')
-    expect(body.selectedProject?.initializationNeeded).toBe(false)
+    expect(body.project?.id).toBe('attached-project')
+    expect(body.project?.initializationNeeded).toBe(false)
     expect(listWorkspaces().map(entry => entry.path)).toContain(tmpProject)
   })
 
-  it('registers and selects an uninitialized project so setup can happen inside the shell', async () => {
+  it('registers an uninitialized project so setup can happen inside the shell', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
 
     const res = await app.fetch(new Request('http://localhost/api/service/attach-project', {
@@ -57,14 +57,16 @@ describe('POST /api/service/attach-project', () => {
     }))
 
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { ok?: boolean; selectedProject?: { initializationNeeded?: boolean } }
+    const body = (await res.json()) as { ok?: boolean; project?: { path?: string; initializationNeeded?: boolean } }
     expect(body.ok).toBe(true)
-    expect(body.selectedProject?.initializationNeeded).toBe(true)
+    expect(body.project?.initializationNeeded).toBe(true)
 
     const service = await app.fetch(new Request('http://localhost/api/service'))
-    const serviceBody = (await service.json()) as { selectedProject?: { path?: string; initializationNeeded?: boolean } | null }
-    expect(serviceBody.selectedProject?.path).toBe(tmpProject)
-    expect(serviceBody.selectedProject?.initializationNeeded).toBe(true)
+    const serviceBody = (await service.json()) as { projects?: Array<{ path?: string; initializationNeeded?: boolean }> }
+    expect(serviceBody.projects).toContainEqual(expect.objectContaining({
+      path: tmpProject,
+      initializationNeeded: true,
+    }))
   })
 
   it('updates the registry entry after setup identity finishes for an attached uninitialized project', async () => {
@@ -75,8 +77,8 @@ describe('POST /api/service/attach-project', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: tmpProject }),
     }))
-    const attachBody = (await attach.json()) as { selectedProject?: { id?: string } }
-    const projectId = attachBody.selectedProject?.id
+    const attachBody = (await attach.json()) as { project?: { id?: string } }
+    const projectId = attachBody.project?.id
     expect(projectId).toBeTruthy()
 
     const save = await app.fetch(new Request(`http://localhost/api/setup/identity?projectId=${encodeURIComponent(projectId ?? '')}`, {
@@ -94,8 +96,38 @@ describe('POST /api/service/attach-project', () => {
   })
 })
 
-describe('POST /api/service/select-project', () => {
-  it('switches the active /api/project surface to the selected registered project', async () => {
+describe('project-scoped API routing', () => {
+  it('does not expose a service-wide selected project in service metadata', async () => {
+    const firstProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-project-service-first-'))
+    const secondProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-project-service-second-'))
+    try {
+      bootstrapWorkspace(firstProject, { name: 'First Project' })
+      bootstrapWorkspace(secondProject, { name: 'Second Project' })
+
+      const { registerWorkspace } = await import('@guildhall/config')
+      registerWorkspace({ id: 'first-project', path: firstProject, name: 'First Project', tags: [] })
+      registerWorkspace({ id: 'second-project', path: secondProject, name: 'Second Project', tags: [] })
+
+      const { app } = buildServeApp({ projectPath: firstProject })
+
+      const service = await app.fetch(new Request('http://localhost/api/service'))
+      expect(service.status).toBe(200)
+      const body = (await service.json()) as {
+        selectedProject?: unknown
+        foregroundProject?: unknown
+        projects?: Array<{ id: string; selected?: boolean }>
+      }
+      expect(body.selectedProject).toBeUndefined()
+      expect(body.foregroundProject).toBeUndefined()
+      expect(body.projects?.map(project => project.id)).toEqual(expect.arrayContaining(['first-project', 'second-project']))
+      expect(body.projects?.some(project => project.selected === true)).toBe(false)
+    } finally {
+      await fs.rm(firstProject, { recursive: true, force: true })
+      await fs.rm(secondProject, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects unscoped project API reads instead of guessing a foreground project', async () => {
     const firstProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-project-first-'))
     const secondProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-project-second-'))
     try {
@@ -108,22 +140,17 @@ describe('POST /api/service/select-project', () => {
 
       const { app } = buildServeApp({ projectPath: firstProject })
 
-      const before = await app.fetch(new Request('http://localhost/api/project'))
-      const beforeBody = (await before.json()) as { name?: string; path?: string }
-      expect(beforeBody.name).toBe('First Project')
-      expect(beforeBody.path).toBe(firstProject)
+      const unscoped = await app.fetch(new Request('http://localhost/api/project'))
+      expect(unscoped.status).toBe(400)
+      await expect(unscoped.json()).resolves.toMatchObject({
+        error: 'projectId is required for project-scoped requests.',
+      })
 
-      const select = await app.fetch(new Request('http://localhost/api/service/select-project', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ projectId: 'second-project' }),
-      }))
-      expect(select.status).toBe(200)
-
-      const after = await app.fetch(new Request('http://localhost/api/project'))
-      const afterBody = (await after.json()) as { name?: string; path?: string }
-      expect(afterBody.name).toBe('Second Project')
-      expect(afterBody.path).toBe(secondProject)
+      const scoped = await app.fetch(new Request('http://localhost/api/project?projectId=second-project'))
+      expect(scoped.status).toBe(200)
+      const scopedBody = (await scoped.json()) as { name?: string; path?: string }
+      expect(scopedBody.name).toBe('Second Project')
+      expect(scopedBody.path).toBe(secondProject)
     } finally {
       await fs.rm(firstProject, { recursive: true, force: true })
       await fs.rm(secondProject, { recursive: true, force: true })
@@ -156,10 +183,13 @@ describe('POST /api/service/select-project', () => {
       const firstBriefPath = path.join(getProjectStateDir(firstProject), 'project-brief.md')
       expect(existsSync(firstBriefPath)).toBe(false)
 
-      const selected = await app.fetch(new Request('http://localhost/api/project'))
-      const selectedBody = (await selected.json()) as { name?: string; path?: string }
-      expect(selectedBody.name).toBe('First Project')
-      expect(selectedBody.path).toBe(firstProject)
+      const unscoped = await app.fetch(new Request('http://localhost/api/project'))
+      expect(unscoped.status).toBe(400)
+
+      const first = await app.fetch(new Request('http://localhost/api/project?projectId=first-project'))
+      const firstBody = (await first.json()) as { name?: string; path?: string }
+      expect(firstBody.name).toBe('First Project')
+      expect(firstBody.path).toBe(firstProject)
     } finally {
       await fs.rm(firstProject, { recursive: true, force: true })
       await fs.rm(secondProject, { recursive: true, force: true })

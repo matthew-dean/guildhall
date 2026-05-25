@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import path from 'node:path'
+import { homedir } from 'node:os'
 import { InMemoryGitDriver } from '../git-driver.js'
 import {
   classifyGitStoryState,
@@ -119,6 +121,32 @@ describe('inspectGitStory', () => {
 
     expect(snapshot.state).toBe('committed_local')
     expect(snapshot.localCommits.map(commit => commit.subject)).toEqual(['first change', 'second change'])
+  })
+
+  it('expands home-relative task worktree paths before inspecting git', async () => {
+    const driver = new InMemoryGitDriver()
+    const expandedWorktree = path.join(homedir(), '.guildhall', 'worktrees', 'demo', 'task-1')
+    driver.setStatusSummary(expandedWorktree, {
+      branch: 'guildhall/task-1',
+      upstream: 'origin/guildhall/task-1',
+      changedCount: 0,
+      untrackedCount: 0,
+      clean: true,
+    })
+
+    const snapshot = await inspectGitStory(driver, {
+      repoRoot: '/repo',
+      inspectPr: false,
+      task: {
+        id: 'task-1',
+        title: 'Use real worktree path',
+        worktreePath: '~/.guildhall/worktrees/demo/task-1',
+      },
+    })
+
+    expect(snapshot.state).toBe('pushed')
+    expect(snapshot.inspectedPath).toBe(expandedWorktree)
+    expect(snapshot.worktreePath).toBe(expandedWorktree)
   })
 
   it('marks explicit local-only work as non-blocking', async () => {

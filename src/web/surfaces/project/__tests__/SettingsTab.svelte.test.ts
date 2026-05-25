@@ -471,7 +471,15 @@ describe('SettingsTab', () => {
                 confidence: 'high',
                 risk: 'medium',
                 status: accepted ? 'active' : 'suggested',
-                evidence: [{ summary: 'The workspace members task failed until the scoped typecheck was rerun.' }],
+                evidence: [{
+                  summary: 'The workspace members task failed until the scoped typecheck was rerun.',
+                  links: [{
+                    kind: 'task',
+                    label: 'Open task evidence',
+                    href: '/task/task-link-editor',
+                    localHistoryRef: 'transcripts/exploring/task-link-editor.md',
+                  }],
+                }],
               },
             ],
           },
@@ -519,6 +527,10 @@ describe('SettingsTab', () => {
     expect(screen.getByText('0 in use')).toBeInTheDocument()
     expect(screen.getByText('3 waiting')).toBeInTheDocument()
     expect(screen.getByText('Run Knit typecheck from web root after API changes.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /open task evidence/i })).toHaveAttribute(
+      'href',
+      '/projects/looma-knit/task/task-link-editor',
+    )
     expect(screen.getByText('Project memory')).toBeInTheDocument()
     expect(screen.getByText('Strong signal')).toBeInTheDocument()
     expect(screen.getByText('Needs care')).toBeInTheDocument()

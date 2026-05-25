@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { GitDriver, PullRequestResult } from './git-driver.js'
+import { expandHomePath } from './path-utils.js'
 
 export const GitStoryClosureState = z.enum([
   'clean',
@@ -137,7 +138,7 @@ export function reasonForGitStorySnapshot(input: {
     case 'committed_local':
       return `${input.branch ?? 'Branch'} has ${input.ahead} local commit${input.ahead === 1 ? '' : 's'} not pushed to ${input.upstream ?? 'upstream'}.`
     case 'no_upstream':
-      return `${input.branch ?? 'Branch'} has no upstream branch.`
+      return `${input.branch ?? 'Branch'} has no upstream branch, so Guildhall cannot compare or publish this work yet.`
     case 'pr_open':
       return input.pr?.url ? `Open PR: ${input.pr.url}` : 'An open PR exists for this branch.'
     case 'pushed':
@@ -180,7 +181,9 @@ export async function inspectGitStory(
   gitDriver: GitDriver,
   input: InspectGitStoryInput,
 ): Promise<GitStorySnapshot> {
-  const inspectedPath = input.inspectedPath ?? input.task?.worktreePath ?? input.repoRoot
+  const rawInspectedPath = input.inspectedPath ?? input.task?.worktreePath ?? input.repoRoot
+  const inspectedPath = expandHomePath(rawInspectedPath)
+  const worktreePath = input.task?.worktreePath ? expandHomePath(input.task.worktreePath) : undefined
   const inspectedAt = (input.now?.() ?? new Date()).toISOString()
   try {
     const status = await gitDriver.statusSummary(inspectedPath)
@@ -223,7 +226,7 @@ export async function inspectGitStory(
       ...(pr.ok && pr.url ? { pr: { url: pr.url, state: pr.state, mergeStateStatus: pr.mergeStateStatus } } : {}),
       taskId: input.task?.id,
       taskTitle: input.task?.title,
-      worktreePath: input.task?.worktreePath,
+      worktreePath,
       mergeRecordResult,
       overrideReason,
       reason: reasonForGitStorySnapshot({
@@ -250,7 +253,7 @@ export async function inspectGitStory(
       inspectedAt,
       taskId: input.task?.id,
       taskTitle: input.task?.title,
-      worktreePath: input.task?.worktreePath,
+      worktreePath,
     })
   }
 }

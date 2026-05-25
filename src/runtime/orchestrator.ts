@@ -129,6 +129,7 @@ import {
 } from './git-driver.js'
 import { buildCommitStoryMessage } from './commit-story.js'
 import { effectiveGitStoryPolicy } from './git-story-policy.js'
+import { upsertTaskWorkspaceState } from './task-state-store.js'
 import {
   ensureWorktreeForDispatch,
   cleanupWorktreeForTerminal,
@@ -201,6 +202,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { resolveRuntimePath } from './path-utils.js'
 
 const execFileP = promisify(execFile)
 
@@ -2361,6 +2363,17 @@ export class Orchestrator {
           gitDriver: this.gitDriver,
         })
         activeWorktreePath = ensured.worktreePath
+        await upsertTaskWorkspaceState(
+          inferProjectRootFromMemoryDir(this.opts.config.memoryDir),
+          task.id,
+          {
+            worktreePath: ensured.worktreePath,
+            branchName: ensured.branchName,
+            baseBranch: ensured.baseBranch,
+            mode: worktreeMode,
+            updatedAt: this.now(),
+          },
+        )
         // Persist metadata if we just minted a new worktree (or if the task
         // is missing any of the fields, e.g. legacy rows pre-FR-24).
         if (
@@ -3061,7 +3074,7 @@ export class Orchestrator {
         const worktreeDirty =
           typeof task.worktreePath === 'string' &&
           task.worktreePath.trim().length > 0 &&
-          !(await this.gitDriver.isClean(task.worktreePath))
+          !(await this.gitDriver.isClean(resolveRuntimePath(task.worktreePath)))
         if (likelyWorkerTargets.length > 0 && !worktreeDirty) {
           const escalation = await raiseEscalation({
             tasksPath,
@@ -3348,7 +3361,7 @@ export class Orchestrator {
           beforeStatus === 'in_progress' &&
           typeof taskAfter.worktreePath === 'string' &&
           taskAfter.worktreePath.trim().length > 0 &&
-          !(await this.gitDriver.isClean(taskAfter.worktreePath))
+          !(await this.gitDriver.isClean(resolveRuntimePath(taskAfter.worktreePath)))
         const dirtyTaskFilesAfter =
           beforeStatus === 'in_progress' ? await this.changedFilesForTask(taskAfter) : []
         const hasDirtyLikelyTargetProgress =
@@ -6385,7 +6398,8 @@ export class Orchestrator {
   }
 
   private async renderChangedFiles(task: Task): Promise<{ summary: string[]; excerpts: string[] }> {
-    const repoRoot = task.worktreePath?.trim() || task.projectPath?.trim()
+    const rawRepoRoot = task.worktreePath?.trim() || task.projectPath?.trim()
+    const repoRoot = rawRepoRoot ? resolveRuntimePath(rawRepoRoot) : ''
     if (!repoRoot) {
       return {
         summary: ['- No task worktree or project path recorded.'],
@@ -6586,7 +6600,7 @@ export class Orchestrator {
       input.beforeStatus === 'in_progress' &&
       typeof task.worktreePath === 'string' &&
       task.worktreePath.trim().length > 0 &&
-      !(await this.gitDriver.isClean(task.worktreePath))
+      !(await this.gitDriver.isClean(resolveRuntimePath(task.worktreePath)))
     if (
       input.beforeStatus === 'exploring' &&
       task.status === 'exploring' &&
@@ -6707,7 +6721,7 @@ export class Orchestrator {
     const hasDirtyWorktree =
       typeof task.worktreePath === 'string' &&
       task.worktreePath.trim().length > 0 &&
-      !(await this.gitDriver.isClean(task.worktreePath))
+      !(await this.gitDriver.isClean(resolveRuntimePath(task.worktreePath)))
     if (!this.hasDurableWorkerHandoffEvidence(input.agentMetadata, task.id)) return null
     const checkpointTouchedFiles = this.checkpointTouchedFilesFromMetadata(
       input.agentMetadata,
@@ -7215,7 +7229,7 @@ export class Orchestrator {
   private async changedFilesForTask(task: Task): Promise<string[]> {
     const repoRoot =
       typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
-        ? task.worktreePath
+        ? resolveRuntimePath(task.worktreePath)
         : resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
     try {
       const { stdout } = await execFileP('git', ['status', '--short', '--untracked-files=all'], {

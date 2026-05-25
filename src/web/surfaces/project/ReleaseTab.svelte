@@ -65,6 +65,8 @@
     }
   }
 
+  type GitStoryBlocker = NonNullable<NonNullable<ReleasePayload['gitStory']>['blockers']>[number]
+
   interface Props {
     subView?: string | null
   }
@@ -136,7 +138,7 @@
             key: 'specs',
             label: 'Specs awaiting approval',
             items: data.unapprovedSpecs,
-            clearLabel: 'Nothing in spec_review.',
+            clearLabel: 'No specs awaiting approval.',
           },
           {
             key: 'shelved',
@@ -172,7 +174,96 @@
     }, 0)
   })
   const dirtyCheckoutCount = $derived(data?.dirtyCheckout?.ownedCount ?? 0)
-  const gitStoryBlockers = $derived(data?.gitStory?.blockers ?? [])
+  const dirtyCheckoutError = $derived(data?.dirtyCheckout?.error ?? '')
+  const checkoutInspectionError = $derived(
+    dirtyCheckoutError
+      ? /git status|fatal: not a git repository|spawn git enoent/i.test(dirtyCheckoutError)
+        ? 'Guildhall could not inspect this checkout with git. Check that the project path is a Git checkout and that git is available to Guildhall.'
+        : dirtyCheckoutError
+      : '',
+  )
+  function normalizedGitStoryState(state: string | undefined): string {
+    return String(state ?? '').trim().toLowerCase()
+  }
+
+  function isGitInspectionFailure(blocker: GitStoryBlocker): boolean {
+    const haystack = `${blocker.state ?? ''}\n${blocker.reason ?? ''}\n${blocker.nextAction ?? ''}`.toLowerCase()
+    return (
+      normalizedGitStoryState(blocker.state) === 'unknown' ||
+      haystack.includes('spawn git enoent') ||
+      haystack.includes('fatal: not a git repository') ||
+      haystack.includes('could not read it')
+    )
+  }
+
+  function gitBlockerCopy(blocker: GitStoryBlocker): { label: string; detail: string } {
+    if (isGitInspectionFailure(blocker)) {
+      return {
+        label: 'Guildhall could not inspect this checkout.',
+        detail: 'Check that this project path is a Git checkout and that git is available to the Guildhall runtime.',
+      }
+    }
+    const haystack = `${blocker.state ?? ''}\n${blocker.reason ?? ''}\n${blocker.nextAction ?? ''}`.toLowerCase()
+    if (haystack.includes('no upstream')) {
+      return {
+        label: 'A branch needs a sharing decision.',
+        detail: 'Push it, open a PR, or mark the work local-only/deferred if it should not be shared.',
+      }
+    }
+    if (haystack.includes('dirty') || haystack.includes('uncommitted')) {
+      return {
+        label: 'A checkout has uncommitted work.',
+        detail: 'Review the diff, then commit it or mark the work local-only/deferred.',
+      }
+    }
+    return {
+      label: blocker.reason ?? blocker.label ?? blocker.state ?? 'Git story needs closure.',
+      detail: blocker.nextAction ?? (blocker.label && blocker.reason ? blocker.reason : ''),
+    }
+  }
+
+  function gitBlockerKey(blocker: GitStoryBlocker): string {
+    const copy = gitBlockerCopy(blocker)
+    if (isGitInspectionFailure(blocker)) return `inspection:${blocker.taskId ?? blocker.id ?? 'project'}`
+    return [
+      normalizedGitStoryState(blocker.state),
+      blocker.taskId ?? '',
+      blocker.id ?? '',
+      copy.label,
+      copy.detail,
+    ].join('|')
+  }
+
+  function dedupeGitBlockers(blockers: GitStoryBlocker[]): GitStoryBlocker[] {
+    const seen = new Set<string>()
+    const out: GitStoryBlocker[] = []
+    for (const blocker of blockers) {
+      const key = gitBlockerKey(blocker)
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(blocker)
+    }
+    return out
+  }
+
+  function statusLabel(status: string): string {
+    switch (status) {
+      case 'exploring': return 'Being shaped'
+      case 'import_draft': return 'Imported drafts'
+      case 'gate_check': return 'Gate checks'
+      case 'spec_review': return 'Spec review'
+      case 'in_progress': return 'In progress'
+      case 'pending_pr': return 'Pending PR'
+      case 'ready': return 'Ready'
+      case 'blocked': return 'Blocked'
+      case 'done': return 'Done'
+      case 'shelved': return 'Shelved'
+      default: return status.replace(/[_-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+    }
+  }
+
+  const gitStoryBlockers = $derived(dedupeGitBlockers(data?.gitStory?.blockers ?? []))
+  const visibleGitStoryBlockers = $derived(gitStoryBlockers.slice(0, 5))
 
   const verdict = $derived.by(() => {
     if (!data) return { label: 'Loading', tone: 'neutral' as const, reason: '' }
@@ -180,10 +271,10 @@
       return {
         label: 'Not yet',
         tone: 'warn' as const,
-        reason: 'No tasks in this project.',
+        reason: 'No release scope yet. Shape the first task before judging ship readiness.',
       }
     }
-    if (data.totals.blockingCount === 0 && unfinishedCount === 0 && dirtyCheckoutCount === 0 && dsLabel().clear) {
+    if (data.totals.blockingCount === 0 && unfinishedCount === 0 && dirtyCheckoutCount === 0 && !dirtyCheckoutError && dsLabel().clear) {
       return {
         label: 'Ready to ship',
         tone: 'ok' as const,
@@ -202,6 +293,13 @@
         label: 'Blocked',
         tone: 'warn' as const,
         reason: `${dirtyCheckoutCount} Guildhall-owned project file${dirtyCheckoutCount === 1 ? '' : 's'} still need cleanup or landing.`,
+      }
+    }
+    if (dirtyCheckoutError) {
+      return {
+        label: 'Blocked',
+        tone: 'warn' as const,
+        reason: 'Guildhall could not inspect the project checkout.',
       }
     }
     if (gitStoryBlockers.length > 0) {
@@ -247,6 +345,7 @@
       ? `${data.totals.blockingCount} release blocker${data.totals.blockingCount === 1 ? '' : 's'}`
       : '0 release blockers',
   )
+  const taskDoneLabel = $derived(data?.totals.tasks === 0 ? 'No release scope yet' : `${data?.totals.done ?? 0}/${data?.totals.tasks ?? 0} done`)
 </script>
 
 {#if initNeeded}
@@ -275,7 +374,7 @@
     >
       {#snippet meta()}
         <StatusPill label={verdict.label} tone={verdict.tone} emphasis="default" />
-        <StatusPill label={`${data.totals.done}/${data.totals.tasks} done`} tone="neutral" />
+        <StatusPill label={taskDoneLabel} tone="neutral" />
       {/snippet}
     </SectionHeader>
 
@@ -310,7 +409,7 @@
         <div class="summary-grid" aria-label="Release summary counts">
           <div class="summary-stat">
             <span class="summary-label">Tasks done</span>
-            <strong>{data.totals.done}/{data.totals.tasks}</strong>
+            <strong>{data.totals.tasks === 0 ? 'No release scope' : `${data.totals.done}/${data.totals.tasks}`}</strong>
           </div>
           <div class="summary-stat">
             <span class="summary-label">Total release blockers</span>
@@ -327,9 +426,9 @@
           {#if data.dirtyCheckout}
             <div class="summary-stat">
               <span class="summary-label">Project checkout</span>
-              <StatusPill
-                label={dirtyCheckoutCount > 0 ? `${dirtyCheckoutCount} Guildhall files dirty` : 'clean'}
-                tone={dirtyCheckoutCount > 0 ? 'warn' : 'ok'}
+          <StatusPill
+                label={dirtyCheckoutError ? 'inspection failed' : dirtyCheckoutCount > 0 ? `${dirtyCheckoutCount} Guildhall files dirty` : 'clean'}
+                tone={dirtyCheckoutError || dirtyCheckoutCount > 0 ? 'warn' : 'ok'}
               />
             </div>
           {/if}
@@ -345,19 +444,27 @@
         </div>
         {#if data.dirtyCheckout && dirtyCheckoutCount > 0}
           <p class="dirty-detail">
-            Guildhall-owned metadata is still present in the project checkout:
-            {data.dirtyCheckout.files.slice(0, 4).join(', ')}{dirtyCheckoutCount > 4 ? ', …' : ''}.
+            {dirtyCheckoutCount} project-local Guildhall {dirtyCheckoutCount === 1 ? 'file needs' : 'files need'} cleanup before release.
+            Open diagnostics if you need the exact file list.
+          </p>
+        {:else if dirtyCheckoutError}
+          <p class="dirty-detail">
+            <strong>Could not inspect checkout</strong>. {checkoutInspectionError}
           </p>
         {/if}
         {#if gitStoryBlockers.length > 0}
           <div class="git-story-detail">
             <strong>Git story needs closure</strong>
+            {#if gitStoryBlockers.length > visibleGitStoryBlockers.length}
+              <p class="muted">Showing {visibleGitStoryBlockers.length} of {gitStoryBlockers.length} git stories.</p>
+            {/if}
             <ul>
-              {#each gitStoryBlockers as blocker, index (`${blocker.id ?? 'git'}:${index}`)}
+              {#each visibleGitStoryBlockers as blocker, index (`${blocker.id ?? 'git'}:${index}`)}
+                {@const copy = gitBlockerCopy(blocker)}
                 <li>
-                  <span>{blocker.label ?? blocker.state ?? 'Git story'}</span>
-                  {#if blocker.nextAction}
-                    <small>{blocker.nextAction}</small>
+                  <span>{copy.label}</span>
+                  {#if copy.detail}
+                    <small>{copy.detail}</small>
                   {/if}
                 </li>
               {/each}
@@ -436,17 +543,21 @@
                 />
               </summary>
               {#if gitStoryBlockers.length > 0}
+                {#if gitStoryBlockers.length > visibleGitStoryBlockers.length}
+                  <p class="muted">Showing {visibleGitStoryBlockers.length} of {gitStoryBlockers.length} git stories.</p>
+                {/if}
                 <ul class="crit-items">
-                  {#each gitStoryBlockers as blocker, index (`${blocker.id ?? 'git'}:${index}`)}
+                  {#each visibleGitStoryBlockers as blocker, index (`${blocker.id ?? 'git'}:${index}`)}
+                    {@const copy = gitBlockerCopy(blocker)}
                     <li>
                       {#if blocker.taskId}
                         <button type="button" class="link" onclick={() => openTask(blocker.taskId ?? '')}>
-                          {blocker.label ?? blocker.taskId}
+                          {copy.label}
                         </button>
                       {:else}
-                        <span>{blocker.label ?? blocker.state ?? 'Git story'}</span>
+                        <span>{copy.label}</span>
                       {/if}
-                      <span class="muted">{blocker.nextAction ?? blocker.reason ?? ''}</span>
+                      <span class="muted">{copy.detail}</span>
                     </li>
                   {/each}
                 </ul>
@@ -465,7 +576,7 @@
             density="dense"
           >
             {#snippet meta()}
-              <StatusPill label={`${data.totals.done}/${data.totals.tasks} done`} tone="neutral" />
+              <StatusPill label={taskDoneLabel} tone="neutral" />
             {/snippet}
           </SectionHeader>
         {/snippet}
@@ -477,7 +588,7 @@
             <tbody>
               {#each statusRows as [k, v] (k)}
                 <tr>
-                  <td><code>{k}</code></td>
+                  <td>{statusLabel(k)}</td>
                   <td>{v}</td>
                 </tr>
               {/each}
@@ -663,14 +774,6 @@
 
   .tally tbody tr:first-child td {
     border-top: none;
-  }
-
-  code {
-    font-family: 'SF Mono', monospace;
-    background: var(--bg-raised-2);
-    padding: 0 4px;
-    border-radius: var(--r-1);
-    font-size: var(--fs-1);
   }
 
   @container (min-width: 42rem) {

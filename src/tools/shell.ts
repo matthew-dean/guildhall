@@ -239,6 +239,14 @@ function directFileWriteGuardMessage(metadata: Record<string, unknown> | undefin
   )
 }
 
+function normalizePnpmScopedScriptCommand(command: string): string {
+  return command.replace(
+    /^pnpm\s+(--dir|-C)\s+(\S+)\s+(test)(\s.*)?$/i,
+    (_match, flag: string, dir: string, script: string, rest: string | undefined) =>
+      `pnpm ${flag} ${dir} run ${script}${rest ?? ''}`,
+  )
+}
+
 function normalizeExecErrorOutput(err: {
   stdout?: string | Buffer
   stderr?: string | Buffer
@@ -420,6 +428,7 @@ export const shellTool = defineTool({
     const authoritativeCommands = parseAuthoritativeCommands(ctx.metadata)
     const reconciled = reconcileShellCommandWithAuthority(input.command, authoritativeCommands)
     const requestedKind = classifyGateCommand(input.command)
+    const executableCommand = normalizePnpmScopedScriptCommand(reconciled.command)
     if (
       authoritativeCommands &&
       authoritativeCommands.length > 0 &&
@@ -443,7 +452,7 @@ export const shellTool = defineTool({
         } as unknown as Record<string, unknown>,
       }
     }
-    if (hasTaskScopedFileMutationGuard(ctx.metadata) && looksLikeDirectFileWrite(reconciled.command)) {
+    if (hasTaskScopedFileMutationGuard(ctx.metadata) && looksLikeDirectFileWrite(executableCommand)) {
       return {
         output: directFileWriteGuardMessage(ctx.metadata),
         is_error: true,
@@ -451,7 +460,7 @@ export const shellTool = defineTool({
           success: false,
           exitCode: 2,
           requestedCommand: input.command,
-          executedCommand: reconciled.command,
+          executedCommand: executableCommand,
           usedAuthoritativeCommand: reconciled.usedAuthority,
           blockedDirectFileWrite: true,
         } as unknown as Record<string, unknown>,
@@ -461,7 +470,7 @@ export const shellTool = defineTool({
     const effectiveCwd = reconcileShellCwdWithTaskScope(requestedCwd, ctx.metadata)
     const normalizedInput: ShellInput = {
       ...input,
-      command: reconciled.command,
+      command: executableCommand,
       cwd: effectiveCwd,
       env: {
         ...(input.env ?? {}),
@@ -484,7 +493,7 @@ export const shellTool = defineTool({
       metadata: {
         ...result,
         requestedCommand: input.command,
-        executedCommand: reconciled.command,
+        executedCommand: executableCommand,
         usedAuthoritativeCommand: reconciled.usedAuthority,
         requestedCwd,
         executedCwd: effectiveCwd,

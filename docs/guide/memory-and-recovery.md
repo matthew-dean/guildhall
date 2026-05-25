@@ -45,6 +45,12 @@ Bulky or private history lives under `~/.guildhall/data/projects/<project-hash>/
 so transcripts, checkpoints, debug snapshots, and full task evidence do not
 fill every pull request.
 
+The compact layer is a navigation layer, not a magic replacement for evidence.
+When a saved lesson, task summary, preference suggestion, or playbook proposal
+can change future behavior, Guildhall keeps source links back to the fuller
+local history that produced it. You can read the short version first, then
+open the evidence when the reason matters.
+
 Guildhall separates lessons by scope, because “remember this” can mean very
 different things:
 

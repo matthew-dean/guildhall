@@ -63,4 +63,14 @@ describe('Header', () => {
       expect(screen.getByText('Looma knit')).toBeInTheDocument()
     })
   })
+
+  it('hides the project event-stream status on global pages', async () => {
+    window.history.replaceState({}, '', '/providers')
+    path.value = '/providers'
+
+    render(Header)
+
+    expect(screen.queryByText(/connecting|connected|reconnecting/i)).toBeNull()
+    await screen.findByText('v0.5.1')
+  })
 })

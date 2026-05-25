@@ -40,6 +40,14 @@ export interface EvidenceRef {
   kind: 'task' | 'verification' | 'tool_error' | 'review' | 'checkpoint'
   summary: string
   ref?: string
+  links?: EvidenceLink[]
+}
+
+export interface EvidenceLink {
+  kind: 'task' | 'local_history'
+  label: string
+  href?: string
+  localHistoryRef?: string
 }
 
 export type PreferenceStrength = 'weak' | 'medium' | 'strong'

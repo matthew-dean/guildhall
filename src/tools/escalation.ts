@@ -1,6 +1,7 @@
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import {
   Escalation,
   EscalationReason,
@@ -9,7 +10,7 @@ import {
   type Task,
 } from '@guildhall/core'
 import { logProgress } from './memory-tools.js'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, appendTaskEvidence, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-10 Escalation protocol
@@ -53,6 +54,15 @@ function nextEscalationId(task: Task): string {
   return `esc-${task.id}-${task.escalations.length + 1}`
 }
 
+function looksLikeRoutineVerificationEscalation(input: RaiseEscalationInput): boolean {
+  const text = `${input.reason}\n${input.summary}\n${input.details ?? ''}`
+  return (
+    /\bAC-\d+\b/i.test(text) &&
+    /\b(?:evidence|verification|test result|gate)\b/i.test(text) &&
+    /\b(?:pnpm|npm|yarn|bun|vitest|test|typecheck|build)\b/i.test(text)
+  )
+}
+
 export async function raiseEscalation(
   input: RaiseEscalationInput,
 ): Promise<RaiseEscalationResult> {
@@ -61,6 +71,14 @@ export async function raiseEscalation(
     const queue = TaskQueue.parse(JSON.parse(raw))
     const task = queue.tasks.find((t) => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+
+    if (looksLikeRoutineVerificationEscalation(input)) {
+      return {
+        success: false,
+        error:
+          'Do not raise a human escalation for routine verification evidence. Run the focused check, save the result in the task proof packet or checkpoint, and continue. Escalate only if an external credential, environment outage, or product decision prevents Guildhall from running the check.',
+      }
+    }
 
     const now = new Date().toISOString()
     const escalation: Escalation = {
@@ -79,6 +97,16 @@ export async function raiseEscalation(
     queue.lastUpdated = now
 
     atomicWriteText(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    await appendTaskEvidence(
+      inferProjectRootFromMemoryDir(path.dirname(input.tasksPath)),
+      task.id,
+      {
+        id: escalation.id,
+        kind: 'escalation',
+        recordedAt: now,
+        payload: escalation,
+      },
+    ).catch(() => undefined)
 
     if (input.progressPath) {
       const entry: ProgressEntry = {
@@ -101,7 +129,7 @@ export async function raiseEscalation(
 export const raiseEscalationTool = defineTool({
   name: 'raise-escalation',
   description:
-    "Raise a structured escalation on a task. This halts the task (sets status='blocked') and records a typed event to PROGRESS.md. Use this — not a plain note — whenever the task needs a human decision or cannot proceed autonomously.",
+    "Raise a structured escalation on a task. This halts the task (sets status='blocked') and records a typed event to PROGRESS.md. Use this — not a plain note — only when the task truly needs the owner or an external system. Do not use it for routine verification, missing proof packets, acceptance-criteria evidence, test reruns, or internal gate bookkeeping that Guildhall can do itself.",
   inputSchema: raiseEscalationInputSchema,
   jsonSchema: {
     type: 'object',

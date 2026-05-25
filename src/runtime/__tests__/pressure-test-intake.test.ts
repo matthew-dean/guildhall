@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -30,6 +30,125 @@ describe('pressure-test intake state', () => {
 
     const saved = await loadPressureTestIntake({ memoryDir, intakeId: intake.id })
     expect(saved.rawRequest).toContain('pressure-test intake')
+  })
+
+  it('asks the first question about the actual pressure-test subject', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
+    const intake = await createPressureTestIntake({
+      memoryDir,
+      target: { type: 'release', id: 'commerce-project-0-9-0', title: 'Commerce Project 0.9.0' },
+      rawRequest: 'Pressure-test Commerce Project 0.9.0 checkout wording assumptions.',
+    })
+
+    expect(intake.pendingQuestion?.prompt).toBe(
+      'For "Commerce Project 0.9.0", what outcome should this request achieve?',
+    )
+  })
+
+  it('regenerates stale first questions from the structured target instead of parsing raw prose', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
+    await mkdir(path.join(memoryDir, 'pressure-test-intake'), { recursive: true })
+    await writeFile(
+      path.join(memoryDir, 'pressure-test-intake', 'pti-commerce-project-0-9-0.json'),
+      JSON.stringify({
+        id: 'pti-commerce-project-0-9-0',
+        rawRequest: 'Pressure-test Commerce Project 0.9.0 checkout wording assumptions.',
+        target: { type: 'release', id: 'commerce-project-0-9-0', title: 'Commerce Project 0.9.0' },
+        status: 'active',
+        activeDomainId: 'product-goals',
+        pendingQuestion: {
+          id: 'product-goals-q-1',
+          domainId: 'product-goals',
+          prompt: 'What must Commerce Project 0.9.0 checkout wording assumptions get right first for product goals?',
+          why: 'A clear goal helps Guildhall shape work around the result you actually want.',
+          evidence: [],
+          askedAt: '2026-05-24T00:00:00.000Z',
+        },
+        domains: [{
+          id: 'product-goals',
+          title: 'Product goals',
+          whyItMatters: 'A clear goal helps Guildhall shape work around the result you actually want.',
+          status: 'active',
+          knownFacts: [],
+          openUnknowns: [],
+          askedQuestions: [],
+          followUpCandidates: [],
+          closeoutAsked: false,
+        }],
+        outputs: { assumptions: [], decisions: [], languageMapCandidates: [], taskSplitCandidates: [] },
+        createdAt: '2026-05-24T00:00:00.000Z',
+        updatedAt: '2026-05-24T00:00:00.000Z',
+      }),
+    )
+
+    const intake = await loadPressureTestIntake({ memoryDir, intakeId: 'pti-commerce-project-0-9-0' })
+
+    expect(intake.target.title).toBe('Commerce Project 0.9.0')
+    expect(intake.pendingQuestion?.prompt).toBe(
+      'For "Commerce Project 0.9.0", what outcome should this request achieve?',
+    )
+  })
+
+  it('does not turn project check-in status copy into the question subject', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
+    const intake = await createPressureTestIntake({
+      memoryDir,
+      target: { type: 'project', id: 'looma-knit-project-check-in', title: 'Looma + Knit project check-in' },
+      rawRequest: 'Project check-in needed before Guildhall treats this workspace as current.',
+    })
+
+    expect(intake.target.title).toBe('Looma + Knit project check-in')
+    expect(intake.pendingQuestion?.prompt).toBe(
+      "What outcome would make this project successful?",
+    )
+  })
+
+  it('repairs stale project check-in intakes whose title was copied from status text', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
+    await mkdir(path.join(memoryDir, 'pressure-test-intake'), { recursive: true })
+    await writeFile(
+      path.join(memoryDir, 'pressure-test-intake', 'pti-project-check-in.json'),
+      JSON.stringify({
+        id: 'pti-project-check-in',
+        rawRequest: 'Project check-in needed before Guildhall treats this workspace as current.',
+        target: {
+          type: 'project',
+          id: 'looma-knit-project-check-in',
+          title: 'Looma + Knit project check-in',
+        },
+        status: 'active',
+        activeDomainId: 'product-goals',
+        pendingQuestion: {
+          id: 'product-goals-q-1',
+          domainId: 'product-goals',
+          prompt: 'What must Project check-in needed before Guildhall treats this workspace as current get right first for product goals?',
+          why: 'A clear goal helps Guildhall shape work around the result you actually want.',
+          evidence: [],
+          askedAt: '2026-05-24T00:00:00.000Z',
+        },
+        domains: [{
+          id: 'product-goals',
+          title: 'Product goals',
+          whyItMatters: 'A clear goal helps Guildhall shape work around the result you actually want.',
+          status: 'active',
+          knownFacts: [],
+          openUnknowns: [],
+          askedQuestions: [],
+          followUpCandidates: [],
+          closeoutAsked: false,
+        }],
+        outputs: { assumptions: [], decisions: [], languageMapCandidates: [], taskSplitCandidates: [] },
+        createdAt: '2026-05-24T00:00:00.000Z',
+        updatedAt: '2026-05-24T00:00:00.000Z',
+      }),
+    )
+
+    const intake = await loadPressureTestIntake({ memoryDir, intakeId: 'pti-project-check-in' })
+
+    expect(intake.target.title).toBe('Looma + Knit project check-in')
+    expect(intake.pendingQuestion?.prompt).toBe(
+      "What outcome would make this project successful?",
+    )
   })
 
   it('records answers and asks a follow-up before closing vague product goals', async () => {

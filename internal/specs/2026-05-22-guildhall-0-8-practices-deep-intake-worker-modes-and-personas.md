@@ -134,6 +134,14 @@ The proposal should include:
 - examples of when not to use it;
 - source evidence that motivated the proposal.
 
+Practice proposals should pass through a scenario layer before activation. A
+single task may leave a useful note, but a reusable practice needs evidence
+that the same work shape has appeared more than once or that one high-impact
+failure exposed a repeatable operating loop. The proposal should name those
+source tasks, transcripts, review findings, or pressure-test answers so a
+reviewer can drill from the practice draft back to the evidence that justified
+it.
+
 Guildhall should draft the practice, then ask for approval before activation.
 If the practice is project-specific, it can live with the project. If the same
 practice proves useful across projects, Guildhall can suggest copying or

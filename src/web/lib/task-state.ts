@@ -86,3 +86,8 @@ export function isCompleteForWorkerHandoff(task: TaskSpecLike): boolean {
 export function needsWorkerHandoffSpecCleanup(task: Pick<Task, 'status'> & TaskSpecLike): boolean {
   return task.status === 'ready' && !isCompleteForWorkerHandoff(task)
 }
+
+export function workerHandoffStatus(task: Pick<Task, 'status'> & TaskSpecLike): string | undefined {
+  if (needsWorkerHandoffSpecCleanup(task)) return 'needs_spec_cleanup'
+  return task.status
+}

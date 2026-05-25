@@ -92,7 +92,7 @@ describe('ReleaseTab', () => {
     expect(screen.getByText('Approve editor spec')).toBeTruthy()
     expect(screen.getByText('draft · rev 2')).toBeTruthy()
     expect(screen.getByText('Task-state tally')).toBeTruthy()
-    expect(screen.getByText('blocked')).toBeTruthy()
+    expect(screen.getAllByText('Blocked').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('2')).toBeTruthy()
 
     await waitFor(() => {
@@ -173,6 +173,89 @@ describe('ReleaseTab', () => {
     expect(screen.getAllByText('Blocked')).toHaveLength(2)
     expect(screen.getByText('3 Guildhall-owned project files still need cleanup or landing.')).toBeTruthy()
     expect(screen.getByText('3 Guildhall files dirty')).toBeTruthy()
-    expect(screen.getByText(/.gitignore, guildhall.yaml, memory\/TASKS.json/)).toBeTruthy()
+    expect(screen.getByText(/3 project-local Guildhall files need cleanup before release/)).toBeTruthy()
+    expect(screen.queryByText(/memory\/TASKS.json/)).toBeNull()
+  })
+
+  it('surfaces checkout inspection errors instead of calling the project clean', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          dirtyCheckout: {
+            ownedCount: 0,
+            files: [],
+            error: 'fatal: not a git repository',
+          },
+        }),
+      ),
+    )
+
+    render(ReleaseTab)
+
+    expect(await screen.findByText('Release readiness')).toBeTruthy()
+    expect(screen.getByText('Could not inspect checkout')).toBeTruthy()
+    expect(screen.getByText(/Guildhall could not inspect this checkout with git/)).toBeTruthy()
+    expect(screen.queryByText(/fatal: not a git repository/)).toBeNull()
+    expect(screen.queryByText('Project checkout clean.')).toBeNull()
+  })
+
+  it('caps the visible Git Story blocker list and keeps the full count', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          gitStory: {
+            state: 'dirty_uncommitted',
+            blockers: Array.from({ length: 9 }, (_, index) => ({
+              id: `repo-${index}`,
+              reason: `Repo ${index} needs commit or push.`,
+              projectPath: `/repo/${index}`,
+            })),
+          },
+          totals: { ...readyPayload.totals, gitStoryBlockingCount: 9 },
+        }),
+      ),
+    )
+
+    render(ReleaseTab, { props: { subView: 'criteria' } })
+
+    expect(await screen.findByText('Release criteria')).toBeTruthy()
+    expect(screen.getByText('9 unresolved git stories.')).toBeTruthy()
+    expect(screen.getByText('Showing 5 of 9 git stories.')).toBeTruthy()
+    expect(screen.getByText('Repo 0 needs commit or push.')).toBeTruthy()
+    expect(screen.queryByText('Repo 8 needs commit or push.')).toBeNull()
+  })
+
+  it('frames git story blockers as owner decisions instead of raw branch plumbing', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          gitStory: {
+            state: 'no_upstream',
+            blockers: [
+              {
+                id: 'repo-0',
+                taskId: 'task-branch',
+                label: 'guildhall/task-task-import-123 has no upstream branch',
+                reason: 'guildhall/task-task-import-123 has no upstream branch',
+              },
+            ],
+          },
+          totals: { ...readyPayload.totals, gitStoryBlockingCount: 1 },
+        }),
+      ),
+    )
+
+    render(ReleaseTab, { props: { subView: 'criteria' } })
+
+    expect(await screen.findByText('Release criteria')).toBeTruthy()
+    expect(screen.getByText('A branch needs a sharing decision.')).toBeTruthy()
+    expect(screen.getByText('Push it, open a PR, or mark the work local-only/deferred if it should not be shared.')).toBeTruthy()
+    expect(screen.queryByText(/has no upstream branch/)).toBeNull()
   })
 })

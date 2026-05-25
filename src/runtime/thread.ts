@@ -20,7 +20,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { constructionModeForTask, type ConstructionMode, type Task } from '@guildhall/core'
+import { constructionModeForTask, type ConstructionMode, type Task, type TaskRequest } from '@guildhall/core'
 import { activeEscalations } from '@guildhall/tools'
 import {
   buildSnapshot,
@@ -35,7 +35,7 @@ import { shouldUseImportDraftState } from './import-drafts.js'
 import { META_INTAKE_TASK_ID, parseCoordinatorDraft } from './meta-intake.js'
 import { visibleOpenQuestions } from './question-visibility.js'
 import { thresholdMs } from './liveness.js'
-import { listPressureTestIntakes } from './pressure-test-intake.js'
+import { listPressureTestIntakes, summarizeProjectCheckIn } from './pressure-test-intake.js'
 import { getProjectStateDir } from '@guildhall/sessions'
 import type { GitStorySnapshot } from './git-story.js'
 
@@ -115,6 +115,7 @@ export interface BriefTurn extends TurnBase {
   }
   liveAgent?: { name: string; startedAt?: string | undefined } | undefined
   approvedAt?: string | null | undefined
+  latestUserCorrection?: string | undefined
 }
 
 /**
@@ -176,6 +177,8 @@ export interface EscalationTurn extends TurnBase {
   constructionMode: ConstructionMode
   gitStory?: GitStorySnapshot | undefined
   escalationId: string
+  escalationReason?: string | undefined
+  escalationAgentId?: string | undefined
   summary: string
   details?: string | undefined
   activity?: LiveActivity[] | undefined
@@ -200,6 +203,8 @@ export interface InFlightTurn extends TurnBase {
   taskTitle: string
   constructionMode: ConstructionMode
   gitStory?: GitStorySnapshot | undefined
+  requestKind?: TaskRequest['kind'] | undefined
+  routingSummary?: string | undefined
   taskDescription?: string | undefined
   sourceNote?: TaskSourceNote | undefined
   taskStatus?: string | undefined
@@ -519,6 +524,18 @@ function latestRecoveryPlaybookSummary(notes: Array<Record<string, unknown>>): s
     } catch {
       continue
     }
+  }
+  return undefined
+}
+
+function latestHumanCorrection(notes: Array<Record<string, unknown>>): string | undefined {
+  for (let index = notes.length - 1; index >= 0; index -= 1) {
+    const note = notes[index]
+    const role = typeof note?.role === 'string' ? note.role : ''
+    const agentId = typeof note?.agentId === 'string' ? note.agentId : ''
+    const content = typeof note?.content === 'string' ? note.content.trim() : ''
+    if (!content) continue
+    if (role === 'human' || agentId === 'human' || agentId === 'system:human') return content
   }
   return undefined
 }
@@ -848,6 +865,34 @@ function pressureTestTurns(projectPath: string): ThreadTurn[] {
   })
 }
 
+function taskRequestTurn(task: Task, taskId: string, taskStatus: string, createdAt: string): RequestTurn | null {
+  const request = task.request
+  if (!request || typeof request !== 'object') return null
+  const requestId = typeof request.id === 'string' && request.id.trim()
+    ? request.id.trim()
+    : `request-${taskId}`
+  const rawRequest = typeof request.raw === 'string' ? request.raw : ''
+  const title = typeof request.title === 'string' && request.title.trim()
+    ? request.title.trim()
+    : displayTaskTitle(task)
+  const routingSummary = typeof request.routingSummary === 'string' && request.routingSummary.trim()
+    ? request.routingSummary.trim()
+    : 'Routed to Task Intake'
+  const terminal = taskStatus === 'done' || taskStatus === 'shelved'
+  return {
+    kind: 'request',
+    id: `request:${requestId}`,
+    requestId,
+    rawRequest,
+    title,
+    routingSummary,
+    at: typeof request.createdAt === 'string' ? request.createdAt : createdAt,
+    persona: 'intake',
+    status: terminal ? 'done' : 'pending',
+    phase: terminal ? 'done' : 'intake',
+  }
+}
+
 function friendlyAgentName(agentName: string | undefined): string {
   if (agentName?.startsWith('coordinator-')) return 'Coordinator'
   switch (agentName) {
@@ -966,9 +1011,34 @@ function liveEventLabel(
   if (type === 'assistant_delta') return 'Writing'
   if (type === 'assistant_complete') return 'Finished a thought'
   if (type === 'line_complete' && typeof ev?.message === 'string' && ev.message.trim()) {
-    return ev.message.trim()
+    return friendlyActivityText(ev.message.trim())
   }
   return type ? type.replace(/_/g, ' ') : 'Working'
+}
+
+function friendlyActivityText(value: string): string {
+  if (/posted (choice|freeform)?\s*question|yield now|wait for the user's answer|q-\d/i.test(value)) {
+    return 'Guildhall asked a question and is waiting for the answer.'
+  }
+  if (/authoritative likely target file|read-only exploration|refusing further read-only|concrete progress or escalates/i.test(value)) {
+    return 'Guildhall is nudging the worker to make a concrete change before reading more files.'
+  }
+  if (/non-durable steps|moving the implementation forward|mutate, verify, checkpoint, or escalate/i.test(value)) {
+    return 'Guildhall is asking the worker to save concrete progress before doing more exploration.'
+  }
+  if (/research budget exhausted|refusing more read-only tool calls|do not call more read-only tools now/i.test(value)) {
+    return 'Guildhall is keeping the worker focused after enough context gathering.'
+  }
+  if (/\bAC-\d+\b|acceptance criteria except|missing test infrastructure|self-critique has been documented/i.test(value)) {
+    return 'Guildhall saved progress, but one verification check still needs a project test command or a manual note before review can finish.'
+  }
+  if (/routine verification evidence|task proof pack|proof packet|proof packe/i.test(value)) {
+    return 'Guildhall needs to save the verification result itself instead of asking you to handle routine test evidence.'
+  }
+  if (/Shell command succeeded|Treat this command as PASSED|required verification/i.test(value)) {
+    return 'Command passed. Guildhall can use it as verification if this task needs it.'
+  }
+  return value
 }
 
 function isExpectedResearchBudgetRefusal(
@@ -981,6 +1051,7 @@ function isExpectedResearchBudgetRefusal(
 
 function friendlyToolName(tool: string): string {
   switch (tool) {
+    case 'post-user-question': return 'question'
     case 'read-file': return 'file read'
     case 'edit-file': return 'file edit'
     case 'run-command': return 'command'
@@ -1024,11 +1095,26 @@ function truncateDetail(value: string | null | undefined): string | undefined {
   ) {
     return 'The file edit was missing oldString: the exact existing text to replace. Read the file, then call edit-file with filePath, oldString, and newString.'
   }
-  return trimmed.length > 180 ? `${trimmed.slice(0, 177)}...` : trimmed
+  const friendly = friendlyActivityText(trimmed)
+  return friendly.length > 180 ? `${friendly.slice(0, 177)}...` : friendly
+}
+
+function toolCompletedDetail(
+  ev: NonNullable<BuildThreadOptions['recentEvents']>[number]['event'],
+): string | undefined {
+  if (ev?.type !== 'tool_completed' && ev?.type !== 'error') return undefined
+  const tool = typeof ev?.tool_name === 'string' ? ev.tool_name : ''
+  if (ev?.type === 'tool_completed' && !ev.is_error && (tool === 'read-file' || tool === 'list-files' || tool === 'search-files')) {
+    return undefined
+  }
+  if (ev?.type === 'tool_completed' && !ev.is_error && tool === 'post-user-question') {
+    return 'Guildhall asked a question and is waiting for the answer.'
+  }
+  return truncateDetail(ev?.output ?? ev?.message)
 }
 
 function rollingDetail(value: string): string | undefined {
-  const compact = value.replace(/\s+/g, ' ').trim()
+  const compact = friendlyActivityText(value).replace(/\s+/g, ' ').trim()
   if (!compact) return undefined
   return compact.length > 220 ? `...${compact.slice(-217)}` : compact
 }
@@ -1124,7 +1210,7 @@ function activityByTask(
           ? { detail: rollingDetail(deltaTextByTask.get(taskId) ?? '') }
           : {}),
         ...(type === 'tool_completed' || type === 'error'
-          ? { detail: truncateDetail(ev?.output ?? ev?.message) }
+          ? { detail: toolCompletedDetail(ev) }
           : {}),
       })
     }
@@ -1241,6 +1327,33 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     })
   }
 
+  const projectCheckIn = summarizeProjectCheckIn(getProjectStateDir(opts.projectPath))
+  if (projectCheckIn.needed) {
+    turns.push({
+      kind: 'setup_step',
+      id: 'setup:project-check-in',
+      at: new Date(3 * 60_000).toISOString(),
+      persona: 'intake',
+      status: 'pending',
+      phase: 'setup',
+      stepId: 'projectCheckIn',
+      title: projectCheckIn.title,
+      why: projectCheckIn.detail,
+      skippable: true,
+      affordance: 'inline-button',
+      actionLabel: 'Start project check-in',
+      submitEndpoint: '/api/project/project-check-in',
+      contextSummary: {
+        intro: 'This project was set up before Guildhall learned to ask these project-level questions.',
+        facts: [
+          'Existing tasks and settings stay as they are.',
+          'This check-in adds context for future requests and release decisions.',
+        ],
+        uncertainty: 'Guildhall will ask one question at a time in Thread.',
+      },
+    })
+  }
+
   // ---- Task-derived turns --------------------------------------------------
   const importDraftTasks = tasks.filter((task) => {
     const taskStatus = typeof task.status === 'string' ? task.status : ''
@@ -1254,9 +1367,13 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const taskDescription = cleanTaskDescription(t)
     const sourceNote = sourceNoteForTask(t)
     const taskStatus = typeof t.status === 'string' ? t.status : ''
+    const requestKind = t.request?.kind
+    const routingSummary = t.request?.routingSummary
     const constructionMode = constructionModeForTask(t)
     const createdAt =
       typeof t.createdAt === 'string' ? t.createdAt : new Date().toISOString()
+    const requestTurn = taskRequestTurn(t, taskId, taskStatus, createdAt)
+    if (requestTurn) turns.push(requestTurn)
 
     const openQs = visibleOpenQuestions<Record<string, unknown>>(t)
     const seenQuestionSignatures = new Set<string>()
@@ -1301,6 +1418,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     }
     const unansweredQuestions = visibleQuestions.filter((entry) => !entry.answeredAt)
     const answeredQuestions = visibleQuestions.filter((entry) => entry.answeredAt)
+    const notes = Array.isArray(t.notes)
+      ? (t.notes as Array<Record<string, unknown>>)
+      : []
 
     // Brief approval (or done card)
     const brief = t.productBrief as
@@ -1344,6 +1464,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         },
         liveAgent,
         approvedAt,
+        latestUserCorrection: latestHumanCorrection(notes),
       })
     }
 
@@ -1394,9 +1515,6 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       })
     }
 
-    const notes = Array.isArray(t.notes)
-      ? (t.notes as Array<Record<string, unknown>>)
-      : []
     const reviewerNotes = notes
       .map((note, index) => ({ note, index }))
       .filter(({ note }) => {
@@ -1523,11 +1641,13 @@ export function buildThread(opts: BuildThreadOptions): Thread {
             ? importDraftTasks.length > 1
               ? `Imported draft needs a task brief. ${importDraftTasks.length - 1} more drafts are queued behind it.`
               : 'Imported draft needs a task brief.'
-            : taskStatus === 'exploring'
+          : taskStatus === 'exploring'
               ? importedDraft
                 ? importDraftTasks.length > 1
                   ? `Imported draft has a task brief in progress. ${importDraftTasks.length - 1} more drafts are queued behind it.`
                   : 'Imported draft has a task brief in progress.'
+              : requestKind === 'project_question'
+                ? 'Guildhall can inspect the project and answer this question without treating it as implementation work.'
               : queuedSpecRevision
                 ? 'Guildhall has your latest answers and a spec draft. The next step is for Guildhall to revise the spec.'
               : 'The spec author is shaping this task.'
@@ -1550,6 +1670,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         taskId,
         taskTitle,
         constructionMode,
+        requestKind,
+        routingSummary,
         taskDescription,
         sourceNote,
         taskStatus,
@@ -1560,6 +1682,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         checklist:
           (taskStatus === 'exploring' || needsSpecFill) &&
           !queuedSpecRevision &&
+          requestKind !== 'project_question' &&
           taskId !== META_INTAKE_TASK_ID &&
           taskId !== 'task-workspace-import' &&
           (!importedDraft || Boolean(liveAgent))
@@ -1582,6 +1705,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
       const escId = typeof esc.id === 'string' ? esc.id : ''
       const at = typeof esc.raisedAt === 'string' ? esc.raisedAt : createdAt
       const reason = 'reason' in esc && typeof esc.reason === 'string' ? esc.reason : ''
+      const escalationAgentId = 'agentId' in esc && typeof esc.agentId === 'string'
+        ? esc.agentId
+        : undefined
       const summary =
         typeof esc.summary === 'string' && esc.summary.trim()
           ? esc.summary
@@ -1601,6 +1727,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         taskTitle,
         constructionMode,
         escalationId: escId,
+        escalationReason: reason || undefined,
+        escalationAgentId,
         summary,
         details: compactEscalationDetailsWithPolicy(
           typeof esc.details === 'string' ? esc.details : undefined,
@@ -1697,6 +1825,13 @@ export function buildThread(opts: BuildThreadOptions): Thread {
   if (activeReviewTurnWithoutLiveAgent && pendingWorkerTurn) {
     activeReviewTurnWithoutLiveAgent.status = 'pending'
     pendingWorkerTurn.status = 'active'
+  }
+
+  if (!turns.some(t => t.status === 'active')) {
+    const checkInTurn = turns.find(
+      (turn) => turn.kind === 'setup_step' && turn.stepId === 'projectCheckIn' && turn.status === 'pending',
+    )
+    if (checkInTurn) checkInTurn.status = 'active'
   }
 
   const activeTurns = turns.filter(t => t.status === 'active')

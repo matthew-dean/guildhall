@@ -90,6 +90,7 @@ describe('project-routes', () => {
     })
     const { projectActionHref } = await import('../project-routes.js')
 
+    expect(projectActionHref('/overview')).toBe('/projects/looma-knit/overview')
     expect(projectActionHref('/workspace-import')).toBe('/projects/looma-knit/workspace-import')
     expect(projectActionHref('/settings/advanced')).toBe('/projects/looma-knit/settings/advanced')
     expect(projectActionHref('/task/task-003')).toBe('/projects/looma-knit/task/task-003')

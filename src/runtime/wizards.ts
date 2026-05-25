@@ -345,25 +345,25 @@ export function progressForTask(wizard: TaskWizard, snap: TaskSnapshot): WizardP
 const specFillSteps: readonly TaskWizardStep[] = [
   {
     id: 'title',
-    title: 'Give the task a title',
+    title: 'Readable title',
     why:
-      'Every downstream view (planner, inbox, transcripts) uses the title as the primary label. A bare task id is unreadable.',
+      'Give this work a name someone can recognize later.',
     skippable: false,
     status: snap => (snap.title.trim().length > 0 ? 'done' : 'pending'),
   },
   {
     id: 'description',
-    title: 'Describe what the agent is looking at',
+    title: 'Starting point',
     why:
-      'Without a short description the agent has to rediscover the intent every tick. One sentence unblocks this.',
+      'Say what Guildhall should inspect or use as the starting evidence.',
     skippable: false,
     status: snap => (snap.description.trim().length >= 10 ? 'done' : 'pending'),
   },
   {
     id: 'brief',
-    title: 'Explain what success looks like',
+    title: 'Success target',
     why:
-      'User need + Done-when are what review gates check. Without them the reviewer has nothing to compare the work against.',
+      'State what should be true when this work is finished.',
     skippable: true,
     status: snap =>
       snap.brief.userJob.trim().length > 0 &&
@@ -373,9 +373,9 @@ const specFillSteps: readonly TaskWizardStep[] = [
   },
   {
     id: 'acceptance',
-    title: 'Add at least one acceptance criterion',
+    title: 'Acceptance criteria',
     why:
-      'Acceptance criteria are the concrete finish line. Agents merge when criteria pass; without any criteria, the task never completes cleanly.',
+      'Add the concrete checks Guildhall should use before calling the work done.',
     skippable: true,
     status: snap => (snap.acceptanceCriteriaCount > 0 ? 'done' : 'pending'),
   },
@@ -383,7 +383,7 @@ const specFillSteps: readonly TaskWizardStep[] = [
 
 export const specFillWizard: TaskWizard = {
   id: 'spec-fill',
-  title: 'Task checklist',
+  title: 'Task brief checklist',
   lede:
     'Finish the missing pieces so Guildhall can work on this task clearly and review it cleanly.',
   steps: specFillSteps,

@@ -931,7 +931,7 @@ export interface MaybeSeedWorkspaceImportInput {
   projectPath: string
   /**
    * Optional injected lever position (tests). When omitted, loaded from
-   * `memory/agent-settings.yaml`. Defaults to 'suggest' if settings are
+   * `.guildhall/agent-settings.yaml`. Defaults to 'suggest' if settings are
    * missing or the lever has not been written yet.
    */
   leverPosition?: ImportAutonomyPosition

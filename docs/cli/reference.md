@@ -3,8 +3,8 @@ title: CLI reference
 help_topic: reference.cli
 help_summary: |
   Every shipped `guildhall` subcommand — init, register, unregister, list,
-  run, serve, start, open, stop, config, corpus-map, and model-bakeoff — with
-  flags and examples.
+  run, serve, start, open, stop, config, corpus-map, memory migration,
+  task-state migration, MCP bridge, and model-bakeoff — with flags and examples.
 ---
 
 # CLI reference
@@ -14,7 +14,7 @@ help_summary: |
 The CLI talks to the same local service and project files as the browser UI.
 Use it for local service lifecycle, project registry management, and focused
 debug runs. Task creation, approval, and setup interviews live in the browser
-UI rather than as separate human-facing CLI commands.
+UI rather than as separate task-mutation CLI commands.
 
 ## `guildhall init [path]`
 
@@ -135,6 +135,50 @@ task transitions.
 guildhall memory compact-project-state --apply .
 ```
 
+## `guildhall migrate task-state [path]`
+
+Preview or apply the 0.8.0 cleanup for older task files. The migration keeps
+the compact task story in `./.guildhall/TASKS.json` and moves bulkier receipts
+into local project history.
+
+```bash
+guildhall migrate task-state .
+guildhall migrate task-state --apply .
+```
+
+Flags:
+
+- `--dry-run` — report what would change. This is the default.
+- `--apply` — write the split and backup files.
+
+See [Cleaner project notes](../guide/task-state-boundary) for the product model.
+
+## `guildhall bridge install [--target codex|claude|all] [id|path]`
+
+Install project instructions that point outside agents at Guildhall's MCP
+bridge.
+
+```bash
+guildhall bridge install --target all .
+guildhall bridge install --target all --yes .
+guildhall bridge install --target claude --no-configure-mcp .
+```
+
+Targets:
+
+- `codex` writes or updates `AGENTS.md` and offers to configure the user-level
+  Codex MCP server.
+- `claude` writes or updates `CLAUDE.md` and project `.mcp.json`.
+- `all` installs both.
+
+Flags:
+
+- `--yes` — accept MCP configuration prompts. Useful for setup scripts.
+- `--no-configure-mcp` — write instructions but skip MCP configuration.
+
+See [External agents and MCP](../guide/external-agents) for what outside agents
+can read through the bridge.
+
 ## `guildhall model-bakeoff [--context-indexer] [output.json]`
 
 Write a deterministic model comparison replay report. The command currently
@@ -148,11 +192,13 @@ Default output:
 
 Use `--context-indexer` to compare semantic [Corpus Map](../guide/corpus-map) candidates. That writes
 `artifacts/model-bakeoff/context-indexer-report.json` and a Markdown summary by
-default, using DeepInfra candidate lanes for choosing a cheap, fast indexing
-model. The report includes the real-project evaluation ladder:
-`narrative-harness` for documentation/product intent, `linecraft` for the first
-small-to-medium code corpus, the Guildhall UI slice for design-system reuse,
-and `jess` for hard architecture.
+default, using candidate lanes for choosing a cheap, fast indexing model.
+
+The context-indexer ladder intentionally uses different corpus shapes:
+documentation-heavy planning, a small-to-medium codebase, a design-system reuse
+slice, and a harder architecture slice. That gives the report more signal than
+one happy-path repo without making readers learn the private project names used
+during development.
 
 The optional positional argument chooses the JSON path. Guildhall writes the
 Markdown summary beside it.
@@ -164,6 +210,7 @@ guildhall init ~/projects/my-app
 guildhall run my-app --domain ui
 guildhall serve
 guildhall corpus-map refresh --semantic .
+guildhall migrate task-state --apply .
 guildhall model-bakeoff artifacts/model-bakeoff/report.json
 guildhall model-bakeoff --context-indexer
 ```

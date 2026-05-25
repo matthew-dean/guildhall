@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
+import { resolveRuntimePath } from './path-utils.js'
 import type { ResolvedConfig } from '@guildhall/config'
 import { detectGateCommands, detectPackageManager, type PackageManager } from './bootstrap.js'
 import { detectBootstrapHypothesis } from './detect-bootstrap.js'
@@ -884,9 +885,9 @@ export function resolveEffectiveTaskProjectPath(
   workspaceProjectPath: string,
 ): string {
   if (typeof task.projectPath === 'string' && task.projectPath.trim().length > 0) {
-    return path.resolve(task.projectPath)
+    return resolveRuntimePath(task.projectPath)
   }
-  return path.resolve(workspaceProjectPath)
+  return resolveRuntimePath(workspaceProjectPath)
 }
 
 export function resolveEffectiveTaskBootstrapBlock(input: {

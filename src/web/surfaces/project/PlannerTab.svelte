@@ -3,6 +3,7 @@
 -->
 <script lang="ts">
   import TaskCard from '../../lib/TaskCard.svelte'
+  import { workerHandoffStatus } from '../../lib/task-state.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
 
   interface Props {
@@ -13,7 +14,7 @@
 
   const PLANNER_STAGES: Array<{ key: string; label: string; statuses: string[] }> = [
     { key: 'backlog', label: 'Backlog', statuses: ['proposed'] },
-    { key: 'spec', label: 'Spec', statuses: ['exploring', 'spec_review'] },
+    { key: 'spec', label: 'Spec', statuses: ['exploring', 'spec_review', 'needs_spec_cleanup'] },
     { key: 'work', label: 'Working', statuses: ['ready', 'in_progress'] },
     { key: 'review', label: 'Review & gates', statuses: ['review', 'gate_check'] },
     { key: 'done', label: 'Done / terminal', statuses: ['done', 'shelved', 'blocked'] },
@@ -32,7 +33,7 @@
   const selectionStatuses = ['gate_check', 'review', 'in_progress', 'proposed', 'exploring', 'spec_review', 'ready']
 
   function statusOf(task: Task): string {
-    return task.status === 'pending' ? 'ready' : task.status ?? ''
+    return task.status === 'pending' ? 'ready' : workerHandoffStatus(task) ?? ''
   }
 
   const statusById = $derived(
@@ -95,9 +96,9 @@
                 <TaskCard
                   task={t}
                   coordinatorRunning={running}
-                  displayStatusLabel={isDependencyBlocked(t) ? 'Waiting' : undefined}
-                  displayStatusTone={isDependencyBlocked(t) ? 'warn' : undefined}
-                  displayStatusIcon={isDependencyBlocked(t) ? 'alert-triangle' : undefined}
+                  displayStatusLabel={isDependencyBlocked(t) ? 'Waiting' : statusOf(t) === 'needs_spec_cleanup' ? 'Needs brief cleanup' : undefined}
+                  displayStatusTone={isDependencyBlocked(t) || statusOf(t) === 'needs_spec_cleanup' ? 'warn' : undefined}
+                  displayStatusIcon={isDependencyBlocked(t) || statusOf(t) === 'needs_spec_cleanup' ? 'alert-triangle' : undefined}
                 />
               {/each}
             </div>

@@ -1,6 +1,6 @@
 <!--
   Project Facts — what the agent knows about this project, aggregated from
-  on-disk state (guildhall.yaml, memory/design-system.yaml, workspace-goals.json,
+  on-disk state (guildhall.yaml, .guildhall/design-system.yaml, workspace-goals.json,
   internal routing). Read-only for now; each section links out to the canonical
   place to modify.
 -->

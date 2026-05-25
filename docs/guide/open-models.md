@@ -59,8 +59,8 @@ it as a permanent benchmark.
 | Model | What we saw | Recommendation |
 |---|---|---|
 | `Qwen/Qwen3-235B-A22B-Instruct-2507` | Best strict pass rate and strongest structured-output reliability in the worker-style cases. | Use for `worker` by default. |
-| `deepseek-ai/DeepSeek-V4-Flash` | Strong general decision quality across coordinator/reviewer-style cases, with acceptable structured output in replay. In the first live context-indexer ladder it produced one good docs result, then malformed JSON for `linecraft`. | Use for `spec`, `coordinator`, `reviewer`, and model-assisted `gateChecker` work. Keep it in the context-indexer set as the cheap challenger, but do not rely on it without schema repair. |
-| `zai-org/GLM-4.6` | Best combined live context-indexer result across the expanded ladder. It gave stronger semantic summaries overall and was faster than DeepSeek on the later Guildhall/Jess tracks, with schema repair covering occasional malformed JSON. | Use for semantic [Corpus Map](./corpus-map) enrichment until a cheaper model passes the same live ladder. |
+| `deepseek-ai/DeepSeek-V4-Flash` | Strong general decision quality across coordinator/reviewer-style cases, with acceptable structured output in replay. In the first live context-indexer ladder it produced one good documentation result, then malformed JSON on the small-codebase rung. | Use for `spec`, `coordinator`, `reviewer`, and model-assisted `gateChecker` work. Keep it in the context-indexer set as the cheap challenger, but do not rely on it without schema repair. |
+| `zai-org/GLM-4.6` | Best combined live context-indexer result across the expanded ladder. It gave stronger semantic summaries overall and was faster than DeepSeek on the later UI and hard-architecture tracks, with schema repair covering occasional malformed JSON. | Use for semantic [Corpus Map](./corpus-map) enrichment until a cheaper model passes the same live ladder. |
 | `Qwen/Qwen3.6-35B-A3B` | Good replay candidate, but returned no parseable JSON in the first live context-indexer ladder. | Keep in the comparison set only if prompt/schema handling changes. |
 | `openai/gpt-oss-120b` | Promising decisions, but weak format reliability in the current harness. | Retest after schema repair before recommending. |
 | `Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo` | Strong decisions, but poor strict-format reliability in the current worker harness. | Keep as a premium worker experiment, not a default. |
@@ -99,18 +99,18 @@ pipeline without spending provider credits.
 
 The context-indexer replay set covers semantic code orientation: canonical
 abstraction selection, legacy/current path detection, design-system drift, and
-module contract summaries. Current DeepInfra candidate lanes are
+module relationship summaries. Current DeepInfra candidate lanes are
 `deepseek-ai/DeepSeek-V4-Flash`, `Qwen/Qwen3.6-35B-A3B`, and `zai-org/GLM-4.6`.
 
 The context-indexer report also records the real-project test ladder Guildhall
 uses when moving from replay checks to provider-backed evaluation:
 
-| Track | Project | What it tests |
+| Track | Corpus shape | What it tests |
 |---|---|---|
-| Documentation corpus | `narrative-harness` | Product theory, specs, decisions, and architecture intent without claiming code exists where it does not. |
-| Code corpus | `linecraft` | A small-to-medium real codebase with enough structure to compare architecture summaries and read-next guidance. |
-| Design-system slice | `guildhall/src/web` and `guildhall/packages/ui` | Whether the indexer steers workers toward shared primitives instead of one-off controls or styling. |
-| Hard architecture | `jess` | Whether summaries stay bounded and correct in a deeper compiler/parser architecture. |
+| Documentation corpus | Product theory and planning notes | Product theory, specs, decisions, and architecture intent without claiming code exists where it does not. |
+| Code corpus | Small-to-medium real codebase | Enough structure to compare architecture summaries and read-next guidance. |
+| Design-system slice | Shared UI and token files | Whether the indexer steers workers toward shared primitives instead of one-off controls or styling. |
+| Hard architecture | Deeper compiler/parser-style codebase | Whether summaries stay bounded and correct in a more complex architecture. |
 
 ## Planned live comparison mode
 

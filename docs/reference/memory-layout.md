@@ -21,19 +21,20 @@ That split has two lanes:
   This is for transcripts, stream events, context-debug snapshots, checkpoints,
   bootstrap status, session markers, and other bulky or private run evidence.
 
-A teammate should be able to clone the project and see the accepted settings,
-active tasks, sealed task summaries, decisions, and project facts. They should
-not inherit your raw run history. That is the storage contract: compact shared
-state in the repo, rich scrollback on your machine.
+A teammate can clone the project and see the accepted settings, active tasks,
+sealed task summaries, decisions, and project facts. They do not inherit your
+raw run history. The short version: commit the compact project record; keep the
+rich scrollback on your machine.
 
-## Format Contract
+## File Formats
 
-The file format tells you who owns the data and how long it should live.
+The file format gives you a quick clue about who is meant to read or edit the
+file.
 
 | Format | Used for | Why |
 |---|---|---|
-| YAML | Human-authored or human-reviewed project contract: `guildhall.yaml`, `.guildhall/agent-settings.yaml`, coordinator config, project practices, personas, business envelope, overrides. | YAML gives readable diffs, comments, and stable hand edits. Use it when a person may reasonably review or change the file. |
-| JSON | Machine-owned bounded state: the active queue, task indexes, compact archive records, local evidence blobs, API payloads. | JSON has strict parsing and predictable TypeScript schema validation. Use it when the runtime owns the shape. Keep committed JSON small. |
+| YAML | Project settings you may review or edit: `guildhall.yaml`, `.guildhall/agent-settings.yaml`, coordinator config, project practices, personas, business envelope, overrides. | YAML gives readable diffs, comments, and stable hand edits. |
+| JSON | App-owned state: the active queue, task indexes, compact archive records, local evidence blobs, API payloads. | JSON is strict and predictable. Guildhall keeps committed JSON small. |
 | JSONL | Append-only high-volume history: event streams, refresh history, debug ledgers. | JSONL can be streamed one record at a time. Do not put months of append history into one committed JSON array. |
 | Markdown | Narrative durable knowledge: project memory, decisions, progress summaries, specs, review packets. | Markdown is for prose people need to read. Keep committed Markdown curated, not a raw transcript dump. |
 
@@ -45,7 +46,29 @@ Two rules matter more than the extension:
 - **Raw history is local by default.** Transcripts, heartbeats, context-debug
   snapshots, checkpoints, and event streams live under
   `~/.guildhall/data/projects/<project-hash>/` unless a compact summary belongs
-  in the shared project contract.
+  in the shared project record.
+
+## Evidence Links
+
+Compact memory is allowed to summarize. It is not allowed to become
+untraceable.
+
+When a compact shared artifact can affect future work, Guildhall keeps links
+back to the evidence that produced it. Task summaries, sealed archives,
+pressure-test facts, project memories, practice proposals, global preference
+suggestions, and resume checkpoints can point back to task ids, transcript ids,
+event ids, checkpoint ids, or local-history paths.
+
+The pattern is simple:
+
+- the compact artifact explains the useful conclusion;
+- its source references identify the raw or fuller local evidence;
+- the UI can show the summary first and let a reviewer drill into evidence when
+  the conclusion matters.
+
+If local history has been compacted or deleted, Guildhall says that the full
+evidence is no longer available instead of presenting the compact summary as if
+it were independently proven.
 
 ## Git Defaults
 
@@ -65,8 +88,8 @@ Ignore:
 - everything under `~/.guildhall/`
 
 Guildhall writes and migrates a small managed block in the project
-`.gitignore` for this. The mental model is: commit the project contract, do not
-commit machine state.
+`.gitignore` for this. The mental model is: commit the project plan and compact
+state; do not commit machine state.
 
 Inside committed `.guildhall`, Guildhall keeps the files bounded. Active tasks
 stay in `TASKS.json`; finished work is sealed into compact task archives;

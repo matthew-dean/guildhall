@@ -6,7 +6,7 @@
  * levers (fanout_N, soft_penalty_after_N, etc.).
  *
  * No hidden hardcoded defaults — defaults live in `defaults.ts` as explicit
- * named constants, and the first write of `memory/agent-settings.yaml` seeds
+ * named constants, and the first write of `.guildhall/agent-settings.yaml` seeds
  * every lever with `setBy: 'system-default'` so the provenance trail is
  * intact.
  */

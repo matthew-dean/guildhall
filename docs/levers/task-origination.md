@@ -17,8 +17,8 @@ Who can add tasks to this domain's queue.
 
 | Position | Who can add | Who must approve |
 |---|---|---|
-| `human_only` | Humans only. Agents never create tasks. | n/a |
-| `agent_proposed_human_approved` | Agents may propose; humans must approve before `exploring`. | Human |
+| `human_only` | You add tasks. Agents never create tasks. | n/a |
+| `agent_proposed_human_approved` | Agents may propose; you approve before `exploring`. | You |
 | `agent_proposed_coordinator_approved` | Agents may propose; the domain coordinator approves. | Coordinator |
 | `agent_autonomous` | Agents may create tasks freely (still subject to coordinator review later). | None at origination |
 

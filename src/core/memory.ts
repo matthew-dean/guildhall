@@ -5,11 +5,11 @@ import { z } from 'zod'
 //
 // Two tiers:
 //   1. Working memory — per-session, injected into agent context per call.
-//      Lives in memory/ as structured markdown files.
+//      Lives in .guildhall/ as structured markdown files.
 //   2. Long-term memory — persists across sessions.
-//      Also in memory/ but append-only (DECISIONS.md, PROGRESS.md).
+//      Also in .guildhall/ but append-only (DECISIONS.md, PROGRESS.md).
 //
-// All agents read from memory before acting and write to memory after.
+// All agents read from memory before acting and write to .guildhall after.
 // ---------------------------------------------------------------------------
 
 export const MemoryFileKey = z.enum([
@@ -21,10 +21,10 @@ export const MemoryFileKey = z.enum([
 export type MemoryFileKey = z.infer<typeof MemoryFileKey>
 
 export const MEMORY_FILES: Record<MemoryFileKey, string> = {
-  TASKS: 'memory/TASKS.json',
-  MEMORY: 'memory/MEMORY.md',
-  DECISIONS: 'memory/DECISIONS.md',
-  PROGRESS: 'memory/PROGRESS.md',
+  TASKS: '.guildhall/TASKS.json',
+  MEMORY: '.guildhall/MEMORY.md',
+  DECISIONS: '.guildhall/DECISIONS.md',
+  PROGRESS: '.guildhall/PROGRESS.md',
 }
 
 // What gets injected into an agent's context at the start of each call

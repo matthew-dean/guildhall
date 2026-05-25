@@ -363,6 +363,39 @@ describe('reflection learning candidates', () => {
     expect(global.suggestedLearnings).toEqual([])
   })
 
+  it('links compact project learnings back to local task evidence', async () => {
+    await persistLearningCandidates({
+      memoryDir: path.join(tmpDir, 'memory'),
+      candidates: [
+        candidate({
+          id: 'project-task-evidence-link',
+          evidence: [
+            {
+              kind: 'task',
+              summary: 'Task completed after the focused invite repair.',
+              ref: 'task-001',
+            },
+          ],
+        }),
+      ],
+    })
+
+    const project = readProjectLearning(path.join(tmpDir, 'memory'))
+    expect(project.suggestedLearnings[0]?.evidence[0]).toMatchObject({
+      kind: 'task',
+      summary: 'Task completed after the focused invite repair.',
+      ref: 'task-001',
+      links: [
+        {
+          kind: 'task',
+          label: 'Open task evidence',
+          href: '/task/task-001',
+          localHistoryRef: path.join('transcripts', 'exploring', 'task-001.md'),
+        },
+      ],
+    })
+  })
+
   it('records task reflection candidates after completed playbook-backed work', async () => {
     await recordTaskReflection({
       memoryDir: path.join(tmpDir, 'memory'),

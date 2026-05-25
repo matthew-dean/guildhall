@@ -18,6 +18,7 @@
   import StatusDot from '../lib/StatusDot.svelte'
   import ProjectShell from '../lib/layout/ProjectShell.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
+  import ProjectOverviewTab from './project/ProjectOverviewTab.svelte'
   import ThreadTab from './project/ThreadTab.svelte'
   import InboxTab from './project/InboxTab.svelte'
   import WorkTab from './project/WorkTab.svelte'
@@ -50,7 +51,7 @@
 
   const props = $props<Props>()
 
-  const currentView = $derived<ProjectView>(props.initialView ?? 'thread')
+  const currentView = $derived<ProjectView>(props.initialView ?? 'overview')
   const currentSub = $derived<string | null>(props.initialSub ?? null)
   const routeProjectId = $derived(props.projectId?.trim() || null)
   const activeProjectId = $derived(routeProjectId ?? project.detail?.id ?? null)
@@ -271,10 +272,10 @@
   $effect(() => {
     if (routeProjectId || !activeProjectId || !path.value.startsWith('/project')) return
     const legacySuffix = path.value === '/project'
-      ? '/thread'
+      ? '/overview'
       : path.value.startsWith('/project/')
         ? path.value.slice('/project'.length)
-        : '/thread'
+        : '/overview'
     nav(currentProjectHref(legacySuffix, activeProjectId))
   })
 
@@ -290,9 +291,18 @@
   const needsMeta = $derived(coordinators.length === 0)
 
   const entries = $derived<NavEntry[]>([
+    { id: 'overview', label: 'Overview', icon: 'activity', suffix: '/overview' },
     { id: 'thread', label: 'Thread', icon: 'sparkles', suffix: '/thread' },
-    { id: 'inbox', label: 'Needs you', icon: 'inbox', suffix: '/notifications' },
-    { id: 'work', label: 'Work', icon: 'activity', suffix: '/work' },
+    {
+      id: 'work',
+      label: 'Work',
+      icon: 'list-checks',
+      suffix: '/work',
+      subs: [
+        { id: 'queue', label: 'Queue', path: currentProjectHref('/work', activeProjectId) },
+        { id: 'board', label: 'Board', path: currentProjectHref('/planner', activeProjectId) },
+      ],
+    },
     { id: 'timeline', label: 'Timeline', icon: 'clock', suffix: '/timeline' },
     {
       id: 'release',
@@ -557,6 +567,12 @@
     })
   })
   const runStopSummary = $derived.by(() => {
+    if (startReadiness?.code === 'owner_input_required') {
+      return {
+        stopReason: 'awaiting_human',
+        stopMessage: startReadiness.message ?? 'Guildhall is waiting on your answer.',
+      }
+    }
     if (currentStopSummary) return currentStopSummary
     if (hasCurrentQueueActivity) return null
     if (detail?.run?.stopSummary) return detail.run.stopSummary
@@ -733,7 +749,9 @@
     ),
   )
   const setupAttentionLabel = $derived(
-    startReadiness?.code === 'import_drafts_waiting'
+    startReadiness?.code === 'owner_input_required'
+      ? 'Needs your answer'
+      : startReadiness?.code === 'import_drafts_waiting'
       ? 'Imported drafts need review'
       : needsMeta || metaIntakePending
         ? 'Project setup needs attention'
@@ -742,7 +760,9 @@
         : 'Readiness checks need attention',
   )
   const setupAttentionButtonLabel = $derived(
-    startReadiness?.code === 'import_drafts_waiting'
+    startReadiness?.code === 'owner_input_required'
+      ? 'Open Thread'
+      : startReadiness?.code === 'import_drafts_waiting'
       ? 'Review drafts'
       : startDisabledReason === 'No tasks to start'
         ? 'Ready'
@@ -753,6 +773,13 @@
   )
   const showRunButton = $derived(
     runStatus === 'running' || runStatus === 'stopping' || (!allTerminalStart && startDisabledReason !== 'No tasks to start'),
+  )
+  const runButtonIdleLabel = $derived(
+    startReadiness?.code === 'owner_input_required'
+      ? 'Waiting on answer'
+      : activeCount > 0
+        ? `Start ${activeCount} ${activeCount === 1 ? 'task' : 'tasks'}`
+        : 'Start run',
   )
   const showAdvanceOneTaskAction = $derived(
     !allTerminalStart,
@@ -1046,7 +1073,7 @@
               count={inboxActionableCount}
               showLabel={!topbarLabelsCollapsed}
               tooltip={topbarLabelsCollapsed}
-              onclick={() => go(currentProjectHref('/notifications', activeProjectId))}
+              onclick={() => go(currentProjectHref('/overview', activeProjectId))}
               title={`${inboxActionableCount} need you`}
               ariaLabel={`${inboxActionableCount} notifications need you`}
             />
@@ -1105,7 +1132,7 @@
             >
               <Icon name={runStatus === 'running' || runStatus === 'stopping' ? 'square' : 'play'} size={16} />
               {#if !topbarLabelsCollapsed}
-                {runStatus === 'stopping' ? 'Stopping...' : runStatus === 'running' ? (runMode === 'one_task' ? 'Stop 1' : 'Stop') : 'Start'}
+                {runStatus === 'stopping' ? 'Stopping...' : runStatus === 'running' ? (runMode === 'one_task' ? 'Stop 1' : 'Stop') : runButtonIdleLabel}
               {/if}
             </Button>
           {/if}
@@ -1115,7 +1142,7 @@
               size="sm"
               iconOnly
               ariaLabel="Open actions menu"
-              title="Open actions menu"
+              title={actionsMenuOpen ? undefined : 'Open actions menu'}
               onclick={toggleActionsMenu}
             >
               <Icon name="ellipsis" size={18} />
@@ -1219,18 +1246,27 @@
               {#if runStopSummary?.stopReason === 'awaiting_human'}
                 <a href={currentProjectHref('/thread', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/thread', activeProjectId)) }}>Open Thread</a>
               {:else if runStopSummary?.stopReason === 'blocked_only'}
-                <a href={currentProjectHref('/notifications', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/notifications', activeProjectId)) }}>Open Notifications</a>
+                <a href={currentProjectHref('/overview', activeProjectId)} onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/overview', activeProjectId)) }}>Open Overview</a>
               {/if}
             {/snippet}
           </NoticeBand>
         {/if}
     {/snippet}
-        {#if currentView !== 'thread' && currentView !== 'inbox'}
+        {#if currentView !== 'overview' && currentView !== 'thread' && currentView !== 'inbox'}
           <DoThisNext />
         {/if}
 
         <div class="body">
-          {#if currentView === 'thread'}
+          {#if currentView === 'overview'}
+            <ProjectOverviewTab
+              {detail}
+              {inboxItems}
+              {inboxLoaded}
+              {inboxError}
+              {projectTicker}
+              {activeProjectId}
+            />
+          {:else if currentView === 'thread'}
             <ThreadTab projectId={activeProjectId} />
           {:else if currentView === 'inbox'}
             <InboxTab items={inboxItems} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />

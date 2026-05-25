@@ -58,6 +58,14 @@ export type PreRejectionCode = z.infer<typeof PreRejectionCode>
 export const TaskPriority = z.enum(['critical', 'high', 'normal', 'low'])
 export type TaskPriority = z.infer<typeof TaskPriority>
 
+export const TaskHold = z.object({
+  previousStatus: TaskStatus,
+  reason: z.string().optional(),
+  heldAt: z.string(),
+  heldBy: z.string(),
+})
+export type TaskHold = z.infer<typeof TaskHold>
+
 // FR-15: per-task permission mode override. Semantic ordering (narrowest →
 // widest) is plan < default < full_auto. A per-task mode may only *narrow*
 // the agent's baseline mode — it can never widen it. The orchestrator clamps
@@ -413,6 +421,26 @@ export const AcceptanceCriteria = z.preprocess(normalizeAcceptanceCriteria, z.ob
 }))
 export type AcceptanceCriteria = z.infer<typeof AcceptanceCriteria>
 
+export const TaskRequestKind = z.enum([
+  'task_spec',
+  'project_question',
+  'settings_proposal',
+  'persona_practice_proposal',
+  'repair_triage',
+  'clarification',
+])
+export type TaskRequestKind = z.infer<typeof TaskRequestKind>
+
+export const TaskRequest = z.object({
+  id: z.string(),
+  raw: z.string(),
+  kind: TaskRequestKind,
+  title: z.string(),
+  routingSummary: z.string(),
+  createdAt: z.string(),
+})
+export type TaskRequest = z.infer<typeof TaskRequest>
+
 export const Task = z.object({
   id: z.string(),
   title: z.string(),
@@ -423,6 +451,10 @@ export const Task = z.object({
 
   // Which project directory this task operates on (absolute path)
   projectPath: z.string(),
+
+  // The user-facing New request that produced this task, when it came through
+  // request routing instead of direct legacy intake.
+  request: TaskRequest.optional(),
 
   status: TaskStatus,
   priority: TaskPriority.default('normal'),
@@ -502,6 +534,7 @@ export const Task = z.object({
     (value) => value == null ? undefined : value,
     z.string().optional(),
   ),
+  hold: TaskHold.optional(),
 
   // FR-15: per-task permission mode override. When set, the orchestrator
   // tells the dispatched agent to clamp its QueryEngine permission checker to

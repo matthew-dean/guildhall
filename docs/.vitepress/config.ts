@@ -88,6 +88,7 @@ const guideWorksItems = [
   { text: 'Agent context', link: '/guide/agent-context' },
   { text: 'Corpus Map', link: '/guide/corpus-map' },
   { text: 'Memory, learning, and recovery', link: '/guide/memory-and-recovery' },
+  { text: 'External agents and MCP', link: '/guide/external-agents' },
 ]
 
 const guideOperateItems = [
@@ -100,6 +101,7 @@ const guideOperateItems = [
 const guideTaskItems = [
   { text: 'Pressure-Test Intake', link: '/guide/pressure-test-intake' },
   { text: 'Task lifecycle', link: '/guide/task-lifecycle' },
+  { text: 'Cleaner project notes', link: '/guide/task-state-boundary' },
   { text: 'Git Story Closure', link: '/guide/git-story-closure' },
 ]
 
@@ -437,7 +439,11 @@ export default defineConfig({
   },
   appearance: 'dark',
   head: [
-    ['link', { rel: 'icon', href: '/guildhall/favicon.svg' }],
+    ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: '/guildhall/icons/genfavicon-32.png' }],
+    ['link', { rel: 'icon', type: 'image/png', sizes: '16x16', href: '/guildhall/icons/genfavicon-16.png' }],
+    ['link', { rel: 'icon', type: 'image/x-icon', href: '/guildhall/favicon.ico', sizes: 'any' }],
+    ['link', { rel: 'apple-touch-icon', sizes: '180x180', href: '/guildhall/apple-touch-icon.png' }],
+    ['link', { rel: 'manifest', href: '/guildhall/site.webmanifest' }],
     ['meta', { name: 'theme-color', content: '#141418' }],
   ],
   themeConfig: {

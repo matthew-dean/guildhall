@@ -177,6 +177,39 @@ describe('POST /api/project/request', () => {
     }
     expect(body.routedActions?.[0]?.kind).toBe('task_spec')
     expect(body.taskId).toMatch(/^task-/)
+    const queue = await readQueue()
+    expect(queue.tasks[0]?.request).toMatchObject({
+      kind: 'task_spec',
+      raw: 'Add a loading spinner to Providers.',
+      routingSummary: 'Routed to Task Intake',
+    })
+  })
+
+  it('keeps project questions visible as routed project-question requests', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/request'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ask: 'What commands should I run before release?' }),
+    }))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      routedActions?: Array<{ kind?: string; safety?: string; intakeTarget?: { nextStep?: string } }>
+      taskId?: string
+    }
+    expect(body.routedActions?.[0]).toMatchObject({
+      kind: 'project_question',
+      safety: 'read-only',
+      intakeTarget: { nextStep: 'answer-question' },
+    })
+    expect(body.taskId).toMatch(/^task-/)
+    const queue = await readQueue()
+    expect(queue.tasks[0]?.request).toMatchObject({
+      kind: 'project_question',
+      raw: 'What commands should I run before release?',
+      routingSummary: 'Routed to Project Question',
+    })
   })
 })
 

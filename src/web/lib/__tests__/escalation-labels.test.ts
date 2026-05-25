@@ -11,6 +11,7 @@ import {
   roleBlurb,
   escalationPrimaryAction,
   escalationRecoveryCopy,
+  escalationUserGuidance,
 } from '../escalation-labels.js'
 
 describe('escalationReasonLabel', () => {
@@ -70,6 +71,48 @@ describe('escalationRecoveryCopy', () => {
       headline: 'Guildhall found context but did not save the next draft.',
       detail: 'The transcript may contain useful observations. Retry from those notes or resolve the blocker after reviewing them.',
     })
+  })
+})
+
+describe('escalationUserGuidance', () => {
+  it('turns internal acceptance-criteria evidence blockers into actionable user copy', () => {
+    const guidance = escalationUserGuidance({
+      agentId: 'worker-agent',
+      summary: 'Cannot satisfy required AC-8 evidence command under current authoritative verification gate.',
+      details: 'Coordinator scoped instructions require an AC-8 evidence block with the exact pnpm --dir frontend test result (timestamp + exit code) and concrete auth test specs.',
+    })
+
+    expect(guidance.title).toBe('Guildhall needs to run one missing check.')
+    expect(guidance.detail).toContain('auth')
+    expect(guidance.detail).toContain('not asking you to prove anything')
+    expect(guidance.nextStep).toContain('Guildhall action')
+    expect(guidance.actionOwner).toBe('guildhall')
+    expect(`${guidance.title} ${guidance.detail} ${guidance.nextStep}`).not.toMatch(/\bAC-8\b/)
+    expect(guidance.technicalNote).toBeUndefined()
+    expect(escalationPrimaryAction({
+      agentId: 'worker-agent',
+      summary: 'Cannot satisfy required AC-8 evidence command under current authoritative verification gate.',
+      details: 'Coordinator scoped instructions require an AC-8 evidence block with the exact pnpm --dir frontend test result (timestamp + exit code) and concrete auth test specs.',
+    })).toMatchObject({
+      label: 'Let Guildhall run the check',
+      nextStatus: 'ready',
+    })
+  })
+
+  it('explains workspace build recovery without asking for an unnamed decision', () => {
+    const guidance = escalationUserGuidance({
+      agentId: 'worker-agent',
+      summary: 'Required authoritative verification is blocked by upstream workspace build failure outside checkpoint-touched editor files.',
+      details: 'Reran authoritative command pnpm build in the task worktree.',
+    })
+
+    expect(guidance.title).toBe('The project build is failing outside this task.')
+    expect(guidance.detail).toContain('nearby workspace code')
+    expect(guidance.nextStep).toContain('Reframe task')
+    expect(guidance.nextStep).toContain('retry gates')
+    expect(guidance.actionOwner).toBe('user')
+    expect(guidance.technicalNote).toBeUndefined()
+    expect(`${guidance.title} ${guidance.detail} ${guidance.nextStep}`).not.toMatch(/authoritative|checkpoint-touched|worktree/i)
   })
 })
 

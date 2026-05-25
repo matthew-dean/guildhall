@@ -2,7 +2,10 @@ export type InboxSeverity = 'high' | 'medium' | 'low'
 
 export type InboxItemKind =
   | 'bootstrap_missing'
+  | 'setup_pending'
   | 'workspace_import_pending'
+  | 'project_check_in'
+  | 'pressure_test_pending'
   | 'agent_question_pending'
   | 'import_draft_queue'
   | 'brief_approval'

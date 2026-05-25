@@ -74,6 +74,7 @@ export function projectActionHref(href: string, explicitProjectId?: string | nul
     return taskId ? `${projectTaskHref(projectId, decodeURIComponent(taskId))}${url.search}${url.hash}` : href
   }
   const projectSurface =
+    url.pathname === '/overview' ||
     url.pathname === '/thread' ||
     url.pathname === '/inbox' ||
     url.pathname === '/notifications' ||

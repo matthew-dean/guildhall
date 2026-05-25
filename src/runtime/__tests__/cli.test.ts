@@ -222,6 +222,8 @@ describe('Guildhall CLI surface', () => {
       'corpus-map',
       'memory',
       'model-bakeoff',
+      'mcp',
+      'bridge',
     ])
   })
 

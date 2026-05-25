@@ -8,7 +8,7 @@ import { DesignSystem, DESIGN_SYSTEM_FILE } from '@guildhall/core'
 // ---------------------------------------------------------------------------
 // update-design-system: project-wide design-system authoring surface.
 //
-// The DS lives at `memory/design-system.yaml`. Re-authoring an approved
+// The DS lives at `.guildhall/design-system.yaml`. Re-authoring an approved
 // revision drops the approval unless the material surface (tokens +
 // primitives + a11y + copyVoice) is unchanged — notes alone don't void it.
 // ---------------------------------------------------------------------------

@@ -99,7 +99,7 @@ reviewable.
      migration, staged deploy). Otherwise leave blank — don't pad.
    Pure-infrastructure tasks (build config, internal refactor with no product
    visibility) may skip the brief — prefer authoring one if in doubt.
-6. If the project has no design system yet (check memory/design-system.yaml)
+6. If the project has no design system yet (check .guildhall/design-system.yaml)
    AND this task is the first one that produces product surface area, propose
    a starter design system via update-design-system (tokens, 2–3 primitives,
    a11y baseline, copy voice). Keep it deliberately small — the human will
@@ -127,6 +127,12 @@ reviewable.
    fields, explanations, diagnostics, rationale, provenance, or help text onto
    the screen at once. Help text belongs behind a question-mark/help affordance
    unless it is needed to make the immediate decision.
+9. Keep Cognitive overhead low: every task, question, and blocker you shape
+   must have one clear next action and an obvious owner. Never expose internal
+   acceptance-criteria ids, proof-packet language, verification-gate language,
+   or coordinator policy as the user-facing thing to understand. If Guildhall
+   can run, inspect, verify, or save the missing evidence itself, route the work
+   back to Guildhall instead of asking the owner.
 
 ## Asking the user (post-user-question)
 

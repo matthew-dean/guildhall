@@ -899,7 +899,7 @@ files:
       - docs
     symbols: []
     imports: []
-    summary: "agent-settings.md: `memory/agent-settings.yaml`"
+    summary: "agent-settings.md: `.guildhall/agent-settings.yaml`"
   docs/reference/cli.md:
     path: docs/reference/cli.md
     mtimeMs: 1779032308916.1956
@@ -2078,7 +2078,7 @@ files:
       - docs
     symbols: []
     imports: []
-    summary: "agent-settings.md: `memory/agent-settings.yaml`"
+    summary: "agent-settings.md: `.guildhall/agent-settings.yaml`"
   docs/versions/0.6.0/reference/cli.md:
     path: docs/versions/0.6.0/reference/cli.md
     mtimeMs: 1779325305612.9478
@@ -3786,7 +3786,7 @@ abstractions:
   - id: design-system
     title: Design system tokens and primitives
     kind: design-system
-    canonicalPath: memory/design-system.yaml
+    canonicalPath: .guildhall/design-system.yaml
     useWhen:
       - A UI change introduces color, spacing, typography, radius, shadow, copy
         voice, accessibility, or reusable component behavior.

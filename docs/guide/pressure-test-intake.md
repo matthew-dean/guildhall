@@ -31,6 +31,11 @@ The first visible card is simple: **New request**, the original ask, and the
 routing summary. If Guildhall finds a similar live card, it reuses that card
 instead of starting a duplicate trail.
 
+The aim is to remove overhead, not judgment. Guildhall inspects project
+evidence, narrows the uncertainty, and asks the smallest useful question it
+can. Product taste, risk tolerance, release judgment, and the calls that
+actually need your hand stay visible instead of being quietly decided for you.
+
 ## The intake rhythm
 
 Pressure-Test Intake asks one question at a time in Thread. Each question has:
@@ -50,8 +55,9 @@ of future pain gets politely mugged before it reaches your codebase.
 
 ## What gets persisted
 
-Pressure-Test Intake is not a chat memory trick. The intake state is written to
-the project state lane so it can be resumed and inspected. It keeps:
+Pressure-Test Intake is not a chat memory trick. Guildhall writes down the
+useful parts so you can pause, come back, and continue without asking everyone
+to remember the last conversation. It keeps:
 
 - known facts and where they came from;
 - open unknowns;
@@ -75,13 +81,13 @@ the truth:
 - what was explicitly deferred;
 - what a worker and reviewer need to verify.
 
-A completed intake should make the next task smaller, not just prettier. If a
+A completed intake makes the next task smaller, not just prettier. If a
 domain is unknown, it stays visible as an assumption or deferral instead of
 quietly turning into a surprise halfway through implementation.
 
 ## When not to use it
 
 Pressure-Test Intake is for broad, risky, or under-shaped work. A tiny docs
-copy edit, a known failing test, or a one-file repair should take the shorter
+copy edit, a known failing test, or a one-file repair can take the shorter
 task path. Guildhall can still ask a clarification question when needed, but it
 does not need to stage a whole town meeting for a missing comma.

@@ -1,5 +1,5 @@
 /**
- * Seed positions for every lever, used when `memory/agent-settings.yaml` is
+ * Seed positions for every lever, used when `.guildhall/agent-settings.yaml` is
  * first created. These are NOT "hidden defaults" — they are written
  * explicitly to the file with `setBy: 'system-default'` so the provenance
  * trail shows that the Spec Agent has not yet refined them via intake.

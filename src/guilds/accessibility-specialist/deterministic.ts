@@ -139,7 +139,7 @@ const CONTRAST_CHECK: DeterministicCheck = {
         : {
             suggestions: [
               'Adjust failing fg/bg tokens so the ratio is ≥4.5 (normal text) or ≥3.0 (large text / UI).',
-              'If a pair is decorative-only and never carries text, annotate it in memory/design-system.yaml and re-scope this check.',
+              'If a pair is decorative-only and never carries text, annotate it in .guildhall/design-system.yaml and re-scope this check.',
             ],
           }),
     }

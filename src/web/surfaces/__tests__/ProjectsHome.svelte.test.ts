@@ -17,7 +17,6 @@ const servicePayload: ServiceDetail = {
       worker: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
     },
   },
-  selectedProject: { id: 'looma-knit', path: '/repo/looma-knit', name: 'Looma + Knit' },
   projects: [
     {
       id: 'looma-knit',
@@ -78,8 +77,8 @@ describe('ProjectsHome', () => {
 
     await userEvent.click(screen.getAllByRole('button', { name: /open project/i })[0]!)
 
-    expect(path.value).toBe('/projects/looma-knit/thread')
-    expect(window.location.pathname).toBe('/projects/looma-knit/thread')
+    expect(path.value).toBe('/projects/looma-knit/overview')
+    expect(window.location.pathname).toBe('/projects/looma-knit/overview')
   })
 
   it('does not invent an in-page project details pane from card selection', async () => {
@@ -135,11 +134,13 @@ describe('ProjectsHome', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(ProjectsHome)
-    await screen.findByText('OpenAI-compatible API')
+    await screen.findByText('Models')
 
-    expect(screen.getByText('Qwen3-235B-A22B-Instruct-2507')).toBeTruthy()
+    expect(screen.getByText('Models')).toBeTruthy()
+    expect(screen.queryByText('OpenAI-compatible API')).toBeNull()
+    expect(screen.queryByText('Qwen3-235B-A22B-Instruct-2507')).toBeNull()
 
-    await userEvent.click(screen.getByRole('button', { name: /machine default models/i }))
+    await userEvent.click(screen.getByRole('button', { name: /open model settings/i }))
 
     expect(path.value).toBe('/providers')
     expect(window.location.pathname).toBe('/providers')
@@ -164,6 +165,55 @@ describe('ProjectsHome', () => {
     render(ProjectsHome)
 
     expect(await screen.findByRole('button', { name: /needs you 2/i })).toBeTruthy()
+  })
+
+  it('does not duplicate identical status and maturity chips on paused cards', async () => {
+    const fetchMock = vi.fn(async () => json({
+      ...servicePayload,
+      projects: [
+        {
+          id: 'narrative-harness',
+          path: '/repo/narrative-harness',
+          name: 'Narrative Harness',
+          taskCounts: { total: 6, active: 6, draftReview: 0, blocked: 0, done: 0, shelved: 0 },
+          run: { status: 'stopped', mode: 'continuous' },
+        },
+      ],
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+    await screen.findByText('Narrative Harness')
+
+    expect(screen.getAllByText('Paused')).toHaveLength(1)
+  })
+
+  it('uses project questions as the only top-level check-in chip', async () => {
+    const fetchMock = vi.fn(async () => json({
+      ...servicePayload,
+      projects: [
+        {
+          id: 'narrative-harness',
+          path: '/repo/narrative-harness',
+          name: 'Narrative Harness',
+          taskCounts: { total: 6, active: 6, draftReview: 0, blocked: 0, done: 0, shelved: 0 },
+          projectCheckIn: {
+            needed: true,
+            label: 'Project questions',
+            title: 'Project check-in needed',
+            detail: 'Answer the first project questions so Guildhall has the newer project context.',
+          },
+          run: { status: 'stopped', mode: 'continuous' },
+        },
+      ],
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+    await screen.findByText('Narrative Harness')
+
+    expect(screen.getAllByText('Project questions')).toHaveLength(1)
+    expect(screen.queryByText('Check-in')).toBeNull()
   })
 
   it('summarizes the project floor and exposes card work mix visuals', async () => {
@@ -199,6 +249,9 @@ describe('ProjectsHome', () => {
     expect(screen.getByLabelText('Coordinator: 1 blocker to triage in Fair Labor License.')).toBeTruthy()
     expect(screen.getByLabelText('Builder: 1 active task waiting for a run in Fair Labor License.')).toBeTruthy()
     expect(screen.getByLabelText('Reviewer: 1 blocked and 1 done task in Fair Labor License.')).toBeTruthy()
+    expect(screen.getAllByText('Coordinator').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Builder').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Reviewer').length).toBeGreaterThan(0)
 
     await userEvent.hover(screen.getByLabelText('Coordinator: 1 blocker to triage in Fair Labor License.'))
     expect((await screen.findByRole('tooltip')).textContent).toBe('Coordinator: 1 blocker to triage in Fair Labor License.')
@@ -239,7 +292,7 @@ describe('ProjectsHome', () => {
     render(ProjectsHome)
     await screen.findByText('Fair Labor License')
 
-    await userEvent.click(screen.getByRole('button', { name: /resume/i }))
+    await userEvent.click(screen.getByRole('button', { name: /resume 1 task/i }))
     await userEvent.click(screen.getAllByRole('button', { name: /stop/i })[0]!)
 
     await waitFor(() => {
@@ -252,7 +305,7 @@ describe('ProjectsHome', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       if (String(input) === '/api/service/attach-project') {
         return json({
-          selectedProject: { id: 'new-project', path: '/repo/new-project', name: 'New Project' },
+          project: { id: 'new-project', path: '/repo/new-project', name: 'New Project' },
         })
       }
       return json({ pid: 1234, projects: [] } satisfies ServiceDetail)
@@ -264,7 +317,7 @@ describe('ProjectsHome', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /attach project/i }))
 
-    await waitFor(() => expect(path.value).toBe('/projects/new-project/thread'))
+    await waitFor(() => expect(path.value).toBe('/projects/new-project/overview'))
   })
 
   it('keeps project-list errors visible instead of looking empty or stuck', async () => {
@@ -309,7 +362,7 @@ describe('ProjectsHome', () => {
     render(ProjectsHome)
     await screen.findByText('Fair Labor License')
 
-    await userEvent.click(screen.getByRole('button', { name: /resume/i }))
+    await userEvent.click(screen.getByRole('button', { name: /resume 1 task/i }))
     await screen.findByText('model unavailable')
     await userEvent.click(screen.getByRole('button', { name: /stop/i }))
     await screen.findByText('stop failed')

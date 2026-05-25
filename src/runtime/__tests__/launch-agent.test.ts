@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   DEFAULT_LAUNCH_AGENT_LABEL,
+  DEFAULT_LAUNCH_AGENT_PATH,
   DEFAULT_PACKAGED_SERVICE_PORT,
   buildLaunchAgentSpec,
   buildMacosPackageManifest,
@@ -39,6 +40,7 @@ describe('buildLaunchAgentSpec', () => {
     expect(spec.workingDirectory).toBe('/Users/tester/.guildhall/app/current')
     expect(spec.stdoutPath).toBe('/Users/tester/.guildhall/logs/service.stdout.log')
     expect(spec.stderrPath).toBe('/Users/tester/.guildhall/logs/service.stderr.log')
+    expect(spec.environmentVariables).toEqual({ PATH: DEFAULT_LAUNCH_AGENT_PATH })
   })
 
   it('renders a stable plist with the packaged service arguments', () => {
@@ -50,6 +52,9 @@ describe('buildLaunchAgentSpec', () => {
     expect(plist).toContain('<string>serve-internal</string>')
     expect(plist).toContain('<string>--service-state</string>')
     expect(plist).toContain('<string>/Users/tester/.guildhall/service.json</string>')
+    expect(plist).toContain('<key>EnvironmentVariables</key>')
+    expect(plist).toContain('<key>PATH</key>')
+    expect(plist).toContain(`<string>${DEFAULT_LAUNCH_AGENT_PATH}</string>`)
     expect(plist).toContain('<key>KeepAlive</key>')
   })
 })

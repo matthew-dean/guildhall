@@ -3,11 +3,19 @@ import { dirname, resolve, join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { confirm } from '@inquirer/prompts'
 import { runOrchestrator } from './orchestrator.js'
 import { renderBakeoffMarkdown, runContextIndexerBakeoff, runModelBakeoff } from './model-bakeoff.js'
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
+import { migrateTaskState } from './task-state-migration.js'
 import { compactProjectState } from './project-state-compaction.js'
 import { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
+import {
+  configureClaudeProjectMcpBridge,
+  configureCodexMcpBridge,
+  installAgentBridgeInstructions,
+  type AgentBridgeTarget,
+} from './agent-bridge-install.js'
 import { runInit } from './init.js'
 import { runServe } from './serve.js'
 import {
@@ -271,6 +279,9 @@ export function resolveServiceLifecycleIntent(
 //                                      — move old transcripts/events/sessions into ~/.guildhall
 //   guildhall model-bakeoff [--context-indexer] [output]
 //                                      — write replay model bakeoff JSON + Markdown
+//   guildhall mcp serve [path]          — serve Guildhall project context over MCP stdio
+//   guildhall bridge install [--target codex|claude|all] [--yes|--no-configure-mcp] [id|path]
+//                                      — install agent instructions for Guildhall MCP
 // ---------------------------------------------------------------------------
 
 export const SHIPPED_CLI_COMMANDS = [
@@ -287,6 +298,8 @@ export const SHIPPED_CLI_COMMANDS = [
   'corpus-map',
   'memory',
   'model-bakeoff',
+  'mcp',
+  'bridge',
 ] as const
 
 const [command = 'help', ...args] = process.argv.slice(2)
@@ -301,7 +314,7 @@ function getFlag(flag: string): string | undefined {
 // another flag — otherwise boolean flags like `--no-browser` would eat the
 // following positional by mistake.
 function positionals(): string[] {
-  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state'])
+  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target'])
   const result: string[] = []
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -355,8 +368,15 @@ Usage:
     --apply                      Write files. Without this, prints a dry run
     --delete-source              Remove migrated old memory/ files after copying
     --update-gitignore           Write/refresh Guildhall's managed .gitignore block
+  guildhall migrate task-state [id|path]
+                                  Move task runtime/evidence out of project-local TASKS.json
+    --apply                      Write files. Without this, prints a dry run
   guildhall model-bakeoff [--context-indexer] [output]
                                   Write replay model bakeoff JSON + Markdown
+  guildhall mcp serve [project-path]
+                                  Serve Guildhall project context over MCP stdio
+  guildhall bridge install [--target codex|claude|all] [--yes|--no-configure-mcp] [id|path]
+                                  Install agent instructions that point to Guildhall MCP
 
 Options:
   --help, -h                     Show this help
@@ -368,8 +388,11 @@ Examples:
   guildhall corpus-map refresh --semantic .
   guildhall memory migrate-0.8.0 --apply --delete-source --update-gitignore .
   guildhall memory compact-project-state --apply .
+  guildhall migrate task-state --apply .
   guildhall model-bakeoff artifacts/model-bakeoff/report.json
   guildhall model-bakeoff --context-indexer
+  guildhall mcp serve .
+  guildhall bridge install --target all --yes .
 `.trim()
 }
 
@@ -765,6 +788,29 @@ async function cmdMemory() {
   }
 }
 
+async function cmdMigrate() {
+  const pos = positionals()
+  const subcommand = pos[0]
+  if (subcommand !== 'task-state') {
+    console.error('[guildhall] Usage: guildhall migrate task-state [--dry-run|--apply] [id|path]')
+    process.exit(1)
+  }
+  const idOrPath = pos[1]
+  const entry = idOrPath ? findWorkspace(idOrPath) : null
+  const projectPath = entry?.path ?? (idOrPath ? resolve(expandPath(idOrPath)) : process.cwd())
+  const apply = args.includes('--apply') && !args.includes('--dry-run')
+  const result = await migrateTaskState({ projectRoot: projectPath, apply })
+  console.log(`[guildhall] Task state migration ${apply ? 'complete' : 'dry run'}.`)
+  console.log(`[guildhall] Project: ${projectPath}`)
+  console.log(`[guildhall] Tasks inspected: ${result.tasksInspected}`)
+  console.log(`[guildhall] Runtime records: ${result.runtimeRecords}`)
+  console.log(`[guildhall] Workspace records: ${result.workspaceRecords}`)
+  console.log(`[guildhall] Evidence records: ${result.evidenceRecords}`)
+  console.log(`[guildhall] Task definitions to rewrite: ${result.taskDefinitionsRewritten}`)
+  if (result.backupPath) console.log(`[guildhall] Backup: ${result.backupPath}`)
+  if (!apply) console.log('[guildhall] Re-run with --apply to perform this migration.')
+}
+
 function createSemanticIndexer(projectPath: string): CorpusSemanticIndexer {
   const providers = readGlobalProviders().providers
   const openai = providers['openai-api']
@@ -910,6 +956,104 @@ function cmdModelBakeoff() {
   console.log(`[guildhall] Model bakeoff summary: ${markdownPath}`)
 }
 
+async function cmdMcp() {
+  const pos = positionals()
+  const subcommand = pos[0] ?? 'serve'
+  if (subcommand !== 'serve') {
+    console.error('[guildhall] Usage: guildhall mcp serve [project-path]')
+    process.exit(1)
+  }
+  const projectPath = pos[1] ? resolve(expandPath(pos[1])) : process.cwd()
+  const { serveGuildhallMcpStdio } = await import('@guildhall/mcp-server')
+  await serveGuildhallMcpStdio(projectPath)
+}
+
+async function cmdBridge() {
+  const pos = positionals()
+  const subcommand = pos[0] ?? 'install'
+  if (subcommand !== 'install') {
+    console.error('[guildhall] Usage: guildhall bridge install [--target codex|claude|all] [--yes|--no-configure-mcp] [id|path]')
+    process.exit(1)
+  }
+
+  const projectArg = pos[1]
+  const entry = projectArg ? findWorkspace(projectArg) : null
+  const projectPath = entry?.path ?? (projectArg ? resolve(expandPath(projectArg)) : process.cwd())
+  const targets = resolveBridgeTargets(getFlag('--target') ?? 'codex')
+  for (const target of targets) {
+    const result = installAgentBridgeInstructions({ projectPath, target })
+    console.log(`[guildhall] ${target} agent bridge ${result.action}: ${result.filePath}`)
+  }
+  if (targets.includes('codex')) {
+    await maybeConfigureCodexMcp()
+  }
+  if (targets.includes('claude')) {
+    await maybeConfigureClaudeMcp(projectPath)
+  }
+}
+
+function resolveBridgeTargets(target: string): AgentBridgeTarget[] {
+  if (target === 'all') return ['codex', 'claude']
+  if (target === 'codex' || target === 'claude') return [target]
+  throw new Error(`Unsupported agent bridge target "${target}". Supported targets: codex, claude, all`)
+}
+
+async function maybeConfigureCodexMcp() {
+  if (args.includes('--no-configure-mcp')) {
+    console.log('[guildhall] Codex MCP configuration skipped.')
+    return
+  }
+
+  let shouldConfigure = args.includes('--yes')
+  if (!shouldConfigure) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.log('[guildhall] Codex MCP configuration not changed because this is not an interactive terminal.')
+      console.log('[guildhall] Re-run with `--yes` to configure: codex mcp add guildhall -- guildhall mcp serve .')
+      return
+    }
+    shouldConfigure = await confirm({
+      message: 'Configure Codex MCP globally as `guildhall mcp serve .`?',
+      default: true,
+    })
+  }
+
+  if (!shouldConfigure) {
+    console.log('[guildhall] Codex MCP configuration skipped.')
+    return
+  }
+
+  const codex = configureCodexMcpBridge()
+  console.log(`[guildhall] ${codex.message}`)
+}
+
+async function maybeConfigureClaudeMcp(projectPath: string) {
+  if (args.includes('--no-configure-mcp')) {
+    console.log('[guildhall] Claude MCP configuration skipped.')
+    return
+  }
+
+  let shouldConfigure = args.includes('--yes')
+  if (!shouldConfigure) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.log('[guildhall] Claude MCP configuration not changed because this is not an interactive terminal.')
+      console.log('[guildhall] Re-run with `--yes` to configure project .mcp.json.')
+      return
+    }
+    shouldConfigure = await confirm({
+      message: 'Configure Claude project MCP in `.mcp.json`?',
+      default: true,
+    })
+  }
+
+  if (!shouldConfigure) {
+    console.log('[guildhall] Claude MCP configuration skipped.')
+    return
+  }
+
+  const claude = configureClaudeProjectMcpBridge({ projectPath })
+  console.log(`[guildhall] ${claude.message}`)
+}
+
 async function main() {
   if (command === '--help' || command === '-h' || command === 'help') {
     printHelp()
@@ -930,7 +1074,10 @@ async function main() {
     case 'config':  return cmdConfig()
     case 'corpus-map': return cmdCorpusMap()
     case 'memory': return cmdMemory()
+    case 'migrate': return cmdMigrate()
     case 'model-bakeoff': return cmdModelBakeoff()
+    case 'mcp': return cmdMcp()
+    case 'bridge': return cmdBridge()
     default:
       console.error(`[guildhall] Unknown command: ${command}`)
       console.error(`[guildhall] Run "guildhall help" for usage.`)

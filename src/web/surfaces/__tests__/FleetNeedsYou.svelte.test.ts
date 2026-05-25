@@ -74,6 +74,8 @@ describe('FleetNeedsYou', () => {
     await screen.findByText('Fair Labor License')
     expect(screen.getByText('Choose migration source')).toBeTruthy()
     expect(screen.getByText('Approve auth spec')).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: /^queue$/i })).toHaveLength(2)
+    expect(screen.queryByRole('button', { name: /project needs you/i })).toBeNull()
 
     await userEvent.click(screen.getByText('Choose migration source'))
 

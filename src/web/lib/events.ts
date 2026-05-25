@@ -8,8 +8,9 @@
  */
 
 import type { EventEnvelope } from './types.js'
-import { withCurrentProjectQuery } from './project-routes.js'
+import { currentProjectId, withProjectQuery } from './project-routes.js'
 import { friendlyTaskId, labelForIdentifier } from './identifier-labels.js'
+import { friendlyRuntimeMessage } from './runtime-message.js'
 
 type Listener = (ev: EventEnvelope) => void
 
@@ -40,7 +41,12 @@ function setStatus(next: SseStatus) {
 }
 
 export function connectStream(): void {
-  const nextUrl = withCurrentProjectQuery('/api/project/events')
+  const projectId = currentProjectId()
+  if (!projectId) {
+    disconnectStream()
+    return
+  }
+  const nextUrl = withProjectQuery('/api/project/events', projectId)
   if (current && currentUrl === nextUrl) return
   if (current) current.close()
   currentUrl = nextUrl
@@ -75,13 +81,14 @@ export function summarizeEvent(env: EventEnvelope): string {
   const agentLabel = (value: unknown) => typeof value === 'string' ? labelForIdentifier('agent', value).label : 'Guildhall'
   const statusLabel = (value: unknown) => typeof value === 'string' ? labelForIdentifier('status', value).label : 'Unknown'
   const runReasonLabel = (value: unknown) => typeof value === 'string' ? labelForIdentifier('run-reason', value).label : ''
+  const messageLabel = (value: unknown) => friendlyRuntimeMessage(typeof value === 'string' ? value : '')
   switch (type) {
     case 'task_transition':
       return `${taskLabel(inner.task_id)} ${statusLabel(inner.from_status)} → ${statusLabel(inner.to_status)} (${agentLabel(inner.agent_name)}${inner.reason ? ': ' + inner.reason : ''})`
     case 'escalation_raised':
       return `Needs attention: ${taskLabel(inner.task_id)}${inner.agent_name ? ' by ' + agentLabel(inner.agent_name) : ''} — ${inner.reason ?? ''}`
     case 'error':
-      return 'ERROR: ' + (inner.message ?? '')
+      return 'ERROR: ' + messageLabel(inner.message)
     case 'agent_issue':
       return `Issue [${inner.severity}/${inner.code}] ${taskLabel(inner.task_id)} — ${inner.reason ?? ''}`
     case 'agent_started':
@@ -94,10 +101,12 @@ export function summarizeEvent(env: EventEnvelope): string {
       return (
         type.replace('supervisor_', '') +
         (inner.reason ? ` (${runReasonLabel(inner.reason)})` : '') +
-        (inner.message ? ': ' + inner.message : '')
+        (inner.message ? ': ' + messageLabel(inner.message) : '')
       )
     case 'provider_health_changed':
       return 'provider health' + (inner.message ? ': ' + inner.message : '')
+    case 'assistant_complete':
+      return 'Finished a thought'
     case 'heartbeat':
     case 'connected':
       return ''
@@ -105,6 +114,7 @@ export function summarizeEvent(env: EventEnvelope): string {
       return type + ' ' + JSON.stringify(inner).slice(0, 200)
   }
 }
+
 
 export function eventTaskId(env: EventEnvelope): string | null {
   const inner = env.event ?? env

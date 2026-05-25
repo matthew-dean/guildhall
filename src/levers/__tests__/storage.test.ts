@@ -20,7 +20,7 @@ let settingsPath: string
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(join(os.tmpdir(), 'guildhall-levers-'))
-  settingsPath = join(tmpDir, 'memory', AGENT_SETTINGS_FILENAME)
+  settingsPath = defaultAgentSettingsPath(tmpDir)
 })
 
 afterEach(async () => {
@@ -96,7 +96,7 @@ describe('loadLeverSettings', () => {
   })
 
   it('throws LeverSettingsCorruptError on invalid YAML', async () => {
-    await fs.mkdir(join(tmpDir, 'memory'), { recursive: true })
+    await fs.mkdir(join(tmpDir, '.guildhall'), { recursive: true })
     await fs.writeFile(settingsPath, ': : : not valid yaml\n\t- [', 'utf8')
     await expect(loadLeverSettings({ path: settingsPath })).rejects.toBeInstanceOf(
       LeverSettingsCorruptError,
@@ -104,7 +104,7 @@ describe('loadLeverSettings', () => {
   })
 
   it('throws LeverSettingsCorruptError when schema-invalid', async () => {
-    await fs.mkdir(join(tmpDir, 'memory'), { recursive: true })
+    await fs.mkdir(join(tmpDir, '.guildhall'), { recursive: true })
     // Valid YAML, but the shape is wrong (wrong version).
     await fs.writeFile(settingsPath, 'version: 99\nproject: {}\ndomains: {}\n', 'utf8')
     await expect(loadLeverSettings({ path: settingsPath })).rejects.toBeInstanceOf(
@@ -135,7 +135,7 @@ describe('loadLeverSettings', () => {
   })
 
   it('still throws when the file is wrong-shaped (not just missing keys)', async () => {
-    await fs.mkdir(join(tmpDir, 'memory'), { recursive: true })
+    await fs.mkdir(join(tmpDir, '.guildhall'), { recursive: true })
     // Bad primitive type — self-heal can't recover this.
     await fs.writeFile(settingsPath, 'version: "one"\nproject: {}\ndomains: {}\n', 'utf8')
     await expect(loadLeverSettings({ path: settingsPath })).rejects.toBeInstanceOf(

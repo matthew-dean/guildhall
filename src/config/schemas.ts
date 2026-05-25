@@ -373,7 +373,7 @@ export const WorkspaceRegistry = z.object({
 export type WorkspaceRegistry = z.infer<typeof WorkspaceRegistry>
 
 // ---------------------------------------------------------------------------
-// memory/agent-overrides.yaml — agent-accumulated configuration
+// .guildhall/agent-overrides.yaml — agent-accumulated configuration
 //
 // Written by agents at runtime via the saveAgentSetting tool.
 // Project-behavior fields are merged on top of guildhall.yaml during config

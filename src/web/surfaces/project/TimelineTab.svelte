@@ -50,10 +50,43 @@
     ].includes(type)
   }
 
-  const operatorEvents = $derived(events.filter(ev => !isProviderHealthEvent(ev) && !isRawTraceEvent(ev)))
+  function isEmptyModelEvent(ev: EventEnvelope): boolean {
+    const inner = ev.event ?? ev
+    const text = `${inner.type ?? ''}\n${inner.message ?? ''}\n${inner.reason ?? ''}`.toLowerCase()
+    return text.includes('empty assistant message') || text.includes('empty model reply') || text.includes('empty assistant reply')
+  }
+
+  function eventKey(ev: EventEnvelope): string {
+    const inner = ev.event ?? ev
+    return [
+      ev.at ?? '',
+      inner.type ?? ev.type ?? '',
+      inner.task_id ?? inner.taskId ?? '',
+      inner.agent_name ?? '',
+      inner.from_status ?? '',
+      inner.to_status ?? '',
+      summarizeEvent(ev),
+    ].join('|')
+  }
+
+  function dedupeEvents(input: EventEnvelope[]): EventEnvelope[] {
+    const seen = new Set<string>()
+    const out: EventEnvelope[] = []
+    for (const ev of input) {
+      const key = eventKey(ev)
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(ev)
+    }
+    return out
+  }
+
+  const emptyModelEvents = $derived(events.filter(isEmptyModelEvent))
+  const operatorEvents = $derived(dedupeEvents(events.filter(ev => !isProviderHealthEvent(ev) && !isRawTraceEvent(ev) && !isEmptyModelEvent(ev))))
   const rawTraceEvents = $derived(events.filter(isRawTraceEvent))
   const hiddenProviderHealthCount = $derived(events.filter(isProviderHealthEvent).length)
   const hiddenRawTraceCount = $derived(rawTraceEvents.length)
+  const hiddenEmptyModelCount = $derived(emptyModelEvents.length)
 </script>
 
 <Card title="Coordinator timeline">
@@ -63,14 +96,20 @@
     <p class="muted">
       Only connection checks and raw agent trace events are hidden. Project activity will appear here when tasks move.
     </p>
-    <p class="muted compact">{hiddenProviderHealthCount} connection checks hidden. {hiddenRawTraceCount} raw trace events hidden.</p>
+    <p class="muted compact">{hiddenProviderHealthCount} connection checks hidden. {hiddenRawTraceCount} background agent events hidden.</p>
   {:else}
+    {#if hiddenEmptyModelCount > 0}
+      <div class="recovery-summary" role="note">
+        <strong>{hiddenEmptyModelCount} model-recovery event{hiddenEmptyModelCount === 1 ? '' : 's'} summarized</strong>
+        <span>Guildhall saw empty model replies during unattended work, kept task state intact, and recorded recovery guidance instead of repeating each raw failure here.</span>
+      </div>
+    {/if}
     {#if hiddenProviderHealthCount > 0}
       <p class="muted compact">{hiddenProviderHealthCount} connection checks hidden.</p>
     {/if}
     {#if hiddenRawTraceCount > 0}
       <details class="raw-trace">
-        <summary>{hiddenRawTraceCount} raw trace event{hiddenRawTraceCount === 1 ? '' : 's'} hidden</summary>
+        <summary>{hiddenRawTraceCount} background agent event{hiddenRawTraceCount === 1 ? '' : 's'} hidden</summary>
         <div class="feed raw">
           {#each rawTraceEvents as ev, i (i)}
             {@const text = summarizeEvent(ev)}
@@ -135,6 +174,21 @@
   }
   .raw-trace summary {
     cursor: pointer;
+  }
+  .recovery-summary {
+    display: grid;
+    gap: var(--s-1);
+    margin: 0 0 var(--s-3);
+    padding: var(--s-2) var(--s-3);
+    border: 1px solid color-mix(in oklab, var(--warn) 34%, transparent);
+    border-radius: var(--r-2);
+    background: color-mix(in oklab, var(--warn) 10%, transparent);
+    color: var(--text);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+  .recovery-summary span {
+    color: var(--text-muted);
   }
   .ev {
     display: flex;

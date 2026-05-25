@@ -135,7 +135,7 @@
   }
 
   function dashboardHref(): string {
-    return activeProjectId ? projectHref(activeProjectId, '/thread') : currentProjectHref('/thread')
+    return activeProjectId ? projectHref(activeProjectId, '/overview') : currentProjectHref('/overview')
   }
 
   $effect(() => {

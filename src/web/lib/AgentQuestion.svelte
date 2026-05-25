@@ -115,6 +115,10 @@
     return prompt
   }
 
+  function isLongPrompt(value: string | undefined): boolean {
+    return (value ?? '').replace(/\s+/g, ' ').trim().length > 220
+  }
+
   // User-facing questions should come from the coordinating persona, not a
   // generic system voice or an internal worker label.
   const askedBy = $derived('From the coordinator:')
@@ -149,6 +153,21 @@
   })
 </script>
 
+{#snippet promptBlock(value: string | undefined)}
+  {@const prompt = displayPrompt(value)}
+  {#if isLongPrompt(prompt)}
+    <details class="prompt-disclosure">
+      <summary>
+        <div class="prompt prompt-preview"><Markdown source={prompt} /></div>
+        <span class="prompt-more">Full question</span>
+      </summary>
+      <div class="prompt prompt-full"><Markdown source={prompt} /></div>
+    </details>
+  {:else}
+    <div class="prompt"><Markdown source={prompt} /></div>
+  {/if}
+{/snippet}
+
 <div class="agent-question">
   <div class="question-head">
     <div class="meta">{askedBy}</div>
@@ -156,7 +175,7 @@
   </div>
 
   {#if question.kind === 'confirm'}
-    <div class="prompt"><Markdown source={displayPrompt(question.restatement)} /></div>
+    {@render promptBlock(question.restatement)}
     {#if mode === 'idle'}
       <Row justify="end" gap="2">
         <Button
@@ -172,7 +191,7 @@
       </Row>
     {/if}
   {:else if question.kind === 'yesno'}
-    <div class="prompt"><Markdown source={displayPrompt(question.prompt)} /></div>
+    {@render promptBlock(question.prompt)}
     {#if mode === 'idle'}
       <Row justify="end" gap="2">
         <Button variant="ghost" disabled={busy} onclick={() => (mode = 'reply')}>
@@ -187,7 +206,7 @@
       </Row>
     {/if}
   {:else if question.kind === 'choice'}
-    <div class="prompt"><Markdown source={displayPrompt(question.prompt)} /></div>
+    {@render promptBlock(question.prompt)}
     {#if mode === 'idle'}
       {#if isProjectMapQuestion}
         <div class="inferred-list" aria-label="Guildhall inferred repo structure">
@@ -261,7 +280,7 @@
       {/if}
     {/if}
   {:else if question.kind === 'text'}
-    <div class="prompt"><Markdown source={displayPrompt(question.prompt)} /></div>
+    {@render promptBlock(question.prompt)}
     {#if mode === 'idle'}
       <Textarea bind:value={replyText} rows={3} placeholder="Type your answer..." />
       <Row justify="end">
@@ -295,8 +314,8 @@
   .agent-question {
     min-width: 0;
     display: grid;
-    gap: var(--s-3);
-    padding: var(--s-3);
+    gap: var(--s-2);
+    padding: var(--s-2);
     border: 1px solid var(--glass-inset-border);
     border-radius: var(--r-3);
     background:
@@ -327,14 +346,49 @@
   }
   .prompt {
     margin: 0;
-    font-size: var(--fs-2);
+    font-size: var(--fs-1);
     font-weight: 400;
     line-height: 1.42;
     color: var(--text-readable);
   }
+  .prompt-disclosure {
+    min-width: 0;
+    border: 1px solid var(--glass-inset-border);
+    border-radius: var(--r-2);
+    background: color-mix(in srgb, var(--glass-inset-bg) 72%, transparent);
+  }
+  .prompt-disclosure summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--s-2);
+    align-items: start;
+    padding: var(--s-2);
+    cursor: pointer;
+    list-style: none;
+  }
+  .prompt-disclosure summary::-webkit-details-marker {
+    display: none;
+  }
+  .prompt-preview {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .prompt-full {
+    padding: 0 var(--s-2) var(--s-2);
+  }
+  .prompt-more {
+    color: var(--accent);
+    font-size: var(--fs-0);
+    font-weight: 750;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
   .choices {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
     gap: var(--s-2);
   }
   .choice {
@@ -344,15 +398,15 @@
     color: var(--text-readable);
     border: 1px solid var(--glass-inset-border);
     border-radius: var(--r-2);
-    padding: var(--s-2) var(--s-3);
+    padding: var(--s-2);
     font: inherit;
-    font-size: var(--fs-2);
+    font-size: var(--fs-1);
     font-weight: 400;
     cursor: pointer;
     display: grid;
     grid-template-columns: 18px minmax(0, 1fr);
     gap: var(--s-2);
-    align-items: center;
+    align-items: start;
     text-align: left;
     text-transform: none;
     width: 100%;
@@ -421,6 +475,10 @@
     font-weight: 550;
     line-height: 1.3;
     text-transform: none;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
   .choice-title :global(strong),
   .choice-detail :global(strong),
@@ -436,8 +494,12 @@
   }
   .choice-detail {
     color: var(--text-soft);
-    font-size: var(--fs-1);
+    font-size: var(--fs-0);
     line-height: var(--lh-body);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
   .choice:disabled { opacity: 0.5; cursor: default; }
   .choice-other {

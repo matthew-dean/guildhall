@@ -12,11 +12,11 @@ work routing and the first behavior settings.
 Those settings are called **levers**. They decide things like how much
 autonomy Guildhall has, how strict reviews are, when you approve completion,
 whether work can fan out into multiple worktrees, and how aggressively the
-runtime recovers from problems.
+app recovers from problems.
 
 ## The first-run flow
 
-1. **Setup wizard** creates the project shell: `./guildhall.yaml`, the `./.guildhall/` metadata lane, provider selection, and the initial route into the project shell.
+1. **Setup wizard** creates the project shell: `./guildhall.yaml`, shared `.guildhall` metadata, provider selection, and the first route into the project shell.
 2. **Meta-intake** asks focused project questions: what the major areas are, what each area owns, what needs your approval, and how cautious the project needs to be.
 3. **The Spec Agent drafts settings** for coordinators and inferred levers. You
    answer in normal language; Guildhall turns that into settings.
@@ -35,7 +35,7 @@ The meta-intake prompt tells the Spec Agent to listen for project signals and in
 |---|---|
 | “This ships to paying customers” or “compliance matters” | stricter `business_envelope_strictness`, often more completion approval |
 | “Prototype, move fast, try things” | more autonomy for task origination or remediation |
-| “CI is the source of truth before merge” | `completion_approval` can move toward `gates_sufficient` once gates exist |
+| “CI decides whether this can merge” | `completion_approval` can move toward `gates_sufficient` once gates exist |
 | “Small solo project, keep friction low” | coordinator approval may be enough for more routine work |
 | “Cost/local model constraints matter” | reviewer mode may stay conservative or prefer deterministic fallback |
 
@@ -45,7 +45,8 @@ is inspectable later.
 
 ## Where the settings land
 
-`./.guildhall/agent-settings.yaml` is the lever source of truth. Each lever entry records:
+`./.guildhall/agent-settings.yaml` is where those lever choices are stored.
+Each entry records:
 
 ```yaml
 position: coordinator_sufficient
@@ -97,5 +98,5 @@ When changing a lever by hand, update the `position`, `rationale`, `setAt`, and 
 
 - [Levers](../levers/) — every lever and position.
 - [Provenance](../levers/provenance) — what `setBy` values mean.
-- [`./.guildhall/agent-settings.yaml`](../reference/agent-settings) — storage shape.
+- [`./.guildhall/agent-settings.yaml`](../reference/agent-settings) — how lever choices are stored.
 - [Setup wizard](../web-ui/setup) — the browser onboarding surface.

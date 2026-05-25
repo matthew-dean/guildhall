@@ -114,6 +114,26 @@ export type {
 export { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
 export type { ResolvedWorkspace } from './workspace-loader.js'
 export {
+  configureClaudeProjectMcpBridge,
+  configureCodexMcpBridge,
+  installAgentBridgeInstructions,
+  renderCodexGuildhallMcpSection,
+  renderGuildhallMcpInstructionSection,
+} from './agent-bridge-install.js'
+export type {
+  AgentBridgeInstallAction,
+  AgentBridgeTarget,
+  ClaudeMcpBridgeAction,
+  CodexMcpBridgeAction,
+  CommandResult,
+  ConfigureClaudeProjectMcpBridgeInput,
+  ConfigureClaudeProjectMcpBridgeResult,
+  ConfigureCodexMcpBridgeInput,
+  ConfigureCodexMcpBridgeResult,
+  InstallAgentBridgeInstructionsInput,
+  InstallAgentBridgeInstructionsResult,
+} from './agent-bridge-install.js'
+export {
   detectPackageManager,
   detectGateCommands,
   runBootstrap as runStructuralBootstrap,

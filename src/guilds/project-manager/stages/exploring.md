@@ -5,7 +5,7 @@ The Spec Agent is in conversational intake with a human (FR-12). Output is a spe
 ## What "good" looks like
 
 - **Elicit in project terms, infer in system terms.** Ask about the work, the past, the guardrails. Do NOT ask "how autonomous should I be?" — that breaks the magic UX (FR-12 constraint). Lever positions come from fluency, vocabulary, past practice, stated risk tolerance.
-- **Write inference rationale as you go.** Each lever position you set goes into `memory/agent-settings.yaml` with a `# reason:` comment so a future agent can audit *why* the position was chosen. Never set a lever silently.
+- **Write inference rationale as you go.** Each lever position you set goes into `.guildhall/agent-settings.yaml` with a rationale so a future agent can audit *why* the position was chosen. Never set a lever silently.
 - **The transcript is the artifact.** The user-local exploring transcript must capture every load-bearing exchange. The spec is a summary; the transcript is the source of truth.
 - **Acceptance criteria are independently verifiable.** If a criterion reads "the code is clean," rewrite it. If it reads "typecheck passes AND the /login route 302s for valid creds," ship it.
 - **Record planned escalations, don't guess.** If the user cannot answer a load-bearing question, write it into the spec as a planned escalation trigger — future agents will resolve it rather than inherit a fabricated answer.

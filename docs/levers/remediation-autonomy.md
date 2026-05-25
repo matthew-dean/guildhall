@@ -2,7 +2,7 @@
 title: remediation_autonomy
 help_topic: lever.remediation_autonomy
 help_summary: |
-  How much of a recovery action can run without human approval. `auto` runs
+  How much of a recovery action can run without your approval. `auto` runs
   anything; `confirm_destructive` (default) prompts before rm/reset/force;
   `confirm_all` prompts for every recovery; `pause_all_on_issue` stops the
   whole orchestrator on any issue.
@@ -21,11 +21,13 @@ How autonomous the orchestrator can be when recovering from a stall, crash, or u
 | `auto` | Execute recovery without prompting. Use with sandboxed worktrees only. |
 | `confirm_destructive` | Prompt before destructive actions (`git reset --hard`, `rm -rf`, `push --force`, etc.). Non-destructive recovery proceeds. |
 | `confirm_all` | Prompt before every recovery step. Slower but maximally safe. |
-| `pause_all_on_issue` | Freeze the entire orchestrator at the first issue; no recovery until human resumes. |
+| `pause_all_on_issue` | Freeze the entire run at the first issue; no recovery until you resume it. |
 
 ## What counts as "destructive"
 
-Defined in `./src/runtime/remediation.ts`: any action that removes or overwrites uncommitted work, force-pushes, reverts merged commits, or deletes files outside a worktree-scoped path.
+Destructive recovery means any action that removes or overwrites uncommitted
+work, force-pushes, reverts merged commits, or deletes files outside a
+worktree-scoped path.
 
 ## Related
 

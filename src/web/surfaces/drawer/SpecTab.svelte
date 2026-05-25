@@ -55,10 +55,6 @@
 
   let followup = $state('')
   let acceptanceDraft = $state('')
-  // NOTE: the drawer is now a READ-ONLY artifact view. The interactive
-  // approve / reply / answer-question affordances live in the Thread
-  // surface. Past-context here is for inspection only.
-
   const openEscalations = $derived(
     activeEscalations(task),
   )
@@ -342,8 +338,11 @@
         <Chip label="Awaiting your approval" tone="warn" />
       {/snippet}
       <Stack gap="2">
-        <h3>Spec approval is waiting in Thread</h3>
-        <p class="lede">Open <strong>Thread</strong> to review the draft and approve it.</p>
+        <h3>Spec draft awaiting approval</h3>
+        <p class="lede">Review the draft on this page, then approve it when it matches what you want.</p>
+        <Row justify="end">
+          <Button variant="primary" disabled={busy} onclick={onApproveSpec}>Approve spec</Button>
+        </Row>
       </Stack>
     </Card>
   {/if}

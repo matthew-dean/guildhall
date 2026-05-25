@@ -133,6 +133,18 @@ describe('buildInbox', () => {
     for (const e of Object.values(userSet.domains.default)) e.setBy = 'user-direct'
     await writeYaml('.guildhall/agent-settings.yaml', userSet)
     await writeJson('.guildhall/TASKS.json', { version: 1, lastUpdated: '', tasks: [] })
+    await writeJson('.guildhall/pressure-test-intake/pti-project-check-in.json', {
+      id: 'pti-project-check-in',
+      rawRequest: 'Run a project check-in.',
+      target: { type: 'project', id: 'project-check-in', title: 'Project check-in' },
+      status: 'complete',
+      activeDomainId: null,
+      pendingQuestion: null,
+      domains: [],
+      outputs: { assumptions: [], decisions: [], languageMapCandidates: [], taskSplitCandidates: [] },
+      createdAt: '2026-05-24T00:00:00.000Z',
+      updatedAt: '2026-05-24T00:00:00.000Z',
+    })
 
     const items = buildInbox({
       projectPath: tmpDir,
@@ -304,6 +316,48 @@ describe('buildInbox', () => {
     expect(hit.title).toBe('Existing repo detected')
     expect(hit.detail).toMatch(/anchors found/i)
     expect(hit.detail).not.toMatch(/\d+ signals?/i)
+  })
+
+  it('project_check_in: nudges older projects that have not answered Guildhall project questions yet', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', {
+      goals: [{ title: 'Keep the project moving', source: 'test' }],
+    })
+    await writeJson('.guildhall/TASKS.json', { version: 1, lastUpdated: '', tasks: [] })
+
+    const items = buildInboxWithProviderSetup()
+    const hit = items.find(i => i.kind === 'project_check_in')
+
+    expect(hit).toMatchObject({
+      severity: 'low',
+      title: 'Project check-in needed',
+      actionHref: '/thread',
+    })
+    expect(hit?.detail).toContain('Start the first project-question pass')
+  })
+
+  it('project_check_in: does not nudge again after any project check-in exists', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', {
+      goals: [{ title: 'Keep the project moving', source: 'test' }],
+    })
+    await writeJson('.guildhall/TASKS.json', { version: 1, lastUpdated: '', tasks: [] })
+    await writeJson('.guildhall/pressure-test-intake/pti-project-check-in.json', {
+      id: 'pti-project-check-in',
+      rawRequest: 'Run a project check-in.',
+      target: { type: 'project', id: 'project-check-in', title: 'Project check-in' },
+      status: 'complete',
+      activeDomainId: null,
+      pendingQuestion: null,
+      domains: [],
+      outputs: { assumptions: [], decisions: [], languageMapCandidates: [], taskSplitCandidates: [] },
+      createdAt: '2026-05-24T00:00:00.000Z',
+      updatedAt: '2026-05-24T00:00:00.000Z',
+    })
+
+    const items = buildInboxWithProviderSetup()
+
+    expect(items.find(i => i.kind === 'project_check_in')).toBeUndefined()
   })
 
   it('brief_approval: emitted for tasks whose productBrief has no approvedAt', async () => {

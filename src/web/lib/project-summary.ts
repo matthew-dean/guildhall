@@ -1,4 +1,4 @@
-import type { ProjectRun, ServiceDetail, ServiceProjectSummary } from './types.js'
+import type { ProjectRun, ProviderStatus, ServiceDetail, ServiceProjectSummary } from './types.js'
 import { buildProjectCardTicker, type ProjectActivityLine } from './project-activity.js'
 import { formatUserPath } from './display-path.js'
 import { humanizeProjectName } from './project-name.js'
@@ -16,6 +16,12 @@ export interface ProjectCardSummary {
   nextLabel: string | null
   maturityLabel: string
   maturityDescription: string
+  projectCheckIn?: ServiceProjectSummary['projectCheckIn']
+  provider?: {
+    label: string
+    title: string
+    tone: 'warn' | 'neutral'
+  } | null
   blurb: string | null
   tags: string[]
   counts: {
@@ -69,6 +75,7 @@ function statusFromRun(run: ProjectRun | null | undefined): ProjectCardSummary['
 
 function stageLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
   const runStatus = project.run?.status ?? 'stopped'
+  if (project.projectCheckIn?.needed) return project.projectCheckIn.label ?? 'Project questions'
   if (project.initializationNeeded) return 'Needs setup'
   if (runStatus === 'error') return 'Needs attention'
   if (runStatus === 'stopping') return 'Stopping'
@@ -86,6 +93,7 @@ function statusLabel(project: ServiceProjectSummary, counts: ProjectCardSummary[
 }
 
 function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
+  if (project.projectCheckIn?.needed) return `${project.projectCheckIn.title ?? 'Project check-in needed'}.`
   if (project.initializationNeeded) return 'Needs first-time Guildhall setup.'
   const running = (project.run?.status ?? 'stopped') === 'running'
   if (running && counts.active > 0) {
@@ -135,6 +143,7 @@ function completedLabel(project: ServiceProjectSummary, counts: ProjectCardSumma
 }
 
 function nextLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string | null {
+  if (project.projectCheckIn?.needed) return 'Answer project questions'
   if (project.highlights?.blockedTaskTitle) return `Unblock: ${project.highlights.blockedTaskTitle}`
   if (project.highlights?.activeTaskTitle) {
     return project.run?.status === 'running'
@@ -156,6 +165,12 @@ function nextLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['c
 }
 
 function maturity(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): Pick<ProjectCardSummary, 'maturityLabel' | 'maturityDescription'> {
+  if (project.projectCheckIn?.needed) {
+    return {
+      maturityLabel: 'Check-in',
+      maturityDescription: project.projectCheckIn.detail ?? 'Answer the first project questions so Guildhall can use current project context.',
+    }
+  }
   if (project.initializationNeeded) {
     return {
       maturityLabel: 'Setup',
@@ -200,7 +215,34 @@ function maturity(project: ServiceProjectSummary, counts: ProjectCardSummary['co
   }
 }
 
-export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCardSummary {
+function providerIdentity(status: ProviderStatus | null | undefined): string | null {
+  const provider =
+    status?.preferredProvider ??
+    status?.activeProvider ??
+    status?.preferredProviderLabel ??
+    status?.activeProviderLabel
+  const model = status?.models?.worker ?? status?.activeModel ?? null
+  return provider || model ? `${provider ?? ''}::${model ?? ''}` : null
+}
+
+function gitStoryTitle(state: string, reason: string | undefined): string {
+  const text = `${state}\n${reason ?? ''}`.toLowerCase()
+  if (text.includes('no upstream')) {
+    return 'This branch needs a sharing decision: push it, open a PR, or mark the work local-only/deferred.'
+  }
+  if (text.includes('dirty') || text.includes('uncommitted')) {
+    return 'This checkout has uncommitted work. Review the diff, then commit it or mark it local-only/deferred.'
+  }
+  if (text.includes('fatal: not a git repository') || text.includes('spawn git enoent')) {
+    return 'Guildhall could not inspect this checkout with git.'
+  }
+  return reason ?? 'Git story needs closure.'
+}
+
+export function summarizeProjectCard(
+  project: ServiceProjectSummary,
+  defaultProviderStatus?: ProviderStatus | null,
+): ProjectCardSummary {
   const counts = {
     total: project.taskCounts?.total ?? 0,
     active: project.taskCounts?.active ?? 0,
@@ -212,12 +254,30 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
   const running = project.run?.status === 'running'
   const initializationNeeded = Boolean(project.initializationNeeded)
   const maturityState = maturity(project, counts)
-  const gitStory = project.gitStory && project.gitStory.state && project.gitStory.state !== 'clean' && project.gitStory.state !== 'merged'
+  const gitStory = project.gitStory &&
+    project.gitStory.state &&
+    project.gitStory.state !== 'clean' &&
+    project.gitStory.state !== 'merged' &&
+    project.gitStory.state !== 'unknown'
     ? {
         state: project.gitStory.state,
         label: gitStoryLabel(project.gitStory.state),
-        title: project.gitStory.blockers?.[0]?.reason ?? 'Git story needs closure.',
+        title: gitStoryTitle(project.gitStory.state, project.gitStory.blockers?.[0]?.reason),
         blockerCount: project.gitStory.blockers?.length ?? 0,
+      }
+    : null
+  const providerWarning = project.providerStatus?.warnings?.[0]
+  const providerLabel =
+    project.providerStatus?.preferredProviderLabel ??
+    project.providerStatus?.activeProviderLabel ??
+    project.providerStatus?.preferredProvider ??
+    project.providerStatus?.activeProvider
+  const providerIsDefault = providerIdentity(project.providerStatus) === providerIdentity(defaultProviderStatus)
+  const provider = providerLabel && (providerWarning || !providerIsDefault)
+    ? {
+        label: providerWarning ? 'Provider warning' : String(providerLabel),
+        title: providerWarning?.message ?? `Project provider: ${providerLabel}.`,
+        tone: providerWarning ? 'warn' as const : 'neutral' as const,
       }
     : null
   return {
@@ -226,7 +286,7 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
     path: formatUserPath(project.path),
     statusLabel: statusLabel(project, counts),
     tone:
-      initializationNeeded || project.run?.status === 'error'
+      project.projectCheckIn?.needed || initializationNeeded || project.run?.status === 'error'
         ? 'warn'
         : (project.run?.status ?? 'stopped') === 'running'
           ? 'active'
@@ -244,13 +304,23 @@ export function summarizeProjectCard(project: ServiceProjectSummary): ProjectCar
     nextLabel: nextLabel(project, counts),
     maturityLabel: maturityState.maturityLabel,
     maturityDescription: maturityState.maturityDescription,
+    ...(project.projectCheckIn ? { projectCheckIn: project.projectCheckIn } : {}),
+    ...(provider ? { provider } : {}),
     blurb: project.summary ?? null,
     tags: project.tags ?? [],
     counts,
     taskActivity: project.taskActivity ?? emptyTaskActivity(),
     ticker: buildProjectCardTicker(project),
     actionLabel: initializationNeeded ? 'Open setup' : 'Open project',
-    runActionLabel: initializationNeeded ? null : running ? 'Stop' : counts.active > 0 ? 'Resume' : counts.total === 0 ? 'Start' : null,
+    runActionLabel: initializationNeeded
+      ? null
+      : running
+        ? 'Stop'
+        : counts.active > 0
+          ? `Resume ${counts.active} ${counts.active === 1 ? 'task' : 'tasks'}`
+          : counts.total === 0
+            ? 'Start intake'
+            : null,
     canOpen: true,
     canStart: !running &&
       !initializationNeeded &&
@@ -277,5 +347,5 @@ function gitStoryLabel(state: string): string {
 }
 
 export function summarizeProjects(service: ServiceDetail | null | undefined): ProjectCardSummary[] {
-  return (service?.projects ?? []).map(summarizeProjectCard)
+  return (service?.projects ?? []).map(project => summarizeProjectCard(project, service?.defaultProviderStatus ?? null))
 }

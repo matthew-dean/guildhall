@@ -9,6 +9,7 @@
   import StatusLight from '../../lib/StatusLight.svelte'
   import AgentQuestion from '../../lib/AgentQuestion.svelte'
   import Markdown from '../../lib/Markdown.svelte'
+  import { escalationPrimaryAction, escalationUserGuidance } from '../../lib/escalation-labels.js'
   import {
     hasIncompleteTaskChecklist,
     isImportedDraftShaping,
@@ -35,6 +36,7 @@
     onRunTask: () => void
     onShapeDraft: () => void
     onOpenSpecTab: () => void
+    onResolveEscalation: (args: { escalationId: string; resolution: string; nextStatus: string }) => Promise<void> | void
     onAnswerQuestion: (questionId: string, answer: string) => Promise<void>
   }
 
@@ -50,6 +52,7 @@
     onRunTask,
     onShapeDraft,
     onOpenSpecTab,
+    onResolveEscalation,
     onAnswerQuestion,
   }: Props = $props()
 
@@ -113,7 +116,7 @@
     }
     if (turn.taskStatus === 'ready' && !turn.liveAgent) {
       if (hasIncompleteTaskChecklist(turn)) {
-        return 'This task is approved, but its brief/spec is still incomplete and not ready for worker implementation. Review the checklist before Guildhall treats it as runnable work.'
+        return 'This is a draft task brief. Before Guildhall can build it, add the missing success target and acceptance criteria.'
       }
       if (isProjectRunActive()) {
         return 'Approved and queued. Guildhall is already running for this project, so this task will stay in the queue until the coordinator picks it.'
@@ -182,7 +185,7 @@
 
   function runLabel(turn: TaskThreadInFlightTurn): string {
     switch (turn.taskStatus) {
-      case 'ready': return 'Start work'
+      case 'ready': return hasIncompleteTaskChecklist(turn) ? 'Open checklist' : 'Start work'
       case 'import_draft': return 'Draft task brief'
       case 'exploring':
         if (turn.importedDraft || hasIncompleteTaskChecklist(turn)) return 'Continue task brief'
@@ -208,9 +211,9 @@
     step: { status: 'done' | 'active' | 'pending' | 'skipped' },
   ): string {
     if (step.status === 'done') return 'Done'
-    if (step.status === 'active') return turn.liveAgent ? 'Now' : 'Paused'
+    if (step.status === 'active') return turn.liveAgent ? 'Now' : 'Missing'
     if (step.status === 'skipped') return 'Skipped'
-    return 'Pending'
+    return 'Missing'
   }
 
   async function answer(turn: TaskThreadQuestionTurn, answer: string): Promise<void> {
@@ -285,16 +288,37 @@
           </Stack>
         </Card>
       {:else if turn.kind === 'escalation'}
-        <Card title="Needs your help" tone="warn">
+        {@const guidance = escalationUserGuidance({ summary: turn.summary, details: turn.details, reason: turn.escalationReason, agentId: turn.escalationAgentId })}
+        {@const recoveryAction = escalationPrimaryAction({ reason: turn.escalationReason, agentId: turn.escalationAgentId, summary: turn.summary, details: turn.details })}
+        <Card title={guidance.actionOwner === 'guildhall' ? 'Guildhall can continue' : 'Needs your help'} tone="warn">
           <Stack gap="3">
             <StateSummary
-              label="Escalated"
-              description={turn.summary}
-              tone="warn"
+              label={guidance.actionOwner === 'guildhall' ? 'Next Guildhall step' : 'What Guildhall needs'}
+              description={guidance.title}
+              tone={guidance.actionOwner === 'guildhall' ? 'accent' : 'warn'}
             />
-            {#if turn.details}
-              <p class="detail-copy">{turn.details}</p>
+            <p class="detail-copy">{guidance.detail}</p>
+            <p class="detail-copy">{guidance.nextStep}</p>
+            {#if guidance.technicalNote}
+              <p class="detail-copy"><strong>Technical note:</strong> {guidance.technicalNote}</p>
             {/if}
+            <Row justify="end" gap="2">
+              <Button variant="secondary" onclick={onOpenSpecTab}>Review acceptance criteria</Button>
+              {#if guidance.actionOwner === 'guildhall'}
+                <Button
+                  variant="agent"
+                  disabled={busy}
+                  onclick={() => onResolveEscalation({
+                    escalationId: turn.escalationId,
+                    resolution: recoveryAction.resolution,
+                    nextStatus: recoveryAction.nextStatus,
+                  })}
+                >
+                  <Icon name="sparkles" size={14} />
+                  {recoveryAction.label}
+                </Button>
+              {/if}
+            </Row>
             {#if turn.activity?.length}
               <div class="live-activity" aria-label="Recent agent activity">
                 {#each turn.activity as item, index (`${item.at ?? 'event'}:${item.label}:${index}`)}
@@ -357,8 +381,8 @@
             {#if showsTaskAction(turn)}
               <Row justify="end" gap="2">
                 {#if turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)}
-                  <Button variant="human" onclick={onOpenSpecTab}>
-                    Review checklist
+                  <Button variant="secondary" onclick={onOpenSpecTab}>
+                    Open checklist
                   </Button>
                 {:else if turn.taskStatus !== 'import_draft' && isProjectRunActive()}
                   <Button variant="secondary" disabled>

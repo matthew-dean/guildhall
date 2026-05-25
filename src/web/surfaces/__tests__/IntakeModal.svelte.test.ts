@@ -52,6 +52,8 @@ describe('IntakeModal', () => {
 
   it('creates a request from the thread without requiring the details pane', async () => {
     const onClose = vi.fn()
+    const created = vi.fn()
+    window.addEventListener('guildhall:request-created', created)
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.startsWith('/api/project/request')) {
@@ -82,6 +84,8 @@ describe('IntakeModal', () => {
     await userEvent.click(screen.getByRole('button', { name: /create request/i }))
 
     await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(created).toHaveBeenCalledTimes(1)
+    window.removeEventListener('guildhall:request-created', created)
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/project/request?projectId=looma-knit'),
       expect.objectContaining({ method: 'POST' }),

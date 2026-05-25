@@ -5,7 +5,7 @@ help_summary: |
   Default action after an agent crash or stall. `prefer_resume` (default)
   reloads the session snapshot and continues; `prefer_restart_clean`
   discards the last turn and retries from the previous good state;
-  `pause_for_review` stops and waits for a human.
+  `pause_for_review` stops and waits for review.
 ---
 
 # `crash_recovery_default`

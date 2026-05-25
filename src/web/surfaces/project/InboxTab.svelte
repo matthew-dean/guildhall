@@ -113,7 +113,10 @@
 
   const ICONS: Record<InboxItem['kind'], IconName> = {
     bootstrap_missing: 'wrench',
+    setup_pending: 'wrench',
     workspace_import_pending: 'package',
+    project_check_in: 'message-square-more',
+    pressure_test_pending: 'message-square-more',
     agent_question_pending: 'message-square-more',
     import_draft_queue: 'list-todo',
     brief_approval: 'file-text',
@@ -125,14 +128,17 @@
 
   const DEFAULT_VERBS: Record<InboxItem['kind'], string> = {
     bootstrap_missing: 'Configure',
+    setup_pending: 'Open setup',
     workspace_import_pending: 'Review import',
+    project_check_in: 'Start check-in',
+    pressure_test_pending: 'Answer question',
     agent_question_pending: 'Answer question',
     import_draft_queue: 'Draft task brief',
     brief_approval: 'Review brief',
     spec_approval: 'Review spec',
     open_escalation: 'Resolve',
     lever_questions: 'Review',
-    spec_fill_pending: 'Review checklist',
+    spec_fill_pending: 'Open checklist',
   }
 
   function actionVerb(item: InboxItem): string {

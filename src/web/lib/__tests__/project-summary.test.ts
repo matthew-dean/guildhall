@@ -100,7 +100,7 @@ describe('summarizeProjects', () => {
         message: 'No recent activity',
       },
       actionLabel: 'Open project',
-      runActionLabel: 'Start',
+      runActionLabel: 'Start intake',
       canStart: true,
       canStop: false,
     })
@@ -109,6 +109,41 @@ describe('summarizeProjects', () => {
       max: 0,
     })
     expect(summarizeProjects(service)[0]?.taskActivity.bars).toHaveLength(18)
+  })
+
+  it('prioritizes project questions in card summaries without saying deep intake', () => {
+    const service: ServiceDetail = {
+      projects: [
+        {
+          id: 'older-project',
+          name: 'Older Project',
+          path: '/work/older-project',
+          taskCounts: { total: 2, active: 0, draftReview: 0, blocked: 0, done: 2, shelved: 0 },
+          projectCheckIn: {
+            needed: true,
+            label: 'Project questions',
+            title: 'Project check-in needed',
+            detail: 'Answer the first project questions so Guildhall has the newer project context.',
+            actionHref: '/thread',
+          },
+          run: { status: 'stopped' },
+        },
+      ],
+    }
+
+    expect(summarizeProjects(service)[0]).toMatchObject({
+      statusLabel: 'Project questions',
+      tone: 'warn',
+      stageLabel: 'Project questions',
+      activityLabel: 'Project check-in needed.',
+      nextLabel: 'Answer project questions',
+      maturityLabel: 'Check-in',
+      maturityDescription: expect.not.stringContaining('deep intake'),
+      projectCheckIn: {
+        needed: true,
+        label: 'Project questions',
+      },
+    })
   })
 
   it('normalizes Windows user-profile project paths for display', () => {
@@ -220,8 +255,63 @@ describe('summarizeProjects', () => {
       recentLabel: 'Working on: Build TypeScript-JSDoc round-trip conversion',
       maturityLabel: 'Paused',
       maturityDescription: 'Work is ready or paused, but no agents are running right now.',
-      runActionLabel: 'Resume',
+      runActionLabel: 'Resume 1 task',
     })
+  })
+
+  it('does not surface failed git inspection as a project-card git chip', () => {
+    const service: ServiceDetail = {
+      projects: [
+        {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          path: '/work/narrative-harness',
+          taskCounts: { total: 2, active: 1, draftReview: 0, blocked: 0, done: 1, shelved: 0 },
+          run: { status: 'stopped' },
+          gitStory: {
+            ready: false,
+            state: 'unknown',
+            blockers: [{
+              id: 'repo:0',
+              label: '/work/narrative-harness',
+              state: 'unknown',
+              reason: 'spawn git ENOENT',
+              nextAction: 'Inspect git state manually.',
+            }],
+          },
+        },
+      ],
+    }
+
+    expect(summarizeProjects(service)[0]?.gitStory).toBeNull()
+  })
+
+  it('does not repeat the global provider as a per-project status chip', () => {
+    const service: ServiceDetail = {
+      defaultProviderStatus: {
+        preferredProvider: 'openai-api',
+        preferredProviderLabel: 'OpenAI-compatible API',
+        activeModel: 'gpt-5.3-codex',
+        models: { worker: 'gpt-5.3-codex' },
+      },
+      projects: [
+        {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          path: '/work/narrative-harness',
+          taskCounts: { total: 2, active: 1, draftReview: 0, blocked: 0, done: 1, shelved: 0 },
+          run: { status: 'stopped' },
+          providerStatus: {
+            preferredProvider: 'openai-api',
+            preferredProviderLabel: 'OpenAI-compatible API',
+            activeModel: 'gpt-5.3-codex',
+            models: { worker: 'gpt-5.3-codex' },
+          },
+        },
+      ],
+    }
+
+    expect(summarizeProjects(service)[0]?.provider).toBeUndefined()
   })
 
   it('treats imported drafts as task-brief work instead of paused execution', () => {

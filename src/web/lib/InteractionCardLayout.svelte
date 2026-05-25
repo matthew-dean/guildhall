@@ -50,11 +50,18 @@
     gap: var(--s-2);
     min-height: var(--control-h);
   }
+  .interaction-card-status:empty {
+    display: none;
+    min-height: 0;
+  }
   .interaction-card-meta {
     min-width: 0;
   }
   .interaction-card-live {
     min-width: 0;
+  }
+  .interaction-card-live:empty {
+    display: none;
   }
   .interaction-card-content {
     display: grid;

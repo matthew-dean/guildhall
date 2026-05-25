@@ -386,6 +386,30 @@ describe('postUserQuestionTool', () => {
     expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
   })
 
+  it('rejects templated title-as-grammar prompts before they reach Thread', async () => {
+    const metadata: Record<string, unknown> = {
+      tasks_path: tasksPath,
+      current_task_id: 'task-001',
+      current_agent_id: 'spec-agent',
+    }
+
+    const result = await postUserQuestionTool.execute(
+      {
+        kind: 'text',
+        body: 'What must Project check-in needed before Guildhall treats this workspace as current get right first for product goals?',
+      },
+      { cwd: '/tmp', metadata },
+    )
+
+    expect(result.is_error).toBe(true)
+    expect(result.output).toContain('write a complete human-readable question')
+
+    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
+      tasks: Array<{ openQuestions?: Array<unknown> }>
+    }
+    expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
+  })
+
   it('does not infer topic labels as answers from assistant prose saying questions remain', async () => {
     const metadata: Record<string, unknown> = {
       tasks_path: tasksPath,
@@ -396,6 +420,30 @@ describe('postUserQuestionTool', () => {
         '',
         '- Extension ownership',
         '- Knit integration',
+      ].join('\n'),
+    }
+
+    const result = await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
+    expect(result.is_error).toBe(true)
+
+    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
+      tasks: Array<{ openQuestions?: Array<unknown> }>
+    }
+    expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
+  })
+
+  it('does not infer a choice question from evidence-summary prose', async () => {
+    const metadata: Record<string, unknown> = {
+      tasks_path: tasksPath,
+      current_task_id: 'task-001',
+      current_agent_id: 'spec-agent',
+      last_assistant_text: [
+        'I have enough from the glob results. Let me piece together what I know:',
+        '',
+        '- The converter package is at `packages/converter/`',
+        '- It uses **vitest**',
+        '- Test files: `test/ts-to-jsdoc.test.ts`, `test/jsdoc-to-ts.test.ts`',
+        '- The root `package.json` likely has workspace scripts',
       ].join('\n'),
     }
 

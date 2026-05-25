@@ -129,6 +129,15 @@ describe('event stream wiring', () => {
     expect(instances[1]!.url).toBe('/api/project/events?projectId=fair-labor-license')
   })
 
+  it('does not open a project stream on global routes', () => {
+    window.history.replaceState({}, '', '/providers')
+    path.value = '/providers'
+
+    connectStream()
+
+    expect(instances).toHaveLength(0)
+  })
+
   it('can close the stream while a project route performs its initial data load', () => {
     connectStream()
     expect(instances).toHaveLength(1)
@@ -154,6 +163,7 @@ describe('event display helpers', () => {
     } as any)).toBe('Task 1 Ready → In review (Builder: done)')
     expect(summarizeEvent({ type: 'escalation_raised', task_id: 'task-2', reason: 'blocked' } as any)).toBe('Needs attention: Task 2 — blocked')
     expect(summarizeEvent({ type: 'error', message: 'boom' } as any)).toBe('ERROR: boom')
+    expect(summarizeEvent({ type: 'supervisor_error', message: 'spawn git ENOENT' } as any)).toBe('error: Guildhall could not find git while inspecting this project.')
     expect(summarizeEvent({ type: 'agent_issue', severity: 'warn', code: 'stuck', task_id: 'task-3', reason: 'quiet' } as any)).toBe('Issue [warn/stuck] Task 3 — quiet')
     expect(summarizeEvent({ type: 'agent_started', agent_name: 'spec-agent', task_id: 'task-4' } as any)).toBe('Spec writer started Task 4')
     expect(summarizeEvent({ type: 'agent_finished', agent_name: 'reviewer-agent', task_id: 'task-5' } as any)).toBe('Review team finished Task 5')

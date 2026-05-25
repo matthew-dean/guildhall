@@ -48,6 +48,12 @@ const EvidenceRefSchema = z.object({
   kind: z.enum(['task', 'verification', 'tool_error', 'review', 'checkpoint']),
   summary: z.string(),
   ref: z.string().optional(),
+  links: z.array(z.object({
+    kind: z.enum(['task', 'local_history']),
+    label: z.string(),
+    href: z.string().optional(),
+    localHistoryRef: z.string().optional(),
+  })).default([]),
 })
 
 const PreferenceItemSchema = z.object({
@@ -170,6 +176,35 @@ function parseLearning(raw: unknown): LearningRecord {
   return LearningRecordSchema.parse(raw ?? {})
 }
 
+function localTaskTranscriptRef(taskId: string): string {
+  return path.join('transcripts', 'exploring', `${taskId}.md`)
+}
+
+function enrichEvidenceRefs(evidence: LearningCandidate['evidence']): LearningCandidate['evidence'] {
+  return evidence.map((item) => {
+    if (item.kind !== 'task' || !item.ref) return item
+    const taskHref = `/task/${encodeURIComponent(item.ref)}`
+    const localHistoryRef = localTaskTranscriptRef(item.ref)
+    const existing = item.links ?? []
+    const hasTaskLink = existing.some(link => link.kind === 'task' && link.href === taskHref)
+    const hasLocalRef = existing.some(link => link.localHistoryRef === localHistoryRef)
+    return {
+      ...item,
+      links: [
+        ...existing,
+        ...(hasTaskLink && hasLocalRef
+          ? []
+          : [{
+              kind: 'task' as const,
+              label: 'Open task evidence',
+              href: taskHref,
+              localHistoryRef,
+            }]),
+      ],
+    }
+  })
+}
+
 function readLearningFile(filePath: string): LearningRecord {
   if (!existsSync(filePath)) return defaultLearningRecord()
   try {
@@ -188,13 +223,14 @@ function upsertSuggestedLearning(
   record: LearningRecord,
   candidate: LearningCandidate,
   now: string,
+  opts: { linkLocalEvidence?: boolean } = {},
 ): LearningRecord {
   if (candidate.proposedDestination === 'task_audit_only') return LearningRecordSchema.parse(record)
   const suggested: SuggestedLearning = SuggestedLearningSchema.parse({
     id: candidate.id,
     source: candidate.source,
     summary: candidate.summary,
-    evidence: candidate.evidence,
+    evidence: opts.linkLocalEvidence ? enrichEvidenceRefs(candidate.evidence) : candidate.evidence,
     scope: candidate.proposedScope,
     destination: candidate.proposedDestination,
     confidence: candidate.confidence,
@@ -243,7 +279,7 @@ export async function persistLearningCandidates(input: {
     if (candidateBelongsInGlobal(candidate)) {
       userRecord = upsertSuggestedLearning(userRecord, candidate, now)
     } else {
-      projectRecord = upsertSuggestedLearning(projectRecord, candidate, now)
+      projectRecord = upsertSuggestedLearning(projectRecord, candidate, now, { linkLocalEvidence: true })
     }
   }
 
@@ -452,9 +488,9 @@ export async function recordUserCorrection(input: {
 
   if (count >= 2) {
     const label = input.category.replaceAll('_', ' ')
-    nextRecord = upsertSuggestedLearning(
-      nextRecord,
-      {
+      nextRecord = upsertSuggestedLearning(
+        nextRecord,
+        {
         id: `user-correction-${input.category}`,
         source: 'user_correction',
         summary: `Repeated user correction about ${label}: ${input.correction}`,

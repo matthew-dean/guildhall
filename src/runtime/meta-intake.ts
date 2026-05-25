@@ -173,7 +173,7 @@ bootstrap:
         stderr: <short excerpt>
 \`\`\`
 
-When the user approves the draft, run the \`guildhall approve-meta-intake\` CLI command — the runtime will parse all three fences, merge the inferred routing slices + bootstrap into \`guildhall.yaml\`, record lever positions in \`memory/agent-settings.yaml\` with \`setBy: 'spec-agent-intake'\`, and mark this task done.`
+When the user approves the draft, run the \`guildhall approve-meta-intake\` CLI command — the runtime will parse all three fences, merge the inferred routing slices + bootstrap into \`guildhall.yaml\`, record lever positions in \`.guildhall/agent-settings.yaml\` with \`setBy: 'spec-agent-intake'\`, and mark this task done.`
 
 export interface CreateMetaIntakeInput {
   memoryDir: string
@@ -800,7 +800,7 @@ export function parseBootstrapDraft(spec: string): BootstrapDraft | null {
 // ---------------------------------------------------------------------------
 // Lever-inference draft: a second YAML codefence the Spec Agent emits during
 // meta-intake, with positions + rationales inferred from the user's
-// project-guidance answers. Merged into memory/agent-settings.yaml on approval.
+// project-guidance answers. Merged into .guildhall/agent-settings.yaml on approval.
 // ---------------------------------------------------------------------------
 
 export interface LeverInference {
@@ -890,7 +890,7 @@ export interface MergeLeverInferencesResult {
 }
 
 /**
- * Apply a parsed LeverInferences block to `memory/agent-settings.yaml`. Each
+ * Apply a parsed LeverInferences block to `.guildhall/agent-settings.yaml`. Each
  * successful write marks the entry with `setBy: 'spec-agent-intake'` and the
  * Spec Agent's supplied rationale. Positions that don't match the lever
  * schema are skipped (not fatal — they're reported as `rejected` so the CLI

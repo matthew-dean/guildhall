@@ -13,7 +13,7 @@ import { buildServeApp, filterEventsForTask } from '../serve.js'
 
 // Integration tests for the v0.2 UI endpoints:
 //   GET  /api/project/task/:id        — per-task detail powering the drawer
-//   POST /api/project/task/:id/pause  — human override → blocked
+//   POST /api/project/task/:id/hold   — human hold → blocked, reversible
 //   POST /api/project/task/:id/shelve — human override → shelved
 //   GET  /api/project/activity        — summary for the persistent chip
 
@@ -577,24 +577,44 @@ describe('filterEventsForTask (drawer live feed)', () => {
   })
 })
 
-describe('POST /api/project/task/:id/pause|shelve', () => {
-  it('pause transitions the task to blocked with a blockReason and note', async () => {
-    await seedTask('task-1')
+describe('POST /api/project/task/:id/hold|shelve', () => {
+  it('puts a task on hold with a reason and can return it to its previous stage', async () => {
+    await seedTask('task-1', { status: 'review' })
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(
-      new Request(projectUrl('/api/project/task/task-1/pause'), { method: 'POST' }),
+    const holdRes = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/hold'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: 'Waiting for the design call.' }),
+      }),
     )
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as Record<string, any>
+    expect(holdRes.status).toBe(200)
+    const body = (await holdRes.json()) as Record<string, any>
     expect(body.ok).toBe(true)
     expect(body.status).toBe('blocked')
 
-    // Verify disk state.
     const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
-    const q = JSON.parse(raw)
+    let q = JSON.parse(raw)
     expect(q.tasks[0].status).toBe('blocked')
-    expect(q.tasks[0].blockReason).toMatch(/dashboard/i)
+    expect(q.tasks[0].blockReason).toBe('On hold: Waiting for the design call.')
+    expect(q.tasks[0].hold).toMatchObject({
+      previousStatus: 'review',
+      reason: 'Waiting for the design call.',
+      heldBy: 'human',
+    })
     expect(q.tasks[0].notes?.at(-1)?.agentId).toBe('system:human')
+
+    const resumeRes = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/resume-hold'), { method: 'POST' }),
+    )
+    expect(resumeRes.status).toBe(200)
+    const resumeBody = (await resumeRes.json()) as Record<string, any>
+    expect(resumeBody.status).toBe('review')
+
+    q = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'))
+    expect(q.tasks[0].status).toBe('review')
+    expect(q.tasks[0].hold).toBeUndefined()
+    expect(q.tasks[0].blockReason).toBeUndefined()
   })
 
   it('shelve transitions to shelved with a shelveReason record', async () => {
@@ -610,11 +630,11 @@ describe('POST /api/project/task/:id/pause|shelve', () => {
     expect(q.tasks[0].shelveReason?.rejectedBy).toBe('system:human')
   })
 
-  it('rejects pause on a done task', async () => {
+  it('rejects hold on a done task', async () => {
     await seedTask('task-1', { status: 'done' })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request(projectUrl('/api/project/task/task-1/pause'), { method: 'POST' }),
+      new Request(projectUrl('/api/project/task/task-1/hold'), { method: 'POST' }),
     )
     expect(res.status).toBe(400)
   })
@@ -626,6 +646,62 @@ describe('POST /api/project/task/:id/pause|shelve', () => {
       new Request(projectUrl('/api/project/task/task-1/nuke'), { method: 'POST' }),
     )
     expect(res.status).toBe(400)
+  })
+})
+
+describe('POST /api/project/task/:id/mark-done', () => {
+  it('marks a ready task done with human evidence and closes its checklist', async () => {
+    await seedTask('task-1', {
+      status: 'ready',
+      assignedTo: null,
+      blockReason: 'Old blocker',
+      acceptanceCriteria: [
+        { id: 'AC-1', description: 'Migrations are applied', verifiedBy: 'manual', met: false },
+        { id: 'AC-2', description: 'Types are generated', verifiedBy: 'manual', met: false },
+      ],
+      escalations: [
+        {
+          id: 'esc-1',
+          taskId: 'task-1',
+          reason: 'environment_blocked',
+          summary: 'Waiting on hosted database credentials',
+          agentId: 'worker-agent',
+          raisedAt: new Date().toISOString(),
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/mark-done'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ evidence: 'supabase db push reports remote database is up to date' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.status).toBe('done')
+
+    const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')
+    const q = JSON.parse(raw)
+    const task = q.tasks[0]
+    expect(task.status).toBe('done')
+    expect(task.assignedTo).toBeNull()
+    expect(task.blockReason).toBeUndefined()
+    expect(task.acceptanceCriteria.every((criterion: Record<string, any>) => criterion.met === true)).toBe(true)
+    expect(task.escalations[0].resolvedBy).toBe('human')
+    expect(task.notes.at(-1).content).toMatch(/supabase db push/)
+  })
+
+  it('rejects mark-done on active execution stages', async () => {
+    await seedTask('task-1', { status: 'in_progress' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/mark-done'), { method: 'POST' }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.error).toMatch(/active run/i)
   })
 })
 
@@ -954,6 +1030,71 @@ describe('POST /api/project/task/:id/resume', () => {
       }),
     )
     expect(res.status).toBe(400)
+  })
+})
+
+describe('POST /api/project/task/:id/reframe-task', () => {
+  it('reopens an inscrutable blocked task for a fresh plain-language frame', async () => {
+    await seedTask('task-1', {
+      status: 'blocked',
+      assignedTo: 'worker-agent',
+      blockReason: 'human_judgment_required: Required authoritative verification is blocked by upstream workspace build failure outside checkpoint-touched editor files.',
+      productBrief: {
+        approvedAt: new Date().toISOString(),
+        userJob: 'Old internal phrasing.',
+        successMetric: 'Old finish line.',
+      },
+      spec: '## Summary\nOld schematic-style spec.',
+      acceptanceCriteria: [{ id: 'AC-8', description: 'Provide authoritative verification evidence.', verifiedBy: 'review' }],
+      openQuestions: [{
+        kind: 'choice',
+        id: 'q-old',
+        askedBy: 'worker-agent',
+        askedAt: new Date().toISOString(),
+        prompt: 'Choose recovery path.',
+        choices: ['retry', 'resolve'],
+      }],
+      escalations: [{
+        id: 'esc-old',
+        taskId: 'task-1',
+        agentId: 'worker-agent',
+        reason: 'human_judgment_required',
+        summary: 'This task needs a recovery decision.',
+        raisedAt: new Date().toISOString(),
+      }],
+      notes: [],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/reframe-task'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: 'The current task is unreadable.' }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.status).toBe('exploring')
+
+    const queue = JSON.parse(
+      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+    ) as { tasks: Array<Record<string, any>> }
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.assignedTo).toBe('spec-agent')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.productBrief).toBeUndefined()
+    expect(task.spec).toBeUndefined()
+    expect(task.acceptanceCriteria).toEqual([])
+    expect(task.openQuestions[0]?.answeredAt).toBeTruthy()
+    expect(task.openQuestions[0]?.answer).toMatch(/Superseded by a task reframe/i)
+    expect(task.escalations[0]?.resolvedAt).toBeTruthy()
+    expect(task.notes.some((note: Record<string, unknown>) => /reframe/i.test(String(note.content ?? '')))).toBe(true)
+    const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
+    expect(transcript).toContain('Reframe this existing task')
+    expect(transcript).toContain('what exact decision is needed')
+    expect(transcript).toContain('The current task is unreadable.')
   })
 })
 

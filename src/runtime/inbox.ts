@@ -3,7 +3,7 @@
  *
  * The inbox is the prioritized queue of things the coordinator needs the
  * human to resolve right now. It sources exclusively from files already on
- * disk — `guildhall.yaml`, `memory/TASKS.json`, `memory/agent-settings.yaml`,
+ * disk — `guildhall.yaml`, `.guildhall/TASKS.json`, `.guildhall/agent-settings.yaml`,
  * and a handful of workspace-signal files — so the endpoint is cheap enough
  * to poll and deterministic enough to snapshot in tests.
  *
@@ -30,6 +30,7 @@ import {
   progressForTask,
   emptyWizardsState,
 } from './wizards.js'
+import { listPressureTestIntakes, summarizeProjectCheckIn } from './pressure-test-intake.js'
 
 export type InboxSeverity = 'high' | 'medium' | 'low'
 
@@ -37,6 +38,8 @@ export type InboxItem =
   | { kind: 'bootstrap_missing'; severity: 'high'; title: string; detail: string; actionHref?: string }
   | { kind: 'setup_pending'; severity: 'medium'; stepId: string; title: string; detail: string; actionHref: string }
   | { kind: 'workspace_import_pending'; severity: 'medium'; title: string; detail: string; signals: string[]; actionHref: string; dismissEndpoint: string }
+  | { kind: 'project_check_in'; severity: 'medium' | 'low'; title: string; detail: string; actionHref: string }
+  | { kind: 'pressure_test_pending'; severity: 'medium'; title: string; detail: string; actionHref: string }
   | { kind: 'agent_question_pending'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
   | { kind: 'import_draft_queue'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
   | { kind: 'brief_approval'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
@@ -76,13 +79,15 @@ const KIND_ORDER: Record<InboxItem['kind'], number> = {
   bootstrap_missing: 0,
   setup_pending: 1,
   workspace_import_pending: 2,
-  open_escalation: 3,
-  agent_question_pending: 4,
-  import_draft_queue: 5,
-  brief_approval: 6,
-  spec_approval: 7,
-  lever_questions: 8,
-  spec_fill_pending: 9,
+  project_check_in: 3,
+  pressure_test_pending: 4,
+  open_escalation: 5,
+  agent_question_pending: 6,
+  import_draft_queue: 7,
+  brief_approval: 8,
+  spec_approval: 9,
+  lever_questions: 10,
+  spec_fill_pending: 11,
 }
 
 const SEVERITY_ORDER: Record<InboxSeverity, number> = {
@@ -100,6 +105,49 @@ function inboxTitle(taskId: string, title: string): string {
   if (taskId === 'task-meta-intake') return 'Inspect the repo and draft starter tasks'
   if (taskId === 'task-workspace-import') return 'Review existing project work'
   return truncateTitle(title)
+}
+
+function cleanPressureTargetTitle(title: string): string {
+  return title
+    .replace(/\s+project check-in$/i, '')
+    .replace(/^Pressure-test\s+/i, '')
+    .replace(/\.\s*Ask me.*$/i, '')
+    .trim()
+    || title
+}
+
+function pressureQuestionDetail(prompt: string, targetTitle: string): string {
+  const target = cleanPressureTargetTitle(targetTitle)
+  const trimmed = prompt.trim()
+  if (/^What outcome would make this project successful\?$/i.test(trimmed)) {
+    return `What would make ${target} successful?`
+  }
+  const quotedOutcome = trimmed.match(/^For "(.+)", what outcome should this request achieve\?$/i)
+  if (quotedOutcome) {
+    return `What should ${cleanPressureTargetTitle(quotedOutcome[1] ?? target)} accomplish?`
+  }
+  return trimmed
+}
+
+function escalationInboxDetail(summary: string, reason: string): string {
+  const text = summary.trim()
+  if (/\bAC-\d+\b/i.test(text) && /\bevidence\b/i.test(text)) {
+    return 'Guildhall needs to run or save one missing verification check before this task can finish.'
+  }
+  if (/authoritative verification|upstream workspace build failure|checkpoint-touched|task worktree/i.test(text)) {
+    return 'The project build is failing outside this task, so Guildhall needs you to choose whether to reframe the task, fix the wider build first, or retry after the build is healthy.'
+  }
+  if (/no visible progress|made no visible progress|no saved (?:spec|draft)|no durable (?:draft|update)/i.test(text)) {
+    return 'Guildhall found useful context but did not save the next draft. Review the task and decide whether to retry from those notes or reframe it.'
+  }
+  const withoutCodePrefix = text.replace(/^[a-z][a-z0-9_]*:\s*/i, '').trim()
+  if (reason === 'spec_ambiguous') {
+    return withoutCodePrefix || 'The task brief is missing a decision or concrete implementation path.'
+  }
+  if (reason === 'human_judgment_required') {
+    return withoutCodePrefix || 'Guildhall needs a product or recovery decision before it can continue.'
+  }
+  return withoutCodePrefix || 'Open the task to choose the next step.'
 }
 
 function unresolvedVisibleQuestions(task: Task): Array<{ answeredAt?: unknown; prompt?: unknown; restatement?: unknown }> {
@@ -266,9 +314,12 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     workspaceImportTask != null &&
     !['done', 'cancelled', 'archived'].includes(workspaceImportTaskStatus)
 
+  const activePressureTest = listPressureTestIntakes(getProjectStateDir(projectPath))
+    .find(intake => intake.status === 'active' && intake.pendingQuestion)
+
   const setupProgress = progressFor(onboardWizard, buildSnapshot({ projectPath, ...(snapshotOptions ?? {}) }))
   const activeSetupStep = setupProgress.steps.find(step => step.id === setupProgress.activeStepId)
-  if (activeSetupStep && ['direction', 'firstTask'].includes(activeSetupStep.id)) {
+  if (activeSetupStep && ['direction', 'firstTask'].includes(activeSetupStep.id) && !activePressureTest) {
     items.push({
       kind: 'setup_pending',
       severity: 'medium',
@@ -302,6 +353,27 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
       signals,
       actionHref: '/workspace-import',
       dismissEndpoint: '/api/project/workspace-import/dismiss',
+    })
+  }
+
+  // --- project_check_in ----------------------------------------------------
+  const projectCheckIn = summarizeProjectCheckIn(getProjectStateDir(projectPath))
+  if (projectCheckIn.needed) {
+    items.push({
+      kind: 'project_check_in',
+      severity: 'low',
+      title: projectCheckIn.title,
+      detail: projectCheckIn.detail,
+      actionHref: projectCheckIn.actionHref,
+    })
+  }
+  if (activePressureTest?.pendingQuestion) {
+    items.push({
+      kind: 'pressure_test_pending',
+      severity: 'medium',
+      title: cleanPressureTargetTitle(activePressureTest.target.title),
+      detail: pressureQuestionDetail(activePressureTest.pendingQuestion.prompt, activePressureTest.target.title),
+      actionHref: '/thread',
     })
   }
 
@@ -477,7 +549,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
         taskId: id,
         escalationId: escId,
         title: truncateTitle(title),
-        detail: summary,
+        detail: escalationInboxDetail(summary, reason),
         actionHref: '/task/' + encodeURIComponent(id),
       })
     }

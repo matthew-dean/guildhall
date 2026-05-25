@@ -167,15 +167,28 @@ describe('TaskDrawer', () => {
     payload.task.status = 'ready'
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url.startsWith('/api/project/task/task-link-editor/pause')) {
+      if (url.startsWith('/api/project/task/task-link-editor/hold')) {
         expect(url).toContain('projectId=looma-knit')
         expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toEqual({
+          reason: 'Waiting on a product call.',
+        })
         return json({ ok: true })
       }
       if (url.startsWith('/api/project/task/task-link-editor/shelve')) {
         expect(url).toContain('projectId=looma-knit')
         expect(init?.method).toBe('POST')
         return json({ ok: true })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor/reframe-task')) {
+        expect(url).toContain('projectId=looma-knit')
+        expect(init?.method).toBe('POST')
+        if (init?.body) {
+          expect(JSON.parse(String(init.body))).toMatchObject({
+            reason: 'This task is describing machinery instead of the user-facing work.',
+          })
+        }
+        return json({ ok: true, status: 'exploring' })
       }
       if (url.startsWith('/api/project/start')) {
         expect(JSON.parse(String(init?.body))).toMatchObject({
@@ -199,13 +212,104 @@ describe('TaskDrawer', () => {
     await screen.findByText('Add link editor controls inside the existing editor toolbar.')
     await userEvent.click(screen.getByRole('button', { name: /run this task/i }))
     await userEvent.click(screen.getByText('More task actions'))
-    await userEvent.click(screen.getByRole('button', { name: /pause task/i }))
-    await userEvent.click(screen.getByRole('button', { name: /put aside/i }))
+    expect(screen.getByRole('button', { name: /reframe task/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /pause and keep in queue/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /shelve task/i })).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: /pause and keep in queue/i }))
+    expect(screen.getByText(/Use this when the task is still valid but should wait/i)).toBeTruthy()
+    await userEvent.type(screen.getByRole('textbox', { name: /why is this on hold/i }), 'Waiting on a product call.')
+    await userEvent.click(screen.getByRole('button', { name: /^pause task$/i }))
+    await userEvent.click(screen.getByText('More task actions'))
+    await userEvent.click(screen.getByRole('button', { name: /shelve task/i }))
+    expect(screen.getByText(/Shelving removes this task from the active plan/i)).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: /^shelve task$/i }))
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/start'))).toBe(true)
-      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/pause'))).toBe(true)
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/hold'))).toBe(true)
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/shelve'))).toBe(true)
+    })
+  })
+
+  it('can reframe a task from the more-actions menu and closes the menu on outside click', async () => {
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'blocked'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/reframe-task')) {
+        expect(url).toContain('projectId=looma-knit')
+        expect(init?.method).toBe('POST')
+        return json({ ok: true, status: 'exploring' })
+      }
+      if (url.startsWith('/api/project/start')) return json({ ok: true })
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Add link editor controls inside the existing editor toolbar.')
+    await userEvent.click(screen.getByText('More task actions'))
+    expect(screen.getByRole('button', { name: /reframe task\.\.\./i })).toBeTruthy()
+    await userEvent.click(document.body)
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /reframe task\.\.\./i })).toBeNull()
+    })
+
+    await userEvent.click(screen.getByText('More task actions'))
+    await userEvent.click(screen.getByRole('button', { name: /reframe task\.\.\./i }))
+    expect(screen.getByRole('dialog', { name: /reframe task/i })).toBeTruthy()
+    const note = screen.getByPlaceholderText(/explain what is confusing/i)
+    await userEvent.type(note, 'This task is describing machinery instead of the user-facing work.')
+    await userEvent.click(screen.getByRole('button', { name: /^reframe task$/i }))
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/reframe-task'))).toBe(true)
+      expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/start'))).toBe(true)
+    })
+  })
+
+  it('shows held tasks as resumable instead of a vague pause state', async () => {
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.status = 'blocked'
+    payload.task.blockReason = 'On hold: Waiting on the design call.'
+    payload.task.hold = {
+      previousStatus: 'ready',
+      reason: 'Waiting on the design call.',
+      heldAt: '2026-05-24T20:00:00.000Z',
+      heldBy: 'human',
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/resume-hold')) {
+        expect(url).toContain('projectId=looma-knit')
+        expect(init?.method).toBe('POST')
+        return json({ ok: true, status: 'ready' })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('This task is out of the active queue for now.')
+    expect(screen.getByText('Reason: Waiting on the design call.')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: /resume task/i }))
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/resume-hold'))).toBe(true)
     })
   })
 
@@ -233,7 +337,7 @@ describe('TaskDrawer', () => {
     await screen.findByText('Task completed.')
 
     expect(screen.queryByRole('button', { name: /run this task/i })).toBeNull()
-    expect(screen.queryByRole('button', { name: /pause task/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /put on hold/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /put aside/i })).toBeNull()
     expect(screen.getByRole('button', { name: /copy link/i })).toBeTruthy()
   })
@@ -280,6 +384,39 @@ describe('TaskDrawer', () => {
     await screen.findByText('Add link editor controls inside the existing editor toolbar.')
     await userEvent.click(screen.getByRole('button', { name: /approve spec/i }))
     await userEvent.type(screen.getByRole('textbox', { name: /note/i }), 'Ship the focused link editor controls first.')
+    await userEvent.click(screen.getByRole('button', { name: /^approve$/i }))
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/approve-spec'))).toBe(true)
+    })
+  })
+
+  it('surfaces spec approval on the Spec tab beside the draft', async () => {
+    const payload = drawerPayload()
+    payload.task.status = 'spec_review'
+    payload.task.spec = '## Summary\nAdd Stripe Connect payments for licensed projects.'
+    payload.threadTurns = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/approve-spec')) {
+        expect(init?.method).toBe('POST')
+        return json({ ok: true })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Spec draft awaiting approval')
+    expect(screen.queryByText(/waiting in Thread/i)).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /approve spec/i }))
     await userEvent.click(screen.getByRole('button', { name: /^approve$/i }))
 
     await waitFor(() => {
@@ -555,7 +692,7 @@ describe('TaskDrawer', () => {
     expect(screen.queryByRole('button', { name: /retry blocker/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /resolve blocker/i })).toBeNull()
 
-    await userEvent.click(screen.getByRole('button', { name: /mark resolved\.\.\./i }))
+    await userEvent.click(screen.getByRole('button', { name: /i handled this\.\.\./i }))
     await screen.findByText('Use this when you handled the blocker yourself or want to tell Guildhall exactly where to continue.')
     await userEvent.type(
       screen.getByLabelText(/resolution note/i),
@@ -713,7 +850,7 @@ describe('TaskDrawer', () => {
     expect(screen.getAllByText('Duplicate of the existing link editor task.').length).toBeGreaterThan(0)
     expect(screen.getByText('Latest checkpoint')).toBeTruthy()
     expect(screen.getByText(/Rerun the focused toolbar test/)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /pause task/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /put on hold/i })).toBeNull()
     expect(screen.getAllByRole('button', { name: /^unshelve$/i }).length).toBeGreaterThan(0)
   })
 })

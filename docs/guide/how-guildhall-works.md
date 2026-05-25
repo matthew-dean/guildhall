@@ -91,6 +91,19 @@ design-system summaries, review rubrics, checkpoints, and gates. None of those
 exist to make the app feel busy. They exist because plausible-looking work is
 still wrong if it ignores the project around it.
 
+Guildhall also leans on a few evidence-backed ideas without turning them into
+ceremony. Cognitive-load research shows why a big wall of context is a bad way
+to ask for a decision. Goal-setting research is one reason Guildhall separates
+clear implementation goals from learning goals when the work is still
+uncertain. Flow systems are why Guildhall would rather finish, block, or
+defer active work than keep opening new lanes.
+
+In practice, that should feel simple: smaller work packets, one question at a
+time, visible proof of done, and fewer half-finished tasks hanging around. The
+point is not to make you manage a process. The point is to take as much
+cognitive overhead off your plate as Guildhall safely can while leaving the
+real product, risk, taste, and release judgments with you.
+
 ## Feedback loops
 
 Guildhall asks for feedback where it changes the outcome.

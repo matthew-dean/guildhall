@@ -10,6 +10,7 @@ import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
 import { atomicWriteText, getProjectStateDir } from '@guildhall/sessions'
+import { readTaskWorkspaceStore } from './task-state-store.js'
 import {
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -105,6 +106,7 @@ import {
   createExploringTask,
   createRoutedRequest,
   approveSpec,
+  reframeTask,
   resumeExploring,
   rerunTaskStage,
   shapeImportDraft,
@@ -113,7 +115,10 @@ import {
 } from './intake.js'
 import {
   answerPressureTestQuestion,
+  createPressureTestIntake,
   loadPressureTestIntake,
+  listPressureTestIntakes,
+  summarizeProjectCheckIn,
 } from './pressure-test-intake.js'
 import { loadDesignSystem, saveDesignSystem } from './design-system-store.js'
 import {
@@ -185,6 +190,7 @@ import {
   buildCoordinatorProjectPathMap,
   resolveTaskProjectPath,
 } from './task-project-path.js'
+import { buildEffectiveTask } from './effective-task.js'
 import { readContextDebugForTask } from './context-observability.js'
 import {
   buildSnapshot,
@@ -203,12 +209,11 @@ import { stringify as stringifyYaml } from 'yaml'
 // guildhall serve — local service over many projects
 //
 // `guildhall serve` now acts like the friendly entrypoint to a local
-// user-level service. During the 0.5.0 transition, the backend already knows
-// about many registered projects and can surface service-level metadata even
-// while the UI still leans on one foreground project API surface.
+// user-level service. The backend knows about many registered projects; project
+// APIs are scoped by explicit project id instead of mutable daemon foreground.
 //
 // Routes:
-//   GET    /api/service               → service metadata + current selected project
+//   GET    /api/service               → service metadata + registered projects
 //   GET    /                          → SPA (root = project detail or setup)
 //   GET    /setup                     → SPA setup wizard route
 //   GET    /api/project               → project detail (config + tasks + run state)
@@ -222,11 +227,14 @@ import { stringify as stringifyYaml } from 'yaml'
 //   GET    /api/project/bootstrap/status   → last run + whether it needs re-running
 //   POST   /api/project/bootstrap/run      → run the verified bootstrap synchronously
 //   GET    /api/project/task/:id      → full task + recent events for drawer
-//   POST   /api/project/task/:id/pause              → human override → blocked
+//   POST   /api/project/task/:id/hold               → human hold → blocked
+//   POST   /api/project/task/:id/resume-hold        → blocked hold → previous stage
+//   POST   /api/project/task/:id/pause              → deprecated alias for hold
 //   POST   /api/project/task/:id/shelve             → human override → shelved
 //   POST   /api/project/task/:id/unshelve           → shelved → proposed (clear shelveReason)
 //   POST   /api/project/task/:id/approve-spec       → spec_review → ready
 //   POST   /api/project/task/:id/approve-brief      → mark the product brief as human-approved
+//   POST   /api/project/task/:id/mark-done          → human confirms task is already complete
 //   POST   /api/project/task/:id/resume             → append follow-up to exploring transcript
 //   POST   /api/project/task/:id/resolve-escalation → close an open escalation; unblocks when none remain
 //   GET    /api/project/activity      → summary for persistent agent chip
@@ -307,7 +315,6 @@ interface ServiceProjectSummary {
   path: string
   name: string
   initializationNeeded: boolean
-  selected?: boolean
   tags?: string[]
   summary?: string | null
   taskCounts?: {
@@ -340,6 +347,8 @@ interface ServiceProjectSummary {
     providerStatus?: unknown
   }
   gitStory?: GitStorySummary
+  providerStatus?: unknown
+  projectCheckIn?: ReturnType<typeof summarizeProjectCheckIn> | null
 }
 
 function humanizeGeneratedProjectName(name: string): string {
@@ -1209,7 +1218,10 @@ function taskGitStoryOverride(task: Record<string, unknown>): {
   }
 }
 
-function taskForGitStory(task: Record<string, unknown>): Parameters<typeof inspectGitStory>[1]['task'] {
+function taskForGitStory(
+  task: Record<string, unknown>,
+  workspace?: { worktreePath?: string },
+): Parameters<typeof inspectGitStory>[1]['task'] {
   const mergeRecord =
     task.mergeRecord && typeof task.mergeRecord === 'object' && !Array.isArray(task.mergeRecord)
       ? task.mergeRecord as { result?: string }
@@ -1217,15 +1229,25 @@ function taskForGitStory(task: Record<string, unknown>): Parameters<typeof inspe
   return {
     ...(typeof task.id === 'string' ? { id: task.id } : {}),
     ...(typeof task.title === 'string' ? { title: task.title } : {}),
-    ...(typeof task.worktreePath === 'string' ? { worktreePath: task.worktreePath } : {}),
+    ...(typeof workspace?.worktreePath === 'string'
+      ? { worktreePath: workspace.worktreePath }
+      : typeof task.worktreePath === 'string'
+        ? { worktreePath: task.worktreePath }
+        : {}),
     ...(mergeRecord ? { mergeRecord } : {}),
     ...(taskGitStoryOverride(task) ? { gitStory: taskGitStoryOverride(task) } : {}),
   }
 }
 
-function taskGitStoryRepoPath(projectPath: string, task: Record<string, unknown>): string {
-  const worktreePath = typeof task.worktreePath === 'string' && task.worktreePath.trim()
-    ? task.worktreePath.trim()
+function taskGitStoryRepoPath(
+  projectPath: string,
+  task: Record<string, unknown>,
+  workspace?: { worktreePath?: string },
+): string {
+  const worktreePath = typeof workspace?.worktreePath === 'string' && workspace.worktreePath.trim()
+    ? workspace.worktreePath.trim()
+    : typeof task.worktreePath === 'string' && task.worktreePath.trim()
+      ? task.worktreePath.trim()
     : ''
   if (worktreePath) return worktreePath
   const taskProjectPath = typeof task.projectPath === 'string' && task.projectPath.trim()
@@ -1234,41 +1256,62 @@ function taskGitStoryRepoPath(projectPath: string, task: Record<string, unknown>
   return taskProjectPath || projectPath
 }
 
-async function gitStoryForTask(projectPath: string, task: Record<string, unknown>) {
+async function gitStoryForTask(
+  projectPath: string,
+  task: Record<string, unknown>,
+  workspace?: { worktreePath?: string },
+) {
   const driver = new NodeGitDriver()
-  const inspectedPath = taskGitStoryRepoPath(projectPath, task)
+  const inspectedPath = taskGitStoryRepoPath(projectPath, task, workspace)
   return inspectGitStory(driver, {
     repoRoot: typeof task.projectPath === 'string' && task.projectPath.trim() ? task.projectPath.trim() : projectPath,
     inspectedPath,
-    task: taskForGitStory(task),
+    task: taskForGitStory(task, workspace),
     inspectPr: false,
   })
 }
 
 async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Record<string, unknown>>): Promise<GitStorySummary> {
   const driver = new NodeGitDriver()
-  const snapshots = [
-    await inspectGitStory(driver, {
-      repoRoot: projectPath,
-      inspectedPath: projectPath,
-      inspectPr: false,
-    }),
-  ]
+  const workspaceConfig = readWorkspaceConfig(projectPath)
+  const workspaceProjects = workspaceConfig.kind === 'workspace'
+    ? resolveWorkspaceProjectPaths(projectPath, workspaceConfig)
+    : []
+  const rootSnapshots = workspaceProjects.length > 0
+    ? await Promise.all(workspaceProjects.map(child =>
+        inspectGitStory(driver, {
+          repoRoot: child.path,
+          inspectedPath: child.path,
+          inspectPr: false,
+        }),
+      ))
+    : [
+        await inspectGitStory(driver, {
+          repoRoot: projectPath,
+          inspectedPath: projectPath,
+          inspectPr: false,
+        }),
+      ]
+  const snapshots = [...rootSnapshots]
   const taskRecords = tasks ?? await readTasksFileNormalized(join(getProjectStateDir(projectPath), 'TASKS.json')).catch(() => [])
+  const workspaceStore = await readTaskWorkspaceStore(projectPath).catch(() => undefined)
   for (const task of taskRecords) {
+    const taskId = typeof task.id === 'string' ? task.id : ''
+    const workspace = taskId ? workspaceStore?.workspaces[taskId] : undefined
     const taskStatus = typeof task.status === 'string' ? task.status : ''
     const mergeRecord =
       task.mergeRecord && typeof task.mergeRecord === 'object' && !Array.isArray(task.mergeRecord)
         ? task.mergeRecord as { result?: string }
         : undefined
     const hasUnresolvedTaskGit =
+      typeof workspace?.worktreePath === 'string' ||
       typeof task.worktreePath === 'string' ||
       Boolean(taskGitStoryOverride(task)) ||
       mergeRecord?.result === 'skipped' ||
       mergeRecord?.result === 'conflict' ||
       taskStatus === 'pending_pr'
     if (!hasUnresolvedTaskGit) continue
-    snapshots.push(await gitStoryForTask(projectPath, task))
+    snapshots.push(await gitStoryForTask(projectPath, task, workspace))
   }
   return summarizeGitStories(snapshots)
 }
@@ -1328,7 +1371,8 @@ async function enrichTaskForServe(
   projectPath: string,
   task: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const normalized = normalizeTaskForDrawer(task)
+  const effective = await buildEffectiveTask(projectPath, task as Task)
+  const normalized = normalizeTaskForDrawer(effective)
   const taskId = typeof normalized.id === 'string' ? normalized.id : ''
   const memoryDir = getProjectStateDir(projectPath)
   const checkpoint = taskId ? await readCheckpoint(memoryDir, taskId) : null
@@ -1355,7 +1399,9 @@ async function enrichTaskForServe(
     (note) => isWorkerSelfCritiqueNote(note),
   )
   const terminalSummary = buildTerminalSummary(normalized)
-  const gitStory = await gitStoryForTask(projectPath, normalized).catch(() => undefined)
+  const workspaceStore = await readTaskWorkspaceStore(projectPath).catch(() => undefined)
+  const workspace = taskId ? workspaceStore?.workspaces[taskId] : undefined
+  const gitStory = await gitStoryForTask(projectPath, normalized, workspace).catch(() => undefined)
 
   return {
     ...normalized,
@@ -1396,27 +1442,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
     ?? getRegisteredProjects()[0]?.path
     ?? process.cwd()
   const projectPath = resolve(fallbackProjectPath)
-  let selectedProjectPath = resolve(projectPath)
+  let defaultProjectPath = resolve(projectPath)
   const requestProjectPathStore = new AsyncLocalStorage<string>()
-  const syncSelectedProject = (): ResolvedProject => resolveProject(selectedProjectPath)
-  const currentProject = (): ResolvedProject => resolveProject(requestProjectPathStore.getStore() ?? selectedProjectPath)
+  const currentProject = (): ResolvedProject => resolveProject(requestProjectPathStore.getStore() ?? defaultProjectPath)
   const refreshProject = (path = currentProject().path): ResolvedProject => {
     const refreshed = resolveProject(path)
-    if (resolve(selectedProjectPath) === resolve(path)) selectedProjectPath = refreshed.path
+    if (resolve(defaultProjectPath) === resolve(path)) defaultProjectPath = refreshed.path
     return refreshed
   }
-  const selectForegroundProject = (path: string): ResolvedProject => {
-    const resolvedPath = resolve(path)
-    selectedProjectPath = resolvedPath
-    return resolveProject(resolvedPath)
-  }
-  const resolveProjectPathForRequest = (c: Context): string | null => {
+  const resolveProjectPathForRequest = (c: Context, { allowDefaultProject = false }: { allowDefaultProject?: boolean } = {}): string | null => {
     const requestedId = c.req.query('projectId')?.trim()
-    if (!requestedId) return selectedProjectPath
-    const selected = syncSelectedProject()
-    if (selected.id === requestedId) return selected.path
+    if (!requestedId) return allowDefaultProject ? defaultProjectPath : null
     const entry = getRegisteredProjects().find(item => item.id === requestedId)
-    if (!entry) return null
+    if (!entry) {
+      const defaultProject = resolveProject(defaultProjectPath)
+      if (defaultProject.id === requestedId) return defaultProject.path
+      return null
+    }
     return resolve(entry.path)
   }
   const project = new Proxy({} as ResolvedProject, {
@@ -1441,8 +1483,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
   const bindProjectScope = async (
     c: Context,
     next: () => Promise<void>,
-    { requireExplicitForMutation = false }: { requireExplicitForMutation?: boolean } = {},
+    {
+      allowDefaultProject = false,
+      requireExplicitForMutation = false,
+    }: { allowDefaultProject?: boolean; requireExplicitForMutation?: boolean } = {},
   ) => {
+    if (!allowDefaultProject && !c.req.query('projectId')?.trim()) {
+      return c.json({ error: 'projectId is required for project-scoped requests.' }, 400)
+    }
     if (
       requireExplicitForMutation &&
       c.req.method !== 'GET' &&
@@ -1451,7 +1499,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     ) {
       return c.json({ error: 'projectId is required for project-mutating requests.' }, 400)
     }
-    const resolvedPath = resolveProjectPathForRequest(c)
+    const resolvedPath = resolveProjectPathForRequest(c, { allowDefaultProject })
     if (!resolvedPath) {
       return c.json({ error: 'Unknown project id for this local Guildhall service.' }, 404)
     }
@@ -1460,10 +1508,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.use('/api/project', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
   app.use('/api/project/*', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
-  app.use('/api/config', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
-  app.use('/api/config/*', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
-  app.use('/api/setup', bindProjectScope)
-  app.use('/api/setup/*', bindProjectScope)
+  app.use('/api/config', (c, next) => bindProjectScope(c, next, { allowDefaultProject: true }))
+  app.use('/api/config/*', (c, next) => bindProjectScope(c, next, { allowDefaultProject: true }))
+  app.use('/api/setup', (c, next) => bindProjectScope(c, next, { allowDefaultProject: true }))
+  app.use('/api/setup/*', (c, next) => bindProjectScope(c, next, { allowDefaultProject: true }))
 
   // Dynamic API surfaces should never be cached. The dashboard depends on
   // `/api/project`, inbox state, and SSE-adjacent status reads reflecting the
@@ -1517,6 +1565,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const projects = await Promise.all(
       registeredProjects.map(async (entry) => {
         const resolved = resolveProject(entry.path)
+        const run = runsById.get(resolved.id)
+        const providerStatus = resolved.initializationNeeded
+          ? null
+          : await buildProjectProviderStatusForPath(entry.path, run?.providerStatus)
+        const projectCheckIn = resolved.initializationNeeded
+          ? null
+          : summarizeProjectCheckIn(getProjectStateDir(entry.path))
         let taskCounts: ServiceProjectSummary['taskCounts'] = {
           total: 0,
           active: 0,
@@ -1537,40 +1592,39 @@ export function buildServeApp(opts: ServeOptions = {}): {
             blockedTaskTitle: latestTaskTitleByStatus(tasks, ['blocked']),
             recentCompletedTaskTitle: latestTaskTitleByStatus(tasks, ['done']),
           }
-          if (gitStory) {
-            return {
-              ...summarizeProject(resolved),
-              summary: summarizeProjectText(resolved),
-              selected: resolved.path === resolve(selectedProjectPath),
-              taskCounts,
-              ...(taskActivity ? { taskActivity } : {}),
-              ...(highlights ? { highlights } : {}),
-              gitStory,
-              ...(runsById.get(resolved.id)
-                ? {
-                    run: {
-                      status: runsById.get(resolved.id)?.status,
-                      startedAt: runsById.get(resolved.id)?.startedAt,
-                      stoppedAt: runsById.get(resolved.id)?.stoppedAt,
-                      error: runsById.get(resolved.id)?.error,
-                      stopSummary: runsById.get(resolved.id)?.stopSummary,
-                      providerStatus: runsById.get(resolved.id)?.providerStatus,
-                    },
-                  }
-                : {}),
-            } satisfies ServiceProjectSummary
-          }
+          return {
+            ...summarizeProject(resolved),
+            summary: summarizeProjectText(resolved),
+            taskCounts,
+            ...(taskActivity ? { taskActivity } : {}),
+            ...(highlights ? { highlights } : {}),
+            ...(gitStory ? { gitStory } : {}),
+            ...(providerStatus ? { providerStatus } : {}),
+            projectCheckIn,
+            ...(run
+              ? {
+                  run: {
+                    status: run.status,
+                    startedAt: run.startedAt,
+                    stoppedAt: run.stoppedAt,
+                    error: run.error,
+                    stopSummary: run.stopSummary,
+                    providerStatus: run.providerStatus,
+                  },
+                }
+              : {}),
+          } satisfies ServiceProjectSummary
         } catch {
           // leave zeroed summary for missing/unreadable task files
         }
-        const run = runsById.get(resolved.id)
         return {
           ...summarizeProject(resolved),
           summary: summarizeProjectText(resolved),
-          selected: resolved.path === resolve(selectedProjectPath),
           taskCounts,
           ...(taskActivity ? { taskActivity } : {}),
           ...(highlights ? { highlights } : {}),
+          ...(providerStatus ? { providerStatus } : {}),
+          projectCheckIn,
           ...(run
             ? {
                 run: {
@@ -1588,28 +1642,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
     )
     return c.json({
       pid: process.pid,
-      selectedProject: summarizeProject(syncSelectedProject()),
-      foregroundProject: summarizeProject(syncSelectedProject()),
       defaultProviderStatus: buildGlobalDefaultProviderStatus(),
       projects,
     })
   })
 
   app.post('/api/service/select-project', async c => {
-    const body = await c.req.json().catch(() => ({})) as { projectId?: string; path?: string }
-    const registeredProjects = getRegisteredProjects()
-    const selectedPath =
-      (body.projectId ? registeredProjects.find((entry) => entry.id === body.projectId)?.path : undefined)
-      ?? body.path
-    if (!selectedPath) {
-      return c.json({ error: 'projectId or path is required' }, 400)
-    }
-    const entry = registeredProjects.find((item) => resolve(item.path) === resolve(selectedPath))
-    if (!entry) {
-      return c.json({ error: 'Project is not registered with this local Guildhall service.' }, 404)
-    }
-    const next = selectForegroundProject(entry.path)
-    return c.json({ ok: true, selectedProject: summarizeProject(next) })
+    return c.json({
+      error: 'Guildhall no longer has a service-wide selected project. Open /projects/:projectId or pass projectId to project APIs.',
+    }, 410)
   })
 
   app.post('/api/service/attach-project', async c => {
@@ -1624,11 +1665,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const next = resolveProject(resolvedPath)
       const sync = syncRegistryEntryForProject(next)
-      selectForegroundProject(next.path)
       return c.json({
         ok: true,
         attached: sync.attached,
-        selectedProject: summarizeProject(next),
+        project: summarizeProject(next),
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -2118,6 +2158,43 @@ export function buildServeApp(opts: ServeOptions = {}): {
     })
   }
 
+  async function buildProjectProviderStatusForPath(projectPath: string, liveProviderStatus?: unknown) {
+    if (liveProviderStatus) return liveProviderStatus
+    const resolvedConfig = resolveConfig({ workspacePath: projectPath })
+    const runtimeProvider = getRuntimeProviderConfig({
+      projectPath,
+      models: resolvedConfig.models,
+    })
+    const preferredProvider = runtimeProvider.preferredProvider
+    const preferredActiveProvider = preferredProvider
+      ? normalizePreferredProvider(preferredProvider)
+      : undefined
+    if (!preferredActiveProvider) return null
+    const preferredHealth = providerHealthForRun({
+      credentials: runtimeProvider.credentials,
+      activeProvider: preferredActiveProvider,
+    })
+    return buildProviderStatusSnapshot({
+      preferredProvider,
+      activeProvider: null,
+      fallback: false,
+      health: preferredHealth,
+      allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
+      activeModel: resolvedConfig.models.worker,
+      models: resolvedConfig.models,
+      laneConcurrency: await providerLaneConcurrencyForRun({
+        projectPath,
+        activeProvider: preferredActiveProvider,
+      }),
+      warnings: await providerWarningsForRun({
+        projectPath,
+        preferredProvider,
+        activeProvider: preferredActiveProvider,
+        health: preferredHealth,
+      }),
+    })
+  }
+
   function providerHealthForRun(input: {
     credentials: {
       anthropicApiKey?: string
@@ -2265,6 +2342,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
     message?: string
     actionHref?: string
   }> {
+    const ownerInputBlocker = startBlockerForOwnerInput(input.projectPath)
+    if (ownerInputBlocker) return ownerInputBlocker
+
     const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath)
     if (importDraftBlocker) return importDraftBlocker
 
@@ -2465,6 +2545,44 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ? `Review the imported draft "${title}" and turn it into a task brief before starting Guildhall.`
           : `Review ${importDrafts.length} imported drafts before starting Guildhall. Start with "${title}".`,
       actionHref: id ? `/task/${encodeURIComponent(id)}` : '/notifications',
+    }
+  }
+
+  function startBlockerForOwnerInput(projectPath: string): {
+    canStart: false
+    code: 'owner_input_required'
+    message: string
+    actionHref: string
+  } | null {
+    const ownerItems = buildInbox({ projectPath }).filter(item =>
+      item.severity !== 'low' &&
+      [
+        'project_check_in',
+        'pressure_test_pending',
+        'agent_question_pending',
+        'brief_approval',
+        'spec_approval',
+        'open_escalation',
+      ].includes(item.kind),
+    )
+    const first = ownerItems[0]
+    if (!first) return null
+    const questionCount = ownerItems.filter(item =>
+      item.kind === 'pressure_test_pending' || item.kind === 'agent_question_pending',
+    ).length
+    const action =
+      questionCount > 0
+        ? `${questionCount} ${questionCount === 1 ? 'question needs' : 'questions need'} your answer before Guildhall can continue`
+        : first.kind === 'brief_approval'
+          ? 'Review the waiting task brief before Guildhall can continue'
+          : first.kind === 'spec_approval'
+            ? 'Review the waiting spec before Guildhall can continue'
+            : 'Choose a recovery path for the blocked task'
+    return {
+      canStart: false,
+      code: 'owner_input_required',
+      message: action,
+      actionHref: first.actionHref ?? '/thread',
     }
   }
 
@@ -2793,6 +2911,37 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...(body.title ? { title: body.title } : {}),
       })
       return c.json(result)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/project-check-in', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const memoryDir = getProjectStateDir(project.path)
+      const existing = listPressureTestIntakes(memoryDir)
+      const active = existing.find(intake => intake.status === 'active')
+      if (active) return c.json({ intake: active, existing: true })
+      if (existing.length > 0) {
+        return c.json({
+          skipped: true,
+          projectCheckIn: summarizeProjectCheckIn(memoryDir),
+        })
+      }
+      const title = `${project.config?.name ?? project.id} project check-in`
+      const intake = await createPressureTestIntake({
+        memoryDir,
+        target: {
+          type: 'project',
+          id: `${project.id}-project-check-in`,
+          title,
+        },
+        rawRequest: `Start a project check-in for ${project.config?.name ?? project.id}.`,
+      })
+      return c.json({ intake, projectCheckIn: summarizeProjectCheckIn(memoryDir) })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -3923,11 +4072,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
       )
       if (taskIds.size > 0) {
         const tasks = await readTasksFileNormalized(join(getProjectStateDir(project.path), 'TASKS.json')).catch(() => [])
+        const workspaceStore = await readTaskWorkspaceStore(project.path).catch(() => undefined)
         const gitStories = new Map<string, Awaited<ReturnType<typeof gitStoryForTask>>>()
         for (const task of tasks) {
           const id = typeof task.id === 'string' ? task.id : ''
           if (!id || !taskIds.has(id)) continue
-          const gitStory = await gitStoryForTask(project.path, task).catch(() => undefined)
+          const gitStory = await gitStoryForTask(project.path, task, workspaceStore?.workspaces[id]).catch(() => undefined)
           if (gitStory) gitStories.set(id, gitStory)
         }
         if (gitStories.size > 0) {
@@ -4269,6 +4419,84 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  app.get('/api/project/task/:id/evidence', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const tasks = await readTasksFileNormalized(tasksPath)
+      const id = c.req.param('id')
+      const task = tasks.find(t => (t as { id?: string }).id === id) as Task | undefined
+      if (!task) return c.json({ error: 'task not found' }, 404)
+      const effective = await buildEffectiveTask(project.path, task)
+      return c.json({ taskId: id, evidence: effective.evidence })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/task/:id/history', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const tasks = await readTasksFileNormalized(tasksPath)
+      const id = c.req.param('id')
+      const task = tasks.find(t => (t as { id?: string }).id === id) as Task | undefined
+      if (!task) return c.json({ error: 'task not found' }, 404)
+      const effective = await buildEffectiveTask(project.path, task)
+      return c.json({
+        taskId: id,
+        events: effective.evidence.filter(event =>
+          event.kind === 'note' ||
+          event.kind === 'escalation' ||
+          event.kind === 'agent_issue' ||
+          event.kind === 'gate_result' ||
+          event.kind === 'merge_record'
+        ),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/task/:id/review', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const tasks = await readTasksFileNormalized(tasksPath)
+      const id = c.req.param('id')
+      const task = tasks.find(t => (t as { id?: string }).id === id) as Task | undefined
+      if (!task) return c.json({ error: 'task not found' }, 404)
+      const effective = await buildEffectiveTask(project.path, task)
+      return c.json({
+        taskId: id,
+        verdicts: effective.evidence.filter(event => event.kind === 'review_verdict'),
+        adjudications: effective.evidence.filter(event => event.kind === 'adjudication'),
+      })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/task/:id/git-story', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const tasks = await readTasksFileNormalized(tasksPath)
+      const id = c.req.param('id')
+      const task = tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+      if (!task) return c.json({ error: 'task not found' }, 404)
+      const workspaceStore = await readTaskWorkspaceStore(project.path).catch(() => undefined)
+      const snapshot = await gitStoryForTask(project.path, task, workspaceStore?.workspaces[id])
+      return c.json({ taskId: id, gitStory: snapshot })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
   app.post('/api/project/task/:id/git-story/:closureAction', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
@@ -4513,14 +4741,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
   })
 
   // POST /api/project/task/:id/:action — human overrides on a task.
-  //   pause              → blocked      (any non-terminal task)
+  //   hold               → blocked      (any non-terminal task; reversible)
+  //   resume-hold        → previous status from hold record
+  //   pause              → deprecated alias for hold
   //   shelve             → shelved      (any non-done task)
   //   unshelve           → proposed     (shelved task only; clears shelveReason)
   //   approve-spec       → ready  (human approves a spec_review task; body: {approvalNote?})
   //   approve-brief      → mark productBrief.approvedBy/approvedAt = human
+  //   mark-done          → done   (human confirms the task is already complete; body: {evidence?})
   //   add-acceptance     → append a human-written acceptance criterion
   //   resume             → append a follow-up message to an exploring transcript
   //                        (body: {message?, resolveEscalationId?, resolution?})
+  //   reframe-task       → reopen a stale/inscrutable task for fresh shaping
   //   resolve-escalation → close a named escalation; unblocks when none remain
   //                        (body: {escalationId, resolution, nextStatus?})
   app.post('/api/project/task/:id/:action', async c => {
@@ -4530,11 +4762,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const action = c.req.param('action')
       const KNOWN_ACTIONS = [
         'pause',
+        'hold',
+        'resume-hold',
         'shelve',
         'approve-spec',
         'approve-brief',
+        'mark-done',
         'add-acceptance',
         'resume',
+        'reframe-task',
         'unshelve',
         'resolve-escalation',
         'stage-answer',
@@ -4591,6 +4827,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
         if (!result.success) return c.json({ error: result.error ?? 'resume failed' }, 400)
         return c.json({ ok: true })
+      }
+
+      if (action === 'reframe-task') {
+        const body = await c.req.json().catch(() => ({})) as {
+          reason?: string
+        }
+        const result = await reframeTask({
+          memoryDir,
+          taskId: id,
+          ...(body.reason ? { reason: body.reason } : {}),
+        })
+        if (!result.success) return c.json({ error: result.error ?? 'reframe failed' }, 400)
+        return c.json({ ok: true, status: result.newStatus })
       }
 
       if (action === 'rerun-stage') {
@@ -4657,6 +4906,65 @@ export function buildServeApp(opts: ServeOptions = {}): {
         queue.lastUpdated = now
         atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true, status: task.status })
+      }
+
+      if (action === 'mark-done') {
+        const body = await c.req.json().catch(() => ({})) as { evidence?: string }
+        const evidence = (body.evidence ?? '').trim()
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        if (task.status === 'done') return c.json({ ok: true, status: 'done' })
+        if (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
+          return c.json({ error: `task is ${task.status}; stop or finish the active run before marking it done` }, 400)
+        }
+
+        const now = new Date().toISOString()
+        const criteria = Array.isArray(task.acceptanceCriteria)
+          ? [...task.acceptanceCriteria as Array<Record<string, unknown>>]
+          : []
+        task.acceptanceCriteria = criteria.map(criterion => ({
+          ...criterion,
+          met: true,
+        }))
+        if (Array.isArray(task.escalations)) {
+          task.escalations = (task.escalations as Array<Record<string, unknown>>).map(escalation => (
+            escalation.resolvedAt
+              ? escalation
+              : {
+                  ...escalation,
+                  resolvedAt: now,
+                  resolvedBy: 'human',
+                  resolution: evidence || 'Human confirmed this task is complete.',
+                }
+          ))
+        }
+        delete task.blockReason
+        task.status = 'done'
+        task.assignedTo = null
+        task.updatedAt = now
+        const notes = Array.isArray(task.notes)
+          ? [...task.notes as Array<Record<string, unknown>>]
+          : []
+        notes.push({
+          agentId: 'system:human',
+          role: 'human',
+          content: evidence
+            ? `Marked done from Thread. Evidence: ${evidence}`
+            : 'Marked done from Thread after human confirmation.',
+          timestamp: now,
+        })
+        task.notes = notes
+        queue.lastUpdated = now
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        return c.json({ ok: true, status: 'done' })
       }
 
       if (action === 'add-acceptance') {
@@ -4858,7 +5166,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ ok: true })
       }
 
-      // pause / shelve / unshelve: in-place mutation of TASKS.json.
+      // hold / resume-hold / shelve / unshelve: in-place mutation of TASKS.json.
       const tasksPath = join(memoryDir, 'TASKS.json')
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
@@ -4871,13 +5179,42 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!task) return c.json({ error: 'task not found' }, 404)
       const now = new Date().toISOString()
       const notes = Array.isArray(task.notes) ? [...(task.notes as unknown[])] : []
-      if (action === 'pause') {
-        if (task.status === 'done' || task.status === 'shelved') {
+      if (action === 'hold' || action === 'pause') {
+        const run = supervisor.get(project.id)
+        if (run && (run.status === 'running' || run.status === 'stopping')) {
+          return c.json({ error: 'Stop Guildhall before putting a task on hold.' }, 409)
+        }
+        if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
           return c.json({ error: `task is ${task.status}` }, 400)
         }
+        if (task.status === 'blocked' && task.hold) {
+          return c.json({ ok: true, status: 'blocked' })
+        }
+        const body = await c.req.json().catch(() => ({})) as { reason?: string }
+        const reason = (body.reason ?? '').trim()
+        task.hold = {
+          previousStatus: task.status,
+          ...(reason ? { reason } : {}),
+          heldAt: now,
+          heldBy: 'human',
+        }
         task.status = 'blocked'
-        task.blockReason = 'Paused by human from dashboard'
-        notes.push({ agentId: 'system:human', role: 'human', content: 'Task paused via dashboard', timestamp: now })
+        task.blockReason = reason ? `On hold: ${reason}` : 'On hold by human.'
+        notes.push({
+          agentId: 'system:human',
+          role: 'human',
+          content: reason ? `Task put on hold: ${reason}` : 'Task put on hold.',
+          timestamp: now,
+        })
+      } else if (action === 'resume-hold') {
+        const hold = task.hold as { previousStatus?: string } | undefined
+        if (task.status !== 'blocked' || !hold) {
+          return c.json({ error: 'task is not on hold' }, 400)
+        }
+        task.status = hold.previousStatus ?? 'ready'
+        delete task.hold
+        delete task.blockReason
+        notes.push({ agentId: 'system:human', role: 'human', content: 'Task returned from hold.', timestamp: now })
       } else if (action === 'unshelve') {
         if (task.status !== 'shelved') {
           return c.json({ error: `task is ${task.status}, not shelved` }, 400)
@@ -5190,7 +5527,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // -------------------------------------------------------------------------
   // API: design system
   //
-  // Project-scoped; lives at memory/design-system.yaml. The spec agent
+  // Project-scoped; lives at .guildhall/design-system.yaml. The spec agent
   // drafts it; a human approves. Agents consume the approved revision via
   // context-builder's summary block — read the full file for richer surface.
   // -------------------------------------------------------------------------
@@ -5261,13 +5598,52 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) return c.json({ initializationNeeded: true })
       const memoryDir = getProjectStateDir(project.path)
       const tasksPath = join(memoryDir, 'TASKS.json')
-      const tasks: Array<Record<string, unknown>> = (() => {
+      const rawTasks: Array<Record<string, unknown>> = (() => {
         if (!existsSync(tasksPath)) return []
         const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as
           | { tasks?: Array<Record<string, unknown>> }
           | Array<Record<string, unknown>>
         return Array.isArray(raw) ? raw : raw.tasks ?? []
       })()
+      const tasks = await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
+      const activePressureTest = listPressureTestIntakes(memoryDir)
+        .find(intake => intake.status === 'active' && intake.pendingQuestion)
+      if (activePressureTest?.pendingQuestion) {
+        return c.json({
+          ready: false,
+          notReadyReason: `Pressure test in progress. Answer the current question for ${activePressureTest.target.title} before judging release readiness.`,
+          statusCounts: {},
+          openEscalations: [],
+          unapprovedBriefs: [],
+          unapprovedSpecs: [],
+          shelvedUnclaimed: [],
+          blockedByAgent: [],
+          designSystem: {
+            drafted: false,
+            approved: false,
+            revision: 0,
+          },
+          dirtyCheckout: {
+            ownedCount: 0,
+            samplePaths: [],
+          },
+          gitStory: {
+            ready: true,
+            blockers: [],
+            snapshots: [],
+          },
+          totals: {
+            tasks: rawTasks.length,
+            blockingCount: 0,
+            humanBlockingCount: 0,
+            unfinishedCount: 0,
+            designSystemBlockingCount: 0,
+            dirtyCheckoutBlockingCount: 0,
+            gitStoryBlockingCount: 0,
+            done: rawTasks.filter(task => task.status === 'done').length,
+          },
+        })
+      }
       const ds = await loadDesignSystem(memoryDir).catch(() => undefined)
       const dirtyCheckout = await guildhallOwnedDirtyCheckout(project.path)
       const gitStory = await buildProjectGitStorySummary(project.path, tasks)
@@ -5303,7 +5679,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           const br = (t as { blockReason?: string }).blockReason
           blockedByAgent.push({ id, title, ...(br ? { reason: br } : {}) })
         }
-        for (const e of activeEscalations(t as import('@guildhall/core').Task)) {
+        for (const e of activeEscalations(t as unknown as import('@guildhall/core').Task)) {
           openEscalations.push({
             taskId: id,
             taskTitle: title,
@@ -5323,7 +5699,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         + unapprovedSpecs.length
         + blockedByAgent.length
       const designSystemBlockingCount = tasks.length > 0 && !designSystemApproved ? 1 : 0
-      const dirtyCheckoutBlockingCount = dirtyCheckout.ownedCount > 0 ? 1 : 0
+      const dirtyCheckoutBlockingCount = dirtyCheckout.ownedCount > 0 || dirtyCheckout.error ? 1 : 0
       const gitStoryBlockingCount = gitStory.blockers.length
       const blockingCount =
         humanBlockingCount
@@ -5333,7 +5709,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         + gitStoryBlockingCount
 
       return c.json({
-        ready: blockingCount === 0,
+        ready: tasks.length > 0 && blockingCount === 0,
+        ...(tasks.length === 0 ? { notReadyReason: 'No tasks in this project yet.' } : {}),
         statusCounts,
         openEscalations,
         unapprovedBriefs,
@@ -6041,6 +6418,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker', 'contextIndexer']
       if (!body.scope) return c.json({ error: 'Missing "scope"' }, 400)
+      if (body.scope !== 'global' && !c.req.query('projectId')?.trim()) {
+        return c.json({ error: 'Choose a project before saving project model overrides.' }, 400)
+      }
       const workspacePath = currentProjectPath()
       const projectCfg = readProjectConfig(workspacePath)
       const preferredProvider = projectCfg.preferredProvider ?? readGlobalConfig().preferredProvider

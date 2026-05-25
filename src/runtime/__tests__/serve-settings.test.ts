@@ -863,7 +863,7 @@ describe('POST /api/project/bootstrap/run — auto-detect fallback', () => {
 describe('GET /api/project/facts', () => {
   it('returns all sections with editHrefs even on a bare-bootstrap workspace', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/facts'))
+    const res = await app.fetch(new Request(scoped('/api/project/facts')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, any>
     expect(body.identity.name).toBeDefined()
@@ -890,7 +890,7 @@ describe('GET /api/project/facts', () => {
     await fs.writeFile(path.join(tmpDir, 'backend', 'backend.csproj'), '<Project />', 'utf8')
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/facts'))
+    const res = await app.fetch(new Request(scoped('/api/project/facts')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as { environment: { packageManagers: string[] } }
     expect(body.environment.packageManagers).toContain('pnpm')
@@ -945,7 +945,7 @@ describe('GET /api/project/facts', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/facts'))
+    const res = await app.fetch(new Request(scoped('/api/project/facts')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       workspace: { goals: { imported: boolean; goalCount: number; taskCount: number; milestoneCount: number } }
@@ -970,7 +970,7 @@ describe('POST /api/project/workspace-import/dismiss', () => {
     await fs.writeFile(path.join(tmpDir, 'README.md'), '# Test\n', 'utf8')
     await fs.writeFile(path.join(tmpDir, 'package.json'), '{"name":"x"}', 'utf8')
 
-    const before = await app.fetch(new Request('http://localhost/api/project/inbox'))
+    const before = await app.fetch(new Request(scoped('/api/project/inbox')))
     const beforeBody = (await before.json()) as { items: Array<{ kind: string }> }
     expect(beforeBody.items.some(i => i.kind === 'workspace_import_pending')).toBe(true)
 
@@ -980,12 +980,12 @@ describe('POST /api/project/workspace-import/dismiss', () => {
     expect(dismiss.status).toBe(200)
     expect(((await dismiss.json()) as { ok?: boolean }).ok).toBe(true)
 
-    const after = await app.fetch(new Request('http://localhost/api/project/inbox'))
+    const after = await app.fetch(new Request(scoped('/api/project/inbox')))
     const afterBody = (await after.json()) as { items: Array<{ kind: string }> }
     expect(afterBody.items.some(i => i.kind === 'workspace_import_pending')).toBe(false)
 
     // Facts surface reflects the dismissed state.
-    const facts = await app.fetch(new Request('http://localhost/api/project/facts'))
+    const facts = await app.fetch(new Request(scoped('/api/project/facts')))
     const factsBody = (await facts.json()) as { workspace: { goals: { dismissed: boolean } | null } }
     expect(factsBody.workspace.goals?.dismissed).toBe(true)
   })
@@ -1043,7 +1043,7 @@ describe('Workspace Import review endpoints', () => {
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
-      new Request('http://localhost/api/project/workspace-import/draft'),
+      new Request(scoped('/api/project/workspace-import/draft')),
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
@@ -1309,7 +1309,7 @@ describe('Workspace Import review endpoints', () => {
     await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'ws-learn' }), 'utf8')
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const before = await app.fetch(new Request('http://localhost/api/project/workspace-import/draft'))
+    const before = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
     const beforeBody = (await before.json()) as {
       detected: {
         review: { sourceGroups: Array<{ key: string; areaKey: string; taskIds: string[] }> }
@@ -1332,7 +1332,7 @@ describe('Workspace Import review endpoints', () => {
     )
     expect(approve.status).toBe(200)
 
-    const after = await app.fetch(new Request('http://localhost/api/project/workspace-import/draft'))
+    const after = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
     const afterBody = (await after.json()) as {
       detected: {
         learning: {
@@ -1440,7 +1440,7 @@ describe('GET/POST /api/project/learning', () => {
     await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'learning-api' }), 'utf8')
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const draftRes = await app.fetch(new Request('http://localhost/api/project/workspace-import/draft'))
+    const draftRes = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
     const draftBody = (await draftRes.json()) as {
       detected: { review: { sourceGroups: Array<{ key: string; areaKey: string; taskIds: string[] }> } }
     }
@@ -1458,7 +1458,7 @@ describe('GET/POST /api/project/learning', () => {
       }),
     )
 
-    const learning = await app.fetch(new Request('http://localhost/api/project/learning'))
+    const learning = await app.fetch(new Request(scoped('/api/project/learning')))
     const learningBody = (await learning.json()) as {
       effective: { defaults: { selectedAreaKeys: string[] } } | null
       project: { workspaceImport: { approvedRuns: number } } | null
@@ -1475,7 +1475,7 @@ describe('GET/POST /api/project/learning', () => {
     )
     expect(reset.status).toBe(200)
 
-    const afterReset = await app.fetch(new Request('http://localhost/api/project/learning'))
+    const afterReset = await app.fetch(new Request(scoped('/api/project/learning')))
     const afterResetBody = (await afterReset.json()) as {
       project: { workspaceImport: { approvedRuns: number } } | null
     }
@@ -1718,7 +1718,7 @@ describe('GET /api/project/inbox — blockers', () => {
 
     // bootstrapWorkspace leaves guildhall.yaml without a structural bootstrap
     // verifiedAt, so bootstrap_missing is expected.
-    const before = await app.fetch(new Request('http://localhost/api/project/inbox'))
+    const before = await app.fetch(new Request(scoped('/api/project/inbox')))
     expect(before.status).toBe(200)
     const beforeBody = (await before.json()) as {
       items: Array<{ kind: string }>
@@ -1736,7 +1736,7 @@ describe('GET /api/project/inbox — blockers', () => {
       'utf8',
     )
 
-    const after = await app.fetch(new Request('http://localhost/api/project/inbox'))
+    const after = await app.fetch(new Request(scoped('/api/project/inbox')))
     const afterBody = (await after.json()) as {
       blockers: { bootstrap: boolean; workspaceImport: boolean }
     }
@@ -1770,7 +1770,7 @@ describe('GET /api/project — bootstrap status', () => {
     )
     const { app } = buildServeApp({ projectPath: tmpDir })
 
-    const res = await app.fetch(new Request('http://localhost/api/project'))
+    const res = await app.fetch(new Request(scoped('/api/project')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       bootstrapStatus?: { success?: boolean; steps?: Array<{ command?: string; result?: string }> }
@@ -1800,7 +1800,7 @@ describe('GET /api/project — bootstrap status', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
     expect(projectRes.status).toBe(200)
     const projectBody = (await projectRes.json()) as {
       inbox?: {
@@ -1809,7 +1809,7 @@ describe('GET /api/project — bootstrap status', () => {
       }
     }
 
-    const inboxRes = await app.fetch(new Request('http://localhost/api/project/inbox'))
+    const inboxRes = await app.fetch(new Request(scoped('/api/project/inbox')))
     expect(inboxRes.status).toBe(200)
     const inboxBody = (await inboxRes.json()) as {
       items?: Array<{ kind?: string; taskId?: string }>
@@ -1823,11 +1823,11 @@ describe('GET /api/project — bootstrap status', () => {
   it('marks dynamic project payloads as non-cacheable', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
 
-    const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
     expect(projectRes.headers.get('cache-control')).toBe('no-store, no-cache, must-revalidate')
     expect(projectRes.headers.get('pragma')).toBe('no-cache')
 
-    const inboxRes = await app.fetch(new Request('http://localhost/api/project/inbox'))
+    const inboxRes = await app.fetch(new Request(scoped('/api/project/inbox')))
     expect(inboxRes.headers.get('cache-control')).toBe('no-store, no-cache, must-revalidate')
     expect(inboxRes.headers.get('pragma')).toBe('no-cache')
   })

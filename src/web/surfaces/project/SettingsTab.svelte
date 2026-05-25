@@ -69,6 +69,12 @@
     kind?: string
     summary?: string
     ref?: string
+    links?: Array<{
+      kind?: string
+      label?: string
+      href?: string
+      localHistoryRef?: string
+    }>
   }
   interface SuggestedLearning {
     id: string
@@ -1162,7 +1168,22 @@
                       <p class="learning-label">Why Guildhall suggested this</p>
                       <ul class="learning-evidence">
                         {#each item.evidence as evidence, i (`${item.id}-${i}`)}
-                          <li>{evidence.summary}</li>
+                          <li>
+                            <span>{evidence.summary}</span>
+                            {#if evidence.links?.length}
+                              <span class="learning-evidence-links">
+                                {#each evidence.links as link, j (`${item.id}-${i}-${j}`)}
+                                  {#if link.href}
+                                    <a
+                                      class="learning-evidence-link"
+                                      href={projectActionHref(link.href)}
+                                      title={link.localHistoryRef ? `Local evidence: ${link.localHistoryRef}` : undefined}
+                                    >{link.label ?? 'Open evidence'}</a>
+                                  {/if}
+                                {/each}
+                              </span>
+                            {/if}
+                          </li>
                         {/each}
                       </ul>
                     {/if}
@@ -1887,6 +1908,20 @@
     color: var(--text-muted);
     font-size: var(--fs-1);
     line-height: var(--lh-body);
+  }
+
+  .learning-evidence-links {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    margin-inline-start: var(--gh-space-2);
+  }
+
+  .learning-evidence-link {
+    color: var(--accent);
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
 
   .suggestion-list {

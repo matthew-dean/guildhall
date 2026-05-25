@@ -467,6 +467,22 @@ describe('engine tool wrappers', () => {
     expect(result.metadata?.escalationId).toBe('esc-task-001-1')
   })
 
+  it('raiseEscalationTool rejects routine verification proof as owner work', async () => {
+    const result = await raiseEscalationTool.execute(
+      {
+        tasksPath,
+        taskId: 'task-001',
+        agentId: 'worker-agent',
+        reason: 'human_judgment_required',
+        summary: 'Cannot satisfy required AC-8 evidence command under current authoritative verification gate.',
+        details: 'Coordinator scoped instructions require an AC-8 evidence block with the exact pnpm --dir frontend test result.',
+      },
+      ctx,
+    )
+    expect(result.is_error).toBe(true)
+    expect(result.output).toMatch(/routine verification evidence/i)
+  })
+
   it('raiseEscalationTool marks unknown task as error', async () => {
     const result = await raiseEscalationTool.execute(
       {

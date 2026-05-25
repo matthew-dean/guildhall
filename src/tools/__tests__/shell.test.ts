@@ -57,6 +57,35 @@ function makeScriptPackage(): string {
   return root
 }
 
+function makeWorkspaceScriptPackage(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guildhall-shell-workspace-'))
+  const frontend = path.join(root, 'frontend')
+  fs.mkdirSync(frontend, { recursive: true })
+  fs.writeFileSync(
+    path.join(root, 'pnpm-workspace.yaml'),
+    "packages:\n  - 'frontend'\n",
+  )
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    JSON.stringify({ private: true, packageManager: 'pnpm@10.19.0' }, null, 2),
+  )
+  fs.writeFileSync(
+    path.join(frontend, 'package.json'),
+    JSON.stringify(
+      {
+        name: 'frontend',
+        private: true,
+        scripts: {
+          test: "node -e \"console.log('frontend-test-ran')\"",
+        },
+      },
+      null,
+      2,
+    ),
+  )
+  return root
+}
+
 describe('runShellSync — success cases', () => {
   it('returns success=true for a command that exits 0', () => {
     const result = runShellSync({ command: 'echo hello', cwd: '/tmp', timeoutMs: 5000 })
@@ -329,6 +358,26 @@ describe('shellTool — engine-tool interface', () => {
     expect(result.metadata).toMatchObject({
       requestedCommand: `cd ${cwd} && pnpm test 2>&1`,
       executedCommand: 'npm test',
+      usedAuthoritativeCommand: true,
+    })
+  })
+
+  it('normalizes scoped pnpm test commands to the script form pnpm expects', async () => {
+    const cwd = makeWorkspaceScriptPackage()
+    const result = await shellTool.execute(
+      { command: 'pnpm test', cwd, timeoutMs: 5000 },
+      {
+        cwd,
+        metadata: {
+          current_task_verification_commands: ['pnpm --dir frontend test'],
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('frontend-test-ran')
+    expect(result.metadata).toMatchObject({
+      requestedCommand: 'pnpm test',
+      executedCommand: 'pnpm --dir frontend run test',
       usedAuthoritativeCommand: true,
     })
   })

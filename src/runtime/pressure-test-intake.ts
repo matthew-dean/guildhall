@@ -67,6 +67,17 @@ export const PressureTestIntake = z.object({
 })
 export type PressureTestIntake = z.infer<typeof PressureTestIntake>
 
+export interface ProjectCheckInSummary {
+  needed: boolean
+  label: string
+  title: string
+  detail: string
+  actionHref: string
+  totalCount: number
+  activeCount: number
+  completedCount: number
+}
+
 export async function createPressureTestIntake(input: {
   memoryDir: string
   target: PressureTestIntake['target']
@@ -81,7 +92,7 @@ export async function createPressureTestIntake(input: {
     target: input.target,
     status: 'active',
     activeDomainId: domains[0]!.id,
-    pendingQuestion: firstQuestion(domains[0]!, input.target.title, now),
+    pendingQuestion: firstQuestion(domains[0]!, input.target, now),
     domains,
     outputs: {
       assumptions: [],
@@ -101,7 +112,7 @@ export async function loadPressureTestIntake(input: {
   intakeId: string
 }): Promise<PressureTestIntake> {
   const raw = await fsp.readFile(pressureTestPath(input.memoryDir, input.intakeId), 'utf-8')
-  return PressureTestIntake.parse(JSON.parse(raw))
+  return normalizePressureTestIntake(PressureTestIntake.parse(JSON.parse(raw)))
 }
 
 export async function savePressureTestIntake(
@@ -148,7 +159,7 @@ export async function answerPressureTestQuestion(input: {
     if (nextDomain) {
       nextDomain.status = 'active'
       intake.activeDomainId = nextDomain.id
-      intake.pendingQuestion = firstQuestion(nextDomain, intake.target.title, now)
+      intake.pendingQuestion = firstQuestion(nextDomain, intake.target, now)
     } else {
       intake.status = 'complete'
       intake.activeDomainId = null
@@ -220,12 +231,37 @@ export function listPressureTestIntakes(memoryDir: string): PressureTestIntake[]
     .flatMap((name) => {
       try {
         const raw = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf-8'))
-        return [PressureTestIntake.parse(raw)]
+        return [normalizePressureTestIntake(PressureTestIntake.parse(raw))]
       } catch {
         return []
       }
     })
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+}
+
+export function summarizeProjectCheckIn(memoryDir: string): ProjectCheckInSummary {
+  const intakes = listPressureTestIntakes(memoryDir)
+  const activeCount = intakes.filter(intake => intake.status === 'active').length
+  const completedCount = intakes.filter(intake => intake.status === 'complete').length
+  const needed = intakes.length === 0
+  return {
+    needed,
+    label: 'Project questions',
+    title: needed
+      ? 'Project check-in needed'
+      : activeCount > 0
+        ? 'Project questions in progress'
+        : 'Project questions answered',
+    detail: needed
+      ? 'Start the first project-question pass so Guildhall can use current project context before it starts guessing.'
+      : activeCount > 0
+        ? 'Keep answering the current project questions in Thread.'
+        : 'Guildhall has already recorded project-level answers for this workspace.',
+    actionHref: '/thread',
+    totalCount: intakes.length,
+    activeCount,
+    completedCount,
+  }
 }
 
 export function renderPressureTestSpec(intake: PressureTestIntake): string {
@@ -262,7 +298,7 @@ function seedDomains(): Array<z.infer<typeof PressureTestDomain>> {
     {
       id: 'product-goals',
       title: 'Product goals',
-      whyItMatters: 'Workers need to know which outcome defines success before splitting tasks.',
+      whyItMatters: 'A clear goal helps Guildhall shape work around the result you actually want.',
       status: 'seeded',
       knownFacts: [],
       openUnknowns: ['What must this intake make clearer than the current flow?'],
@@ -297,17 +333,66 @@ function seedDomains(): Array<z.infer<typeof PressureTestDomain>> {
 
 function firstQuestion(
   domain: z.infer<typeof PressureTestDomain>,
-  targetTitle: string,
+  target: PressureTestIntake['target'],
   askedAt: string,
 ): PressureTestQuestion {
   return {
     id: `${domain.id}-q-1`,
     domainId: domain.id,
-    prompt: `What must ${targetTitle} get right first for ${domain.title.toLowerCase()}?`,
+    prompt: firstQuestionPrompt(domain.title, target),
     why: domain.whyItMatters,
     evidence: domain.knownFacts.map(f => `${f.source}: ${f.fact}`),
     askedAt,
   }
+}
+
+function firstQuestionPrompt(domainTitle: string, target: PressureTestIntake['target']): string {
+  if (target.type === 'project') {
+    return projectCheckInQuestionPrompt(domainTitle)
+  }
+
+  const targetLabel = `"${target.title}"`
+  switch (domainTitle.toLowerCase()) {
+    case 'product goals':
+      return `For ${targetLabel}, what outcome should this request achieve?`
+    case 'workflows':
+      return `For ${targetLabel}, what workflow or user path should Guildhall understand before splitting the work?`
+    case 'risks and non-goals':
+      return `For ${targetLabel}, what risk, boundary, or non-goal should Guildhall keep in mind?`
+    default:
+      return `What should Guildhall understand first about ${targetLabel}?`
+  }
+}
+
+function projectCheckInQuestionPrompt(domainTitle: string): string {
+  switch (domainTitle.toLowerCase()) {
+    case 'product goals':
+      return 'What outcome would make this project successful?'
+    case 'workflows':
+      return 'What workflow or day-to-day constraint should Guildhall understand about this project?'
+    case 'risks and non-goals':
+      return 'What risk, boundary, or non-goal should Guildhall remember for this project?'
+    default:
+      return 'What should Guildhall understand first about this project?'
+  }
+}
+
+function normalizePressureTestIntake(intake: PressureTestIntake): PressureTestIntake {
+  const active = intake.domains.find(domain => domain.id === intake.activeDomainId)
+  if (active && intake.pendingQuestion?.id === `${active.id}-q-1`) {
+    const replacement = firstQuestion(active, intake.target, intake.pendingQuestion.askedAt)
+    if (intake.pendingQuestion.prompt !== replacement.prompt) {
+      intake = {
+        ...intake,
+        pendingQuestion: {
+          ...intake.pendingQuestion,
+          prompt: replacement.prompt,
+        },
+      }
+    }
+  }
+
+  return intake
 }
 
 function needsConcreteFollowUp(answer: string): boolean {

@@ -83,31 +83,34 @@ async function writeCodexCred(): Promise<void> {
 }
 
 describe('GET /api/setup/providers', () => {
-  it('reports service metadata with a current selected project when the service starts at the fleet level', async () => {
+  it('reports service metadata without a current selected project when the service starts at the fleet level', async () => {
     registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
     const { app } = buildServeApp({})
     const res = await app.fetch(new Request('http://localhost/api/service'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
-      selectedProject: { id: string } | null
-      foregroundProject: { id: string } | null
+      selectedProject?: unknown
+      foregroundProject?: unknown
       projects: Array<{ id: string }>
     }
-    expect(body.selectedProject?.id).toBe('provider-test')
-    expect(body.foregroundProject?.id).toBe('provider-test')
+    expect(body.selectedProject).toBeUndefined()
+    expect(body.foregroundProject).toBeUndefined()
     expect(body.projects.map(project => project.id)).toContain('provider-test')
   })
 
-  it('reports the hinted project as selected when the service is launched with an initial project hint', async () => {
+  it('keeps a project hint out of service-wide selection metadata', async () => {
+    registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
     const { app } = buildServeApp({ preferredProjectPath: tmpProject })
     const res = await app.fetch(new Request('http://localhost/api/service'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
-      selectedProject: { id: string; path: string } | null
-      foregroundProject: { id: string } | null
+      selectedProject?: unknown
+      foregroundProject?: unknown
+      projects: Array<{ id: string; path: string }>
     }
-    expect(body.selectedProject).toMatchObject({ id: 'provider-test', path: tmpProject })
-    expect(body.foregroundProject).toMatchObject({ id: 'provider-test' })
+    expect(body.selectedProject).toBeUndefined()
+    expect(body.foregroundProject).toBeUndefined()
+    expect(body.projects).toContainEqual(expect.objectContaining({ id: 'provider-test', path: tmpProject }))
   })
 
   it('reports no credentials when the global store is empty', async () => {
@@ -161,7 +164,7 @@ describe('GET /api/setup/providers', () => {
 })
 
 describe('POST /api/setup/providers/config', () => {
-  it('applies provider setup reads and writes to the selected project, not the startup project', async () => {
+  it('applies provider setup reads and writes to the explicitly scoped project, not the startup project', async () => {
     const secondProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-providers-proj-'))
     try {
       bootstrapWorkspace(secondProject, { name: 'Second Provider Test' })
@@ -170,16 +173,7 @@ describe('POST /api/setup/providers/config', () => {
       updateProjectConfig(secondProject, { preferredProvider: 'llama-cpp' })
 
       const { app } = buildServeApp({ projectPath: tmpProject })
-      const selectRes = await app.fetch(
-        new Request('http://localhost/api/service/select-project', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ projectId: 'second-provider-test' }),
-        }),
-      )
-      expect(selectRes.status).toBe(200)
-
-      const before = await app.fetch(new Request('http://localhost/api/setup/providers'))
+      const before = await app.fetch(new Request('http://localhost/api/setup/providers?projectId=second-provider-test'))
       expect(before.status).toBe(200)
       const beforeBody = (await before.json()) as { preferredProvider?: string | null }
       expect(beforeBody.preferredProvider).toBe('llama-cpp')
@@ -442,7 +436,7 @@ describe('POST /api/setup/providers/config', () => {
       ),
     )
     const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/config/models'))
+    const res = await app.fetch(new Request('http://localhost/api/config/models?projectId=provider-test'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       loadedModels?: string[]
@@ -638,7 +632,7 @@ describe('POST /api/project/start preflight', () => {
         activeModel: 'claude-sonnet-4-6',
       })
 
-      const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+      const projectRes = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test'))
       const projectBody = (await projectRes.json()) as {
         providerStatus?: {
           preferredProvider?: string
@@ -725,7 +719,7 @@ describe('POST /api/project/start preflight', () => {
       allowPaidProviderFallback: true,
     })
     const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/project'))
+    const res = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       providerStatus?: {
@@ -781,6 +775,49 @@ describe('POST /api/project/start preflight', () => {
     expect(body.defaultProviderStatus?.warnings).toBeUndefined()
   })
 
+  it('includes project provider warnings and project question status in the service payload', async () => {
+    updateGlobalConfig({
+      ...readGlobalConfig(),
+      preferredProvider: 'codex',
+      models: {
+        'openai-api': {
+          worker: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+        },
+      },
+    })
+    updateProjectConfig(tmpProject, { preferredProvider: 'codex' })
+    registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
+
+    const { app } = buildServeApp({})
+    const res = await app.fetch(new Request('http://localhost/api/service'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      projects: Array<{
+        id: string
+        providerStatus?: {
+          preferredProvider?: string
+          warnings?: Array<{ code?: string; message?: string }>
+        } | null
+        projectCheckIn?: {
+          needed?: boolean
+          label?: string
+          actionHref?: string
+        }
+      }>
+    }
+
+    const project = body.projects.find(p => p.id === 'provider-test')
+    expect(project?.providerStatus).toMatchObject({
+      preferredProvider: 'codex',
+      warnings: [expect.objectContaining({ code: 'provider_model_scope_mismatch' })],
+    })
+    expect(project?.projectCheckIn).toMatchObject({
+      needed: true,
+      label: 'Project questions',
+      actionHref: '/thread',
+    })
+  })
+
   it('warns when provider-scoped model overrides do not match the preferred provider', async () => {
     updateGlobalConfig({
       ...readGlobalConfig(),
@@ -792,7 +829,7 @@ describe('POST /api/project/start preflight', () => {
       },
     })
     const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/project'))
+    const res = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       providerStatus?: {
@@ -814,7 +851,7 @@ describe('POST /api/project/start preflight', () => {
       reviewerFanoutConcurrency: 3,
     })
     const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/project'))
+    const res = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       providerStatus?: {

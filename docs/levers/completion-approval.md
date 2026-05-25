@@ -17,7 +17,7 @@ What authority is required to mark a task `done`.
 
 | Position | Behavior |
 |---|---|
-| `human_required` | Task waits in `gate_check` until a human clicks Approve in the browser UI. |
+| `human_required` | Task waits in `gate_check` until you click Approve in the browser UI. |
 | `coordinator_sufficient` | If all reviewer verdicts are pass, the coordinator approves automatically. |
 | `gates_sufficient` | If all hard gates pass, the task completes with no further review. |
 

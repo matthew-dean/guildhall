@@ -96,6 +96,48 @@ describe('buildProjectTicker', () => {
 
     expect(
       buildProjectTicker(
+        {
+          ...detail,
+          gitStory: {
+            ready: false,
+            state: 'unknown',
+            blockers: [{ state: 'unknown', reason: 'spawn git ENOENT' }],
+            snapshots: [{ state: 'unknown', reason: 'spawn git ENOENT' }],
+          },
+        },
+        { event: { type: 'supervisor_error', message: 'spawn git ENOENT' } },
+        now,
+      ),
+    ).toMatchObject({
+      tone: 'danger',
+      actorLabel: 'Git',
+      label: 'Error',
+      message: 'Guildhall could not find git while inspecting this project.',
+    })
+
+    expect(
+      buildProjectTicker(
+        {
+          ...detail,
+          tasks: [{ id: 'task-1', status: 'ready', title: 'Polish task cards' }],
+          gitStory: {
+            ready: true,
+            state: 'clean',
+            blockers: [],
+            snapshots: [{ state: 'clean', reason: 'No local changes or unpublished branch work detected.' }],
+          },
+        },
+        { event: { type: 'supervisor_error', message: 'spawn git ENOENT' } },
+        now,
+      ),
+    ).toMatchObject({
+      tone: 'idle',
+      actorLabel: 'Paused',
+      message: '1 task paused until Guildhall starts',
+    })
+
+    expect(
+      buildProjectTicker(
         detail,
         { event: { type: 'agent_issue', task_id: 'task-1' } },
         now,

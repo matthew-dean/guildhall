@@ -23,6 +23,7 @@ function handlers() {
     onRunTask: vi.fn(),
     onShapeDraft: vi.fn(),
     onOpenSpecTab: vi.fn(),
+    onResolveEscalation: vi.fn(async () => {}),
     onAnswerQuestion: vi.fn(async () => {}),
   }
 }
@@ -225,6 +226,37 @@ describe('CurrentTab', () => {
     expect(screen.queryByText('Queued')).toBeNull()
   })
 
+  it('turns acceptance-criteria evidence blockers into a concrete Guildhall action', async () => {
+    const props = renderCurrent([
+      {
+        id: 'turn-escalation',
+        kind: 'escalation',
+        at: now,
+        persona: 'worker',
+        status: 'active',
+        phase: 'blocked',
+        taskId: 'task-link-editor',
+        taskTitle: 'Knit: add link editor controls',
+        escalationId: 'esc-1',
+        escalationAgentId: 'worker-agent',
+        summary: 'Cannot satisfy required AC-8 evidence command under current authoritative verification gate.',
+        details: 'Coordinator scoped instructions require an AC-8 evidence block with the exact pnpm --dir frontend test result (timestamp + exit code) and concrete auth test specs.',
+      },
+    ])
+
+    expect(screen.getByText('Next Guildhall step')).toBeTruthy()
+    expect(screen.getByText('Guildhall needs to run one missing check.')).toBeTruthy()
+    expect(screen.getByText(/not asking you to prove anything/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Let Guildhall run the check/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Review acceptance criteria' })).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: /Let Guildhall run the check/i }))
+    expect(props.onResolveEscalation).toHaveBeenCalledWith(expect.objectContaining({
+      escalationId: 'esc-1',
+      nextStatus: 'ready',
+    }))
+    expect(document.body.textContent).not.toMatch(/\bAC-8\b/)
+  })
+
   it('shows queued work, run errors, and checklist progress in one card', async () => {
     const props = renderCurrent(
       [
@@ -297,24 +329,25 @@ describe('CurrentTab', () => {
         taskStatus: 'ready',
         summary: 'Ready for work.',
         checklist: {
-          title: 'Task checklist',
+          title: 'Task brief checklist',
           doneCount: 2,
           totalSteps: 4,
           activeStepId: 'success',
           steps: [
-            { id: 'title', title: 'Give the task a title', why: 'Needed downstream.', status: 'done' },
-            { id: 'description', title: 'Describe what the agent is looking at', why: 'Needed downstream.', status: 'done' },
-            { id: 'success', title: 'Explain what success looks like', why: 'Review needs this.', status: 'active' },
-            { id: 'criteria', title: 'Add at least one acceptance criterion', why: 'Review needs this.', status: 'pending' },
+            { id: 'title', title: 'Readable title', why: 'Give this work a name someone can recognize later.', status: 'done' },
+            { id: 'description', title: 'Starting point', why: 'Say what Guildhall should inspect or use as the starting evidence.', status: 'done' },
+            { id: 'success', title: 'Success target', why: 'State what should be true when this work is finished.', status: 'active' },
+            { id: 'criteria', title: 'Acceptance criteria', why: 'Add the concrete checks Guildhall should use before calling the work done.', status: 'pending' },
           ],
         },
       },
     ])
 
     expect(screen.getByText('Needs task brief')).toBeTruthy()
-    expect(screen.getByText(/not ready for worker implementation/i)).toBeTruthy()
+    expect(screen.getByText(/draft task brief/i)).toBeTruthy()
+    expect(screen.getAllByText('Missing').length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByRole('button', { name: /start work/i })).toBeNull()
-    await userEvent.click(screen.getByRole('button', { name: /review checklist/i }))
+    await userEvent.click(screen.getByRole('button', { name: /open checklist/i }))
 
     expect(props.onOpenSpecTab).toHaveBeenCalledOnce()
     expect(props.onRunTask).not.toHaveBeenCalled()

@@ -20,6 +20,14 @@ const launchAgentsDir = join(homeDir, 'Library', 'LaunchAgents')
 const plistPath = join(launchAgentsDir, `${label}.plist`)
 const templatePath = flag('--template') ?? join(ROOT, 'packaging', 'macos', 'io.guildhall.agent.plist.tmpl')
 const uid = process.getuid?.()
+const servicePath = [
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  '/usr/bin',
+  '/bin',
+  '/usr/sbin',
+  '/sbin',
+].join(':')
 
 mkdirSync(logsDir, { recursive: true })
 mkdirSync(launchAgentsDir, { recursive: true })
@@ -39,6 +47,7 @@ const plist = readFileSync(templatePath, 'utf8')
   .replace('{{WORKING_DIRECTORY}}', xmlEscape(installDir))
   .replace('{{STDOUT_PATH}}', xmlEscape(join(logsDir, 'service.stdout.log')))
   .replace('{{STDERR_PATH}}', xmlEscape(join(logsDir, 'service.stderr.log')))
+  .replace('{{SERVICE_PATH}}', xmlEscape(servicePath))
 
 writeFileSync(plistPath, plist, 'utf8')
 

@@ -9,7 +9,7 @@ import { z } from 'zod'
 // starts with nothing, the Spec Agent (or a human) fills it in over time,
 // and a human approves the version that new work is measured against.
 //
-// Storage: memory/design-system.yaml (YAML for human-editability).
+// Storage: .guildhall/design-system.yaml (YAML for human-editability).
 // Loader + writer live in @guildhall/runtime (they're filesystem-bound).
 // ---------------------------------------------------------------------------
 

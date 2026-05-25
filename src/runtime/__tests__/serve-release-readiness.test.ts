@@ -4,7 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { bootstrapWorkspace } from '@guildhall/config'
+import { bootstrapWorkspace, slugify } from '@guildhall/config'
 import type { Task, TaskQueue } from '@guildhall/core'
 import { buildServeApp } from '../serve.js'
 
@@ -107,7 +107,10 @@ describe('GET /api/project/release-readiness', () => {
     const emptyDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-uninitialized-'))
     try {
       const { app } = buildServeApp({ projectPath: emptyDir })
-      const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+      const fallbackId = slugify(path.basename(emptyDir))
+      const url = new URL('http://localhost/api/project/release-readiness')
+      url.searchParams.set('projectId', fallbackId)
+      const res = await app.fetch(new Request(url))
       expect(res.status).toBe(200)
       const body = await res.json() as { initializationNeeded?: boolean }
       expect(body.initializationNeeded).toBe(true)
@@ -116,11 +119,13 @@ describe('GET /api/project/release-readiness', () => {
     }
   })
 
-  it('reports all-clear on an empty workspace', async () => {
+  it('does not call an empty workspace release-ready', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     expect(res.status).toBe(200)
     const body = await res.json() as any
+    expect(body.ready).toBe(false)
+    expect(body.notReadyReason).toBe('No tasks in this project yet.')
     expect(body.totals.blockingCount).toBe(0)
     expect(body.openEscalations).toEqual([])
     expect(body.unapprovedBriefs).toEqual([])
@@ -147,7 +152,7 @@ describe('GET /api/project/release-readiness', () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     await approveDesignSystem(app)
     await commitAndPush('settle terminal tasks')
-    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
     expect(body.unapprovedBriefs.map((b: any) => b.id)).toEqual(['task-1'])
     expect(body.unapprovedSpecs.map((b: any) => b.id)).toEqual(['task-2'])
@@ -191,7 +196,7 @@ describe('GET /api/project/release-readiness', () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     await approveDesignSystem(app)
     await commitAndPush('settle done task')
-    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
     expect(body.unapprovedBriefs).toEqual([])
     expect(body.totals.blockingCount).toBe(0)
@@ -209,7 +214,7 @@ describe('GET /api/project/release-readiness', () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     await approveDesignSystem(app)
     await commitAndPush('settle done task')
-    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
     expect(body.ready).toBe(true)
     expect(body.totals.done).toBe(1)
@@ -230,7 +235,7 @@ describe('GET /api/project/release-readiness', () => {
     await commitAndPush('approve design system')
     await fs.writeFile(path.join(tmpDir, '.guildhall', 'release-note.md'), 'unlanded Guildhall note\n', 'utf8')
 
-    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
 
     expect(body.ready).toBe(false)
@@ -274,7 +279,7 @@ describe('GET /api/project/release-readiness', () => {
       }),
     ])
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
     expect(body.openEscalations).toHaveLength(1)
     expect(body.openEscalations[0]).toMatchObject({
@@ -304,14 +309,14 @@ describe('GET /api/project/release-readiness', () => {
         authoredBy: 'human',
       }),
     }))
-    let res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    let res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     let body = await res.json() as any
     expect(body.designSystem.drafted).toBe(true)
     expect(body.designSystem.approved).toBe(false)
     expect(body.designSystem.revision).toBe(1)
 
     await app.fetch(new Request(projectUrl('/api/project/design-system/approve'), { method: 'POST' }))
-    res = await app.fetch(new Request('http://localhost/api/project/release-readiness'))
+    res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     body = await res.json() as any
     expect(body.designSystem.approved).toBe(true)
   })

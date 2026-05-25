@@ -37,6 +37,10 @@
     if (e.key === 'Escape') onClose()
   }
 
+  function notifyRequestCreated() {
+    window.dispatchEvent(new CustomEvent('guildhall:request-created'))
+  }
+
   async function submit() {
     error = null
     busy = true
@@ -58,6 +62,7 @@
         const j = await res.json()
         if (j.error) return (error = 'Bug filing failed: ' + j.error)
         onClose()
+        notifyRequestCreated()
         setTimeout(() => void project.refresh(), 400)
         return
       }
@@ -73,6 +78,7 @@
       const j = await res.json()
       if (j.error) return (error = 'Request failed: ' + j.error)
       onClose()
+      notifyRequestCreated()
       setTimeout(() => void project.refresh(), 400)
     } finally {
       busy = false

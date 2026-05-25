@@ -140,11 +140,28 @@ function isQuestionListPrompt(promptBody: string): boolean {
   )
 }
 
+function isEvidenceSummaryPrompt(promptBody: string): boolean {
+  const normalized = promptBody
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+  return (
+    /^i have enough\b/.test(normalized) ||
+    /^let me (?:piece|summarize|recap)\b/.test(normalized) ||
+    /^here'?s what i (?:found|know|learned)\b/.test(normalized) ||
+    /^what i (?:found|know|learned)\b/.test(normalized)
+  )
+}
+
 function validateQuestionShape(input: {
   kind?: string
   body?: string
   choices?: string[]
 }): string | null {
+  if (input.body && /^what must .+ get right first\b/i.test(input.body.trim())) {
+    return 'question prompt appears to interpolate a title as grammar; write a complete human-readable question instead'
+  }
   if (input.kind === 'choice' && input.body && isQuestionListPrompt(input.body)) {
     return 'choice question choices must be answers to one prompt, not labels for separate questions'
   }
@@ -194,6 +211,7 @@ function inferQuestionsFromAssistantText(text: string): InferredQuestion[] {
     if (!promptLike) continue
     if (isPlanningPrompt(promptBody)) continue
     if (isQuestionListPrompt(promptBody)) continue
+    if (isEvidenceSummaryPrompt(promptBody)) continue
     const summaryLike =
       /i['’]ll draft the full spec with\b|i will draft the full spec with\b|once you (?:pick|answer).+i['’]ll draft\b/i
         .test(promptBody)

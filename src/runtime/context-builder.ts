@@ -32,6 +32,7 @@ import { loadGoalForTask } from './business-envelope.js'
 import { loadDesignSystem } from './design-system-store.js'
 import { loadLanguageMap, renderLanguageMapContext } from './language-map.js'
 import { renderWorkerMode, selectWorkerMode, type SelectedWorkerMode } from './worker-modes.js'
+import { resolveRuntimePath } from './path-utils.js'
 
 // ---------------------------------------------------------------------------
 // Just-in-time context builder
@@ -70,13 +71,14 @@ const GLOB_CANDIDATE_RE = /[*?{}]/
 
 async function loadOrCreateCodebaseMap(memoryDir: string, task: Task) {
   const projectRoot = (task.worktreePath?.trim() || task.projectPath?.trim())
+  const resolvedProjectRoot = projectRoot ? resolveRuntimePath(projectRoot) : ''
   const existing = await loadCodebaseMap(memoryDir)
   if (existing) {
-    if (!projectRoot || path.resolve(existing.project.root) === path.resolve(projectRoot)) return existing
+    if (!resolvedProjectRoot || path.resolve(existing.project.root) === resolvedProjectRoot) return existing
   }
-  if (!projectRoot) return null
+  if (!resolvedProjectRoot) return null
   const result = await refreshCodebaseMap({
-    projectRoot,
+    projectRoot: resolvedProjectRoot,
     memoryDir,
     reason: 'setup',
   })
@@ -93,7 +95,8 @@ function isActionableFileCandidate(candidate: string): boolean {
 }
 
 export function resolveLikelyTaskFiles(task: Task, checkpointFilesTouched: readonly string[] = []): string[] {
-  const root = task.worktreePath?.trim() || task.projectPath?.trim() || ''
+  const rawRoot = task.worktreePath?.trim() || task.projectPath?.trim() || ''
+  const root = rawRoot ? resolveRuntimePath(rawRoot) : ''
   const out: string[] = []
   const seen = new Set<string>()
   const importedSourceHints = task.notes
@@ -481,9 +484,10 @@ function renderSpecOverview(task: Task): string {
 
 async function summarizeActiveWorktree(task: Task): Promise<string> {
   if (task.status !== 'in_progress' || !task.worktreePath?.trim()) return ''
+  const worktreePath = resolveRuntimePath(task.worktreePath)
   try {
     const { stdout } = await execFileP('git', ['status', '--short', '--untracked-files=all'], {
-      cwd: task.worktreePath,
+      cwd: worktreePath,
       maxBuffer: 1024 * 1024,
     })
     const lines = stdout
@@ -495,13 +499,13 @@ async function summarizeActiveWorktree(task: Task): Promise<string> {
     const shown = lines.slice(0, MAX_WORKTREE_HINT_LINES)
     const extra = lines.length - shown.length
     return [
-      `**Active worktree:** ${task.worktreePath}`,
+      `**Active worktree:** ${worktreePath}`,
       '**Changed files to resume from first:**',
       ...shown.map((line) => `- ${line}`),
       extra > 0 ? `- ...and ${extra} more` : '',
     ].filter(Boolean).join('\n')
   } catch {
-    return task.worktreePath ? `**Active worktree:** ${task.worktreePath}` : ''
+    return task.worktreePath ? `**Active worktree:** ${worktreePath}` : ''
   }
 }
 
@@ -560,7 +564,7 @@ export interface BuiltContext {
   envelope: string
   /**
    * Approved (or draft) design-system summary — tokens, primitives, copy
-   * voice, a11y baseline. Empty when memory/design-system.yaml is absent so
+   * voice, a11y baseline. Empty when .guildhall/design-system.yaml is absent so
    * pure-infra projects pay nothing.
    */
   designSystem: string
@@ -831,7 +835,8 @@ export async function buildContext(
             command: criterion.command,
           })),
           likelyFiles: resolveLikelyTaskFiles(task, checkpoint?.filesTouched ?? []).map((file) => {
-            const root = task.worktreePath?.trim() || task.projectPath?.trim() || codebaseMap.project.root
+            const rawRoot = task.worktreePath?.trim() || task.projectPath?.trim() || codebaseMap.project.root
+            const root = resolveRuntimePath(rawRoot)
             const relative = path.relative(root, file).replace(/\\/g, '/')
             return relative.startsWith('..') ? file : relative
           }),

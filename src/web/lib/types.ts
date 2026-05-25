@@ -139,6 +139,12 @@ export interface Task {
   revisionCount?: number
   remediationAttempts?: number
   blockReason?: string
+  hold?: {
+    previousStatus?: string
+    reason?: string
+    heldAt?: string
+    heldBy?: string
+  }
   shelveReason?: ShelveReason
   productBrief?: ProductBrief
   openQuestions?: AgentQuestion[]
@@ -338,6 +344,8 @@ export interface TaskThreadReviewFeedbackTurn extends TaskThreadTurnBase {
 export interface TaskThreadEscalationTurn extends TaskThreadTurnBase {
   kind: 'escalation'
   escalationId: string
+  escalationReason?: string
+  escalationAgentId?: string
   summary: string
   details?: string
   activity?: TaskTurnLiveActivity[]
@@ -578,7 +586,6 @@ export interface ServiceProjectSummary {
   path: string
   name: string
   initializationNeeded?: boolean
-  selected?: boolean
   tags?: string[]
   summary?: string | null
   taskCounts?: {
@@ -603,14 +610,23 @@ export interface ServiceProjectSummary {
     }>
   }
   run?: ProjectRun | null
+  providerStatus?: ProviderStatus | null
   gitStory?: GitStorySummary | null
+  projectCheckIn?: {
+    needed?: boolean
+    label?: string
+    title?: string
+    detail?: string
+    actionHref?: string
+    totalCount?: number
+    activeCount?: number
+    completedCount?: number
+  } | null
 }
 
 export interface ServiceDetail {
   pid?: number
   defaultProviderStatus?: ProviderStatus | null
-  selectedProject?: Pick<ServiceProjectSummary, 'id' | 'path' | 'name' | 'initializationNeeded'> | null
-  foregroundProject?: Pick<ServiceProjectSummary, 'id' | 'path' | 'name' | 'initializationNeeded'> | null
   projects?: ServiceProjectSummary[]
 }
 
@@ -636,6 +652,7 @@ export interface EventEnvelope {
 }
 
 export type ProjectView =
+  | 'overview'
   | 'thread'
   | 'inbox'
   | 'work'

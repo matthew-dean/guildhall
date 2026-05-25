@@ -75,6 +75,121 @@ describe('buildThread', () => {
     }
   })
 
+  it('projects a project check-in card when the project has not answered Guildhall project questions yet', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [{
+            id: 'task-done',
+            title: 'Completed setup task',
+            description: 'Done.',
+            domain: 'frontend',
+            projectPath,
+            status: 'done',
+            createdAt: '2026-05-23T00:00:00.000Z',
+            updatedAt: '2026-05-23T00:00:00.000Z',
+          }],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot })
+      const turn = thread.turns.find(t => t.id === 'setup:project-check-in')
+
+      expect(turn).toMatchObject({
+        kind: 'setup_step',
+        status: 'active',
+        title: 'Project check-in needed',
+        actionLabel: 'Start project check-in',
+        submitEndpoint: '/api/project/project-check-in',
+      })
+      expect(thread.activeTurnId).toBe('setup:project-check-in')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('projects routed task requests as request turns until the task is complete', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'What commands should I run before release?',
+              description: 'What commands should I run before release?',
+              domain: 'frontend',
+              projectPath,
+              status: 'exploring',
+              request: {
+                id: 'request-question',
+                raw: 'What commands should I run before release?',
+                kind: 'project_question',
+                title: 'What commands should I run before release?',
+                routingSummary: 'Routed to Project Question',
+                createdAt: '2026-05-23T00:00:00.000Z',
+              },
+              createdAt: '2026-05-23T00:00:00.000Z',
+              updatedAt: '2026-05-23T00:00:00.000Z',
+            },
+          ],
+        }),
+      )
+
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
+      expect(thread.turns.find(t => t.id === 'request:request-question')).toMatchObject({
+        kind: 'request',
+        status: 'pending',
+        phase: 'intake',
+        routingSummary: 'Routed to Project Question',
+      })
+      expect(thread.turns.find(t => t.id === 'inflight:task-1')).toMatchObject({
+        kind: 'inflight',
+        requestKind: 'project_question',
+        checklist: undefined,
+        summary: expect.stringContaining('answer this question'),
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('surfaces active task work once setup is already complete', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
@@ -1958,7 +2073,156 @@ coordinators:
       if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
       expect(turn.liveAgent?.lastEventLabel).not.toBe('Failed glob')
       expect(turn.activity?.some(item => item.label === 'Failed glob')).toBe(false)
-      expect(turn.activity?.some(item => item.label.includes('refusing more read-only'))).toBe(true)
+      expect(turn.activity?.some(item => item.label.includes('keeping the worker focused'))).toBe(true)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('rewrites internal target-file guard language before it reaches Thread', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Complete auth flow',
+              status: 'in_progress',
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'core', name: 'Core' }],
+        },
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [
+          {
+            at: new Date(Date.now() - 2_000).toISOString(),
+            event: {
+              type: 'tool_completed',
+              task_id: 'task-1',
+              agent_name: 'worker-agent',
+              tool_name: 'read-file',
+              is_error: true,
+              output: 'You have already inspected an authoritative likely target file at /tmp/auth.vue. Do not do more read-only exploration now.',
+            },
+          },
+          {
+            at: new Date(Date.now() - 1_000).toISOString(),
+            event: {
+              type: 'line_complete',
+              task_id: 'task-1',
+              agent_name: 'worker-agent',
+              message: 'Assistant already inspected an authoritative likely target file; refusing further read-only exploration until it makes concrete progress or escalates.',
+            },
+          },
+          {
+            at: new Date().toISOString(),
+            event: {
+              type: 'line_complete',
+              task_id: 'task-1',
+              agent_name: 'worker-agent',
+              message: 'Assistant kept using non-durable steps without moving the implementation forward; asking it to mutate, verify, checkpoint, or escalate now.',
+            },
+          },
+        ],
+      })
+
+      const turn = thread.turns.find(t => t.kind === 'inflight')
+      if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
+      const rendered = JSON.stringify(turn.activity ?? [])
+      expect(rendered).toContain('make a concrete change')
+      expect(rendered).toContain('save concrete progress')
+      expect(rendered).not.toMatch(/authoritative likely target|read-only exploration|refusing further read-only/i)
+      expect(rendered).not.toMatch(/non-durable steps|mutate, verify, checkpoint, or escalate/i)
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('rewrites acceptance-criteria verification jargon before it reaches Thread', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Complete auth flow',
+              status: 'in_progress',
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'core', name: 'Core' }],
+        },
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [
+          {
+            at: new Date().toISOString(),
+            event: {
+              type: 'line_complete',
+              task_id: 'task-1',
+              agent_name: 'worker-agent',
+              message: 'Writing complete for all acceptance criteria except AC-8, which cannot be verified due to missing test infrastructure in the project. The self-critique has been documented.',
+            },
+          },
+          {
+            at: new Date(Date.now() + 1).toISOString(),
+            event: {
+              type: 'assistant_delta',
+              task_id: 'task-1',
+              agent_name: 'worker-agent',
+              message: 'Writing complete for all acceptance criteria except AC-9, which cannot be verified due to missing test infrastructure in the project. The self-critique has been documented.',
+            },
+          },
+        ],
+      })
+
+      const turn = thread.turns.find(t => t.kind === 'inflight')
+      if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
+      const rendered = JSON.stringify(turn.activity ?? [])
+      expect(rendered).toContain('one verification check still needs a project test command')
+      expect(rendered).not.toMatch(/\bAC-\d+\b|acceptance criteria except|self-critique/i)
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }

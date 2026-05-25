@@ -17,6 +17,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import path from 'node:path'
 import fs from 'node:fs/promises'
+import { resolveRuntimePath } from './path-utils.js'
 
 const execFileP = promisify(execFile)
 
@@ -32,7 +33,7 @@ function isIgnorableGuildhallStatePath(file: string): boolean {
 
 async function resolveGitTopLevel(repoRoot: string): Promise<string> {
   const { stdout } = await execFileP('git', ['rev-parse', '--show-toplevel'], {
-    cwd: repoRoot,
+    cwd: resolveRuntimePath(repoRoot),
   })
   return stdout.trim() || repoRoot
 }
@@ -144,7 +145,7 @@ export interface GitDriver {
 export class NodeGitDriver implements GitDriver {
   async currentBranch(repoRoot: string): Promise<string> {
     const { stdout } = await execFileP('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-      cwd: repoRoot,
+      cwd: resolveRuntimePath(repoRoot),
     })
     return stdout.trim()
   }
@@ -249,18 +250,20 @@ export class NodeGitDriver implements GitDriver {
     repoRoot: string,
     { worktreePath, branch, baseBranch }: CreateWorktreeOptions,
   ): Promise<void> {
-    await fs.mkdir(path.dirname(worktreePath), { recursive: true })
+    const resolvedRepoRoot = resolveRuntimePath(repoRoot)
+    const resolvedWorktreePath = resolveRuntimePath(worktreePath)
+    await fs.mkdir(path.dirname(resolvedWorktreePath), { recursive: true })
     try {
       await execFileP(
         'git',
-        ['worktree', 'add', '-b', branch, worktreePath, baseBranch],
-        { cwd: repoRoot },
+        ['worktree', 'add', '-b', branch, resolvedWorktreePath, baseBranch],
+        { cwd: resolvedRepoRoot },
       )
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (!/already exists/i.test(message)) throw err
-      await execFileP('git', ['worktree', 'add', worktreePath, branch], {
-        cwd: repoRoot,
+      await execFileP('git', ['worktree', 'add', resolvedWorktreePath, branch], {
+        cwd: resolvedRepoRoot,
       })
     }
   }
@@ -269,16 +272,18 @@ export class NodeGitDriver implements GitDriver {
     repoRoot: string,
     { worktreePath, branch }: AttachWorktreeOptions,
   ): Promise<void> {
-    await fs.mkdir(path.dirname(worktreePath), { recursive: true })
-    await execFileP('git', ['worktree', 'add', worktreePath, branch], {
-      cwd: repoRoot,
+    const resolvedRepoRoot = resolveRuntimePath(repoRoot)
+    const resolvedWorktreePath = resolveRuntimePath(worktreePath)
+    await fs.mkdir(path.dirname(resolvedWorktreePath), { recursive: true })
+    await execFileP('git', ['worktree', 'add', resolvedWorktreePath, branch], {
+      cwd: resolvedRepoRoot,
     })
   }
 
   async removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {
     try {
-      await execFileP('git', ['worktree', 'remove', '--force', worktreePath], {
-        cwd: repoRoot,
+      await execFileP('git', ['worktree', 'remove', '--force', resolveRuntimePath(worktreePath)], {
+        cwd: resolveRuntimePath(repoRoot),
       })
     } catch {
       // Already gone, or never created — either way, nothing to clean up.
@@ -348,11 +353,12 @@ export class NodeGitDriver implements GitDriver {
     branch: string,
     baseBranch: string,
   ): Promise<MergeResult> {
+    const gitRoot = await resolveGitTopLevel(repoRoot)
     try {
-      await execFileP('git', ['checkout', baseBranch], { cwd: repoRoot })
-      await execFileP('git', ['merge', '--ff-only', branch], { cwd: repoRoot })
+      await execFileP('git', ['checkout', baseBranch], { cwd: gitRoot })
+      await execFileP('git', ['merge', '--ff-only', branch], { cwd: gitRoot })
       const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], {
-        cwd: repoRoot,
+        cwd: gitRoot,
       })
       return { ok: true, commitSha: stdout.trim() }
     } catch (err) {
@@ -430,7 +436,7 @@ export class NodeGitDriver implements GitDriver {
 
   async push(repoRoot: string, branch: string): Promise<PushResult> {
     try {
-      await execFileP('git', ['push', 'origin', branch], { cwd: repoRoot })
+      await execFileP('git', ['push', 'origin', branch], { cwd: resolveRuntimePath(repoRoot) })
       return { ok: true }
     } catch (err) {
       return {
@@ -457,7 +463,7 @@ export class NodeGitDriver implements GitDriver {
         '--body',
         opts.body ?? '',
       ]
-      const { stdout } = await execFileP('gh', args, { cwd: repoRoot })
+      const { stdout } = await execFileP('gh', args, { cwd: resolveRuntimePath(repoRoot) })
       const urlLine = stdout.trim().split('\n').find((l) => l.startsWith('http'))
       return urlLine ? { ok: true, url: urlLine } : { ok: true }
     } catch (err) {

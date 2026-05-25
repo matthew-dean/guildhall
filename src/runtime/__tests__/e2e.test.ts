@@ -541,10 +541,8 @@ describe('E2E 0.5.0: service over projects', () => {
       const fleetRes = await app.fetch(new Request('http://localhost/api/service'))
       expect(fleetRes.status).toBe(200)
       const fleetBody = (await fleetRes.json()) as {
-        selectedProject: { id: string } | null
         projects: Array<{ id: string }>
       }
-      expect(fleetBody.selectedProject?.id).toBe('service-proof')
       expect(fleetBody.projects.map(project => project.id)).toContain('service-proof')
 
       const attachRes = await app.fetch(new Request('http://localhost/api/service/attach-project', {
@@ -554,15 +552,17 @@ describe('E2E 0.5.0: service over projects', () => {
       }))
       expect(attachRes.status).toBe(200)
       const attachBody = (await attachRes.json()) as {
-        selectedProject?: { initializationNeeded?: boolean }
+        project?: { id?: string; initializationNeeded?: boolean }
       }
-      expect(attachBody.selectedProject?.initializationNeeded).toBe(true)
+      expect(attachBody.project?.initializationNeeded).toBe(true)
+      const attachedProjectId = attachBody.project?.id
+      expect(attachedProjectId).toBeTruthy()
 
-      const projectRes = await app.fetch(new Request('http://localhost/api/project'))
+      const projectRes = await app.fetch(new Request(`http://localhost/api/project?projectId=${encodeURIComponent(attachedProjectId ?? '')}`))
       const projectBody = (await projectRes.json()) as { initializationNeeded?: boolean }
       expect(projectBody.initializationNeeded).toBe(true)
 
-      const setupRes = await app.fetch(new Request('http://localhost/api/setup/identity', {
+      const setupRes = await app.fetch(new Request(`http://localhost/api/setup/identity?projectId=${encodeURIComponent(attachedProjectId ?? '')}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: 'Attached Project', id: 'attached-project', tags: ['extension'] }),
@@ -582,14 +582,8 @@ describe('E2E 0.5.0: service over projects', () => {
       setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
       updateGlobalConfig({ preferredProvider: 'anthropic-api' })
       updateProjectConfig(tmpDir, { allowPaidProviderFallback: true })
-      const selectRes = await app.fetch(new Request('http://localhost/api/service/select-project', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ projectId: 'service-proof' }),
-      }))
-      expect(selectRes.status).toBe(200)
 
-      const projectSnapshot = await app.fetch(new Request('http://localhost/api/project'))
+      const projectSnapshot = await app.fetch(new Request('http://localhost/api/project?projectId=service-proof'))
       const snapshotBody = (await projectSnapshot.json()) as {
         initializationNeeded?: boolean
         name?: string
@@ -616,7 +610,7 @@ describe('E2E 0.5.0: service over projects', () => {
       expect(startBody.status).toBe('stopped')
       expect(startBody.code).toBe('all_terminal')
       expect(startBody.stopSummary?.reason).toBe('all_terminal')
-      const activityRes = await app.fetch(new Request('http://localhost/api/project/activity'))
+      const activityRes = await app.fetch(new Request('http://localhost/api/project/activity?projectId=service-proof'))
       const activity = (await activityRes.json()) as { running?: boolean; runStatus?: string }
       expect(activity.running).toBe(false)
       expect(activity.runStatus).toBe('stopped')

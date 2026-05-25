@@ -39,6 +39,7 @@
   )
   const parsedRoute = $derived(parseProjectRoute(path.value))
   const showProjectMenu = $derived(path.value.startsWith('/project') || parsedRoute.projectScoped)
+  const showSseStatus = $derived(parsedRoute.projectScoped || path.value.startsWith('/project'))
 
   $effect(() => {
     projectTitle = parsedRoute.projectScoped
@@ -97,10 +98,12 @@
     {/if}
   </div>
   <div class="header-right">
-    <span class="sse-status">
-      <StatusDot tone={sseTone} pulse={sseStatus === 'live'} />
-      {sseLabel}
-    </span>
+    {#if showSseStatus}
+      <span class="sse-status">
+        <StatusDot tone={sseTone} pulse={sseStatus === 'live'} />
+        {sseLabel}
+      </span>
+    {/if}
   </div>
 </header>
 
@@ -250,6 +253,27 @@
     .project-title {
       max-width: min(42vw, 24ch);
       font-size: var(--fs-1);
+    }
+  }
+  @media (max-width: 640px) {
+    .app-header {
+      padding-inline: var(--s-2);
+    }
+    .brand-word,
+    .version {
+      display: none;
+    }
+    .header-center {
+      justify-self: start;
+      padding-inline: 0;
+    }
+    .project-title {
+      max-width: 100%;
+    }
+    .sse-status {
+      font-size: 0;
+      letter-spacing: 0;
+      gap: 0;
     }
   }
 </style>

@@ -1,5 +1,6 @@
 import type { EventEnvelope, ProjectDetail, ServiceProjectSummary, Task } from './types.js'
 import { friendlyTaskId, labelForIdentifier } from './identifier-labels.js'
+import { friendlyRuntimeMessage, isGitUnavailableMessage } from './runtime-message.js'
 
 export type ProjectActivityTone = 'idle' | 'active' | 'ok' | 'warn' | 'danger'
 
@@ -129,9 +130,9 @@ function lineFromEvent(
       return {
         tone: 'danger',
         pulse: false,
-        actorLabel: 'Error',
+        actorLabel: isGitUnavailableMessage(inner.message) ? 'Git' : 'Error',
         label: 'Error',
-        message: typeof inner.message === 'string' && inner.message.length > 0 ? inner.message : 'Run hit an error',
+        message: typeof inner.message === 'string' && inner.message.length > 0 ? friendlyRuntimeMessage(inner.message) : 'Run hit an error',
         timeLabel,
       }
     case 'escalation_raised':
@@ -172,9 +173,9 @@ function lineFromEvent(
       return {
         tone: 'danger',
         pulse: false,
-        actorLabel: 'Coordinator',
+        actorLabel: isGitUnavailableMessage(inner.message) ? 'Git' : 'Coordinator',
         label: 'Error',
-        message: typeof inner.message === 'string' && inner.message.length > 0 ? inner.message : 'Coordinator error',
+        message: typeof inner.message === 'string' && inner.message.length > 0 ? friendlyRuntimeMessage(inner.message) : 'Coordinator error',
         timeLabel,
       }
     case 'provider_health_changed':
@@ -183,7 +184,10 @@ function lineFromEvent(
         pulse: false,
         actorLabel: 'Providers',
         label: 'Provider',
-        message: typeof inner.message === 'string' && inner.message.length > 0 ? inner.message : 'Provider health changed',
+        message:
+          typeof inner.message === 'string' && inner.message.length > 0
+            ? friendlyRuntimeMessage(inner.message)
+            : 'Provider health changed',
         timeLabel,
       }
     default:
@@ -203,6 +207,17 @@ export function buildProjectTicker(
       actorLabel: 'Setup',
       label: 'Setup',
       message: 'Finish first-time Guildhall setup',
+      timeLabel: null,
+    }
+  }
+
+  if (detail?.startReadiness?.code === 'owner_input_required') {
+    return {
+      tone: 'warn',
+      pulse: false,
+      actorLabel: 'Needs you',
+      label: 'Needs you',
+      message: detail.startReadiness.message || 'Guildhall is waiting on your answer',
       timeLabel: null,
     }
   }
@@ -238,7 +253,10 @@ export function buildProjectTicker(
     eventType === 'supervisor_stopped' &&
     eventReason !== 'all_terminal' &&
     (importDrafts > 0 || blocked > 0 || active > 0)
-  const fromEvent = staleStoppedEvent ? null : lineFromEvent(detail, latestEvent, now)
+  const staleGitUnavailableEvent =
+    isGitUnavailableMessage(latestEvent?.event?.message ?? latestEvent?.message) &&
+    !hasCurrentGitUnavailableStory(detail)
+  const fromEvent = staleStoppedEvent || staleGitUnavailableEvent ? null : lineFromEvent(detail, latestEvent, now)
   if (fromEvent) return fromEvent
 
   if (detail?.run?.status === 'running') {
@@ -293,6 +311,14 @@ export function buildProjectTicker(
     message: 'No recent activity',
     timeLabel: null,
   }
+}
+
+export function hasCurrentGitUnavailableStory(detail: ProjectDetail | null | undefined): boolean {
+  const snapshots = detail?.gitStory?.snapshots ?? []
+  const blockers = detail?.gitStory?.blockers ?? []
+  return [...snapshots, ...blockers].some(item =>
+    item.state === 'unknown' && isGitUnavailableMessage(item.reason),
+  )
 }
 
 export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectActivityLine {
