@@ -137,6 +137,7 @@ export const domainLeversSchema = z.object({
       'majority',
     ]),
   ),
+  review_effort: entry(z.enum(['lean', 'balanced', 'thorough', 'release_critical'])),
   max_revisions: entry(z.number().int().min(0)),
   escalation_on_ambiguity: entry(z.enum(['always', 'coordinator_first', 'never'])),
   crash_recovery_default: entry(
@@ -187,6 +188,7 @@ export const DOMAIN_LEVER_NAMES = [
   'completion_approval',
   'reviewer_mode',
   'reviewer_fanout_policy',
+  'review_effort',
   'max_revisions',
   'escalation_on_ambiguity',
   'crash_recovery_default',

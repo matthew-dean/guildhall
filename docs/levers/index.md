@@ -58,6 +58,7 @@ Per coordinator domain; one `default:` entry is required as fallback.
 | [`completion_approval`](./completion-approval) | `human_required`, `coordinator_sufficient`, `gates_sufficient` | `coordinator_sufficient` |
 | [`reviewer_mode`](./reviewer-mode) | `llm_only`, `deterministic_only`, `llm_with_deterministic_fallback` | `llm_with_deterministic_fallback` |
 | [`reviewer_fanout_policy`](./reviewer-fanout-policy) | `strict`, `coordinator_adjudicates_on_conflict`, `advisory`, `majority` | `strict` |
+| [`review_effort`](./review-effort) | `lean`, `balanced`, `thorough`, `release_critical` | `balanced` |
 | [`max_revisions`](./max-revisions) | integer | `3` |
 | [`escalation_on_ambiguity`](./escalation-on-ambiguity) | `always`, `coordinator_first`, `never` | `coordinator_first` |
 | [`crash_recovery_default`](./crash-recovery-default) | `prefer_resume`, `prefer_restart_clean`, `pause_for_review` | `prefer_resume` |

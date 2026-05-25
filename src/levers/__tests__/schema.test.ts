@@ -109,6 +109,12 @@ describe('default LeverSettings', () => {
     const settings = makeDefaultSettings()
     expect(settings.project.worktree_isolation.position).toBe('per_task')
   })
+
+  it('defaults review effort to balanced review depth', () => {
+    const settings = makeDefaultSettings()
+    expect(DOMAIN_LEVER_NAMES).toContain('review_effort')
+    expect(settings.domains.default.review_effort.position).toBe('balanced')
+  })
 })
 
 describe('parameterized lever positions round-trip', () => {

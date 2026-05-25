@@ -322,6 +322,7 @@ const leverSidebarSections = [
       { text: 'completion_approval', link: '/levers/completion-approval' },
       { text: 'reviewer_mode', link: '/levers/reviewer-mode' },
       { text: 'reviewer_fanout_policy', link: '/levers/reviewer-fanout-policy' },
+      { text: 'review_effort', link: '/levers/review-effort' },
       { text: 'max_revisions', link: '/levers/max-revisions' },
       { text: 'escalation_on_ambiguity', link: '/levers/escalation-on-ambiguity' },
       { text: 'crash_recovery_default', link: '/levers/crash-recovery-default' },

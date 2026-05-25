@@ -18,6 +18,11 @@ import type {
   ApiStreamEvent,
   SupportsStreamingMessages,
 } from '@guildhall/engine'
+import {
+  AGENT_SETTINGS_FILENAME,
+  makeDefaultSettings,
+  saveLeverSettings,
+} from '@guildhall/levers'
 import type { ConversationMessage, UsageSnapshot } from '@guildhall/protocol'
 import { z } from 'zod'
 import { InMemoryGitDriver } from '../git-driver.js'
@@ -509,6 +514,81 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     expect(calls[0]).toEqual({
       lanes: ['ux_comprehension', 'copy_clarity', 'test_adequacy'],
       recipeIds: ['product-ux-zero-context'],
+    })
+  })
+
+  it('records new review plans with the domain review effort lever', async () => {
+    await writeDesignSystem(minimalDS)
+    const task = mkTask({
+      title: 'Clarify release-note wording',
+      description: 'Update public docs copy for the changelog.',
+      priority: 'low',
+    })
+    await writeQueue([task])
+
+    const settings = makeDefaultSettings(new Date('2026-04-01T00:00:00.000Z'))
+    settings.domains.overrides = {
+      looma: {
+        review_effort: {
+          position: 'thorough',
+          rationale: 'This project wants deeper review while calibrating reviewer coverage.',
+          setAt: '2026-04-01T00:00:00.000Z',
+          setBy: 'user-direct',
+        },
+      },
+    }
+    await saveLeverSettings({
+      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      settings,
+    })
+
+    const savedPlans: Array<{ effort: string; budget?: { maxReviewerAgents?: number } }> = []
+    const reviewAuditStore = {
+      async readTaskReviewAudit() {
+        return {
+          plan: null,
+          events: [],
+          reviewerRuns: [],
+          escapedMisses: [],
+        }
+      },
+      async saveReviewPlan(plan: { effort: string; budget?: { maxReviewerAgents?: number } }) {
+        savedPlans.push(plan)
+        return { payload: plan }
+      },
+      async appendReviewPlanEvent() {
+        return { payload: {} }
+      },
+      async appendReviewerRun() {
+        return { payload: {} }
+      },
+    }
+
+    const runner: ReviewerFanoutRunner = async ({ personas }) =>
+      personas.map(
+        (persona): PersonaVerdict => ({
+          guildSlug: persona.slug,
+          guildName: persona.name,
+          verdict: 'approve',
+          reasoning: `${persona.name} approved.`,
+          revisionItems: [],
+          rawOutput: '**Verdict:** approve',
+        }),
+      )
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      reviewerFanout: runner,
+      reviewAuditStore: reviewAuditStore as never,
+      gitDriver: memoryGitDriver(),
+    })
+    await orch.tick()
+
+    expect(savedPlans).toHaveLength(1)
+    expect(savedPlans[0]).toMatchObject({
+      effort: 'thorough',
+      budget: { maxReviewerAgents: 6 },
     })
   })
 

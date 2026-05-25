@@ -92,6 +92,14 @@ babysit setup/import/provider/release states across multiple pages.
   capacity, and persists each persona verdict as a reviewer-run audit event
   through the review-audit store without blocking review if local-history
   persistence is unavailable.
+- [x] Add the review-effort lever as the first user-modifiable review-budget
+  control. `review_effort` is now a domain lever with `lean`, `balanced`,
+  `thorough`, and `release_critical` positions, defaulting to `balanced`.
+  The coordinator resolves the task domain's lever before recording a review
+  plan; the planner treats the requested effort as a floor, so high-risk task
+  signals can still raise the plan to release-critical. Settings exposes the
+  lever with readable labels, and public lever docs now explain what the user
+  is choosing without describing the calibration harness as a shipped promise.
 - [x] Tighten the dark-theme text contrast ladder from the Fair Labor License
   Thread walkthrough. Supporting copy was too dim against near-white headings,
   so the system text tokens now keep primary/strong text slightly softer and

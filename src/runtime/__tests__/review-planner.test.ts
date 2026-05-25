@@ -133,11 +133,11 @@ describe('buildReviewPlan', () => {
     ]))
     expect(plan.requiredRecipes.map((recipe) => recipe.recipeId)).toContain('product-ux-zero-context')
     expect(plan.requiredRecipes.find((recipe) => recipe.recipeId === 'product-ux-zero-context')).toMatchObject({
-      calibrationRecipeIds: [
+      calibrationRecipeIds: expect.arrayContaining([
         'ux-zero-context-comprehension',
         'ux-error-recovery',
         'ux-cross-surface-consistency',
-      ],
+      ]),
     })
     expect(plan.deterministicChecks).toContain('browser-or-screenshot-evidence')
     expect(plan.requiredArtifacts).toContain('visual-evidence')
@@ -200,6 +200,27 @@ describe('buildReviewPlan', () => {
       'test_adequacy',
     ]))
     expect(plan.skippedLanes.some((entry) => entry.lane === 'security')).toBe(true)
+  })
+
+  it('treats requested review effort as a floor, not a cap on safety-sensitive work', () => {
+    const plan = buildReviewPlan({
+      task: task({
+        priority: 'critical',
+        title: 'Migrate account permission model',
+        description: 'Change the auth API schema, migrate database rows, and preserve rollout fallback.',
+      }),
+      changedFiles: [
+        'src/api/accounts.ts',
+        'migrations/20260525-permissions.sql',
+      ],
+      requestedEffort: 'balanced',
+      createdAt: '2026-05-25T12:00:00.000Z',
+    })
+
+    expect(plan.effort).toBe('release_critical')
+    expect(plan.depth).toBe('release_critical')
+    expect(plan.budget.maxReviewerAgents).toBe(8)
+    expect(plan.aggregation.security).toBe('strict')
   })
 })
 

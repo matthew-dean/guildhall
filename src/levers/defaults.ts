@@ -87,6 +87,10 @@ export function makeDefaultSettings(now: Date = new Date()): LeverSettings {
       position: 'strict',
       ...stub('every persona must approve; worker synthesizes dissenting revisions. Coordinator adjudication turns on once conflicts prove recurrent.'),
     },
+    review_effort: {
+      position: 'balanced',
+      ...stub('start with balanced review depth; raise or lower after calibration data shows the quality and cost tradeoff for this domain'),
+    },
     max_revisions: {
       position: 3,
       ...stub('three revision passes before escalation — enough for iteration, short enough to surface systemic spec issues'),

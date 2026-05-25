@@ -219,7 +219,10 @@ export interface EnsureTaskReviewPlanRecordedResult {
 
 export function buildReviewPlan(input: BuildReviewPlanInput): ReviewPlanRecord {
   const signals = detectReviewSignals(input)
-  const effort = input.requestedEffort ?? inferEffort(input.task.priority, signals.selectedLanes)
+  const effort = resolveReviewEffort({
+    requestedEffort: input.requestedEffort,
+    inferredEffort: inferEffort(input.task.priority, signals.selectedLanes),
+  })
   const selectedLanes = trimLanesForEffort(signals.selectedLanes, effort)
   const budget = {
     ...(effort === 'custom' ? EFFORT_BUDGETS.thorough : EFFORT_BUDGETS[effort]),
@@ -286,6 +289,17 @@ export async function ensureTaskReviewPlanRecorded(
     recorded: true,
     plan,
   }
+}
+
+function resolveReviewEffort(input: {
+  requestedEffort?: ReviewEffort
+  inferredEffort: ReviewEffort
+}): ReviewEffort {
+  if (!input.requestedEffort) return input.inferredEffort
+  if (input.requestedEffort === 'custom') return 'custom'
+  return EFFORT_RANK[input.inferredEffort] > EFFORT_RANK[input.requestedEffort]
+    ? input.inferredEffort
+    : input.requestedEffort
 }
 
 function detectReviewSignals(input: BuildReviewPlanInput): {

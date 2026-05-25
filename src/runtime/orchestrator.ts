@@ -174,7 +174,7 @@ import {
   type ReviewerMode,
 } from './reviewer-dispatch.js'
 import { ensureTaskReviewPlanRecorded } from './review-planner.js'
-import type { ReviewAuditStore, ReviewPlanRecord, ReviewRiskLane } from './review-audit-store.js'
+import type { ReviewAuditStore, ReviewEffort, ReviewPlanRecord, ReviewRiskLane } from './review-audit-store.js'
 import { createReviewAuditStore } from './review-audit-store.js'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import { runGuildGates } from './guild-gate-runner.js'
@@ -5112,10 +5112,13 @@ export class Orchestrator {
           : {}),
         likelyTargetFiles,
       })
+      const settings = await this.readLeverSettings()
+      const domainLevers = resolveDomainLevers(settings, task.domain)
       const result = await ensureTaskReviewPlanRecorded({
         store,
         task,
         changedFiles: likelyTargetFiles,
+        requestedEffort: domainLevers.review_effort.position as ReviewEffort,
         deterministicChecks: verificationCommands,
         createdBy: 'coordinator-review-planner',
         now: () => new Date(this.now()),

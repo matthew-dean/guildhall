@@ -293,6 +293,14 @@ describe('SettingsTab', () => {
                   rationale: 'Use one isolated worktree per task.',
                   scope: 'project',
                 },
+                {
+                  name: 'review_effort',
+                  position: 'balanced',
+                  defaultPosition: 'balanced',
+                  setBy: 'system-default',
+                  rationale: 'Use balanced review depth while calibration data accumulates.',
+                  scope: 'domain:default',
+                },
               ]
             : undefined,
         })
@@ -452,6 +460,8 @@ describe('SettingsTab', () => {
     await screen.findByText('Lever file is malformed.')
     await userEvent.click(screen.getByRole('button', { name: /reset to defaults/i }))
     await screen.findByText(/Worktree isolation/i)
+    await screen.findByText(/Review effort/i)
+    expect(screen.getByRole('option', { name: /Release-critical/i })).toBeInTheDocument()
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /worktree isolation setting/i }), 'per_attempt')
     await screen.findByText(/Current: Per attempt/)
 
