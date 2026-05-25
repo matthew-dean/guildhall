@@ -7,6 +7,7 @@ import type {
   ReviewRecipeRef,
   ReviewRiskLane,
 } from './review-audit-store.js'
+import { selectCalibrationRecipesForLanes } from './review-calibration.js'
 
 const ALL_LANES: ReviewRiskLane[] = [
   'ux_comprehension',
@@ -380,6 +381,9 @@ function selectRecipes(lanes: readonly ReviewRiskLane[], effort: ReviewEffort): 
       lanes: recipe.lanes.filter((lane) => laneSet.has(lane)),
       blocking: recipeBlockingForEffort(effort),
       required: true,
+      calibrationRecipeIds: selectCalibrationRecipesForLanes(
+        recipe.lanes.filter((lane) => laneSet.has(lane)),
+      ).map((calibrationRecipe) => calibrationRecipe.id),
     } satisfies ReviewRecipeRef))
   return eligible.length > 0 ? eligible : [{
     recipeId: 'quality-performance-release',
@@ -387,6 +391,7 @@ function selectRecipes(lanes: readonly ReviewRiskLane[], effort: ReviewEffort): 
     lanes: ['test_adequacy'],
     blocking: 'medium',
     required: true,
+    calibrationRecipeIds: [],
   }]
 }
 

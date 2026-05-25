@@ -59,6 +59,7 @@ export const ReviewRecipeRef = z.object({
   lanes: z.array(ReviewRiskLane).min(1),
   blocking: z.enum(['none', 'medium', 'high', 'strict']).default('high'),
   required: z.boolean().default(true),
+  calibrationRecipeIds: z.array(z.string().min(1)).default([]),
 })
 export type ReviewRecipeRef = z.infer<typeof ReviewRecipeRef>
 

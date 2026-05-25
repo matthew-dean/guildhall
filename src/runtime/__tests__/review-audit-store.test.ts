@@ -47,6 +47,7 @@ describe('review audit store', () => {
         lanes: ['ux_comprehension'],
         blocking: 'high',
         required: true,
+        calibrationRecipeIds: ['ux-zero-context-comprehension'],
       }],
       budget: { maxReviewerAgents: 3 },
       aggregation: { ux_comprehension: 'blocking_on_high' },
@@ -57,6 +58,7 @@ describe('review audit store', () => {
     expect(saved.ref.path).toContain(path.join(projectRoot, '.guildhall', 'persistence'))
     expect(saved.payload.createdAt).toBe('2026-05-25T12:34:00.000Z')
     expect(saved.payload.selectedLanes).toEqual(['ux_comprehension', 'plan_completeness'])
+    expect(saved.payload.requiredRecipes[0]?.calibrationRecipeIds).toEqual(['ux-zero-context-comprehension'])
   })
 
   it('keeps raw reviewer runs in local history and reads a task audit bundle', async () => {

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -20,6 +20,7 @@ import {
   serviceStatePath,
   serviceUrlForPort,
   SHIPPED_CLI_COMMANDS,
+  validateReviewCalibrationCorpus,
   writeModelBakeoffReport,
 } from '../cli.js'
 
@@ -221,6 +222,7 @@ describe('Guildhall CLI surface', () => {
       'config',
       'corpus-map',
       'memory',
+      'review-calibration',
       'model-bakeoff',
       'mcp',
       'bridge',
@@ -240,6 +242,31 @@ describe('Guildhall CLI surface', () => {
     expect(help).not.toContain('guildhall meta-intake')
     expect(help).not.toContain('guildhall approve-meta-intake')
     expect(help).toContain('guildhall memory migrate-0.8.0')
+  })
+
+  it('validates and records the review calibration corpus through persistence', async () => {
+    const project = tmpHome()
+    const priorDataDir = process.env.GUILDHALL_DATA_DIR
+    const dataDir = join(tmpHome(), 'guildhall-data')
+    process.env.GUILDHALL_DATA_DIR = dataDir
+    try {
+      const result = await validateReviewCalibrationCorpus({
+        projectPath: project,
+        casesDir: resolve(process.cwd(), 'internal/calibration/cases/ux'),
+        recordedBy: 'calibration:test',
+        now: () => new Date('2026-05-25T12:00:00.000Z'),
+      })
+
+      expect(result.summary.missingCaseIds).toEqual([])
+      expect(result.record.ref.path).toContain(join(dataDir, 'projects'))
+      expect(result.record.payload.variantSet).toBe('review-calibration-corpus')
+    } finally {
+      if (priorDataDir === undefined) {
+        delete process.env.GUILDHALL_DATA_DIR
+      } else {
+        process.env.GUILDHALL_DATA_DIR = priorDataDir
+      }
+    }
   })
 
   it('writes a model bakeoff report as json plus markdown', () => {

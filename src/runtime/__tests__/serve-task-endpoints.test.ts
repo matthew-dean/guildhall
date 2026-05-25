@@ -152,6 +152,7 @@ describe('GET /api/project/task/:id', () => {
         lanes: ['ux_comprehension'],
         blocking: 'high',
         required: true,
+        calibrationRecipeIds: ['ux-zero-context-comprehension'],
       }],
       budget: { maxReviewerAgents: 4, maxWallClockMinutes: 18 },
       createdBy: 'coordinator-review-planner',

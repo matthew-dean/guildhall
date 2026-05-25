@@ -4,6 +4,7 @@ import path from 'node:path'
 import { parse as parseYaml } from 'yaml'
 
 import { ReviewRiskLane } from './review-audit-store.js'
+import type { ReviewAuditStore } from './review-audit-store.js'
 
 export const CalibrationArtifact = z.object({
   id: z.string().min(1),
@@ -111,6 +112,17 @@ export interface CalibrationFrontierSummary {
   }>
 }
 
+export interface CalibrationCorpusSummary {
+  caseCount: number
+  recipeIds: string[]
+  knownFindingCount: number
+  falsePositiveTrapCount: number
+  negativeControlCount: number
+  laneCoverage: Record<string, number>
+  missingCaseIds: string[]
+  orphanCaseIds: string[]
+}
+
 export const ReviewCalibrationRecipe = z.object({
   id: z.string().min(1),
   version: z.string().min(1),
@@ -186,6 +198,67 @@ export function selectCalibrationRecipesForLanes(
 ): ReviewCalibrationRecipe[] {
   const laneSet = new Set(lanes)
   return recipes.filter((recipe) => recipe.lanes.some((lane) => laneSet.has(lane)))
+}
+
+export function buildCalibrationCorpusSummary(
+  cases: readonly CalibrationCase[],
+  recipes: readonly ReviewCalibrationRecipe[] = defaultReviewCalibrationRecipes,
+): CalibrationCorpusSummary {
+  const caseIds = new Set(cases.map((calibrationCase) => calibrationCase.id))
+  const calibratedCaseIds = new Set(recipes.flatMap((recipe) => recipe.calibratedCaseIds))
+  const laneCoverage: Record<string, number> = {}
+  for (const calibrationCase of cases) {
+    for (const lane of calibrationCase.reviewLanes) {
+      laneCoverage[lane] = (laneCoverage[lane] ?? 0) + 1
+    }
+  }
+
+  return {
+    caseCount: cases.length,
+    recipeIds: recipes.map((recipe) => recipe.id),
+    knownFindingCount: cases.reduce((total, calibrationCase) => total + calibrationCase.knownFindings.length, 0),
+    falsePositiveTrapCount: cases.reduce((total, calibrationCase) => total + calibrationCase.falsePositiveTraps.length, 0),
+    negativeControlCount: cases.filter((calibrationCase) => calibrationCase.knownFindings.length === 0).length,
+    laneCoverage,
+    missingCaseIds: [...calibratedCaseIds].filter((caseId) => !caseIds.has(caseId)).sort(),
+    orphanCaseIds: [...caseIds].filter((caseId) => !calibratedCaseIds.has(caseId)).sort(),
+  }
+}
+
+export async function recordCalibrationCorpusValidation(input: {
+  casesDir: string
+  store: Pick<ReviewAuditStore, 'saveFrontierRun'>
+  recipes?: readonly ReviewCalibrationRecipe[]
+  recordedBy: string
+  now?: () => Date
+}): Promise<{
+  summary: CalibrationCorpusSummary
+  record: Awaited<ReturnType<Pick<ReviewAuditStore, 'saveFrontierRun'>['saveFrontierRun']>>
+}> {
+  const cases = await loadCalibrationCasesFromDirectory(input.casesDir)
+  const recipes = input.recipes ?? defaultReviewCalibrationRecipes
+  const summary = buildCalibrationCorpusSummary(cases, recipes)
+  const recordedAt = (input.now?.() ?? new Date()).toISOString()
+
+  const record = await input.store.saveFrontierRun({
+    runId: `review-calibration-corpus-${slugRunId(recordedAt)}`,
+    variantSet: 'review-calibration-corpus',
+    variants: summary.recipeIds,
+    metrics: {
+      caseCount: summary.caseCount,
+      knownFindingCount: summary.knownFindingCount,
+      falsePositiveTrapCount: summary.falsePositiveTrapCount,
+      negativeControlCount: summary.negativeControlCount,
+      laneCoverage: summary.laneCoverage,
+      missingCaseIds: summary.missingCaseIds,
+      orphanCaseIds: summary.orphanCaseIds,
+    },
+    summary: renderCalibrationCorpusSummary(summary),
+    recordedAt,
+    recordedBy: input.recordedBy,
+  })
+
+  return { summary, record }
 }
 
 export function gradeCalibrationRun(input: {
@@ -275,6 +348,25 @@ export async function loadCalibrationCasesFromDirectory(directory: string): Prom
     cases.push(CalibrationCase.parse(parsed))
   }
   return cases.sort((a, b) => a.id.localeCompare(b.id))
+}
+
+function renderCalibrationCorpusSummary(summary: CalibrationCorpusSummary): string {
+  const coverage = Object.entries(summary.laneCoverage)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([lane, count]) => `${lane}: ${count}`)
+    .join(', ')
+  const status = summary.missingCaseIds.length === 0
+    ? 'All default calibration recipe case references resolve.'
+    : `Missing calibration cases: ${summary.missingCaseIds.join(', ')}.`
+  return [
+    `${summary.caseCount} calibration case(s), ${summary.knownFindingCount} known finding(s), ${summary.negativeControlCount} negative control(s).`,
+    `Lane coverage: ${coverage || 'none'}.`,
+    status,
+  ].join(' ')
+}
+
+function slugRunId(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }
 
 function outcomeFor(input: {

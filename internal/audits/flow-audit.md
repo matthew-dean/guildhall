@@ -63,9 +63,11 @@ babysit setup/import/provider/release states across multiple pages.
   false-positive-heavy outcomes, summarizes one-variable quality/cost
   frontiers, loads repo-local YAML/JSON seed cases, and exposes versioned
   recipe selection for the initial UX comprehension/error-recovery/
-  cross-surface-consistency recipes. The initial UX corpus includes ambiguous
-  primary action, missing error recovery, cross-surface state contradiction,
-  and a CLI negative-control case.
+  cross-surface-consistency recipes. Review plans now carry calibration recipe
+  ids for each grouped reviewer recipe, and `guildhall review-calibration
+  validate` records corpus coverage through the review-audit persistence store.
+  The initial UX corpus includes ambiguous primary action, missing error
+  recovery, cross-surface state contradiction, and a CLI negative-control case.
 - [x] Surface stored review plans in task details. Real orchestrator runs now
   pass a file-backed review audit store, the task drawer payload reads the
   stored review plan through the persistence facade, and the Spec/task-details

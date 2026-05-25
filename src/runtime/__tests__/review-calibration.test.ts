@@ -5,10 +5,12 @@ import path from 'node:path'
 
 import {
   CalibrationCase,
+  buildCalibrationCorpusSummary,
   buildCalibrationReviewPacket,
   defaultReviewCalibrationRecipes,
   gradeCalibrationRun,
   loadCalibrationCasesFromDirectory,
+  recordCalibrationCorpusValidation,
   selectCalibrationRecipesForLanes,
   summarizeCalibrationFrontier,
 } from '../review-calibration.js'
@@ -307,5 +309,49 @@ describe('review calibration cases', () => {
     expect(selected.flatMap((recipe) => recipe.requiredArtifactKinds)).toEqual(
       expect.arrayContaining(['copy_snippet']),
     )
+  })
+
+  it('summarizes corpus coverage and records validation through the review audit store facade', async () => {
+    const casesDir = path.resolve(process.cwd(), 'internal/calibration/cases/ux')
+    const cases = await loadCalibrationCasesFromDirectory(casesDir)
+    const summary = buildCalibrationCorpusSummary(cases)
+
+    expect(summary.caseCount).toBeGreaterThanOrEqual(4)
+    expect(summary.knownFindingCount).toBeGreaterThan(0)
+    expect(summary.negativeControlCount).toBeGreaterThan(0)
+    expect(summary.missingCaseIds).toEqual([])
+    expect(summary.recipeIds).toEqual(expect.arrayContaining([
+      'ux-zero-context-comprehension',
+      'ux-error-recovery',
+      'ux-cross-surface-consistency',
+    ]))
+
+    const frontierRuns: unknown[] = []
+    const recorded = await recordCalibrationCorpusValidation({
+      casesDir,
+      store: {
+        async saveFrontierRun(run) {
+          frontierRuns.push(run)
+          return {
+            payload: run,
+          } as never
+        },
+      },
+      recordedBy: 'calibration:test',
+      now: () => new Date('2026-05-25T12:00:00.000Z'),
+    })
+
+    expect(frontierRuns).toHaveLength(1)
+    expect(recorded.summary.missingCaseIds).toEqual([])
+    expect(frontierRuns[0]).toMatchObject({
+      runId: 'review-calibration-corpus-2026-05-25t12-00-00-000z',
+      variantSet: 'review-calibration-corpus',
+      variants: [
+        'ux-zero-context-comprehension',
+        'ux-error-recovery',
+        'ux-cross-surface-consistency',
+      ],
+      recordedBy: 'calibration:test',
+    })
   })
 })

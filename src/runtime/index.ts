@@ -142,14 +142,17 @@ export {
   CalibrationFalsePositiveTrap,
   CalibrationKnownFinding,
   ReviewCalibrationRecipe,
+  buildCalibrationCorpusSummary,
   buildCalibrationReviewPacket,
   defaultReviewCalibrationRecipes,
   gradeCalibrationRun,
   loadCalibrationCasesFromDirectory,
+  recordCalibrationCorpusValidation,
   selectCalibrationRecipesForLanes,
   summarizeCalibrationFrontier,
 } from './review-calibration.js'
 export type {
+  CalibrationCorpusSummary,
   CalibrationFrontierRun,
   CalibrationFrontierSummary,
   CalibrationGrade,

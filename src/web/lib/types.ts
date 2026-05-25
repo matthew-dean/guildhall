@@ -79,6 +79,7 @@ export interface ReviewRecipeRef {
   lanes?: string[]
   blocking?: 'none' | 'medium' | 'high' | 'strict' | string
   required?: boolean
+  calibrationRecipeIds?: string[]
 }
 
 export interface ReviewPlan {

@@ -9,6 +9,8 @@ import { renderBakeoffMarkdown, runContextIndexerBakeoff, runModelBakeoff } from
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
 import { migrateTaskState } from './task-state-migration.js'
 import { compactProjectState } from './project-state-compaction.js'
+import { recordCalibrationCorpusValidation } from './review-calibration.js'
+import { createReviewAuditStore } from './review-audit-store.js'
 import { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
 import {
   configureClaudeProjectMcpBridge,
@@ -34,6 +36,7 @@ import { platform } from 'node:os'
 import { buildSemanticIndexPrompt, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
 import { OpenAICompatibleClient } from '@guildhall/providers'
 import { getProjectStateDir } from '@guildhall/sessions'
+import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`
@@ -190,7 +193,7 @@ export function parseArgs(rawArgs: string[]): {
   getFlag: (flag: string) => string | undefined
   positionals: string[]
 } {
-  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks'])
+  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks', '--cases'])
   function getFlag(flag: string): string | undefined {
     const idx = rawArgs.indexOf(flag)
     return idx !== -1 ? rawArgs[idx + 1] : undefined
@@ -277,6 +280,8 @@ export function resolveServiceLifecycleIntent(
 //   guildhall memory migrate-0.8.0 [--apply] [--delete-source] [--update-gitignore] [path]
 //   guildhall memory migrate-local-history [--apply] [--delete-source] [--update-gitignore] [path]
 //                                      — move old transcripts/events/sessions into ~/.guildhall
+//   guildhall review-calibration validate [path] [--cases <dir>]
+//                                      — validate and record review calibration corpus coverage
 //   guildhall model-bakeoff [--context-indexer] [output]
 //                                      — write replay model bakeoff JSON + Markdown
 //   guildhall mcp serve [path]          — serve Guildhall project context over MCP stdio
@@ -297,6 +302,7 @@ export const SHIPPED_CLI_COMMANDS = [
   'config',
   'corpus-map',
   'memory',
+  'review-calibration',
   'model-bakeoff',
   'mcp',
   'bridge',
@@ -314,7 +320,7 @@ function getFlag(flag: string): string | undefined {
 // another flag — otherwise boolean flags like `--no-browser` would eat the
 // following positional by mistake.
 function positionals(): string[] {
-  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target'])
+  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target', '--cases'])
   const result: string[] = []
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -371,6 +377,9 @@ Usage:
   guildhall migrate task-state [id|path]
                                   Move task runtime/evidence out of project-local TASKS.json
     --apply                      Write files. Without this, prints a dry run
+  guildhall review-calibration validate [id|path]
+                                  Validate and record calibration corpus coverage
+    --cases <dir>                Corpus directory (default: internal/calibration/cases/ux)
   guildhall model-bakeoff [--context-indexer] [output]
                                   Write replay model bakeoff JSON + Markdown
   guildhall mcp serve [project-path]
@@ -389,6 +398,7 @@ Examples:
   guildhall memory migrate-0.8.0 --apply --delete-source --update-gitignore .
   guildhall memory compact-project-state --apply .
   guildhall migrate task-state --apply .
+  guildhall review-calibration validate . --cases internal/calibration/cases/ux
   guildhall model-bakeoff artifacts/model-bakeoff/report.json
   guildhall model-bakeoff --context-indexer
   guildhall mcp serve .
@@ -811,6 +821,56 @@ async function cmdMigrate() {
   if (!apply) console.log('[guildhall] Re-run with --apply to perform this migration.')
 }
 
+export async function validateReviewCalibrationCorpus(input: {
+  projectPath: string
+  casesDir?: string
+  recordedBy?: string
+  now?: () => Date
+}) {
+  const projectPath = resolve(expandPath(input.projectPath))
+  const casesDir = resolve(projectPath, input.casesDir ?? 'internal/calibration/cases/ux')
+  const store = createReviewAuditStore({
+    projectRoot: projectPath,
+    persistence: new FileBackedGuildhallPersistence(),
+    ...(input.now ? { now: input.now } : {}),
+  })
+  return recordCalibrationCorpusValidation({
+    casesDir,
+    store,
+    recordedBy: input.recordedBy ?? 'guildhall-cli',
+    ...(input.now ? { now: input.now } : {}),
+  })
+}
+
+async function cmdReviewCalibration() {
+  const pos = positionals()
+  const subcommand = pos[0] ?? 'validate'
+  if (subcommand !== 'validate') {
+    console.error('[guildhall] Usage: guildhall review-calibration validate [id|path] [--cases <dir>]')
+    process.exit(1)
+  }
+  const idOrPath = pos[1]
+  const entry = idOrPath ? findWorkspace(idOrPath) : null
+  const projectPath = entry?.path ?? (idOrPath ? resolve(expandPath(idOrPath)) : process.cwd())
+  const casesDir = getFlag('--cases')
+  const result = await validateReviewCalibrationCorpus({
+    projectPath,
+    ...(casesDir ? { casesDir } : {}),
+    recordedBy: 'guildhall-cli',
+  })
+
+  console.log('[guildhall] Review calibration corpus validated.')
+  console.log(`[guildhall] Cases: ${result.summary.caseCount}`)
+  console.log(`[guildhall] Known findings: ${result.summary.knownFindingCount}`)
+  console.log(`[guildhall] Negative controls: ${result.summary.negativeControlCount}`)
+  console.log(`[guildhall] Recipes: ${result.summary.recipeIds.join(', ')}`)
+  console.log(`[guildhall] Audit record: ${result.record.ref.path}`)
+  if (result.summary.missingCaseIds.length > 0) {
+    console.error(`[guildhall] Missing calibration cases: ${result.summary.missingCaseIds.join(', ')}`)
+    process.exitCode = 1
+  }
+}
+
 function createSemanticIndexer(projectPath: string): CorpusSemanticIndexer {
   const providers = readGlobalProviders().providers
   const openai = providers['openai-api']
@@ -1075,6 +1135,7 @@ async function main() {
     case 'corpus-map': return cmdCorpusMap()
     case 'memory': return cmdMemory()
     case 'migrate': return cmdMigrate()
+    case 'review-calibration': return cmdReviewCalibration()
     case 'model-bakeoff': return cmdModelBakeoff()
     case 'mcp': return cmdMcp()
     case 'bridge': return cmdBridge()

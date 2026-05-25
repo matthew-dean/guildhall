@@ -132,6 +132,13 @@ describe('buildReviewPlan', () => {
       'test_adequacy',
     ]))
     expect(plan.requiredRecipes.map((recipe) => recipe.recipeId)).toContain('product-ux-zero-context')
+    expect(plan.requiredRecipes.find((recipe) => recipe.recipeId === 'product-ux-zero-context')).toMatchObject({
+      calibrationRecipeIds: [
+        'ux-zero-context-comprehension',
+        'ux-error-recovery',
+        'ux-cross-surface-consistency',
+      ],
+    })
     expect(plan.deterministicChecks).toContain('browser-or-screenshot-evidence')
     expect(plan.requiredArtifacts).toContain('visual-evidence')
     expect(plan.budget.maxReviewerAgents).toBeGreaterThan(3)
