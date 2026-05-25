@@ -174,7 +174,7 @@ import {
   type ReviewerMode,
 } from './reviewer-dispatch.js'
 import { ensureTaskReviewPlanRecorded } from './review-planner.js'
-import type { ReviewAuditStore, ReviewPlanRecord } from './review-audit-store.js'
+import type { ReviewAuditStore, ReviewPlanRecord, ReviewRiskLane } from './review-audit-store.js'
 import { createReviewAuditStore } from './review-audit-store.js'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import { runGuildGates } from './guild-gate-runner.js'
@@ -5479,6 +5479,12 @@ export class Orchestrator {
       for (const v of verdicts) {
         t.reviewVerdicts.push(personaVerdictToReviewRecord(v, { now }))
       }
+      await this.persistReviewerRuns({
+        task: t,
+        verdicts,
+        reviewPlan,
+        recordedAt: now,
+      })
 
       const repeatedAfterCoordinatorAdjudication =
         aggregate.verdict === 'revise' &&
@@ -5641,6 +5647,45 @@ export class Orchestrator {
         afterStatus: 'in_progress',
       } as TickOutcome
     })
+  }
+
+  private async persistReviewerRuns(input: {
+    task: Task
+    verdicts: readonly PersonaVerdict[]
+    reviewPlan: ReviewPlanRecord | null
+    recordedAt: string
+  }): Promise<void> {
+    const store = this.opts.reviewAuditStore
+    if (!store) return
+    for (const verdict of input.verdicts) {
+      const recipe = selectReviewerRunRecipe(input.reviewPlan)
+      try {
+        await store.saveReviewerRun({
+          taskId: input.task.id,
+          recipeId: recipe.recipeId,
+          recipeVersion: recipe.version,
+          lanes: recipe.lanes,
+          verdict: verdict.verdict,
+          findings: verdict.revisionItems.map((item) => ({
+            lane: recipe.lanes[0] ?? 'test_adequacy',
+            severity: 'high',
+            summary: item,
+          })),
+          recordedAt: input.recordedAt,
+          recordedBy: `reviewer-fanout:${verdict.guildSlug}`,
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        await this.logTickProgress({
+          task: input.task,
+          agent: 'reviewer-fanout',
+          beforeStatus: input.task.status,
+          afterStatus: input.task.status,
+          transitioned: false,
+          note: `reviewer-run audit write failed for ${verdict.guildSlug}: ${message}`,
+        })
+      }
+    }
   }
 
   /**
@@ -8489,4 +8534,26 @@ function renderReviewPlanForReviewerPrompt(reviewPlan: ReviewPlanRecord): string
     `Required checks: ${reviewPlan.deterministicChecks.join(', ') || 'none'}`,
     `Evidence expected: ${reviewPlan.requiredArtifacts.join(', ') || 'none'}`,
   ].join('\n')
+}
+
+function selectReviewerRunRecipe(
+  reviewPlan: ReviewPlanRecord | null,
+): {
+  recipeId: string
+  version: string
+  lanes: ReviewRiskLane[]
+} {
+  const firstRecipe = reviewPlan?.requiredRecipes[0]
+  if (firstRecipe) {
+    return {
+      recipeId: firstRecipe.recipeId,
+      version: firstRecipe.version,
+      lanes: firstRecipe.lanes.length > 0 ? [...firstRecipe.lanes] : ['test_adequacy'],
+    }
+  }
+  return {
+    recipeId: 'reviewer-fanout-persona',
+    version: 'v1',
+    lanes: reviewPlan?.selectedLanes.length ? [...reviewPlan.selectedLanes] : ['test_adequacy'],
+  }
 }

@@ -79,7 +79,9 @@ babysit setup/import/provider/release states across multiple pages.
   default persona prompts with lanes, recipes, calibration recipe ids, checks,
   evidence, and budget. Fan-out now also applies the plan's reviewer-agent
   budget by selecting lane-relevant reviewer personas before filling remaining
-  capacity.
+  capacity, and persists each persona verdict as a reviewer-run audit event
+  through the review-audit store without blocking review if local-history
+  persistence is unavailable.
 - [x] Tighten the dark-theme text contrast ladder from the Fair Labor License
   Thread walkthrough. Supporting copy was too dim against near-white headings,
   so the system text tokens now keep primary/strong text slightly softer and
