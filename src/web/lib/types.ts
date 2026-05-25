@@ -73,6 +73,35 @@ export interface ReviewVerdict {
   llmError?: string
 }
 
+export interface ReviewRecipeRef {
+  recipeId?: string
+  version?: string
+  lanes?: string[]
+  blocking?: 'none' | 'medium' | 'high' | 'strict' | string
+  required?: boolean
+}
+
+export interface ReviewPlan {
+  taskId?: string
+  effort?: 'lean' | 'balanced' | 'thorough' | 'release_critical' | 'custom' | string
+  depth?: 'minimal' | 'standard' | 'targeted' | 'deep' | 'release_critical' | string
+  selectedLanes?: string[]
+  skippedLanes?: Array<{ lane?: string; reason?: string }>
+  requiredRecipes?: ReviewRecipeRef[]
+  deterministicChecks?: string[]
+  requiredArtifacts?: string[]
+  budget?: {
+    maxReviewerAgents?: number
+    maxEstimatedTokens?: number
+    maxWallClockMinutes?: number
+    maxRevisionLoops?: number
+  }
+  aggregation?: Record<string, 'advisory' | 'blocking_on_high' | 'strict' | string>
+  reasons?: string[]
+  createdAt?: string
+  createdBy?: string
+}
+
 export interface TaskNote {
   role?: string
   agentId?: string
@@ -163,6 +192,7 @@ export interface Task {
   acceptanceCriteria?: AcceptanceCriterion[]
   gateResults?: GateResult[]
   reviewVerdicts?: ReviewVerdict[]
+  reviewPlan?: ReviewPlan
   escalations?: Escalation[]
   notes?: TaskNote[]
   latestReviewerSummary?: string

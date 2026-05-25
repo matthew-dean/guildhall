@@ -57,6 +57,11 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Surface stored review plans in task details. Real orchestrator runs now
+  pass a file-backed review audit store, the task drawer payload reads the
+  stored review plan through the persistence facade, and the Spec/task-details
+  tab shows a compact Review plan card with effort, depth, budget, lanes,
+  reviewer groups, checks, evidence, and skipped lenses behind a disclosure.
 - [x] Tighten the dark-theme text contrast ladder from the Fair Labor License
   Thread walkthrough. Supporting copy was too dim against near-white headings,
   so the system text tokens now keep primary/strong text slightly softer and

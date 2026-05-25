@@ -168,6 +168,55 @@ describe('TaskDrawer', () => {
     })
   })
 
+  it('shows a compact review plan in task details when one is recorded', async () => {
+    const payload = drawerPayload({
+      threadTurns: [],
+      task: {
+        ...drawerPayload().task,
+        status: 'review',
+        reviewPlan: {
+          taskId: 'task-link-editor',
+          effort: 'balanced',
+          depth: 'standard',
+          selectedLanes: ['ux_comprehension', 'copy_clarity', 'test_adequacy', 'plan_completeness', 'accessibility'],
+          requiredRecipes: [{
+            recipeId: 'product-ux-zero-context',
+            version: 'v1',
+            lanes: ['ux_comprehension', 'copy_clarity', 'accessibility'],
+            blocking: 'high',
+          }],
+          deterministicChecks: ['browser-or-screenshot-evidence'],
+          requiredArtifacts: ['visual-evidence'],
+          skippedLanes: [{ lane: 'security', reason: 'No matching signal.' }],
+          budget: { maxReviewerAgents: 4, maxWallClockMinutes: 18, maxEstimatedTokens: 45000 },
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Review plan')
+    expect(screen.getByText('Balanced review')).toBeInTheDocument()
+    expect(screen.getByText(/4 reviewers/)).toBeInTheDocument()
+    expect(screen.getByText('UX Comprehension')).toBeInTheDocument()
+    expect(screen.getByText('+1 more')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByText('Show review details'))
+    expect(screen.getByText('Reviewer groups')).toBeInTheDocument()
+    expect(screen.getByText(/browser-or-screenshot-evidence/)).toBeInTheDocument()
+  })
+
   it('opens the Action tab when a question notification deep-links to the current surface', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=current')
     path.value = '/projects/looma-knit/task/task-link-editor'

@@ -196,6 +196,8 @@ import {
 } from './task-project-path.js'
 import { buildEffectiveTask } from './effective-task.js'
 import { readContextDebugForTask } from './context-observability.js'
+import { createReviewAuditStore } from './review-audit-store.js'
+import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import {
   buildSnapshot,
   listWizards,
@@ -1521,9 +1523,16 @@ async function enrichTaskForServe(
   const workspaceStore = await readTaskWorkspaceStore(projectPath).catch(() => undefined)
   const workspace = taskId ? workspaceStore?.workspaces[taskId] : undefined
   const gitStory = await gitStoryForTask(projectPath, normalized, workspace).catch(() => undefined)
+  const reviewAudit = taskId
+    ? await createReviewAuditStore({
+        projectRoot: projectPath,
+        persistence: new FileBackedGuildhallPersistence(),
+      }).readTaskReviewAudit(taskId).catch(() => null)
+    : null
 
   return {
     ...normalized,
+    ...(reviewAudit?.plan ? { reviewPlan: reviewAudit.plan.payload } : {}),
     ...(latestReviewerSummary ? { latestReviewerSummary } : {}),
     ...(latestSelfCritique ? { latestSelfCritique } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),

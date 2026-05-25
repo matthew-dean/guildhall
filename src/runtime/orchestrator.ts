@@ -175,6 +175,8 @@ import {
 } from './reviewer-dispatch.js'
 import { ensureTaskReviewPlanRecorded } from './review-planner.js'
 import type { ReviewAuditStore } from './review-audit-store.js'
+import { createReviewAuditStore } from './review-audit-store.js'
+import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import { runGuildGates } from './guild-gate-runner.js'
 import { loadDesignSystem } from './design-system-store.js'
 import {
@@ -7977,6 +7979,10 @@ export async function runOrchestrator(
     config: effectiveConfig,
     agents,
     reviewerFanout,
+    reviewAuditStore: createReviewAuditStore({
+      projectRoot: effectiveConfig.projectPath,
+      persistence: new FileBackedGuildhallPersistence(),
+    }),
     providerName: selection.providerName,
     ...(opts.domainFilter ? { domainFilter: opts.domainFilter } : {}),
     ...(hookExecutor ? { hookExecutor } : {}),

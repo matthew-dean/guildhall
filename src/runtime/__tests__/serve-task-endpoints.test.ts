@@ -10,6 +10,8 @@ import {
 } from '@guildhall/sessions'
 import { readExploringTranscript, writeCheckpoint } from '@guildhall/tools'
 import { buildServeApp, filterEventsForTask } from '../serve.js'
+import { createReviewAuditStore } from '../review-audit-store.js'
+import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 
 // Integration tests for the v0.2 UI endpoints:
 //   GET  /api/project/task/:id        — per-task detail powering the drawer
@@ -130,6 +132,43 @@ describe('GET /api/project/task/:id', () => {
       'newer',
       'older',
     ])
+  })
+
+  it('includes a stored review plan in the task drawer payload', async () => {
+    await seedTask('task-1', { status: 'review' })
+    const store = createReviewAuditStore({
+      projectRoot: tmpDir,
+      persistence: new FileBackedGuildhallPersistence(),
+      now: () => new Date('2026-05-25T12:00:00.000Z'),
+    })
+    await store.saveReviewPlan({
+      taskId: 'task-1',
+      effort: 'balanced',
+      depth: 'standard',
+      selectedLanes: ['ux_comprehension', 'test_adequacy'],
+      requiredRecipes: [{
+        recipeId: 'product-ux-zero-context',
+        version: 'v1',
+        lanes: ['ux_comprehension'],
+        blocking: 'high',
+        required: true,
+      }],
+      budget: { maxReviewerAgents: 4, maxWallClockMinutes: 18 },
+      createdBy: 'coordinator-review-planner',
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+
+    expect(body.task?.reviewPlan).toMatchObject({
+      taskId: 'task-1',
+      effort: 'balanced',
+      depth: 'standard',
+      selectedLanes: ['ux_comprehension', 'test_adequacy'],
+      budget: { maxReviewerAgents: 4, maxWallClockMinutes: 18 },
+    })
   })
 
   it('returns the exploring transcript artifact for the task drawer', async () => {
