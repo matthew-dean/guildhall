@@ -57,6 +57,12 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Start the persistence-boundary implementation slice. The first runtime
+  code pass adds `@guildhall/persistence` with `GuildhallPersistence` types and
+  a file-backed implementation for typed records, append-only events, artifacts,
+  placement policy, hashes, and missing-evidence resolution. Focused persistence
+  tests pass; the broader pre-existing full-suite failures remain tracked as
+  part of the dirty-work checkpoint.
 - [x] Audit whether Guildhall would have caught its recent manual UX fixes
   while building itself. The detailed audit lives at
   `internal/audits/2026-05-25-guildhall-self-ux-audit.md`. Conclusion:

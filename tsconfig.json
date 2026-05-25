@@ -30,6 +30,7 @@
       "@guildhall/levers": ["./src/levers/index.ts"],
       "@guildhall/mcp": ["./src/mcp/index.ts"],
       "@guildhall/mcp-server": ["./src/mcp-server/index.ts"],
+      "@guildhall/persistence": ["./src/persistence/index.ts"],
       "@guildhall/protocol": ["./src/protocol/index.ts"],
       "@guildhall/providers": ["./src/providers/index.ts"],
       "@guildhall/runtime": ["./src/runtime/index.ts"],
