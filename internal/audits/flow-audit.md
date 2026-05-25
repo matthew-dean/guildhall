@@ -57,6 +57,13 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Add the first review-audit consumer of the persistence boundary.
+  `createReviewAuditStore` now stores compact review plans and escaped-miss
+  audit events in shared project persistence, while raw reviewer/frontier runs
+  stay in local history by default. This is the first runtime shape for review
+  plans, review budgets, reviewer recipes, calibration runs, and post-hoc
+  missed-risk links to go through the centralized persistence facade instead
+  of writing ad hoc files.
 - [x] Start the persistence-boundary implementation slice. The first runtime
   code pass adds `@guildhall/persistence` with `GuildhallPersistence` types and
   a file-backed implementation for typed records, append-only events, artifacts,

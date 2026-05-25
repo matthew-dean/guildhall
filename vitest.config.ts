@@ -31,6 +31,7 @@ export default defineConfig({
       'levers',
       'mcp',
       'protocol',
+      'persistence',
       'providers',
       'runtime',
       'runtime-bundle',

@@ -113,6 +113,14 @@ export interface EventQuery {
   streamId: string
 }
 
+export interface RecordRefInput {
+  projectRoot?: string
+  exportRoot?: string
+  placement: PersistencePlacement
+  collection: string
+  id: string
+}
+
 export interface SaveArtifactInput extends Omit<BasePersistenceInput, 'schemaName' | 'schemaVersion'> {
   id?: string
   content: string | Buffer
@@ -150,6 +158,7 @@ export interface CompactionSummary {
 }
 
 export interface GuildhallPersistence {
+  recordRef(input: RecordRefInput): PersistenceRef
   writeRecord<T>(input: WriteRecordInput<T>): Promise<PersistedRecord<T>>
   appendEvent<T>(input: AppendEventInput<T>): Promise<PersistedEvent<T>>
   readRecord<T = unknown>(ref: PersistenceRef): Promise<PersistedRecord<T> | null>

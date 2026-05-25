@@ -106,6 +106,30 @@ export type {
   PreRejectionDecision,
   EvaluatePreRejectionInput,
 } from './pre-rejection-policy.js'
+export {
+  createReviewAuditStore,
+  ReviewRiskLane,
+  ReviewEffort,
+  ReviewBudget,
+  ReviewRecipeRef,
+  ReviewPlanRecord,
+  ReviewPlanEvent,
+  ReviewerRunRecord,
+  FrontierRunRecord,
+  EscapedMissRecord,
+} from './review-audit-store.js'
+export type {
+  ReviewAuditStore,
+  ReviewRiskLane as ReviewRiskLaneType,
+  ReviewEffort as ReviewEffortType,
+  ReviewBudget as ReviewBudgetType,
+  ReviewRecipeRef as ReviewRecipeRefType,
+  ReviewPlanRecord as ReviewPlanRecordType,
+  ReviewPlanEvent as ReviewPlanEventType,
+  ReviewerRunRecord as ReviewerRunRecordType,
+  FrontierRunRecord as FrontierRunRecordType,
+  EscapedMissRecord as EscapedMissRecordType,
+} from './review-audit-store.js'
 export { selectApiClient } from './provider-selection.js'
 export type {
   SelectApiClientOptions,

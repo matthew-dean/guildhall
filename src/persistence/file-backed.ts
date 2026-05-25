@@ -21,6 +21,7 @@ import type {
   PersistedRecord,
   PersistencePlacement,
   PersistenceRef,
+  RecordRefInput,
   SaveArtifactInput,
   WriteRecordInput,
 } from './types.js'
@@ -68,12 +69,22 @@ function ensureExportRoot(input: { exportRoot?: string }, scope: string): string
 }
 
 export class FileBackedGuildhallPersistence implements GuildhallPersistence {
+  recordRef(input: RecordRefInput): PersistenceRef {
+    const id = slug(input.id)
+    return this.ref(
+      input.placement,
+      input.collection,
+      id,
+      this.recordPath(input.placement, input.collection, id, input),
+    )
+  }
+
   async writeRecord<T>(input: WriteRecordInput<T>): Promise<PersistedRecord<T>> {
     const id = slug(input.id ?? `${input.schemaName}-${hash(input.payload).slice(0, 12)}`)
     const filePath = this.recordPath(input.placement, input.collection, id, input)
     const existing = await this.readExistingRecord(filePath)
     const at = nowIso(input.now)
-    const ref = this.ref(input.placement, input.collection, id, filePath)
+    const ref = this.recordRef({ ...input, id })
     const record: PersistedRecord<T> = {
       schema: { name: input.schemaName, version: input.schemaVersion },
       ref,
