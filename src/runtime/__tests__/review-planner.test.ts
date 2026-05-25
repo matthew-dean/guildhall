@@ -1,7 +1,64 @@
 import { describe, expect, it } from 'vitest'
 import type { Task } from '@guildhall/core'
+import type {
+  PersistedEvent,
+  PersistedRecord,
+  PersistencePlacement,
+} from '@guildhall/persistence'
 
-import { buildReviewPlan } from '../review-planner.js'
+import { buildReviewPlan, ensureTaskReviewPlanRecorded } from '../review-planner.js'
+import type {
+  ReviewAuditStore,
+  ReviewPlanEvent,
+  ReviewPlanRecord,
+} from '../review-audit-store.js'
+
+const auditPlacement: PersistencePlacement = {
+  scope: 'shared_project',
+  retention: 'active',
+  visibility: 'internal_audit',
+  commitPolicy: 'committed',
+}
+
+function persistedPlan(plan: ReviewPlanRecord): PersistedRecord<ReviewPlanRecord> {
+  return {
+    schema: { name: 'review-plan', version: 1 },
+    ref: {
+      scope: 'shared_project',
+      collection: 'review-plans',
+      id: plan.taskId,
+      path: '/tmp/review-plan.json',
+    },
+    placement: auditPlacement,
+    provenance: {
+      createdAt: plan.createdAt,
+      updatedAt: plan.createdAt,
+      createdBy: plan.createdBy,
+      sourceRefs: [],
+    },
+    contentHash: 'hash',
+    payload: plan,
+  }
+}
+
+function persistedPlanEvent(event: ReviewPlanEvent): PersistedEvent<ReviewPlanEvent> {
+  return {
+    schema: { name: 'review-plan-event', version: 1 },
+    ref: {
+      scope: 'shared_project',
+      collection: 'review-plan-events',
+      id: 'event-1',
+      path: '/tmp/event.jsonl',
+    },
+    eventId: 'event-1',
+    recordedAt: event.recordedAt,
+    recordedBy: event.recordedBy,
+    placement: auditPlacement,
+    sourceRefs: [],
+    contentHash: 'hash',
+    payload: event,
+  }
+}
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -136,5 +193,85 @@ describe('buildReviewPlan', () => {
       'test_adequacy',
     ]))
     expect(plan.skippedLanes.some((entry) => entry.lane === 'security')).toBe(true)
+  })
+})
+
+describe('ensureTaskReviewPlanRecorded', () => {
+  it('stores a new review plan and creation event once', async () => {
+    const savedPlans: ReviewPlanRecord[] = []
+    const savedEvents: ReviewPlanEvent[] = []
+    const store: Pick<ReviewAuditStore, 'readTaskReviewAudit' | 'saveReviewPlan' | 'appendReviewPlanEvent'> = {
+      async readTaskReviewAudit() {
+        return {
+          plan: null,
+          events: [],
+          reviewerRuns: [],
+          escapedMisses: [],
+        }
+      },
+      async saveReviewPlan(plan) {
+        const saved = plan as ReviewPlanRecord
+        savedPlans.push(saved)
+        return persistedPlan(saved)
+      },
+      async appendReviewPlanEvent(event) {
+        const saved = event as ReviewPlanEvent
+        savedEvents.push(saved)
+        return persistedPlanEvent(saved)
+      },
+    }
+
+    const result = await ensureTaskReviewPlanRecorded({
+      store,
+      task: task({
+        title: 'Fix confusing setup wizard labels',
+        description: 'Update browser flow copy and focus behavior.',
+      }),
+      changedFiles: ['src/web/surfaces/SetupWizard.svelte'],
+      createdBy: 'coordinator:test',
+      now: () => new Date('2026-05-25T12:00:00.000Z'),
+    })
+
+    expect(result.recorded).toBe(true)
+    expect(savedPlans).toHaveLength(1)
+    expect(savedEvents).toHaveLength(1)
+    expect(savedEvents[0]!.kind).toBe('created')
+    expect(savedEvents[0]!.lanes).toEqual(result.plan.selectedLanes)
+    expect(result.plan.createdAt).toBe('2026-05-25T12:00:00.000Z')
+  })
+
+  it('does not overwrite an existing review plan', async () => {
+    const existing = buildReviewPlan({
+      task: task({ title: 'Existing plan' }),
+      createdAt: '2026-05-25T11:00:00.000Z',
+    })
+    let writes = 0
+    const store: Pick<ReviewAuditStore, 'readTaskReviewAudit' | 'saveReviewPlan' | 'appendReviewPlanEvent'> = {
+      async readTaskReviewAudit() {
+        return {
+          plan: persistedPlan(existing),
+          events: [],
+          reviewerRuns: [],
+          escapedMisses: [],
+        }
+      },
+      async saveReviewPlan() {
+        writes += 1
+        throw new Error('unexpected save')
+      },
+      async appendReviewPlanEvent() {
+        writes += 1
+        throw new Error('unexpected event')
+      },
+    }
+
+    const result = await ensureTaskReviewPlanRecorded({
+      store,
+      task: task({ title: 'Existing plan' }),
+    })
+
+    expect(result.recorded).toBe(false)
+    expect(result.plan.createdAt).toBe('2026-05-25T11:00:00.000Z')
+    expect(writes).toBe(0)
   })
 })

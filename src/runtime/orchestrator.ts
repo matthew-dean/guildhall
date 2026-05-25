@@ -173,6 +173,8 @@ import {
   type DeterministicVerdict,
   type ReviewerMode,
 } from './reviewer-dispatch.js'
+import { ensureTaskReviewPlanRecorded } from './review-planner.js'
+import type { ReviewAuditStore } from './review-audit-store.js'
 import { runGuildGates } from './guild-gate-runner.js'
 import { loadDesignSystem } from './design-system-store.js'
 import {
@@ -1589,8 +1591,10 @@ export interface OrchestratorOptions {
    * task to `in_progress` with combined feedback.
    *
    * When absent, the legacy single-reviewer dispatch runs unchanged.
-   */
+  */
   reviewerFanout?: ReviewerFanoutRunner
+  /** Optional review audit store used to persist review plans before work review runs. */
+  reviewAuditStore?: ReviewAuditStore
   /** Optional wall-clock timeout for a single agent turn. */
   agentGenerateTimeoutMs?: number
 }
@@ -2218,6 +2222,7 @@ export class Orchestrator {
 
     if (task.status === 'review' && !hasPendingHandoffStep(task)) {
       await this.normalizeReviewOwnership(task)
+      await this.ensureReviewPlanRecorded(task)
     }
 
     if (task.status === 'gate_check') {
@@ -5086,6 +5091,54 @@ export class Orchestrator {
       AGENT_SETTINGS_FILENAME,
     )
     return await loadLeverSettings({ path: settingsPath })
+  }
+
+  private async ensureReviewPlanRecorded(task: Task): Promise<void> {
+    const store = this.opts.reviewAuditStore
+    if (!store) return
+
+    try {
+      const likelyTargetFiles = resolveLikelyTaskFiles(task)
+      const verificationCommands = resolveEffectiveTaskVerificationCommands({
+        task,
+        workspaceProjectPath: this.opts.config.projectPath,
+        ...(this.opts.config.bootstrap
+          ? { workspaceBootstrap: this.opts.config.bootstrap }
+          : {}),
+        likelyTargetFiles,
+      })
+      const result = await ensureTaskReviewPlanRecorded({
+        store,
+        task,
+        changedFiles: likelyTargetFiles,
+        deterministicChecks: verificationCommands,
+        createdBy: 'coordinator-review-planner',
+        now: () => new Date(this.now()),
+      })
+      if (result.recorded) {
+        await this.logTickProgress({
+          task,
+          agent: 'coordinator-review-planner',
+          beforeStatus: 'review',
+          afterStatus: 'review',
+          transitioned: false,
+          note:
+            `planned ${result.plan.effort} review across ` +
+            `${result.plan.selectedLanes.length} risk lane(s) ` +
+            `with up to ${result.plan.budget.maxReviewerAgents ?? 'unbounded'} grouped reviewer agent(s)`,
+        })
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      await this.logTickProgress({
+        task,
+        agent: 'coordinator-review-planner',
+        beforeStatus: 'review',
+        afterStatus: 'review',
+        transitioned: false,
+        note: `review planning audit write failed: ${message}`,
+      })
+    }
   }
 
   /**

@@ -57,6 +57,11 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Wire review planning into the work-review path behind an optional audit
+  store. When a task reaches `review`, the orchestrator now ensures a review
+  plan exists before automated-review shortcut, fan-out, or legacy reviewer
+  dispatch runs. The hook is non-blocking for review execution: persistence
+  write failures are logged as progress instead of changing task status.
 - [x] Add the first coordinator-facing review planner shape. The pure
   `buildReviewPlan` path now turns task text, changed-file hints, priority,
   requested effort, and optional budget overrides into selected risk lanes,

@@ -2,6 +2,7 @@ import type { Task, TaskPriority } from '@guildhall/core'
 import type {
   ReviewBudget,
   ReviewEffort,
+  ReviewAuditStore,
   ReviewPlanRecord,
   ReviewRecipeRef,
   ReviewRiskLane,
@@ -205,6 +206,16 @@ export interface BuildReviewPlanInput {
   budgetOverride?: ReviewBudget
 }
 
+export interface EnsureTaskReviewPlanRecordedInput extends Omit<BuildReviewPlanInput, 'createdAt'> {
+  store: Pick<ReviewAuditStore, 'readTaskReviewAudit' | 'saveReviewPlan' | 'appendReviewPlanEvent'>
+  now?: () => Date
+}
+
+export interface EnsureTaskReviewPlanRecordedResult {
+  recorded: boolean
+  plan: ReviewPlanRecord
+}
+
 export function buildReviewPlan(input: BuildReviewPlanInput): ReviewPlanRecord {
   const signals = detectReviewSignals(input)
   const effort = input.requestedEffort ?? inferEffort(input.task.priority, signals.selectedLanes)
@@ -242,6 +253,37 @@ export function buildReviewPlan(input: BuildReviewPlanInput): ReviewPlanRecord {
     ],
     createdAt: input.createdAt ?? new Date().toISOString(),
     createdBy: input.createdBy ?? 'review-planner',
+  }
+}
+
+export async function ensureTaskReviewPlanRecorded(
+  input: EnsureTaskReviewPlanRecordedInput,
+): Promise<EnsureTaskReviewPlanRecordedResult> {
+  const existing = await input.store.readTaskReviewAudit(input.task.id)
+  if (existing.plan) {
+    return {
+      recorded: false,
+      plan: existing.plan.payload,
+    }
+  }
+
+  const plan = buildReviewPlan({
+    ...input,
+    createdAt: (input.now?.() ?? new Date()).toISOString(),
+    createdBy: input.createdBy ?? 'review-planner',
+  })
+  await input.store.saveReviewPlan(plan)
+  await input.store.appendReviewPlanEvent({
+    taskId: plan.taskId,
+    kind: 'created',
+    summary: `Planned ${plan.effort} review across ${plan.selectedLanes.length} risk lane(s).`,
+    lanes: plan.selectedLanes,
+    recordedBy: plan.createdBy,
+    recordedAt: plan.createdAt,
+  })
+  return {
+    recorded: true,
+    plan,
   }
 }
 
