@@ -162,7 +162,9 @@ export type {
   ReviewCalibrationRecipe as ReviewCalibrationRecipeType,
 } from './review-calibration.js'
 export {
+  ReviewRecipeBundleMetadata,
   ReviewPlanningCalibrationCase,
+  defaultReviewRecipeBundles,
   gradeReviewPlanningCase,
   loadReviewPlanningCasesFromDirectory,
   recordReviewPlanningFrontier,
@@ -174,6 +176,8 @@ export type {
   ReviewPlanningFrontierVariant,
   ReviewPlanningGrade,
   ReviewPlanningOutcome,
+  ReviewRecipeBundleMetadata as ReviewRecipeBundleMetadataType,
+  ReviewRecipeBundleMode as ReviewRecipeBundleModeType,
   ReviewPlanningCalibrationCase as ReviewPlanningCalibrationCaseType,
 } from './review-planning-calibration.js'
 export { selectApiClient } from './provider-selection.js'

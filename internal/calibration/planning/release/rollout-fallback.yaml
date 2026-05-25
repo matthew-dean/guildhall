@@ -1,0 +1,21 @@
+id: release-rollout-fallback-plan
+title: Rollout fallback review plan
+task:
+  id: task-release-rollout-fallback
+  title: Roll out new review planner
+  description: Ship the review planner behind a feature flag with fallback behavior for production rollout.
+  priority: high
+  changedFiles:
+    - src/runtime/review-planner.ts
+    - src/runtime/orchestrator.ts
+expected:
+  requiredLanes:
+    - rollout_safety
+    - release_risk
+    - calibration_governance
+    - test_adequacy
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

@@ -14,6 +14,63 @@ import {
 
 const TaskPrioritySchema = z.enum(['low', 'normal', 'high', 'critical'])
 
+export const ReviewRecipeBundleMetadata = z.object({
+  recipeId: z.string().min(1),
+  lanes: z.array(ReviewRiskLane).min(1),
+  canSplit: z.boolean(),
+  highStakes: z.boolean(),
+  splitInto: z.array(z.string().min(1)).default([]),
+  evidenceRequiredBeforeBundling: z.array(z.string().min(1)).default([]),
+})
+export type ReviewRecipeBundleMetadata = z.infer<typeof ReviewRecipeBundleMetadata>
+
+export const defaultReviewRecipeBundles: ReviewRecipeBundleMetadata[] = [
+  {
+    recipeId: 'product-ux-zero-context',
+    lanes: ['ux_comprehension', 'copy_clarity', 'visual_design', 'accessibility'],
+    canSplit: true,
+    highStakes: false,
+    splitInto: ['ux_comprehension', 'copy_clarity', 'visual_design', 'accessibility'],
+    evidenceRequiredBeforeBundling: ['planning corpus coverage for every bundled lane'],
+  },
+  {
+    recipeId: 'security-privacy-boundary',
+    lanes: ['security', 'privacy', 'evidence_privacy'],
+    canSplit: true,
+    highStakes: true,
+    splitInto: ['security', 'privacy', 'evidence_privacy'],
+    evidenceRequiredBeforeBundling: ['security and privacy cases pass independently before bundling'],
+  },
+  {
+    recipeId: 'api-data-migration-contract',
+    lanes: ['api_contract', 'data_integrity', 'migration_safety'],
+    canSplit: true,
+    highStakes: true,
+    splitInto: ['api_contract', 'data_integrity', 'migration_safety'],
+    evidenceRequiredBeforeBundling: ['API, data, and migration cases each preserve strict aggregation'],
+  },
+  {
+    recipeId: 'quality-performance-release',
+    lanes: ['test_adequacy', 'performance', 'release_risk', 'rollout_safety'],
+    canSplit: true,
+    highStakes: false,
+    splitInto: ['test_adequacy', 'performance', 'release_risk', 'rollout_safety'],
+    evidenceRequiredBeforeBundling: ['performance and rollout misses stay below the frontier threshold'],
+  },
+  {
+    recipeId: 'docs-truth-and-plan',
+    lanes: ['docs_truth', 'plan_completeness'],
+    canSplit: true,
+    highStakes: false,
+    splitInto: ['docs_truth', 'plan_completeness'],
+    evidenceRequiredBeforeBundling: ['docs truth cases do not degrade into tone-only feedback'],
+  },
+]
+
+export type ReviewRecipeBundleMode =
+  | 'default_bundles'
+  | 'split_ux_copy'
+
 export const ReviewPlanningCalibrationCase = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -57,6 +114,7 @@ export interface ReviewPlanningGrade {
 export interface ReviewPlanningFrontierVariant {
   variantId: string
   reviewEffort: Exclude<ReviewEffort, 'custom'>
+  recipeBundleMode?: ReviewRecipeBundleMode
 }
 
 export interface ReviewPlanningFrontierRun {
@@ -69,6 +127,8 @@ export interface ReviewPlanningFrontierRun {
   laneRecall: number
   falsePositiveLaneRate: number
   averageReviewerAgents: number
+  averageReviewerGroups: number
+  recipeBundleMode: ReviewRecipeBundleMode
   oneVariableChange: boolean
 }
 
@@ -150,6 +210,8 @@ export function runReviewPlanningFrontier(input: {
     const matchedLaneCount = grades.reduce((total, grade) => total + grade.matchedLaneIds.length, 0)
     const falsePositiveLaneCount = grades.reduce((total, grade) => total + grade.falsePositiveLaneIds.length, 0)
 
+    const recipeBundleMode = variant.recipeBundleMode ?? 'default_bundles'
+
     return {
       variantId: variant.variantId,
       reviewEffort: variant.reviewEffort,
@@ -160,6 +222,10 @@ export function runReviewPlanningFrontier(input: {
       laneRecall: matchedLaneCount / expectedLaneCount,
       falsePositiveLaneRate: falsePositiveLaneCount / expectedLaneCount,
       averageReviewerAgents: average(reviewerAgentCounts),
+      averageReviewerGroups: average(input.cases.map((planningCase) =>
+        estimateReviewerGroups(planningCase.expected.requiredLanes, recipeBundleMode),
+      )),
+      recipeBundleMode,
       oneVariableChange: true,
     } satisfies ReviewPlanningFrontierRun
   })
@@ -230,6 +296,31 @@ export async function loadReviewPlanningCasesFromDirectory(
 function average(values: readonly number[]): number {
   if (values.length === 0) return 0
   return values.reduce((total, value) => total + value, 0) / values.length
+}
+
+function estimateReviewerGroups(
+  lanes: readonly z.infer<typeof ReviewRiskLane>[],
+  mode: ReviewRecipeBundleMode,
+): number {
+  if (mode === 'split_ux_copy') {
+    const uxLanes = new Set(['ux_comprehension', 'copy_clarity', 'visual_design', 'accessibility'])
+    const splitUxCount = lanes.filter((lane) => uxLanes.has(lane)).length
+    const nonUxCount = countDefaultBundles(lanes.filter((lane) => !uxLanes.has(lane)))
+    return splitUxCount + nonUxCount
+  }
+  return countDefaultBundles(lanes)
+}
+
+function countDefaultBundles(lanes: readonly z.infer<typeof ReviewRiskLane>[]): number {
+  const remaining = new Set(lanes)
+  let groups = 0
+  for (const bundle of defaultReviewRecipeBundles) {
+    if (bundle.lanes.some((lane) => remaining.has(lane))) {
+      groups += 1
+      for (const lane of bundle.lanes) remaining.delete(lane)
+    }
+  }
+  return groups + remaining.size
 }
 
 function renderReviewPlanningFrontierSummary(summary: ReviewPlanningFrontierSummary): string {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import path from 'node:path'
 
 import {
+  defaultReviewRecipeBundles,
   gradeReviewPlanningCase,
   loadReviewPlanningCasesFromDirectory,
   runReviewPlanningFrontier,
@@ -63,13 +64,33 @@ describe('review planning calibration', () => {
       path.join(process.cwd(), 'internal/calibration/planning'),
     )
 
-    expect(cases.length).toBeGreaterThanOrEqual(4)
+    expect(cases.length).toBeGreaterThanOrEqual(8)
     expect(cases.map((planningCase) => planningCase.id)).toEqual(expect.arrayContaining([
       'ux-settings-review-effort',
+      'accessibility-keyboard-modal-plan',
       'security-tenant-export-plan',
+      'api-status-compatibility-plan',
+      'data-idempotent-retry-plan',
       'docs-install-command-plan',
       'performance-unbounded-query-plan',
+      'release-rollout-fallback-plan',
     ]))
+  })
+
+  it('declares reviewer bundle metadata before frontier variants use it', () => {
+    expect(defaultReviewRecipeBundles.map((bundle) => bundle.recipeId)).toEqual(expect.arrayContaining([
+      'product-ux-zero-context',
+      'security-privacy-boundary',
+      'api-data-migration-contract',
+    ]))
+    expect(defaultReviewRecipeBundles.find((bundle) => bundle.recipeId === 'product-ux-zero-context')).toMatchObject({
+      lanes: ['ux_comprehension', 'copy_clarity', 'visual_design', 'accessibility'],
+      canSplit: true,
+      highStakes: false,
+    })
+    expect(defaultReviewRecipeBundles.find((bundle) => bundle.recipeId === 'security-privacy-boundary')).toMatchObject({
+      highStakes: true,
+    })
   })
 
   it('runs review effort frontier variants over the planning corpus', async () => {
@@ -82,12 +103,17 @@ describe('review planning calibration', () => {
         { variantId: 'lean', reviewEffort: 'lean' },
         { variantId: 'balanced', reviewEffort: 'balanced' },
         { variantId: 'thorough', reviewEffort: 'thorough' },
+        { variantId: 'balanced_split_ux_copy', reviewEffort: 'balanced', recipeBundleMode: 'split_ux_copy' },
       ],
     })
 
-    expect(frontier.runs).toHaveLength(3)
+    expect(frontier.runs).toHaveLength(4)
     expect(frontier.runs.find((run) => run.variantId === 'balanced')).toMatchObject({
       caseCount: cases.length,
+      oneVariableChange: true,
+    })
+    expect(frontier.runs.find((run) => run.variantId === 'balanced_split_ux_copy')).toMatchObject({
+      recipeBundleMode: 'split_ux_copy',
       oneVariableChange: true,
     })
     expect(frontier.recommendedVariantId).toBeTruthy()

@@ -325,7 +325,12 @@ describe('Guildhall CLI surface', () => {
       expect(result.summary.recommendedVariantId).toBeTruthy()
       expect(result.record.ref.path).toContain(join(dataDir, 'projects'))
       expect(result.record.payload.variantSet).toBe('review-planning-frontier')
-      expect(result.record.payload.variants).toEqual(['lean', 'balanced', 'thorough'])
+      expect(result.record.payload.variants).toEqual([
+        'lean',
+        'balanced',
+        'thorough',
+        'balanced_split_ux_copy',
+      ])
     } finally {
       if (priorDataDir === undefined) {
         delete process.env.GUILDHALL_DATA_DIR

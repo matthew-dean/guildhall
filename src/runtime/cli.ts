@@ -884,6 +884,7 @@ export async function validateReviewPlanningCorpus(input: {
       { variantId: 'lean', reviewEffort: 'lean' },
       { variantId: 'balanced', reviewEffort: 'balanced' },
       { variantId: 'thorough', reviewEffort: 'thorough' },
+      { variantId: 'balanced_split_ux_copy', reviewEffort: 'balanced', recipeBundleMode: 'split_ux_copy' },
     ],
     store,
     recordedBy: input.recordedBy ?? 'guildhall-cli',

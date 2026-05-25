@@ -1,0 +1,23 @@
+id: api-status-compatibility-plan
+title: API status compatibility review plan
+task:
+  id: task-api-status-compatibility
+  title: Change task endpoint status code
+  description: Update the REST response status code and schema for the task details endpoint.
+  priority: normal
+  changedFiles:
+    - src/api/tasks.ts
+expected:
+  requiredLanes:
+    - api_contract
+    - docs_truth
+    - test_adequacy
+  requiredArtifacts:
+    - contract-or-state-diff
+  strictLanes:
+    - api_contract
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

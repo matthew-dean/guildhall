@@ -1,0 +1,24 @@
+id: accessibility-keyboard-modal-plan
+title: Keyboard modal review plan
+task:
+  id: task-accessibility-keyboard-modal
+  title: Fix modal keyboard focus path
+  description: The settings modal cannot be reached by keyboard and has no visible focus state.
+  priority: normal
+  changedFiles:
+    - src/web/surfaces/project/SettingsTab.svelte
+expected:
+  requiredLanes:
+    - accessibility
+    - ux_comprehension
+    - visual_design
+    - test_adequacy
+  requiredArtifacts:
+    - visual-evidence
+  deterministicChecks:
+    - browser-or-screenshot-evidence
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

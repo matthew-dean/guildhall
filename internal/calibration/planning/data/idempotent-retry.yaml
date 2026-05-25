@@ -1,0 +1,24 @@
+id: data-idempotent-retry-plan
+title: Retry idempotency review plan
+task:
+  id: task-data-idempotent-retry
+  title: Retry failed invoice sync
+  description: Retry failed database writes after a provider timeout without duplicating externally visible side effects.
+  priority: high
+  changedFiles:
+    - src/runtime/invoice-sync.ts
+    - src/models/invoice.ts
+expected:
+  requiredLanes:
+    - data_integrity
+    - performance
+    - test_adequacy
+  requiredArtifacts:
+    - contract-or-state-diff
+  strictLanes:
+    - data_integrity
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

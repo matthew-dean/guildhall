@@ -108,6 +108,15 @@ babysit setup/import/provider/release states across multiple pages.
   compares `lean`, `balanced`, and `thorough` review-effort variants and
   records the result through the review-audit persistence store via
   `guildhall review-calibration validate-planning`.
+- [x] Add initial reviewer-bundle metadata and broaden the planning corpus.
+  Review-planning calibration now declares bundle metadata for UX/copy/design/
+  accessibility, security/privacy, API/data/migration, quality/performance/
+  release, and docs/plan recipes, including whether each bundle can split and
+  which high-stakes bundles need evidence before bundling. The seed planning
+  corpus now also covers accessibility keyboard focus, API compatibility, data
+  idempotency, and rollout fallback. Frontier validation records
+  `balanced_split_ux_copy` alongside lean/balanced/thorough effort variants so
+  grouped-reviewer tradeoffs can be tested instead of guessed.
 - [x] Tighten the dark-theme text contrast ladder from the Fair Labor License
   Thread walkthrough. Supporting copy was too dim against near-white headings,
   so the system text tokens now keep primary/strong text slightly softer and
