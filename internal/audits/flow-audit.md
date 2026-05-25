@@ -66,6 +66,9 @@ babysit setup/import/provider/release states across multiple pages.
   cross-surface-consistency recipes. Review plans now carry calibration recipe
   ids for each grouped reviewer recipe, and `guildhall review-calibration
   validate` records corpus coverage through the review-audit persistence store.
+  `guildhall review-calibration escaped-miss` now records human-found missed
+  review findings as escaped-miss audit events, so misses can feed corpus-case,
+  planner, bakeoff, or deterministic-gate follow-up without hand-editing state.
   The initial UX corpus includes ambiguous primary action, missing error
   recovery, cross-surface state contradiction, and a CLI negative-control case.
 - [x] Surface stored review plans in task details. Real orchestrator runs now

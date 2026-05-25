@@ -20,6 +20,7 @@ import {
   serviceStatePath,
   serviceUrlForPort,
   SHIPPED_CLI_COMMANDS,
+  recordEscapedReviewMiss,
   validateReviewCalibrationCorpus,
   writeModelBakeoffReport,
 } from '../cli.js'
@@ -242,6 +243,7 @@ describe('Guildhall CLI surface', () => {
     expect(help).not.toContain('guildhall meta-intake')
     expect(help).not.toContain('guildhall approve-meta-intake')
     expect(help).toContain('guildhall memory migrate-0.8.0')
+    expect(help).toContain('guildhall review-calibration escaped-miss')
   })
 
   it('validates and records the review calibration corpus through persistence', async () => {
@@ -260,6 +262,42 @@ describe('Guildhall CLI surface', () => {
       expect(result.summary.missingCaseIds).toEqual([])
       expect(result.record.ref.path).toContain(join(dataDir, 'projects'))
       expect(result.record.payload.variantSet).toBe('review-calibration-corpus')
+    } finally {
+      if (priorDataDir === undefined) {
+        delete process.env.GUILDHALL_DATA_DIR
+      } else {
+        process.env.GUILDHALL_DATA_DIR = priorDataDir
+      }
+    }
+  })
+
+  it('records escaped review misses through persistence for calibration follow-up', async () => {
+    const project = tmpHome()
+    const priorDataDir = process.env.GUILDHALL_DATA_DIR
+    const dataDir = join(tmpHome(), 'guildhall-data')
+    process.env.GUILDHALL_DATA_DIR = dataDir
+    try {
+      const result = await recordEscapedReviewMiss({
+        projectPath: project,
+        taskId: 'task-1',
+        missedLane: 'ux_comprehension',
+        humanFinding: 'The reviewer missed that the primary setup action was ambiguous.',
+        nextCalibrationAction: 'create_case',
+        missedByRecipe: 'product-ux-zero-context',
+        recordedBy: 'calibration:test',
+        recordedAt: '2026-05-25T12:05:00.000Z',
+      })
+
+      expect(result.ref.path).toContain(join(project, '.guildhall', 'persistence', 'events', 'escaped-misses'))
+      expect(result.payload).toMatchObject({
+        taskId: 'task-1',
+        missedLane: 'ux_comprehension',
+        missedByRecipe: 'product-ux-zero-context',
+        humanFinding: 'The reviewer missed that the primary setup action was ambiguous.',
+        nextCalibrationAction: 'create_case',
+        recordedAt: '2026-05-25T12:05:00.000Z',
+        recordedBy: 'calibration:test',
+      })
     } finally {
       if (priorDataDir === undefined) {
         delete process.env.GUILDHALL_DATA_DIR

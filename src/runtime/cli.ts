@@ -193,7 +193,7 @@ export function parseArgs(rawArgs: string[]): {
   getFlag: (flag: string) => string | undefined
   positionals: string[]
 } {
-  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks', '--cases'])
+  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by'])
   function getFlag(flag: string): string | undefined {
     const idx = rawArgs.indexOf(flag)
     return idx !== -1 ? rawArgs[idx + 1] : undefined
@@ -282,6 +282,8 @@ export function resolveServiceLifecycleIntent(
 //                                      — move old transcripts/events/sessions into ~/.guildhall
 //   guildhall review-calibration validate [path] [--cases <dir>]
 //                                      — validate and record review calibration corpus coverage
+//   guildhall review-calibration escaped-miss [path] --task <id> --lane <lane> --finding <text>
+//                                      — record a missed review finding for calibration follow-up
 //   guildhall model-bakeoff [--context-indexer] [output]
 //                                      — write replay model bakeoff JSON + Markdown
 //   guildhall mcp serve [path]          — serve Guildhall project context over MCP stdio
@@ -320,7 +322,7 @@ function getFlag(flag: string): string | undefined {
 // another flag — otherwise boolean flags like `--no-browser` would eat the
 // following positional by mistake.
 function positionals(): string[] {
-  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target', '--cases'])
+  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by'])
   const result: string[] = []
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -380,6 +382,13 @@ Usage:
   guildhall review-calibration validate [id|path]
                                   Validate and record calibration corpus coverage
     --cases <dir>                Corpus directory (default: internal/calibration/cases/ux)
+  guildhall review-calibration escaped-miss [id|path]
+                                  Record a missed review finding for calibration follow-up
+    --task <id>                  Task where the miss escaped review
+    --lane <lane>                Review lane that missed the issue
+    --finding <text>             Human finding that reviewers missed
+    --action <action>            create_case, update_case, run_bakeoff, add_deterministic_gate, or adjust_planner
+    --missed-by <recipe>         Optional reviewer recipe that missed it
   guildhall model-bakeoff [--context-indexer] [output]
                                   Write replay model bakeoff JSON + Markdown
   guildhall mcp serve [project-path]
@@ -399,6 +408,7 @@ Examples:
   guildhall memory compact-project-state --apply .
   guildhall migrate task-state --apply .
   guildhall review-calibration validate . --cases internal/calibration/cases/ux
+  guildhall review-calibration escaped-miss . --task task-1 --lane ux_comprehension --finding "Primary action was ambiguous"
   guildhall model-bakeoff artifacts/model-bakeoff/report.json
   guildhall model-bakeoff --context-indexer
   guildhall mcp serve .
@@ -842,16 +852,66 @@ export async function validateReviewCalibrationCorpus(input: {
   })
 }
 
+export async function recordEscapedReviewMiss(input: {
+  projectPath: string
+  taskId: string
+  missedLane: string
+  humanFinding: string
+  nextCalibrationAction?: string
+  missedByRecipe?: string
+  recordedBy?: string
+  recordedAt?: string
+}) {
+  const projectPath = resolve(expandPath(input.projectPath))
+  const store = createReviewAuditStore({
+    projectRoot: projectPath,
+    persistence: new FileBackedGuildhallPersistence(),
+  })
+  return store.linkEscapedMiss({
+    taskId: input.taskId,
+    missedLane: input.missedLane as never,
+    humanFinding: input.humanFinding,
+    nextCalibrationAction: (input.nextCalibrationAction ?? 'create_case') as never,
+    ...(input.missedByRecipe ? { missedByRecipe: input.missedByRecipe } : {}),
+    recordedBy: input.recordedBy ?? 'guildhall-cli',
+    ...(input.recordedAt ? { recordedAt: input.recordedAt } : {}),
+  })
+}
+
 async function cmdReviewCalibration() {
   const pos = positionals()
   const subcommand = pos[0] ?? 'validate'
-  if (subcommand !== 'validate') {
-    console.error('[guildhall] Usage: guildhall review-calibration validate [id|path] [--cases <dir>]')
+  if (!['validate', 'escaped-miss'].includes(subcommand)) {
+    console.error('[guildhall] Usage: guildhall review-calibration <validate|escaped-miss> [id|path]')
     process.exit(1)
   }
   const idOrPath = pos[1]
   const entry = idOrPath ? findWorkspace(idOrPath) : null
   const projectPath = entry?.path ?? (idOrPath ? resolve(expandPath(idOrPath)) : process.cwd())
+  if (subcommand === 'escaped-miss') {
+    const taskId = getFlag('--task')
+    const missedLane = getFlag('--lane')
+    const humanFinding = getFlag('--finding')
+    if (!taskId || !missedLane || !humanFinding) {
+      console.error('[guildhall] Usage: guildhall review-calibration escaped-miss [id|path] --task <id> --lane <lane> --finding <text> [--action <action>] [--missed-by <recipe>]')
+      process.exit(1)
+    }
+    const result = await recordEscapedReviewMiss({
+      projectPath,
+      taskId,
+      missedLane,
+      humanFinding,
+      ...(getFlag('--action') ? { nextCalibrationAction: getFlag('--action') } : {}),
+      ...(getFlag('--missed-by') ? { missedByRecipe: getFlag('--missed-by') } : {}),
+      recordedBy: 'guildhall-cli',
+    })
+    console.log('[guildhall] Escaped review miss recorded.')
+    console.log(`[guildhall] Task: ${result.payload.taskId}`)
+    console.log(`[guildhall] Lane: ${result.payload.missedLane}`)
+    console.log(`[guildhall] Next calibration action: ${result.payload.nextCalibrationAction}`)
+    console.log(`[guildhall] Audit stream: ${result.ref.path}`)
+    return
+  }
   const casesDir = getFlag('--cases')
   const result = await validateReviewCalibrationCorpus({
     projectPath,
