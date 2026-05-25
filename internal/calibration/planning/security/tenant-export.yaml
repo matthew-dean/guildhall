@@ -1,0 +1,28 @@
+id: security-tenant-export-plan
+title: Tenant export review plan
+task:
+  id: task-security-tenant-export
+  title: Add workspace export endpoint
+  description: Add an authenticated API route that exports tenant workspace data.
+  priority: high
+  changedFiles:
+    - src/api/workspace-export.ts
+expected:
+  requiredLanes:
+    - security
+    - privacy
+    - api_contract
+    - data_integrity
+    - test_adequacy
+  requiredArtifacts:
+    - contract-or-state-diff
+  strictLanes:
+    - security
+    - privacy
+    - api_contract
+    - data_integrity
+  maxReviewerAgents: 8
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

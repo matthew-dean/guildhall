@@ -10,6 +10,10 @@ import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
 import { migrateTaskState } from './task-state-migration.js'
 import { compactProjectState } from './project-state-compaction.js'
 import { recordCalibrationCorpusValidation } from './review-calibration.js'
+import {
+  loadReviewPlanningCasesFromDirectory,
+  recordReviewPlanningFrontier,
+} from './review-planning-calibration.js'
 import { createReviewAuditStore } from './review-audit-store.js'
 import { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
 import {
@@ -382,6 +386,9 @@ Usage:
   guildhall review-calibration validate [id|path]
                                   Validate and record calibration corpus coverage
     --cases <dir>                Corpus directory (default: internal/calibration/cases)
+  guildhall review-calibration validate-planning [id|path]
+                                  Validate and record review-planning frontier coverage
+    --cases <dir>                Planning corpus directory (default: internal/calibration/planning)
   guildhall review-calibration escaped-miss [id|path]
                                   Record a missed review finding for calibration follow-up
     --task <id>                  Task where the miss escaped review
@@ -408,6 +415,7 @@ Examples:
   guildhall memory compact-project-state --apply .
   guildhall migrate task-state --apply .
   guildhall review-calibration validate . --cases internal/calibration/cases/ux
+  guildhall review-calibration validate-planning .
   guildhall review-calibration escaped-miss . --task task-1 --lane ux_comprehension --finding "Primary action was ambiguous"
   guildhall model-bakeoff artifacts/model-bakeoff/report.json
   guildhall model-bakeoff --context-indexer
@@ -854,6 +862,35 @@ export async function validateReviewCalibrationCorpus(input: {
   })
 }
 
+export async function validateReviewPlanningCorpus(input: {
+  projectPath: string
+  casesDir?: string
+  recordedBy?: string
+  now?: () => Date
+}) {
+  const projectPath = resolve(expandPath(input.projectPath))
+  const casesDir = input.casesDir
+    ? resolve(projectPath, input.casesDir)
+    : resolve(process.cwd(), 'internal/calibration/planning')
+  const store = createReviewAuditStore({
+    projectRoot: projectPath,
+    persistence: new FileBackedGuildhallPersistence(),
+    ...(input.now ? { now: input.now } : {}),
+  })
+  const cases = await loadReviewPlanningCasesFromDirectory(casesDir)
+  return recordReviewPlanningFrontier({
+    cases,
+    variants: [
+      { variantId: 'lean', reviewEffort: 'lean' },
+      { variantId: 'balanced', reviewEffort: 'balanced' },
+      { variantId: 'thorough', reviewEffort: 'thorough' },
+    ],
+    store,
+    recordedBy: input.recordedBy ?? 'guildhall-cli',
+    ...(input.now ? { now: input.now } : {}),
+  })
+}
+
 export async function recordEscapedReviewMiss(input: {
   projectPath: string
   taskId: string
@@ -883,8 +920,8 @@ export async function recordEscapedReviewMiss(input: {
 async function cmdReviewCalibration() {
   const pos = positionals()
   const subcommand = pos[0] ?? 'validate'
-  if (!['validate', 'escaped-miss'].includes(subcommand)) {
-    console.error('[guildhall] Usage: guildhall review-calibration <validate|escaped-miss> [id|path]')
+  if (!['validate', 'validate-planning', 'escaped-miss'].includes(subcommand)) {
+    console.error('[guildhall] Usage: guildhall review-calibration <validate|validate-planning|escaped-miss> [id|path]')
     process.exit(1)
   }
   const idOrPath = pos[1]
@@ -915,6 +952,19 @@ async function cmdReviewCalibration() {
     return
   }
   const casesDir = getFlag('--cases')
+  if (subcommand === 'validate-planning') {
+    const result = await validateReviewPlanningCorpus({
+      projectPath,
+      ...(casesDir ? { casesDir } : {}),
+      recordedBy: 'guildhall-cli',
+    })
+
+    console.log('[guildhall] Review planning corpus validated.')
+    console.log(`[guildhall] Recommended variant: ${result.summary.recommendedVariantId ?? 'none'}`)
+    console.log(`[guildhall] Variants: ${result.summary.runs.map((run) => run.variantId).join(', ')}`)
+    console.log(`[guildhall] Frontier record: ${result.record.ref.path}`)
+    return
+  }
   const result = await validateReviewCalibrationCorpus({
     projectPath,
     ...(casesDir ? { casesDir } : {}),

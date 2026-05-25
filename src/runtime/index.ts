@@ -161,6 +161,21 @@ export type {
   CalibrationReviewPacket,
   ReviewCalibrationRecipe as ReviewCalibrationRecipeType,
 } from './review-calibration.js'
+export {
+  ReviewPlanningCalibrationCase,
+  gradeReviewPlanningCase,
+  loadReviewPlanningCasesFromDirectory,
+  recordReviewPlanningFrontier,
+  runReviewPlanningFrontier,
+} from './review-planning-calibration.js'
+export type {
+  ReviewPlanningFrontierRun,
+  ReviewPlanningFrontierSummary,
+  ReviewPlanningFrontierVariant,
+  ReviewPlanningGrade,
+  ReviewPlanningOutcome,
+  ReviewPlanningCalibrationCase as ReviewPlanningCalibrationCaseType,
+} from './review-planning-calibration.js'
 export { selectApiClient } from './provider-selection.js'
 export type {
   SelectApiClientOptions,

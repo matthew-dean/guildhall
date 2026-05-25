@@ -22,6 +22,7 @@ import {
   SHIPPED_CLI_COMMANDS,
   recordEscapedReviewMiss,
   validateReviewCalibrationCorpus,
+  validateReviewPlanningCorpus,
   writeModelBakeoffReport,
 } from '../cli.js'
 
@@ -244,6 +245,7 @@ describe('Guildhall CLI surface', () => {
     expect(help).not.toContain('guildhall approve-meta-intake')
     expect(help).toContain('guildhall memory migrate-0.8.0')
     expect(help).toContain('guildhall review-calibration escaped-miss')
+    expect(help).toContain('guildhall review-calibration validate-planning')
   })
 
   it('validates and records the review calibration corpus through persistence', async () => {
@@ -299,6 +301,31 @@ describe('Guildhall CLI surface', () => {
         recordedAt: '2026-05-25T12:05:00.000Z',
         recordedBy: 'calibration:test',
       })
+    } finally {
+      if (priorDataDir === undefined) {
+        delete process.env.GUILDHALL_DATA_DIR
+      } else {
+        process.env.GUILDHALL_DATA_DIR = priorDataDir
+      }
+    }
+  })
+
+  it('validates and records the review planning corpus through persistence', async () => {
+    const project = tmpHome()
+    const priorDataDir = process.env.GUILDHALL_DATA_DIR
+    const dataDir = join(tmpHome(), 'guildhall-data')
+    process.env.GUILDHALL_DATA_DIR = dataDir
+    try {
+      const result = await validateReviewPlanningCorpus({
+        projectPath: project,
+        recordedBy: 'planning-calibration:test',
+        now: () => new Date('2026-05-25T12:00:00.000Z'),
+      })
+
+      expect(result.summary.recommendedVariantId).toBeTruthy()
+      expect(result.record.ref.path).toContain(join(dataDir, 'projects'))
+      expect(result.record.payload.variantSet).toBe('review-planning-frontier')
+      expect(result.record.payload.variants).toEqual(['lean', 'balanced', 'thorough'])
     } finally {
       if (priorDataDir === undefined) {
         delete process.env.GUILDHALL_DATA_DIR

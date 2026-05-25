@@ -1,0 +1,24 @@
+id: ux-settings-review-effort
+title: Settings exposes review effort clearly
+task:
+  id: task-ux-settings-review-effort
+  title: Add review effort to Settings
+  description: Show the review effort lever in advanced settings with readable option labels.
+  priority: low
+  changedFiles:
+    - src/web/surfaces/project/SettingsTab.svelte
+expected:
+  requiredLanes:
+    - ux_comprehension
+    - copy_clarity
+    - visual_design
+    - test_adequacy
+  requiredArtifacts:
+    - visual-evidence
+  deterministicChecks:
+    - browser-or-screenshot-evidence
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

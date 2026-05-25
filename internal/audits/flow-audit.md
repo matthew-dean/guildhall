@@ -100,6 +100,14 @@ babysit setup/import/provider/release states across multiple pages.
   signals can still raise the plan to release-critical. Settings exposes the
   lever with readable labels, and public lever docs now explain what the user
   is choosing without describing the calibration harness as a shipped promise.
+- [x] Add the first review-planning calibration harness. Planning cases now
+  grade whether the coordinator selected required risk lanes, evidence
+  artifacts, deterministic checks, strict aggregation, and budget bounds for a
+  task packet. Seed planning cases cover UX/settings, tenant export security,
+  docs command truth, and unbounded-query performance. The frontier runner
+  compares `lean`, `balanced`, and `thorough` review-effort variants and
+  records the result through the review-audit persistence store via
+  `guildhall review-calibration validate-planning`.
 - [x] Tighten the dark-theme text contrast ladder from the Fair Labor License
   Thread walkthrough. Supporting copy was too dim against near-white headings,
   so the system text tokens now keep primary/strong text slightly softer and
