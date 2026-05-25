@@ -174,7 +174,7 @@ import {
   type ReviewerMode,
 } from './reviewer-dispatch.js'
 import { ensureTaskReviewPlanRecorded } from './review-planner.js'
-import type { ReviewAuditStore } from './review-audit-store.js'
+import type { ReviewAuditStore, ReviewPlanRecord } from './review-audit-store.js'
 import { createReviewAuditStore } from './review-audit-store.js'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import { runGuildGates } from './guild-gate-runner.js'
@@ -975,6 +975,7 @@ export interface OrchestratorAgentSet {
 export type ReviewerFanoutRunner = (input: {
   task: Task
   personas: GuildDefinition[]
+  reviewPlan?: ReviewPlanRecord
   builtContext: Awaited<ReturnType<typeof buildContext>>
   context: string
   memoryDir: string
@@ -2222,9 +2223,10 @@ export class Orchestrator {
       if (handoffOutcome) return handoffOutcome
     }
 
+    let reviewPlan: ReviewPlanRecord | null = null
     if (task.status === 'review' && !hasPendingHandoffStep(task)) {
       await this.normalizeReviewOwnership(task)
-      await this.ensureReviewPlanRecorded(task)
+      reviewPlan = await this.ensureReviewPlanRecorded(task)
     }
 
     if (task.status === 'gate_check') {
@@ -2258,7 +2260,7 @@ export class Orchestrator {
     // is configured or no reviewer personas apply.
     if (task.status === 'review' && this.opts.reviewerFanout) {
       await this.maybeWriteReviewPacket(task)
-      const fanoutOutcome = await this.runReviewerFanoutInline(task, queueBefore)
+      const fanoutOutcome = await this.runReviewerFanoutInline(task, queueBefore, reviewPlan)
       if (fanoutOutcome) return fanoutOutcome
     }
 
@@ -5095,9 +5097,9 @@ export class Orchestrator {
     return await loadLeverSettings({ path: settingsPath })
   }
 
-  private async ensureReviewPlanRecorded(task: Task): Promise<void> {
+  private async ensureReviewPlanRecorded(task: Task): Promise<ReviewPlanRecord | null> {
     const store = this.opts.reviewAuditStore
-    if (!store) return
+    if (!store) return null
 
     try {
       const likelyTargetFiles = resolveLikelyTaskFiles(task)
@@ -5130,6 +5132,7 @@ export class Orchestrator {
             `with up to ${result.plan.budget.maxReviewerAgents ?? 'unbounded'} grouped reviewer agent(s)`,
         })
       }
+      return result.plan
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       await this.logTickProgress({
@@ -5140,6 +5143,7 @@ export class Orchestrator {
         transitioned: false,
         note: `review planning audit write failed: ${message}`,
       })
+      return null
     }
   }
 
@@ -5378,6 +5382,7 @@ export class Orchestrator {
   private async runReviewerFanoutInline(
     task: Task,
     _queueBefore: TaskQueue,
+    reviewPlan: ReviewPlanRecord | null = null,
   ): Promise<TickOutcome | null> {
     const runner = this.opts.reviewerFanout
     if (!runner) return null
@@ -5409,6 +5414,7 @@ export class Orchestrator {
         task,
         builtContext: ctx,
         personas,
+        ...(reviewPlan ? { reviewPlan } : {}),
         context: ctx.formatted,
         memoryDir: this.opts.config.memoryDir,
         projectPath: task.projectPath || this.opts.config.projectPath,
@@ -8391,7 +8397,7 @@ export function buildDefaultReviewerFanout(
 ): ReviewerFanoutRunner {
   const concurrency = Math.max(1, Math.floor(opts.concurrency ?? 1))
   const personaTimeoutMs = Math.max(100, Math.floor(opts.personaTimeoutMs ?? 60_000))
-  return async ({ task, personas, builtContext, context, projectPath }) => {
+  return async ({ task, personas, reviewPlan, builtContext, context, projectPath }) => {
     const { parsePersonaOutput, buildPersonaOutputHints } = await import('./reviewer-fanout.js')
     const personaOutputHints = buildPersonaOutputHints(task)
 
@@ -8403,6 +8409,7 @@ export function buildDefaultReviewerFanout(
       })
       const prompt = [
         context,
+        ...(reviewPlan ? ['', renderReviewPlanForReviewerPrompt(reviewPlan)] : []),
         '',
         `Task id: ${task.id}. Review this task through your lens alone and emit the required verdict format.`,
         'Use the Review Packet evidence directly: inspect the changed-file excerpts, latest self-critique, checkpoint, and recorded commands before asking for more narration.',
@@ -8457,4 +8464,28 @@ export function buildDefaultReviewerFanout(
       runPersona(persona),
     )
   }
+}
+
+function renderReviewPlanForReviewerPrompt(reviewPlan: ReviewPlanRecord): string {
+  const recipes = reviewPlan.requiredRecipes
+    .map((recipe) => {
+      const calibration = recipe.calibrationRecipeIds.length > 0
+        ? `; calibration: ${recipe.calibrationRecipeIds.join(', ')}`
+        : ''
+      return `- ${recipe.recipeId}@${recipe.version}: ${recipe.lanes.join(', ')} (${recipe.blocking}${calibration})`
+    })
+    .join('\n')
+  return [
+    '## Planned review scope',
+    '',
+    `Planned review lanes: ${reviewPlan.selectedLanes.join(', ') || 'none'}`,
+    `Effort/depth: ${reviewPlan.effort} / ${reviewPlan.depth}`,
+    `Reviewer budget: up to ${reviewPlan.budget.maxReviewerAgents ?? 'unbounded'} grouped reviewer agent(s)`,
+    '',
+    'Planned reviewer recipes:',
+    recipes || '- (none)',
+    '',
+    `Required checks: ${reviewPlan.deterministicChecks.join(', ') || 'none'}`,
+    `Evidence expected: ${reviewPlan.requiredArtifacts.join(', ') || 'none'}`,
+  ].join('\n')
 }

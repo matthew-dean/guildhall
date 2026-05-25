@@ -73,6 +73,11 @@ babysit setup/import/provider/release states across multiple pages.
   stored review plan through the persistence facade, and the Spec/task-details
   tab shows a compact Review plan card with effort, depth, budget, lanes,
   reviewer groups, checks, evidence, and skipped lenses behind a disclosure.
+- [x] Feed stored review plans into reviewer fan-out. The orchestrator now
+  returns the existing or newly recorded review plan from the audit hook,
+  passes it to reviewer fan-out, and includes a compact planned-scope block in
+  default persona prompts with lanes, recipes, calibration recipe ids, checks,
+  evidence, and budget.
 - [x] Tighten the dark-theme text contrast ladder from the Fair Labor License
   Thread walkthrough. Supporting copy was too dim against near-white headings,
   so the system text tokens now keep primary/strong text slightly softer and

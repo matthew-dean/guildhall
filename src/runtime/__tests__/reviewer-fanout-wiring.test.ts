@@ -126,10 +126,12 @@ interface ScriptedTurn {
 
 class ScriptedApiClient implements SupportsStreamingMessages {
   private index = 0
+  readonly requests: ApiMessageRequest[] = []
 
   constructor(private readonly script: ScriptedTurn[]) {}
 
-  async *streamMessage(_request: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
+  async *streamMessage(request: ApiMessageRequest): AsyncIterable<ApiStreamEvent> {
+    this.requests.push(request)
     const turn = this.script[this.index]
     if (!turn) throw new Error(`ScriptedApiClient exhausted at ${this.index}`)
     this.index += 1
@@ -281,6 +283,75 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     expect(verdicts[0]?.verdict).toBe('approve')
   })
 
+  it('default fanout prompts include the planned review lanes and recipes', async () => {
+    const client = new ScriptedApiClient([
+      {
+        message: assistantMsg(
+          [
+            '**Rubric:**',
+            '- review: yes - checked planned lanes',
+            '',
+            '**Verdict:** approve',
+            '',
+            '**Reasoning:** Planned UX recipe was considered.',
+          ].join('\n'),
+        ),
+      },
+    ])
+    const runner = buildDefaultReviewerFanout(
+      { apiClient: client, modelId: 'm' },
+      { personaTimeoutMs: 1_000 },
+    )
+
+    await runner({
+      task: mkTask(),
+      personas: [
+        {
+          slug: 'project-manager',
+          name: 'The Project Manager',
+          blurb: 'Checks handoff quality.',
+          role: 'overseer',
+          principles: 'Check handoff quality.',
+          rubric: [{ id: 'review', question: 'Is the review packet usable?', weight: 1 }],
+          deterministicChecks: [],
+          applicable: () => true,
+        },
+      ],
+      reviewPlan: {
+        taskId: 'task-001',
+        effort: 'balanced',
+        depth: 'standard',
+        selectedLanes: ['ux_comprehension', 'copy_clarity'],
+        skippedLanes: [{ lane: 'security', reason: 'No security signal.' }],
+        requiredRecipes: [{
+          recipeId: 'product-ux-zero-context',
+          version: 'v1',
+          lanes: ['ux_comprehension', 'copy_clarity'],
+          blocking: 'high',
+          required: true,
+          calibrationRecipeIds: ['ux-zero-context-comprehension'],
+        }],
+        deterministicChecks: ['browser-or-screenshot-evidence'],
+        requiredArtifacts: ['visual-evidence'],
+        budget: { maxReviewerAgents: 4 },
+        aggregation: { ux_comprehension: 'blocking_on_high', copy_clarity: 'blocking_on_high' },
+        reasons: ['User-facing copy changed.'],
+        createdAt: '2026-04-01T00:00:00Z',
+        createdBy: 'coordinator-review-planner',
+      },
+      builtContext: builtContextStub(),
+      context: 'Review the task.',
+      memoryDir,
+      projectPath: tmpDir,
+    })
+
+    const requestText = JSON.stringify(client.requests[0])
+    expect(requestText).toContain('Planned review lanes')
+    expect(requestText).toContain('ux_comprehension')
+    expect(requestText).toContain('product-ux-zero-context')
+    expect(requestText).toContain('ux-zero-context-comprehension')
+  })
+
   it('times out a hanging persona call instead of stalling review forever', async () => {
     const runner = buildDefaultReviewerFanout(
       { apiClient: new HangingApiClient(), modelId: 'm' },
@@ -355,6 +426,90 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     // One ReviewVerdict per persona was persisted.
     expect(after.reviewVerdicts.length).toBe(calls[0]!.personaSlugs.length)
     expect(after.reviewVerdicts.every((v) => v.verdict === 'approve')).toBe(true)
+  })
+
+  it('passes the persisted review plan into reviewer fan-out', async () => {
+    await writeDesignSystem(minimalDS)
+    const task = mkTask({
+      title: 'Clarify confusing setup flow copy',
+      description: 'The UI flow needs clearer labels.',
+    })
+    await writeQueue([task])
+    const agents = agentSet()
+
+    const reviewPlan = {
+      taskId: task.id,
+      effort: 'balanced',
+      depth: 'standard',
+      selectedLanes: ['ux_comprehension', 'copy_clarity', 'test_adequacy'],
+      skippedLanes: [],
+      requiredRecipes: [{
+        recipeId: 'product-ux-zero-context',
+        version: 'v1',
+        lanes: ['ux_comprehension', 'copy_clarity'],
+        blocking: 'high',
+        required: true,
+        calibrationRecipeIds: ['ux-zero-context-comprehension'],
+      }],
+      deterministicChecks: ['browser-or-screenshot-evidence'],
+      requiredArtifacts: ['visual-evidence'],
+      budget: { maxReviewerAgents: 4 },
+      aggregation: {},
+      reasons: ['Stored plan from coordinator.'],
+      createdAt: '2026-04-01T00:00:00Z',
+      createdBy: 'coordinator-review-planner',
+    } as const
+    const reviewAuditStore = {
+      async readTaskReviewAudit() {
+        return {
+          plan: {
+            payload: reviewPlan,
+          },
+          events: [],
+          reviewerRuns: [],
+          escapedMisses: [],
+        }
+      },
+      async saveReviewPlan() {
+        throw new Error('should not overwrite existing plan')
+      },
+      async appendReviewPlanEvent() {
+        throw new Error('should not append event for existing plan')
+      },
+    }
+
+    const calls: { lanes?: readonly string[]; recipeIds?: readonly string[] }[] = []
+    const runner: ReviewerFanoutRunner = async ({ personas, reviewPlan: plan }) => {
+      calls.push({
+        lanes: plan?.selectedLanes,
+        recipeIds: plan?.requiredRecipes.map((recipe) => recipe.recipeId),
+      })
+      return personas.map(
+        (persona): PersonaVerdict => ({
+          guildSlug: persona.slug,
+          guildName: persona.name,
+          verdict: 'approve',
+          reasoning: `${persona.name} approved.`,
+          revisionItems: [],
+          rawOutput: '**Verdict:** approve',
+        }),
+      )
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      reviewerFanout: runner,
+      reviewAuditStore: reviewAuditStore as never,
+      gitDriver: memoryGitDriver(),
+    })
+    await orch.tick()
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toEqual({
+      lanes: ['ux_comprehension', 'copy_clarity', 'test_adequacy'],
+      recipeIds: ['product-ux-zero-context'],
+    })
   })
 
   it('bounces the task to in_progress when any persona revises', async () => {
