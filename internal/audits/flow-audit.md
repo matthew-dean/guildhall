@@ -77,7 +77,9 @@ babysit setup/import/provider/release states across multiple pages.
   returns the existing or newly recorded review plan from the audit hook,
   passes it to reviewer fan-out, and includes a compact planned-scope block in
   default persona prompts with lanes, recipes, calibration recipe ids, checks,
-  evidence, and budget.
+  evidence, and budget. Fan-out now also applies the plan's reviewer-agent
+  budget by selecting lane-relevant reviewer personas before filling remaining
+  capacity.
 - [x] Tighten the dark-theme text contrast ladder from the Fair Labor License
   Thread walkthrough. Supporting copy was too dim against near-white headings,
   so the system text tokens now keep primary/strong text slightly softer and

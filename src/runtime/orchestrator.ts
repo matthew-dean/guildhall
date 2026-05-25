@@ -198,6 +198,7 @@ import {
   aggregateFanout,
   boundedConcurrency,
   personaVerdictToReviewRecord,
+  selectReviewersForPlan,
   type PersonaVerdict,
   type ReviewerFanoutPolicy,
 } from './reviewer-fanout.js'
@@ -5400,7 +5401,7 @@ export class Orchestrator {
       },
       roster,
     )
-    const personas = reviewersForTask(applicable)
+    const personas = selectReviewersForPlan(reviewersForTask(applicable), reviewPlan)
     if (personas.length === 0) return null
 
     // Build the JIT context once; every persona sees the same facts.

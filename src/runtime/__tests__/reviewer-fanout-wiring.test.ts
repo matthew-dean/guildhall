@@ -512,6 +512,80 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     })
   })
 
+  it('uses the review plan budget to cap reviewer fan-out personas', async () => {
+    await writeDesignSystem(minimalDS)
+    const task = mkTask({
+      title: 'Clarify confusing setup flow copy',
+      description: 'The UI flow needs clearer labels.',
+    })
+    await writeQueue([task])
+    const agents = agentSet()
+
+    const reviewAuditStore = {
+      async readTaskReviewAudit() {
+        return {
+          plan: {
+            payload: {
+              taskId: task.id,
+              effort: 'lean',
+              depth: 'minimal',
+              selectedLanes: ['ux_comprehension', 'copy_clarity'],
+              skippedLanes: [],
+              requiredRecipes: [],
+              deterministicChecks: [],
+              requiredArtifacts: [],
+              budget: { maxReviewerAgents: 2 },
+              aggregation: {},
+              reasons: [],
+              createdAt: '2026-04-01T00:00:00Z',
+              createdBy: 'coordinator-review-planner',
+            },
+          },
+          events: [],
+          reviewerRuns: [],
+          escapedMisses: [],
+        }
+      },
+      async saveReviewPlan() {
+        throw new Error('should not overwrite existing plan')
+      },
+      async appendReviewPlanEvent() {
+        throw new Error('should not append event for existing plan')
+      },
+    }
+
+    const calls: { personaSlugs: string[] }[] = []
+    const runner: ReviewerFanoutRunner = async ({ personas }) => {
+      calls.push({ personaSlugs: personas.map((persona) => persona.slug) })
+      return personas.map(
+        (persona): PersonaVerdict => ({
+          guildSlug: persona.slug,
+          guildName: persona.name,
+          verdict: 'approve',
+          reasoning: `${persona.name} approved.`,
+          revisionItems: [],
+          rawOutput: '**Verdict:** approve',
+        }),
+      )
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents,
+      reviewerFanout: runner,
+      reviewAuditStore: reviewAuditStore as never,
+      gitDriver: memoryGitDriver(),
+    })
+    await orch.tick()
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.personaSlugs.length).toBeLessThanOrEqual(2)
+    expect(calls[0]!.personaSlugs).toEqual(expect.arrayContaining([
+      'component-designer',
+      'copywriter',
+    ]))
+  })
+
   it('bounces the task to in_progress when any persona revises', async () => {
     await writeDesignSystem(minimalDS)
     const task = mkTask()
