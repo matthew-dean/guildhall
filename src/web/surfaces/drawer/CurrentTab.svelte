@@ -1,6 +1,7 @@
 <script lang="ts">
   import Card from '../../lib/Card.svelte'
   import Button from '../../lib/Button.svelte'
+  import Chip from '../../lib/Chip.svelte'
   import Icon from '../../lib/Icon.svelte'
   import Stack from '../../lib/Stack.svelte'
   import Row from '../../lib/Row.svelte'
@@ -9,11 +10,17 @@
   import StatusLight from '../../lib/StatusLight.svelte'
   import AgentQuestion from '../../lib/AgentQuestion.svelte'
   import Markdown from '../../lib/Markdown.svelte'
-  import { escalationPrimaryAction, escalationUserGuidance } from '../../lib/escalation-labels.js'
+  import {
+    escalationPrimaryAction,
+    escalationReasonLabel,
+    escalationUserGuidance,
+    roleLabel,
+  } from '../../lib/escalation-labels.js'
   import {
     hasIncompleteTaskChecklist,
     isImportedDraftShaping,
     isQueuedSpecRevision,
+    needsWorkerHandoffSpecCleanup,
     needsRecovery,
   } from '../../lib/task-state.js'
   import type {
@@ -36,7 +43,7 @@
     onRunTask: () => void
     onShapeDraft: () => void
     onOpenSpecTab: () => void
-    onResolveEscalation: (args: { escalationId: string; resolution: string; nextStatus: string }) => Promise<void> | void
+    onOpenEscalationAction: (escalationId: string, mode: 'retry' | 'resolve') => void
     onAnswerQuestion: (questionId: string, answer: string) => Promise<void>
   }
 
@@ -52,7 +59,7 @@
     onRunTask,
     onShapeDraft,
     onOpenSpecTab,
-    onResolveEscalation,
+    onOpenEscalationAction,
     onAnswerQuestion,
   }: Props = $props()
 
@@ -66,6 +73,8 @@
         return 0
       }),
   )
+
+  const taskNeedsBriefCleanup = $derived(needsWorkerHandoffSpecCleanup(task))
 
   function activityElapsed(iso: string | undefined): string | null {
     if (!iso) return null
@@ -116,7 +125,7 @@
     }
     if (turn.taskStatus === 'ready' && !turn.liveAgent) {
       if (hasIncompleteTaskChecklist(turn)) {
-        return 'This is a draft task brief. Before Guildhall can build it, add the missing success target and acceptance criteria.'
+        return briefFixDescription(turn)
       }
       if (isProjectRunActive()) {
         return 'Approved and queued. Guildhall is already running for this project, so this task will stay in the queue until the coordinator picks it.'
@@ -132,7 +141,7 @@
       }
       return turn.importedDraft
         ? 'Guildhall is shaping the task brief for this imported note. You can add context, but you do not need to babysit the draft.'
-        : 'Guildhall has a partial draft here. Review it, then let Guildhall keep shaping it when you are ready.'
+        : 'Guildhall has started shaping this task, but the brief is not ready yet. The checklist below shows what is still missing.'
     }
     if (turn.taskStatus === 'in_progress' && !turn.liveAgent) {
       return 'Work is paused. Start Guildhall when you want it to continue.'
@@ -185,16 +194,65 @@
 
   function runLabel(turn: TaskThreadInFlightTurn): string {
     switch (turn.taskStatus) {
-      case 'ready': return hasIncompleteTaskChecklist(turn) ? 'Open checklist' : 'Start work'
+      case 'ready': return hasIncompleteTaskChecklist(turn) ? briefFixButtonLabel(turn) : 'Start work'
       case 'import_draft': return 'Draft task brief'
       case 'exploring':
-        if (turn.importedDraft || hasIncompleteTaskChecklist(turn)) return 'Continue task brief'
+        if (turn.importedDraft || hasIncompleteTaskChecklist(turn)) return 'Continue shaping brief'
         return isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
       case 'review': return 'Resume review'
       case 'gate_check': return 'Resume gates'
       case 'in_progress': return 'Resume work'
       default: return 'Run this task'
     }
+  }
+
+  function missingChecklistSteps(turn: TaskThreadInFlightTurn): NonNullable<TaskThreadInFlightTurn['checklist']>['steps'] {
+    return (turn.checklist?.steps ?? [])
+      .filter(step => step.status !== 'done' && step.status !== 'skipped')
+  }
+
+  function missingBriefFieldKind(turn: TaskThreadInFlightTurn): 'success' | 'acceptance' | 'both' | 'unknown' {
+    const missing = missingChecklistSteps(turn)
+    const hasSuccess = missing.some(step => /success|done|outcome|target/i.test(`${step.id} ${step.title}`))
+    const hasAcceptance = missing.some(step => /acceptance|criteria|check|verify/i.test(`${step.id} ${step.title}`))
+    if (hasSuccess && hasAcceptance) return 'both'
+    if (hasSuccess) return 'success'
+    if (hasAcceptance) return 'acceptance'
+    return 'unknown'
+  }
+
+  function briefFixTitle(turn: TaskThreadInFlightTurn): string {
+    switch (missingBriefFieldKind(turn)) {
+      case 'success': return 'Brief cleanup needed'
+      case 'acceptance': return 'Brief cleanup needed'
+      case 'both': return 'Brief cleanup needed'
+      default: return 'Brief cleanup needed'
+    }
+  }
+
+  function briefFixDescription(turn: TaskThreadInFlightTurn): string {
+    switch (missingBriefFieldKind(turn)) {
+      case 'success':
+        return 'Guildhall needs to turn the source notes into a success target before implementation.'
+      case 'acceptance':
+        return 'Guildhall needs to turn the source notes into concrete acceptance checks before implementation.'
+      case 'both':
+        return 'Guildhall needs to turn the source notes into an outcome and acceptance checks before implementation.'
+      default:
+        return 'Guildhall needs to turn the missing task-brief field into a usable task brief before implementation.'
+    }
+  }
+
+  function briefFixButtonLabel(turn: TaskThreadInFlightTurn): string {
+    switch (missingBriefFieldKind(turn)) {
+      case 'success': return 'Start'
+      case 'acceptance': return 'Start'
+      default: return 'Start'
+    }
+  }
+
+  function cardTitleForTurn(turn: TaskThreadInFlightTurn): string {
+    return hasIncompleteTaskChecklist(turn) ? 'Needs brief cleanup' : 'Current state'
   }
 
   function checklistStepTone(
@@ -222,7 +280,27 @@
 </script>
 
 <Stack gap="4">
-  {#if relevantTurns.length === 0}
+  {#if relevantTurns.length === 0 && taskNeedsBriefCleanup}
+    <Card title="Needs brief cleanup" tone="warn">
+      <Stack gap="3">
+        <StateSummary
+          label="Brief cleanup needed"
+          description="Guildhall needs to turn the source notes into a usable task brief before implementation."
+          tone="warn"
+        />
+        <p class="detail-copy">
+          The Work board sent you here because this task is marked ready, but its brief/spec is not complete enough for a worker yet. Start lets Guildhall clean up the brief before implementation.
+        </p>
+        <Row justify="end" gap="2">
+          <Button variant="secondary" onclick={onOpenSpecTab}>View brief</Button>
+          <Button variant="agent" disabled={runBusy} onclick={onRunTask}>
+            <Icon name="sparkles" size={14} />
+            Start
+          </Button>
+        </Row>
+      </Stack>
+    </Card>
+  {:else if relevantTurns.length === 0}
     <Card title="Current status">
       <StateSummary
         label="Nothing is waiting"
@@ -290,34 +368,57 @@
       {:else if turn.kind === 'escalation'}
         {@const guidance = escalationUserGuidance({ summary: turn.summary, details: turn.details, reason: turn.escalationReason, agentId: turn.escalationAgentId })}
         {@const recoveryAction = escalationPrimaryAction({ reason: turn.escalationReason, agentId: turn.escalationAgentId, summary: turn.summary, details: turn.details })}
-        <Card title={guidance.actionOwner === 'guildhall' ? 'Guildhall can continue' : 'Needs your help'} tone="warn">
+        {@const reasonLabel = escalationReasonLabel(turn.escalationReason)}
+        {@const ownerLabel = roleLabel(turn.escalationAgentId)}
+        <Card title={guidance.actionOwner === 'guildhall' ? 'Guildhall can continue' : 'Recovery needed'} tone="warn">
           <Stack gap="3">
             <StateSummary
-              label={guidance.actionOwner === 'guildhall' ? 'Next Guildhall step' : 'What Guildhall needs'}
-              description={guidance.title}
+              label={guidance.actionOwner === 'guildhall' ? 'Guildhall action' : reasonLabel}
+              description={guidance.actionOwner === 'guildhall' ? guidance.title : guidance.detail}
               tone={guidance.actionOwner === 'guildhall' ? 'accent' : 'warn'}
             />
-            <p class="detail-copy">{guidance.detail}</p>
-            <p class="detail-copy">{guidance.nextStep}</p>
+            <div class="recovery-meta" aria-label="Recovery owner">
+              {#if ownerLabel !== 'Unknown'}
+                <Chip label={ownerLabel} tone="accent" />
+              {/if}
+            </div>
+            {#if guidance.actionOwner === 'guildhall'}
+              <p class="detail-copy">{guidance.detail}</p>
+              <p class="detail-copy">{guidance.nextStep}</p>
+            {:else}
+              <p class="detail-copy">
+                Guildhall stopped because this blocker changes what the task means or how it should continue.
+                The recommended next step is shown first; use the other action only if you already fixed the blocker outside Guildhall.
+              </p>
+              <p class="detail-copy"><strong>Most likely next step:</strong> {recoveryAction.label}</p>
+            {/if}
             {#if guidance.technicalNote}
-              <p class="detail-copy"><strong>Technical note:</strong> {guidance.technicalNote}</p>
+              <details class="more">
+                <summary>Show blocker detail</summary>
+                <p class="detail-copy">{guidance.technicalNote}</p>
+              </details>
             {/if}
             <Row justify="end" gap="2">
-              <Button variant="secondary" onclick={onOpenSpecTab}>Review acceptance criteria</Button>
-              {#if guidance.actionOwner === 'guildhall'}
+              <Button variant="secondary" onclick={onOpenSpecTab}>View spec and evidence</Button>
+              {#if guidance.actionOwner === 'user'}
                 <Button
-                  variant="agent"
+                  variant="secondary"
                   disabled={busy}
-                  onclick={() => onResolveEscalation({
-                    escalationId: turn.escalationId,
-                    resolution: recoveryAction.resolution,
-                    nextStatus: recoveryAction.nextStatus,
-                  })}
+                  onclick={() => onOpenEscalationAction(turn.escalationId, 'resolve')}
                 >
-                  <Icon name="sparkles" size={14} />
-                  {recoveryAction.label}
+                  I handled this...
                 </Button>
               {/if}
+              <Button
+                variant={guidance.actionOwner === 'guildhall' ? 'agent' : 'primary'}
+                disabled={busy}
+                onclick={() => onOpenEscalationAction(turn.escalationId, 'retry')}
+              >
+                {#if guidance.actionOwner === 'guildhall'}
+                  <Icon name="sparkles" size={14} />
+                {/if}
+                {recoveryAction.label}
+              </Button>
             </Row>
             {#if turn.activity?.length}
               <div class="live-activity" aria-label="Recent agent activity">
@@ -335,10 +436,10 @@
           </Stack>
         </Card>
       {:else if turn.kind === 'inflight'}
-        <Card title="Current state" tone={turn.importedDraft ? 'accent' : 'default'}>
+        <Card title={cardTitleForTurn(turn)} tone={hasIncompleteTaskChecklist(turn) ? 'warn' : turn.importedDraft ? 'accent' : 'default'}>
           <Stack gap="3">
             <StateSummary
-              label={taskStateLabel(turn)}
+              label={hasIncompleteTaskChecklist(turn) ? briefFixTitle(turn) : taskStateLabel(turn)}
               description={taskStateDescription(turn)}
               tone={taskStateTone(turn)}
             />
@@ -381,8 +482,9 @@
             {#if showsTaskAction(turn)}
               <Row justify="end" gap="2">
                 {#if turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)}
-                  <Button variant="secondary" onclick={onOpenSpecTab}>
-                    Open checklist
+                  <Button variant="agent" disabled={runBusy} onclick={onRunTask}>
+                    <Icon name="sparkles" size={14} />
+                    {briefFixButtonLabel(turn)}
                   </Button>
                 {:else if turn.taskStatus !== 'import_draft' && isProjectRunActive()}
                   <Button variant="secondary" disabled>
@@ -436,6 +538,29 @@
     color: var(--text-muted);
     font-size: var(--fs-2);
     line-height: var(--lh-body);
+  }
+  .recovery-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+  }
+  .more > summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    list-style: none;
+    text-transform: uppercase;
+  }
+  .more > summary::-webkit-details-marker {
+    display: none;
+  }
+  .more > summary::before {
+    content: '▸ ';
+  }
+  .more[open] > summary::before {
+    content: '▾ ';
   }
   .live-activity {
     display: grid;

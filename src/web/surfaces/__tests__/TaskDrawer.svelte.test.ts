@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import '@testing-library/jest-dom/vitest'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
@@ -140,7 +141,34 @@ describe('TaskDrawer', () => {
     })
   })
 
-  it('opens the Now tab when a question notification deep-links to the current surface', async () => {
+  it('loads a project task with the explicit project id even from a legacy global task route', async () => {
+    window.history.replaceState({}, '', '/task/task-link-editor')
+    path.value = '/task/task-link-editor'
+    const payload = drawerPayload({ threadTurns: [] })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) {
+        expect(url).toContain('projectId=looma-knit')
+        return json(payload)
+      }
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Add link editor controls inside the existing editor toolbar.')
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('projectId=looma-knit'))).toBe(true)
+    })
+  })
+
+  it('opens the Action tab when a question notification deep-links to the current surface', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=current')
     path.value = '/projects/looma-knit/task/task-link-editor'
     const payload = drawerPayload()
@@ -159,7 +187,64 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Which controls belong in the link editor?')
-    expect(screen.getByRole('tab', { name: 'Now' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('tab', { name: 'Action' }).getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('does not repeat the recovery banner above the tab that owns the recovery decision', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=current')
+    path.value = '/projects/looma-knit/task/task-link-editor'
+    const payload = drawerPayload({
+      task: {
+        ...drawerPayload().task,
+        status: 'blocked',
+        escalations: [
+          {
+            id: 'esc-1',
+            raisedAt: now,
+            agentId: 'worker-agent',
+            reason: 'spec_ambiguous',
+            summary: 'Card component exists but template syntax mismatch prevents edit',
+            details: 'The worker found src/components/Card.svelte, but the requested dashboard edit does not match the current file shape.',
+            status: 'open',
+          },
+        ],
+      },
+      threadTurns: [
+        {
+          id: 'turn-escalation',
+          kind: 'escalation',
+          at: now,
+          persona: 'worker',
+          status: 'active',
+          phase: 'blocked',
+          taskId: 'task-link-editor',
+          taskTitle: 'Knit: add link editor controls',
+          escalationId: 'esc-1',
+          escalationAgentId: 'worker-agent',
+          escalationReason: 'spec_ambiguous',
+          summary: 'Card component exists but template syntax mismatch prevents edit',
+          details: 'The worker found src/components/Card.svelte, but the requested dashboard edit does not match the current file shape.',
+        },
+      ],
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Recovery needed')
+    expect(screen.getAllByText(/Card component exists but template syntax mismatch prevents edit/i)).toHaveLength(1)
+    expect(screen.queryByLabelText('Needs recovery')).toBeNull()
+    expect(screen.queryByText(/Open the task/i)).toBeNull()
   })
 
   it('runs and manages the task from drawer controls without losing project scope', async () => {
@@ -650,7 +735,7 @@ describe('TaskDrawer', () => {
     })
   })
 
-  it('separates retry and manual blocker resolution actions in the drawer footer', async () => {
+  it('separates retry and manual blocker resolution actions on the recovery surface', async () => {
     const payload = drawerPayload({ threadTurns: [] })
     payload.task.status = 'blocked'
     payload.task.blockReason = 'verification_failed: Build failed after implementation.'
@@ -692,7 +777,7 @@ describe('TaskDrawer', () => {
     expect(screen.queryByRole('button', { name: /retry blocker/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /resolve blocker/i })).toBeNull()
 
-    await userEvent.click(screen.getByRole('button', { name: /i handled this\.\.\./i }))
+    await userEvent.click(screen.getByRole('button', { name: /^resolve\.\.\.$/i }))
     await screen.findByText('Use this when you handled the blocker yourself or want to tell Guildhall exactly where to continue.')
     await userEvent.type(
       screen.getByLabelText(/resolution note/i),
@@ -703,6 +788,30 @@ describe('TaskDrawer', () => {
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/resolve-escalation'))).toBe(true)
+    })
+  })
+
+  it('renders the full task description in the drawer header when the title is a compact label', async () => {
+    const payload = drawerPayload({ threadTurns: [] })
+    payload.task.title = 'We should have a system-wide policy of how much FLL charges on overhe...'
+    payload.task.description = 'We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.'
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await waitFor(() => {
+      expect(screen.getAllByText('We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.').length).toBeGreaterThan(0)
     })
   })
 
@@ -747,7 +856,8 @@ describe('TaskDrawer', () => {
     const footerRetry = screen.getAllByRole('button', { name: /^retry gates$/i }).at(-1)
     expect(footerRetry).toBeDefined()
     await userEvent.click(footerRetry!)
-    await screen.findByText('Guildhall will close this blocker and try the task again from the selected step.')
+    await screen.findByText('Guildhall will close this blocker and continue from the step this recovery action is built for.')
+    expect(screen.queryByLabelText('Resume at')).toBeNull()
     const modalRetry = screen.getAllByRole('button', { name: /^retry gates$/i }).at(-1)
     expect(modalRetry).toBeDefined()
     await userEvent.click(modalRetry!)

@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import {
+  DEFAULT_ROLE_BEHAVIOR,
+  ModelBehaviorProfile,
   ModelAssignmentConfig,
   DEFAULT_CLOUD_MODEL_ASSIGNMENT,
   DEFAULT_LOCAL_MODEL_ASSIGNMENT,
@@ -19,6 +21,16 @@ type ModelRoleKey = (typeof MODEL_ROLE_KEYS)[number]
 type ModelProviderKey = (typeof MODEL_PROVIDER_KEYS)[number]
 
 const LegacyModelAssignmentPartialSchema = ModelAssignmentConfig.partial().strict()
+
+const ModelBehaviorConfigSchema = z.object({
+  spec: ModelBehaviorProfile.optional(),
+  coordinator: ModelBehaviorProfile.optional(),
+  worker: ModelBehaviorProfile.optional(),
+  reviewer: ModelBehaviorProfile.optional(),
+  gateChecker: ModelBehaviorProfile.optional(),
+  contextIndexer: ModelBehaviorProfile.optional(),
+}).strict()
+export type ModelBehaviorConfig = z.infer<typeof ModelBehaviorConfigSchema>
 
 const ProviderModelShortcutSchema = z.object({
   all: z.string().optional(),
@@ -190,6 +202,10 @@ export const WorkspaceYamlConfig = z.object({
   // Missing roles fall back to global config, then built-in defaults.
   models: ModelConfigInputSchema.optional(),
 
+  // Plain-language behavior profile per role. Guildhall translates this into
+  // provider-specific sampling internally; users should not need raw knobs.
+  modelBehavior: ModelBehaviorConfigSchema.optional(),
+
   // Which coordinators are active in this workspace.
   // Each coordinator can target a sub-path of projectPath.
   coordinators: z.array(z.object({
@@ -300,6 +316,9 @@ export const GlobalConfig = z.object({
   // Default model assignments (merged with per-workspace models)
   models: ModelConfigInputSchema.optional(),
 
+  // Machine-wide defaults for how each model role should behave.
+  modelBehavior: ModelBehaviorConfigSchema.optional(),
+
   // Default preferred provider for this machine. Projects may override it
   // in local .guildhall/config.yaml when truly necessary.
   preferredProvider: z.enum(['claude-oauth', 'codex', 'llama-cpp', 'anthropic-api', 'openai-api']).optional(),
@@ -337,6 +356,12 @@ export const GlobalConfig = z.object({
    * a sane default from the active provider's advertised capacity.
    */
   reviewerFanoutConcurrency: z.number().int().positive().max(16).optional(),
+
+  /**
+   * Machine-wide hard ceiling for provider request concurrency. Provider
+   * profiles can choose lower defaults, but never exceed this limit.
+   */
+  maxProviderConcurrency: z.number().int().positive().max(200).default(200),
 })
 export type GlobalConfig = z.infer<typeof GlobalConfig>
 
@@ -480,6 +505,9 @@ export const ResolvedConfig = z.object({
 
   // Fully resolved model assignments
   models: ModelAssignmentConfig,
+
+  // Fully resolved role behavior profiles.
+  modelBehavior: ModelBehaviorConfigSchema.optional(),
 
   // Coordinator definitions (mirrors WorkspaceYamlConfig.coordinators)
   coordinators: z.array(z.object({
@@ -693,4 +721,15 @@ export function mergeModels(
     if (v !== undefined) cleaned[k] = v
   }
   return ModelAssignmentConfig.parse(cleaned)
+}
+
+export function mergeModelBehavior(
+  base: ModelBehaviorConfig | undefined,
+  override: ModelBehaviorConfig | undefined,
+): Required<ModelBehaviorConfig> {
+  return ModelBehaviorConfigSchema.required().parse({
+    ...DEFAULT_ROLE_BEHAVIOR,
+    ...(base ?? {}),
+    ...(override ?? {}),
+  })
 }

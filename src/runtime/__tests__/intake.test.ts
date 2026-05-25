@@ -117,12 +117,12 @@ describe('createExploringTask', () => {
     expect(result.taskId).toBe('custom-id')
   })
 
-  it('truncates long asks into a reasonable title', async () => {
+  it('keeps long asks complete in description instead of storing truncated title content', async () => {
     const long = 'x'.repeat(200)
     await createExploringTask({ memoryDir, ask: long, domain: 'looma', projectPath: '/x' })
     const queue = await readQueue()
-    expect(queue.tasks[0]!.title.length).toBeLessThanOrEqual(60)
-    expect(queue.tasks[0]!.title).toMatch(/\.\.\.$/)
+    expect(queue.tasks[0]!.title).toBe('New request')
+    expect(queue.tasks[0]!.description).toBe(long)
   })
 
   it('uses explicit title when provided', async () => {

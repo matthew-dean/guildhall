@@ -55,7 +55,7 @@ app explains the likely fit and offers realistic alternatives.
 | Foundation | Safe execution setup | Worktree status, dependencies, baseline checks, and any setup blocker. |
 | Framing | Task organization | Work grouped into understandable pieces with dependencies and open questions. |
 | Trade work | Implementation | Source edits, tests, docs, migrations, UI changes, and the evidence behind them. |
-| Inspection | Review and gates | Review findings, command results, browser checks, and release readiness. |
+| Inspection | Review and gates | Review findings, command results, browser checks, and current work closure. |
 | Change order | Plan revision | A clear note explaining what changed and why. |
 | Punch list | Finish and release | Shipping blockers, follow-ups, cleanup, and explicit deferrals. |
 

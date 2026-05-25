@@ -65,9 +65,13 @@ export function isOperationalReceiptQuestion(question: QuestionVisibilityRecord)
   if (/^i(?:'|’)ve now persisted progress with tools\b/.test(text)) return true
   if (/^i took durable tool steps this turn:?$/.test(text)) return true
   if (/^i have enough from\b.*\b(?:glob|search|read|scan|inspection|results?)\b/.test(text)) return true
+  if (/^let me piece together what i know\b/.test(text)) return true
+  if (/^(?:here(?:'|’)s|here is) what i (?:found|know|learned)\b/.test(text) && !looksLikeOwnerDecisionPrompt(text)) return true
+  if (/^i(?:'|’)m going to\b.*\b(?:inspect|read|scan|search|open|check|summarize|draft|write|update)\b/.test(text)) return true
   if (/^i don(?:'|’)t see\b.*\b(?:todo|readme|file|directory|docs?)\b/.test(text)) return true
   if (/^i found\b.*\b(?:glob|search|read|scan|inspection|results?)\b/.test(text) && !looksLikeOwnerDecisionPrompt(text)) return true
   if (/^based on (?:the )?(?:glob|search|read|scan|inspection|results?)\b/.test(text) && !looksLikeOwnerDecisionPrompt(text)) return true
+  if (/^(?:from|after) (?:the )?(?:glob|search|read|scan|inspection|results?)\b/.test(text) && !looksLikeOwnerDecisionPrompt(text)) return true
   if (looksLikeOutputPromisePrompt(text)) return true
   if (
     /^i (?:will|can|now|have)\b.*\b(?:persist|draft|update|write|post|set|move|create|record)\b/.test(text) &&

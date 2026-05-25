@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 import type { TaskStatus } from '@guildhall/core'
 import type { GuildDefinition, GuildSignals } from '../types.js'
+import { CONTENT_INTEGRITY_CHECK } from '../content-integrity.js'
 import { applicable } from './applicable.js'
 import { PROJECT_MANAGER_RUBRIC } from './rubric.js'
 
@@ -79,7 +80,7 @@ export const projectManagerGuild: GuildDefinition = {
     'Lifecycle discipline, clean handoffs, audit-trail obsession. Always at the table.',
   principles: BASE_PRINCIPLES,
   rubric: PROJECT_MANAGER_RUBRIC,
-  deterministicChecks: [],
+  deterministicChecks: [CONTENT_INTEGRITY_CHECK],
   applicable,
   specializePrinciples(signals: GuildSignals): string | null {
     const playbook = loadStagePlaybook(signals.task.status, signals.memoryDir)

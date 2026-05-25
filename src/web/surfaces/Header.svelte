@@ -12,6 +12,7 @@
   import StatusDot from '../lib/StatusDot.svelte'
   import { parseProjectRoute } from '../lib/project-routes.js'
   import { humanizeProjectName } from '../lib/project-name.js'
+  import { project } from '../lib/project.svelte.js'
 
   let sseStatus = $state<SseStatus>('connecting')
   let version = $state<string | null>(null)
@@ -40,11 +41,19 @@
   const parsedRoute = $derived(parseProjectRoute(path.value))
   const showProjectMenu = $derived(path.value.startsWith('/project') || parsedRoute.projectScoped)
   const showSseStatus = $derived(parsedRoute.projectScoped || path.value.startsWith('/project'))
+  const savedProjectTitle = $derived(
+    parsedRoute.projectScoped && project.detail?.id === parsedRoute.projectId
+      ? (project.detail.name?.trim() || null)
+      : null,
+  )
+  const fallbackProjectTitle = $derived(
+    parsedRoute.projectScoped
+      ? humanizeProjectName(parsedRoute.projectId)
+      : null,
+  )
 
   $effect(() => {
-    projectTitle = parsedRoute.projectScoped
-      ? humanizeProjectName(parsedRoute.projectId)
-      : null
+    projectTitle = savedProjectTitle ?? fallbackProjectTitle
   })
 
   $effect(() => {
@@ -52,7 +61,7 @@
       const custom = event as CustomEvent<{ title?: string | null }>
       projectTitle = typeof custom.detail?.title === 'string' && custom.detail.title.trim().length > 0
         ? custom.detail.title.trim()
-        : (parsedRoute.projectScoped ? humanizeProjectName(parsedRoute.projectId) : null)
+        : (savedProjectTitle ?? fallbackProjectTitle)
     }
     window.addEventListener('guildhall:set-project-title', handle as EventListener)
     return () => window.removeEventListener('guildhall:set-project-title', handle as EventListener)

@@ -91,3 +91,19 @@ export function workerHandoffStatus(task: Pick<Task, 'status'> & TaskSpecLike): 
   if (needsWorkerHandoffSpecCleanup(task)) return 'needs_spec_cleanup'
   return task.status
 }
+
+export function effectiveWorkStatus(task: Pick<Task, 'status'> & TaskSpecLike, running = false): string | undefined {
+  const handoffStatus = workerHandoffStatus(task)
+  if (handoffStatus === 'needs_spec_cleanup') return handoffStatus
+  if (!running) {
+    if (task.status === 'in_progress') return 'paused'
+    if (task.status === 'review') return 'review_waiting'
+    if (task.status === 'gate_check') return 'gates_waiting'
+  }
+  return task.status
+}
+
+export function isWorkerRunnableStatus(task: Pick<Task, 'status'> & TaskSpecLike): boolean {
+  if (task.status === 'ready') return isCompleteForWorkerHandoff(task)
+  return ['proposed', 'exploring', 'in_progress', 'review', 'gate_check'].includes(task.status ?? '')
+}

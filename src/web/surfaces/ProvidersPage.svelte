@@ -17,6 +17,7 @@
     verifiedAt: string | null
     url?: string
     baseUrl?: string | null
+    maxConcurrency?: number | null
   }
   interface ModelCatalogItem {
     id: string
@@ -26,6 +27,9 @@
   interface ModelConfig {
     globalModels: Record<string, string>
     effectiveModels: Record<string, string>
+    globalBehavior: Record<string, string>
+    effectiveBehavior: Record<string, string>
+    behaviorProfiles: Array<{ id: string; label: string; description: string }>
     loadedModels: string[]
     missingModels: string[]
     catalog: ModelCatalogItem[]
@@ -45,6 +49,7 @@
   let openaiKey = $state('')
   let openaiBaseUrl = $state('')
   let llamaUrl = $state('')
+  let maxConcurrency = $state<Record<string, string>>({})
 
   const ORDER = ['claude-oauth', 'codex', 'anthropic-api', 'openai-api', 'llama-cpp']
   const MODEL_ROLES = [
@@ -76,6 +81,12 @@
       providers = nextProviders
       if (nextProviders['llama-cpp']?.url && !llamaUrl) llamaUrl = nextProviders['llama-cpp'].url
       openaiBaseUrl = nextProviders['openai-api']?.baseUrl ?? ''
+      maxConcurrency = Object.fromEntries(
+        Object.entries(nextProviders).map(([key, meta]) => [
+          key,
+          meta.maxConcurrency ? String(meta.maxConcurrency) : '',
+        ]),
+      )
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err)
     }
@@ -108,6 +119,9 @@
         if (!llamaUrl.trim()) return flash('Enter a URL first', true)
         body.lmStudioUrl = llamaUrl.trim()
       }
+      body.provider = key
+      const concurrency = maxConcurrency[key]?.trim()
+      if (concurrency) body.maxConcurrency = Number(concurrency)
       const r = await fetch('/api/setup/providers/config', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -118,6 +132,25 @@
       if (key === 'anthropic-api') anthropicKey = ''
       if (key === 'openai-api') openaiKey = ''
       flash('Saved', false)
+      await load()
+    } finally {
+      saving = null
+    }
+  }
+
+  async function saveConcurrency(key: string) {
+    const value = maxConcurrency[key]?.trim()
+    if (!value) return flash('Enter a concurrency limit first', true)
+    saving = `${key}:concurrency`
+    try {
+      const r = await fetch('/api/setup/providers/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: key, maxConcurrency: Number(value) }),
+      })
+      const j = await r.json()
+      if (j.error) return flash(j.error, true)
+      flash('Concurrency saved', false)
       await load()
     } finally {
       saving = null
@@ -173,6 +206,23 @@
       const j = await r.json()
       if (j.error) return flash(j.error, true)
       flash('Global default saved', false)
+      await load()
+    } finally {
+      saving = null
+    }
+  }
+
+  async function saveGlobalBehavior(role: string, behaviorProfile: string) {
+    saving = `${role}:behavior`
+    try {
+      const r = await fetch('/api/config/models', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scope: 'global', role, behaviorProfile }),
+      })
+      const j = await r.json()
+      if (j.error) return flash(j.error, true)
+      flash('Behavior saved', false)
       await load()
     } finally {
       saving = null
@@ -262,6 +312,22 @@
               </div>
             </div>
             <div class="row-detail muted">{meta.detail}</div>
+            <div class="concurrency-edit">
+              <label class="mini-label" for={`provider-${key}-concurrency`}>Max concurrent requests</label>
+              <Input
+                id={`provider-${key}-concurrency`}
+                type="number"
+                placeholder={key === 'llama-cpp' ? '2' : '10'}
+                value={maxConcurrency[key] ?? ''}
+                oninput={v => (maxConcurrency = { ...maxConcurrency, [key]: v })}
+              />
+              <Button
+                disabled={saving === `${key}:concurrency` || !maxConcurrency[key]?.trim()}
+                onclick={() => saveConcurrency(key)}
+              >
+                {saving === `${key}:concurrency` ? 'Saving...' : 'Save limit'}
+              </Button>
+            </div>
 
             {#if key === 'anthropic-api'}
               <div class="row-edit">
@@ -348,7 +414,9 @@
           <div class="model-list">
             {#each MODEL_ROLES as role (role.id)}
               {@const current = models.globalModels[role.id] ?? models.effectiveModels[role.id] ?? ''}
-              <label class="model-row">
+              {@const behavior = models.globalBehavior[role.id] ?? models.effectiveBehavior[role.id] ?? 'precise'}
+              {@const selectedBehavior = models.behaviorProfiles.find(profile => profile.id === behavior)}
+              <div class="model-row">
                 <span class="model-copy">
                   <span class="label">{role.label}</span>
                   <span class="row-detail muted">{current}</span>
@@ -365,7 +433,21 @@
                     <option value={current}>{current}</option>
                   {/if}
                 </select>
-              </label>
+                <span class="behavior-copy">
+                  <span class="mini-label">Behavior</span>
+                  <span class="row-detail muted">{selectedBehavior?.description ?? ''}</span>
+                </span>
+                <select
+                  value={behavior}
+                  disabled={saving === `${role.id}:behavior`}
+                  aria-label={`${role.label} behavior`}
+                  onchange={(e) => void saveGlobalBehavior(role.id, e.currentTarget.value)}
+                >
+                  {#each models.behaviorProfiles as profile (profile.id)}
+                    <option value={profile.id}>{profile.label}</option>
+                  {/each}
+                </select>
+              </div>
             {/each}
           </div>
         {/if}
@@ -440,6 +522,21 @@
   .row-edit :global(input) {
     flex: 1;
   }
+  .concurrency-edit {
+    display: grid;
+    grid-template-columns: minmax(150px, 1fr) minmax(120px, 160px) auto;
+    gap: var(--s-2);
+    align-items: center;
+    padding: var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: var(--bg-raised);
+  }
+  .mini-label {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    font-weight: 600;
+  }
   .openai-edit {
     flex-wrap: wrap;
   }
@@ -453,7 +550,7 @@
   }
   .model-row {
     display: grid;
-    grid-template-columns: minmax(150px, 1fr) minmax(260px, 1.4fr);
+    grid-template-columns: minmax(140px, 1fr) minmax(230px, 1.25fr);
     gap: var(--s-2);
     align-items: center;
     padding: var(--s-3);
@@ -466,6 +563,16 @@
     flex-direction: column;
     gap: 2px;
     min-width: 0;
+  }
+  .behavior-copy {
+    grid-column: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .behavior-copy + select {
+    grid-column: 2;
   }
   select {
     width: 100%;
@@ -491,6 +598,9 @@
   }
   @media (max-width: 640px) {
     .model-row {
+      grid-template-columns: 1fr;
+    }
+    .concurrency-edit {
       grid-template-columns: 1fr;
     }
   }

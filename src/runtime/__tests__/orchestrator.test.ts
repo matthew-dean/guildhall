@@ -1605,6 +1605,31 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.openQuestions ?? []).toHaveLength(0)
   })
 
+  it('does not promote research-summary narration into fallback choice questions', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Rust outline preprocessing' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        "OK, I've hit the research budget for this turn. But I have enough context from what I've read to understand the situation clearly. Let me synthesize:",
+        '',
+        '- The plan doc says Rust gave 10-15% speedup.',
+        '- The current task is blocked on a pixi install failure.',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions ?? []).toHaveLength(0)
+  })
+
   it('preserves fallback brief and question state when a spec turn hits the max turn limit after plain-text output', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Collections coverage' })])
     const spec = {
@@ -8581,7 +8606,7 @@ describe('Orchestrator — FR-32 remediation wiring', () => {
 })
 
 describe('Orchestrator worker no-progress escalation', () => {
-  it('escalates an in-progress worker task after repeated no-op passes with likely target files', async () => {
+  it('gives the worker five no-op passes before escalating likely-target no-progress', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-011')
     await fs.mkdir(path.join(worktreePath, 'web', 'tests', 'unit', 'composables'), { recursive: true })
     await writeQueue([
@@ -8612,19 +8637,21 @@ describe('Orchestrator worker no-progress escalation', () => {
       gitDriver,
     })
 
-    const first = await orch.tick({ dispatchLimit: 1 })
-    expect(first.kind).toBe('processed')
-    if (first.kind === 'processed') expect(first.transitioned).toBe(false)
+    for (let pass = 1; pass < 5; pass += 1) {
+      const outcome = await orch.tick({ dispatchLimit: 1 })
+      expect(outcome.kind).toBe('processed')
+      if (outcome.kind === 'processed') expect(outcome.transitioned).toBe(false)
+    }
 
-    const second = await orch.tick({ dispatchLimit: 1 })
-    expect(second.kind).toBe('escalated')
-    if (second.kind === 'escalated') expect(second.reason).toContain('Worker made no visible progress')
+    const fifth = await orch.tick({ dispatchLimit: 1 })
+    expect(fifth.kind).toBe('escalated')
+    if (fifth.kind === 'escalated') expect(fifth.reason).toContain('Worker made no visible progress')
 
     const queue = await readQueue()
     const task = queue.tasks.find((candidate) => candidate.id === 'task-011')
     expect(task?.status).toBe('blocked')
     expect(task?.escalations.length).toBe(1)
-    expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress')
+    expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress after 5 passes')
     expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
       .toContain('"class":"model_tool_use_failure"')
   })
@@ -8695,14 +8722,17 @@ describe('Orchestrator worker no-progress escalation', () => {
       agents: agentSet({ worker }),
     })
 
-    const first = await orch.tick({ dispatchLimit: 1 })
-    expect(first.kind).toBe('processed')
+    for (let pass = 1; pass < 5; pass += 1) {
+      const outcome = await orch.tick({ dispatchLimit: 1 })
+      expect(outcome.kind).toBe('processed')
+      if (outcome.kind === 'processed') expect(outcome.agent).toBe('worker-agent')
+    }
 
-    const second = await orch.tick({ dispatchLimit: 1 })
-    expect(second.kind).toBe('processed')
-    if (second.kind === 'processed') {
-      expect(second.agent).toBe('coordinator-remediation')
-      expect(second.afterStatus).toBe('in_progress')
+    const fifth = await orch.tick({ dispatchLimit: 1 })
+    expect(fifth.kind).toBe('processed')
+    if (fifth.kind === 'processed') {
+      expect(fifth.agent).toBe('coordinator-remediation')
+      expect(fifth.afterStatus).toBe('in_progress')
     }
 
     let queue = await readQueue()
@@ -8715,17 +8745,20 @@ describe('Orchestrator worker no-progress escalation', () => {
     const decisions = await fs.readFile(path.join(memoryDir, 'DECISIONS.md'), 'utf-8')
     expect(decisions).toMatch(/Remediation: restart_from_checkpoint/)
 
-    const third = await orch.tick({ dispatchLimit: 1 })
-    expect(third.kind).toBe('processed')
+    for (let pass = 1; pass < 5; pass += 1) {
+      const outcome = await orch.tick({ dispatchLimit: 1 })
+      expect(outcome.kind).toBe('processed')
+      if (outcome.kind === 'processed') expect(outcome.agent).toBe('worker-agent')
+    }
 
-    const fourth = await orch.tick({ dispatchLimit: 1 })
-    expect(fourth.kind).toBe('escalated')
-    if (fourth.kind === 'escalated') expect(fourth.reason).toContain('Worker made no visible progress')
+    const tenth = await orch.tick({ dispatchLimit: 1 })
+    expect(tenth.kind).toBe('escalated')
+    if (tenth.kind === 'escalated') expect(tenth.reason).toContain('Worker made no visible progress')
 
     queue = await readQueue()
     task = queue.tasks.find((candidate) => candidate.id === 'task-blank')
     expect(task?.status).toBe('blocked')
-    expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress')
+    expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress after 5 passes')
     expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
       .toContain('"class":"model_tool_use_failure"')
   })
@@ -8793,15 +8826,17 @@ describe('Orchestrator worker no-progress escalation', () => {
       gitDriver,
     })
 
-    const first = await orch.tick({ dispatchLimit: 1 })
-    expect(first.kind).toBe('processed')
-    if (first.kind === 'processed') expect(first.agent).toBe('worker-agent')
+    for (let pass = 1; pass < 5; pass += 1) {
+      const outcome = await orch.tick({ dispatchLimit: 1 })
+      expect(outcome.kind).toBe('processed')
+      if (outcome.kind === 'processed') expect(outcome.agent).toBe('worker-agent')
+    }
 
-    const second = await orch.tick({ dispatchLimit: 1 })
-    expect(second.kind).toBe('processed')
-    if (second.kind === 'processed') {
-      expect(second.agent).toBe('coordinator-remediation')
-      expect(second.afterStatus).toBe('in_progress')
+    const fifth = await orch.tick({ dispatchLimit: 1 })
+    expect(fifth.kind).toBe('processed')
+    if (fifth.kind === 'processed') {
+      expect(fifth.agent).toBe('coordinator-remediation')
+      expect(fifth.afterStatus).toBe('in_progress')
     }
 
     const queue = await readQueue()

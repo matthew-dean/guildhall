@@ -47,7 +47,7 @@ state still needs attention. The Provenance drawer keeps the fuller snapshot
 beside merge records, so you can see both what Guildhall tried and what Git
 currently says.
 
-Release readiness also gets stricter. Dirty repos, local commits, missing
+Current work closure also gets stricter. Dirty repos, local commits, missing
 upstreams, pending PRs, skipped merges, stale task worktrees, and unknown Git
 inspection failures become blockers until they are closed, marked local-only,
 or deferred with a reason.
@@ -90,6 +90,6 @@ touched files.
 Sometimes work should stay local. Sometimes the right Git move is "not yet."
 
 Marking work **local-only** or **deferred** records that decision with a reason
-and removes it from the accidental-residue pile. The release view can then
+and removes it from the accidental-residue pile. The Closure view can then
 distinguish "we meant to leave this here" from "nobody noticed the branch was
 still dangling."

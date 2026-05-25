@@ -1,8 +1,8 @@
 <!--
-  Release readiness view. Primary/secondary/overflow IA:
+  Current work closure view. Primary/secondary/overflow IA:
     · Primary: single verdict band — shared status treatment + one-line reason.
     · Secondary: criteria list, one row per check, expandable into task links.
-    · Overflow: compact release counts and task-state tally.
+    · Overflow: compact closure counts and task-state tally.
 -->
 <script lang="ts">
   import FrameCard from '../../../../packages/ui/src/components/FrameCard.svelte'
@@ -10,7 +10,7 @@
   import SectionHeader from '../../../../packages/ui/src/components/SectionHeader.svelte'
   import StatusPill from '../../../../packages/ui/src/components/StatusPill.svelte'
   import { nav } from '../../lib/nav.svelte.js'
-  import { projectFetch } from '../../lib/project-routes.js'
+  import { currentTaskHref, projectFetch } from '../../lib/project-routes.js'
 
   interface ReleaseItem {
     id?: string
@@ -25,6 +25,11 @@
   interface ReleasePayload {
     initializationNeeded?: boolean
     error?: string
+    scope?: {
+      kind: string
+      label: string
+      description: string
+    }
     openEscalations: ReleaseItem[]
     unapprovedBriefs: ReleaseItem[]
     unapprovedSpecs: ReleaseItem[]
@@ -34,6 +39,9 @@
       drafted: boolean
       approved: boolean
       revision?: number
+      source?: 'guildhall' | 'repo' | 'none' | string
+      label?: string
+      reason?: string
     }
     dirtyCheckout?: {
       ownedCount: number
@@ -109,7 +117,7 @@
   }
 
   function openTask(id: string) {
-    if (id) nav('/task/' + encodeURIComponent(id))
+    if (id) nav(currentTaskHref(id))
   }
 
   interface Criterion {
@@ -158,12 +166,15 @@
 
   const dsLabel = $derived(() => {
     const ds = data?.designSystem
-    if (!ds) return { label: 'not drafted', tone: 'warn' as const, clear: false }
-    if (!ds.drafted) return { label: 'not drafted', tone: 'warn' as const, clear: false }
-    if (ds.approved) {
-      return { label: `approved · rev ${ds.revision ?? 0}`, tone: 'ok' as const, clear: true }
+    if (!ds) return { label: 'not captured', tone: 'warn' as const, clear: false }
+    if (!ds.drafted) return { label: ds.label ?? 'not captured', tone: 'warn' as const, clear: false }
+    if (ds.source === 'repo') {
+      return { label: ds.label ?? 'detected in repo', tone: 'ok' as const, clear: true }
     }
-    return { label: `draft · rev ${ds.revision ?? 0}`, tone: 'warn' as const, clear: false }
+    if (ds.approved) {
+      return { label: ds.label ?? `approved · rev ${ds.revision ?? 0}`, tone: 'ok' as const, clear: true }
+    }
+    return { label: ds.label ?? `draft · rev ${ds.revision ?? 0}`, tone: 'warn' as const, clear: false }
   })
 
   const unfinishedCount = $derived.by(() => {
@@ -271,14 +282,14 @@
       return {
         label: 'Not yet',
         tone: 'warn' as const,
-        reason: 'No release scope yet. Shape the first task before judging ship readiness.',
+        reason: 'No tracked work yet. Shape the first task before judging closure.',
       }
     }
     if (data.totals.blockingCount === 0 && unfinishedCount === 0 && dirtyCheckoutCount === 0 && !dirtyCheckoutError && dsLabel().clear) {
       return {
-        label: 'Ready to ship',
+        label: 'Closed',
         tone: 'ok' as const,
-        reason: `${data.totals.done}/${data.totals.tasks} tasks done · no human blockers.`,
+        reason: `${data.totals.done}/${data.totals.tasks} tasks done · no open closure blockers.`,
       }
     }
     if (unfinishedCount > 0) {
@@ -313,9 +324,10 @@
       return {
         label: 'Blocked',
         tone: 'warn' as const,
-        reason: data.designSystem?.drafted
-          ? 'Design system is drafted but not approved yet.'
-          : 'Design system is not drafted yet.',
+        reason: data.designSystem?.reason
+          ?? (data.designSystem?.drafted
+            ? 'A design guardrail is drafted but still needs approval.'
+            : 'No design-system guardrail is captured yet.'),
       }
     }
     return {
@@ -328,12 +340,13 @@
   const sectionCopy = $derived(
     section === 'criteria'
       ? {
-          title: 'Release criteria',
-          description: 'Expand any row to inspect the tasks or approvals still holding this release.',
+          title: 'Closure checks',
+          description: 'Expand any row to inspect the tasks, approvals, or Git stories still keeping the current work open.',
         }
       : {
-          title: 'Release readiness',
-          description: 'A quick read on whether this project is ready to ship right now.',
+          title: 'Current work closure',
+          description: data?.scope?.description
+            ?? 'A quick read on whether the work Guildhall is tracking now is closed enough to hand off, ship, or deliberately defer.',
         },
   )
 
@@ -342,31 +355,31 @@
   )
   const releaseBlockerLabel = $derived(
     data
-      ? `${data.totals.blockingCount} release blocker${data.totals.blockingCount === 1 ? '' : 's'}`
-      : '0 release blockers',
+      ? `${data.totals.blockingCount} closure blocker${data.totals.blockingCount === 1 ? '' : 's'}`
+      : '0 closure blockers',
   )
-  const taskDoneLabel = $derived(data?.totals.tasks === 0 ? 'No release scope yet' : `${data?.totals.done ?? 0}/${data?.totals.tasks ?? 0} done`)
+  const taskDoneLabel = $derived(data?.totals.tasks === 0 ? 'No tracked work yet' : `${data?.totals.done ?? 0}/${data?.totals.tasks ?? 0} done`)
 </script>
 
 {#if initNeeded}
-  <NoticeBand tone="warn" role="note" label="Release" title="Project not initialized yet">
+  <NoticeBand tone="warn" role="note" label="Closure" title="Project not initialized yet">
     {#snippet actions()}
       <a class="notice-link" href="/setup">Open setup wizard</a>
     {/snippet}
-    <p>Complete the setup wizard before you can assess release readiness.</p>
+    <p>Complete the setup wizard before Guildhall can assess whether the current work is closed.</p>
   </NoticeBand>
 {:else if error}
-  <NoticeBand tone="danger" role="alert" label="Release" title="Could not load release readiness">
+  <NoticeBand tone="danger" role="alert" label="Closure" title="Could not load closure checks">
     <p>{error}</p>
   </NoticeBand>
 {:else if !data}
-  <NoticeBand tone="neutral" role="status" label="Release" title="Loading release readiness">
-    <p>Collecting release status, approvals, and task counts…</p>
+  <NoticeBand tone="neutral" role="status" label="Closure" title="Loading closure checks">
+    <p>Collecting task status, approvals, Git stories, and checkout state…</p>
   </NoticeBand>
 {:else}
   <div class="release-shell">
     <SectionHeader
-      eyebrow="Release"
+      eyebrow={data.scope?.label ?? 'Current Guildhall work'}
       title={sectionCopy.title}
       description={sectionCopy.description}
       headingTag="h2"
@@ -396,7 +409,7 @@
         {#snippet header()}
           <SectionHeader
             title="Current counts"
-            description="A compact view of the signals feeding the release verdict."
+            description="A compact view of the signals feeding the closure verdict."
             headingTag="h3"
             density="dense"
           >
@@ -406,13 +419,13 @@
           </SectionHeader>
         {/snippet}
 
-        <div class="summary-grid" aria-label="Release summary counts">
+        <div class="summary-grid" aria-label="Current work closure summary counts">
           <div class="summary-stat">
             <span class="summary-label">Tasks done</span>
-            <strong>{data.totals.tasks === 0 ? 'No release scope' : `${data.totals.done}/${data.totals.tasks}`}</strong>
+            <strong>{data.totals.tasks === 0 ? 'No tracked work' : `${data.totals.done}/${data.totals.tasks}`}</strong>
           </div>
           <div class="summary-stat">
-            <span class="summary-label">Total release blockers</span>
+            <span class="summary-label">Total closure blockers</span>
             <strong>{data.totals.blockingCount}</strong>
           </div>
           <div class="summary-stat">
@@ -444,7 +457,7 @@
         </div>
         {#if data.dirtyCheckout && dirtyCheckoutCount > 0}
           <p class="dirty-detail">
-            {dirtyCheckoutCount} project-local Guildhall {dirtyCheckoutCount === 1 ? 'file needs' : 'files need'} cleanup before release.
+            {dirtyCheckoutCount} project-local Guildhall {dirtyCheckoutCount === 1 ? 'file needs' : 'files need'} cleanup before the current work can close.
             Open diagnostics if you need the exact file list.
           </p>
         {:else if dirtyCheckoutError}
@@ -523,7 +536,7 @@
             <div class="crit-summary crit-static">
               <span class="crit-copy">
                 <span class="crit-label">Design system</span>
-                <span class="crit-detail">Current approval state for the operator-facing design system draft.</span>
+                <span class="crit-detail">How Guildhall knows which design rules apply here.</span>
               </span>
               <StatusPill label={dsLabel().label} tone={dsLabel().tone} />
             </div>

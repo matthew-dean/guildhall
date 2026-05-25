@@ -27,6 +27,9 @@ export const AgentRole = z.enum([
 ])
 export type AgentRole = z.infer<typeof AgentRole>
 
+export const ModelBehaviorProfile = z.enum(['precise', 'balanced', 'exploratory'])
+export type ModelBehaviorProfile = z.infer<typeof ModelBehaviorProfile>
+
 // What a role primarily needs from its model
 export const CognitiveProfile = z.object({
   // How much long-horizon reasoning is needed (planning, multi-step logic)
@@ -78,6 +81,37 @@ export const ROLE_PROFILES: Record<AgentRole, CognitiveProfile> = {
     preferSpeed: true,   // Runs often and may touch high-token inputs
   },
 }
+
+export const DEFAULT_ROLE_BEHAVIOR: Record<AgentRole, ModelBehaviorProfile> = {
+  spec: 'balanced',
+  coordinator: 'balanced',
+  worker: 'precise',
+  reviewer: 'precise',
+  gateChecker: 'precise',
+  contextIndexer: 'precise',
+}
+
+export const MODEL_BEHAVIOR_PROFILES: Array<{
+  id: ModelBehaviorProfile
+  label: string
+  description: string
+}> = [
+  {
+    id: 'precise',
+    label: 'Precise',
+    description: 'Repeatable and conservative; best for code, review, checks, and compact summaries.',
+  },
+  {
+    id: 'balanced',
+    label: 'Balanced',
+    description: 'Careful but flexible; best for planning, specs, intake, and task reframing.',
+  },
+  {
+    id: 'exploratory',
+    label: 'Exploratory',
+    description: 'More variety; best for early ideas before work is committed to a plan.',
+  },
+]
 
 // ---------------------------------------------------------------------------
 // Model catalog

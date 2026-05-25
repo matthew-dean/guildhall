@@ -52,6 +52,6 @@ hold the whole run in your head.
   one-question-at-a-time intake instead of a giant vague task. Answers,
   assumptions, and deferrals stay attached to the project.
 - **Inspect the run**: read the queue, open the drawer, follow the transcript, and decide whether Guildhall is making durable progress or just generating noise.
-- **Judge release readiness**: keep reviewer verdicts, release checks, and Git
-  Story blockers visible so “probably fine” does not become your deployment
+- **Judge current work closure**: keep reviewer verdicts, closure checks, and
+  Git Story blockers visible so “probably fine” does not become your deployment
   methodology.

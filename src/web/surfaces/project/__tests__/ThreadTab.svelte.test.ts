@@ -326,6 +326,9 @@ function installFetchFakes(
     if (url.startsWith('/api/project/task/') && url.includes('/mark-done')) {
       return json({ ok: true, status: 'done' })
     }
+    if (url.startsWith('/api/project/task/') && url.includes('/update-brief')) {
+      return json({ ok: true })
+    }
     if (url.startsWith('/api/project/task/') && url.includes('/resume')) {
       return json({ ok: true })
     }
@@ -834,6 +837,11 @@ describe('ThreadTab', () => {
         importedDraft: false,
         phase: 'inflight',
         summary: 'Ready for work.',
+        gitStory: {
+          state: 'no_upstream',
+          reason: 'guildhall/task-task-import-123 has no upstream branch',
+          nextAction: 'Set an upstream branch or open a PR for this branch.',
+        },
         checklist: {
           title: 'Task brief checklist',
           doneCount: 2,
@@ -850,13 +858,133 @@ describe('ThreadTab', () => {
 
     render(ThreadTab)
 
-    await screen.findByText('Needs task brief')
-    expect(screen.getByText(/draft task brief/i)).toBeTruthy()
+    await screen.findByText('Needs brief')
     expect(screen.getByText('Needs brief')).toBeTruthy()
-    expect(screen.getAllByText('Missing').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('Brief checklist')).toBeTruthy()
+    expect(screen.queryByText('No upstream')).toBeNull()
+    expect(screen.queryByText(/has no upstream branch/)).toBeNull()
     expect(screen.queryByText('Guildhall next')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Start work' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Open checklist' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Finish task brief...' })).toBeNull()
+    const noteButton = screen.getByRole('button', { name: 'Add optional note' })
+    const startButton = screen.getByRole('button', { name: 'Start' })
+    expect(startButton.classList.contains('v-agent')).toBe(true)
+    expect(noteButton.compareDocumentPosition(startButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('makes a one-field brief blocker start Guildhall cleanup instead of opening a user form', async () => {
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'turn-success-only',
+        taskId: 'task-success-only',
+        taskTitle: 'Add human-readable docs labels',
+        taskStatus: 'ready',
+        importedDraft: false,
+        phase: 'inflight',
+        summary: 'Ready for work.',
+        gitStory: {
+          state: 'no_upstream',
+          reason: 'guildhall/task-task-import-qh97p0 has no upstream branch',
+          nextAction: 'Set an upstream branch or open a PR for this branch.',
+        },
+        checklist: {
+          title: 'Task brief checklist',
+          doneCount: 3,
+          totalSteps: 4,
+          steps: [
+            { id: 'title', title: 'Readable title', why: 'Give this work a name someone can recognize later.', status: 'done' },
+            { id: 'description', title: 'Starting point', why: 'Say what Guildhall should inspect or use as the starting evidence.', status: 'done' },
+            { id: 'success', title: 'Success target', why: 'State what should be true when this work is finished.', status: 'active' },
+            { id: 'criteria', title: 'Acceptance criteria', why: 'Add the concrete checks Guildhall should use before calling the work done.', status: 'done' },
+          ],
+        },
+      }),
+    ], 'turn-success-only')
+
+    render(ThreadTab)
+
+    await screen.findByText('Needs brief')
+    expect(screen.queryByText('No upstream')).toBeNull()
+    expect(screen.queryByText(/has no upstream branch/)).toBeNull()
+    const startButton = screen.getByRole('button', { name: 'Start' })
+    expect(startButton.classList.contains('v-agent')).toBe(true)
+    await userEvent.click(startButton)
+    expect(screen.queryByText('What should be true when this is done?')).toBeNull()
+    expect(screen.queryByText('How should Guildhall check it?')).toBeNull()
+  })
+
+  it('hides upstream branch copy whenever the task brief is still incomplete', async () => {
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'turn-import-incomplete',
+        taskId: 'task-import-incomplete',
+        taskTitle: 'HoverCard',
+        taskStatus: 'import_draft',
+        importedDraft: true,
+        summary: 'Imported from your project notes.',
+        gitStory: {
+          state: 'no_upstream',
+          reason: 'guildhall/task-task-import-1pgqco7 has no upstream branch',
+          nextAction: 'Set an upstream branch or open a PR for this branch.',
+        },
+        checklist: {
+          title: 'Task brief checklist',
+          doneCount: 2,
+          totalSteps: 4,
+          steps: [
+            { id: 'title', title: 'Readable title', why: 'Give this work a name someone can recognize later.', status: 'done' },
+            { id: 'description', title: 'Starting point', why: 'Say what Guildhall should inspect or use as the starting evidence.', status: 'done' },
+            { id: 'success', title: 'Success target', why: 'State what should be true when this work is finished.', status: 'active' },
+            { id: 'criteria', title: 'Acceptance criteria', why: 'Add the concrete checks Guildhall should use before calling the work done.', status: 'pending' },
+          ],
+        },
+      }),
+    ], 'turn-import-incomplete')
+
+    render(ThreadTab)
+
+    await screen.findByText('HoverCard')
+    expect(screen.getByText('Brief checklist')).toBeTruthy()
+    expect(screen.queryByText('No upstream')).toBeNull()
+    expect(screen.queryByText(/has no upstream branch/)).toBeNull()
+    expect(screen.queryByText(/Set an upstream branch/)).toBeNull()
+  })
+
+  it('starts Guildhall brief cleanup instead of asking the user to fill missing brief fields inline', async () => {
+    const { calls } = installFetchFakes([
+      importedDraftTurn({
+        id: 'turn-ready-incomplete',
+        taskId: 'task-ready-incomplete',
+        taskTitle: 'Knit: add link editor controls',
+        taskStatus: 'ready',
+        importedDraft: false,
+        phase: 'inflight',
+        summary: 'Ready for work.',
+        checklist: {
+          title: 'Task brief checklist',
+          doneCount: 2,
+          totalSteps: 4,
+          steps: [
+            { id: 'title', title: 'Readable title', why: 'Give this work a name someone can recognize later.', status: 'done' },
+            { id: 'description', title: 'Starting point', why: 'Say what Guildhall should inspect or use as the starting evidence.', status: 'done' },
+            { id: 'brief', title: 'Success target', why: 'State what should be true when this work is finished.', status: 'pending' },
+            { id: 'acceptance', title: 'Acceptance criteria', why: 'Add the concrete checks Guildhall should use before calling the work done.', status: 'pending' },
+          ],
+        },
+      }),
+    ], 'turn-ready-incomplete')
+
+    render(ThreadTab)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Start' }))
+
+    await waitFor(() => {
+      const call = calls.find(c => c.url.includes('/api/project/start'))
+      expect(call?.body).toMatchObject({
+        taskId: 'task-ready-incomplete',
+        mode: 'continuous',
+      })
+    })
   })
 
   it('does not offer task-specific starts while the project run is already active', async () => {
@@ -1638,7 +1766,7 @@ describe('ThreadTab', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(ThreadTab)
-    await screen.findByText(/Guildhall drafted a first pass here/)
+    await screen.findByText(/Guildhall has started shaping this task/)
     await userEvent.click(screen.getByRole('button', { name: /continue drafting spec/i }))
 
     await screen.findByText('Provider model is not loaded.')

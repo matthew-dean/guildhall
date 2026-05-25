@@ -175,7 +175,7 @@ describe('summarizeProjects', () => {
     }
 
     expect(summarizeProjects(service)[0]).toMatchObject({
-      name: 'Scratch pad',
+      name: 'scratch-pad',
       statusLabel: 'Needs setup',
       tone: 'warn',
       stageLabel: 'Needs setup',
@@ -193,6 +193,22 @@ describe('summarizeProjects', () => {
       canStart: false,
       canStop: false,
     })
+  })
+
+  it('preserves saved project display-name casing instead of re-humanizing it', () => {
+    const service: ServiceDetail = {
+      projects: [
+        {
+          id: 'fair-labor-license',
+          name: 'Fair Labor License',
+          path: '/work/fair-labor-license',
+          taskCounts: { total: 0, active: 0, draftReview: 0, blocked: 0, done: 0, shelved: 0 },
+          run: { status: 'stopped' },
+        },
+      ],
+    }
+
+    expect(summarizeProjects(service)[0]?.name).toBe('Fair Labor License')
   })
 
   it('surfaces blocked or recently completed work in a human summary', () => {

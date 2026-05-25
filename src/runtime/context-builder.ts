@@ -62,6 +62,7 @@ const MAX_AGENT_NOTE_CHARS = 1200
 const MAX_AGENT_NOTES = 3
 const MAX_SPEC_OVERVIEW_CHARS = 3200
 const MAX_CORPUS_MAP_CHARS = 3200
+const RETRY_COACHING_AFTER_REVISIONS = 3
 const execFileP = promisify(execFile)
 const repoFileCache = new Map<string, string[]>()
 
@@ -275,6 +276,60 @@ function renderLikelyTaskFiles(task: Task, checkpointFilesTouched: readonly stri
   const files = resolveLikelyTaskFiles(task, checkpointFilesTouched)
   if (files.length === 0) return ''
   return ['**Likely target files:**', ...files.map((file) => `- ${file}`)].join('\n')
+}
+
+function looksLikeBrittleImplementationRecovery(text: string): boolean {
+  return /\b(?:exact string|search string|string (?:was )?not found|template syntax mismatch|whitespace|formatting mismatch|failed to edit|attempts? to edit|replace failed|patch failed)\b/i.test(text) &&
+    /\b(?:component exists|correctly imported|current file|template|props?|composable|import|\.vue|\.svelte|\.tsx?|\.jsx?)\b/i.test(text)
+}
+
+function renderRetryCoaching(input: {
+  task: Task
+  latestRevisionFeedback: string
+  likelyFiles: readonly string[]
+}): string {
+  if (input.task.status !== 'in_progress') return ''
+
+  const latestFeedback = input.latestRevisionFeedback.trim()
+  const resolvedImplementationRecovery = [...input.task.escalations]
+    .reverse()
+    .find((escalation) => {
+      if (!escalation.resolvedAt) return false
+      const text = `${escalation.reason}\n${escalation.summary}\n${escalation.details ?? ''}\n${escalation.resolution ?? ''}`
+      return looksLikeBrittleImplementationRecovery(text) || /implementation recovery/i.test(text)
+    })
+  const repeatedReviewLoop =
+    input.task.revisionCount >= RETRY_COACHING_AFTER_REVISIONS &&
+    latestFeedback.length > 0
+  if (!repeatedReviewLoop && !resolvedImplementationRecovery) return ''
+
+  const targetFiles = input.likelyFiles.slice(0, 4)
+  const lines = [
+    latestFeedback.length > 0
+      ? 'You are in a retry, so do not merely replay the previous attempt. Use the reviewer feedback as a diagnosis and change your approach before editing.'
+      : 'You are in a retry, so do not merely replay the previous attempt. Use the resolved recovery evidence as a diagnosis and change your approach before editing.',
+  ]
+
+  if (resolvedImplementationRecovery) {
+    lines.push(
+      'Do not ask the owner about local implementation mechanics such as component props, imports, template syntax, whitespace, or exact-string edit failures.',
+      'Re-read the current target file and the referenced component/API before editing; avoid exact-string replacement when the file has drifted, and make a smaller structural edit against the current source.',
+    )
+  }
+
+  if (repeatedReviewLoop) {
+    lines.push(
+      'Before changing code, compare the latest reviewer feedback to the current file contents and identify the specific still-failing item you are fixing.',
+      'After the edit, run the narrowest verification that proves that item changed, then update the self-critique with the exact evidence.',
+    )
+  }
+
+  if (targetFiles.length > 0) {
+    lines.push('Start by reading these files in order:')
+    lines.push(...targetFiles.map((file) => `- ${file}`))
+  }
+
+  return lines.join('\n')
 }
 
 function renderActiveRecoveryPlaybook(task: Task): string {
@@ -862,6 +917,12 @@ export async function buildContext(
   const clippedRevisionFeedback = latestRevisionFeedback
     ? clipContextBlock(latestRevisionFeedback, MAX_REVISION_FEEDBACK_CHARS)
     : ''
+  const likelyTaskFileList = resolveLikelyTaskFiles(task, checkpoint?.filesTouched ?? [])
+  const retryCoaching = renderRetryCoaching({
+    task,
+    latestRevisionFeedback,
+    likelyFiles: likelyTaskFileList,
+  })
   const recentAgentNotes = task.notes
     .filter((note) => note.role !== 'reviewer')
     .slice(-MAX_AGENT_NOTES)
@@ -908,6 +969,9 @@ export async function buildContext(
       : '',
     clippedRevisionFeedback
       ? `\n### Latest Required Revisions\n${clippedRevisionFeedback}`
+      : '',
+    retryCoaching
+      ? `\n### Retry Coaching\n${retryCoaching}`
       : '',
     latestCheckpoint
       ? `\n### Latest Checkpoint\n${latestCheckpoint}`

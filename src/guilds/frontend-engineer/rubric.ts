@@ -20,6 +20,12 @@ export const FRONTEND_ENGINEER_RUBRIC: SoftGateRubricItem[] = [
     weight: 0.9,
   },
   {
+    id: 'fe-content-integrity',
+    question:
+      'Does the change keep semantic content complete in data/storage and reserve clipping or shortening for explicit summaries and reusable display behavior?',
+    weight: 1.0,
+  },
+  {
     id: 'fe-layout-primitives-for-spacing',
     question:
       'Does the component rely on layout primitives (Stack/Row/Grid) for spacing rather than applying external margin?',

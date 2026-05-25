@@ -31,11 +31,22 @@ export interface ProductBrief {
  * no free-prose questions. The UI renders each kind with a fixed deterministic
  * affordance (see web/lib/AgentQuestion.svelte).
  */
+type AgentQuestionBase = {
+  id: string
+  askedBy: string
+  askedAt: string
+  subject?: string
+  description?: string
+  draftAnswer?: string
+  answeredAt?: string
+  answer?: string
+}
+
 export type AgentQuestion =
-  | { kind: 'confirm'; id: string; askedBy: string; askedAt: string; restatement: string; draftAnswer?: string; answeredAt?: string; answer?: string }
-  | { kind: 'yesno'; id: string; askedBy: string; askedAt: string; prompt: string; draftAnswer?: string; answeredAt?: string; answer?: string }
-  | { kind: 'choice'; id: string; askedBy: string; askedAt: string; prompt: string; choices: string[]; selectionMode?: 'single' | 'multiple' | undefined; draftAnswer?: string; answeredAt?: string; answer?: string }
-  | { kind: 'text'; id: string; askedBy: string; askedAt: string; prompt: string; draftAnswer?: string; answeredAt?: string; answer?: string }
+  | (AgentQuestionBase & { kind: 'confirm'; restatement: string })
+  | (AgentQuestionBase & { kind: 'yesno'; prompt: string })
+  | (AgentQuestionBase & { kind: 'choice'; prompt: string; choices: string[]; selectionMode?: 'single' | 'multiple' | undefined })
+  | (AgentQuestionBase & { kind: 'text'; prompt: string })
 
 export interface AcceptanceCriterion {
   description?: string
@@ -201,6 +212,12 @@ export interface Task {
   createdAt?: string
   updatedAt?: string
   completedAt?: string
+  runtime?: {
+    openEscalationIds?: string[]
+    openIssueIds?: string[]
+    assignedTo?: string | null
+    updatedAt?: string
+  }
   parentGoalId?: string
   permissionMode?: string
   dependsOn?: string[]

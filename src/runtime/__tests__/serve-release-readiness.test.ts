@@ -221,7 +221,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.totals.blockingCount).toBe(0)
   })
 
-  it('blocks release readiness when Guildhall-owned project files are dirty', async () => {
+  it('blocks current work closure when Guildhall-owned project files are dirty', async () => {
     await seed([
       makeTask({
         id: 'task-1',
@@ -319,5 +319,72 @@ describe('GET /api/project/release-readiness', () => {
     res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     body = await res.json() as any
     expect(body.designSystem.approved).toBe(true)
+  })
+
+  it('treats a component-library repo as having its design system in the repo', async () => {
+    await seed([
+      makeTask({
+        id: 'task-1',
+        title: 'Completed component work',
+        status: 'done',
+        completedAt: '2026-05-09T00:00:00Z',
+      }),
+    ])
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'codebase-map.yaml'),
+      [
+        'version: 1',
+        `generatedAt: ${new Date().toISOString()}`,
+        'project:',
+        `  root: ${tmpDir}`,
+        '  summary: Component library with design-system components.',
+        '  languages: [typescript]',
+        '  packageManagers: [pnpm]',
+        '  primaryFrameworks: []',
+        'files: {}',
+        'entrypoints: []',
+        'areas: []',
+        'abstractions: []',
+        'designSystem:',
+        '  approved: false',
+        '  tokenCounts: { color: 0, spacing: 0, typography: 0, radius: 0, shadow: 0 }',
+        '  tokenSamples: []',
+        '  primitives: []',
+        '  componentFiles:',
+        '    - packages/core/src/components/ui-button/ui-button.tsx',
+        '    - packages/core/src/components/ui-dialog/ui-dialog.tsx',
+        '    - packages/core/src/components/ui-tooltip/ui-tooltip.tsx',
+        '    - packages/core/src/components/ui-tabs/ui-tabs.tsx',
+        '  maturity: absent',
+        '  recommendations: []',
+        'verification: { commands: [] }',
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'guildhall.yaml'),
+      [
+        'name: Release Test',
+        'tags:',
+        '  - ui-library',
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await commitAndPush('settle component library')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.ready).toBe(true)
+    expect(body.designSystem).toMatchObject({
+      drafted: true,
+      approved: true,
+      source: 'repo',
+      label: 'detected in repo',
+    })
+    expect(body.totals.designSystemBlockingCount).toBe(0)
   })
 })

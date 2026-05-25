@@ -7,6 +7,7 @@ import {
   createPressureTestIntake,
   inspectPressureTestEvidence,
   loadPressureTestIntake,
+  pressureTestPath,
   renderPressureTestSpec,
 } from '../pressure-test-intake.js'
 
@@ -212,6 +213,9 @@ describe('pressure-test intake state', () => {
       questionId: intake.pendingQuestion!.id,
       answer: 'Thread must show one active question with provenance before work starts.',
     })
+    expect(closeout.pendingQuestion?.prompt).toContain('before we move to the next topic')
+    expect(closeout.pendingQuestion?.prompt).not.toContain('domain closes')
+    expect(closeout.pendingQuestion?.why).toContain('before leaving a topic')
     const nextDomain = await answerPressureTestQuestion({
       memoryDir,
       intakeId: closeout.id,
@@ -226,6 +230,35 @@ describe('pressure-test intake state', () => {
     expect(nextDomain.activeDomainId).toBe('workflows')
     expect(nextDomain.pendingQuestion?.domainId).toBe('workflows')
     expect(nextDomain.outputs.languageMapCandidates).toContainEqual(expect.stringContaining('Thread'))
+  })
+
+  it('normalizes persisted closeout questions away from internal domain wording', async () => {
+    const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
+    const intake = await createPressureTestIntake({
+      memoryDir,
+      target: { type: 'project', id: 'fair-labor-license', title: 'Fair Labor License' },
+      rawRequest: 'Project check-in needed.',
+    })
+    const closeout = await answerPressureTestQuestion({
+      memoryDir,
+      intakeId: intake.id,
+      questionId: intake.pendingQuestion!.id,
+      answer: 'Make licensed software easier to fund.',
+    })
+    closeout.pendingQuestion!.prompt = 'Is there anything else Guildhall should know about product goals before this domain closes?'
+    closeout.pendingQuestion!.why = 'Pressure-test intake closes each domain deliberately so hidden constraints do not vanish.'
+    closeout.domains[0]!.askedQuestions.push({
+      questionId: 'product-goals-closeout',
+      prompt: 'Is there anything else Guildhall should know about product goals before this domain closes?',
+      answered: false,
+    })
+    await writeFile(pressureTestPath(memoryDir, closeout.id), JSON.stringify(closeout, null, 2), 'utf-8')
+
+    const loaded = await loadPressureTestIntake({ memoryDir, intakeId: closeout.id })
+
+    expect(loaded.pendingQuestion?.prompt).toContain('before we move to the next topic')
+    expect(loaded.pendingQuestion?.why).toContain('before leaving a topic')
+    expect(loaded.domains[0]?.askedQuestions.at(-1)?.prompt).toContain('before we move to the next topic')
   })
 
   it('inspects project memory before asking questions', async () => {

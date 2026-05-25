@@ -14,6 +14,7 @@ export {
   ResolvedConfig,
   slugify,
   mergeModels,
+  mergeModelBehavior,
   resolveModelsForProvider,
   writeModelsForProvider,
 } from './schemas.js'

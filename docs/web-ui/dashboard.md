@@ -55,7 +55,7 @@ clear ending.
 </picture>
 
 The Projects home is deliberately shallow. It helps you choose where to look
-next; the detailed Thread, Work, Settings, Memory, and Release surfaces stay
+next; the detailed Thread, Work, Settings, Memory, and Closure surfaces stay
 inside the project shell.
 
 ## Provider defaults on the home view

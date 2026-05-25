@@ -36,23 +36,31 @@ export function globalProvidersPath(): string {
 // Schema
 // ---------------------------------------------------------------------------
 
+const providerConcurrencySchema = {
+  maxConcurrency: z.number().int().positive().max(200).optional(),
+}
+
 const anthropicApiSchema = z.object({
   apiKey: z.string().min(1),
   verifiedAt: z.string().optional(),
+  ...providerConcurrencySchema,
 })
 const openaiApiSchema = z.object({
   apiKey: z.string().min(1),
   baseUrl: z.string().url().optional(),
   verifiedAt: z.string().optional(),
+  ...providerConcurrencySchema,
 })
 const llamaCppSchema = z.object({
   url: z.string().url(),
   verifiedAt: z.string().optional(),
+  ...providerConcurrencySchema,
 })
 // OAuth providers: we do not persist the credential (the CLI owns that file);
 // we only record that the user acknowledged the connection here.
 const oauthSchema = z.object({
   verifiedAt: z.string().optional(),
+  ...providerConcurrencySchema,
 })
 
 export const GlobalProvidersSchema = z.object({
@@ -131,6 +139,9 @@ function renderGlobalProvidersYaml(next: GlobalProviders): string {
     if (p['claude-oauth'].verifiedAt) {
       lines.push(`    verifiedAt: ${quote(p['claude-oauth'].verifiedAt)}`)
     }
+    if (p['claude-oauth'].maxConcurrency) {
+      lines.push(`    maxConcurrency: ${p['claude-oauth'].maxConcurrency}`)
+    }
   } else {
     lines.push('  # claude-oauth:')
     lines.push('  #   verifiedAt: "2026-05-02T00:00:00.000Z"')
@@ -140,6 +151,9 @@ function renderGlobalProvidersYaml(next: GlobalProviders): string {
     lines.push('  codex-oauth:')
     if (p['codex-oauth'].verifiedAt) {
       lines.push(`    verifiedAt: ${quote(p['codex-oauth'].verifiedAt)}`)
+    }
+    if (p['codex-oauth'].maxConcurrency) {
+      lines.push(`    maxConcurrency: ${p['codex-oauth'].maxConcurrency}`)
     }
   } else {
     lines.push('  # codex-oauth:')
@@ -151,6 +165,9 @@ function renderGlobalProvidersYaml(next: GlobalProviders): string {
     lines.push(`    apiKey: ${quote(p['anthropic-api'].apiKey)}`)
     if (p['anthropic-api'].verifiedAt) {
       lines.push(`    verifiedAt: ${quote(p['anthropic-api'].verifiedAt)}`)
+    }
+    if (p['anthropic-api'].maxConcurrency) {
+      lines.push(`    maxConcurrency: ${p['anthropic-api'].maxConcurrency}`)
     }
   } else {
     lines.push('  # anthropic-api:')
@@ -168,6 +185,9 @@ function renderGlobalProvidersYaml(next: GlobalProviders): string {
     if (p['openai-api'].verifiedAt) {
       lines.push(`    verifiedAt: ${quote(p['openai-api'].verifiedAt)}`)
     }
+    if (p['openai-api'].maxConcurrency) {
+      lines.push(`    maxConcurrency: ${p['openai-api'].maxConcurrency}`)
+    }
   } else {
     lines.push('  # openai-api:')
     lines.push('  #   apiKey: "sk-..."')
@@ -179,6 +199,9 @@ function renderGlobalProvidersYaml(next: GlobalProviders): string {
     lines.push(`    url: ${quote(p['llama-cpp'].url)}`)
     if (p['llama-cpp'].verifiedAt) {
       lines.push(`    verifiedAt: ${quote(p['llama-cpp'].verifiedAt)}`)
+    }
+    if (p['llama-cpp'].maxConcurrency) {
+      lines.push(`    maxConcurrency: ${p['llama-cpp'].maxConcurrency}`)
     }
   } else {
     lines.push('  # llama-cpp:')

@@ -162,6 +162,16 @@ language or quote the specific source fact that created the ambiguity. Also
 say why the answer changes the task and what you will do after the owner
 answers. Do not ask the owner to intuit hidden context.
 
+For \`post-user-question\`, \`body\`/\`prompt\` is only the exact answerable question or restatement. Put the setup somewhere else: \`subject\` is a short topic like
+"AlertDialog variants", and \`description\` is the context, source fact, or
+reason the answer matters. Never write a prompt like "The key
+question I need to ask before drafting: what variants does the user need?"
+Instead post:
+- subject: "AlertDialog variants"
+- description: "The roadmap lists AlertDialog as missing, and \`ui-dialog\`
+  already provides the base dialog primitive."
+- body: "Which AlertDialog variants should Guildhall include first?"
+
 You may post **multiple questions in one turn** when they're related and
 the user can reasonably answer them in any order — call \`post-user-question\`
 once per question, then yield. The Thread surface renders them as a batch

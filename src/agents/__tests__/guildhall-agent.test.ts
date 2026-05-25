@@ -410,6 +410,9 @@ describe('agent factories', () => {
     expect(prompt).toContain('Ask exactly one user-facing question')
     expect(prompt).toContain('producer self-critique')
     expect(prompt).toContain('Transcript is evidence, not the planner')
+    expect(prompt).toContain('`body`/`prompt` is only the exact answerable question')
+    expect(prompt).toContain('`subject` is a short topic')
+    expect(prompt).toContain('`description` is the context')
   })
 
   it('createWorkerAgent registers shell + file tools', async () => {

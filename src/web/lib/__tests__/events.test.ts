@@ -164,12 +164,14 @@ describe('event display helpers', () => {
     expect(summarizeEvent({ type: 'escalation_raised', task_id: 'task-2', reason: 'blocked' } as any)).toBe('Needs attention: Task 2 — blocked')
     expect(summarizeEvent({ type: 'error', message: 'boom' } as any)).toBe('ERROR: boom')
     expect(summarizeEvent({ type: 'supervisor_error', message: 'spawn git ENOENT' } as any)).toBe('error: Guildhall could not find git while inspecting this project.')
-    expect(summarizeEvent({ type: 'agent_issue', severity: 'warn', code: 'stuck', task_id: 'task-3', reason: 'quiet' } as any)).toBe('Issue [warn/stuck] Task 3 — quiet')
+    expect(summarizeEvent({ type: 'agent_issue', severity: 'warn', code: 'stuck', task_id: 'task-3', reason: 'quiet' } as any)).toBe('Stuck: Task 3 — quiet')
     expect(summarizeEvent({ type: 'agent_started', agent_name: 'spec-agent', task_id: 'task-4' } as any)).toBe('Spec writer started Task 4')
     expect(summarizeEvent({ type: 'agent_finished', agent_name: 'reviewer-agent', task_id: 'task-5' } as any)).toBe('Review team finished Task 5')
     expect(summarizeEvent({ type: 'supervisor_stopped', reason: 'all_terminal' } as any)).toBe('stopped (Run finished)')
     expect(summarizeEvent({ type: 'provider_health_changed', message: 'ok' } as any)).toBe('provider health: ok')
     expect(summarizeEvent({ type: 'connected' } as any)).toBe('')
+    expect(summarizeEvent({ type: 'assistant_complete', message: '{\"event\":\"raw\"}' } as any)).toBe('Finished a thought')
+    expect(summarizeEvent({ type: 'unknown_runtime_event', reason: 'human_judgment_required: choose the billing model' } as any)).toBe('Unknown Runtime Event: choose the billing model')
   })
 
   it('extracts task ids and CSS classes from both wrapped and flat envelopes', () => {

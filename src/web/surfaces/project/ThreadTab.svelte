@@ -242,6 +242,9 @@
   let contextErrors = $state<Record<string, string>>({})
   let pressureTestAnswers = $state<Record<string, string>>({})
   let pressureTestErrors = $state<Record<string, string>>({})
+  let briefFixTurnId = $state<string | null>(null)
+  let briefFixDrafts = $state<Record<string, { successTarget: string; acceptanceCriterion: string }>>({})
+  let briefFixErrors = $state<Record<string, string>>({})
   const SOURCE_PREVIEW_RENDER_CHAR_LIMIT = 32_000
 
   let sourcePreview = $state<{ ref: string; displayPath: string; content: string | null; truncated: boolean; loading: boolean } | null>(null)
@@ -1007,6 +1010,120 @@
     }
   }
 
+  function setBriefFixDraft(
+    turnId: string,
+    field: 'successTarget' | 'acceptanceCriterion',
+    value: string,
+  ): void {
+    const draft = briefFixDrafts[turnId] ?? { successTarget: '', acceptanceCriterion: '' }
+    briefFixDrafts = { ...briefFixDrafts, [turnId]: { ...draft, [field]: value } }
+    if (briefFixErrors[turnId]) {
+      const next = { ...briefFixErrors }
+      delete next[turnId]
+      briefFixErrors = next
+    }
+  }
+
+  function missingChecklistTitles(turn: InFlightTurn): string {
+    const titles = (turn.checklist?.steps ?? [])
+      .filter(step => step.status !== 'done' && step.status !== 'skipped')
+      .map(step => step.title.toLowerCase())
+    if (titles.length === 0) return 'the missing brief fields'
+    if (titles.length === 1) return titles[0] ?? 'the missing brief field'
+    return `${titles.slice(0, -1).join(', ')} and ${titles.at(-1)}`
+  }
+
+  function missingChecklistSteps(turn: InFlightTurn): NonNullable<InFlightTurn['checklist']>['steps'] {
+    return (turn.checklist?.steps ?? [])
+      .filter(step => step.status !== 'done' && step.status !== 'skipped')
+  }
+
+  function missingBriefFieldKind(turn: InFlightTurn): 'success' | 'acceptance' | 'both' | 'unknown' {
+    const missing = missingChecklistSteps(turn)
+    const hasSuccess = missing.some(step => /success|done|outcome|target/i.test(`${step.id} ${step.title}`))
+    const hasAcceptance = missing.some(step => /acceptance|criteria|check|verify/i.test(`${step.id} ${step.title}`))
+    if (hasSuccess && hasAcceptance) return 'both'
+    if (hasSuccess) return 'success'
+    if (hasAcceptance) return 'acceptance'
+    return 'unknown'
+  }
+
+  function briefFixTitle(turn: InFlightTurn): string {
+    switch (missingBriefFieldKind(turn)) {
+      case 'success': return 'Brief cleanup needed'
+      case 'acceptance': return 'Brief cleanup needed'
+      case 'both': return 'Brief cleanup needed'
+      default: return 'Brief cleanup needed'
+    }
+  }
+
+  function briefFixDescription(turn: InFlightTurn): string {
+    switch (missingBriefFieldKind(turn)) {
+      case 'success':
+        return 'Guildhall needs to turn the source notes into a success target before implementation.'
+      case 'acceptance':
+        return 'Guildhall needs to turn the source notes into concrete acceptance checks before implementation.'
+      case 'both':
+        return 'Guildhall needs to turn the source notes into an outcome and acceptance checks before implementation.'
+      default:
+        return `Guildhall needs to turn ${missingChecklistTitles(turn)} into a usable task brief before implementation.`
+    }
+  }
+
+  function briefFixButtonLabel(turn: InFlightTurn): string {
+    switch (missingBriefFieldKind(turn)) {
+      case 'success': return 'Start'
+      case 'acceptance': return 'Start'
+      default: return 'Start'
+    }
+  }
+
+  function showBriefSuccessField(turn: InFlightTurn): boolean {
+    const kind = missingBriefFieldKind(turn)
+    return kind === 'success' || kind === 'both' || kind === 'unknown'
+  }
+
+  function showBriefAcceptanceField(turn: InFlightTurn): boolean {
+    const kind = missingBriefFieldKind(turn)
+    return kind === 'acceptance' || kind === 'both' || kind === 'unknown'
+  }
+
+  function canSaveBriefFix(turn: InFlightTurn): boolean {
+    const draft = briefFixDrafts[turn.id] ?? { successTarget: '', acceptanceCriterion: '' }
+    const needsSuccess = showBriefSuccessField(turn)
+    const needsAcceptance = showBriefAcceptanceField(turn)
+    return (!needsSuccess || draft.successTarget.trim().length > 0) &&
+      (!needsAcceptance || draft.acceptanceCriterion.trim().length > 0)
+  }
+
+  async function saveBriefFix(turn: InFlightTurn): Promise<void> {
+    const draft = briefFixDrafts[turn.id] ?? { successTarget: '', acceptanceCriterion: '' }
+    const successTarget = draft.successTarget.trim()
+    const acceptanceCriterion = draft.acceptanceCriterion.trim()
+    if (!successTarget && !acceptanceCriterion) return
+    busyTurnId = turn.id
+    try {
+      const res = await scopedProjectFetch(`/api/project/task/${encodeURIComponent(turn.taskId)}/update-brief`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ successTarget, acceptanceCriterion }),
+      })
+      const body = await res.json().catch(() => ({})) as { error?: string }
+      if (!res.ok || body.error) {
+        briefFixErrors = { ...briefFixErrors, [turn.id]: body.error ?? `HTTP ${res.status}` }
+        return
+      }
+      const nextDrafts = { ...briefFixDrafts }
+      delete nextDrafts[turn.id]
+      briefFixDrafts = nextDrafts
+      briefFixTurnId = null
+      await load()
+      await refreshProject()
+    } finally {
+      busyTurnId = null
+    }
+  }
+
   function setContextDraft(turnId: string, value: string): void {
     contextDrafts = { ...contextDrafts, [turnId]: value }
     if (contextErrors[turnId]) {
@@ -1282,7 +1399,7 @@
     }
     if (turn.taskStatus === 'ready' && !live) {
       if (hasIncompleteTaskChecklist(turn)) {
-        return 'This is a draft task brief. Before Guildhall can build it, add the missing success target and acceptance criteria.'
+        return briefFixDescription(turn)
       }
       return runStatus === 'running'
         ? 'Approved and queued. Guildhall is running and can pick this up.'
@@ -1304,7 +1421,7 @@
           ? 'Guildhall is shaping the task brief for this imported note. You can add context, but you do not need to babysit the draft.'
           : isQueuedSpecRevision(turn)
             ? 'Guildhall already has the draft spec plus your latest answers. Press Start when you want Guildhall to revise it.'
-            : 'Guildhall drafted a first pass here. Review it if you want, or press Start to let Guildhall revise the draft.'
+            : 'Guildhall has started shaping this task, but the brief is not ready yet. The checklist shows what is still missing.'
     }
     if (turn.taskStatus === 'in_progress' && !live) {
       return runStatus === 'running'
@@ -1326,6 +1443,7 @@
 
   function gitStoryVisible(turn: Turn): boolean {
     if (!('gitStory' in turn) || !turn.gitStory?.state) return false
+    if (turn.kind === 'inflight' && hasIncompleteTaskChecklist(turn)) return false
     const state = normalizedGitStoryState(turn.gitStory)
     return state !== 'clean' && state !== 'merged' && state !== 'unknown'
   }
@@ -1379,7 +1497,6 @@
   }
 
   function canStartTaskTurn(turn: InFlightTurn): boolean {
-    if (turn.taskStatus === 'ready' && hasIncompleteTaskChecklist(turn)) return false
     if (projectRunBlocksTaskStart(turn)) return false
     return !turnLiveAgent(turn) && (
       turn.taskStatus === 'ready' ||
@@ -1409,13 +1526,13 @@
     if (metaIntakeChecklistComplete(turn)) return 'Create split proposal'
     switch (turn.taskStatus) {
       case 'ready':
-        if (hasIncompleteTaskChecklist(turn)) return 'Open checklist'
+        if (hasIncompleteTaskChecklist(turn)) return 'Start'
         if (runStatus === 'running' || runStatus === 'stopping') return 'Already queued'
         return 'Start work'
       case 'import_draft': return 'Draft task brief'
       case 'exploring':
         if (turn.taskId === 'task-meta-intake') return 'Let Guildhall keep setting this up'
-        if (turn.importedDraft || hasIncompleteTaskChecklist(turn)) return 'Continue task brief'
+        if (turn.importedDraft || hasIncompleteTaskChecklist(turn)) return 'Continue shaping brief'
         return isQueuedSpecRevision(turn) ? 'Revise spec' : 'Continue drafting spec'
       case 'review': return 'Resume review'
       case 'gate_check': return 'Resume gates'
@@ -2429,20 +2546,73 @@
                 </div>
               {:else if t.kind === 'inflight'}
                 <StateSummary
-                  label={taskStateLabel(t)}
+                  label={t.taskStatus === 'ready' && hasIncompleteTaskChecklist(t) ? briefFixTitle(t) : taskStateLabel(t)}
                   description={taskStateDescription(t)}
                   tone={taskStateTone(t)}
                   showLabel={!isQueuedForGuildhall(t)}
                 />
                 {#if t.taskStatus === 'ready' && hasIncompleteTaskChecklist(t) && replyTurnId !== t.id}
-                  <Row justify="end" gap="2">
-                    <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
-                      Open checklist
-                    </Button>
-                    <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
-                      Add optional note
-                    </Button>
-                  </Row>
+                  {#if briefFixTurnId === t.id}
+                    {@const draft = briefFixDrafts[t.id] ?? { successTarget: '', acceptanceCriterion: '' }}
+                    <div class="brief-fix-panel">
+                      <p class="brief-fix-intro">
+                        Fill {missingChecklistTitles(t)} here. Guildhall will use this to finish the task brief.
+                      </p>
+                      {#if showBriefSuccessField(t)}
+                        <label class="brief-fix-field">
+                          <span>What should be true when this is done?</span>
+                          <Textarea
+                            value={draft.successTarget}
+                            rows={3}
+                            placeholder="Example: Future component docs use human-readable labels while keeping stable ui-* doc ids."
+                            disabled={busyTurnId === t.id}
+                            oninput={(v) => setBriefFixDraft(t.id, 'successTarget', v)}
+                          />
+                        </label>
+                      {/if}
+                      {#if showBriefAcceptanceField(t)}
+                        <label class="brief-fix-field">
+                          <span>How should Guildhall check it?</span>
+                          <Textarea
+                            value={draft.acceptanceCriterion}
+                            rows={3}
+                            placeholder="Example: Reviewer can find the convention note and confirm it gives one clear example."
+                            disabled={busyTurnId === t.id}
+                            oninput={(v) => setBriefFixDraft(t.id, 'acceptanceCriterion', v)}
+                          />
+                        </label>
+                      {/if}
+                      <Row justify="end" gap="2">
+                        <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (briefFixTurnId = null)}>
+                          Cancel
+                        </Button>
+                        <Button
+                          variant="primary"
+                          disabled={busyTurnId === t.id || !canSaveBriefFix(t)}
+                          onclick={() => saveBriefFix(t)}
+                        >
+                          Save brief
+                        </Button>
+                      </Row>
+                      {#if briefFixErrors[t.id]}
+                        <p class="error">{briefFixErrors[t.id]}</p>
+                      {/if}
+                    </div>
+                  {:else}
+                    <Row justify="end" gap="2">
+                      <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
+                        Add optional note
+                      </Button>
+                      {#if projectRunBlocksTaskStart(t)}
+                        <Button variant="secondary" disabled>Already queued</Button>
+                      {:else}
+                        <Button variant="agent" disabled={runBusy || busyTurnId === t.id} onclick={() => startTaskRun(t.taskId)}>
+                          <Icon name="sparkles" size={14} />
+                          {briefFixButtonLabel(t)}
+                        </Button>
+                      {/if}
+                    </Row>
+                  {/if}
                 {/if}
                 {#if t.taskDescription || t.sourceNote}
                   <details class="thread-disclosure task-context-disclosure">
@@ -2536,11 +2706,12 @@
                   </div>
                 {/if}
                 {#if t.checklist}
-                  <div class="live-checklist">
-                    <div class="live-checklist-head">
-                      <strong>{t.checklist.title}</strong>
-                      <span>{t.checklist.doneCount} of {t.checklist.totalSteps}</span>
-                    </div>
+                  <details class="thread-disclosure checklist-disclosure" open={!hasIncompleteTaskChecklist(t)}>
+                    <summary>
+                      <span>{hasIncompleteTaskChecklist(t) ? 'Brief checklist' : t.checklist.title}</span>
+                      <Chip label={`${t.checklist.doneCount} of ${t.checklist.totalSteps}`} tone={hasIncompleteTaskChecklist(t) ? 'warn' : 'neutral'} />
+                    </summary>
+                    <div class="live-checklist">
                     <div class="live-checklist-steps">
                       {#each t.checklist.steps as step (step.id)}
                         <div class="live-step" class:done={step.status === 'done'} class:active={step.status === 'active'}>
@@ -2558,7 +2729,8 @@
                         </div>
                       {/each}
                     </div>
-                  </div>
+                    </div>
+                  </details>
                 {/if}
                 {#if replyTurnId === t.id}
                   <Stack gap="2">
@@ -2684,12 +2856,17 @@
                         {t.taskStatus === 'exploring' ? 'Inspect details' : 'Open task'}
                       </Button>
                       {#if t.taskStatus === 'ready' && hasIncompleteTaskChecklist(t)}
-                        <Button variant="secondary" disabled={busyTurnId === t.id} onclick={() => nav(currentTaskHref(t.taskId))}>
-                          Open checklist
-                        </Button>
                         <Button variant="ghost" disabled={busyTurnId === t.id} onclick={() => (replyTurnId = t.id)}>
                           Add optional note
                         </Button>
+                        {#if projectRunBlocksTaskStart(t)}
+                          <Button variant="secondary" disabled>Already queued</Button>
+                        {:else}
+                          <Button variant="agent" disabled={runBusy || busyTurnId === t.id} onclick={() => startTaskRun(t.taskId)}>
+                            <Icon name="sparkles" size={14} />
+                            {briefFixButtonLabel(t)}
+                          </Button>
+                        {/if}
                       {:else if t.taskStatus === 'ready' && !turnLiveAgent(t)}
                         {#if projectRunBlocksTaskStart(t)}
                           <Button variant="secondary" disabled>Already queued</Button>
@@ -3346,6 +3523,27 @@
     color: var(--text-muted);
     font-size: var(--fs-2);
     line-height: var(--lh-body);
+  }
+  .brief-fix-panel {
+    display: grid;
+    gap: var(--s-2);
+    padding: var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+  }
+  .brief-fix-intro {
+    margin: 0;
+    color: var(--text);
+    font-size: var(--fs-2);
+    line-height: var(--lh-body);
+  }
+  .brief-fix-field {
+    display: grid;
+    gap: var(--s-1);
+    color: var(--text);
+    font-size: var(--fs-1);
+    font-weight: 700;
   }
   .live-checklist-head,
   .live-step {

@@ -2,7 +2,7 @@ import { resolve, join, isAbsolute } from 'node:path'
 import { readGlobalConfig } from './global-config.js'
 import { readWorkspaceConfig, resolveMemoryDir, readAgentSettings } from './workspace-config.js'
 import { readProjectConfig } from './project-config.js'
-import { ResolvedConfig, defaultModelsForProvider, mergeModels, resolveModelsForProvider, slugify } from './schemas.js'
+import { ResolvedConfig, defaultModelsForProvider, mergeModelBehavior, mergeModels, resolveModelsForProvider, slugify } from './schemas.js'
 import type { WorkspaceYamlConfig, AgentSettings } from './schemas.js'
 
 // ---------------------------------------------------------------------------
@@ -104,6 +104,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
     resolveModelsForProvider(workspace.models, preferredProvider),
     defaultModelsForProvider(preferredProvider),
   )
+  const modelBehavior = mergeModelBehavior(global.modelBehavior, workspace.modelBehavior)
 
   // Resolve project path
   const projectPath = workspace.projectPath
@@ -147,6 +148,7 @@ export function resolveConfig(opts: ResolveOptions): ResolvedConfig {
     landingBranch: project.landingBranch,
     memoryDir,
     models,
+    modelBehavior,
     coordinators,
     maxRevisions: workspace.maxRevisions ?? global.maxRevisions,
     heartbeatInterval: workspace.heartbeatInterval ?? global.heartbeatInterval,

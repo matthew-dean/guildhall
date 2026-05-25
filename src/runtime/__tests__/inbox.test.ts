@@ -931,6 +931,33 @@ coordinators:
     expect(first.detail).toMatch(/scope/i)
   })
 
+  it('open_escalation: keeps full task content separate from the compact title', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-c',
+          title: 'We should have a system-wide policy of how much FLL charges on overhe...',
+          description: 'We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.',
+          status: 'blocked',
+          escalations: [
+            { id: 'esc-1', reason: 'spec_ambiguous', summary: 'Card component exists but template syntax mismatch prevents edit' },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    const hit = items.find(i => i.kind === 'open_escalation')
+    expect(hit).toBeDefined()
+    if (!hit || hit.kind !== 'open_escalation') throw new Error('unreachable')
+    expect(hit.title).toBe('We should have a system-wide policy of how much FLL charges on overhe...')
+    expect(hit.taskDescription).toBe('We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.')
+  })
+
   it('open_escalation: surfaces blocked tasks that only have a block reason', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })

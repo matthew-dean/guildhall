@@ -15,7 +15,7 @@
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectActionHref } from '../../lib/project-routes.js'
-  import type { InboxItem } from '../../lib/inbox-item-key.js'
+  import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
   import type { EventEnvelope, ProjectDetail, Task } from '../../lib/types.js'
   import { hasCurrentGitUnavailableStory, type ProjectActivityLine } from '../../lib/project-activity.js'
   import { isGitUnavailableMessage } from '../../lib/runtime-message.js'
@@ -143,7 +143,7 @@
     if (gitBlockers.length > 0) {
       items.push({
         label: 'Git story needs closure',
-        detail: gitBlockers[0]?.reason ?? gitBlockers[0]?.label ?? `${gitBlockers.length} git ${gitBlockers.length === 1 ? 'item' : 'items'} need attention.`,
+        detail: friendlyBlockerText(gitBlockers[0]?.reason ?? gitBlockers[0]?.label ?? `${gitBlockers.length} git ${gitBlockers.length === 1 ? 'item' : 'items'} need attention.`),
         tone: 'warn',
         href: currentProjectHref('/release', activeProjectId),
       })
@@ -189,6 +189,7 @@
       return {
         label: inbox.title,
         detail: inbox.detail,
+        content: inbox.taskDescription,
         button: 'Open',
         href: inbox.actionHref ?? '/thread',
         tone: inbox.severity === 'high' ? 'danger' as Tone : 'warn' as Tone,
@@ -197,7 +198,7 @@
     if (activeTask?.status === 'blocked') {
       return {
         label: activeTask.title ?? friendlyTaskId(activeTask.id),
-        detail: activeTask.blockReason ?? 'This task needs recovery or a decision.',
+        detail: activeTask.blockReason ? friendlyBlockerText(activeTask.blockReason) : 'This task needs recovery or a decision.',
         button: 'Open task',
         href: currentTaskHref(activeTask.id, activeProjectId),
         tone: 'warn' as Tone,
@@ -398,6 +399,7 @@
       case 'all_terminal': return 'No runnable tasks'
       case 'provider_unavailable': return 'Provider unavailable'
       case 'bootstrap_blocked': return 'Readiness blocked'
+      case 'no_unattended_progress': return 'Nothing ready to run'
       default: return 'Start is blocked'
     }
   }
@@ -477,6 +479,9 @@
       <div class="next-action">
         <Chip label={nextAction.tone === 'running' ? 'Live' : nextAction.tone === 'warn' || nextAction.tone === 'danger' ? 'Needs attention' : 'Ready'} tone={nextAction.tone === 'danger' ? 'danger' : nextAction.tone === 'warn' ? 'warn' : nextAction.tone === 'running' ? 'ok' : 'neutral'} />
         <h2>{nextAction.label}</h2>
+        {#if nextAction.content && nextAction.content !== nextAction.label}
+          <p class="task-content">{nextAction.content}</p>
+        {/if}
         <p>{nextAction.detail}</p>
         <Button variant={nextAction.tone === 'warn' || nextAction.tone === 'danger' ? 'human' : 'secondary'} onclick={() => go(nextAction.href)}>
           {nextAction.button}
@@ -495,9 +500,12 @@
         <p class="muted">No owner action is blocking the project right now.</p>
       {:else}
         <div class="action-list">
-          {#each actionableInbox as item (`${item.kind}:${item.taskId ?? ''}:${item.title}`)}
+          {#each actionableInbox as item (inboxItemKey(item))}
             <button type="button" class="action-row" onclick={() => go(item.actionHref ?? '/thread')}>
               <span class="action-title">{item.title}</span>
+              {#if item.taskDescription && item.taskDescription !== item.title}
+                <span class="action-content">{item.taskDescription}</span>
+              {/if}
               <span>{item.detail}</span>
             </button>
           {/each}
@@ -769,6 +777,10 @@
     color: var(--text-muted);
     line-height: var(--lh-body);
   }
+  .next-action .task-content {
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
   .action-list,
   .motion-list,
   .health-list,
@@ -786,6 +798,10 @@
   .action-title {
     color: var(--text);
     font-weight: 700;
+  }
+  .action-content {
+    color: var(--text);
+    overflow-wrap: anywhere;
   }
   .action-row span:last-child,
   .motion-row span,

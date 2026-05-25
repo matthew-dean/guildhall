@@ -10,6 +10,8 @@ Use this directory for:
 - commercially sensitive notes;
 - agent-facing operating instructions;
 - raw research and design exploration that has not been sanitized for readers.
+- source-backed research notes that support internal plans, specs, audits, and
+  design notes.
 
 If a note belongs in public docs, move or rewrite it deliberately under
 `docs/`. Do not assume a planning note is publishable just because it is
@@ -22,3 +24,4 @@ The proposed 0.9.0 task-shaping direction is
 `internal/plans/2026-05-24-guildhall-0-9-task-shaping-and-finishability.md`.
 Live product/runtime audit checklists live in `internal/audits/`.
 Older exploratory design notes live in `internal/design-notes/`.
+Source-backed research notes live in `internal/research/`.

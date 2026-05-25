@@ -235,6 +235,10 @@ const AgentQuestionBase = {
   /** Which agent asked (spec-agent, coordinator, etc.). */
   askedBy: z.string(),
   askedAt: z.string(),
+  /** Short topic label, e.g. "AlertDialog variants". */
+  subject: z.string().optional(),
+  /** Plain-language context that explains why the question matters. */
+  description: z.string().optional(),
   /** Persisted-but-unsubmitted answer draft shown back to the user on reload. */
   draftAnswer: z.string().optional(),
   /** ISO timestamp when the user answered, or undefined if still open. */

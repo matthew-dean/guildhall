@@ -82,7 +82,7 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
   }
 
   const now = new Date().toISOString()
-  const title = input.title?.trim() || truncateTitle(input.ask)
+  const title = compactStoredLabel(input.title, input.ask, 'New request')
 
   const task: Task = {
     id,
@@ -180,10 +180,27 @@ export async function createRoutedRequest(input: IntakeInput): Promise<RoutedReq
   }
 }
 
-function truncateTitle(ask: string): string {
-  const firstLine = ask.split(/\n/)[0] ?? ask
-  if (firstLine.length <= 60) return firstLine.trim()
-  return firstLine.slice(0, 57).trim() + '...'
+function compactStoredLabel(
+  preferred: string | undefined,
+  fallbackContent: string,
+  fallbackLabel: string,
+  max = 60,
+): string {
+  const preferredLabel = completeShortLabel(preferred, max)
+  if (preferredLabel) return preferredLabel
+  const fallbackCandidate = completeShortLabel(fallbackContent, max)
+  return fallbackCandidate ?? fallbackLabel
+}
+
+function completeShortLabel(value: string | undefined, max = 60): string | null {
+  const firstLine = value?.split(/\n/).find(line => line.trim().length > 0)?.trim()
+  if (!firstLine) return null
+  const singleLine = firstLine.replace(/\s+/g, ' ').trim()
+  if (!singleLine || /\.\.\.$/.test(singleLine)) return null
+  if (singleLine.length <= max) return singleLine
+  const sentence = singleLine.match(/^(.+?[.!?])(?:\s|$)/)?.[1]?.trim()
+  if (sentence && sentence.length <= max && !/\.\.\.$/.test(sentence)) return sentence
+  return null
 }
 
 function slugId(value: string): string {
@@ -317,7 +334,11 @@ export async function createBugReportTask(input: BugReportInput): Promise<BugRep
   const id = nextTaskId(queue)
   const now = new Date().toISOString()
 
-  const title = `Bug: ${truncateTitle(input.title).replace(/^Bug:\s*/i, '')}`
+  const title = `Bug: ${compactStoredLabel(
+    input.title.replace(/^Bug:\s*/i, ''),
+    input.body,
+    'Bug report',
+  )}`
 
   const description = [
     input.body.trim(),

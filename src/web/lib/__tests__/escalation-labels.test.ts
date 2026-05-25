@@ -45,7 +45,7 @@ describe('escalationPrimaryAction', () => {
     })
   })
 
-  it('resumes worker turn-limit failures instead of sending them to gates', () => {
+  it('retries worker turn-limit failures instead of sending them to gates', () => {
     expect(
       escalationPrimaryAction({
         reason: 'human_judgment_required',
@@ -53,7 +53,7 @@ describe('escalationPrimaryAction', () => {
         summary: 'Worker stopped after hitting its turn limit.',
       }),
     ).toMatchObject({
-      label: 'Resume worker',
+      label: 'Retry worker',
       nextStatus: 'in_progress',
     })
   })
@@ -113,6 +113,29 @@ describe('escalationUserGuidance', () => {
     expect(guidance.actionOwner).toBe('user')
     expect(guidance.technicalNote).toBeUndefined()
     expect(`${guidance.title} ${guidance.detail} ${guidance.nextStep}`).not.toMatch(/authoritative|checkpoint-touched|worktree/i)
+  })
+
+  it('treats worker timeouts as Guildhall-owned recovery instead of an unnamed human decision', () => {
+    const guidance = escalationUserGuidance({
+      agentId: 'worker-agent',
+      reason: 'human_judgment_required',
+      summary: 'Worker timed out after failing to mutate the likely target file.',
+      details: 'worker-agent timed out after 120000ms of inactivity',
+    })
+
+    expect(guidance.title).toBe('Guildhall can retry the worker.')
+    expect(guidance.detail).toContain('not something you need to solve by hand')
+    expect(guidance.nextStep).toContain('Retry worker')
+    expect(guidance.actionOwner).toBe('guildhall')
+    expect(`${guidance.title} ${guidance.detail} ${guidance.nextStep}`).not.toMatch(/recovery decision/i)
+    expect(escalationPrimaryAction({
+      agentId: 'worker-agent',
+      reason: 'human_judgment_required',
+      summary: 'Worker timed out after failing to mutate the likely target file.',
+    })).toMatchObject({
+      label: 'Retry worker',
+      nextStatus: 'in_progress',
+    })
   })
 })
 

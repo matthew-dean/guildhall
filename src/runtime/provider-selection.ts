@@ -38,6 +38,10 @@ import {
   openAiCompatiblePoolKey,
 } from './provider-client-pool.js'
 import { providerCapabilitiesForAnyKey } from './provider-metadata.js'
+import {
+  resolveOpenAiCompatibleConcurrency,
+  resolveProviderGroupConcurrency,
+} from './provider-concurrency.js'
 
 export type ProviderName =
   | 'claude-oauth'
@@ -265,7 +269,10 @@ function tryLlama(opts: SelectApiClientOptions): Probe {
       baseUrl: url,
     }),
     {
-      maxConcurrency: providerCapabilitiesForAnyKey('llama-cpp')?.recommendedConcurrency,
+      maxConcurrency: resolveOpenAiCompatibleConcurrency({
+        provider: 'llama-cpp',
+        baseUrl: url,
+      }),
     },
     () => new OpenAICompatibleClient({ baseUrl: url }),
   )
@@ -285,7 +292,7 @@ function tryAnthropicApi(opts: SelectApiClientOptions): Probe {
   const apiClient = getOrCreateProviderClient(
     anthropicCompatiblePoolKey(key),
     {
-      maxConcurrency: providerCapabilitiesForAnyKey('anthropic-api')?.recommendedConcurrency,
+      maxConcurrency: resolveProviderGroupConcurrency('anthropic-api') ?? providerCapabilitiesForAnyKey('anthropic-api')?.recommendedConcurrency,
     },
     () => new AnthropicApiClient({ apiKey: key }),
   )
@@ -311,7 +318,10 @@ function tryOpenAiApi(opts: SelectApiClientOptions): Probe {
       apiKey: key,
     }),
     {
-      maxConcurrency: providerCapabilitiesForAnyKey('openai-api')?.recommendedConcurrency,
+      maxConcurrency: resolveOpenAiCompatibleConcurrency({
+        provider: 'openai-api',
+        baseUrl: resolvedBaseUrl,
+      }),
     },
     () =>
       new OpenAICompatibleClient({

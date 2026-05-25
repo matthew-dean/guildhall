@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { findSecrets } from '../security-engineer/index.js'
 import { findTestSmells } from '../test-engineer/index.js'
 import { findBannedTerms } from '../copywriter/index.js'
+import { findTruncatedContentStorage } from '../frontend-engineer/index.js'
+import { CONTENT_INTEGRITY_CHECK, findTruncatedSemanticData } from '../content-integrity.js'
 
 describe('findSecrets (Security Engineer)', () => {
   it('flags an AWS access key', () => {
@@ -112,5 +114,85 @@ describe('findBannedTerms (Copywriter)', () => {
 
   it('returns empty when no bannedTerms are provided', () => {
     expect(findBannedTerms('anything at all', [])).toHaveLength(0)
+  })
+})
+
+describe('findTruncatedContentStorage (Content Integrity)', () => {
+  it('flags mechanical ellipsis slicing before semantic assignment', () => {
+    const r = findTruncatedContentStorage(
+      `const title = ask.slice(0, 57).trim() + '...'\nqueue.tasks.push({ title })`,
+    )
+    expect(r.map((x) => x.kind)).toContain('ellipsis-slice')
+  })
+
+  it('flags truncate helpers used for semantic content fields', () => {
+    const r = findTruncatedContentStorage(
+      `const task = { description: truncateText(rawDescription) }`,
+    )
+    expect(r.map((x) => x.kind)).toContain('semantic-truncate-helper')
+  })
+
+  it('allows complete short labels without ellipsis', () => {
+    expect(
+      findTruncatedContentStorage(
+        `const task = { title: 'Set the fee policy', description: rawAsk }`,
+      ),
+    ).toHaveLength(0)
+  })
+})
+
+describe('findTruncatedSemanticData (Content Integrity)', () => {
+  it('flags stored semantic fields ending in ellipsis', () => {
+    const r = findTruncatedSemanticData({
+      title: 'We should have a system-wide policy of how much FLL charges on overhe...',
+      description: 'Complete content is here.',
+    })
+    expect(r).toEqual([
+      {
+        path: 'task.title',
+        preview: 'We should have a system-wide policy of how much FLL charges on overhe...',
+      },
+    ])
+  })
+
+  it('does not flag complete semantic content', () => {
+    expect(
+      findTruncatedSemanticData({
+        title: 'Set the fee policy',
+        description: 'We should have a system-wide policy of how much FLL charges on overhead.',
+      }),
+    ).toHaveLength(0)
+  })
+
+  it('fails the Project Manager content check for ellipsized task data', async () => {
+    const result = await CONTENT_INTEGRITY_CHECK.run({
+      task: {
+        id: 'task-006',
+        title: 'We should have a system-wide policy of how much FLL charges on overhe...',
+        description: 'We should have a system-wide policy of how much FLL charges on overhead.',
+        domain: 'policy',
+        projectPath: '/tmp/project',
+        status: 'ready',
+        priority: 'normal',
+        dependsOn: [],
+        outOfScope: [],
+        acceptanceCriteria: [],
+        notes: [],
+        gateResults: [],
+        reviewVerdicts: [],
+        adjudications: [],
+        escalations: [],
+        agentIssues: [],
+        revisionCount: 0,
+        remediationAttempts: 0,
+        origination: 'human',
+        createdAt: '',
+        updatedAt: '',
+      },
+      memoryDir: '/tmp/guildhall',
+      projectPath: '/tmp/project',
+    })
+    expect(result.pass).toBe(false)
+    expect(result.summary).toContain('semantic field')
   })
 })

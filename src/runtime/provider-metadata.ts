@@ -23,6 +23,10 @@ export interface ProviderCapabilities {
   localServer: boolean
 }
 
+export const DEFAULT_GLOBAL_PROVIDER_CONCURRENCY = 200
+export const HOSTED_PROVIDER_DEFAULT_CONCURRENCY = 10
+export const LOCAL_PROVIDER_DEFAULT_CONCURRENCY = 2
+
 export function providerFamilyForSetupKey(key: SetupProviderKey): ProviderFamily {
   switch (key) {
     case 'claude-oauth':
@@ -61,9 +65,9 @@ export function providerLabelForSetupKey(key: SetupProviderKey): string {
     case 'anthropic-api':
       return 'Anthropic-compatible API key'
     case 'openai-api':
-      return 'OpenAI-compatible API key'
+      return 'Remote OpenAI-compatible API key'
     case 'llama-cpp':
-      return 'OpenAI-compatible local server'
+      return 'Local OpenAI-compatible server'
   }
 }
 
@@ -84,9 +88,9 @@ export function providerLabelForAnyKey(
     case 'anthropic-api':
       return 'Anthropic-compatible API'
     case 'openai-api':
-      return 'OpenAI-compatible API'
+      return 'Remote OpenAI-compatible'
     case 'llama-cpp':
-      return 'OpenAI-compatible local server'
+      return 'Local OpenAI-compatible'
     case 'none':
       return 'None'
     default:
@@ -133,7 +137,7 @@ export function providerCapabilitiesForAnyKey(
         resumableSessions: true,
         reasoningSideChannel: 'none',
         browserAppControl: false,
-        recommendedConcurrency: 2,
+        recommendedConcurrency: HOSTED_PROVIDER_DEFAULT_CONCURRENCY,
         localServer: false,
       }
     case 'codex':
@@ -144,7 +148,7 @@ export function providerCapabilitiesForAnyKey(
         resumableSessions: true,
         reasoningSideChannel: 'none',
         browserAppControl: false,
-        recommendedConcurrency: 2,
+        recommendedConcurrency: HOSTED_PROVIDER_DEFAULT_CONCURRENCY,
         localServer: false,
       }
     case 'anthropic-api':
@@ -154,7 +158,7 @@ export function providerCapabilitiesForAnyKey(
         resumableSessions: false,
         reasoningSideChannel: 'none',
         browserAppControl: false,
-        recommendedConcurrency: 4,
+        recommendedConcurrency: HOSTED_PROVIDER_DEFAULT_CONCURRENCY,
         localServer: false,
       }
     case 'openai-api':
@@ -164,7 +168,7 @@ export function providerCapabilitiesForAnyKey(
         resumableSessions: false,
         reasoningSideChannel: 'compatible',
         browserAppControl: false,
-        recommendedConcurrency: 4,
+        recommendedConcurrency: HOSTED_PROVIDER_DEFAULT_CONCURRENCY,
         localServer: false,
       }
     case 'llama-cpp':
@@ -174,7 +178,7 @@ export function providerCapabilitiesForAnyKey(
         resumableSessions: false,
         reasoningSideChannel: 'compatible',
         browserAppControl: false,
-        recommendedConcurrency: 1,
+        recommendedConcurrency: LOCAL_PROVIDER_DEFAULT_CONCURRENCY,
         localServer: true,
       }
     default:

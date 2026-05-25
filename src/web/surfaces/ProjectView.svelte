@@ -39,6 +39,7 @@
   import { buildProviderIndicator } from '../lib/provider-indicator.js'
   import { formatUserPath } from '../lib/display-path.js'
   import { humanizeProjectName } from '../lib/project-name.js'
+  import { isWorkerRunnableStatus } from '../lib/task-state.js'
   import { isOperationalReceiptQuestion } from '@guildhall/shared'
   import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { AgentQuestion, EventEnvelope, ProjectView, ProviderStatus, Task } from '../lib/types.js'
@@ -84,7 +85,9 @@
   let inboxLoadQueued = false
   let latestTickerEvent = $state<EventEnvelope | null>(null)
   let tickerNow = $state(Date.now())
-  const projectDisplayName = $derived(humanizeProjectName(project.detail?.name ?? project.detail?.id ?? 'Project'))
+  const projectDisplayName = $derived(
+    project.detail?.name?.trim() || humanizeProjectName(project.detail?.id ?? 'Project'),
+  )
   const projectDisplayPath = $derived(formatUserPath(project.detail?.path))
   const projectDisplayPathLeaf = $derived(projectDisplayPath.split('/').filter(Boolean).pop() ?? 'This project')
 
@@ -306,12 +309,12 @@
     { id: 'timeline', label: 'Timeline', icon: 'clock', suffix: '/timeline' },
     {
       id: 'release',
-      label: 'Release',
-      icon: 'rocket',
+      label: 'Closure',
+      icon: 'check-circle-2',
       suffix: '/release',
       subs: [
-        { id: 'verdict', label: 'Verdict', path: currentProjectHref('/release', activeProjectId) },
-        { id: 'criteria', label: 'Criteria', path: currentProjectHref('/release/criteria', activeProjectId) },
+        { id: 'verdict', label: 'Summary', path: currentProjectHref('/release', activeProjectId) },
+        { id: 'criteria', label: 'Checks', path: currentProjectHref('/release/criteria', activeProjectId) },
       ],
     },
   ])
@@ -705,7 +708,8 @@
   const activeCount = $derived(
     taskList.filter(t => {
       const s = (t as { status?: string }).status
-      return s && !['done', 'blocked', 'cancelled', 'archived', 'spec_review', 'shelved'].includes(s)
+      if (!s || ['done', 'blocked', 'cancelled', 'archived', 'spec_review', 'shelved', 'import_draft'].includes(s)) return false
+      return isWorkerRunnableStatus(t)
     }).length,
   )
   const activeCountLabel = $derived(
@@ -753,6 +757,8 @@
       ? 'Needs your answer'
       : startReadiness?.code === 'import_drafts_waiting'
       ? 'Imported drafts need review'
+      : startReadiness?.code === 'no_unattended_progress'
+        ? 'Nothing ready to run'
       : needsMeta || metaIntakePending
         ? 'Project setup needs attention'
         : startDisabledReason === 'No tasks to start'
@@ -764,6 +770,8 @@
       ? 'Open Thread'
       : startReadiness?.code === 'import_drafts_waiting'
       ? 'Review drafts'
+      : startReadiness?.code === 'no_unattended_progress'
+        ? 'Open Work'
       : startDisabledReason === 'No tasks to start'
         ? 'Ready'
         : 'Setup',
@@ -1073,7 +1081,7 @@
               count={inboxActionableCount}
               showLabel={!topbarLabelsCollapsed}
               tooltip={topbarLabelsCollapsed}
-              onclick={() => go(currentProjectHref('/overview', activeProjectId))}
+              onclick={() => go(currentProjectHref('/inbox', activeProjectId))}
               title={`${inboxActionableCount} need you`}
               ariaLabel={`${inboxActionableCount} notifications need you`}
             />
@@ -1110,7 +1118,7 @@
           {/if}
           {#if showRunButton}
             <Button
-              variant={runStatus === 'running' || runStatus === 'stopping' ? 'danger' : 'primary'}
+              variant={runStatus === 'running' || runStatus === 'stopping' ? 'danger' : 'agent'}
               size="sm"
               iconOnly={topbarLabelsCollapsed}
               disabled={busy || runStatus === 'stopping' || (runStatus !== 'running' && startDisabledReason !== null)}
@@ -1130,7 +1138,7 @@
                   : (startDisabledReason ?? 'Let Guildhall advance this project')
               }
             >
-              <Icon name={runStatus === 'running' || runStatus === 'stopping' ? 'square' : 'play'} size={16} />
+              <Icon name={runStatus === 'running' || runStatus === 'stopping' ? 'square' : 'sparkles'} size={16} />
               {#if !topbarLabelsCollapsed}
                 {runStatus === 'stopping' ? 'Stopping...' : runStatus === 'running' ? (runMode === 'one_task' ? 'Stop 1' : 'Stop') : runButtonIdleLabel}
               {/if}

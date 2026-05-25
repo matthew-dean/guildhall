@@ -463,8 +463,8 @@ export async function answerPressureTestQuestion(input: {
     intake.pendingQuestion = {
       id: `${domain.id}-closeout`,
       domainId: domain.id,
-      prompt: `Is there anything else Guildhall should know about ${domain.title.toLowerCase()} before this domain closes?`,
-      why: 'Pressure-test intake closes each domain deliberately so hidden constraints do not vanish.',
+      prompt: `Is there anything else Guildhall should know about ${domain.title.toLowerCase()} before we move to the next topic?`,
+      why: 'Guildhall asks this before leaving a topic so hidden constraints do not vanish.',
       evidence: domain.knownFacts.map(f => `${f.source}: ${f.fact}`),
       askedAt: new Date().toISOString(),
     }

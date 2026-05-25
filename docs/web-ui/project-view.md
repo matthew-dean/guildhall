@@ -25,8 +25,9 @@ decision live in one place.
   routing, pressure-test questions, spec approvals, live worker trouble, and
   “you need to answer this now” all gather here.
 - **Work**: the queue and movement view. This is where you judge whether the guild is making progress or just manufacturing elegant confusion.
-- **Release**: the verdict view. If something is about to ship, this page
-  tells you why it deserves the privilege, including unresolved Git stories.
+- **Closure**: the current-work verdict view. It tells you whether the work
+  Guildhall is tracking now is actually closed, including unresolved Git
+  stories. It is not a version or milestone picker yet.
 - **Settings**: the setup and behavior layer. Ready checks, Providers,
   Coordinators, Facts, Memory, Advanced settings, and the knobs that determine
   how much autonomy the guild gets.
@@ -36,14 +37,14 @@ decision live in one place.
 - Make the next real action obvious
 - Let you understand the project from Overview before you dive into Thread or Work
 - Keep your questions and the run's progress in the same story
-- Surface release and reviewer state before it becomes an unpleasant surprise
+- Surface closure and reviewer state before it becomes an unpleasant surprise
 - Keep Git closure visible when work is dirty, local-only, deferred, pushed,
   waiting on a PR, or blocked by a conflict
 - Let you drill into transcripts and provenance without leaving the shell
 
 ![Guildhall task drawer showing transcript, spec, history, and provenance.](../assets/ui-audit/0-7-0/task-drawer.png)
 
-![Guildhall release view showing readiness checks and remaining blockers.](../assets/ui-audit/0-7-0/release.png)
+![Guildhall closure view showing readiness checks and remaining blockers.](../assets/ui-audit/0-7-0/release.png)
 
 ![Guildhall settings view showing readiness checks, provider setup, and project facts.](../assets/ui-audit/0-7-0/settings.png)
 
@@ -52,7 +53,7 @@ decision live in one place.
 - Overview as a live project summary
 - Left-rail shell structure
 - Task drawer inspection model
-- Release, reviewer, and Git Story visibility
+- Closure, reviewer, and Git Story visibility
 
 ## Thread as the intake view
 
@@ -65,9 +66,13 @@ Those answers are not trapped in the transcript. They update persisted intake
 state so the eventual spec can name assumptions, decisions, deferrals, and the
 domains that were actually covered.
 
-## Release as the closure view
+## Closure as the current-work view
 
-Release readiness now treats Git state as part of the verdict. Dirty files,
-local commits, branches without upstreams, pending PRs, skipped merges, stale
-task worktrees, and unknown inspection failures are blockers until you close
-them or deliberately mark them local-only or deferred.
+Closure treats Git state as part of the verdict. Dirty files, local commits,
+branches without upstreams, pending PRs, skipped merges, stale task worktrees,
+and unknown inspection failures are blockers until you close them or
+deliberately mark them local-only or deferred.
+
+For now, Closure means "the current Guildhall-tracked work," not "the next
+named software release." Future release or milestone grouping can sit on top of
+the same checks once Guildhall has an actual release target to point at.

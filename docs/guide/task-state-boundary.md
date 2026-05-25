@@ -30,7 +30,7 @@ So Guildhall keeps two layers:
   It can hold the longer evidence without making your repo noisy or weird.
 
 Most of the time, you should not have to think about this. You open Thread,
-Overview, Release, or the task drawer, and Guildhall shows the useful story:
+Overview, Closure, or the task drawer, and Guildhall shows the useful story:
 what happened, what still needs attention, and where the evidence came from.
 
 The split mostly matters when you look at Git. Your shared project files stay

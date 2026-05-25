@@ -23,7 +23,7 @@ Each run pulls from a few kinds of state:
 4. **Execution state**: active worktree, checkpoint, previous attempts,
    verification output, and unresolved reviewer feedback.
 5. **Inspection state**: reviewer rubrics, guild specialists, gate results,
-   release readiness, and your decisions.
+   current work closure, and your decisions.
 6. **Learning state**: project habits and cross-project preferences that can be
    accepted, ignored, or scoped.
 
@@ -114,7 +114,7 @@ you are comfortable shipping it, Guildhall asks.
 
 Reviewer feedback belongs where another lens catches a class of mistake:
 architecture fit, product flow, accessibility, security, test coverage,
-design-system consistency, or release readiness.
+design-system consistency, or closure readiness.
 
 Copy review is part of that loop. When a task changes docs or a visible
 surface, Guildhall brings in the Copywriter to check the small words too:

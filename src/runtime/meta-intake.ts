@@ -550,7 +550,7 @@ function coordinatorTemplate(id: string, task: Task): DraftCoordinator {
     },
     'testing-qa': {
       name: 'Testing and Quality',
-      mandate: 'Protect the project gates and test coverage for converter behavior, extension workflow, and release readiness.',
+      mandate: 'Protect the project gates and test coverage for converter behavior, extension workflow, and closure readiness.',
       concerns: [
         {
           id: 'gate-coverage',

@@ -3,6 +3,7 @@ import { loadGuildAsset } from '../load-asset.js'
 import { applicable } from './applicable.js'
 import { FRONTEND_ENGINEER_RUBRIC } from './rubric.js'
 import { detectFramework, frameworkLayer } from './frameworks.js'
+import { findTruncatedContentStorage } from '../content-integrity.js'
 
 const BASE_PRINCIPLES = loadGuildAsset({
   importMetaUrl: import.meta.url,
@@ -29,3 +30,4 @@ export const frontendEngineerGuild: GuildDefinition = {
 }
 
 export { detectFramework, frameworkLayer } from './frameworks.js'
+export { findTruncatedContentStorage }

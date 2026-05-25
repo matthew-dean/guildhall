@@ -90,7 +90,7 @@
     />
   {/if}
 {:else if selected === 'llama-cpp'}
-  <label class="field-label" for="pp-url">OpenAI-compatible local server URL</label>
+  <label class="field-label" for="pp-url">Local OpenAI-compatible server URL</label>
   <Input
     id="pp-url"
     value={llamaUrl || providers['llama-cpp']?.url || 'http://localhost:1234/v1'}

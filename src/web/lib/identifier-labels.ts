@@ -38,6 +38,10 @@ const STATUS_LABELS: Record<string, IdentifierLabel> = {
   done: { label: 'Done', tone: 'ok' },
   blocked: { label: 'Blocked', tone: 'danger' },
   shelved: { label: 'Shelved', tone: 'warn' },
+  assistant_complete: { label: 'Finished a thought', tone: 'neutral' },
+  human_judgment_required: { label: 'Needs a decision', tone: 'warn' },
+  spec_ambiguous: { label: 'Needs a clearer spec', tone: 'warn' },
+  no_unattended_progress: { label: 'Nothing ready to run', tone: 'warn' },
 }
 
 const PRIORITY_LABELS: Record<string, IdentifierLabel> = {

@@ -282,7 +282,7 @@ export function summarizeProjectCard(
     : null
   return {
     id: project.id,
-    name: humanizeProjectName(project.name),
+    name: humanizeProjectName(project.name?.trim() || project.id),
     path: formatUserPath(project.path),
     statusLabel: statusLabel(project, counts),
     tone:

@@ -132,8 +132,8 @@ describe('GET /api/setup/providers', () => {
       providers: Record<string, { label: string }>
     }
     expect(body.providers['anthropic-api']!.label).toBe('Anthropic-compatible API key')
-    expect(body.providers['openai-api']!.label).toBe('OpenAI-compatible API key')
-    expect(body.providers['llama-cpp']!.label).toBe('OpenAI-compatible local server')
+    expect(body.providers['openai-api']!.label).toBe('Remote OpenAI-compatible API key')
+    expect(body.providers['llama-cpp']!.label).toBe('Local OpenAI-compatible server')
   })
 
   it('reflects a stored Anthropic key from the global store (no project-level secret)', async () => {
@@ -293,6 +293,54 @@ describe('POST /api/setup/providers/config', () => {
     expect(g.providers['openai-api']?.baseUrl).toBe('https://integrate.api.nvidia.com/v1')
   })
 
+  it('writes provider-group concurrency through provider settings', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request('http://localhost/api/setup/providers/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider: 'openai-api',
+          openaiApiKey: 'sk-openai-pasted',
+          openaiBaseUrl: 'https://example-openai-compatible.test/v1',
+          maxConcurrency: 200,
+        }),
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(readGlobalProviders().providers['openai-api']).toMatchObject({
+      apiKey: 'sk-openai-pasted',
+      baseUrl: 'https://example-openai-compatible.test/v1',
+      maxConcurrency: 200,
+    })
+
+    const setup = await app.fetch(new Request('http://localhost/api/setup/providers'))
+    const body = (await setup.json()) as {
+      providers?: {
+        'openai-api'?: { maxConcurrency?: number }
+      }
+    }
+    expect(body.providers?.['openai-api']?.maxConcurrency).toBe(200)
+  })
+
+  it('rejects provider-group concurrency outside the global ceiling', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(
+      new Request('http://localhost/api/setup/providers/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider: 'openai-api',
+          openaiApiKey: 'sk-openai-pasted',
+          maxConcurrency: 201,
+        }),
+      }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error?: string }
+    expect(body.error).toMatch(/maxConcurrency/)
+  })
+
   it('clears the stored OpenAI-compatible base URL when blank is saved', async () => {
     setProvider('openai-api', {
       apiKey: 'sk-openai-pasted',
@@ -358,6 +406,58 @@ describe('POST /api/setup/providers/config', () => {
     expect(res.status).toBe(200)
     expect(resolveModelsForProvider(readGlobalConfig().models).worker).toBe('qwen/qwen3.6-35b-a3b')
     expect(readWorkspaceConfig(tmpProject).models).toBeUndefined()
+  })
+
+  it('exposes role behavior profiles without exposing raw sampling numbers', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const res = await app.fetch(new Request('http://localhost/api/config/models?projectId=provider-test'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      effectiveBehavior?: Record<string, string>
+      behaviorProfiles?: Array<{ id: string; label: string; description: string }>
+      temperature?: unknown
+    }
+    expect(body.effectiveBehavior).toMatchObject({
+      spec: 'balanced',
+      coordinator: 'balanced',
+      worker: 'precise',
+      reviewer: 'precise',
+      gateChecker: 'precise',
+      contextIndexer: 'precise',
+    })
+    expect(body.behaviorProfiles?.map(profile => profile.id)).toEqual(['precise', 'balanced', 'exploratory'])
+    expect(JSON.stringify(body)).not.toMatch(/temperature/i)
+  })
+
+  it('saves global and project role behavior profiles through the model config endpoint', async () => {
+    const { app } = buildServeApp({ projectPath: tmpProject })
+    const globalRes = await app.fetch(
+      new Request('http://localhost/api/config/models?projectId=provider-test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'global',
+          role: 'spec',
+          behaviorProfile: 'exploratory',
+        }),
+      }),
+    )
+    expect(globalRes.status).toBe(200)
+    expect(readGlobalConfig().modelBehavior?.spec).toBe('exploratory')
+
+    const projectRes = await app.fetch(
+      new Request('http://localhost/api/config/models?projectId=provider-test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'project',
+          role: 'worker',
+          behaviorProfile: 'balanced',
+        }),
+      }),
+    )
+    expect(projectRes.status).toBe(200)
+    expect(readWorkspaceConfig(tmpProject).modelBehavior?.worker).toBe('balanced')
   })
 
   it('writes provider-scoped global models when the project prefers openai-api', async () => {
@@ -616,16 +716,16 @@ describe('POST /api/project/start preflight', () => {
       expect(body.providerStatus).toMatchObject({
         preferredProvider: 'llama-cpp',
         preferredProviderFamily: 'openai-compatible',
-        preferredProviderLabel: 'OpenAI-compatible local server',
+        preferredProviderLabel: 'Local OpenAI-compatible',
         preferredCapabilities: {
-          recommendedConcurrency: 1,
+          recommendedConcurrency: 2,
           localServer: true,
         },
         activeProvider: 'anthropic-api',
         activeProviderFamily: 'anthropic-compatible',
         activeProviderLabel: 'Anthropic-compatible API',
         activeCapabilities: {
-          recommendedConcurrency: 4,
+          recommendedConcurrency: 10,
           localServer: false,
         },
         fallback: true,
@@ -732,7 +832,7 @@ describe('POST /api/project/start preflight', () => {
     expect(body.providerStatus).toMatchObject({
       preferredProvider: 'openai-api',
       preferredProviderFamily: 'openai-compatible',
-      preferredProviderLabel: 'OpenAI-compatible API',
+      preferredProviderLabel: 'Remote OpenAI-compatible',
       preferredCapabilities: {
         streaming: true,
         toolCalls: true,
@@ -767,7 +867,7 @@ describe('POST /api/project/start preflight', () => {
     }
     expect(body.defaultProviderStatus).toMatchObject({
       preferredProvider: 'openai-api',
-      preferredProviderLabel: 'OpenAI-compatible API',
+      preferredProviderLabel: 'Remote OpenAI-compatible',
       activeModel: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
     })
     expect(body.defaultProviderStatus?.models?.worker).toBe('Qwen/Qwen3-235B-A22B-Instruct-2507')
@@ -840,7 +940,7 @@ describe('POST /api/project/start preflight', () => {
       code: 'provider_model_scope_mismatch',
       severity: 'warn',
     })
-    expect(body.providerStatus?.warnings?.[0]?.message).toMatch(/OpenAI-compatible API/)
+    expect(body.providerStatus?.warnings?.[0]?.message).toMatch(/Remote OpenAI-compatible/)
     expect(body.providerStatus?.warnings?.[0]?.message).toMatch(/Codex/)
   })
 
@@ -893,7 +993,7 @@ describe('POST /api/project/start preflight', () => {
     expect(body.providerStatus?.laneConcurrency?.reviewerFanout).toMatchObject({
       requested: 3,
       effective: 1,
-      recommended: 1,
+      recommended: 2,
       clamped: true,
     })
     expect(body.providerStatus?.laneConcurrency?.spec).toMatchObject({

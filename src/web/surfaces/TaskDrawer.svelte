@@ -36,7 +36,7 @@
     onClose: () => void
   }
 
-  let { taskId, projectId: _projectId = null, onClose }: Props = $props()
+  let { taskId, projectId = null, onClose }: Props = $props()
 
   let payload = $state<DrawerPayload | null>(null)
   let error = $state<string | null>(null)
@@ -88,8 +88,21 @@
     return `${singleLine.slice(0, max - 1).trim()}...`
   }
 
+  function scopedProjectId(): string | null {
+    const normalized = projectId?.trim()
+    return normalized ? normalized : null
+  }
+
+  function drawerFetch(input: string, init?: RequestInit): Promise<Response> {
+    return projectFetch(input, init, scopedProjectId())
+  }
+
+  function drawerProjectHref(suffix = '/thread'): string {
+    return currentProjectHref(suffix, scopedProjectId())
+  }
+
   async function copyTaskLink(taskId: string): Promise<void> {
-    const href = currentTaskHref(taskId)
+    const href = currentTaskHref(taskId, scopedProjectId())
     const absolute = typeof window === 'undefined'
       ? href
       : new URL(href, window.location.origin).toString()
@@ -127,7 +140,7 @@
 
   async function load() {
     try {
-      const res = await projectFetch(`/api/project/task/${encodeURIComponent(taskId)}`)
+      const res = await drawerFetch(`/api/project/task/${encodeURIComponent(taskId)}`)
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         error = body.error ?? `HTTP ${res.status}`
@@ -146,7 +159,7 @@
   ): Promise<boolean> {
     busy = true
     try {
-      const res = await projectFetch(
+      const res = await drawerFetch(
         `/api/project/task/${encodeURIComponent(taskId)}/${action}`,
         {
           method: 'POST',
@@ -172,7 +185,7 @@
   async function answerQuestion(questionId: string, answer: string): Promise<void> {
     busy = true
     try {
-      const res = await projectFetch(`/api/project/task/${encodeURIComponent(taskId)}/answer-questions`, {
+      const res = await drawerFetch(`/api/project/task/${encodeURIComponent(taskId)}/answer-questions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -204,7 +217,7 @@
     if (taskId === 'task-workspace-import') {
       busy = true
       try {
-        const res = await projectFetch('/api/project/workspace-import/approve', {
+        const res = await drawerFetch('/api/project/workspace-import/approve', {
           method: 'POST',
           headers: body ? { 'content-type': 'application/json' } : undefined,
           body: body ? JSON.stringify(body) : undefined,
@@ -228,6 +241,12 @@
 
   function handleResolveEscalation(escalation: Escalation, mode: 'retry' | 'resolve' = 'resolve') {
     resolveModal = { escalation, mode }
+  }
+
+  function handleOpenEscalationAction(escalationId: string, mode: 'retry' | 'resolve') {
+    const escalation = openEscalations.find(item => item.id === escalationId)
+    if (!escalation) return
+    handleResolveEscalation(escalation, mode)
   }
 
   async function submitResolveEscalation(args: { resolution: string; nextStatus: string }) {
@@ -332,7 +351,7 @@
   const hasCurrentTurns = $derived((payload?.threadTurns?.length ?? 0) > 0)
   const tabs = $derived(
     hasCurrentTurns
-      ? ([{ id: 'current', label: 'Now' }, ...BASE_TABS] as const)
+      ? ([{ id: 'current', label: 'Action' }, ...BASE_TABS] as const)
       : BASE_TABS,
   )
   function isTerminalRunStatus(status: string | undefined): boolean {
@@ -407,6 +426,9 @@
     }
     return null
   })
+  const activeTabOwnsEscalationDecision = $derived(
+    Boolean(firstOpenEscalation) && (activeTab === 'current' || activeTab === 'spec'),
+  )
   const displayTaskTitle = $derived.by(() => {
     if (!task) return taskId
     const raw = typeof task.title === 'string' ? task.title.trim() : ''
@@ -423,6 +445,12 @@
       return 'Starter task spec draft'
     }
     return raw || taskId
+  })
+  const displayTaskDescription = $derived.by(() => {
+    if (!task || typeof task.description !== 'string') return ''
+    const description = task.description.trim()
+    if (!description || description === displayTaskTitle) return ''
+    return description
   })
   const preferSpecTab = $derived.by(() => {
     if (!task) return false
@@ -508,7 +536,7 @@
     runBusy = true
     runError = null
     try {
-      const res = await projectFetch(`/api/project/${action}`, {
+      const res = await drawerFetch(`/api/project/${action}`, {
         method: 'POST',
         headers: action === 'start' ? { 'content-type': 'application/json' } : undefined,
         body: action === 'start'
@@ -589,7 +617,12 @@
 
 <aside class="gh-drawer" aria-label="Task drawer">
   <header class="gh-drawer-head">
-    <h3>{displayTaskTitle}</h3>
+    <div class="drawer-title-block">
+      <h3>{displayTaskTitle}</h3>
+      {#if displayTaskDescription}
+        <p>{displayTaskDescription}</p>
+      {/if}
+    </div>
     <Button variant="ghost" size="sm" ariaLabel="Close" onclick={onClose}>
       <Icon name="x" size={16} />
     </Button>
@@ -614,7 +647,7 @@
     {:else if !payload}
       <p class="loading">Loading...</p>
     {:else}
-      {#if drawerOutcome}
+      {#if drawerOutcome && !activeTabOwnsEscalationDecision}
         <section class={`drawer-outcome tone-${drawerOutcome.tone}`} aria-label={drawerOutcome.eyebrow}>
           <span class="outcome-eyebrow">{drawerOutcome.eyebrow}</span>
           <strong>{drawerOutcome.title}</strong>
@@ -634,14 +667,7 @@
           onRunTask={() => runProject('start', taskId)}
           onShapeDraft={handleShapeDraft}
           onOpenSpecTab={() => (activeTab = 'spec')}
-          onResolveEscalation={async (args) => {
-            await post('resolve-escalation', {
-              escalationId: args.escalationId,
-              resolution: args.resolution,
-              nextStatus: args.nextStatus,
-            })
-            await runProject('start', taskId)
-          }}
+          onOpenEscalationAction={handleOpenEscalationAction}
           onAnswerQuestion={answerQuestion}
         />
       {:else if activeTab === 'spec'}
@@ -682,7 +708,7 @@
             variant="primary"
             size="sm"
             onclick={() => {
-              window.history.pushState({}, '', currentProjectHref('/workspace-import'))
+              window.history.pushState({}, '', drawerProjectHref('/workspace-import'))
               window.dispatchEvent(new PopStateEvent('popstate'))
             }}
           >
@@ -779,7 +805,7 @@
           </Button>
         </div>
         <div class="footer-actions-right">
-          {#if firstOpenEscalation}
+          {#if firstOpenEscalation && !activeTabOwnsEscalationDecision}
             {#if firstOpenEscalationGuidance.actionOwner === 'user'}
               <Button
                 variant="secondary"
@@ -1008,6 +1034,18 @@
   .drawer-outcome strong {
     font-size: var(--fs-2);
     line-height: var(--lh-tight);
+  }
+  .drawer-title-block {
+    display: grid;
+    gap: var(--s-1);
+    min-width: 0;
+  }
+  .drawer-title-block p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-copy);
+    overflow-wrap: anywhere;
   }
   .drawer-outcome span:last-child {
     color: var(--text-muted);

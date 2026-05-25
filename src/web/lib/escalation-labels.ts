@@ -105,6 +105,7 @@ export function escalationUserGuidance(
     summary?: string | undefined
     details?: string | undefined
     agentId?: string | undefined
+    reason?: string | undefined
   } | undefined | null,
 ): EscalationUserGuidance {
   const summary = escalation?.summary ?? ''
@@ -129,12 +130,24 @@ export function escalationUserGuidance(
     }
   }
 
+  if (
+    escalation?.agentId === 'worker-agent' &&
+    /timed out|turn limit|maximum turn|no visible progress|model provider|provider unavailable|local model/i.test(text)
+  ) {
+    return {
+      title: 'Guildhall can retry the worker.',
+      detail: 'The last worker attempt stalled before it finished useful work. This is a Guildhall recovery step, not something you need to solve by hand.',
+      nextStep: 'Use Retry worker to close this blocker and let Guildhall try again. Use Reframe task only if the task itself is wrong, too broad, or unclear.',
+      actionOwner: 'guildhall',
+    }
+  }
+
   const recovery = escalationRecoveryCopy(escalation)
   const hasSpecificRecovery = /no visible progress|made no visible progress|no saved (?:spec|draft)|no durable (?:draft|update)/i.test(text)
   return {
     title: hasSpecificRecovery ? recovery.headline : 'This task needs a recovery decision.',
     detail: hasSpecificRecovery ? recovery.detail : recovery.headline,
-    nextStep: 'Open the task and choose the action that matches what you know: resume Guildhall if it can continue, reframe the task if the brief is unclear, or mark it resolved only if you already handled the blocker outside Guildhall.',
+    nextStep: 'Choose the action that matches what you know: resume Guildhall if it can continue, rework the spec if the brief is unclear, or mark it resolved only if you already handled the blocker outside Guildhall.',
     actionOwner: 'user',
     technicalNote: details && !hasInternalRecoveryLanguage(details) ? stripInternalAcceptanceIds(details) : undefined,
   }
@@ -158,7 +171,7 @@ export function escalationRecoveryCopy(
   return {
     headline: escalation?.summary ?? 'This task needs attention.',
     detail: role === 'Unknown'
-      ? 'Open the task to review the blocker and choose the next step.'
+      ? 'Review the blocker and choose the next step.'
       : `${role} needs a recovery decision before this task can continue.`,
   }
 }
@@ -188,11 +201,14 @@ export function escalationPrimaryAction(
       resolution: 'Retrying gates after addressing the failure.',
     }
   }
-  if (agentId === 'worker-agent' && /turn limit|maximum turn/i.test(text)) {
+  if (
+    agentId === 'worker-agent' &&
+    /turn limit|maximum turn|timed out|no visible progress|made no visible progress|model provider|provider unavailable|local model/i.test(text)
+  ) {
     return {
-      label: 'Resume worker',
+      label: 'Retry worker',
       nextStatus: 'in_progress',
-      resolution: 'Resume the worker with the current spec and continue from the last attempt.',
+      resolution: 'Retry the worker with the current task brief and continue from the last attempt.',
     }
   }
   if (reason === 'spec_ambiguous') {

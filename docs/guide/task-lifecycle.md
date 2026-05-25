@@ -48,8 +48,8 @@ Git story is closed.
 
 After work completes, Guildhall inspects the project or task worktree and shows
 whether changes are dirty, committed only locally, missing an upstream, pushed,
-in an open PR, merged, local-only, deferred, conflicted, or unknown. Release
-readiness blocks on unresolved Git stories so a task cannot silently look
+in an open PR, merged, local-only, deferred, conflicted, or unknown. Current
+work closure blocks on unresolved Git stories so a task cannot silently look
 finished while its branch is still wandering around with a backpack.
 
 Closure actions are controlled by the project's Git Story policy. Guildhall may

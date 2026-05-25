@@ -81,5 +81,5 @@ Each tick:
 4. For any tasks in `gate_check`: run hard gates.
 5. Persist state; emit events.
 
-The Thread, Work, and Release views show the same state machine without needing
+The Thread, Work, and Closure views show the same state machine without needing
 to read Guildhall's source code.

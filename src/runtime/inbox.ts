@@ -44,7 +44,7 @@ export type InboxItem =
   | { kind: 'import_draft_queue'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
   | { kind: 'brief_approval'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
   | { kind: 'spec_approval'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
-  | { kind: 'open_escalation'; severity: 'high'; taskId: string; escalationId: string; title: string; detail: string; actionHref: string }
+  | { kind: 'open_escalation'; severity: 'high'; taskId: string; escalationId: string; title: string; detail: string; actionHref: string; taskDescription?: string }
   | { kind: 'lever_questions'; severity: 'low'; title: string; detail: string; defaultCount: number; actionHref: string }
   | { kind: 'spec_fill_pending'; severity: 'low'; taskId: string; title: string; detail: string; actionHref: string; missingSteps: string[] }
 
@@ -417,6 +417,9 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   for (const t of tasks) {
     const id = typeof t.id === 'string' ? t.id : ''
     const title = typeof t.title === 'string' ? t.title : id
+    const taskDescription = typeof t.description === 'string' && t.description.trim()
+      ? t.description.trim()
+      : undefined
     if (!id) continue
 
     const brief = t.productBrief as { approvedAt?: unknown } | undefined
@@ -551,6 +554,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
         title: truncateTitle(title),
         detail: escalationInboxDetail(summary, reason),
         actionHref: '/task/' + encodeURIComponent(id),
+        ...(taskDescription ? { taskDescription } : {}),
       })
     }
   }

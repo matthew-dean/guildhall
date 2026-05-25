@@ -181,8 +181,8 @@ export async function answerPressureTestQuestion(input: {
     intake.pendingQuestion = {
       id: `${domain.id}-closeout`,
       domainId: domain.id,
-      prompt: `Is there anything else Guildhall should know about ${domain.title.toLowerCase()} before this domain closes?`,
-      why: 'Pressure-test intake closes each domain deliberately so hidden constraints do not vanish.',
+      prompt: `Is there anything else Guildhall should know about ${domain.title.toLowerCase()} before we move to the next topic?`,
+      why: 'Guildhall asks this before leaving a topic so hidden constraints do not vanish.',
       evidence: domain.knownFacts.map(f => `${f.source}: ${f.fact}`),
       askedAt: now,
     }
@@ -248,12 +248,12 @@ export function summarizeProjectCheckIn(memoryDir: string): ProjectCheckInSummar
     needed,
     label: 'Project questions',
     title: needed
-      ? 'Project check-in needed'
+      ? 'Run project check-in'
       : activeCount > 0
         ? 'Project questions in progress'
         : 'Project questions answered',
     detail: needed
-      ? 'Start the first project-question pass so Guildhall can use current project context before it starts guessing.'
+      ? 'Guildhall has not generated the first project questions yet. Start the check-in pass so it can ask one clear question at a time.'
       : activeCount > 0
         ? 'Keep answering the current project questions in Thread.'
         : 'Guildhall has already recorded project-level answers for this workspace.',
@@ -392,7 +392,38 @@ function normalizePressureTestIntake(intake: PressureTestIntake): PressureTestIn
     }
   }
 
+  const normalizedPendingQuestion = intake.pendingQuestion
+    ? normalizeCloseoutQuestionCopy(intake.pendingQuestion)
+    : intake.pendingQuestion
+  const normalizedDomains = intake.domains.map(domain => ({
+    ...domain,
+    askedQuestions: domain.askedQuestions.map(normalizeCloseoutQuestionCopy),
+  }))
+  if (normalizedPendingQuestion !== intake.pendingQuestion || normalizedDomains.some((domain, index) => domain !== intake.domains[index])) {
+    intake = {
+      ...intake,
+      pendingQuestion: normalizedPendingQuestion,
+      domains: normalizedDomains,
+    }
+  }
+
   return intake
+}
+
+function normalizeCloseoutQuestionCopy<T extends { prompt: string; why?: string }>(question: T): T {
+  const prompt = question.prompt
+    .replace(/before this domain closes\?/g, 'before we move to the next topic?')
+    .replace(/before the domain closes\?/g, 'before we move to the next topic?')
+  const why = question.why?.replace(
+    /Pressure-test intake closes each domain deliberately so hidden constraints do not vanish\./g,
+    'Guildhall asks this before leaving a topic so hidden constraints do not vanish.',
+  )
+  if (prompt === question.prompt && why === question.why) return question
+  return {
+    ...question,
+    prompt,
+    ...(why === undefined ? {} : { why }),
+  }
 }
 
 function needsConcreteFollowUp(answer: string): boolean {

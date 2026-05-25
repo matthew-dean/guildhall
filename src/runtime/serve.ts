@@ -36,19 +36,23 @@ import {
   resolveModelsForProvider,
   mergeModels,
   type ProviderKind,
+  type WorkspaceYamlConfig,
   writeModelsForProvider,
 } from '@guildhall/config'
 import {
   MODEL_CATALOG,
+  MODEL_BEHAVIOR_PROFILES,
   type Checkpoint,
   DEFAULT_LOCAL_MODEL_ASSIGNMENT,
   DEFAULT_CLOUD_MODEL_ASSIGNMENT,
   type ModelAssignmentConfig,
+  type ModelBehaviorProfile,
 } from '@guildhall/core'
 import {
   loadCodebaseMap,
   loadCodebaseMapStaleState,
   refreshCodebaseMap,
+  type CodebaseMap,
 } from '@guildhall/corpus-map'
 import {
   loadLeverSettings,
@@ -70,7 +74,7 @@ import {
   resolveEscalation,
   updateDesignSystem,
 } from '@guildhall/tools'
-import { DesignSystem, summarizeDesignSystem, type Task } from '@guildhall/core'
+import { DesignSystem, summarizeDesignSystem, type DesignSystem as DesignSystemRecord, type Task } from '@guildhall/core'
 import {
   loadProjectGuildRoster,
   selectApplicableGuilds,
@@ -821,6 +825,97 @@ function summarizeProject(project: ResolvedProject): ServiceProjectSummary {
   }
 }
 
+type ReleaseDesignSystemSource = 'guildhall' | 'repo' | 'none'
+
+interface ReleaseDesignSystemStatus {
+  drafted: boolean
+  approved: boolean
+  revision: number
+  source: ReleaseDesignSystemSource
+  label: string
+  reason?: string
+}
+
+function hasRepoDesignSystemSignals(config: WorkspaceYamlConfig | null, map: CodebaseMap | null | undefined): boolean {
+  const componentFiles = map?.designSystem?.componentFiles?.length ?? 0
+  const primitives = map?.designSystem?.primitives?.length ?? 0
+  const tokenCounts = map?.designSystem?.tokenCounts
+    ? Object.values(map.designSystem.tokenCounts).reduce((sum, count) => sum + count, 0)
+    : 0
+  if (componentFiles >= 3 || primitives > 0 || tokenCounts > 0) return true
+
+  if (!config) return false
+  const text = [
+    config.name,
+    config.kind,
+    ...(config.tags ?? []),
+    config.council?.mandate ?? '',
+    ...(config.projects ?? []).flatMap(project => [
+      project.id,
+      project.label ?? '',
+      project.type ?? '',
+      project.path,
+      project.coordinator ?? '',
+    ]),
+    ...(config.coordinators ?? []).flatMap(coordinator => [
+      coordinator.id,
+      coordinator.name ?? '',
+      coordinator.domain,
+      coordinator.path ?? '',
+      coordinator.mandate,
+    ]),
+  ].join('\n').toLowerCase()
+
+  return [
+    'design system',
+    'design-system',
+    'component library',
+    'component-library',
+    'ui library',
+    'ui-library',
+  ].some(signal => text.includes(signal))
+}
+
+function releaseDesignSystemStatus(
+  ds: DesignSystemRecord | undefined,
+  config: WorkspaceYamlConfig | null,
+  map: CodebaseMap | null | undefined,
+): ReleaseDesignSystemStatus {
+  if (ds) {
+    const approved = Boolean(ds.approvedAt)
+    return {
+      drafted: true,
+      approved,
+      revision: ds.revision ?? 0,
+      source: 'guildhall',
+      label: approved ? `approved · rev ${ds.revision ?? 0}` : `draft · rev ${ds.revision ?? 0}`,
+      reason: approved
+        ? 'Guildhall has an approved design guardrail for this project.'
+        : 'A design guardrail is drafted but still needs approval.',
+    }
+  }
+
+  if (hasRepoDesignSystemSignals(config, map)) {
+    return {
+      drafted: true,
+      approved: true,
+      revision: 0,
+      source: 'repo',
+      label: 'detected in repo',
+      reason: 'This project already contains its design system or component library.',
+    }
+  }
+
+  return {
+    drafted: false,
+    approved: false,
+    revision: 0,
+    source: 'none',
+    label: 'not captured',
+    reason: 'No design-system guardrail is captured yet.',
+  }
+}
+
 async function chooseProjectFolderMacOS(): Promise<string | null> {
   try {
     const { stdout } = await execFileP('osascript', [
@@ -901,6 +996,30 @@ function summarizeTaskCounts(tasks: Array<Record<string, unknown>>): ServiceProj
     done,
     shelved,
   }
+}
+
+function hasApprovedProductBriefRecord(task: Record<string, unknown>): boolean {
+  const brief = task.productBrief
+  return Boolean(
+    brief &&
+    typeof brief === 'object' &&
+    !Array.isArray(brief) &&
+    typeof (brief as { approvedAt?: unknown }).approvedAt === 'string' &&
+    (brief as { approvedAt: string }).approvedAt.trim().length > 0,
+  )
+}
+
+function hasSpecDraftRecord(task: Record<string, unknown>): boolean {
+  return (
+    typeof task.spec === 'string' &&
+    task.spec.trim().length > 0 &&
+    Array.isArray(task.acceptanceCriteria) &&
+    task.acceptanceCriteria.length > 0
+  )
+}
+
+function isReadyForWorkerHandoffRecord(task: Record<string, unknown>): boolean {
+  return hasApprovedProductBriefRecord(task) && hasSpecDraftRecord(task)
 }
 
 function summarizeTaskActivity(
@@ -2348,6 +2467,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath)
     if (importDraftBlocker) return importDraftBlocker
 
+    const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
+    if (taskReadinessBlocker) return taskReadinessBlocker
+
     const terminal = terminalStartState(input.projectPath)
     if (terminal) {
       return {
@@ -2546,6 +2668,70 @@ export function buildServeApp(opts: ServeOptions = {}): {
           : `Review ${importDrafts.length} imported drafts before starting Guildhall. Start with "${title}".`,
       actionHref: id ? `/task/${encodeURIComponent(id)}` : '/notifications',
     }
+  }
+
+  async function startBlockerForTaskReadiness(projectPath: string): Promise<{
+    canStart: false
+    code: 'no_unattended_progress'
+    message: string
+    actionHref: string
+  } | null> {
+    const tasksPath = join(getProjectStateDir(projectPath), 'TASKS.json')
+    if (!existsSync(tasksPath)) return null
+    const raw = JSON.parse(await fsp.readFile(tasksPath, 'utf-8')) as
+      | { tasks?: Array<Record<string, unknown>> }
+      | Array<Record<string, unknown>>
+    const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
+    if (tasks.length === 0) return null
+
+    let runnable = 0
+    let needsBriefCleanup = 0
+    let waitingForApproval = 0
+    let terminal = 0
+    for (const task of tasks) {
+      if (!task || typeof task !== 'object') continue
+      const status = String((task as { status?: unknown }).status ?? '')
+      if (['done', 'blocked', 'shelved', 'pending_pr'].includes(status)) {
+        terminal += 1
+        continue
+      }
+      if (status === 'spec_review') {
+        waitingForApproval += 1
+        continue
+      }
+      if (status === 'ready' && !isReadyForWorkerHandoffRecord(task)) {
+        needsBriefCleanup += 1
+        continue
+      }
+      if (['proposed', 'exploring', 'ready', 'in_progress', 'review', 'gate_check'].includes(status)) {
+        runnable += 1
+      }
+    }
+
+    if (runnable > 0 || terminal === tasks.length) return null
+    if (needsBriefCleanup > 0) {
+      return {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message:
+          needsBriefCleanup === 1
+            ? 'One task needs a clearer brief and acceptance criteria before Guildhall can build unattended.'
+            : `${needsBriefCleanup} tasks need clearer briefs and acceptance criteria before Guildhall can build unattended.`,
+        actionHref: '/work',
+      }
+    }
+    if (waitingForApproval > 0) {
+      return {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message:
+          waitingForApproval === 1
+            ? 'Review the waiting spec before starting Guildhall.'
+            : `Review ${waitingForApproval} waiting specs before starting Guildhall.`,
+        actionHref: '/thread',
+      }
+    }
+    return null
   }
 
   function startBlockerForOwnerInput(projectPath: string): {
@@ -3175,12 +3361,41 @@ export function buildServeApp(opts: ServeOptions = {}): {
         areas: map?.areas.length ?? 0,
         abstractions: map?.abstractions.length ?? 0,
       },
+      project: map
+        ? {
+            summary: map.project.summary,
+            languages: map.project.languages,
+            packageManagers: map.project.packageManagers,
+            primaryFrameworks: map.project.primaryFrameworks,
+          }
+        : null,
+      entrypoints: map?.entrypoints.slice(0, 8) ?? [],
+      areas: map?.areas.slice(0, 6).map(area => ({
+        id: area.id,
+        title: area.title,
+        summary: area.summary,
+        owns: area.owns.slice(0, 4),
+        canonicalFiles: area.canonicalFiles.slice(0, 5),
+        conventions: area.conventions.slice(0, 4),
+        tests: area.tests.slice(0, 4),
+      })) ?? [],
+      abstractions: map?.abstractions.slice(0, 8).map(abstraction => ({
+        id: abstraction.id,
+        title: abstraction.title,
+        kind: abstraction.kind,
+        canonicalPath: abstraction.canonicalPath,
+        useWhen: abstraction.useWhen.slice(0, 3),
+        avoid: abstraction.avoid.slice(0, 3),
+        related: abstraction.related.slice(0, 5),
+      })) ?? [],
       designSystem: map?.designSystem
         ? {
             maturity: map.designSystem.maturity,
             approved: map.designSystem.approved,
             tokenCounts: map.designSystem.tokenCounts,
             primitives: map.designSystem.primitives.length,
+            tokenSamples: map.designSystem.tokenSamples.slice(0, 8),
+            componentFiles: map.designSystem.componentFiles.slice(0, 8),
             recommendations: map.designSystem.recommendations,
           }
         : null,
@@ -3190,6 +3405,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
             corpusKind: map.semantic.corpusKind,
             confidence: map.semantic.confidence,
             projectPurpose: map.semantic.projectPurpose,
+            currentTruth: map.semantic.currentTruth.slice(0, 6),
+            architectureAreas: map.semantic.architectureAreas.slice(0, 6),
+            canonicalAbstractions: map.semantic.canonicalAbstractions.slice(0, 6),
+            gapsOrRisks: map.semantic.gapsOrRisks.slice(0, 6),
             readNext: map.semantic.readNext.slice(0, 4),
             workerGuidance: map.semantic.workerGuidance.slice(0, 4),
             needsBroaderRead: map.semantic.needsBroaderRead,
@@ -3872,7 +4091,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         },
         workspace: {
           goals: workspaceGoals,
-          reviewHref: '/workspace-import',
+          reviewHref: `/projects/${encodeURIComponent(project.id)}/workspace-import`,
         },
         coordinators: {
           count: cfg?.coordinators?.length ?? 0,
@@ -3910,6 +4129,45 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  async function fileSummary(filePath: string): Promise<{ present: boolean; nonEmptyLines: number }> {
+    if (!existsSync(filePath)) return { present: false, nonEmptyLines: 0 }
+    try {
+      const raw = await fsp.readFile(filePath, 'utf-8')
+      const nonEmptyLines = raw
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(line => line.length > 0 && !/^#\s/.test(line) && !/^_Updated by GuildHall agents\._$/i.test(line))
+        .length
+      return { present: true, nonEmptyLines }
+    } catch {
+      return { present: true, nonEmptyLines: 0 }
+    }
+  }
+
+  async function buildProjectContextSummary(memoryDir: string): Promise<{
+    projectBrief: { present: boolean; nonEmptyLines: number }
+    projectNotes: { present: boolean; nonEmptyLines: number }
+    decisions: { present: boolean; nonEmptyLines: number }
+    workspaceGoals: { present: boolean; goalCount: number }
+  }> {
+    const [projectBrief, projectNotes, decisions] = await Promise.all([
+      fileSummary(join(memoryDir, 'project-brief.md')),
+      fileSummary(join(memoryDir, 'MEMORY.md')),
+      fileSummary(join(memoryDir, 'DECISIONS.md')),
+    ])
+    let workspaceGoals = { present: false, goalCount: 0 }
+    const goalsPath = join(memoryDir, 'workspace-goals.json')
+    if (existsSync(goalsPath)) {
+      try {
+        const raw = JSON.parse(await fsp.readFile(goalsPath, 'utf-8')) as { goals?: unknown[] }
+        workspaceGoals = { present: true, goalCount: Array.isArray(raw.goals) ? raw.goals.length : 0 }
+      } catch {
+        workspaceGoals = { present: true, goalCount: 0 }
+      }
+    }
+    return { projectBrief, projectNotes, decisions, workspaceGoals }
+  }
+
   app.get('/api/project/learning', async c => {
     try {
       if (project.initializationNeeded) {
@@ -3917,6 +4175,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           project: null,
           user: null,
           effective: null,
+          projectContext: null,
         })
       }
       const memoryDir = getProjectStateDir(project.path)
@@ -3945,6 +4204,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return c.json({
         ...buildLearningSnapshot({ memoryDir, review, draft }),
         projectSkillProposals: readProjectSkillProposals(memoryDir),
+        projectContext: await buildProjectContextSummary(memoryDir),
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -4749,6 +5009,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   //   approve-spec       → ready  (human approves a spec_review task; body: {approvalNote?})
   //   approve-brief      → mark productBrief.approvedBy/approvedAt = human
   //   mark-done          → done   (human confirms the task is already complete; body: {evidence?})
+  //   update-brief       → fill missing task-brief fields from human input
   //   add-acceptance     → append a human-written acceptance criterion
   //   resume             → append a follow-up message to an exploring transcript
   //                        (body: {message?, resolveEscalationId?, resolution?})
@@ -4768,6 +5029,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         'approve-spec',
         'approve-brief',
         'mark-done',
+        'update-brief',
         'add-acceptance',
         'resume',
         'reframe-task',
@@ -5006,6 +5268,79 @@ export function buildServeApp(opts: ServeOptions = {}): {
         queue.lastUpdated = now
         atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true, count: criteria.length })
+      }
+
+      if (action === 'update-brief') {
+        const body = await c.req.json().catch(() => ({})) as {
+          successTarget?: string
+          acceptanceCriterion?: string
+          userJob?: string
+        }
+        const successTarget = (body.successTarget ?? '').trim()
+        const acceptanceCriterion = (body.acceptanceCriterion ?? '').trim()
+        const userJob = (body.userJob ?? '').trim()
+        if (!successTarget && !acceptanceCriterion && !userJob) {
+          return c.json({ error: 'Add a success target or an acceptance criterion.' }, 400)
+        }
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const parsed = JSON.parse(readFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        const now = new Date().toISOString()
+        const currentBrief = task.productBrief && typeof task.productBrief === 'object' && !Array.isArray(task.productBrief)
+          ? task.productBrief as Record<string, unknown>
+          : {}
+        const fallbackUserJob =
+          typeof currentBrief.userJob === 'string' && currentBrief.userJob.trim()
+            ? currentBrief.userJob.trim()
+            : userJob ||
+              (typeof task.description === 'string' && task.description.trim()
+                ? task.description.trim()
+                : String(task.title ?? id).trim())
+        task.productBrief = {
+          ...currentBrief,
+          userJob: fallbackUserJob,
+          ...(successTarget ? { successMetric: successTarget, successCriteria: successTarget } : {}),
+          authoredBy: currentBrief.authoredBy ?? 'human',
+        }
+
+        if (acceptanceCriterion) {
+          const criteria = Array.isArray(task.acceptanceCriteria)
+            ? [...task.acceptanceCriteria as Array<Record<string, unknown>>]
+            : []
+          criteria.push({
+            id: `ac-${criteria.length + 1}`,
+            description: acceptanceCriterion,
+            verifiedBy: 'review',
+            met: false,
+          })
+          task.acceptanceCriteria = criteria
+        }
+
+        const notes = Array.isArray(task.notes)
+          ? [...task.notes as Array<Record<string, unknown>>]
+          : []
+        const noteParts = [
+          successTarget ? `Success target: ${successTarget}` : '',
+          acceptanceCriterion ? `Acceptance criterion: ${acceptanceCriterion}` : '',
+        ].filter(Boolean)
+        notes.push({
+          agentId: 'human',
+          role: 'specifier',
+          content: `Updated task brief. ${noteParts.join(' ')}`.trim(),
+          timestamp: now,
+        })
+        task.notes = notes
+        task.updatedAt = now
+        queue.lastUpdated = now
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        return c.json({ ok: true })
       }
 
       if (action === 'answer-question') {
@@ -5586,16 +5921,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
   })
 
   // -------------------------------------------------------------------------
-  // API: release readiness
+  // API: current work closure
   //
-  // Aggregates the signals that decide "is this project ready to ship its
-  // next milestone?" into a single readout. Intentionally shallow — it
-  // summarizes, it doesn't gate. The Release view renders the sections
+  // Aggregates the signals that decide "is the work Guildhall is tracking
+  // currently closed enough to hand off, ship, or intentionally defer?" into a
+  // single readout. Intentionally shallow — it summarizes, it doesn't gate.
+  // The Closure view renders the sections
   // and links back into drawers / Settings for fix-its.
   // -------------------------------------------------------------------------
   app.get('/api/project/release-readiness', async c => {
     try {
-      if (project.initializationNeeded) return c.json({ initializationNeeded: true })
+      const closureScope = {
+        kind: 'current_work',
+        label: 'Current Guildhall work',
+        description:
+          'Guildhall is checking the work it is tracking now. This is not a named version or milestone selector yet.',
+      }
+      if (project.initializationNeeded) return c.json({ initializationNeeded: true, scope: closureScope })
       const memoryDir = getProjectStateDir(project.path)
       const tasksPath = join(memoryDir, 'TASKS.json')
       const rawTasks: Array<Record<string, unknown>> = (() => {
@@ -5610,8 +5952,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         .find(intake => intake.status === 'active' && intake.pendingQuestion)
       if (activePressureTest?.pendingQuestion) {
         return c.json({
+          scope: closureScope,
           ready: false,
-          notReadyReason: `Pressure test in progress. Answer the current question for ${activePressureTest.target.title} before judging release readiness.`,
+          notReadyReason: `Guildhall has one more question for ${activePressureTest.target.title}. Answer it before judging whether the current work can close.`,
           statusCounts: {},
           openEscalations: [],
           unapprovedBriefs: [],
@@ -5622,6 +5965,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
             drafted: false,
             approved: false,
             revision: 0,
+            source: 'none',
+            label: 'not captured',
+            reason: 'No design-system guardrail is captured yet.',
           },
           dirtyCheckout: {
             ownedCount: 0,
@@ -5644,7 +5990,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
           },
         })
       }
-      const ds = await loadDesignSystem(memoryDir).catch(() => undefined)
+      const [ds, codebaseMap] = await Promise.all([
+        loadDesignSystem(memoryDir).catch(() => undefined),
+        loadCodebaseMap(memoryDir).catch(() => null),
+      ])
+      const designSystem = releaseDesignSystemStatus(ds, project.config, codebaseMap)
       const dirtyCheckout = await guildhallOwnedDirtyCheckout(project.path)
       const gitStory = await buildProjectGitStorySummary(project.path, tasks)
 
@@ -5690,15 +6040,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
       }
 
-      const designSystemApproved = Boolean(ds?.approvedAt)
-      const designSystemDrafted = Boolean(ds)
-
       const humanBlockingCount =
         openEscalations.length
         + unapprovedBriefs.length
         + unapprovedSpecs.length
         + blockedByAgent.length
-      const designSystemBlockingCount = tasks.length > 0 && !designSystemApproved ? 1 : 0
+      const designSystemBlockingCount = tasks.length > 0 && !designSystem.approved ? 1 : 0
       const dirtyCheckoutBlockingCount = dirtyCheckout.ownedCount > 0 || dirtyCheckout.error ? 1 : 0
       const gitStoryBlockingCount = gitStory.blockers.length
       const blockingCount =
@@ -5709,6 +6056,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         + gitStoryBlockingCount
 
       return c.json({
+        scope: closureScope,
         ready: tasks.length > 0 && blockingCount === 0,
         ...(tasks.length === 0 ? { notReadyReason: 'No tasks in this project yet.' } : {}),
         statusCounts,
@@ -5717,11 +6065,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         unapprovedSpecs,
         shelvedUnclaimed,
         blockedByAgent,
-        designSystem: {
-          drafted: designSystemDrafted,
-          approved: designSystemApproved,
-          revision: ds?.revision ?? 0,
-        },
+        designSystem,
         dirtyCheckout,
         gitStory,
         totals: {
@@ -5741,6 +6085,34 @@ export function buildServeApp(opts: ServeOptions = {}): {
   })
 
   async function guildhallOwnedDirtyCheckout(projectPath: string): Promise<{
+    ownedCount: number
+    files: string[]
+    error?: string
+  }> {
+    const workspaceConfig = readWorkspaceConfig(projectPath)
+    const childProjects = workspaceConfig.kind === 'workspace'
+      ? resolveWorkspaceProjectPaths(projectPath, workspaceConfig)
+      : []
+    if (childProjects.length > 0) {
+      const results = await Promise.all(childProjects.map(async (child) => {
+        const result = await guildhallOwnedDirtyCheckoutInRepo(child.path)
+        return {
+          ...result,
+          files: result.files.map(file => `${child.id}/${file}`),
+        }
+      }))
+      const ownedFiles = results.flatMap(result => result.files)
+      const errors = results.filter(result => result.error).map(result => result.error).filter(Boolean)
+      return {
+        ownedCount: ownedFiles.length,
+        files: ownedFiles.slice(0, 12),
+        ...(ownedFiles.length === 0 && errors.length === results.length && errors[0] ? { error: errors[0] } : {}),
+      }
+    }
+    return guildhallOwnedDirtyCheckoutInRepo(projectPath)
+  }
+
+  async function guildhallOwnedDirtyCheckoutInRepo(projectPath: string): Promise<{
     ownedCount: number
     files: string[]
     error?: string
@@ -5911,6 +6283,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const configuredOpenAiBaseUrl = creds.openaiBaseUrl ?? ''
 
       const v = (kind: ProviderKind) => global.providers[kind]?.verifiedAt ?? null
+      const maxConcurrency = (kind: ProviderKind) => global.providers[kind]?.maxConcurrency ?? null
 
       return c.json({
         preferredProvider: stored.preferredProvider ?? readGlobalConfig().preferredProvider ?? null,
@@ -5919,6 +6292,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             label: providerLabelForSetupKey('claude-oauth'),
             detected: claudeInstalled,
             verifiedAt: v('claude-oauth'),
+            maxConcurrency: maxConcurrency('claude-oauth'),
             detail: claudeInstalled
               ? `Credentials detected at ${claudeCredPath}`
               : 'Install Claude Code and run `claude auth login`.',
@@ -5927,6 +6301,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             label: providerLabelForSetupKey('codex'),
             detected: codexInstalled,
             verifiedAt: v('codex-oauth'),
+            maxConcurrency: maxConcurrency('codex-oauth'),
             detail: codexInstalled
               ? `Credentials detected at ${codexCredPath}`
               : 'Install the Codex CLI and run `codex auth login`.',
@@ -5935,6 +6310,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             label: providerLabelForSetupKey('llama-cpp'),
             detected: llamaReachable,
             verifiedAt: v('llama-cpp'),
+            maxConcurrency: maxConcurrency('llama-cpp'),
             url: llamaReachable ? llamaUrl : configuredLlamaUrl || null,
             detail:
               configuredLlamaUrl.length === 0 && !llamaReachable
@@ -5947,6 +6323,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             label: providerLabelForSetupKey('anthropic-api'),
             detected: Boolean(creds.anthropicApiKey),
             verifiedAt: v('anthropic-api'),
+            maxConcurrency: maxConcurrency('anthropic-api'),
             detail: global.providers['anthropic-api']?.apiKey
               ? 'Stored in ~/.guildhall/providers.yaml'
               : process.env.ANTHROPIC_API_KEY
@@ -5957,6 +6334,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             label: providerLabelForSetupKey('openai-api'),
             detected: Boolean(creds.openaiApiKey),
             verifiedAt: v('openai-api'),
+            maxConcurrency: maxConcurrency('openai-api'),
             baseUrl: configuredOpenAiBaseUrl || null,
             detail: global.providers['openai-api']?.apiKey
               ? configuredOpenAiBaseUrl
@@ -5978,13 +6356,38 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.post('/api/setup/providers/config', async c => {
     try {
       const body = (await c.req.json().catch(() => ({}))) as {
+        provider?: string
         preferredProvider?: string
         anthropicApiKey?: string
         openaiApiKey?: string
         openaiBaseUrl?: string
         lmStudioUrl?: string
+        maxConcurrency?: number
       }
       const allowed = SETUP_PROVIDER_ORDER
+      const requestedMaxConcurrency = body.maxConcurrency == null
+        ? undefined
+        : Math.floor(Number(body.maxConcurrency))
+      if (body.maxConcurrency != null) {
+        const ceiling = readGlobalConfig().maxProviderConcurrency
+        if (
+          requestedMaxConcurrency == null ||
+          !Number.isFinite(requestedMaxConcurrency) ||
+          requestedMaxConcurrency < 1 ||
+          requestedMaxConcurrency > ceiling
+        ) {
+          return c.json({ error: `maxConcurrency must be between 1 and ${ceiling}` }, 400)
+        }
+      }
+      const maxConcurrency = requestedMaxConcurrency
+      const providerForConcurrency = body.provider === 'codex'
+        ? 'codex-oauth'
+        : body.provider
+      if (providerForConcurrency && !((
+        [...allowed, 'codex-oauth'] as readonly string[]
+      ).includes(providerForConcurrency))) {
+        return c.json({ error: `Unknown provider "${body.provider}"` }, 400)
+      }
       // preferredProvider is machine-level by default. Projects may still
       // override it locally when needed, but the setup flow writes the shared
       // default rather than stamping every project.
@@ -5997,9 +6400,31 @@ export function buildServeApp(opts: ServeOptions = {}): {
           preferredProvider: body.preferredProvider as (typeof allowed)[number],
         })
       }
+      if (
+        maxConcurrency != null &&
+        (providerForConcurrency === 'claude-oauth' || providerForConcurrency === 'codex-oauth')
+      ) {
+        const existing = readGlobalProviders().providers[providerForConcurrency]
+        setProvider(providerForConcurrency, {
+          ...(existing ?? {}),
+          maxConcurrency,
+        })
+      }
       // Credentials go to the global store.
       if (typeof body.anthropicApiKey === 'string' && body.anthropicApiKey.trim().length > 0) {
-        setProvider('anthropic-api', { apiKey: body.anthropicApiKey.trim() })
+        const existing = readGlobalProviders().providers['anthropic-api']
+        setProvider('anthropic-api', {
+          apiKey: body.anthropicApiKey.trim(),
+          ...(existing?.verifiedAt ? { verifiedAt: existing.verifiedAt } : {}),
+          ...(maxConcurrency != null && providerForConcurrency === 'anthropic-api'
+            ? { maxConcurrency }
+            : existing?.maxConcurrency
+              ? { maxConcurrency: existing.maxConcurrency }
+              : {}),
+        })
+      } else if (maxConcurrency != null && providerForConcurrency === 'anthropic-api') {
+        const existing = readGlobalProviders().providers['anthropic-api']
+        if (existing?.apiKey) setProvider('anthropic-api', { ...existing, maxConcurrency })
       }
       if (typeof body.openaiApiKey === 'string' && body.openaiApiKey.trim().length > 0) {
         const existing = readGlobalProviders().providers['openai-api']
@@ -6008,6 +6433,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
           apiKey: body.openaiApiKey.trim(),
           ...(baseUrl ? { baseUrl } : {}),
           ...(existing?.verifiedAt ? { verifiedAt: existing.verifiedAt } : {}),
+          ...(maxConcurrency != null && providerForConcurrency === 'openai-api'
+            ? { maxConcurrency }
+            : existing?.maxConcurrency
+              ? { maxConcurrency: existing.maxConcurrency }
+              : {}),
         })
       } else if (typeof body.openaiBaseUrl === 'string') {
         const existing = readGlobalProviders().providers['openai-api']
@@ -6017,12 +6447,32 @@ export function buildServeApp(opts: ServeOptions = {}): {
             apiKey: existing.apiKey,
             ...(baseUrl ? { baseUrl } : {}),
             ...(existing.verifiedAt ? { verifiedAt: existing.verifiedAt } : {}),
+            ...(maxConcurrency != null && providerForConcurrency === 'openai-api'
+              ? { maxConcurrency }
+              : existing.maxConcurrency
+                ? { maxConcurrency: existing.maxConcurrency }
+                : {}),
           })
         }
+      } else if (maxConcurrency != null && providerForConcurrency === 'openai-api') {
+        const existing = readGlobalProviders().providers['openai-api']
+        if (existing?.apiKey) setProvider('openai-api', { ...existing, maxConcurrency })
       }
       if (typeof body.lmStudioUrl === 'string' && body.lmStudioUrl.trim().length > 0) {
         const url = body.lmStudioUrl.trim()
-        setProvider('llama-cpp', { url })
+        const existing = readGlobalProviders().providers['llama-cpp']
+        setProvider('llama-cpp', {
+          url,
+          ...(existing?.verifiedAt ? { verifiedAt: existing.verifiedAt } : {}),
+          ...(maxConcurrency != null && providerForConcurrency === 'llama-cpp'
+            ? { maxConcurrency }
+            : existing?.maxConcurrency
+              ? { maxConcurrency: existing.maxConcurrency }
+              : {}),
+        })
+      } else if (maxConcurrency != null && providerForConcurrency === 'llama-cpp') {
+        const existing = readGlobalProviders().providers['llama-cpp']
+        if (existing?.url) setProvider('llama-cpp', { ...existing, maxConcurrency })
       }
       return c.json({ ok: true })
     } catch (err) {
@@ -6374,6 +6824,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         globalModels: resolveModelsForProvider(global.models, preferredProvider),
         projectModels: resolveModelsForProvider(workspace.models, preferredProvider),
         effectiveModels: resolved.models,
+        globalBehavior: global.modelBehavior ?? {},
+        projectBehavior: workspace.modelBehavior ?? {},
+        effectiveBehavior: resolved.modelBehavior,
+        behaviorProfiles: MODEL_BEHAVIOR_PROFILES,
         loadedModels,
         missingModels,
         catalog: [
@@ -6415,8 +6869,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         role?: keyof ModelAssignmentConfig
         model?: string
         models?: Partial<ModelAssignmentConfig>
+        behaviorProfile?: ModelBehaviorProfile
       }
       const roles: Array<keyof ModelAssignmentConfig> = ['spec', 'coordinator', 'worker', 'reviewer', 'gateChecker', 'contextIndexer']
+      const behaviorIds = new Set(MODEL_BEHAVIOR_PROFILES.map(profile => profile.id))
       if (!body.scope) return c.json({ error: 'Missing "scope"' }, 400)
       if (body.scope !== 'global' && !c.req.query('projectId')?.trim()) {
         return c.json({ error: 'Choose a project before saving project model overrides.' }, 400)
@@ -6437,6 +6893,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!requestedModels && (!body.role || !roles.includes(body.role))) {
         return c.json({ error: 'Unknown model role' }, 400)
       }
+      if (body.role && !roles.includes(body.role)) {
+        return c.json({ error: 'Unknown model role' }, 400)
+      }
+      const requestedBehavior = typeof body.behaviorProfile === 'string'
+        ? body.behaviorProfile.trim()
+        : undefined
+      if (requestedBehavior && !behaviorIds.has(requestedBehavior as ModelBehaviorProfile)) {
+        return c.json({ error: 'Unknown behavior profile' }, 400)
+      }
+      const hasSingleModel = typeof body.model === 'string'
+      const hasBehavior = requestedBehavior !== undefined
+      if (!requestedModels && !hasSingleModel && !hasBehavior && body.scope !== 'global-default') {
+        return c.json({ error: 'Missing "model" or behaviorProfile' }, 400)
+      }
 
       if (body.scope === 'global') {
         const global = readGlobalConfig()
@@ -6447,25 +6917,32 @@ export function buildServeApp(opts: ServeOptions = {}): {
             if (!trimmed) return c.json({ error: 'Missing "model"' }, 400)
             nextModels[role] = trimmed
           }
-        } else {
+        } else if (hasSingleModel) {
           const model = body.model?.trim()
           if (!model || !body.role) return c.json({ error: 'Missing "model"' }, 400)
           nextModels[body.role] = model
         }
         updateGlobalConfig({
           ...global,
-          models: writeModelsForProvider(global.models, preferredProvider, nextModels),
+          ...(requestedModels || hasSingleModel
+            ? { models: writeModelsForProvider(global.models, preferredProvider, nextModels) }
+            : {}),
+          ...(requestedBehavior && body.role
+            ? { modelBehavior: { ...(global.modelBehavior ?? {}), [body.role]: requestedBehavior as ModelBehaviorProfile } }
+            : {}),
         })
         return c.json({ ok: true })
       }
 
       const workspace = readWorkspaceConfig(workspacePath)
       const nextModels = { ...resolveModelsForProvider(workspace.models, preferredProvider) }
+      const nextBehavior = { ...(workspace.modelBehavior ?? {}) }
       if (body.scope === 'global-default') {
         if (requestedModels) {
           for (const [role] of requestedModels) delete nextModels[role]
         } else if (body.role) {
           delete nextModels[body.role]
+          delete nextBehavior[body.role]
         }
       } else if (body.scope === 'project') {
         if (requestedModels) {
@@ -6474,10 +6951,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
             if (!trimmed) return c.json({ error: 'Missing "model"' }, 400)
             nextModels[role] = trimmed
           }
-        } else if (body.role) {
+        } else if (hasSingleModel && body.role) {
           const model = body.model?.trim()
           if (!model) return c.json({ error: 'Missing "model"' }, 400)
           nextModels[body.role] = model
+        }
+        if (requestedBehavior && body.role) {
+          nextBehavior[body.role] = requestedBehavior as ModelBehaviorProfile
         }
       } else {
         return c.json({ error: 'Unknown model scope' }, 400)
@@ -6488,6 +6968,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         nextConfig.models = writeModelsForProvider(workspace.models, preferredProvider, nextModels)
       } else {
         delete nextConfig.models
+      }
+      if (Object.keys(nextBehavior).length > 0) {
+        nextConfig.modelBehavior = nextBehavior
+      } else {
+        delete nextConfig.modelBehavior
       }
       writeWorkspaceConfig(workspacePath, nextConfig)
       refreshProject(project.path)

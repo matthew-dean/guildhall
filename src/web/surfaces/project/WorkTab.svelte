@@ -15,7 +15,7 @@
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
   import { buildWorkSurface } from '../../lib/project-data.js'
   import { friendlyRuntimeMessage } from '../../lib/runtime-message.js'
-  import { isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup, workerHandoffStatus } from '../../lib/task-state.js'
+  import { effectiveWorkStatus, isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
 
@@ -181,14 +181,7 @@
   }
 
   function effectiveStatus(task: Task): string | undefined {
-    const handoffStatus = workerHandoffStatus(task)
-    if (handoffStatus === 'needs_spec_cleanup') return handoffStatus
-    if (detail.run?.status !== 'running') {
-      if (task.status === 'in_progress') return 'paused'
-      if (task.status === 'review') return 'review_waiting'
-      if (task.status === 'gate_check') return 'gates_waiting'
-    }
-    return task.status
+    return effectiveWorkStatus(task, detail.run?.status === 'running')
   }
 
   function effectiveStatusLabel(task: Task): string {

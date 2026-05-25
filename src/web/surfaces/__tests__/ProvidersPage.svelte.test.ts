@@ -33,7 +33,7 @@ const providersPayload = {
       verifiedAt: null,
     },
     'openai-api': {
-      label: 'OpenAI-compatible API',
+      label: 'Remote OpenAI-compatible',
       detail: 'OpenAI or DeepInfra-compatible endpoint',
       detected: true,
       verifiedAt: null,
@@ -59,6 +59,27 @@ const modelsPayload = {
     contextIndexer: 'qwen/qwen3.6-35b-a3b',
   },
   effectiveModels: {},
+  globalBehavior: {
+    spec: 'balanced',
+    coordinator: 'balanced',
+    worker: 'precise',
+    reviewer: 'precise',
+    gateChecker: 'precise',
+    contextIndexer: 'precise',
+  },
+  effectiveBehavior: {
+    spec: 'balanced',
+    coordinator: 'balanced',
+    worker: 'precise',
+    reviewer: 'precise',
+    gateChecker: 'precise',
+    contextIndexer: 'precise',
+  },
+  behaviorProfiles: [
+    { id: 'precise', label: 'Precise', description: 'Repeatable and conservative; best for code, review, checks, and compact summaries.' },
+    { id: 'balanced', label: 'Balanced', description: 'Careful but flexible; best for planning, specs, intake, and task reframing.' },
+    { id: 'exploratory', label: 'Exploratory', description: 'More variety; best for early ideas before work is committed to a plan.' },
+  ],
   loadedModels: ['qwen/qwen3.6-35b-a3b'],
   missingModels: ['qwen/qwen3-coder'],
   catalog: [
@@ -97,9 +118,10 @@ describe('ProvidersPage', () => {
     render(ProvidersPage)
 
     await screen.findByText('Claude OAuth')
-    expect(screen.getByText('OpenAI-compatible API')).toBeTruthy()
+    expect(screen.getByText('Remote OpenAI-compatible')).toBeTruthy()
     expect(screen.getByText('Global model defaults')).toBeTruthy()
     expect(screen.getByText(/These defaults apply to every Guildhall project/)).toBeTruthy()
+    expect(screen.getAllByText(/Careful but flexible/).length).toBeGreaterThan(0)
     expect(screen.getByRole('status').textContent).toContain('Model not loaded.')
   })
 
@@ -144,6 +166,21 @@ describe('ProvidersPage', () => {
             call.body?.scope === 'global' &&
             call.body?.role === 'spec' &&
             call.body?.model === 'qwen/qwen3-coder',
+        ),
+      ).toBe(true)
+    })
+
+    const specBehaviorSelect = screen.getByRole('combobox', { name: 'Spec author behavior' })
+    await userEvent.selectOptions(specBehaviorSelect, 'exploratory')
+    await waitFor(() => {
+      expect(
+        calls.some(
+          call =>
+            call.url === '/api/config/models' &&
+            call.init?.method === 'POST' &&
+            call.body?.scope === 'global' &&
+            call.body?.role === 'spec' &&
+            call.body?.behaviorProfile === 'exploratory',
         ),
       ).toBe(true)
     })

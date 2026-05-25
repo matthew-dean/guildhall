@@ -54,6 +54,19 @@ function nextEscalationId(task: Task): string {
   return `esc-${task.id}-${task.escalations.length + 1}`
 }
 
+function normalizeEscalationText(value: string | undefined): string {
+  return (value ?? '').replace(/\s+/g, ' ').trim()
+}
+
+function findMatchingOpenEscalation(task: Task, input: RaiseEscalationInput): Escalation | null {
+  return task.escalations.find(escalation =>
+    !escalation.resolvedAt &&
+    escalation.agentId === input.agentId &&
+    escalation.reason === input.reason &&
+    normalizeEscalationText(escalation.summary) === normalizeEscalationText(input.summary),
+  ) ?? null
+}
+
 function looksLikeRoutineVerificationEscalation(input: RaiseEscalationInput): boolean {
   const text = `${input.reason}\n${input.summary}\n${input.details ?? ''}`
   return (
@@ -61,6 +74,18 @@ function looksLikeRoutineVerificationEscalation(input: RaiseEscalationInput): bo
     /\b(?:evidence|verification|test result|gate)\b/i.test(text) &&
     /\b(?:pnpm|npm|yarn|bun|vitest|test|typecheck|build)\b/i.test(text)
   )
+}
+
+function looksLikeWorkerImplementationRecovery(input: RaiseEscalationInput): boolean {
+  if (input.agentId !== 'worker-agent') return false
+  const text = `${input.reason}\n${input.summary}\n${input.details ?? ''}`
+  const brittleEditFailure =
+    /\b(?:exact string|search string|string (?:was )?not found|template syntax mismatch|whitespace|formatting mismatch|failed to edit|attempts? to edit|replace failed|patch failed)\b/i.test(text)
+  const localImplementationEvidence =
+    /\b(?:component exists|correctly imported|current file|template|props?|composable|import|dashboard\.vue|\.vue|\.svelte|\.tsx?|\.jsx?)\b/i.test(text)
+  const asksForOwnerToResolveImplementation =
+    /\b(?:need clarification|needs clarification|how to properly apply|how to apply|how to edit|how to wire|how to import)\b/i.test(text)
+  return brittleEditFailure && (localImplementationEvidence || asksForOwnerToResolveImplementation)
 }
 
 export async function raiseEscalation(
@@ -78,6 +103,19 @@ export async function raiseEscalation(
         error:
           'Do not raise a human escalation for routine verification evidence. Run the focused check, save the result in the task proof packet or checkpoint, and continue. Escalate only if an external credential, environment outage, or product decision prevents Guildhall from running the check.',
       }
+    }
+
+    if (looksLikeWorkerImplementationRecovery(input)) {
+      return {
+        success: false,
+        error:
+          'This is implementation recovery, not an owner decision: do not ask the owner to resolve failed exact-string edits, whitespace mismatches, local template syntax, imports, or component props. Re-read the current file and component API, apply a smaller structural edit, or record a checkpoint and retry with the existing spec.',
+      }
+    }
+
+    const existing = findMatchingOpenEscalation(task, input)
+    if (existing) {
+      return { success: true, escalationId: existing.id }
     }
 
     const now = new Date().toISOString()

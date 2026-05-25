@@ -21,6 +21,7 @@ export interface InboxItem {
   detail: string
   actionHref?: string
   taskId?: string
+  taskDescription?: string
   escalationId?: string
   signals?: string[]
   defaultCount?: number

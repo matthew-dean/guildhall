@@ -56,6 +56,93 @@ describe('AgentQuestion', () => {
     expect(within(row).getByText('URL input + Display text + Preview + Remove link')).toBeInTheDocument()
   })
 
+  it('keeps long choice text readable instead of ellipsizing the decision', () => {
+    const longChoice = 'Existing primitives to reuse: docs/harness/author-voice-loop.md already defines the author voice scoring workflow, reviewer lane inputs, and expected handoff notes.'
+
+    render(AgentQuestion, {
+      question: question({
+        choices: [longChoice],
+      }),
+      onAnswer: vi.fn(),
+    })
+
+    const row = screen.getByRole('button', { name: /Existing primitives to reuse docs\/harness\/author-voice-loop\.md/ })
+    expect(within(row).getByText('Existing primitives to reuse')).toBeInTheDocument()
+    expect(within(row).getByText(/author voice scoring workflow/)).toBeInTheDocument()
+    expect(row.querySelector('.choice-title')).not.toHaveStyle('-webkit-line-clamp: 2')
+    expect(row.querySelector('.choice-detail')).not.toHaveStyle('-webkit-line-clamp: 2')
+  })
+
+  it('replaces the long-question preview with the full question instead of duplicating it', async () => {
+    const user = userEvent.setup()
+    const longPrompt = [
+      'I have enough context. The roadmap lists AlertDialog as missing and the existing ui-dialog uses a native dialog element.',
+      'AlertDialog will compose on top of this with a structured title, description, and actions layout.',
+      'The key question I need to ask before drafting: what variants does the user need?',
+    ].join(' ')
+
+    render(AgentQuestion, {
+      question: question({
+        prompt: longPrompt,
+      }),
+      onAnswer: vi.fn(),
+    })
+
+    expect(screen.getByText('Full question')).toBeInTheDocument()
+    expect(screen.getAllByText(/I have enough context/)).toHaveLength(1)
+
+    await user.click(screen.getByText('Full question'))
+
+    expect(screen.getByText('Hide question')).toBeInTheDocument()
+    expect(screen.getAllByText(/I have enough context/)).toHaveLength(1)
+    expect(screen.getByText(/what variants does the user need/)).toBeInTheDocument()
+  })
+
+  it('separates question context from the actual answerable question', () => {
+    render(AgentQuestion, {
+      question: question({
+        kind: 'text',
+        subject: 'AlertDialog variants',
+        description: 'The roadmap lists AlertDialog as missing, and ui-dialog already provides the base dialog primitive.',
+        prompt: 'What variants does AlertDialog need?',
+      }),
+      onAnswer: vi.fn(),
+    })
+
+    expect(screen.getByText('AlertDialog variants')).toBeInTheDocument()
+    expect(screen.getByText(/ui-dialog already provides/)).toBeInTheDocument()
+    expect(screen.getByText('Question')).toBeInTheDocument()
+    expect(screen.getByText('What variants does AlertDialog need?')).toBeInTheDocument()
+    expect(screen.queryByText(/The key question I need to ask/)).not.toBeInTheDocument()
+  })
+
+  it('does not present narrative evidence as fake choice answers', async () => {
+    const user = userEvent.setup()
+    const onAnswer = vi.fn()
+
+    render(AgentQuestion, {
+      question: question({
+        prompt: "OK, I've hit the research budget for this turn. But I have enough context from what I've read to understand the situation clearly. Let me synthesize:",
+        choices: [
+          "The `.cursor/plan.md` lists Rust as a completed optimization with 10-15% faster training.",
+          'The current task is blocked on a `pixi install` failure.',
+        ],
+      }),
+      onAnswer,
+    })
+
+    expect(screen.getByText('Reply')).toBeInTheDocument()
+    expect(screen.getByText('Question missing')).toBeInTheDocument()
+    expect(screen.getByText('Tell Guildhall what you want it to do next.')).toBeInTheDocument()
+    expect(screen.getByText('What Guildhall found')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /cursor\/plan\.md/ })).not.toBeInTheDocument()
+
+    await user.type(screen.getByRole('textbox'), 'Use Python only and stop trying to continue the Rust slice.')
+    await user.click(screen.getByRole('button', { name: /^send$/i }))
+
+    expect(onAnswer).toHaveBeenCalledWith('Use Python only and stop trying to continue the Rust slice.')
+  })
+
   it('supports multiple-choice questions without leaving the thread context', async () => {
     const user = userEvent.setup()
     const onAnswer = vi.fn()

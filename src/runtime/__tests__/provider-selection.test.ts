@@ -3,8 +3,13 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { Buffer } from 'node:buffer'
+import { setProvider } from '@guildhall/config'
 import { selectApiClient, inferPreferredProvider } from '../provider-selection.js'
-import { clearProviderClientPool } from '../provider-client-pool.js'
+import {
+  clearProviderClientPool,
+  openAiCompatiblePoolKey,
+  providerClientHealth,
+} from '../provider-client-pool.js'
 
 let tmpDir: string
 let claudeCredPath: string
@@ -15,6 +20,7 @@ const CLEAN_ENV_KEYS = [
   'GUILDHALL_PROVIDER',
   'ANTHROPIC_API_KEY',
   'OPENAI_API_KEY',
+  'GUILDHALL_CONFIG_DIR',
 ] as const
 const savedEnv: Record<string, string | undefined> = {}
 
@@ -238,6 +244,46 @@ describe('selectApiClient', () => {
     })
     expect(result.providerName).toBe('openai-api')
     expect(result.reason).toMatch(/integrate\.api\.nvidia\.com/)
+  })
+
+  it('uses the configured provider-group concurrency limit for OpenAI-compatible APIs', async () => {
+    const baseUrl = 'https://example-openai-compatible.test/v1'
+    const apiKey = 'sk-openai-compatible-test'
+    process.env.GUILDHALL_CONFIG_DIR = path.join(tmpDir, '.guildhall')
+    setProvider('openai-api', { apiKey, baseUrl, maxConcurrency: 200 })
+
+    const result = await selectApiClient({
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+      openaiApiKey: apiKey,
+      openaiBaseUrl: baseUrl,
+    })
+
+    expect(result.providerName).toBe('openai-api')
+    expect(providerClientHealth(openAiCompatiblePoolKey({
+      provider: 'openai-api',
+      baseUrl,
+      apiKey,
+    }))).toMatchObject({
+      maxConcurrency: 200,
+    })
+  })
+
+  it('keeps local OpenAI-compatible servers capped at 2 concurrent requests', async () => {
+    const baseUrl = 'http://localhost:1234/v1'
+    const result = await selectApiClient({
+      claudeCredentialPath: claudeCredPath,
+      codexCredentialPath: codexCredPath,
+      llamaCppUrl: baseUrl,
+    })
+
+    expect(result.providerName).toBe('llama-cpp')
+    expect(providerClientHealth(openAiCompatiblePoolKey({
+      provider: 'llama-cpp',
+      baseUrl,
+    }))).toMatchObject({
+      maxConcurrency: 2,
+    })
   })
 
   it('reuses the same OpenAI-compatible API client for equivalent runtime config', async () => {

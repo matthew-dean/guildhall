@@ -56,7 +56,7 @@ function providersPayload(preferredProvider = 'openai-api') {
     preferredProvider,
     providers: {
       'openai-api': {
-        label: 'OpenAI-compatible API',
+        label: 'Remote OpenAI-compatible',
         detected: true,
         detail: 'Stored globally.',
         verifiedAt: now,
@@ -343,11 +343,55 @@ describe('SettingsTab', () => {
           configured: true,
           generatedAt: now,
           counts: { files: 121, areas: 8, abstractions: 5 },
+          project: {
+            summary: 'Local project with Svelte workers and documentation.',
+            languages: ['typescript', 'svelte'],
+            packageManagers: ['pnpm'],
+            primaryFrameworks: ['svelte'],
+          },
+          entrypoints: [
+            { kind: 'readme', path: 'README.md', summary: 'Repository overview.' },
+          ],
+          areas: [
+            {
+              id: 'web-ui',
+              title: 'Web UI',
+              summary: 'Project view and task surfaces.',
+              owns: ['src/web/**'],
+              canonicalFiles: [{ path: 'src/web/surfaces/ProjectView.svelte', symbols: [], summary: 'Project shell.' }],
+              conventions: ['Keep task cards readable.'],
+              tests: ['src/web/surfaces/__tests__/ProjectView.svelte.test.ts'],
+            },
+          ],
+          abstractions: [
+            {
+              id: 'button',
+              title: 'Button',
+              kind: 'component',
+              canonicalPath: 'packages/ui/src/components/Button.svelte',
+              useWhen: ['Use for click actions instead of local button styling.'],
+              avoid: ['Do not invent one-off button treatments.'],
+              related: ['src/web/lib/Button.svelte'],
+            },
+          ],
           semantic: {
             modelId: 'zai-org/GLM-4.6',
             corpusKind: 'documentation',
             confidence: 0.95,
             projectPurpose: 'Documentation-led product specification.',
+            currentTruth: ['Thread cards should be readable without opening details.'],
+            architectureAreas: [{
+              name: 'Thread UI',
+              purpose: 'Shows current work and user decisions.',
+              canonicalFiles: ['src/web/surfaces/project/ThreadTab.svelte'],
+            }],
+            canonicalAbstractions: [{
+              name: 'Task drawer',
+              purpose: 'Details for one task.',
+              canonicalFiles: ['src/web/surfaces/TaskDrawer.svelte'],
+              reuseRule: 'Open the drawer for details; keep thread cards scannable.',
+            }],
+            gapsOrRisks: ['Some older tasks still use opaque internal wording.'],
             readNext: [{ path: 'docs/architecture.md', reason: 'Canonical architecture note.' }],
             workerGuidance: ['Read the semantic map before editing.'],
             needsBroaderRead: true,
@@ -407,16 +451,26 @@ describe('SettingsTab', () => {
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /worktree isolation setting/i }), 'per_attempt')
     await screen.findByText(/Current: Per attempt/)
 
-    await screen.findByText('Codebase map')
+    await screen.findByRole('heading', { name: 'Codebase map' })
     expect(screen.getByText('121')).toBeInTheDocument()
     expect(screen.getByText('8')).toBeInTheDocument()
     expect(screen.getByText('5')).toBeInTheDocument()
     expect(screen.getByText('thin')).toBeInTheDocument()
     expect(screen.getByText('documentation')).toBeInTheDocument()
+    expect(screen.getByText('Local project with Svelte workers and documentation.')).toBeInTheDocument()
+    expect(screen.getByText('README.md')).toBeInTheDocument()
     expect(screen.getByText('zai-org/GLM-4.6')).toBeInTheDocument()
     expect(screen.getByText('Documentation-led product specification.')).toBeInTheDocument()
+    expect(screen.getByText('Thread cards should be readable without opening details.')).toBeInTheDocument()
     expect(screen.getByText('docs/architecture.md')).toBeInTheDocument()
     expect(screen.getByText(/Read the semantic map before editing/i)).toBeInTheDocument()
+    expect(screen.getByText('Web UI')).toBeInTheDocument()
+    expect(screen.getByText('Project view and task surfaces.')).toBeInTheDocument()
+    expect(screen.getAllByText('Button').length).toBeGreaterThan(0)
+    expect(screen.getByText('packages/ui/src/components/Button.svelte')).toBeInTheDocument()
+    expect(screen.getByText('Thread UI')).toBeInTheDocument()
+    expect(screen.getByText('Task drawer')).toBeInTheDocument()
+    expect(screen.getByText('Some older tasks still use opaque internal wording.')).toBeInTheDocument()
     expect(screen.getByText('UI surface area is larger than the captured token/primitive set.')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /refresh map/i }))
     await screen.findByText('122')
@@ -462,6 +516,12 @@ describe('SettingsTab', () => {
         const skillActivated = fetchMock.mock.calls.some(([prior]) => String(prior).includes('/api/project/skill-proposals/action'))
         return json({
           project: {
+            workspaceImport: {
+              approvedRuns: 2,
+              dismissedRuns: 0,
+              averageTaskAcceptanceRatio: 1,
+              updatedAt: now,
+            },
             suggestedLearnings: [
               {
                 id: 'learn-1',
@@ -497,6 +557,12 @@ describe('SettingsTab', () => {
             ],
           },
           effective: {
+            workspaceImport: {
+              approvedRuns: 2,
+              dismissedRuns: 0,
+              averageTaskAcceptanceRatio: 1,
+              updatedAt: now,
+            },
             productSuggestions: [
               {
                 id: 'product-1',
@@ -505,6 +571,12 @@ describe('SettingsTab', () => {
                 evidence: ['Navigation work needed a stable outline before UI fill-in.'],
               },
             ],
+          },
+          projectContext: {
+            projectBrief: { present: true, nonEmptyLines: 2 },
+            workspaceGoals: { present: true, goalCount: 1 },
+            decisions: { present: true, nonEmptyLines: 9 },
+            projectNotes: { present: true, nonEmptyLines: 0 },
           },
           projectSkillProposals: [
             {
@@ -523,9 +595,16 @@ describe('SettingsTab', () => {
 
     render(SettingsTab, { subView: 'learning' })
 
-    await screen.findByRole('heading', { name: /memory and habits/i })
+    await screen.findByRole('heading', { name: /reusable guidance/i })
     expect(screen.getByText('0 in use')).toBeInTheDocument()
     expect(screen.getByText('3 waiting')).toBeInTheDocument()
+    expect(screen.getByText('Project context Guildhall already has')).toBeInTheDocument()
+    expect(screen.getByText('Project brief')).toBeInTheDocument()
+    expect(screen.getByText('Workspace goals')).toBeInTheDocument()
+    expect(screen.getByText('Import choices')).toBeInTheDocument()
+    expect(screen.getByText('Decision log')).toBeInTheDocument()
+    expect(screen.getByText('2 approved')).toBeInTheDocument()
+    expect(screen.getByText('1 goal')).toBeInTheDocument()
     expect(screen.getByText('Run Knit typecheck from web root after API changes.')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /open task evidence/i })).toHaveAttribute(
       'href',

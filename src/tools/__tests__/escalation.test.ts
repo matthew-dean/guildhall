@@ -126,6 +126,51 @@ describe('raiseEscalation', () => {
     expect(queue?.tasks[0]?.escalations).toHaveLength(2)
   })
 
+  it('reuses an existing unresolved escalation for the same blocker', async () => {
+    const first = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'decision_required',
+      summary: 'Owner must choose between monthly and annual billing',
+      details: 'Both pricing paths are implementable, but the task needs a product decision before the worker can pick one.',
+    })
+    const second = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'decision_required',
+      summary: 'Owner must choose between monthly and annual billing',
+      details: 'Same blocker with a more detailed explanation.',
+    })
+
+    expect(first.success).toBe(true)
+    expect(second.success).toBe(true)
+    expect(second.escalationId).toBe(first.escalationId)
+
+    const { queue } = await readTasks({ tasksPath })
+    expect(queue?.tasks[0]?.escalations).toHaveLength(1)
+  })
+
+  it('rejects worker escalations caused by brittle edit matching instead of owner decisions', async () => {
+    const result = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'spec_ambiguous',
+      summary: 'Card component exists but template syntax mismatch prevents edit',
+      details: 'Multiple attempts to edit dashboard.vue failed because the exact string was not found, suggesting a whitespace or formatting mismatch. Need clarification on how to properly apply Card with props in the template.',
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/implementation recovery/i)
+    expect(result.error).toMatch(/do not ask the owner/i)
+
+    const { queue } = await readTasks({ tasksPath })
+    expect(queue?.tasks[0]?.status).toBe('in_progress')
+    expect(queue?.tasks[0]?.escalations).toHaveLength(0)
+  })
+
   it('writes a typed progress entry when progressPath is provided', async () => {
     await raiseEscalation({
       tasksPath,

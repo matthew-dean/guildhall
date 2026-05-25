@@ -18,6 +18,11 @@ function task(overrides: Record<string, unknown> = {}) {
     status: 'ready',
     domain: 'Editor',
     priority: 'high',
+    productBrief: {
+      userJob: 'Let editors create links without leaving the writing flow.',
+      approvedAt: now,
+    },
+    spec: 'Build the link editor controls inside the existing editor toolbar.',
     acceptanceCriteria: [
       { description: 'URL and display text controls are present.' },
       { description: 'The editor can remove an existing link.' },
@@ -262,7 +267,7 @@ async function renderProjectView(
   project.detail = initialDetail
   project.error = null
   render(ProjectView, { initialView: view, initialSub: sub, projectId })
-  await waitFor(() => expect(screen.getAllByText('Looma + Knit').length).toBeGreaterThan(0))
+  await waitFor(() => expect(screen.getAllByText(initialDetail.name ?? 'Project').length).toBeGreaterThan(0))
 }
 
 function installMobileBrowserFakes() {
@@ -347,7 +352,7 @@ describe('ProjectView', () => {
     ['work', 'Knit: add link editor controls'],
     ['planner', 'Knit: add link editor controls'],
     ['timeline', 'Coordinator timeline'],
-    ['release', 'Release'],
+    ['release', 'Closure'],
     ['settings', 'Settings'],
     ['workspace-import', 'Review existing project work'],
     ['facts', 'Project facts'],
@@ -541,7 +546,9 @@ describe('ProjectView', () => {
     const fetchMock = installFetchFakes()
 
     await renderProjectView('thread')
-    await user.click(screen.getByRole('button', { name: /^start$/i }))
+    const startButton = screen.getByRole('button', { name: /^start$/i })
+    expect(startButton.classList.contains('v-agent')).toBe(true)
+    await user.click(startButton)
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -796,17 +803,35 @@ describe('ProjectView', () => {
     expect(screen.getByRole('button', { name: 'Thread' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Work' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Release' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Closure' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Project provider settings' })).not.toBeInTheDocument()
   })
 
-  it('routes the top-bar Needs you indicator to the project overview', async () => {
-    await renderProjectView('thread')
+  it('preserves the saved project-name casing in the app header', async () => {
+    const fllDetail = detail({
+      id: 'fair-labor-license',
+      name: 'Fair Labor License',
+      path: '/workspace/fair-labor-license',
+    })
+    installFetchFakes(fllDetail)
+    await renderProjectView(
+      'overview',
+      null,
+      'fair-labor-license',
+      fllDetail,
+    )
+
+    expect(screen.getAllByText('Fair Labor License').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Fair labor license')).not.toBeInTheDocument()
+  })
+
+  it('routes the top-bar Needs you indicator to the project inbox, even from overview', async () => {
+    await renderProjectView('overview')
 
     await userEvent.click(screen.getByRole('button', { name: /notifications need you/i }))
 
-    expect(path.value).toBe('/projects/looma-knit/overview')
+    expect(path.value).toBe('/projects/looma-knit/inbox')
   })
 
   it('keeps Settings pinned in the rail utility section instead of expanding settings subsections there', async () => {

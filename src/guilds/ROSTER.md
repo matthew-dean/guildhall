@@ -10,7 +10,7 @@ Each persona is an expert with a role in the lifecycle:
 
 | Slug | Persona | Role | Deterministic checks | Triggers when |
 |---|---|---|---|---|
-| `project-manager` | The Project Manager | overseer | _(lifecycle enforced elsewhere)_ | Always |
+| `project-manager` | The Project Manager | overseer | `content.no-truncated-data` — pure detector `findTruncatedContentStorage` | Always |
 | `component-designer` | The Component Designer | designer | `findExternalMargins`, `findHardcodedDesignValues` (pure detectors; wiring TBD) | UI task or design system exists |
 | `visual-designer` | The Visual Designer | designer | _(rubric-only)_ | Design system exists, product brief, or surface keywords |
 | `copywriter` | The Copywriter | designer | `findBannedTerms` (pure) | UI, docs, onboarding, release-note, label/control, or explicit copy work |

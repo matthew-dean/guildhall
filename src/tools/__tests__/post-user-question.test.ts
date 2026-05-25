@@ -188,6 +188,8 @@ describe('postUserQuestionTool', () => {
         kind: { type: 'string' },
         body: { type: 'string' },
         prompt: { type: 'string' },
+        subject: { type: 'string' },
+        description: { type: 'string' },
         choices: { type: 'array' },
         selectionMode: { type: 'string' },
       },
@@ -386,6 +388,35 @@ describe('postUserQuestionTool', () => {
     expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
   })
 
+  it('rejects research narration masquerading as a choice question', async () => {
+    const metadata: Record<string, unknown> = {
+      tasks_path: tasksPath,
+      current_task_id: 'task-001',
+      current_agent_id: 'spec-agent',
+    }
+
+    const result = await postUserQuestionTool.execute(
+      {
+        kind: 'choice',
+        body: "OK, I've hit the research budget for this turn. Let me synthesize:",
+        choices: [
+          'The plan doc says Rust gave 10-15% speedup.',
+          'The current task is blocked on pixi install.',
+        ],
+        selectionMode: 'single',
+      },
+      { cwd: '/tmp', metadata },
+    )
+
+    expect(result.is_error).toBe(true)
+    expect(result.output).toContain('choice question prompt')
+
+    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
+      tasks: Array<{ openQuestions?: Array<unknown> }>
+    }
+    expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
+  })
+
   it('rejects templated title-as-grammar prompts before they reach Thread', async () => {
     const metadata: Record<string, unknown> = {
       tasks_path: tasksPath,
@@ -454,5 +485,35 @@ describe('postUserQuestionTool', () => {
       tasks: Array<{ openQuestions?: Array<unknown> }>
     }
     expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
+  })
+
+  it('extracts a highlighted question from prose that says what the agent should ask', async () => {
+    const metadata: Record<string, unknown> = {
+      tasks_path: tasksPath,
+      current_task_id: 'task-001',
+      current_agent_id: 'spec-agent',
+      last_assistant_text: [
+        'I have enough context. The roadmap lists AlertDialog as missing (P0 gap).',
+        'The existing `ui-dialog` uses `<dialog>`, overlay manager, open/defaultOpen/dismissible/modal props, and a single `<slot />`.',
+        'AlertDialog will be a higher-level component that composes on top of this with a structured title/description/actions layout.',
+        '',
+        'The key question I need to ask before drafting: what variants does the user need? Let me write the product brief first, then ask.',
+      ].join('\n'),
+    }
+
+    const result = await postUserQuestionTool.execute({}, { cwd: '/tmp', metadata })
+    expect(result.is_error).toBe(false)
+
+    const queue = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as {
+      tasks: Array<{ openQuestions?: Array<{ subject?: string; description?: string; prompt?: string }> }>
+    }
+    expect(queue.tasks[0]?.openQuestions).toHaveLength(1)
+    expect(queue.tasks[0]?.openQuestions?.[0]).toMatchObject({
+      subject: 'AlertDialog variants',
+      prompt: 'What variants does AlertDialog need?',
+    })
+    expect(queue.tasks[0]?.openQuestions?.[0]?.description).toContain('roadmap lists AlertDialog as missing')
+    expect(queue.tasks[0]?.openQuestions?.[0]?.description).not.toContain('The key question I need to ask')
+    expect(queue.tasks[0]?.openQuestions?.[0]?.prompt).not.toContain('The key question I need to ask')
   })
 })

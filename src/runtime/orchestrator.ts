@@ -1014,7 +1014,7 @@ const ONE_TASK_STOP_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
   'spec_review',
 ])
 const EXPLORING_NO_PROGRESS_ESCALATION_AFTER = 3
-const WORKER_NO_PROGRESS_ESCALATION_AFTER = 2
+const WORKER_NO_PROGRESS_ESCALATION_AFTER = 5
 
 function looksLikePlaintextUserQuestion(text: string): boolean {
   const trimmed = text.trim()
@@ -1024,8 +1024,8 @@ function looksLikePlaintextUserQuestion(text: string): boolean {
 }
 
 type FallbackQuestionDraft =
-  | { kind: 'text'; prompt: string }
-  | { kind: 'choice'; prompt: string; choices: string[]; selectionMode?: 'single' | 'multiple' }
+  | { kind: 'text'; prompt: string; subject?: string; description?: string }
+  | { kind: 'choice'; prompt: string; subject?: string; description?: string; choices: string[]; selectionMode?: 'single' | 'multiple' }
 
 interface FallbackBriefDraft {
   userJob: string
@@ -1056,6 +1056,55 @@ function normalizeFallbackQuestionPrompt(prompt: string): string {
     .trim()
 }
 
+function normalizeFallbackWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function sentenceCaseFallbackQuestion(value: string): string {
+  const trimmed = normalizeFallbackWhitespace(value).replace(/\s+\?/g, '?')
+  if (!trimmed) return trimmed
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1)
+}
+
+function inferFallbackSubjectFromContext(context: string, question: string): string | undefined {
+  const ignored = new Set(['The', 'This', 'That', 'I'])
+  const component = [...context.matchAll(/\b([A-Z][A-Za-z0-9]+)\b/g)]
+    .map((match) => match[1])
+    .find((value): value is string => Boolean(value && !ignored.has(value)))
+  if (!component || ignored.has(component)) return undefined
+  if (/\bvariants?\b/i.test(question)) return `${component} variants`
+  return component
+}
+
+function rewriteFallbackQuestionWithSubject(question: string, subject: string | undefined): string {
+  const normalized = sentenceCaseFallbackQuestion(question)
+  if (!subject) return normalized
+  const component = subject.replace(/\s+variants?$/i, '').trim()
+  if (!component) return normalized
+  return normalized
+    .replace(/\bthe user\b/i, component)
+    .replace(/\buser\b/i, component)
+}
+
+function extractEmbeddedFallbackQuestion(text: string): FallbackQuestionDraft | null {
+  const trimmed = text.trim()
+  const match = trimmed.match(
+    /\b(?:the\s+)?(?:key|main|top|only|focused)?\s*question(?:\s+i\s+need\s+to\s+ask|\s+we\s+need\s+to\s+answer|\s+to\s+answer)?(?:\s+before\s+[^:\n]+)?\s*(?:is|:)\s*([\s\S]*?\?)/i,
+  )
+  if (!match || match.index === undefined) return null
+  const rawQuestion = match[1]?.trim() ?? ''
+  if (!rawQuestion) return null
+  const context = normalizeFallbackWhitespace(trimmed.slice(0, match.index))
+    .replace(/^i have enough context\.?\s*/i, '')
+  const subject = inferFallbackSubjectFromContext(context, rawQuestion)
+  return {
+    kind: 'text',
+    prompt: rewriteFallbackQuestionWithSubject(rawQuestion, subject),
+    ...(subject ? { subject } : {}),
+    ...(context ? { description: context } : {}),
+  }
+}
+
 function parseFallbackOptionLine(line: string): string | null {
   const trimmed = line.trim()
   if (/^-\s+/.test(trimmed)) {
@@ -1082,6 +1131,22 @@ function isQuestionListPrompt(promptBody: string): boolean {
   )
 }
 
+function isEvidenceSummaryPrompt(promptBody: string): boolean {
+  const normalized = promptBody
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+  return (
+    /^i have enough\b/.test(normalized) ||
+    /^ok,\s*i['’]ve hit the research budget\b/.test(normalized) ||
+    /^i['’]ve hit the research budget\b/.test(normalized) ||
+    /^let me (?:piece|synthesize|summarize|recap)\b/.test(normalized) ||
+    /^here'?s what i (?:found|know|learned|asked)\b/.test(normalized) ||
+    /^what i (?:found|know|learned)\b/.test(normalized)
+  )
+}
+
 function isOperationalFallbackPrompt(promptBody: string): boolean {
   const normalized = promptBody
     .replace(/^#{1,6}\s*/, '')
@@ -1101,6 +1166,9 @@ function isOperationalFallbackPrompt(promptBody: string): boolean {
 function inferFallbackQuestionsFromPlaintext(text: string): FallbackQuestionDraft[] {
   const trimmed = text.trim()
   if (!trimmed) return []
+
+  const embeddedQuestion = extractEmbeddedFallbackQuestion(trimmed)
+  if (embeddedQuestion) return [embeddedQuestion]
 
   const simplePickOne = trimmed.match(/^pick one:\s*(.+)$/im)
   if (simplePickOne) {
@@ -1127,6 +1195,7 @@ function inferFallbackQuestionsFromPlaintext(text: string): FallbackQuestionDraf
     const promptLike = /pick one\b|choose one\b|select one\b|\?$|:\s*$|success look like/i.test(promptBody)
     if (!promptLike) continue
     if (isQuestionListPrompt(promptBody)) continue
+    if (isEvidenceSummaryPrompt(promptBody)) continue
     if (isOperationalFallbackPrompt(promptBody)) continue
     const summaryLike =
       /i['’]ll draft the full spec with\b|i will draft the full spec with\b|once you (?:pick|answer).+i['’]ll draft\b/i
@@ -1199,6 +1268,7 @@ function inferFallbackQuestionsFromPlaintext(text: string): FallbackQuestionDraf
         .map((line) => line as string)
       if (choices.length >= 2 && choices.length <= 6) {
         if (isQuestionListPrompt(section.heading)) return null
+        if (isEvidenceSummaryPrompt(section.heading)) return null
         if (isOperationalFallbackPrompt(section.heading)) return null
         const combined = [section.heading, ...section.lines.map((line) => line.trim()).filter((line) => line && !/^-/.test(line))]
           .join('\n')
@@ -7397,6 +7467,8 @@ export class Orchestrator {
                 askedBy: 'spec-agent',
                 askedAt: now,
                 prompt: draft.prompt,
+                ...(draft.subject ? { subject: draft.subject } : {}),
+                ...(draft.description ? { description: draft.description } : {}),
                 choices: draft.choices,
                 ...(draft.selectionMode ? { selectionMode: draft.selectionMode } : {}),
               }
@@ -7406,6 +7478,8 @@ export class Orchestrator {
                 askedBy: 'spec-agent',
                 askedAt: now,
                 prompt: draft.prompt,
+                ...(draft.subject ? { subject: draft.subject } : {}),
+                ...(draft.description ? { description: draft.description } : {}),
               },
         ),
       ]
@@ -7673,7 +7747,7 @@ export async function runOrchestrator(
   const apiClient = selection.apiClient
   const effectiveModels = opts.modelAssignmentOverride ?? config.models
   const effectiveConfig: ResolvedConfig = { ...config, models: effectiveModels }
-  const models = buildModelSet(effectiveModels, apiClient)
+  const models = buildModelSet(effectiveModels, apiClient, effectiveConfig.modelBehavior ?? {})
 
   // FR-17: load bundled + user + workspace skills once per run. Each agent
   // factory receives the same frozen skill list so the composed system prompt

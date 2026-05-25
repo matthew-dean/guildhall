@@ -34,6 +34,11 @@ promise that every candidate slice ships in 0.8.0.
   MVP; it now belongs to the proposed 0.9.0 task-shaping and finishability
   direction.
 - `internal/audits/flow-audit.md` remains the live checklist and evidence log.
+- `internal/design-notes/ux-review-calibration-and-work-review-integration.md`,
+  `internal/research/2026-05-25-ux-review-calibration-source-notes.md`, and
+  `internal/plans/2026-05-25-review-calibration-and-failure-corpus.md` are
+  follow-on 0.9.0 planning sources for calibrated work review. They are not
+  0.8.0 MVP blockers.
 
 ## MVP Thesis
 
@@ -102,7 +107,7 @@ MVP contract:
 - Every project gets an explicit Git Story Policy copied from the system/global
   Git Story config at project setup or discovery time, then refined by
   discovered repo facts and project-level overrides.
-- Release readiness blocks on unresolved git stories, not just known
+- Current work closure blocks on unresolved git stories, not just known
   Guildhall-owned dirty checkout residue.
 - Thread and task provenance show the current closure state and the next safe
   action.
@@ -165,7 +170,7 @@ User-visible surfaces:
 - Thread task card: Git Story section when a task is in review, gate, blocked,
   done, or has unresolved git state.
 - Provenance drawer: full snapshot details beside `mergeRecord`.
-- Release readiness: blocker group for dirty repos, local commits, no upstream,
+- Closure: blocker group for dirty repos, local commits, no upstream,
   pending PRs, skipped merges, stale task worktrees, and unknown inspection
   failures.
 
@@ -193,7 +198,7 @@ Release bar:
   or pending PR cannot silently appear fully closed.
 - A project with dirty/unpushed work is visible from the project list or home
   before the user opens individual tasks.
-- Release readiness gives a concrete list of unresolved git stories and the
+- Current work closure gives a concrete list of unresolved git stories and the
   safest next action for each one.
 - Marking work `local_only` or `deferred` records an explicit reason and stops
   it from masquerading as accidental residue.
@@ -214,7 +219,7 @@ Implementation notes:
   and the resolved project policy says `commit: auto`, the orchestrator
   auto-commits the completed task work before landing. The default UI path
   still requires confirmation when the policy says `ask`.
-- Projects Home, Thread, Provenance, and Release readiness now surface
+- Projects Home, Thread, Provenance, and Closure now surface
   unresolved Git Story state.
 
 ### 3. Task State Boundary
@@ -349,13 +354,13 @@ export/delete controls, and large-scale compaction.
   the new stores while preserving legacy writes for compatibility; the
   remaining work is to flip canonical writers over fully.
 - [x] Task-state migration is idempotent and covered by live-shaped fixtures.
-- [ ] Task Drawer, Thread, Overview, and Release render from effective task
+- [ ] Task Drawer, Thread, Overview, and Closure render from effective task
   projections. Current slice adds evidence/review/history/git-story endpoints
   and Git Story workspace-store reads; drawer/surface rewiring remains.
 - [x] Git Story Snapshot model and tests exist.
 - [x] Project/service API exposes git story summary.
 - [x] Thread and Provenance render git story state.
-- [x] Release readiness blocks unresolved git stories.
+- [x] Current work closure blocks unresolved git stories.
 - [x] Commit/push/open-PR/local-only/deferred actions obey project Git Story
   Policy and record durable evidence.
 - [x] Focused Vitest suite passes.

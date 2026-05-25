@@ -30,7 +30,7 @@ const providersPayload = {
       verifiedAt: null,
     },
     'openai-api': {
-      label: 'OpenAI-compatible API',
+      label: 'Remote OpenAI-compatible',
       detail: 'Needs API key.',
       detected: false,
       verifiedAt: null,
@@ -97,7 +97,7 @@ describe('ProjectProvidersSection', () => {
     render(ProjectProvidersSection)
     await screen.findByText('Codex OAuth')
     expect(screen.getByText(/Credentials are machine-scoped/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /OpenAI-compatible API/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Remote OpenAI-compatible/i })).toBeDisabled()
 
     await userEvent.click(screen.getByRole('button', { name: /Anthropic API key/i }))
     await userEvent.click(screen.getByRole('button', { name: /save selection/i }))

@@ -117,7 +117,9 @@ describe('SetupWizard', () => {
     render(SetupWizard, { projectId: 'font-improvement' })
     await screen.findByText("You're ready to bootstrap.")
 
-    await userEvent.click(screen.getByRole('button', { name: /start meta-intake/i }))
+    const startButton = screen.getByRole('button', { name: /start meta-intake/i })
+    expect(startButton.classList.contains('v-agent')).toBe(true)
+    await userEvent.click(startButton)
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/meta-intake'))).toBe(true)
@@ -153,7 +155,7 @@ describe('SetupWizard', () => {
           preferredProvider: 'codex',
           providers: {
             codex: { label: 'Codex', detail: 'Local CLI session', detected: true },
-            'openai-api': { label: 'OpenAI-compatible API', detail: 'Key based', detected: false, baseUrl: '' },
+            'openai-api': { label: 'Remote OpenAI-compatible', detail: 'Key based', detected: false, baseUrl: '' },
           },
         })
       }

@@ -690,6 +690,51 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('Add the missing login redirect tests')
   })
 
+  it('adds concrete retry coaching when review loops repeat and the worker hits brittle edit failures', async () => {
+    const taskWithBrittleRetry: Task = {
+      ...baseTask,
+      title: 'Set FLL overhead charge policy',
+      description: 'Create the public fee policy page and author dashboard fee breakdown.',
+      revisionCount: 6,
+      notes: [
+        {
+          agentId: 'reviewer-agent',
+          role: 'reviewer',
+          content: [
+            '**Required revisions:**',
+            '1. In `frontend/app/pages/dashboard.vue`, define `fetchData` for the Retry button.',
+            '2. Fix `<Card>` usage to match `frontend/app/components/ui/molecules/Card.vue` props.',
+          ].join('\n'),
+          timestamp: '2026-05-25T04:06:41.363Z',
+        },
+      ],
+      escalations: [
+        {
+          id: 'esc-task-006-23',
+          taskId: 'task-001',
+          agentId: 'worker-agent',
+          reason: 'spec_ambiguous',
+          summary: 'Card component exists but template syntax mismatch prevents edit',
+          details:
+            'Multiple attempts to edit dashboard.vue failed because the exact string was not found, suggesting a whitespace or formatting mismatch. Need clarification on how to properly apply Card with props in the template.',
+          raisedAt: '2026-05-25T04:08:27.700Z',
+          resolvedAt: '2026-05-25T18:20:42.819Z',
+          resolvedBy: 'system',
+          resolution:
+            'Resolved as Guildhall-owned implementation recovery: failed exact-string/template edits are not a product/spec decision for the owner.',
+        },
+      ],
+    }
+
+    const ctx = await buildContext(taskWithBrittleRetry, tmpDir)
+
+    expect(ctx.taskSummary).toContain('### Retry Coaching')
+    expect(ctx.taskSummary).toContain('Do not ask the owner about local implementation mechanics')
+    expect(ctx.taskSummary).toContain('Re-read the current target file')
+    expect(ctx.taskSummary).toContain('avoid exact-string replacement')
+    expect(ctx.taskSummary).toContain('frontend/app/pages/dashboard.vue')
+  })
+
   it('does not duplicate reviewer feedback inside the generic agent-notes section', async () => {
     const taskWithReviewNote: Task = {
       ...baseTask,

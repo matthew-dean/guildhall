@@ -11,7 +11,7 @@ help_summary: |
 
 The app has two useful scales: the `/projects` service home for scanning
 registered projects, and the project shell where setup, tasks, live runs,
-reviewer calls, and release readiness actually play out.
+reviewer calls, and current work closure actually play out.
 
 Use it for the everyday loop:
 

@@ -3,7 +3,13 @@
 **Status:** proposed 0.9.0 direction  
 **Owner:** future Guildhall release planning  
 **Depends on:** 0.8.0 Pressure-Test Intake and Git Story Closure  
-**Related source:** `internal/specs/2026-05-22-guildhall-0-8-podman-project-runtime.md`
+**Related sources:**
+
+- `internal/specs/2026-05-22-guildhall-0-8-podman-project-runtime.md`
+- `internal/design-notes/ux-review-calibration-and-work-review-integration.md`
+- `internal/research/2026-05-25-ux-review-calibration-source-notes.md`
+- `internal/plans/2026-05-25-review-calibration-and-failure-corpus.md`
+- `internal/design-notes/persistence-system-boundary.md`
 
 ## Thesis
 
@@ -26,6 +32,13 @@ them into small product behaviors:
 - separate learning tasks from implementation tasks;
 - keep active work-in-progress low;
 - make completion evidence explicit;
+- make review evidence explicit, including calibrated UX review when a task
+  changes user-facing comprehension, recovery, trust, or task flow;
+- require plan-completeness review so important governance, privacy, rollout,
+  cost, drift, and override concerns surface without the user having to ask
+  "anything else?";
+- centralize persistence so task state, evidence, logs, memory, artifacts,
+  review audit, archives, and compaction all use one storage boundary;
 - move risky execution into an explicit runtime boundary;
 - escalate product, taste, risk, and release judgment instead of silently
   deciding those for the user.
@@ -125,6 +138,40 @@ Sources:
 - <https://arxiv.org/abs/2205.10625>
 - <https://arxiv.org/abs/2305.04091>
 - <https://arxiv.org/abs/2210.03629>
+
+### UX Review Calibration
+
+Use UX review calibration as the review-side counterpart to task shaping.
+Guildhall should not merely ask "did a reviewer approve?" It should know
+whether that reviewer recipe has caught similar failures in a source-backed
+corpus.
+
+The initial source-backed categories come from usability heuristics, checkout
+and form friction research, deceptive-design taxonomies, and regulatory dark
+pattern guidance. The detailed source notes live at
+`internal/research/2026-05-25-ux-review-calibration-source-notes.md`.
+
+Product implications:
+
+- risky user-facing tasks get a `reviewRisk` profile during shaping;
+- substantial feature plans get a `plan_completeness` lane that looks for
+  missing governance, privacy, cost, drift, rollout, mandatory-lane, and
+  override concerns;
+- specs name the UX review recipes and artifacts required for review;
+- workers cannot hand off review without the requested screenshots, routes,
+  DOM snapshots, copy snippets, or click-through paths;
+- reviewer fanout can include calibrated recipe-backed reviewers;
+- `gate_check` enforces deterministic artifact and static UX contracts;
+- escaped UX review misses become new calibration cases;
+- Coordinator tuning changes context, model, settings, or prompt one variable
+  at a time.
+
+Sources:
+
+- <https://media.nngroup.com/media/articles/attachments/Heuristic_Summary1_Letter-compressed.pdf>
+- <https://baymard.com/learn/audit-checkout-flow-hidden-friction>
+- <https://www.deceptive.design/types>
+- <https://www.ftc.gov/news-events/news/press-releases/2022/09/ftc-report-shows-rise-sophisticated-dark-patterns-designed-trick-trap-consumers>
 
 ## Product Contract
 
@@ -250,6 +297,58 @@ Add an occasional coordinator review that asks:
 This review should produce suggested practice or preference candidates, not
 silently rewrite project behavior.
 
+### Review Calibration And Failure Corpus
+
+Add a Coordinator-owned review calibration loop. UX is the first lane, but the
+same machinery should eventually apply to security, accessibility, performance,
+API design, docs, migrations, and reliability.
+
+The core objects are:
+
+- failure corpus cases with hidden expected findings;
+- reviewer recipes with model/settings/prompt/context versions;
+- calibration results that record matched findings, missed findings, false
+  positives, and useful-fix quality;
+- task `reviewRisk` profiles that require calibrated recipes and artifacts;
+- escaped-miss records that turn human-found review failures into future
+  calibration cases.
+
+The implementation plan is
+`internal/plans/2026-05-25-review-calibration-and-failure-corpus.md`.
+
+### Persistence Boundary
+
+Retool Guildhall persistence so generated state and evidence do not keep
+spreading through copy-pasted file writes. Review audit should be the first major
+consumer, but the 0.9.0+ shape is broader: task state, task evidence, memory,
+decisions, logs, transcripts, checkpoints, artifacts, levers, config, corpus
+maps, design-system state, and archives should all route through one central
+persistence boundary.
+
+The source design is
+`internal/design-notes/persistence-system-boundary.md`.
+
+Product implications:
+
+- new durable features do not write directly to managed Guildhall paths;
+- domain stores stay ergonomic, but delegate placement, provenance, evidence
+  refs, compaction, and backend writes to the persistence layer;
+- compact project summaries remain shareable under `./.guildhall/`;
+- bulky/private evidence remains local by default;
+- UI, CLI, MCP, and agents read the same compact/full evidence model;
+- missing local evidence is shown honestly instead of silently breaking an
+  audit trail.
+
+The migration order should be:
+
+1. persistence core and static guardrail;
+2. review audit as first consumer;
+3. task state and task evidence;
+4. memory, decisions, transcripts, and checkpoints;
+5. artifacts, corpus map, design system, skills, levers, and config;
+6. reader convergence across UI, CLI, MCP, and agent context;
+7. backend freedom for SQLite, object storage, encryption, or export bundles.
+
 ### Podman Project Runtime
 
 Move the deferred Podman/containerized project runtime into the 0.9.0 planning
@@ -312,4 +411,6 @@ Bad public framing:
   capability approval for extra host access.
 - Coordinator reflection can suggest, but not auto-approve, a new project or
   global preference/practice based on repeated task-shaping evidence.
+- Risky user-facing work can require calibrated UX review recipes, reviewer
+  artifacts, and gate-checked review evidence before completion.
 - Public docs describe the science-backed influence lightly and accurately.

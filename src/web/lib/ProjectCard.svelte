@@ -5,7 +5,7 @@
     CheckCircle2,
     FolderOpen,
     PauseCircle,
-    Play,
+    Sparkles,
     Square,
   } from 'lucide-svelte'
   import ActionBar from './ActionBar.svelte'
@@ -327,8 +327,8 @@
         {summary.actionLabel}
       </Button>
       {#if summary.canStart && !effectiveRunning}
-        <Button variant="primary" size="sm" disabled={busy} title={`${summary.runActionLabel}: let Guildhall advance ${summary.name}`} onclick={() => onStart?.(summary.id)}>
-          <Play size={14} />
+        <Button variant="agent" size="sm" disabled={busy} title={`${summary.runActionLabel}: let Guildhall advance ${summary.name}`} onclick={() => onStart?.(summary.id)}>
+          <Sparkles size={14} />
           {summary.runActionLabel}
         </Button>
       {:else if effectiveRunning}

@@ -292,7 +292,9 @@ describe('ProjectsHome', () => {
     render(ProjectsHome)
     await screen.findByText('Fair Labor License')
 
-    await userEvent.click(screen.getByRole('button', { name: /resume 1 task/i }))
+    const startButton = screen.getByRole('button', { name: /resume 1 task/i })
+    expect(startButton.classList.contains('v-agent')).toBe(true)
+    await userEvent.click(startButton)
     await userEvent.click(screen.getAllByRole('button', { name: /stop/i })[0]!)
 
     await waitFor(() => {

@@ -6,9 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import Header from '../Header.svelte'
 import { path } from '../../lib/nav.svelte.js'
+import { project } from '../../lib/project.svelte.js'
 
 describe('Header', () => {
   beforeEach(() => {
+    project.detail = null
     window.history.replaceState({}, '', '/projects/looma-knit/thread')
     path.value = '/projects/looma-knit/thread'
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ version: '0.5.1' }), {
@@ -18,6 +20,7 @@ describe('Header', () => {
   })
 
   afterEach(() => {
+    project.detail = null
     vi.restoreAllMocks()
     cleanup()
   })
@@ -62,6 +65,22 @@ describe('Header', () => {
     await waitFor(() => {
       expect(screen.getByText('Looma knit')).toBeInTheDocument()
     })
+  })
+
+  it('preserves the saved project name instead of re-humanizing the slug', async () => {
+    window.history.replaceState({}, '', '/projects/fair-labor-license/settings/advanced')
+    path.value = '/projects/fair-labor-license/settings/advanced'
+    project.detail = {
+      id: 'fair-labor-license',
+      name: 'Fair Labor License',
+      path: '/repo/fair-labor-license',
+      tasks: [],
+    }
+
+    render(Header)
+
+    expect(screen.getByText('Fair Labor License')).toBeInTheDocument()
+    expect(screen.queryByText('Fair labor license')).not.toBeInTheDocument()
   })
 
   it('hides the project event-stream status on global pages', async () => {

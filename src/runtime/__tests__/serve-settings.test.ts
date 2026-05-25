@@ -214,6 +214,19 @@ describe('general project status endpoints', () => {
     const body = await status.json() as Record<string, any>
     expect(body.configured).toBe(true)
     expect(body.counts.files).toBeGreaterThan(0)
+    expect(body.project.summary).toContain('Local project')
+    expect(body.project.languages).toContain('svelte')
+    expect(body.entrypoints.map((entry: any) => entry.path)).toContain('package.json')
+    expect(body.areas.length).toBeGreaterThan(0)
+    expect(body.areas[0]).toHaveProperty('canonicalFiles')
+    expect(body.abstractions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: 'Command buttons',
+          canonicalPath: 'src/web/lib/Button.svelte',
+        }),
+      ]),
+    )
     expect(body.frameworks).toContain('svelte')
 
     await fs.writeFile(
@@ -730,6 +743,54 @@ describe('POST /api/project/start', () => {
     expect(startBody.actionHref).toBe('/task/task-import-1')
   })
 
+  it('blocks Start when ready tasks still need brief cleanup', async () => {
+    const now = new Date().toISOString()
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+      JSON.stringify({
+        version: 1,
+        lastUpdated: now,
+        tasks: [
+          {
+            id: 'task-thin-ready',
+            title: 'Thin ready task',
+            description: 'Looks queued but has no approved brief or acceptance criteria.',
+            domain: 'core',
+            status: 'ready',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            escalations: [],
+            agentIssues: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectBody = (await projectRes.json()) as {
+      startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
+    }
+
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'no_unattended_progress',
+      actionHref: '/work',
+    })
+    expect(projectBody.startReadiness?.message).toContain('clearer brief')
+  })
+
   it('rejects fanout without worktree isolation with a clear error', async () => {
     const settings = makeDefaultSettings()
     settings.project.concurrent_task_dispatch = {
@@ -871,7 +932,7 @@ describe('GET /api/project/facts', () => {
     expect(typeof body.identity.editHref).toBe('string')
     expect(body.identity.editHref).toBe('/settings/advanced')
     expect(body.environment.editHref).toBe('/settings')
-    expect(body.workspace.reviewHref).toBe('/workspace-import')
+    expect(body.workspace.reviewHref).toBe(`/projects/${PROJECT_ID}/workspace-import`)
     expect(body.coordinators.editHref).toBe('/settings/routing')
     expect(body.designSystem.editHref).toBe('/settings')
     expect(Array.isArray(body.environment.packageManagers)).toBe(true)
@@ -1457,14 +1518,20 @@ describe('GET/POST /api/project/learning', () => {
         }),
       }),
     )
+    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, '.guildhall', 'project-brief.md'), 'This project has saved context.\n', 'utf8')
 
     const learning = await app.fetch(new Request(scoped('/api/project/learning')))
     const learningBody = (await learning.json()) as {
       effective: { defaults: { selectedAreaKeys: string[] } } | null
       project: { workspaceImport: { approvedRuns: number } } | null
+      projectContext: {
+        projectBrief: { present: boolean; nonEmptyLines: number }
+      } | null
     }
     expect(learningBody.project?.workspaceImport.approvedRuns).toBe(1)
     expect(learningBody.effective?.defaults.selectedAreaKeys).toEqual(['looma'])
+    expect(learningBody.projectContext?.projectBrief).toMatchObject({ present: true, nonEmptyLines: 1 })
 
     const reset = await app.fetch(
       new Request(scoped('/api/project/learning/reset'), {

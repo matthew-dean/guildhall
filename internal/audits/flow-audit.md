@@ -57,6 +57,71 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Audit whether Guildhall would have caught its recent manual UX fixes
+  while building itself. The detailed audit lives at
+  `internal/audits/2026-05-25-guildhall-self-ux-audit.md`. Conclusion:
+  Guildhall has useful ingredients, but it would not catch these issues
+  reliably until zero-context comprehension, owner/action projection contracts,
+  internal-language leak scanning, and screenshot/browser-backed agent review
+  become first-class gates. Follow-up generalized into
+  `internal/design-notes/ux-review-calibration-and-work-review-integration.md`,
+  which frames this as a product-agnostic failure-corpus and calibrated-review
+  workflow that plugs into Coordinator shaping, reviewer fanout, and gate checks.
+  The review-budget follow-up now lives in
+  `internal/design-notes/review-effort-budget-and-calibration-harness.md`; it
+  adds all-lane review planning, quality/cost frontier testing, and centralized
+  persistence so review plans, results, memory, logs, artifacts, and archives
+  stay inspectable without copy-pasted file writes. The broader persistence
+  boundary is captured in `internal/design-notes/persistence-system-boundary.md`.
+  The same design now treats plan completeness as a calibrated lane so agents
+  are expected to surface missing governance, privacy, cost, drift, rollout,
+  override, and feedback-loop concerns proactively instead of waiting for the
+  user to ask what else is missing.
+- [x] Enforce content integrity across Guildhall storage and model outputs.
+  Guildhall may visually clip compact UI rows, and agents may produce complete
+  short summaries, but neither Guildhall nor an LLM may persist ellipsized
+  prose as semantic data. This was exposed in the Fair Labor License task
+  walkthrough: a compact `title` ended in `...` while the complete request only
+  survived in `description`, and details reused the compact field. Fixed by
+  rendering complete task content in details, stopping intake from writing
+  mechanical title truncation, correcting the Fair Labor License saved task
+  fields, and adding deterministic content-integrity checks so future guild
+  review can flag `slice(...) + '...'`, truncate helpers used on semantic
+  fields, and stored prose ending in ellipses.
+- [x] Repair the Fair Labor License task recovery decision surface. The
+  task-006 walkthrough showed that recovery UI was not answering the user's
+  real question. It repeated `Needs recovery` / `Needs your help`, sent the
+  user from an already-open task to `Review task details`, hid the useful
+  `Spec unclear` signal on a separate tab, and diluted the actual decision
+  behind footer actions. The drawer now treats recovery as a communication job:
+  the active surface is `Action`, the recovery card leads with the specific
+  reason, explains whether Guildhall or the user owns the next move, names the
+  most likely action, keeps blocker detail secondary, and uses `View spec and
+  evidence` only as optional context. The shell banner and footer no longer
+  duplicate recovery copy/actions when the active tab already owns that
+  decision.
+- [x] Stop treating brittle worker edit failures as owner/spec blockers. The
+  Fair Labor License task-006 blocker `Card component exists but template syntax
+  mismatch prevents edit` was not a spec problem; the worker failed exact-string
+  edits in `dashboard.vue` and incorrectly raised `spec_ambiguous`. The
+  escalation tool now rejects worker escalations caused by exact-string misses,
+  whitespace/formatting mismatch, local template syntax, imports, or component
+  props, and tells the worker to re-read the current file/component API and
+  retry structurally. The worker no-progress guard was also raised from 2
+  no-op passes to 5, so "no progress" means repeated failure to mutate, verify,
+  checkpoint, or transition after several focused attempts, not one or two
+  weak turns. The live FLL task was repaired by resolving the bogus open
+  escalation and returning task-006 to `in_progress` for the worker.
+- [x] Add retry coaching instead of merely throwing feedback over the wall.
+  The task-006 review loop showed that Guildhall was forwarding reviewer
+  feedback and occasionally scoped coordinator adjudication, but it was not
+  reliably diagnosing the worker's failure mode. Worker retry context now
+  includes a `Retry Coaching` block when a task has repeated review loops or a
+  resolved implementation-recovery escalation. The coaching tells the worker
+  not to ask the owner about local implementation mechanics, to re-read the
+  current target/component API, avoid stale exact-string replacements, compare
+  the latest review feedback to the current file contents, and verify the
+  specific fixed item before writing a new self-critique.
 - [x] Add a zero-context user-testing script for Thread and task-card flows.
   The script lives at
   `internal/plans/2026-05-24-zero-context-flow-user-testing.md` and treats the
@@ -5182,7 +5247,7 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
   `pnpm build`, dev install/restart, live `/api/service` for FLL showing real
   dirty/no-upstream worktree states, and browser control confirming FLL Overview
   no longer shows raw or friendly git-unavailable copy.
-- [ ] 2026-05-24 multi-agent flow audit round: owner-input and route clarity.
+- [x] 2026-05-24 multi-agent flow audit round: owner-input and route clarity.
   Five read-only agents plus a local browser sweep tested the fresh served
   bundle (`/api/version` `0.7.0`, `/api/stale-server` `stale:false`) across
   Fair Labor License, Looma + Knit, Narrative Harness, Font Something,
@@ -5212,37 +5277,61 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     without a project id; project model overrides still require an explicit
     project.
   Remaining P1s from the audit:
-  - [ ] Work list / board / Thread runnable truth still diverges. Fair Labor
+  - [x] Work list / board / Thread runnable truth still diverges. Fair Labor
     License list says `0 ready to start` and `3 need brief cleanup`, while the
     board places those tasks under `Working` with `Ready` chips. Use one
     projection for runnable, ready, needs-brief-cleanup, and owner-input states.
-  - [ ] Start readiness is not owner-input aware. T minus T, Commerce, Font
+    Fixed by sharing `effectiveWorkStatus` / worker-runnable projection between
+    Work, Board, and project start summaries. Browser smoke on the rebuilt
+    bundle shows Fair Labor License Work and Board both presenting the same
+    brief-cleanup state instead of calling incomplete tasks ready to start.
+  - [x] Start readiness is not owner-input aware. T minus T, Commerce, Font
     Something, and Looma + Knit can show `Start` while the next real move is a
     project question, pressure-test answer, or no real actionable task. Split
     `can start a supervisor tick` from `can make unattended progress`.
-  - [ ] Existing fake/tool-receipt questions still render as owner questions,
+    Fixed by checking owner input, import drafts, spec approval, and incomplete
+    worker handoff before treating a project as capable of unattended progress.
+    The global/project labels now say what blocks progress rather than exposing
+    a generic Start path when Guildhall has nothing safe to run.
+  - [x] Existing fake/tool-receipt questions still render as owner questions,
     especially T minus T fallback prompts like `I have enough from the glob
     results...`. Filter/repair persisted fallback questions on read, not only
     at creation.
+    Fixed by expanding the read-time operational-receipt filter and adding a
+    persistence-regression test for glob/search/tool narration that should never
+    become an owner question.
   - [x] Commerce empty/pressure-test flow remains contradictory: `No tasks
     yet`, `Shape the first spec`, active pressure-test questions, and release
     blockers can all show at once. `Pressure test in progress` should suppress
     generic first-spec/setup/release blocker framing.
-  - [ ] Looma + Knit workspace-container git inspection is still wrong.
+  - [x] Looma + Knit workspace-container git inspection is still wrong.
     Inspect configured child repos (`looma`, `knit`) rather than treating the
     container path as a release-blocking non-git repo.
-  - [ ] Project Overview still leaks raw runtime JSON / status identifiers in
+    Fixed by resolving workspace child projects before running Git-owned state
+    checks. Browser smoke on Looma Release no longer shows `spawn git ENOENT`,
+    `Inspect git state manually`, or `Project checkout inspection failed`.
+  - [x] Project Overview still leaks raw runtime JSON / status identifiers in
     recent changes and dependency rows (`assistant_complete {...}`,
     `human_judgment_required:`, `spec_ambiguous:`). Route those rows through the
     friendly runtime/status mappers and collapse empty-assistant churn.
-  - [ ] Project check-in can be actionable-looking with `totalCount: 0` /
+    Fixed by routing task transitions, escalations, default runtime events, git
+    health details, and active-blocker details through friendly status/reason
+    mappers. Rebuilt-browser smoke found no raw JSON/status leakage on the
+    sampled overview/thread/release/work routes.
+  - [x] Project check-in can be actionable-looking with `totalCount: 0` /
     `activeCount: 0`. Either generate the first concrete question or render
     `Run the first project-question pass`; do not imply visible questions
     already exist.
-  - [ ] Recovery drawers should promote the recommended recovery paths as
+    Fixed by changing empty check-in summaries to `Run project check-in` with
+    copy that says Guildhall has not generated questions yet and will ask one
+    clear question at a time.
+  - [x] Recovery drawers should promote the recommended recovery paths as
     first-class actions (`Reframe task`, `Track upstream build fix`,
     `Retry gates`) instead of burying Reframe and showing generic
     `Mark resolved...`.
+    Verified by the focused TaskDrawer suite and rebuilt Looma overview/release
+    smoke: recovery copy now names the choice and routes to the recovery path
+    instead of only presenting generic resolution language.
   Remaining P2s:
   - [x] Release views still expose internal storage paths like
     `.guildhall/TASKS.json`, `.guildhall/pressure-test-intake/...`, and
@@ -5289,3 +5378,88 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     `No actionable tasks remain` contradiction, no raw `Request aborted`, no
     optional-plus-Needs-You pairing, and no stuck `Loading project` state after
     the websocket connects.
+  - [x] Coordinator/spec-agent questions can still appear as prose about what
+    the agent should ask (`The key question I need to ask...`) instead of a
+    highlighted, answerable question. The fix adds explicit
+    subject/description/question fields to the question contract, teaches the
+    prose-recovery parser to extract the actual question, and renders structured
+    questions as context plus a highlighted `Question` callout.
+  - [x] Project Facts `Workspace discoveries` linked `Review` to the global
+    `/workspace-import` route from inside project pages. The facts endpoint now
+    emits `/projects/:id/workspace-import`, and the Facts tab scopes action
+    links through the current project as a defensive fallback.
+  - [x] Release readiness said Looma + Knit had a `Design system` that was
+    `not drafted`, which made it sound like the repo lacked a design system.
+    The release contract now distinguishes Guildhall's captured design
+    guardrail from a repo that is itself a design system/component library, and
+    the Release UI shows repo evidence as `detected in repo` instead of a
+    blocker.
+  - [x] Ready tasks with an incomplete task brief could render as a wordy stack
+    of git-story warning, generic brief warning, source-note disclosure, and
+    full checklist while still not making the next action obvious. Thread now
+    suppresses git-story noise on incomplete task-brief cards until the brief
+    is complete, names the missing field as the card headline, opens a
+    one-field brief form when only one field is missing, and collapses the full
+    checklist behind disclosure.
+  - [x] Planner/Work cards labeled `Needs brief cleanup` could open task
+    details where the Current tab said nothing was waiting. Current now carries
+    the same task-level worker-handoff check as the board and shows a yellow
+    `Needs brief cleanup` card with an `Open brief cleanup` action when the
+    task is marked ready but its brief/spec is not complete enough for a
+    worker.
+  - [x] Release/git-story and routing links could drop from
+    `/projects/:id/...` to legacy global routes such as `/task/:id` or
+    `/routing`, causing project-scoped drawer requests to fail with
+    `projectId is required`. Release task links now use the current project
+    task route, the task drawer uses its explicit `projectId` for every load
+    and action, and routing tabs stay project-relative.
+  - [x] Settings `Memory` made projects with saved context look blank because
+    it only listed reusable habit/playbook proposals. The tab is now
+    `Guidance`, explains that project facts/decisions are already saved, and
+    shows the project brief, workspace goals, import choices, and decision log
+    before listing reusable habits.
+  - [x] Advanced Settings `Codebase map` looked like counters rather than a
+    map. The endpoint now exposes the stored project summary, stack,
+    entrypoints, mapped areas, reusable abstractions, semantic findings, and
+    design-system evidence; the UI renders those sections directly so users can
+    see what Guildhall actually learned.
+  - [x] Project titles were still re-humanized from the slug in the global
+    header. Slugs can seed an empty name, but saved display names now stay
+    authoritative everywhere, including `Fair Labor License` casing.
+  - [x] Agent questions could render research narration as `Choose one` with
+    evidence snippets as fake answers. Existing malformed questions now show
+    the evidence as context, label the actual problem (`Question missing`), and
+    ask for a free-text next step; future post-user-question/orchestrator
+    fallback paths reject or skip research-summary prose instead of turning it
+    into a choice card.
+  - [x] Task drawers could show stale historical escalations in footer
+    recovery actions after the Thread body correctly showed only the latest
+    blocker. The drawer now honors runtime `openEscalationIds`, worker
+    timeouts are framed as a Guildhall-owned `Retry worker` action instead of
+    an unnamed human decision, and the retry modal no longer shows an ignored
+    `Resume at` picker or stale `Needs human call` chip.
+  - [x] Provider concurrency defaults were still tuned for a cautious
+    one-project/local-model era: Claude/Codex were capped at 2, generic hosted
+    APIs at 4, and local OpenAI-compatible servers at 1. Provider metadata now
+    uses 10 as the normal hosted/CLI fallback, local servers stay capped at 2,
+    provider groups can carry their own `maxConcurrency`, and the
+    machine-global ceiling defaults to 200. Remote OpenAI-compatible providers
+    can therefore be configured for high throughput without Guildhall sniffing
+    a vendor URL.
+  - [x] Model sampling settings were still an internal temperature mapping with
+    no product-level shape. Guildhall now exposes role behavior profiles
+    (`Precise`, `Balanced`, `Exploratory`) in global model defaults, resolves
+    global/workspace role profile overrides through config, and translates the
+    profile to provider sampling internally. The UI avoids raw temperature/top-p
+    knobs while still letting advanced users pick best-practice behavior per
+    role.
+  - [x] Guildhall-run actions were visually mixed with user-primary actions:
+    `Start`/`Resume` could appear purple with a play icon, and task-brief
+    cleanup exposed manual form controls where the real next step was handing
+    source notes back to Guildhall. Start/resume handoffs now use the agent
+    variant and sparkle icon across the project header, project cards, setup
+    wizard, thread cards, and current drawer; optional user notes stay
+    secondary/left of the agent handoff.
+  - [ ] Add the follow-on global scheduler that fairly spends the provider
+    budget across all turned-on projects instead of requiring each project to
+    be manually started and budgeted in isolation.
