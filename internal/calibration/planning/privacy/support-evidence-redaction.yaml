@@ -1,0 +1,25 @@
+id: privacy-support-evidence-redaction-plan
+title: Support evidence redaction review plan
+task:
+  id: task-privacy-support-evidence-redaction
+  title: Attach support transcripts to task review evidence
+  description: Store support transcript snippets and screenshots as review evidence while redacting email, phone, address, and other personal data.
+  priority: high
+  changedFiles:
+    - src/runtime/support-evidence.ts
+expected:
+  requiredLanes:
+    - privacy
+    - evidence_privacy
+    - data_integrity
+    - test_adequacy
+  strictLanes:
+    - privacy
+    - data_integrity
+  deterministicChecks:
+    - secret-and-sensitive-evidence-scan
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

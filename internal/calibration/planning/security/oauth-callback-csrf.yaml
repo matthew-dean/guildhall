@@ -1,0 +1,24 @@
+id: security-oauth-callback-csrf-plan
+title: OAuth callback CSRF review plan
+task:
+  id: task-security-oauth-callback-csrf
+  title: Add OAuth callback route
+  description: Add an authenticated OAuth callback endpoint that exchanges a token and creates a session after validating state.
+  priority: high
+  changedFiles:
+    - src/api/oauth/callback.ts
+expected:
+  requiredLanes:
+    - security
+    - api_contract
+    - test_adequacy
+  strictLanes:
+    - security
+    - api_contract
+  requiredArtifacts:
+    - contract-or-state-diff
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

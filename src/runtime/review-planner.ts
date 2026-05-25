@@ -94,17 +94,17 @@ const LANE_PATTERNS: Array<{
   },
   {
     lane: 'accessibility',
-    pattern: /\b(a11y|accessibility|aria|keyboard|focus|screen reader|contrast|tab order|semantic)\b/i,
+    pattern: /\b(a11y|accessibility|aria|keyboard|focus|focus state|screen reader|contrast|tab order|semantic|tap target|hit target|overlap|overlaps|overlapping|reachable)\b/i,
     reason: 'The task mentions accessibility-sensitive behavior.',
   },
   {
     lane: 'security',
-    pattern: /\b(auth|authorization|authentication|permission|access token|api token|secret|session|csrf|xss|injection|sandbox|capability)\b/i,
+    pattern: /\b(auth|authenticated|oauth|authorization|authentication|permission|access token|api token|secret|session|csrf|xss|injection|sandbox|capability|tenant|workspace export|tenant boundary|ownership boundary)\b/i,
     reason: 'The task touches trust, permissions, or attack surface.',
   },
   {
     lane: 'privacy',
-    pattern: /\b(pii|privacy|personal data|email|phone|address|user data|telemetry|analytics|tracking|consent)\b/i,
+    pattern: /\b(pii|privacy|personal data|email|phone|address|user data|workspace data|tenant data|telemetry|analytics|tracking|consent|redact|redaction|support transcript|transcript snippet)\b/i,
     reason: 'The task may expose, store, or transmit user-sensitive data.',
   },
   {
@@ -114,7 +114,7 @@ const LANE_PATTERNS: Array<{
   },
   {
     lane: 'data_integrity',
-    pattern: /\b(database|db|sql|mongo|postgres|redis|transaction|consistency|idempot|dedupe|cache|persist|persistence|stored state|project state)\b/i,
+    pattern: /\b(database|db|sql|mongo|postgres|redis|transaction|consistency|idempot|dedupe|cache|persist|persistence|stored state|project state|workspace data|tenant data|analytics events|side effects|evidence records|transcript snippets|support transcripts)\b/i,
     reason: 'The task changes persisted or coordinated state.',
   },
   {
@@ -129,7 +129,7 @@ const LANE_PATTERNS: Array<{
   },
   {
     lane: 'docs_truth',
-    pattern: /\b(docs?|readme|guide|reference|release notes|changelog|help|public copy|vitepress)\b/i,
+    pattern: /\b(docs?|readme|guide|reference|release notes|changelog|help|public copy|vitepress|status code|schema)\b/i,
     reason: 'The task changes product documentation or help surfaces.',
   },
   {
@@ -139,12 +139,12 @@ const LANE_PATTERNS: Array<{
   },
   {
     lane: 'evidence_privacy',
-    pattern: /\b(log|trace|audit|archive|evidence|recording|transcript|screenshot|prompt|conversation)\b/i,
+    pattern: /\b(log|trace|audit|archive|evidence|recording|transcript|screenshot|prompt|conversation|telemetry|analytics)\b/i,
     reason: 'The task records evidence that may need retention and redaction rules.',
   },
   {
     lane: 'calibration_governance',
-    pattern: /\b(calibration|eval|benchmark|reviewer|review plan|model setting|prompt|rubric|agent)\b/i,
+    pattern: /\b(calibration|eval|benchmark|reviewer|review plan|review planner|model setting|prompt|rubric|agent)\b/i,
     reason: 'The task changes review, evaluation, or agent-governance behavior.',
   },
   {

@@ -7,6 +7,7 @@ import {
   loadReviewPlanningCasesFromDirectory,
   runReviewPlanningFrontier,
   recordReviewPlanningFrontier,
+  type ReviewPlanningCalibrationCase,
 } from '../review-planning-calibration.js'
 import { buildReviewPlan } from '../review-planner.js'
 
@@ -64,13 +65,16 @@ describe('review planning calibration', () => {
       path.join(process.cwd(), 'internal/calibration/planning'),
     )
 
-    expect(cases.length).toBeGreaterThanOrEqual(15)
+    expect(cases.length).toBeGreaterThanOrEqual(20)
     expect(cases.map((planningCase) => planningCase.id)).toEqual(expect.arrayContaining([
       'ux-settings-review-effort',
       'accessibility-keyboard-modal-plan',
+      'accessibility-contrast-token-plan',
       'visual-responsive-toolbar-plan',
       'security-tenant-export-plan',
+      'security-oauth-callback-csrf-plan',
       'privacy-telemetry-consent-plan',
+      'privacy-support-evidence-redaction-plan',
       'api-status-compatibility-plan',
       'data-idempotent-retry-plan',
       'migration-backfill-rollback-plan',
@@ -78,9 +82,11 @@ describe('review planning calibration', () => {
       'performance-unbounded-query-plan',
       'evidence-redaction-plan',
       'cost-model-budget-plan',
+      'cost-provider-rate-limit-plan',
       'calibration-prompt-change-plan',
       'plan-completeness-handoff-plan',
       'release-rollout-fallback-plan',
+      'release-feature-flag-fallback-plan',
     ]))
   })
 
@@ -115,15 +121,70 @@ describe('review planning calibration', () => {
     })
 
     expect(frontier.runs).toHaveLength(4)
-    expect(frontier.runs.find((run) => run.variantId === 'balanced')).toMatchObject({
+    const balancedRun = frontier.runs.find((run) => run.variantId === 'balanced')
+    expect(balancedRun).toMatchObject({
       caseCount: cases.length,
       oneVariableChange: true,
     })
+    expect(balancedRun?.caseMisses).toEqual([])
+    expect(balancedRun?.highStakesLaneMissCounts).toEqual({})
     expect(frontier.runs.find((run) => run.variantId === 'balanced_split_ux_copy')).toMatchObject({
       recipeBundleMode: 'split_ux_copy',
       oneVariableChange: true,
     })
     expect(frontier.recommendedVariantId).toBeTruthy()
+  })
+
+  it('reports lane-level frontier diagnostics and excludes variants below the quality gate', () => {
+    const cases: ReviewPlanningCalibrationCase[] = [{
+      id: 'missed-ux-planning',
+      title: 'Missed UX planning',
+      task: {
+        id: 'task-missed-ux-planning',
+        title: 'Add a settings control',
+        description: 'Add a new control to the project settings screen.',
+        priority: 'low' as const,
+        changedFiles: ['src/web/surfaces/project/SettingsTab.svelte'],
+      },
+      expected: {
+        requiredLanes: ['ux_comprehension', 'visual_design', 'test_adequacy'],
+        forbiddenLanes: [],
+        requiredArtifacts: ['visual-evidence'],
+        deterministicChecks: ['browser-or-screenshot-evidence'],
+        strictLanes: [],
+        maxReviewerAgents: 6,
+      },
+      labelGovernance: {
+        labeledBy: 'review-calibration-test',
+        labeledAt: '2026-05-25',
+        reviewStatus: 'seed' as const,
+      },
+    }]
+
+    const frontier = runReviewPlanningFrontier({
+      cases,
+      variants: [
+        { variantId: 'lean', reviewEffort: 'lean' },
+        { variantId: 'balanced', reviewEffort: 'balanced' },
+      ],
+    })
+
+    expect(frontier.runs.find((run) => run.variantId === 'lean')).toMatchObject({
+      qualityGate: 'fail',
+      laneMissCounts: {
+        ux_comprehension: 1,
+        visual_design: 1,
+      },
+      caseMisses: [{
+        caseId: 'missed-ux-planning',
+        missedLaneIds: ['ux_comprehension', 'visual_design'],
+      }],
+    })
+    expect(frontier.runs.find((run) => run.variantId === 'balanced')).toMatchObject({
+      qualityGate: 'pass',
+      laneMissCounts: {},
+    })
+    expect(frontier.recommendedVariantId).toBe('balanced')
   })
 
   it('records planning frontier summaries through the review audit store', async () => {

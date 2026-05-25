@@ -1,0 +1,22 @@
+id: cost-provider-rate-limit-plan
+title: Provider rate limit review plan
+task:
+  id: task-cost-provider-rate-limit
+  title: Add provider rate limit fallback
+  description: Route agent model calls across providers when token quota or rate limits are reached, and report estimated cost per review run.
+  priority: normal
+  changedFiles:
+    - src/runtime/model-provider-router.ts
+expected:
+  requiredLanes:
+    - cost_control
+    - calibration_governance
+    - rollout_safety
+    - test_adequacy
+  requiredArtifacts:
+    - review-variant-comparison
+  maxReviewerAgents: 6
+labelGovernance:
+  labeledBy: review-calibration-seed
+  labeledAt: '2026-05-25'
+  reviewStatus: seed

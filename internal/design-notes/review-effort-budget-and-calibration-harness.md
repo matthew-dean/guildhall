@@ -430,6 +430,10 @@ Metrics:
 
 - high-severity lane recall;
 - critical lane miss rate;
+- lane-level miss counts, so a high aggregate score cannot hide a repeated
+  blind spot;
+- quality-gate status, so a low-cost variant can be excluded when it misses a
+  required lane or high-stakes coverage;
 - false-positive lane rate;
 - average reviewer-agent count;
 - average estimated tokens;
@@ -941,17 +945,31 @@ The task page should say what happened in ordinary language:
 - Which review records are safe to commit by default, and which must always stay
   local unless the user exports them?
 
-## First implementation slice
+## First implementation slice status
 
-1. Add or refactor the central persistence system that routes compact summaries,
-   full evidence, artifacts, logs, memory, archives, and compaction references.
-2. Add the `review_effort` lever definition as internal schema only.
-3. Add `ReviewPlan` and `ReviewBudget` types.
-4. Add a planning corpus format with 15-20 seed cases across UX,
-   accessibility, security, data, docs, API, and performance.
-5. Add a planner runner that grades lane selection, artifacts, aggregation, and
-   budget decisions.
-6. Add recipe bundle metadata.
-7. Run frontier variants for `lean`, `balanced`, and `thorough`.
-8. Use the report to choose the recommended default.
-9. Only then write public docs for the shipped lever and task-page behavior.
+- [x] Add the central persistence foundation for typed records, events,
+  artifacts, placement, hashes, and missing-evidence resolution.
+- [x] Add `ReviewAuditStore` as the first review-audit consumer of the
+  persistence boundary.
+- [x] Add the `review_effort` lever and expose the shipped user-facing control.
+- [x] Add `ReviewPlan` and `ReviewBudget` records.
+- [x] Add a planning corpus format and seed it with 20 product-agnostic cases
+  across UX, accessibility, visual design, security, privacy, evidence privacy,
+  API compatibility, data integrity, migration safety, docs truth,
+  performance, cost control, calibration governance, plan completeness, and
+  rollout/release safety.
+- [x] Add a planner runner that grades lane selection, required artifacts,
+  deterministic checks, aggregation, and budget bounds.
+- [x] Add reviewer-bundle metadata for default grouped recipes and split
+  variants.
+- [x] Run frontier variants for `lean`, `balanced`, `thorough`, and
+  `balanced_split_ux_copy`.
+- [x] Add frontier diagnostics for lane-level misses, missing checks/artifacts,
+  high-stakes misses, and quality-gate pass/fail so the recommended default is
+  not based on aggregate recall alone.
+- [x] Use the expanded corpus to tighten planner signal detection for
+  high-stakes wording that appears in ordinary task descriptions, including
+  workspace data, analytics evidence, OAuth callbacks, review-planner rollout,
+  and overlapping interactive controls.
+- [x] Publish user-facing docs for the shipped lever while keeping the
+  calibration harness itself internal until the behavior is product-ready.

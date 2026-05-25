@@ -102,12 +102,12 @@ export type ReviewPlanningOutcome = 'pass' | 'partial' | 'miss'
 
 export interface ReviewPlanningGrade {
   outcome: ReviewPlanningOutcome
-  matchedLaneIds: string[]
-  missedLaneIds: string[]
-  falsePositiveLaneIds: string[]
+  matchedLaneIds: ReviewRiskLane[]
+  missedLaneIds: ReviewRiskLane[]
+  falsePositiveLaneIds: ReviewRiskLane[]
   missingArtifactIds: string[]
   missingCheckIds: string[]
-  aggregationMisses: string[]
+  aggregationMisses: ReviewRiskLane[]
   budgetWithinLimit: boolean
 }
 
@@ -130,6 +130,19 @@ export interface ReviewPlanningFrontierRun {
   averageReviewerGroups: number
   recipeBundleMode: ReviewRecipeBundleMode
   oneVariableChange: boolean
+  qualityGate: 'pass' | 'fail'
+  laneMissCounts: Record<string, number>
+  highStakesLaneMissCounts: Record<string, number>
+  missingArtifactCounts: Record<string, number>
+  missingCheckCounts: Record<string, number>
+  caseMisses: Array<{
+    caseId: string
+    outcome: ReviewPlanningOutcome
+    missedLaneIds: ReviewRiskLane[]
+    missingArtifactIds: string[]
+    missingCheckIds: string[]
+    aggregationMisses: ReviewRiskLane[]
+  }>
 }
 
 export interface ReviewPlanningFrontierSummary {
@@ -211,6 +224,37 @@ export function runReviewPlanningFrontier(input: {
     const falsePositiveLaneCount = grades.reduce((total, grade) => total + grade.falsePositiveLaneIds.length, 0)
 
     const recipeBundleMode = variant.recipeBundleMode ?? 'default_bundles'
+    const laneMissCounts = countBy(grades.flatMap((grade) => grade.missedLaneIds))
+    const highStakesLaneMissCounts = countBy(
+      grades.flatMap((grade) => grade.missedLaneIds.filter((lane) => HIGH_STAKES_LANES.has(lane))),
+    )
+    const missingArtifactCounts = countBy(grades.flatMap((grade) => grade.missingArtifactIds))
+    const missingCheckCounts = countBy(grades.flatMap((grade) => grade.missingCheckIds))
+    const missCount = grades.filter((grade) => grade.outcome === 'miss').length
+    const caseMisses = grades.flatMap((grade, index) => {
+      if (
+        grade.outcome === 'pass' &&
+        grade.missedLaneIds.length === 0 &&
+        grade.missingArtifactIds.length === 0 &&
+        grade.missingCheckIds.length === 0 &&
+        grade.aggregationMisses.length === 0
+      ) {
+        return []
+      }
+      return [{
+        caseId: input.cases[index]!.id,
+        outcome: grade.outcome,
+        missedLaneIds: grade.missedLaneIds,
+        missingArtifactIds: grade.missingArtifactIds,
+        missingCheckIds: grade.missingCheckIds,
+        aggregationMisses: grade.aggregationMisses,
+      }]
+    })
+    const qualityGate = missCount === 0 &&
+      Object.keys(highStakesLaneMissCounts).length === 0 &&
+      average(reviewerAgentCounts) > 0
+      ? 'pass'
+      : 'fail'
 
     return {
       variantId: variant.variantId,
@@ -218,7 +262,7 @@ export function runReviewPlanningFrontier(input: {
       caseCount: input.cases.length,
       passCount: grades.filter((grade) => grade.outcome === 'pass').length,
       partialCount: grades.filter((grade) => grade.outcome === 'partial').length,
-      missCount: grades.filter((grade) => grade.outcome === 'miss').length,
+      missCount,
       laneRecall: matchedLaneCount / expectedLaneCount,
       falsePositiveLaneRate: falsePositiveLaneCount / expectedLaneCount,
       averageReviewerAgents: average(reviewerAgentCounts),
@@ -227,10 +271,17 @@ export function runReviewPlanningFrontier(input: {
       )),
       recipeBundleMode,
       oneVariableChange: true,
+      qualityGate,
+      laneMissCounts,
+      highStakesLaneMissCounts,
+      missingArtifactCounts,
+      missingCheckCounts,
+      caseMisses,
     } satisfies ReviewPlanningFrontierRun
   })
 
   const recommended = [...runs].sort((a, b) => {
+    if (a.qualityGate !== b.qualityGate) return a.qualityGate === 'pass' ? -1 : 1
     const quality = (b.laneRecall - b.falsePositiveLaneRate) - (a.laneRecall - a.falsePositiveLaneRate)
     if (Math.abs(quality) > 0.0001) return quality
     return a.averageReviewerAgents - b.averageReviewerAgents
@@ -298,6 +349,23 @@ function average(values: readonly number[]): number {
   return values.reduce((total, value) => total + value, 0) / values.length
 }
 
+const HIGH_STAKES_LANES = new Set<ReviewRiskLane>([
+  'security',
+  'privacy',
+  'api_contract',
+  'data_integrity',
+  'migration_safety',
+  'evidence_privacy',
+  'release_risk',
+  'rollout_safety',
+])
+
+function countBy(values: readonly string[]): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const value of values) counts[value] = (counts[value] ?? 0) + 1
+  return counts
+}
+
 function estimateReviewerGroups(
   lanes: readonly z.infer<typeof ReviewRiskLane>[],
   mode: ReviewRecipeBundleMode,
@@ -328,7 +396,8 @@ function renderReviewPlanningFrontierSummary(summary: ReviewPlanningFrontierSumm
   const runs = summary.runs
     .map((run) =>
       `${run.variantId}: recall ${formatPercent(run.laneRecall)}, ` +
-      `${run.passCount}/${run.caseCount} pass, avg reviewers ${run.averageReviewerAgents.toFixed(1)}`,
+      `${run.passCount}/${run.caseCount} pass, gate ${run.qualityGate}, ` +
+      `avg reviewers ${run.averageReviewerAgents.toFixed(1)}`,
     )
     .join('; ')
   return `Recommended review planning variant: ${recommended}. ${runs}`

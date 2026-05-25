@@ -136,6 +136,18 @@ babysit setup/import/provider/release states across multiple pages.
   recipes, pitfalls, footguns, rollout risks, docs/audit/storage concerns, and
   non-blocking follow-ups when those concerns matter for the task. This bakes
   the "what else are we missing?" squeeze into the work-review flow.
+- [x] Harden the review-planning frontier and expand the seed corpus. Frontier
+  runs now report lane-level misses, high-stakes misses, missing required
+  artifacts, missing deterministic checks, and a quality-gate pass/fail so a
+  cheap review setting cannot win on aggregate recall while hiding an important
+  blind spot. The planning corpus now has 20 product-agnostic cases, adding
+  contrast/accessibility, OAuth callback CSRF, support-evidence redaction,
+  provider rate-limit/cost fallback, and feature-flag rollout fallback cases.
+  The expanded corpus immediately exposed planner blind spots around workspace
+  data, analytics evidence, review-planner rollout, OAuth/security wording, and
+  overlapping interactive controls; the planner signal rules now cover those
+  terms and the balanced frontier is required to have no high-stakes lane
+  misses on the seed corpus.
 - [x] Tighten the dark-theme text contrast ladder from the Fair Labor License
   Thread walkthrough. Supporting copy was too dim against near-white headings,
   so the system text tokens now keep primary/strong text slightly softer and
