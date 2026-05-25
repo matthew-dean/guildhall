@@ -4,7 +4,7 @@ import path from 'node:path'
 import { parse as parseYaml } from 'yaml'
 
 import { ReviewRiskLane } from './review-audit-store.js'
-import type { ReviewAuditStore } from './review-audit-store.js'
+import type { EscapedMissRecord, ReviewAuditStore } from './review-audit-store.js'
 
 export const CalibrationArtifact = z.object({
   id: z.string().min(1),
@@ -140,6 +140,18 @@ export const ReviewCalibrationRecipe = z.object({
 })
 export type ReviewCalibrationRecipe = z.infer<typeof ReviewCalibrationRecipe>
 
+export interface BuildCalibrationCaseDraftFromEscapedMissInput {
+  miss: EscapedMissRecord
+  title: string
+  scenario: string
+  labeledBy: string
+  labeledAt: string
+  reviewAfter: string
+  productType?: string
+  surfaceType?: string
+  userGoal?: string
+}
+
 export const defaultReviewCalibrationRecipes: ReviewCalibrationRecipe[] = [
   {
     id: 'ux-zero-context-comprehension',
@@ -256,6 +268,59 @@ export function buildCalibrationReviewPacket(calibrationCase: CalibrationCase): 
     source: { ...calibrationCase.source },
     privacyClassification: calibrationCase.privacyClassification,
   }
+}
+
+export function buildCalibrationCaseDraftFromEscapedMiss(
+  input: BuildCalibrationCaseDraftFromEscapedMissInput,
+): CalibrationCase {
+  const miss = input.miss
+  const id = `escaped-${slugId(miss.taskId)}-${slugId(miss.missedLane)}`
+  const findingText = miss.humanFinding.trim()
+  const draft = {
+    id,
+    title: input.title,
+    domain: 'escaped-review-miss',
+    productType: input.productType ?? 'unknown',
+    surfaceType: input.surfaceType ?? 'unknown',
+    userGoal: input.userGoal ?? 'Avoid repeating a review miss from a previous task.',
+    scenario: input.scenario,
+    artifacts: [{
+      id: `${id}-finding-note`,
+      kind: 'document_excerpt' as const,
+      description: 'Human-recorded escaped review finding.',
+      content: findingText,
+    }],
+    reviewLanes: [miss.missedLane],
+    knownFindings: [{
+      id: `${id}-finding`,
+      lane: miss.missedLane,
+      severity: 'high' as const,
+      summary: findingText,
+      impact: 'A similar issue could pass review again unless reviewer context, rubric, or deterministic checks improve.',
+      minimumUsefulFix: 'Update the relevant review recipe, planner coverage, or deterministic check so this finding is raised before acceptance.',
+      matchHints: deriveMatchHints(findingText),
+    }],
+    falsePositiveTraps: [{
+      id: `${id}-avoid-overfit`,
+      summary: 'Do not fail this case only because it resembles the escaped task; fail it only when the same user-visible or system risk is present.',
+    }],
+    source: {
+      kind: 'production_miss' as const,
+      citation: `Escaped review miss for task ${miss.taskId}.`,
+    },
+    labelGovernance: {
+      labeledBy: input.labeledBy,
+      labeledAt: input.labeledAt,
+      reviewStatus: 'seed' as const,
+    },
+    privacyClassification: 'internal' as const,
+    negativeControl: false,
+    stalenessPolicy: {
+      reviewAfter: input.reviewAfter,
+      reason: 'Escaped-miss drafts should be reviewed after the underlying product and reviewer recipes evolve.',
+    },
+  }
+  return CalibrationCase.parse(draft)
 }
 
 export function selectCalibrationRecipesForLanes(
@@ -462,4 +527,24 @@ function reviewerFindingMatches(
 
 function normalize(value: string): string {
   return value.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function deriveMatchHints(text: string): string[] {
+  const normalized = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const candidates = [
+    ...normalized.matchAll(/\b(primary\s+\w+\s+action)\b/g),
+    ...normalized.matchAll(/\b(safe\s+next\s+action)\b/g),
+    ...normalized.matchAll(/\b(ambiguous)\b/g),
+    ...normalized.matchAll(/\b(permission|privacy|migration|rollback|keyboard|focus|token|budget|cost)\b/g),
+  ].map((match) => match[1]!)
+
+  return [...new Set(candidates)].slice(0, 6)
+}
+
+function slugId(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }

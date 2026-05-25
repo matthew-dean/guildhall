@@ -20,6 +20,7 @@ import {
   serviceStatePath,
   serviceUrlForPort,
   SHIPPED_CLI_COMMANDS,
+  draftEscapedMissCalibrationCase,
   recordEscapedReviewMiss,
   validateReviewCalibrationCorpus,
   validateReviewPlanningCorpus,
@@ -245,6 +246,7 @@ describe('Guildhall CLI surface', () => {
     expect(help).not.toContain('guildhall approve-meta-intake')
     expect(help).toContain('guildhall memory migrate-0.8.0')
     expect(help).toContain('guildhall review-calibration escaped-miss')
+    expect(help).toContain('guildhall review-calibration draft-case')
     expect(help).toContain('guildhall review-calibration validate-planning')
   })
 
@@ -308,6 +310,30 @@ describe('Guildhall CLI surface', () => {
         process.env.GUILDHALL_DATA_DIR = priorDataDir
       }
     }
+  })
+
+  it('drafts a calibration case from an escaped review miss without writing ad hoc files', () => {
+    const draft = draftEscapedMissCalibrationCase({
+      taskId: 'task-1',
+      missedLane: 'ux_comprehension',
+      humanFinding: 'The reviewer missed that the primary setup action was ambiguous.',
+      title: 'Ambiguous setup primary action escaped review',
+      scenario: 'A setup card made the safe next action unclear.',
+      recordedBy: 'calibration:test',
+      recordedAt: '2026-05-25T12:05:00.000Z',
+      labeledBy: 'calibration:test',
+      labeledAt: '2026-05-25T12:10:00.000Z',
+      reviewAfter: '2026-11-25',
+    })
+
+    expect(draft).toMatchObject({
+      id: 'escaped-task-1-ux-comprehension',
+      reviewLanes: ['ux_comprehension'],
+      source: { kind: 'production_miss' },
+      knownFindings: [{
+        summary: 'The reviewer missed that the primary setup action was ambiguous.',
+      }],
+    })
   })
 
   it('validates and records the review planning corpus through persistence', async () => {

@@ -9,7 +9,10 @@ import { renderBakeoffMarkdown, runContextIndexerBakeoff, runModelBakeoff } from
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
 import { migrateTaskState } from './task-state-migration.js'
 import { compactProjectState } from './project-state-compaction.js'
-import { recordCalibrationCorpusValidation } from './review-calibration.js'
+import {
+  buildCalibrationCaseDraftFromEscapedMiss,
+  recordCalibrationCorpusValidation,
+} from './review-calibration.js'
 import {
   loadReviewPlanningCasesFromDirectory,
   recordReviewPlanningFrontier,
@@ -389,6 +392,13 @@ Usage:
   guildhall review-calibration validate-planning [id|path]
                                   Validate and record review-planning frontier coverage
     --cases <dir>                Planning corpus directory (default: internal/calibration/planning)
+  guildhall review-calibration draft-case [id|path]
+                                  Print a calibration-case draft from an escaped miss
+    --task <id>                  Task where the miss escaped review
+    --lane <lane>                Review lane that missed the issue
+    --finding <text>             Human finding that reviewers missed
+    --title <text>               Draft calibration case title
+    --scenario <text>            Draft scenario to test
   guildhall review-calibration escaped-miss [id|path]
                                   Record a missed review finding for calibration follow-up
     --task <id>                  Task where the miss escaped review
@@ -416,6 +426,7 @@ Examples:
   guildhall migrate task-state --apply .
   guildhall review-calibration validate . --cases internal/calibration/cases/ux
   guildhall review-calibration validate-planning .
+  guildhall review-calibration draft-case . --task task-1 --lane ux_comprehension --finding "Primary action was ambiguous" --title "Ambiguous action" --scenario "A setup card hides the safe next action"
   guildhall review-calibration escaped-miss . --task task-1 --lane ux_comprehension --finding "Primary action was ambiguous"
   guildhall model-bakeoff artifacts/model-bakeoff/report.json
   guildhall model-bakeoff --context-indexer
@@ -918,16 +929,73 @@ export async function recordEscapedReviewMiss(input: {
   })
 }
 
+export function draftEscapedMissCalibrationCase(input: {
+  taskId: string
+  missedLane: string
+  humanFinding: string
+  title: string
+  scenario: string
+  missedByRecipe?: string
+  recordedBy?: string
+  recordedAt?: string
+  labeledBy?: string
+  labeledAt?: string
+  reviewAfter?: string
+}) {
+  const recordedAt = input.recordedAt ?? new Date().toISOString()
+  const reviewAfter = input.reviewAfter ?? new Date(Date.now() + 180 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10)
+  return buildCalibrationCaseDraftFromEscapedMiss({
+    miss: {
+      taskId: input.taskId,
+      missedLane: input.missedLane as never,
+      ...(input.missedByRecipe ? { missedByRecipe: input.missedByRecipe } : {}),
+      humanFinding: input.humanFinding,
+      nextCalibrationAction: 'create_case',
+      recordedAt,
+      recordedBy: input.recordedBy ?? 'guildhall-cli',
+    },
+    title: input.title,
+    scenario: input.scenario,
+    labeledBy: input.labeledBy ?? input.recordedBy ?? 'guildhall-cli',
+    labeledAt: input.labeledAt ?? recordedAt,
+    reviewAfter,
+  })
+}
+
 async function cmdReviewCalibration() {
   const pos = positionals()
   const subcommand = pos[0] ?? 'validate'
-  if (!['validate', 'validate-planning', 'escaped-miss'].includes(subcommand)) {
-    console.error('[guildhall] Usage: guildhall review-calibration <validate|validate-planning|escaped-miss> [id|path]')
+  if (!['validate', 'validate-planning', 'draft-case', 'escaped-miss'].includes(subcommand)) {
+    console.error('[guildhall] Usage: guildhall review-calibration <validate|validate-planning|draft-case|escaped-miss> [id|path]')
     process.exit(1)
   }
   const idOrPath = pos[1]
   const entry = idOrPath ? findWorkspace(idOrPath) : null
   const projectPath = entry?.path ?? (idOrPath ? resolve(expandPath(idOrPath)) : process.cwd())
+  if (subcommand === 'draft-case') {
+    const taskId = getFlag('--task')
+    const missedLane = getFlag('--lane')
+    const humanFinding = getFlag('--finding')
+    const title = getFlag('--title')
+    const scenario = getFlag('--scenario')
+    if (!taskId || !missedLane || !humanFinding || !title || !scenario) {
+      console.error('[guildhall] Usage: guildhall review-calibration draft-case [id|path] --task <id> --lane <lane> --finding <text> --title <text> --scenario <text>')
+      process.exit(1)
+    }
+    const draft = draftEscapedMissCalibrationCase({
+      taskId,
+      missedLane,
+      humanFinding,
+      title,
+      scenario,
+      ...(getFlag('--missed-by') ? { missedByRecipe: getFlag('--missed-by') } : {}),
+      recordedBy: 'guildhall-cli',
+    })
+    console.log(JSON.stringify(draft, null, 2))
+    return
+  }
   if (subcommand === 'escaped-miss') {
     const taskId = getFlag('--task')
     const missedLane = getFlag('--lane')

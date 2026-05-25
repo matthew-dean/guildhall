@@ -5,6 +5,7 @@ import path from 'node:path'
 
 import {
   CalibrationCase,
+  buildCalibrationCaseDraftFromEscapedMiss,
   buildCalibrationCorpusSummary,
   buildCalibrationReviewPacket,
   defaultReviewCalibrationRecipes,
@@ -340,6 +341,52 @@ describe('review calibration cases', () => {
       'performance-critical-path',
       'docs-truth-quickstart',
     ]))
+  })
+
+  it('builds a valid calibration-case draft from an escaped review miss', () => {
+    const draft = buildCalibrationCaseDraftFromEscapedMiss({
+      miss: {
+        taskId: 'task-123',
+        missedLane: 'ux_comprehension',
+        missedByRecipe: 'product-ux-zero-context',
+        humanFinding: 'The reviewer missed that the primary setup action was ambiguous.',
+        nextCalibrationAction: 'create_case',
+        recordedAt: '2026-05-25T12:05:00.000Z',
+        recordedBy: 'calibration:test',
+      },
+      title: 'Ambiguous setup primary action escaped review',
+      scenario: 'A user-facing setup card reached review even though the safe next action was unclear.',
+      labeledBy: 'calibration:test',
+      labeledAt: '2026-05-25T12:10:00.000Z',
+      reviewAfter: '2026-11-25',
+    })
+
+    expect(CalibrationCase.parse(draft)).toMatchObject({
+      id: 'escaped-task-123-ux-comprehension',
+      title: 'Ambiguous setup primary action escaped review',
+      reviewLanes: ['ux_comprehension'],
+      source: {
+        kind: 'production_miss',
+        citation: 'Escaped review miss for task task-123.',
+      },
+      labelGovernance: {
+        labeledBy: 'calibration:test',
+        labeledAt: '2026-05-25T12:10:00.000Z',
+        reviewStatus: 'seed',
+      },
+      privacyClassification: 'internal',
+      knownFindings: [{
+        id: 'escaped-task-123-ux-comprehension-finding',
+        lane: 'ux_comprehension',
+        severity: 'high',
+        summary: 'The reviewer missed that the primary setup action was ambiguous.',
+      }],
+    })
+    expect(draft.knownFindings[0]!.matchHints).toEqual([
+      'primary setup action',
+      'ambiguous',
+    ])
+    expect(draft.falsePositiveTraps[0]!.summary).toContain('Do not fail this case only because')
   })
 
   it('summarizes corpus coverage and records validation through the review audit store facade', async () => {

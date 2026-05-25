@@ -123,6 +123,13 @@ babysit setup/import/provider/release states across multiple pages.
   prompt governance, and implementation-handoff completeness. This gives the
   review planner frontier enough cross-lane examples to catch regressions when
   effort or reviewer-bundle settings change.
+- [x] Close the escaped-miss-to-corpus draft loop. Escaped review misses now
+  have a pure calibration-case draft helper that produces a schema-valid
+  production-miss seed with hidden findings, match hints, false-positive
+  guardrails, label governance, and staleness policy. The CLI exposes
+  `guildhall review-calibration draft-case` to print the draft without writing
+  ad hoc corpus files; actual persistence remains in the escaped-miss audit
+  event until a reviewed case is intentionally added to the corpus.
 - [x] Tighten the dark-theme text contrast ladder from the Fair Labor License
   Thread walkthrough. Supporting copy was too dim against near-white headings,
   so the system text tokens now keep primary/strong text slightly softer and
