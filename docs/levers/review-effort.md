@@ -11,29 +11,30 @@ help_summary: |
 
 **Scope:** domain • **Default:** `balanced`
 
-`review_effort` sets the starting depth for task review in a domain. It is the
-review-side version of a reasoning level: lower settings keep everyday work
-moving, while higher settings ask Guildhall to spend more reviewer attention
-before accepting a change.
+`review_effort` tells Guildhall how much review attention to start with for a
+kind of work.
 
-Guildhall still looks at the task itself. If a task touches security, privacy,
-migrations, release rollout, or other high-risk areas, the review plan can rise
-above this setting.
+Most projects can leave this at `balanced`. Small, familiar changes stay light;
+larger or riskier changes get more eyes before Guildhall accepts them.
+
+This setting is a starting point, not a blind cap. If a task touches security,
+privacy, migrations, release rollout, or another sensitive area, Guildhall can
+raise the review level for that task and explain why.
 
 ## Positions
 
 | Position | Behavior |
 |---|---|
-| `lean` | Keeps review short for small, low-risk work. Uses a smaller reviewer budget and treats more findings as advisory unless the task itself raises risk. |
-| `balanced` | The default. Covers the likely risk lanes without turning every task into a release review. |
-| `thorough` | Adds deeper review for domains where quality risk is higher, the product surface is newer, or calibration data says misses are still common. |
-| `release_critical` | Uses the heaviest review posture for work that must be treated like a release gate. |
+| `lean` | Keeps review short for small, low-risk work. Good for tidy follow-ups where the blast radius is easy to see. |
+| `balanced` | The default. Covers the likely risks without turning every task into a ceremony. |
+| `thorough` | Adds deeper review when the product surface is new, the change is subtle, or misses would be expensive. |
+| `release_critical` | Uses the heaviest review posture for work that should feel like a release gate. |
 
 ## What It Does Not Override
 
-`review_effort` does not replace required verification commands, deterministic
-checks, reviewer fan-out policy, or human approval settings. It shapes the review
-plan; it does not waive safety gates.
+`review_effort` does not replace verification commands, required checks,
+reviewer agreement rules, or approval settings. It shapes the review plan; it
+does not waive safety gates.
 
 ## Related
 

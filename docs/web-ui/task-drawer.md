@@ -24,6 +24,18 @@ place so you do not have to reconstruct what happened from scattered logs.
 | **History** | How did the task move through the system? Shows status changes, review verdicts, escalations, and gate outcomes. |
 | **Provenance** | Which project policies shaped this task? Shows lever positions, who set them, and when. |
 
+## Review plan
+
+When Guildhall has planned a review, the Spec tab shows a compact review plan.
+It tells you the review level, the main risks Guildhall is checking, the
+reviewer budget, and the evidence or checks the task needs before it can be
+accepted.
+
+The card starts small on purpose. You can see the shape of the review without
+reading a wall of process. If you want the details, expand it to see reviewer
+groups, deterministic checks, required evidence, and any lenses Guildhall chose
+not to use.
+
 ## When a task is stuck
 
 When a task is blocked, the drawer summarizes why in one place: recent
