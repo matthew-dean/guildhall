@@ -7,7 +7,7 @@
   import { nav } from '../lib/nav.svelte.js'
   import { projectHref } from '../lib/project-routes.js'
   import { getCachedService, setCachedService } from '../lib/service-cache.js'
-  import type { InboxItem } from '../lib/inbox-item-key.js'
+  import { inboxItemKey, type InboxItem } from '../lib/inbox-item-key.js'
   import type { ServiceDetail, ServiceProjectSummary } from '../lib/types.js'
 
   type ProjectInboxGroup = {
@@ -32,6 +32,8 @@
 
   function itemVerb(item: InboxItem): string {
     switch (item.kind) {
+      case 'required_migration': return 'Migrate'
+      case 'project_understanding': return 'Reconcile'
       case 'workspace_import_pending': return 'Review import'
       case 'pressure_test_pending': return 'Answer question'
       case 'agent_question_pending': return 'Answer question'
@@ -144,9 +146,8 @@
       const service = await fetchJsonWithTimeout<ServiceDetail>('/api/service')
       setCachedService(service)
       const projects = service.projects ?? []
-      const nextGroups: ProjectInboxGroup[] = []
       error = null
-      for (const project of projects) {
+      const nextGroups = await Promise.all(projects.map(async project => {
         try {
           const body = await fetchJsonWithTimeout<{ items?: InboxItem[] }>(
             `/api/project/inbox?projectId=${encodeURIComponent(project.id)}`,
@@ -156,19 +157,16 @@
             items: (body.items ?? []).filter(item => item.severity !== 'low'),
             error: null,
           } satisfies ProjectInboxGroup
-          if (nextGroup.items.length > 0) {
-            nextGroups.push(nextGroup)
-            groups = [...nextGroups]
-          }
+          return nextGroup.items.length > 0 ? nextGroup : null
         } catch (err) {
-          nextGroups.push({
+          return {
             project,
             items: [],
             error: requestErrorMessage(err),
-          } satisfies ProjectInboxGroup)
-          groups = [...nextGroups]
+          } satisfies ProjectInboxGroup
         }
-      }
+      }))
+      groups = nextGroups.filter((group): group is ProjectInboxGroup => group !== null)
     } catch (err) {
       error = requestErrorMessage(err)
       groups = []
@@ -249,7 +247,7 @@
             </div>
           {:else}
             <ul class="items">
-              {#each group.items as item (`${item.kind}-${item.taskId ?? item.title}-${item.actionHref ?? ''}`)}
+              {#each group.items as item, itemIndex (`${inboxItemKey(item)}:${itemIndex}`)}
                 <li>
                   <button type="button" class="item" onclick={() => goToItem(group.project.id, item)}>
                     <span class="severity severity-{item.severity}" aria-hidden="true"></span>

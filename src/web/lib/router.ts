@@ -11,7 +11,7 @@ export function parseRoute(p: string, state: unknown = null): Route {
   const pathname = p.split(/[?#]/, 1)[0] || '/'
   p = pathname
   if (p === '/' || p === '/projects' || p === '/overview') return { kind: 'projects' }
-  if (p === '/needs-you' || p === '/notifications') return { kind: 'fleet-inbox' }
+  if (p === '/inbox' || p === '/needs-you' || p === '/notifications') return { kind: 'fleet-inbox' }
   if (p === '/setup') return { kind: 'setup', projectId: null }
   const projectSetupMatch = /^\/projects\/([^/]+)\/setup$/.exec(p)
   if (projectSetupMatch) return { kind: 'setup', projectId: decodeURIComponent(projectSetupMatch[1] ?? '') }

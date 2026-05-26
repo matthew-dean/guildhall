@@ -7,6 +7,7 @@ describe('parseRoute', () => {
     expect(parseRoute('/')).toEqual({ kind: 'projects' })
     expect(parseRoute('/projects')).toEqual({ kind: 'projects' })
     expect(parseRoute('/overview')).toEqual({ kind: 'projects' })
+    expect(parseRoute('/inbox')).toEqual({ kind: 'fleet-inbox' })
     expect(parseRoute('/needs-you')).toEqual({ kind: 'fleet-inbox' })
     expect(parseRoute('/notifications')).toEqual({ kind: 'fleet-inbox' })
     expect(parseRoute('/setup')).toEqual({ kind: 'setup', projectId: null })

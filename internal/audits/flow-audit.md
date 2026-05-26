@@ -57,6 +57,17 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Run a multi-agent 0.8 user-testing pass on the documented Narrative
+  Harness project and repair the bounded regressions found live. The pass
+  covered migration/runtime authority, workspace-intake depth, and
+  Overview/Inbox UX. Immediate fixes: top-level `/inbox` now opens the fleet
+  Needs You queue instead of a project-scoped error, Fleet Needs You loads
+  project inboxes in parallel and no longer crashes on repeated inbox rows,
+  project Inbox history counts match the visible ledger rows, and migration /
+  project-understanding rows get useful fleet verbs. Remaining release-polish
+  findings are tracked in this audit trail: duplicate inbox rows can still bury
+  the next move, some old/internal agent language still leaks into user
+  surfaces, and the package metadata still reports `v0.7.0` on the 0.8 branch.
 - [x] Integrate required migrations and runtime compatibility with durable
   attention. Required project migrations now also appear in the Overview Inbox
   ledger as blocking, non-dismissible items while the existing migration

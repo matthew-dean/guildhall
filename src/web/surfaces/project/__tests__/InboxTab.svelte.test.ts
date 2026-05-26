@@ -154,6 +154,57 @@ describe('InboxTab', () => {
     expect(screen.queryByRole('button', { name: /dismiss/i })).not.toBeInTheDocument()
   })
 
+  it('counts the visible ledger rows instead of only actionable rows', async () => {
+    render(InboxTab, {
+      items: [
+        {
+          id: 'open-high',
+          kind: 'agent_question_pending',
+          severity: 'high',
+          title: 'Choose scope',
+          detail: 'A decision is needed.',
+          actionHref: '/thread',
+          status: 'open',
+        },
+      ] as any,
+      history: [
+        {
+          id: 'open-high',
+          kind: 'agent_question_pending',
+          severity: 'high',
+          title: 'Choose scope',
+          detail: 'A decision is needed.',
+          actionHref: '/thread',
+          status: 'open',
+        },
+        {
+          id: 'resolved',
+          kind: 'required_migration',
+          severity: 'high',
+          migrationId: '0.8.0/project-state-layout',
+          title: 'Required migration',
+          detail: 'Done.',
+          actionHref: '/migrations',
+          status: 'resolved',
+          resolution: 'migrated',
+        },
+        {
+          id: 'low',
+          kind: 'lever_questions',
+          severity: 'low',
+          title: 'Levers',
+          detail: 'Optional.',
+          actionHref: '/settings/advanced',
+          status: 'open',
+        },
+      ] as any,
+      loaded: true,
+    })
+
+    expect(screen.getByText('(3 items)')).toBeInTheDocument()
+    expect(screen.getByText('Migrated')).toBeInTheDocument()
+  })
+
   it('surfaces inbox load and handler failures without hiding the row', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost')

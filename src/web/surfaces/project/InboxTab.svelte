@@ -181,6 +181,7 @@
       .sort((left, right) => ((right.updatedAt ?? right.createdAt ?? '')).localeCompare(left.updatedAt ?? left.createdAt ?? ''))
       .slice(0, 50)
   })
+  const displayCount = $derived(displayItems.length)
 
   function statusLabel(item: InboxItem): string {
     if (!item.status || item.status === 'open') return 'Open'
@@ -223,7 +224,7 @@
   <header class="head">
     <h2>Needs you</h2>
     {#if loaded}
-      <span class="count">({priorityItems.length} item{priorityItems.length === 1 ? '' : 's'})</span>
+      <span class="count">({displayCount} item{displayCount === 1 ? '' : 's'})</span>
     {/if}
   </header>
 
