@@ -32,6 +32,7 @@ export const LOCAL_PROJECT_STATE_GITIGNORE_ENTRIES = [
   `${PROJECT_CONFIG_DIRNAME}/context-debug/`,
   `${PROJECT_CONFIG_DIRNAME}/events/`,
   `${PROJECT_CONFIG_DIRNAME}/checkpoints/`,
+  `${PROJECT_CONFIG_DIRNAME}/.session-epoch`,
 ] as const
 export const GUILDHALL_GITIGNORE_BEGIN = '# BEGIN Guildhall managed'
 export const GUILDHALL_GITIGNORE_END = '# END Guildhall managed'
@@ -67,6 +68,7 @@ const LEGACY_GUILDHALL_POLICY_LINES = new Set([
   `${PROJECT_CONFIG_DIRNAME}/context-debug/`,
   `${PROJECT_CONFIG_DIRNAME}/events/`,
   `${PROJECT_CONFIG_DIRNAME}/checkpoints/`,
+  `${PROJECT_CONFIG_DIRNAME}/.session-epoch`,
 ])
 
 export function applyGuildhallGitignorePolicy(content: string): string {

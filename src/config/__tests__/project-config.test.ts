@@ -15,6 +15,7 @@ const EXTRA_LOCAL_IGNORES = [
   '.guildhall/context-debug/',
   '.guildhall/events/',
   '.guildhall/checkpoints/',
+  '.guildhall/.session-epoch',
 ]
 
 describe('project config local state guard', () => {
@@ -163,6 +164,7 @@ describe('project config local state guard', () => {
     writeFileSync(join(project, '.guildhall', 'TASKS.json'), '[]\n', 'utf8')
     writeFileSync(join(project, '.guildhall', 'agent-settings.yaml'), 'version: 1\n', 'utf8')
     writeFileSync(join(project, '.guildhall', 'config.yaml'), 'preferredProvider: codex\n', 'utf8')
+    writeFileSync(join(project, '.guildhall', '.session-epoch'), 'epoch-1\n', 'utf8')
     mkdirSync(join(project, '.guildhall', 'worktrees', 'task-1'), { recursive: true })
     writeFileSync(join(project, '.guildhall', 'worktrees', 'task-1', 'file.txt'), 'local\n', 'utf8')
     mkdirSync(join(project, '.guildhall', 'context-debug'), { recursive: true })
@@ -170,6 +172,7 @@ describe('project config local state guard', () => {
 
     for (const ignored of [
       '.guildhall/config.yaml',
+      '.guildhall/.session-epoch',
       '.guildhall/worktrees/task-1/file.txt',
       '.guildhall/context-debug/snapshot.md',
     ]) {
