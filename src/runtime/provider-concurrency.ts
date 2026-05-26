@@ -6,14 +6,18 @@ import {
   LOCAL_PROVIDER_DEFAULT_CONCURRENCY,
   providerCapabilitiesForAnyKey,
 } from './provider-metadata.js'
-import type { PreferredProviderKey, ProviderName } from './provider-selection.js'
 
 export function resolveGlobalProviderConcurrencyCeiling(): number {
   const configured = readGlobalConfig().maxProviderConcurrency
   return Math.max(1, Math.floor(configured ?? DEFAULT_GLOBAL_PROVIDER_CONCURRENCY))
 }
 
-type ProviderConcurrencyKey = PreferredProviderKey | ProviderName | 'none' | null | undefined
+type ProviderConcurrencyKey =
+  | ProviderKind
+  | 'codex'
+  | 'none'
+  | null
+  | undefined
 
 function storedProviderKey(provider: ProviderConcurrencyKey): ProviderKind | null {
   if (provider === 'codex') return 'codex-oauth'

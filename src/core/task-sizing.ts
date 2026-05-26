@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import type { Task } from './task.js'
 
 export const TaskSizeBand = z.enum(['tiny', 'small', 'medium', 'large', 'epic'])
 export type TaskSizeBand = z.infer<typeof TaskSizeBand>
@@ -45,7 +44,15 @@ export const TaskSizePlan = z.object({
 export type TaskSizePlan = z.infer<typeof TaskSizePlan>
 
 export interface BuildTaskSizePlanInput {
-  task: Pick<Task, 'id' | 'title' | 'description' | 'priority' | 'spec' | 'acceptanceCriteria' | 'outOfScope'>
+  task: {
+    id: string
+    title?: string
+    description: string
+    priority: 'critical' | 'high' | 'normal' | 'low'
+    spec?: string
+    acceptanceCriteria?: Array<{ description: string; [key: string]: unknown }>
+    outOfScope?: string[]
+  }
   changedFiles?: readonly string[]
   riskLanes?: readonly string[]
   createdAt?: string
@@ -186,7 +193,7 @@ function estimateOutcomeCount(text: string, acceptanceCount: number): number {
   return Math.max(acceptanceCount, Math.min(6, Math.max(1, verbs, connectorSplits)))
 }
 
-function scoreForWeight(weight: number, priority: Task['priority']): TaskSizePlan['score'] {
+function scoreForWeight(weight: number, priority: BuildTaskSizePlanInput['task']['priority']): TaskSizePlan['score'] {
   const adjusted = priority === 'critical' || priority === 'high' ? weight + 1 : weight
   if (adjusted >= 7) return 8
   if (adjusted >= 4) return 5
