@@ -138,6 +138,34 @@ describe('buildContext — task summary', () => {
     expect(ctx.taskSummary).toContain('ghost button variant')
   })
 
+  it('includes env file key names for credential-shaped tasks without values', async () => {
+    const project = path.join(tmpDir, 'project')
+    const memoryDir = path.join(project, '.guildhall')
+    await fs.mkdir(path.join(project, 'frontend'), { recursive: true })
+    await fs.mkdir(memoryDir, { recursive: true })
+    await fs.writeFile(
+      path.join(project, 'frontend', '.env'),
+      [
+        'PUBLIC_SUPABASE_URL=https://example.supabase.co',
+        'PUBLIC_SUPABASE_ANON_KEY=anon-secret',
+        'SUPABASE_SERVICE_ROLE_KEY=service-secret',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const ctx = await buildContext({
+      ...baseTask,
+      title: 'Configure Supabase OAuth providers',
+      description: 'Enable Google and Apple providers in Supabase.',
+      projectPath: project,
+    }, memoryDir)
+
+    expect(ctx.taskSummary).toContain('### Environment Files (names only; values redacted)')
+    expect(ctx.taskSummary).toContain('frontend/.env: PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY')
+    expect(ctx.taskSummary).not.toContain('anon-secret')
+    expect(ctx.taskSummary).not.toContain('service-secret')
+  })
+
   it('keeps only the summary portion of long spec markdown in the task summary', async () => {
     const ctx = await buildContext({
       ...baseTask,

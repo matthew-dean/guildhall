@@ -62,6 +62,8 @@ const MAX_AGENT_NOTE_CHARS = 1200
 const MAX_AGENT_NOTES = 3
 const MAX_SPEC_OVERVIEW_CHARS = 3200
 const MAX_CORPUS_MAP_CHARS = 3200
+const MAX_ENV_MANIFEST_FILES = 8
+const MAX_ENV_MANIFEST_KEYS_PER_FILE = 40
 const RETRY_COACHING_AFTER_REVISIONS = 3
 const execFileP = promisify(execFile)
 const repoFileCache = new Map<string, string[]>()
@@ -69,6 +71,9 @@ const repoFileCache = new Map<string, string[]>()
 const ACTIONABLE_FILE_HINT_RE = /^\s*(?:[-*]\s*|\d+\.\s*)?(edit|update|modify|create|write|verify|check|test|open|remove|delete|rename|trim|clean)\b/i
 const SHELLISH_CANDIDATE_RE = /^(pnpm|npm|yarn|bun|cd|node)\b|--|&&|\|\|/
 const GLOB_CANDIDATE_RE = /[*?{}]/
+const ENV_FILE_RE = /^\.env(?:\.[A-Za-z0-9_-]+)?$/
+const ENV_KEY_RE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/
+const ENV_CONTEXT_TASK_RE = /\b(env|environment|credential|secret|key|token|oauth|provider|supabase|stripe|vercel|google|apple|webhook)\b/i
 
 async function loadOrCreateCodebaseMap(memoryDir: string, task: Task) {
   const projectRoot = (task.worktreePath?.trim() || task.projectPath?.trim())
@@ -510,6 +515,73 @@ function clipContextBlock(value: string, maxChars: number): string {
   return `${trimmed.slice(0, Math.max(0, maxChars - 19)).trimEnd()}\n...[truncated]`
 }
 
+async function collectEnvManifest(projectRoot: string, task: Task): Promise<string> {
+  const taskText = [
+    task.title,
+    task.description,
+    task.spec ?? '',
+    task.blockReason ?? '',
+    ...task.acceptanceCriteria.map((criterion) => criterion.description),
+  ].join('\n')
+  if (!ENV_CONTEXT_TASK_RE.test(taskText)) return ''
+
+  const found: Array<{ relativePath: string; keys: string[] }> = []
+  const visited = new Set<string>()
+
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    if (found.length >= MAX_ENV_MANIFEST_FILES || depth > 2) return
+    let entries: import('node:fs').Dirent[]
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    for (const entry of entries) {
+      if (found.length >= MAX_ENV_MANIFEST_FILES) return
+      if (
+        entry.name === '.git' ||
+        entry.name === '.guildhall' ||
+        entry.name === 'node_modules' ||
+        entry.name === 'dist' ||
+        entry.name === '.output' ||
+        entry.name === '.nuxt'
+      ) {
+        continue
+      }
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        await walk(full, depth + 1)
+        continue
+      }
+      if (!entry.isFile() || !ENV_FILE_RE.test(entry.name)) continue
+      const relativePath = path.relative(projectRoot, full).replace(/\\/g, '/')
+      if (visited.has(relativePath)) continue
+      visited.add(relativePath)
+      let content = ''
+      try {
+        content = await fs.readFile(full, 'utf-8')
+      } catch {
+        continue
+      }
+      const keys = Array.from(new Set(content
+        .split(/\r?\n/)
+        .map((line) => ENV_KEY_RE.exec(line)?.[1])
+        .filter((key): key is string => Boolean(key))))
+        .slice(0, MAX_ENV_MANIFEST_KEYS_PER_FILE)
+      if (keys.length > 0) found.push({ relativePath, keys })
+    }
+  }
+
+  await walk(projectRoot, 0)
+  if (found.length === 0) return ''
+  return [
+    '### Environment Files (names only; values redacted)',
+    'Use this to distinguish credentials that already exist locally from credentials or provider-dashboard access that still must be created or configured. Never print or store secret values.',
+    ...found.map((file) => `- ${file.relativePath}: ${file.keys.join(', ')}`),
+  ].join('\n')
+}
+
 function constructionResponsibility(mode: ConstructionMode): string {
   switch (mode) {
     case 'survey':
@@ -755,7 +827,7 @@ export async function buildContext(
   }
 
   const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
-  const [memory, progress, decisions, exploring, goal, ds, worktreeResume, checkpoint, codebaseMap, languageMapData] = await Promise.all([
+  const [memory, progress, decisions, exploring, goal, ds, worktreeResume, checkpoint, codebaseMap, languageMapData, envManifest] = await Promise.all([
     readSafe('MEMORY.md'),
     readSafe('PROGRESS.md'),
     readSafe('DECISIONS.md'),
@@ -775,6 +847,7 @@ export async function buildContext(
       : Promise.resolve(null),
     loadOrCreateCodebaseMap(memoryDir, task).catch(() => null),
     loadLanguageMap(memoryDir).catch(() => null),
+    collectEnvManifest(projectRoot, task).catch(() => ''),
   ])
   const reviewPacket =
     task.status === 'review' || task.status === 'gate_check'
@@ -987,6 +1060,9 @@ export async function buildContext(
       : '',
     activeRecoveryPlaybook
       ? `\n### Active Recovery Playbook\n${activeRecoveryPlaybook}`
+      : '',
+    envManifest
+      ? `\n${envManifest}`
       : '',
     projectSkills
       ? `\n### Project Skills\n${projectSkills}`
