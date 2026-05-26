@@ -16,6 +16,10 @@ async function createPrepareFixture(tmp: string): Promise<void> {
   await fs.mkdir(path.join(tmp, 'docs/web-ui'), { recursive: true })
   await fs.mkdir(path.join(tmp, 'docs/versions/1.0.0/guide'), { recursive: true })
   await fs.mkdir(path.join(tmp, 'docs/versions/1.0.0/releases'), { recursive: true })
+  await fs.writeFile(
+    path.join(tmp, 'package.json'),
+    JSON.stringify({ name: 'guildhall-docs-fixture', version: '1.0.0' }, null, 2),
+  )
   await fs.copyFile(
     path.join(root, 'scripts/prepare-versioned-docs.mjs'),
     path.join(tmp, 'scripts/prepare-versioned-docs.mjs'),

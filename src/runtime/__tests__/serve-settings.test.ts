@@ -72,7 +72,7 @@ afterEach(async () => {
 describe('GET /api/config/levers', () => {
   it('returns seeded project + default-domain levers with string-rendered positions', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/config/levers'))
+    const res = await app.fetch(new Request(scoped('/api/config/levers')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as { levers: Array<Record<string, any>> }
     expect(Array.isArray(body.levers)).toBe(true)
@@ -104,7 +104,7 @@ describe('GET /api/config/levers', () => {
     const settingsPath = path.join(tmpDir, '.guildhall', 'agent-settings.yaml')
     await expect(fs.access(settingsPath)).rejects.toThrow()
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/config/levers'))
+    const res = await app.fetch(new Request(scoped('/api/config/levers')))
     expect(res.status).toBe(200)
     await fs.access(settingsPath) // now exists
   })
@@ -986,7 +986,7 @@ describe('POST /api/config/levers/reset', () => {
     // broken file here to force the 500 path.
     await fs.mkdir(path.dirname(settingsPath), { recursive: true })
     await fs.writeFile(settingsPath, 'version: "one"\nproject: {}\ndomains: {}\n', 'utf8')
-    const bad = await app.fetch(new Request('http://localhost/api/config/levers'))
+    const bad = await app.fetch(new Request(scoped('/api/config/levers')))
     expect(bad.status).toBe(500)
 
     // Reset → ok.
@@ -997,7 +997,7 @@ describe('POST /api/config/levers/reset', () => {
     expect(((await reset.json()) as { ok?: boolean }).ok).toBe(true)
 
     // Follow-up read succeeds and contains the seeded defaults.
-    const good = await app.fetch(new Request('http://localhost/api/config/levers'))
+    const good = await app.fetch(new Request(scoped('/api/config/levers')))
     expect(good.status).toBe(200)
     const body = (await good.json()) as { levers: Array<{ name: string; setBy: string }> }
     expect(body.levers.length).toBeGreaterThan(0)

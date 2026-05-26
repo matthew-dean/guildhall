@@ -231,7 +231,9 @@ describe('Orchestrator — guild-gate pre-pass at gate_check', () => {
     expect((agents.gateChecker as ReturnType<typeof stubAgent>).calls.length).toBeGreaterThan(0)
     const q = await readQueue()
     const after = q.tasks[0]!
-    // No guild soft gates recorded — none were applicable.
-    expect(after.gateResults.filter((g) => g.type === 'soft')).toHaveLength(0)
+    const soft = after.gateResults.filter((g) => g.type === 'soft')
+    expect(soft.every((g) => g.passed)).toBe(true)
+    expect(soft.map((g) => g.gateId)).not.toContain('a11y.contrast-matrix')
+    expect(soft.map((g) => g.gateId)).not.toContain('color.near-duplicate-roles')
   })
 })

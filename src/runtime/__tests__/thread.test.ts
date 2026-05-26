@@ -116,7 +116,7 @@ describe('buildThread', () => {
       expect(turn).toMatchObject({
         kind: 'setup_step',
         status: 'active',
-        title: 'Project check-in needed',
+        title: 'Run project check-in',
         actionLabel: 'Start project check-in',
         submitEndpoint: '/api/project/project-check-in',
       })
@@ -2073,7 +2073,7 @@ coordinators:
       if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
       expect(turn.liveAgent?.lastEventLabel).not.toBe('Failed glob')
       expect(turn.activity?.some(item => item.label === 'Failed glob')).toBe(false)
-      expect(turn.activity?.some(item => item.label.includes('keeping the worker focused'))).toBe(true)
+      expect(turn.activity?.some(item => item.label.includes('paused after gathering enough context'))).toBe(true)
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }

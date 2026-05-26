@@ -1755,21 +1755,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
     ?? getRegisteredProjects()[0]?.path
     ?? process.cwd()
   const projectPath = resolve(fallbackProjectPath)
-  let defaultProjectPath = resolve(projectPath)
+  let configuredProjectPath = resolve(projectPath)
   const requestProjectPathStore = new AsyncLocalStorage<string>()
-  const currentProject = (): ResolvedProject => resolveProject(requestProjectPathStore.getStore() ?? defaultProjectPath)
+  const currentProject = (): ResolvedProject => resolveProject(requestProjectPathStore.getStore() ?? configuredProjectPath)
   const refreshProject = (path = currentProject().path): ResolvedProject => {
     const refreshed = resolveProject(path)
-    if (resolve(defaultProjectPath) === resolve(path)) defaultProjectPath = refreshed.path
+    if (resolve(configuredProjectPath) === resolve(path)) configuredProjectPath = refreshed.path
     return refreshed
   }
-  const resolveProjectPathForRequest = (c: Context, { allowDefaultProject = false }: { allowDefaultProject?: boolean } = {}): string | null => {
+  const resolveProjectPathForRequest = (c: Context): string | null => {
     const requestedId = c.req.query('projectId')?.trim()
-    if (!requestedId) return allowDefaultProject ? defaultProjectPath : null
+    if (!requestedId) return null
     const entry = getRegisteredProjects().find(item => item.id === requestedId)
     if (!entry) {
-      const defaultProject = resolveProject(defaultProjectPath)
-      if (defaultProject.id === requestedId) return defaultProject.path
+      const configuredProject = resolveProject(configuredProjectPath)
+      if (configuredProject.id === requestedId) return configuredProject.path
       return null
     }
     return resolve(entry.path)
@@ -1797,11 +1797,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     c: Context,
     next: () => Promise<void>,
     {
-      allowDefaultProject = false,
       requireExplicitForMutation = false,
-    }: { allowDefaultProject?: boolean; requireExplicitForMutation?: boolean } = {},
+    }: { requireExplicitForMutation?: boolean } = {},
   ) => {
-    if (!allowDefaultProject && !c.req.query('projectId')?.trim()) {
+    if (!c.req.query('projectId')?.trim()) {
       return c.json({ error: 'projectId is required for project-scoped requests.' }, 400)
     }
     if (
@@ -1812,7 +1811,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     ) {
       return c.json({ error: 'projectId is required for project-mutating requests.' }, 400)
     }
-    const resolvedPath = resolveProjectPathForRequest(c, { allowDefaultProject })
+    const resolvedPath = resolveProjectPathForRequest(c)
     if (!resolvedPath) {
       return c.json({ error: 'Unknown project id for this local Guildhall service.' }, 404)
     }
@@ -1856,10 +1855,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.use('/api/project', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
   app.use('/api/project/*', (c, next) => bindProjectScope(c, next, { requireExplicitForMutation: true }))
-  app.use('/api/config', (c, next) => bindProjectScope(c, next, { allowDefaultProject: true }))
-  app.use('/api/config/*', (c, next) => bindProjectScope(c, next, { allowDefaultProject: true }))
-  app.use('/api/setup', (c, next) => bindProjectScope(c, next, { allowDefaultProject: true }))
-  app.use('/api/setup/*', (c, next) => bindProjectScope(c, next, { allowDefaultProject: true }))
+  app.use('/api/config', bindProjectScope)
+  app.use('/api/config/*', bindProjectScope)
+  app.use('/api/setup', bindProjectScope)
+  app.use('/api/setup/*', bindProjectScope)
 
   // Dynamic API surfaces should never be cached. The dashboard depends on
   // `/api/project`, inbox state, and SSE-adjacent status reads reflecting the
@@ -2196,7 +2195,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   async function runningHealthPayload() {
     const served = servedBundleFreshnessPayload()
     const identity = readBakedBuildIdentity() ?? await liveBuildIdentity()
-    const migrations = await summarizeProjectMigrations(defaultProjectPath)
+    const migrations = await summarizeProjectMigrations(configuredProjectPath)
     return {
       version: identity.version ?? readRuntimeVersion(),
       git: identity.git,

@@ -127,8 +127,26 @@ function taskHistoryPath(taskId: string, ...parts: string[]): string {
   return path.join(getProjectTaskLocalHistoryDir(tmpDir, taskId), ...parts)
 }
 
+const VALID_SPEC = [
+  '## Summary',
+  '',
+  'Implement the requested change.',
+  '',
+  '## Completion Boundary',
+  '- Product outcome: The requested change works for the target user.',
+  '- What Guildhall can complete in code: Update the relevant source and test files.',
+  '- External dependencies: None.',
+  '- Owner-only setup: None.',
+  '- Verification environment: Local test environment.',
+  '- What counts as done: The acceptance criterion is met and the task can be reviewed locally.',
+  '- What must be split or blocked: Nothing.',
+  '',
+  '## Acceptance Criteria',
+  '1. Thing is done.',
+].join('\n')
+
 function mkTask(overrides: Partial<Task> = {}): Task {
-  return {
+  const task: Task = {
     id: 'task-001',
     title: 'Do a thing',
     description: 'Details here',
@@ -152,6 +170,26 @@ function mkTask(overrides: Partial<Task> = {}): Task {
     updatedAt: '2026-04-01T00:00:00Z',
     ...overrides,
   }
+  if (task.status === 'ready' && !Object.hasOwn(overrides, 'spec')) {
+    task.spec = VALID_SPEC
+  }
+  if (task.status !== 'exploring' && task.spec === VALID_SPEC) {
+    if (task.acceptanceCriteria.length === 0) {
+      task.acceptanceCriteria = [{
+        id: 'ac-1',
+        description: 'Thing is done',
+        verifiedBy: 'review',
+        met: false,
+      }]
+    }
+    task.productBrief ??= {
+      userJob: 'I want the requested task completed.',
+      successMetric: 'The acceptance criterion is met.',
+      antiPatterns: [],
+      approvedAt: '2026-05-26T00:00:00.000Z',
+    }
+  }
+  return task
 }
 
 async function writeQueue(tasks: Task[]): Promise<void> {
@@ -1904,7 +1942,7 @@ describe('Orchestrator.tick — routing', () => {
   })
 
   it('claims ready tasks deterministically without a coordinator call', async () => {
-    await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: 'approved spec' })])
+    await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: VALID_SPEC })])
     const coord = stubAgent('ghost-coordinator')
     const worker = stubAgent('worker-agent')
     const orch = new Orchestrator({
@@ -4470,7 +4508,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'ready',
         domain: 'looma',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         acceptanceCriteria: [
           {
             id: 'ac-1',
@@ -4534,7 +4572,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'ready',
         domain: 'looma',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         acceptanceCriteria: [
           {
             id: 'ac-1',
@@ -4578,7 +4616,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'ready',
         domain: 'looma',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         acceptanceCriteria: [
           {
             id: 'ac-1',
@@ -4650,7 +4688,7 @@ describe('Orchestrator.run — full loops', () => {
         status: 'ready',
         domain: 'knit',
         projectPath: subrepo,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         acceptanceCriteria: [
           {
             id: 'ac-1',
@@ -4745,7 +4783,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'blocked-task',
         status: 'ready',
         domain: 'looma',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
       }),
     ])
 
@@ -4801,7 +4839,7 @@ describe('Orchestrator.run — full loops', () => {
         assignedTo: 'worker-agent',
         domain: 'knit',
         projectPath: subrepo,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
       }),
     ])
 
@@ -4859,7 +4897,7 @@ describe('Orchestrator.run — full loops', () => {
         assignedTo: null,
         domain: 'frontend',
         projectPath: subrepo,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason:
           `Guildhall could not start work because the target repo is dirty: ` +
           `base repo has uncommitted changes at ${subrepo}. ` +
@@ -4923,7 +4961,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason: 'human_judgment_required: Blocked transitioning task to review — tool loop',
         notes: [
           {
@@ -4989,7 +5027,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason: 'decision_required: Stuck in tool loop transitioning a to review status',
         notes: [
           {
@@ -5055,7 +5093,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason:
           'gate_hard_failure: Tool validation bug prevents transitioning a to review status despite all work being complete.',
         notes: [
@@ -5119,7 +5157,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason:
           'decision_required: Task blocked from transitioning to review despite passing all verification',
         notes: [
@@ -5182,7 +5220,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason:
           'decision_required: Cannot transition to review — system validator rejects passing verification',
         notes: [
@@ -5245,7 +5283,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason:
           'gate_hard_failure: Blocked from transitioning to review — system validator bug persists',
         notes: [
@@ -5308,7 +5346,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'in_progress',
         assignedTo: 'worker-agent',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         notes: [
           {
             agentId: 'worker-agent',
@@ -5373,7 +5411,7 @@ describe('Orchestrator.run — full loops', () => {
         status: 'in_progress',
         assignedTo: 'worker-agent',
         title: 'Resume handoff',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         notes: [
           {
             agentId: 'worker-agent',
@@ -5448,7 +5486,7 @@ describe('Orchestrator.run — full loops', () => {
         assignedTo: null,
         domain: 'frontend',
         projectPath: subrepo,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason:
           'Guildhall could not create a task worktree: ' +
           'fatal: a branch named \'guildhall/task-a\' already exists. ' +
@@ -5503,7 +5541,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason: 'human_judgment_required: Worker stopped after hitting its turn limit.',
         notes: [
           {
@@ -5566,7 +5604,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason: 'decision_required: Tool reads are being intercepted to an unrelated missing file, blocking implementation',
         notes: [
           {
@@ -5630,7 +5668,19 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'Implement auth profile management and email confirmation.',
+        spec: VALID_SPEC,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Thing is done',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        productBrief: {
+          userJob: 'I want auth profile management completed.',
+          successMetric: 'The auth profile management acceptance criterion is met.',
+          antiPatterns: [],
+          approvedAt: '2026-05-26T00:00:00.000Z',
+        },
         blockReason: 'human_judgment_required: Cannot author missing useAuth.ts during blueprint phase for a spec task.',
         notes: [
           {
@@ -5771,7 +5821,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason: 'human_judgment_required: Worker timed out after failing to mutate the likely target file.',
         notes: [
           {
@@ -5926,9 +5976,9 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.assignedTo).toBe('worker-agent')
     expect(task?.blockReason ?? null).toBeNull()
     expect(task?.escalations[0]?.resolvedBy).toBe('system')
-    expect(task?.escalations[0]?.resolution).toContain('self-authored verification failure')
-    expect(task?.notes.at(-1)?.content).toContain('repair the failed verification')
-    expect(seenPrompt).toContain('Latest authoritative verification')
+    expect(task?.escalations[0]?.resolution).toContain('worker-owned verification confusion')
+    expect(task?.notes.at(-1)?.content).toContain('rerun the focused verification')
+    expect(seenPrompt).toContain('Authoritative verification commands')
   })
 
   it('reopens an infra-only max-revisions blocker at review when the user explicitly restarts the project', async () => {
@@ -5937,7 +5987,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         acceptanceCriteria: [
           { id: 'ac-1', description: 'done', met: true, verifiedBy: 'review' },
         ],
@@ -6030,7 +6080,7 @@ describe('Orchestrator.run — full loops', () => {
         id: 'a',
         status: 'blocked',
         assignedTo: null,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         acceptanceCriteria: [
           { id: 'ac-1', description: 'done', met: true, verifiedBy: 'review' },
         ],
@@ -6130,7 +6180,7 @@ describe('Orchestrator.run — full loops', () => {
         assignedTo: 'worker-agent',
         domain: 'knit',
         projectPath: subrepo,
-        spec: 'approved spec',
+        spec: VALID_SPEC,
       }),
     ])
 
@@ -6346,7 +6396,7 @@ describe('Orchestrator.run — full loops', () => {
         worktreePath,
         branchName: 'guildhall/task-a',
         baseBranch: 'main',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason:
           'Guildhall could not start work because task setup failed: ' +
           'worktree bootstrap failed on command `pnpm install` (exit 1). ' +
@@ -6443,7 +6493,7 @@ describe('Orchestrator.run — full loops', () => {
         worktreePath,
         branchName: 'guildhall/task-env-fix',
         baseBranch: 'main',
-        spec: 'approved spec',
+        spec: VALID_SPEC,
         blockReason: 'Test environment setup failed due to unresolved @nuxt/test-utils module',
         notes: [
           {
@@ -6565,7 +6615,7 @@ describe('Orchestrator.run — full loops', () => {
   it('stopAfterOneTask stops after one active task reaches terminal status', async () => {
     await writeQueue([
       mkTask({ id: 'a', status: 'in_progress', domain: 'looma' }),
-      mkTask({ id: 'b', status: 'ready', domain: 'looma', spec: 'approved spec' }),
+      mkTask({ id: 'b', status: 'ready', domain: 'looma', spec: VALID_SPEC }),
     ])
 
     let writeChain = Promise.resolve()
@@ -7059,9 +7109,9 @@ describe('Orchestrator.run — full loops', () => {
 
   it('processes three unblocked tasks in one unattended run', async () => {
     await writeQueue([
-      mkTask({ id: 'a', status: 'ready', spec: 'approved spec', domain: 'looma' }),
-      mkTask({ id: 'b', status: 'ready', spec: 'approved spec', domain: 'looma' }),
-      mkTask({ id: 'c', status: 'ready', spec: 'approved spec', domain: 'looma' }),
+      mkTask({ id: 'a', status: 'ready', spec: VALID_SPEC, domain: 'looma' }),
+      mkTask({ id: 'b', status: 'ready', spec: VALID_SPEC, domain: 'looma' }),
+      mkTask({ id: 'c', status: 'ready', spec: VALID_SPEC, domain: 'looma' }),
     ])
 
     const mutateCurrentTask = (next: TaskStatus) => async (prompt: string) => {
@@ -7117,7 +7167,7 @@ describe('Orchestrator.run — full loops', () => {
       stdio: 'ignore',
     })
     await writeQueue([
-      mkTask({ id: 'done-ish', status: 'ready', spec: 'approved spec', domain: 'looma' }),
+      mkTask({ id: 'done-ish', status: 'ready', spec: VALID_SPEC, domain: 'looma' }),
       mkTask({
         id: 'question',
         status: 'exploring',

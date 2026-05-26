@@ -456,7 +456,7 @@ async function summarizeMigrations(projectPath: string) {
 ```
 
 - Include `migrationSummary` on `/api/service` project summaries.
-- Include `migrations` on `/api/health` for the current default project.
+- Include `migrations` on `/api/health` for the configured project path served by this process.
 - Catch errors and return zero/unknown summary rather than breaking service startup.
 
 - [x] **Step 4: Run service tests**

@@ -19,6 +19,12 @@ const { buildServeApp } = await import('../serve.js')
 const { clearProviderClientPool } = await import('../provider-client-pool.js')
 
 let tmpProject: string
+const PROJECT_ID = 'provider-test'
+
+function scoped(pathname: string): string {
+  const separator = pathname.includes('?') ? '&' : '?'
+  return `http://localhost${pathname}${separator}projectId=${encodeURIComponent(PROJECT_ID)}`
+}
 
 function sseResponse(frames: string[]): Response {
   const encoder = new TextEncoder()
@@ -115,7 +121,7 @@ describe('GET /api/setup/providers', () => {
 
   it('reports no credentials when the global store is empty', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/setup/providers'))
+    const res = await app.fetch(new Request(scoped('/api/setup/providers')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       providers: Record<string, { detected: boolean; verifiedAt: string | null }>
@@ -127,7 +133,7 @@ describe('GET /api/setup/providers', () => {
 
   it('uses protocol-first labels for compatible APIs and local servers', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/setup/providers'))
+    const res = await app.fetch(new Request(scoped('/api/setup/providers')))
     const body = (await res.json()) as {
       providers: Record<string, { label: string }>
     }
@@ -139,7 +145,7 @@ describe('GET /api/setup/providers', () => {
   it('reflects a stored Anthropic key from the global store (no project-level secret)', async () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-global' })
     const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/setup/providers'))
+    const res = await app.fetch(new Request(scoped('/api/setup/providers')))
     const body = (await res.json()) as {
       providers: Record<string, { detected: boolean; detail: string }>
     }
@@ -153,7 +159,7 @@ describe('GET /api/setup/providers', () => {
       baseUrl: 'https://integrate.api.nvidia.com/v1',
     })
     const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/setup/providers'))
+    const res = await app.fetch(new Request(scoped('/api/setup/providers')))
     const body = (await res.json()) as {
       providers: Record<string, { detected: boolean; detail: string; baseUrl?: string | null }>
     }
@@ -179,7 +185,7 @@ describe('POST /api/setup/providers/config', () => {
       expect(beforeBody.preferredProvider).toBe('llama-cpp')
 
       const configRes = await app.fetch(
-        new Request('http://localhost/api/setup/providers/config', {
+        new Request(scoped('/api/setup/providers/config'), {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ preferredProvider: 'openai-api' }),
@@ -217,9 +223,10 @@ describe('POST /api/setup/providers/config', () => {
   it('does not seed workspace model assignments during identity setup', async () => {
     const freshProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-identity-proj-'))
     try {
+      registerWorkspace({ id: 'fresh-project', name: 'Fresh Project', path: freshProject, tags: [] })
       const { app } = buildServeApp({ projectPath: freshProject })
       const res = await app.fetch(
-        new Request('http://localhost/api/setup/identity', {
+        new Request('http://localhost/api/setup/identity?projectId=fresh-project', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ name: 'Fresh Project', id: 'fresh-project' }),
@@ -235,7 +242,7 @@ describe('POST /api/setup/providers/config', () => {
   it('writes a pasted Anthropic key to the GLOBAL store, not the project file', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/setup/providers/config', {
+      new Request(scoped('/api/setup/providers/config'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ anthropicApiKey: 'sk-ant-pasted' }),
@@ -257,7 +264,7 @@ describe('POST /api/setup/providers/config', () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-global' })
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/setup/providers/config', {
+      new Request(scoped('/api/setup/providers/config'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ preferredProvider: 'anthropic-api' }),
@@ -278,7 +285,7 @@ describe('POST /api/setup/providers/config', () => {
   it('writes an OpenAI-compatible base URL to the global store and preserves the key', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/setup/providers/config', {
+      new Request(scoped('/api/setup/providers/config'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -296,7 +303,7 @@ describe('POST /api/setup/providers/config', () => {
   it('writes provider-group concurrency through provider settings', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/setup/providers/config', {
+      new Request(scoped('/api/setup/providers/config'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -314,7 +321,7 @@ describe('POST /api/setup/providers/config', () => {
       maxConcurrency: 200,
     })
 
-    const setup = await app.fetch(new Request('http://localhost/api/setup/providers'))
+    const setup = await app.fetch(new Request(scoped('/api/setup/providers')))
     const body = (await setup.json()) as {
       providers?: {
         'openai-api'?: { maxConcurrency?: number }
@@ -326,7 +333,7 @@ describe('POST /api/setup/providers/config', () => {
   it('rejects provider-group concurrency outside the global ceiling', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/setup/providers/config', {
+      new Request(scoped('/api/setup/providers/config'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -348,7 +355,7 @@ describe('POST /api/setup/providers/config', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/setup/providers/config', {
+      new Request(scoped('/api/setup/providers/config'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -375,7 +382,7 @@ describe('POST /api/setup/providers/config', () => {
     )
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/setup/providers/config', {
+      new Request(scoped('/api/setup/providers/config'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -579,7 +586,7 @@ describe('POST /api/setup/providers/config', () => {
   it('rejects unknown preferredProvider values', async () => {
     const { app } = buildServeApp({ projectPath: tmpProject })
     const res = await app.fetch(
-      new Request('http://localhost/api/setup/providers/config', {
+      new Request(scoped('/api/setup/providers/config'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ preferredProvider: 'bogus-provider' }),
@@ -595,7 +602,7 @@ describe('POST /api/setup/providers/config', () => {
     writeFileSync(cfgPath, 'anthropicApiKey: sk-ant-legacy\n', 'utf8')
     const { app } = buildServeApp({ projectPath: tmpProject })
     // Hitting GET triggers the migration.
-    await app.fetch(new Request('http://localhost/api/setup/providers'))
+    await app.fetch(new Request(scoped('/api/setup/providers')))
     const g = readGlobalProviders()
     expect(g.providers['anthropic-api']?.apiKey).toBe('sk-ant-legacy')
     // And the project file no longer holds the secret.

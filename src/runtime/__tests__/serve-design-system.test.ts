@@ -44,7 +44,7 @@ function projectUrl(route: string): string {
 describe('GET /api/project/design-system', () => {
   it('returns null when no design system has been drafted', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request('http://localhost/api/project/design-system'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/design-system')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as { designSystem: unknown }
     expect(body.designSystem).toBeNull()
@@ -68,7 +68,7 @@ describe('GET /api/project/design-system', () => {
         authoredBy: 'agent:spec-agent',
       }),
     }))
-    const res = await app.fetch(new Request('http://localhost/api/project/design-system'))
+    const res = await app.fetch(new Request(projectUrl('/api/project/design-system')))
     const body = (await res.json()) as { designSystem: DesignSystem; summary: string }
     expect(body.designSystem.tokens.color[0]!.name).toBe('primary')
     expect(body.summary).toMatch(/Button/)

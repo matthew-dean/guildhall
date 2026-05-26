@@ -76,6 +76,26 @@ let originalDataDir: string | undefined
 let testHomeDir: string
 let testDataDir: string
 
+function buildValidSpec(summary: string, criterion: string): string {
+  return [
+    '## Summary',
+    '',
+    summary,
+    '',
+    '## Completion Boundary',
+    `- Product outcome: ${criterion}`,
+    '- What Guildhall can complete in code: Update the project files needed for this task.',
+    '- External dependencies: None.',
+    '- Owner-only setup: None.',
+    '- Verification environment: Local test environment.',
+    `- What counts as done: ${criterion}`,
+    '- What must be split or blocked: Nothing.',
+    '',
+    '## Acceptance Criteria',
+    `1. ${criterion}`,
+  ].join('\n')
+}
+
 beforeEach(async () => {
   originalHome = process.env.HOME
   originalDataDir = process.env.GUILDHALL_DATA_DIR
@@ -129,6 +149,18 @@ async function setTaskSpecForReview(id: string, spec: string): Promise<void> {
   const task = queue.tasks.find((t) => t.id === id)!
   task.spec = spec
   task.status = 'spec_review'
+  task.productBrief = {
+    userJob: 'I want this task completed in the test project.',
+    successMetric: 'The scripted acceptance criterion is met.',
+    antiPatterns: [],
+    approvedAt: '2026-05-26T00:00:00.000Z',
+  }
+  task.acceptanceCriteria = [{
+    id: 'AC-1',
+    description: 'The scripted acceptance criterion is met.',
+    verifiedBy: 'review',
+    met: false,
+  }]
   await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
 }
 
@@ -224,7 +256,7 @@ describe('E2E AC-03: task lifecycle exploring → done', () => {
     // advances it to ready for the deterministic claimer.
     await setTaskSpecForReview(
       intake.taskId,
-      '## Summary\nAdd a ghost button variant.\n## AC\n1. renders.',
+      buildValidSpec('Add a ghost button variant.', 'The ghost button variant renders.'),
     )
     const specApproval = await approveSpec({
       memoryDir,
@@ -372,7 +404,10 @@ coordinators:
 
     // 5. Simulate the Spec Agent drafting a spec on the orchestrator's next
     //    tick, then approve it via FR-12 approveSpec.
-    await setTaskSpecForReview(intake.taskId, '## Summary\nAdd a ghost button variant.\n## AC\n1. renders.')
+    await setTaskSpecForReview(
+      intake.taskId,
+      buildValidSpec('Add a ghost button variant.', 'The ghost button variant renders.'),
+    )
     const specApproval = await approveSpec({
       memoryDir,
       taskId: intake.taskId,
@@ -496,7 +531,7 @@ describe('E2E 0.5.0: service over projects', () => {
     })
     await setTaskSpecForReview(
       intake.taskId,
-      '## Summary\nRemove the stale binding.\n## AC\n1. the binding is removed.\n2. no behavior changes.',
+      buildValidSpec('Remove the stale binding.', 'The stale binding is removed without behavior changes.'),
     )
     await approveSpec({
       memoryDir,

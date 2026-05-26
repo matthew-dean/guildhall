@@ -413,9 +413,9 @@
         {:else}
           <div class="model-list">
             {#each MODEL_ROLES as role (role.id)}
-              {@const current = models.globalModels[role.id] ?? models.effectiveModels[role.id] ?? ''}
-              {@const behavior = models.globalBehavior[role.id] ?? models.effectiveBehavior[role.id] ?? 'precise'}
-              {@const selectedBehavior = models.behaviorProfiles.find(profile => profile.id === behavior)}
+              {@const current = models.globalModels?.[role.id] ?? models.effectiveModels?.[role.id] ?? ''}
+              {@const behavior = models.globalBehavior?.[role.id] ?? models.effectiveBehavior?.[role.id] ?? 'precise'}
+              {@const selectedBehavior = models.behaviorProfiles?.find(profile => profile.id === behavior)}
               <div class="model-row">
                 <span class="model-copy">
                   <span class="label">{role.label}</span>
