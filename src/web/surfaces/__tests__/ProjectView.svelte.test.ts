@@ -373,15 +373,6 @@ describe('ProjectView', () => {
     expect(screen.getByLabelText(/notifications need you/i)).toBeInTheDocument()
   })
 
-  it('canonicalizes legacy project routes to the explicit project slug', async () => {
-    path.value = '/project'
-    window.history.replaceState({}, '', '/project')
-
-    await renderProjectView('overview', null, null)
-
-    await waitFor(() => expect(path.value).toBe('/projects/looma-knit/overview'))
-  })
-
   it('does not foreground resolved git runtime errors in Overview', async () => {
     const projectPayload = detail({
       recentEvents: [

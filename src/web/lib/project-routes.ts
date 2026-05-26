@@ -43,17 +43,13 @@ export function projectTaskHref(projectId: string, taskId: string): string {
 
 export function currentProjectHref(suffix = '/thread', explicitProjectId?: string | null): string {
   const projectId = normalizedProjectId(explicitProjectId) ?? currentProjectId()
-  if (!projectId) {
-    const normalized = suffix.startsWith('/') ? suffix : `/${suffix}`
-    if (normalized === '' || normalized === '/') return '/project'
-    return normalized === '/thread' ? '/project/thread' : `/project${normalized}`
-  }
+  if (!projectId) return '/projects'
   return projectHref(projectId, suffix)
 }
 
 export function currentTaskHref(taskId: string, explicitProjectId?: string | null): string {
   const projectId = normalizedProjectId(explicitProjectId) ?? currentProjectId()
-  if (!projectId) return `/task/${encodeURIComponent(taskId)}`
+  if (!projectId) return '/projects'
   return projectTaskHref(projectId, taskId)
 }
 

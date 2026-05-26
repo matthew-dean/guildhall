@@ -63,7 +63,7 @@ describe('project-routes', () => {
     expect(href).toBe('/api/project/meta-intake?projectId=new-project')
   })
 
-  it('builds scoped project hrefs from an explicit id even on a legacy project route', async () => {
+  it('builds scoped project hrefs from an explicit id even before the URL has a project id', async () => {
     Object.defineProperty(globalThis, 'window', {
       value: {
         location: {
@@ -76,6 +76,22 @@ describe('project-routes', () => {
     const { currentProjectHref } = await import('../project-routes.js')
 
     expect(currentProjectHref('/settings/ready', 'font-something')).toBe('/projects/font-something/settings/ready')
+  })
+
+  it('falls back to Projects Home when no URL or explicit project id is available', async () => {
+    Object.defineProperty(globalThis, 'window', {
+      value: {
+        location: {
+          origin: 'http://localhost:7777',
+          pathname: '/project/thread',
+        },
+      },
+      configurable: true,
+    })
+    const { currentProjectHref, currentTaskHref } = await import('../project-routes.js')
+
+    expect(currentProjectHref('/settings/ready')).toBe('/projects')
+    expect(currentTaskHref('task-123')).toBe('/projects')
   })
 
   it('normalizes project action hrefs that come from runtime inbox and thread payloads', async () => {

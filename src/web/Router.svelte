@@ -28,7 +28,7 @@
 
   function closeDrawer() {
     if (route.kind === 'project' && route.drawerTaskId) {
-      nav(route.backgroundPath ?? (route.projectId ? currentProjectHref('/thread') : '/project/thread'))
+      nav(route.backgroundPath ?? currentProjectHref('/thread', route.projectId))
     }
   }
 </script>

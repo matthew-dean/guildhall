@@ -92,43 +92,14 @@ describe('parseRoute', () => {
     })
   })
 
-  it('keeps legacy single-project URLs working while preserving drawer context', () => {
-    expect(parseRoute('/project')).toMatchObject({
-      kind: 'project',
-      projectId: null,
-      view: 'overview',
-    })
-    expect(parseRoute('/project/overview')).toMatchObject({ view: 'overview' })
-    expect(parseRoute('/project/inbox')).toMatchObject({ view: 'overview', sub: 'inbox' })
-    expect(parseRoute('/project/overview/inbox')).toMatchObject({ view: 'overview', sub: 'inbox' })
-    expect(parseRoute('/project/settings/routing')).toMatchObject({
-      view: 'settings',
-      sub: 'routing',
-    })
-    expect(parseRoute('/project/release/notes')).toMatchObject({
-      view: 'release',
-      sub: 'notes',
-    })
-    expect(parseRoute('/project/coordinators')).toMatchObject({
-      view: 'settings',
-      sub: 'coordinators',
-    })
-    expect(parseRoute('/project/planner')).toMatchObject({ view: 'planner' })
-    expect(parseRoute('/project/work/board')).toMatchObject({ view: 'planner' })
-    expect(parseRoute('/project/facts')).toMatchObject({ view: 'facts' })
-    expect(parseRoute('/project/timeline')).toMatchObject({ view: 'timeline' })
-    expect(parseRoute('/project/nope')).toMatchObject({ view: 'overview' })
+  it('routes unscoped legacy project URLs back to project selection', () => {
+    expect(parseRoute('/project')).toEqual({ kind: 'projects' })
+    expect(parseRoute('/project/thread')).toEqual({ kind: 'projects' })
+    expect(parseRoute('/project/settings/routing')).toEqual({ kind: 'projects' })
     expect(
       parseRoute('/task/task-1', {
         backgroundPath: '/project/release',
       }),
-    ).toEqual({
-      kind: 'project',
-      projectId: null,
-      view: 'release',
-      sub: null,
-      drawerTaskId: 'task-1',
-      backgroundPath: '/project/release',
-    })
+    ).toEqual({ kind: 'projects' })
   })
 })

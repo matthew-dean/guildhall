@@ -56,7 +56,7 @@
   const currentView = $derived<ProjectView>(props.initialView ?? 'overview')
   const currentSub = $derived<string | null>(props.initialSub ?? null)
   const routeProjectId = $derived(props.projectId?.trim() || null)
-  const activeProjectId = $derived(routeProjectId ?? project.detail?.id ?? null)
+  const activeProjectId = $derived(routeProjectId)
   let busy = $state(false)
   let optimisticRunStatus = $state<'running' | 'stopping' | null>(null)
   let runError = $state<string | null>(null)
@@ -280,16 +280,6 @@
       if (t.startsWith('supervisor_') || t === 'provider_health_changed') void project.refresh(activeProjectId)
     })
     return off
-  })
-
-  $effect(() => {
-    if (routeProjectId || !activeProjectId || !path.value.startsWith('/project')) return
-    const legacySuffix = path.value === '/project'
-      ? '/overview'
-      : path.value.startsWith('/project/')
-        ? path.value.slice('/project'.length)
-        : '/overview'
-    nav(currentProjectHref(legacySuffix, activeProjectId))
   })
 
   interface NavEntry {

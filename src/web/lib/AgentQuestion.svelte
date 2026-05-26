@@ -560,7 +560,7 @@
     display: grid;
     grid-template-columns: 18px minmax(0, 1fr);
     gap: var(--s-2);
-    align-items: start;
+    align-items: center;
     text-align: left;
     text-transform: none;
     width: 100%;
