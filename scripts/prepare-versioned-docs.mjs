@@ -8,6 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..')
 const DOCS = join(ROOT, 'docs')
 const DOCS_BASE = normalizeDocsBase(process.env.GUILDHALL_DOCS_BASE ?? '/')
+const PACKAGE_VERSION = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8')).version
 
 const GENERATED_DIRS = [
   join(DOCS, 'current'),
@@ -56,17 +57,18 @@ function docsHref(prefix, section) {
 async function resolveCurrentVersion() {
   const versionsRoot = join(DOCS, 'versions')
   if (!existsSync(versionsRoot)) {
-    throw new Error('docs: cannot prepare /current/ because docs/versions does not exist')
+    return PACKAGE_VERSION
   }
   const versions = (await readdir(versionsRoot, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory() && /^\d+\.\d+\.\d+(-[\w.]+)?$/.test(entry.name))
     .map((entry) => entry.name)
     .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
-  const current = versions[0]
-  if (!current) {
-    throw new Error('docs: cannot prepare /current/ because docs/versions has no versioned snapshots')
+  if (versions.includes(PACKAGE_VERSION) || versions.length === 0) return PACKAGE_VERSION
+  const latestSnapshot = versions[0]
+  if (!latestSnapshot || PACKAGE_VERSION.localeCompare(latestSnapshot, undefined, { numeric: true }) >= 0) {
+    return PACKAGE_VERSION
   }
-  return current
+  return latestSnapshot
 }
 
 async function copyEntry(fromRoot, toRoot, entry, excludePatterns = []) {
@@ -137,7 +139,9 @@ async function main() {
 
   const currentVersion = await resolveCurrentVersion()
   const currentRoot = join(DOCS, 'current')
-  await copyEntries(join(DOCS, 'versions', currentVersion), currentRoot, CURRENT_ENTRIES)
+  const currentSnapshotRoot = join(DOCS, 'versions', currentVersion)
+  const currentSourceRoot = existsSync(currentSnapshotRoot) ? currentSnapshotRoot : DOCS
+  await copyEntries(currentSourceRoot, currentRoot, CURRENT_ENTRIES)
   await rewriteCurrentDocLinks(currentRoot, currentVersion)
 
   const nextRoot = join(DOCS, 'next')

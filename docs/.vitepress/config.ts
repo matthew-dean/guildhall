@@ -47,6 +47,9 @@ function resolveStableVersion(version: string): string {
       .filter((name) => /^\d+\.\d+\.\d+(-[\w.]+)?$/.test(name))
       .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
       [0]
+    if (latestDir && !version.includes('-') && version.localeCompare(latestDir, undefined, { numeric: true }) >= 0) {
+      return version
+    }
     if (latestDir) return latestDir
   }
   const latest = git(['tag', '--sort=-version:refname'])

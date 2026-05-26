@@ -373,6 +373,18 @@
   function friendlyBlockerText(value: string): string {
     const text = value.trim()
     if (!text) return text
+    if (/Model returned an empty assistant message|Model returned an empty reply/i.test(text)) {
+      return 'Guildhall got an empty model reply, so it kept the task state intact. Retry the run or switch providers if this keeps happening.'
+    }
+    if (/\bstopped\s*\(\s*Idle Limit\s*\)|\bIdle Limit\b/i.test(text)) {
+      return 'Guildhall stopped after reaching the idle limit. Start the run again when you are ready to continue.'
+    }
+    if (/already have the question posted|posted (?:a |the )?(?:choice|freeform)?\s*question|wait for the user's answer|yield now|q-\d/i.test(text)) {
+      return 'Guildhall asked a question and is waiting for the answer.'
+    }
+    if (/research budget exhausted|hit the research budget|refusing more read-only tool calls|do not call more read-only tools now/i.test(text)) {
+      return 'Guildhall paused after gathering enough context. Open the task to choose the next step.'
+    }
     if (/\bAC-\d+\b/i.test(text) && /\bevidence\b/i.test(text)) {
       return 'Guildhall needs to run or save one missing verification check before this task can finish.'
     }
@@ -382,9 +394,12 @@
     if (/no visible progress|made no visible progress|no saved (?:spec|draft)|no durable (?:draft|update)/i.test(text)) {
       return 'Guildhall found useful context but did not save the next draft. Decide whether to retry from those notes or reframe the task.'
     }
-    const withoutCodePrefix = text.replace(/^[a-z][a-z0-9_]*:\s*/i, '').trim()
-    if (/^spec_ambiguous\b/i.test(text)) return withoutCodePrefix || 'The task brief is missing a concrete implementation path.'
-    if (/^human_judgment_required\b/i.test(text)) return withoutCodePrefix || 'Guildhall needs a product or recovery decision before it can continue.'
+    const withoutCodePrefix = text
+      .replace(/^ERROR:\s*/i, '')
+      .replace(/^[a-z][a-z0-9_]*:\s*/i, '')
+      .trim()
+    if (/^ERROR:\s*spec_ambiguous\b/i.test(text) || /^spec_ambiguous\b/i.test(text)) return withoutCodePrefix || 'The task brief is missing a concrete implementation path.'
+    if (/^ERROR:\s*human_judgment_required\b/i.test(text) || /^human_judgment_required\b/i.test(text)) return withoutCodePrefix || 'Guildhall needs a product or recovery decision before it can continue.'
     return withoutCodePrefix
   }
 

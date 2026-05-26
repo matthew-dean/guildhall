@@ -19,6 +19,7 @@ import type { Task } from '@guildhall/core'
 import { activeEscalations } from '@guildhall/tools'
 import { META_INTAKE_TASK_ID } from './meta-intake.js'
 import { visibleOpenQuestions } from './question-visibility.js'
+import { userFacingText } from './user-facing-text.js'
 import type { BootstrapStatus } from './bootstrap-runner.js'
 import {
   buildSnapshot,
@@ -130,11 +131,11 @@ function pressureQuestionDetail(prompt: string, targetTitle: string): string {
   if (quotedOutcome) {
     return `What should ${cleanPressureTargetTitle(quotedOutcome[1] ?? target)} accomplish?`
   }
-  return trimmed
+  return userFacingText(trimmed, 'Guildhall needs one answer before it can keep going.')
 }
 
 function escalationInboxDetail(summary: string, reason: string): string {
-  const text = summary.trim()
+  const text = userFacingText(summary).trim()
   if (/\bAC-\d+\b/i.test(text) && /\bevidence\b/i.test(text)) {
     return 'Guildhall needs to run or save one missing verification check before this task can finish.'
   }
@@ -151,7 +152,32 @@ function escalationInboxDetail(summary: string, reason: string): string {
   if (reason === 'human_judgment_required') {
     return withoutCodePrefix || 'Guildhall needs a product or recovery decision before it can continue.'
   }
-  return withoutCodePrefix || 'Open the task to choose the next step.'
+  return userFacingText(withoutCodePrefix, 'Open the task to choose the next step.')
+}
+
+function inboxItemDedupeKey(item: InboxItem): string {
+  const taskId = 'taskId' in item ? item.taskId : ''
+  const actionHref = 'actionHref' in item && typeof item.actionHref === 'string' ? item.actionHref : ''
+  const detail = 'detail' in item && typeof item.detail === 'string' ? item.detail : ''
+  return [
+    item.kind,
+    taskId,
+    item.title,
+    detail,
+    actionHref,
+  ].map(value => value.trim().replace(/\s+/g, ' ').toLowerCase()).join('\u0000')
+}
+
+export function dedupeInboxItems(items: readonly InboxItem[]): InboxItem[] {
+  const seen = new Set<string>()
+  const deduped: InboxItem[] = []
+  for (const item of items) {
+    const key = inboxItemDedupeKey(item)
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push(item)
+  }
+  return deduped
 }
 
 function unresolvedVisibleQuestions(task: Task): Array<{ answeredAt?: unknown; prompt?: unknown; restatement?: unknown }> {
@@ -441,7 +467,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
         severity: 'medium',
         taskId: id,
         title: inboxTitle(id, title),
-        detail: truncateTitle(questionDetail, 140),
+        detail: truncateTitle(userFacingText(questionDetail, 'Guildhall needs one answer before it can keep going.'), 140),
         actionHref: '/task/' + encodeURIComponent(id) + '?tab=current',
       })
     }
@@ -602,5 +628,5 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     return KIND_ORDER[a.kind] - KIND_ORDER[b.kind]
   })
 
-  return items
+  return dedupeInboxItems(items)
 }

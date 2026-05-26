@@ -208,6 +208,7 @@ import { buildEffectiveTask } from './effective-task.js'
 import { buildDoneTaskSummaryBundle } from './done-task-summary.js'
 import { readContextDebugForTask } from './context-observability.js'
 import { createReviewAuditStore } from './review-audit-store.js'
+import { userFacingText } from './user-facing-text.js'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import {
   buildSnapshot,
@@ -1249,8 +1250,8 @@ function summarizeProjectEvent(ev: Record<string, unknown> | undefined): string 
   if ((type === 'tool_started' || type === 'tool_execution_started') && tool) return `Started ${tool}`
   if ((type === 'tool_completed' || type === 'tool_execution_completed') && ev?.is_error && tool) return `Failed ${tool}`
   if ((type === 'tool_completed' || type === 'tool_execution_completed') && tool) return `Finished ${tool}`
-  if (type === 'error') return message || 'Agent error'
-  if (type === 'line_complete') return message || 'Agent update'
+  if (type === 'error') return userFacingText(message, 'Agent error')
+  if (type === 'line_complete') return userFacingText(message, 'Agent update')
   return type.replace(/_/g, ' ') || 'Agent activity'
 }
 

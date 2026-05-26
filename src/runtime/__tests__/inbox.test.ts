@@ -958,6 +958,62 @@ coordinators:
     expect(hit.taskDescription).toBe('We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.')
   })
 
+  it('open_escalation: collapses duplicate visible rows so the next move is not buried', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-c',
+          title: 'Block menu',
+          status: 'blocked',
+          escalations: [
+            { id: 'esc-1', reason: 'spec_ambiguous', summary: 'spec_ambiguous: Need the menu ownership decision.' },
+            { id: 'esc-2', reason: 'spec_ambiguous', summary: 'spec_ambiguous: Need the menu ownership decision.' },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    const hits = items.filter(i => i.kind === 'open_escalation')
+    expect(hits).toHaveLength(1)
+    const hit = hits[0]
+    if (!hit || hit.kind !== 'open_escalation') throw new Error('unreachable')
+    expect(hit.detail).toBe('Need the menu ownership decision.')
+  })
+
+  it('agent_question_pending: hides internal agent narration instead of turning it into a user task', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-question-receipt',
+          title: 'Choose migration source of truth',
+          description: 'Decide which migration status signal matters.',
+          status: 'ready',
+          openQuestions: [
+            {
+              id: 'q-receipt',
+              kind: 'text',
+              askedBy: 'spec-agent',
+              askedAt: '2026-05-23T00:00:00.000Z',
+              prompt: 'No problem - I already have the question posted and will wait for the user answer.',
+            },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInbox({ projectPath: tmpDir })
+    expect(items.find(i => i.kind === 'agent_question_pending' && i.taskId === 'task-question-receipt')).toBeUndefined()
+  })
+
   it('open_escalation: surfaces blocked tasks that only have a block reason', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })

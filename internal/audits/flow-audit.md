@@ -5799,6 +5799,14 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     project start and CLI runs until applied, while prompt safety still prevents
     surprise project-file writes. Verified with migration, CLI, service-health,
     typecheck, build, compiled CLI status, and release smoke checks.
+  - [x] Follow-up user testing no longer buries Overview/Inbox behind repeated
+    identical escalation rows or raw agent/debug narration. Runtime inbox
+    projection now collapses exact duplicate visible rows, filters operational
+    "question posted" receipts out of user questions, and routes empty-model,
+    idle-limit, research-budget, `ERROR:`, and `spec_ambiguous` strings through
+    a shared user-facing text normalizer used by Inbox, Thread, activity, and
+    wire-event errors. The package and home-page current-docs label now report
+    0.8.0 so fresh served UI does not identify itself as the previous release.
   - [ ] Add the follow-on global scheduler that fairly spends the provider
     budget across all turned-on projects instead of requiring each project to
     be manually started and budgeted in isolation.

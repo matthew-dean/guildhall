@@ -38,6 +38,7 @@ import { thresholdMs } from './liveness.js'
 import { listPressureTestIntakes, summarizeProjectCheckIn } from './pressure-test-intake.js'
 import { getProjectStateDir } from '@guildhall/sessions'
 import type { GitStorySnapshot } from './git-story.js'
+import { userFacingText } from './user-facing-text.js'
 
 // ---------------------------------------------------------------------------
 // Turn shape
@@ -1022,6 +1023,8 @@ function liveEventLabel(
 }
 
 function friendlyActivityText(value: string): string {
+  const friendly = userFacingText(value, value)
+  if (friendly !== value.trim()) return friendly
   if (isProviderCapacityMessage(value)) return providerCapacityActivityLabel(value)
   if (/posted (choice|freeform)?\s*question|yield now|wait for the user's answer|q-\d/i.test(value)) {
     return 'Guildhall asked a question and is waiting for the answer.'

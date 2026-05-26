@@ -5,6 +5,7 @@ import {
   type QuestionVisibilityRecord,
 } from '@guildhall/shared'
 import { META_INTAKE_TASK_ID, parseCoordinatorDraft } from './meta-intake.js'
+import { isInternalAgentNarration } from './user-facing-text.js'
 
 type QuestionRecord = QuestionVisibilityRecord & {
   answeredAt?: unknown
@@ -58,6 +59,7 @@ export function isObsoleteVisibleQuestion(task: Task, question: QuestionRecord):
   const taskSpec = typeof task.spec === 'string' ? task.spec : ''
   return (
     isOperationalReceiptQuestion(question) ||
+    isInternalAgentNarration(questionText(question)) ||
     isObsoleteMetaRoutingQuestion(taskId, taskSpec, question) ||
     isObsoleteStarterTaskFocusQuestion(task, question)
   )
