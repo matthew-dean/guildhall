@@ -1188,12 +1188,16 @@ export function renderTaskScopedGateInstructions(input: {
 
 export function renderTaskScopedVerificationInstructions(input: {
   projectPath: string
+  verificationCwd?: string
   successGates: readonly string[] | undefined
 }): string {
+  const verificationCwd = input.verificationCwd ?? input.projectPath
   const lines = [
     '## Authoritative verification commands',
     '',
-    `When you verify work for this task, run commands against \`${input.projectPath}\`. This task path is authoritative even when the outer workspace root differs.`,
+    `When you verify work for this task, use the command list below from the working directory Guildhall names here. The task project path is \`${input.projectPath}\`, but package-scoped commands may need to run from a parent workspace/worktree root.`,
+    '',
+    `Working directory: \`${verificationCwd}\``,
   ]
 
   if (input.successGates === undefined) {
@@ -1217,7 +1221,7 @@ export function renderTaskScopedVerificationInstructions(input: {
     'Use these commands as the authoritative verification commands for this task:',
     ...input.successGates.map((gate) => `- \`${gate}\``),
     '',
-    'If you call `shell` for verification and your drafted command differs, Guildhall will reconcile it back to this authoritative list.',
+    'If you call `shell` for verification and your drafted command differs, Guildhall will reconcile it back to this authoritative list and working directory.',
   )
   return lines.join('\n')
 }

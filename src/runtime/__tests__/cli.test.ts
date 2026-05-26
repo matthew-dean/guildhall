@@ -275,6 +275,7 @@ describe('Guildhall CLI surface', () => {
       'config',
       'corpus-map',
       'memory',
+      'migrate',
       'review-calibration',
       'model-bakeoff',
       'mcp',
@@ -295,6 +296,9 @@ describe('Guildhall CLI surface', () => {
     expect(help).not.toContain('guildhall meta-intake')
     expect(help).not.toContain('guildhall approve-meta-intake')
     expect(help).toContain('guildhall memory migrate-0.8.0')
+    expect(help).toContain('guildhall migrate status')
+    expect(help).toContain('guildhall migrate plan')
+    expect(help).toContain('guildhall migrate apply')
     expect(help).toContain('guildhall review-calibration escaped-miss')
     expect(help).toContain('guildhall review-calibration draft-case')
     expect(help).toContain('guildhall review-calibration validate-planning')

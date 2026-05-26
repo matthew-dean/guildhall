@@ -706,6 +706,18 @@ describe('resolveEffectiveTaskVerificationCommands', () => {
     ])
   })
 
+  it('renders nested package verification with the workspace cwd that owns the scoped command', async () => {
+    const instructions = renderTaskScopedVerificationInstructions({
+      projectPath: path.join(tmpDir, 'frontend'),
+      verificationCwd: tmpDir,
+      successGates: ['pnpm --dir frontend build'],
+    })
+
+    expect(instructions).toContain(`Working directory: \`${tmpDir}\``)
+    expect(instructions).toContain('pnpm --dir frontend build')
+    expect(instructions).not.toContain(`run commands against \`${path.join(tmpDir, 'frontend')}\``)
+  })
+
   it('scopes explicit direct-binary acceptance commands through pnpm exec for nested projects', async () => {
     const frontendDir = path.join(tmpDir, 'frontend')
     await fs.mkdir(frontendDir, { recursive: true })

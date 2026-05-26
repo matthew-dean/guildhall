@@ -98,7 +98,38 @@ archive evidence go to local history automatically.
 
 ## Migration
 
-Older projects with `./memory/` can be migrated in place. Start with a dry run:
+Guildhall tracks project migrations in `./.guildhall/migrations.json`. That
+ledger is versioned so future releases can add project, workspace, or database
+migrations without turning each one into a separate one-off command.
+
+Start by checking the project:
+
+```sh
+guildhall migrate status .
+guildhall migrate plan .
+```
+
+Then apply safe automatic migrations:
+
+```sh
+guildhall migrate apply .
+```
+
+Some 0.8.0 migrations intentionally wait for explicit approval because they
+touch project-facing files. Use `--include-prompt` when you are ready for those:
+
+```sh
+guildhall migrate apply --include-prompt .
+```
+
+If `guildhall migrate status` shows a migration under `Blocked`, the current
+runtime cannot safely run the project yet. That usually means the project is on
+an old storage location or incompatible schema. Guildhall asks before writing
+the migration so you can avoid surprise Git changes, but the project needs that
+migration before new runs or task resumes can continue.
+
+Older projects with `./memory/` can still run the direct compatibility command.
+Start with a dry run:
 
 ```sh
 guildhall memory migrate-0.8.0 .
@@ -115,6 +146,10 @@ private evidence into `~/.guildhall/data/projects/<project-hash>/`, and removes
 the old root `memory/` directory. It also compacts the shared state it just
 created, archiving terminal tasks into sharded files and moving heartbeat
 progress into local history.
+
+The compatibility command is useful when you want direct control over
+`--delete-source` and `--update-gitignore`. For release-by-release checks, use
+the generic `guildhall migrate` commands first.
 
 When `--update-gitignore` makes a previously committed local/private file
 ignored, the migration also removes that file from the Git index while leaving

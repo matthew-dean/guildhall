@@ -26,7 +26,7 @@ const DOCS_DIR = resolve(ROOT, 'docs')
 const OUT_DIR = resolve(ROOT, 'src/web/generated')
 const OUT_JSON = join(OUT_DIR, 'help-topics.json')
 const OUT_DTS = join(OUT_DIR, 'help-topics.d.ts')
-const DOCS_BASE_URL = '/guildhall/'
+const DOCS_BASE_URL = normalizeDocsBase(process.env.GUILDHALL_DOCS_BASE ?? '/')
 const HELP_DOCS_PREFIX = process.env.GUILDHALL_HELP_DOCS_PREFIX ?? 'next/'
 const PUBLIC_HELP_EXCLUDES = [
   /^next\//,
@@ -39,6 +39,12 @@ const PUBLIC_HELP_EXCLUDES = [
 ]
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
+
+function normalizeDocsBase(value) {
+  const trimmed = String(value).trim()
+  if (!trimmed || trimmed === '/') return '/'
+  return `/${trimmed.replace(/^\/+|\/+$/g, '')}/`
+}
 
 async function walk(dir) {
   const entries = await readdir(dir, { withFileTypes: true })

@@ -12,6 +12,7 @@
 
   interface Props {
     items?: InboxItem[]
+    history?: InboxItem[]
     loaded?: boolean
     error?: string | null
     refresh?: (() => Promise<void>) | null
@@ -19,6 +20,7 @@
 
   let {
     items: suppliedItems = undefined,
+    history: suppliedHistory = undefined,
     loaded: suppliedLoaded = false,
     error: suppliedError = null,
     refresh = null,
@@ -44,8 +46,9 @@
     try {
       const r = await projectFetch('/api/project/inbox')
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      const j = (await r.json()) as { items?: InboxItem[] }
+      const j = (await r.json()) as { items?: InboxItem[]; history?: InboxItem[] }
       localItems = j.items ?? []
+      if (j.history) localItems = j.history
       localError = null
     } catch (e) {
       localError = e instanceof Error ? e.message : String(e)
@@ -112,6 +115,8 @@
   })
 
   const ICONS: Record<InboxItem['kind'], IconName> = {
+    required_migration: 'refresh-cw',
+    project_understanding: 'alert-triangle',
     bootstrap_missing: 'wrench',
     setup_pending: 'wrench',
     workspace_import_pending: 'package',
@@ -127,6 +132,8 @@
   }
 
   const DEFAULT_VERBS: Record<InboxItem['kind'], string> = {
+    required_migration: 'Migrate',
+    project_understanding: 'Reconcile',
     bootstrap_missing: 'Configure',
     setup_pending: 'Open setup',
     workspace_import_pending: 'Review import',
@@ -168,6 +175,48 @@
 
   const priorityItems = $derived(items.filter(item => item.severity !== 'low'))
   const housekeepingItems = $derived(items.filter(item => item.severity === 'low'))
+  const displayItems = $derived.by(() => {
+    const source = suppliedHistory ?? items
+    return [...source]
+      .sort((left, right) => ((right.updatedAt ?? right.createdAt ?? '')).localeCompare(left.updatedAt ?? left.createdAt ?? ''))
+      .slice(0, 50)
+  })
+
+  function statusLabel(item: InboxItem): string {
+    if (!item.status || item.status === 'open') return 'Open'
+    if (item.status === 'resolved') {
+      switch (item.resolution) {
+        case 'answered': return 'Answered'
+        case 'migrated': return 'Migrated'
+        case 'reconciled': return 'Reconciled'
+        case 'reviewed': return 'Reviewed'
+        case 'verified': return 'Verified'
+        default: return 'Resolved'
+      }
+    }
+    if (item.status === 'dismissed') return 'Dismissed'
+    if (item.status === 'superseded') return 'Superseded'
+    return item.status
+  }
+
+  function statusClass(item: InboxItem): string {
+    if (!item.status || item.status === 'open') return item.severity === 'high' ? 'status-open-high' : 'status-open'
+    if (item.status === 'resolved') return 'status-resolved'
+    if (item.status === 'dismissed') return 'status-dismissed'
+    return 'status-neutral'
+  }
+
+  function itemTime(item: InboxItem): string {
+    const value = item.updatedAt ?? item.createdAt
+    if (!value) return ''
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return ''
+    return date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  }
+
+  function isOpen(item: InboxItem): boolean {
+    return !item.status || item.status === 'open'
+  }
 </script>
 
 <div class="wrap">
@@ -196,9 +245,9 @@
       </Card>
     {/if}
 
-    {#if priorityItems.length > 0}
+    {#if displayItems.length > 0}
       <ul class="list">
-        {#each priorityItems as item, i (inboxItemKey(item))}
+        {#each displayItems as item, i (inboxItemKey(item))}
           {@const handling = handlingIndex === items.indexOf(item)}
           {@const handler = AGENT_HANDLERS[item.kind]}
           <li>
@@ -219,10 +268,17 @@
                   {#if itemDigest(item)}
                     <div class="digest">{itemDigest(item)}</div>
                   {/if}
+                  {#if item.resolutionDetail}
+                    <div class="digest">{item.resolutionDetail}</div>
+                  {/if}
                 </div>
+                <span class={`status-pill ${statusClass(item)}`}>{statusLabel(item)}</span>
+                {#if itemTime(item)}
+                  <span class="time">{itemTime(item)}</span>
+                {/if}
                 <span class="verb">{actionVerb(item)} →</span>
               </button>
-              {#if handler}
+              {#if isOpen(item) && handler}
                 <button
                   type="button"
                   class="agent-verb"
@@ -233,7 +289,7 @@
                   {handling ? handler.pending : handler.verb}
                 </button>
               {/if}
-              {#if item.dismissEndpoint}
+              {#if isOpen(item) && item.dismissEndpoint}
                 <button
                   type="button"
                   class="dismiss-verb"
@@ -249,7 +305,7 @@
       </ul>
     {/if}
 
-    {#if housekeepingItems.length > 0}
+    {#if false && housekeepingItems.length > 0}
       <section class="housekeeping">
         <header class="subhead">
           <h3>Optional cleanup</h3>
@@ -375,7 +431,7 @@
   }
   .row-main {
     display: grid;
-    grid-template-columns: 4px 20px 1fr auto;
+    grid-template-columns: 4px 20px minmax(0, 1fr) auto auto auto;
     align-items: center;
     gap: var(--s-3);
     padding: var(--s-3);
@@ -480,5 +536,45 @@
     white-space: nowrap;
     text-transform: uppercase;
     letter-spacing: 0.04em;
+  }
+  .status-pill {
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px var(--s-2);
+    font-size: var(--fs-0);
+    font-weight: 650;
+    white-space: nowrap;
+  }
+  .status-open-high {
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  }
+  .status-open {
+    color: var(--warn);
+    border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+  }
+  .status-resolved {
+    color: var(--ok);
+    border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+  }
+  .status-dismissed,
+  .status-neutral {
+    color: var(--text-muted);
+  }
+  .time {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    white-space: nowrap;
+  }
+  @media (max-width: 760px) {
+    .row-main {
+      grid-template-columns: 4px 20px minmax(0, 1fr);
+    }
+    .status-pill,
+    .time,
+    .verb {
+      grid-column: 3;
+      justify-self: start;
+    }
   }
 </style>

@@ -179,6 +179,14 @@ import {
 } from '@guildhall/skills'
 import { normalizeImportedDraftTask } from './import-drafts.js'
 import { buildInbox, buildInboxBlockers, detectRepoAnchors } from './inbox.js'
+import {
+  buildProjectMigrationAdvisories,
+  buildProjectUnderstandingAdvisories,
+  markAttentionDismissed,
+  reconcileAttentionRecords,
+  recordReconciliationResolved,
+} from './attention.js'
+import { projectRuntimeCompatibilityBlocker } from './runtime-compatibility.js'
 import { buildThread } from './thread.js'
 import { NodeGitDriver } from './git-driver.js'
 import {
@@ -212,6 +220,7 @@ import {
   progressForTask,
   type WizardsState,
 } from './wizards.js'
+import { applyProjectMigrations, getProjectMigrationStatus } from './migrations.js'
 import { stringify as stringifyYaml } from 'yaml'
 
 // ---------------------------------------------------------------------------
@@ -249,6 +258,7 @@ import { stringify as stringifyYaml } from 'yaml'
 //   GET    /api/project/activity      → summary for persistent agent chip
 //   GET    /api/project/progress      → tail of memory/PROGRESS.md
 //   GET    /api/project/events        → SSE feed of orchestrator events
+//   GET    /api/health                → running package/git/build identity
 //   GET    /api/config                → project-local config (secrets redacted)
 //   GET    /api/config/levers         → lever positions for Settings UI
 //   GET    /api/project/design-system → current design system (or null)
@@ -357,6 +367,12 @@ interface ServiceProjectSummary {
   }
   gitStory?: GitStorySummary
   providerStatus?: unknown
+  migrationSummary?: {
+    pending: number
+    blocked: number
+    applied: number
+    error?: string
+  }
   projectCheckIn?: ReturnType<typeof summarizeProjectCheckIn> | null
 }
 
@@ -702,9 +718,37 @@ async function buildProjectInboxSnapshot(input: {
   } catch {
     /* never let stale-blocker repair break an inbox read */
   }
-  const items = buildInbox({ projectPath: input.projectPath })
-  const blockers = buildInboxBlockers(items)
-  return { items, blockers }
+  const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: input.projectPath })
+  if (runtimeBlocker) {
+    return {
+      items: [{
+        id: 'runtime:too-old',
+        kind: 'project_understanding' as const,
+        severity: 'high' as const,
+        title: 'Upgrade Guildhall before changing this project',
+        detail: runtimeBlocker.message,
+        signals: ['runtime_compatibility'],
+        actionHref: runtimeBlocker.actionHref,
+        dismissEndpoint: '',
+        status: 'open' as const,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }],
+      history: [],
+      blockers: { bootstrap: false, workspaceImport: false },
+    }
+  }
+  const computedItems = [
+    ...await buildProjectMigrationAdvisories(input.projectPath),
+    ...buildProjectUnderstandingAdvisories(input.projectPath),
+    ...buildInbox({ projectPath: input.projectPath }),
+  ]
+  const attention = reconcileAttentionRecords({
+    projectPath: input.projectPath,
+    openItems: computedItems,
+  })
+  const blockers = buildInboxBlockers(attention.openItems)
+  return { items: attention.openItems, history: attention.history, blockers }
 }
 
 // ---------------------------------------------------------------------------
@@ -827,6 +871,43 @@ function summarizeProject(project: ResolvedProject): ServiceProjectSummary {
     name: project.config?.name ?? project.id,
     initializationNeeded: project.initializationNeeded,
     tags: project.config?.tags ?? [],
+  }
+}
+
+async function summarizeProjectMigrations(projectPath: string): Promise<NonNullable<ServiceProjectSummary['migrationSummary']>> {
+  try {
+    const status = await getProjectMigrationStatus({ projectRoot: projectPath })
+    return {
+      pending: status.pending.length,
+      blocked: status.blocked.length,
+      applied: status.applied.length,
+    }
+  } catch (err) {
+    return {
+      pending: 0,
+      blocked: 0,
+      applied: 0,
+      error: err instanceof Error ? err.message : String(err),
+    }
+  }
+}
+
+async function startBlockerForRequiredMigrations(projectPath: string): Promise<{
+  canStart: false
+  code: 'required_migration_pending'
+  message: string
+  actionHref: string
+} | null> {
+  const status = await getProjectMigrationStatus({ projectRoot: projectPath })
+  if (status.blocked.length === 0) return null
+  const first = status.blocked[0]
+  return {
+    canStart: false,
+    code: 'required_migration_pending',
+    message: first
+      ? `Run required Guildhall migration ${first.id} before starting this project.`
+      : 'Run required Guildhall migrations before starting this project.',
+    actionHref: '/migrations',
   }
 }
 
@@ -1734,6 +1815,41 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (!resolvedPath) {
       return c.json({ error: 'Unknown project id for this local Guildhall service.' }, 404)
     }
+    if (
+      c.req.path.startsWith('/api/project') &&
+      c.req.method !== 'GET' &&
+      c.req.method !== 'HEAD'
+    ) {
+      const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: resolvedPath })
+      if (runtimeBlocker) {
+        return c.json(
+          {
+            error: runtimeBlocker.message,
+            code: runtimeBlocker.code,
+            actionHref: runtimeBlocker.actionHref,
+          },
+          409,
+        )
+      }
+    }
+    if (
+      c.req.path.startsWith('/api/project') &&
+      !c.req.path.startsWith('/api/project/migrations') &&
+      c.req.method !== 'GET' &&
+      c.req.method !== 'HEAD'
+    ) {
+      const requiredMigrationBlocker = await startBlockerForRequiredMigrations(resolvedPath)
+      if (requiredMigrationBlocker) {
+        return c.json(
+          {
+            error: requiredMigrationBlocker.message,
+            code: requiredMigrationBlocker.code,
+            actionHref: requiredMigrationBlocker.actionHref,
+          },
+          409,
+        )
+      }
+    }
     return requestProjectPathStore.run(resolvedPath, next)
   }
 
@@ -1758,26 +1874,61 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // API: runtime version (shown next to the "Guildhall" wordmark)
   // -------------------------------------------------------------------------
   let _cachedVersion: string | null = null
+  let _cachedPackageRoot: string | null | undefined = undefined
+  type RuntimeBuildIdentity = {
+    version?: string
+    builtAt: string
+    source: string
+    git: {
+      commit: string
+      shortCommit: string
+      branch: string
+      dirty: boolean
+    }
+  }
+
+  function runtimePackageRoot(): string | null {
+    if (_cachedPackageRoot !== undefined) return _cachedPackageRoot
+    try {
+      const here = dirname(fileURLToPath(import.meta.url))
+      for (const start of [here, process.cwd()]) {
+        let dir = start
+        for (let i = 0; i < 8; i++) {
+          const candidate = join(dir, 'package.json')
+          if (existsSync(candidate)) {
+            const pkg = JSON.parse(readFileSync(candidate, 'utf-8')) as {
+              name?: string
+            }
+            if (pkg?.name === 'guildhall' || pkg?.name === '@guildhall/cli') {
+              _cachedPackageRoot = dir
+              return _cachedPackageRoot
+            }
+          }
+          const next = dirname(dir)
+          if (next === dir) break
+          dir = next
+        }
+      }
+    } catch {
+      /* fall through */
+    }
+    _cachedPackageRoot = null
+    return _cachedPackageRoot
+  }
+
   function readRuntimeVersion(): string {
     if (_cachedVersion !== null) return _cachedVersion
     try {
-      // src/runtime/serve.ts → up to package root
-      const here = dirname(fileURLToPath(import.meta.url))
-      // Walk up until we find a package.json.
-      let dir = here
-      for (let i = 0; i < 6; i++) {
-        const candidate = join(dir, 'package.json')
+      const root = runtimePackageRoot()
+      if (root) {
+        const candidate = join(root, 'package.json')
         if (existsSync(candidate)) {
           const pkg = JSON.parse(readFileSync(candidate, 'utf-8')) as {
-            name?: string
             version?: string
           }
-          if (pkg?.name === 'guildhall' || pkg?.name === '@guildhall/cli') {
-            _cachedVersion = pkg.version ?? 'unknown'
-            return _cachedVersion
-          }
+          _cachedVersion = pkg.version ?? 'unknown'
+          return _cachedVersion
         }
-        dir = dirname(dir)
       }
     } catch {
       /* fall through */
@@ -1800,6 +1951,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const providerStatus = resolved.initializationNeeded
           ? null
           : await buildProjectProviderStatusForPath(entry.path, run?.providerStatus)
+        const migrationSummary = resolved.initializationNeeded
+          ? null
+          : await summarizeProjectMigrations(entry.path)
         const projectCheckIn = resolved.initializationNeeded
           ? null
           : summarizeProjectCheckIn(getProjectStateDir(entry.path))
@@ -1831,6 +1985,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             ...(highlights ? { highlights } : {}),
             ...(gitStory ? { gitStory } : {}),
             ...(providerStatus ? { providerStatus } : {}),
+            ...(migrationSummary ? { migrationSummary } : {}),
             projectCheckIn,
             ...(run
               ? {
@@ -1855,6 +2010,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ...(taskActivity ? { taskActivity } : {}),
           ...(highlights ? { highlights } : {}),
           ...(providerStatus ? { providerStatus } : {}),
+          ...(migrationSummary ? { migrationSummary } : {}),
           projectCheckIn,
           ...(run
             ? {
@@ -1967,12 +2123,102 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  function readBakedBuildIdentity(): RuntimeBuildIdentity | null {
+    try {
+      const here = dirname(fileURLToPath(import.meta.url))
+      const candidates = [
+        join(here, 'build-info.json'),
+        join(here, 'dist', 'build-info.json'),
+        join(here, '..', 'build-info.json'),
+      ]
+      for (const candidate of candidates) {
+        if (!existsSync(candidate)) continue
+        const parsed = JSON.parse(readFileSync(candidate, 'utf-8')) as Partial<RuntimeBuildIdentity>
+        const git = (parsed.git ?? {}) as Record<string, unknown>
+        if (
+          typeof parsed.builtAt === 'string' &&
+          typeof parsed.source === 'string' &&
+          typeof git.commit === 'string' &&
+          typeof git.shortCommit === 'string' &&
+          typeof git.branch === 'string' &&
+          typeof git.dirty === 'boolean'
+        ) {
+          return {
+            version: typeof parsed.version === 'string' ? parsed.version : undefined,
+            builtAt: parsed.builtAt,
+            source: parsed.source,
+            git: {
+              commit: git.commit,
+              shortCommit: git.shortCommit,
+              branch: git.branch,
+              dirty: git.dirty,
+            },
+          }
+        }
+      }
+    } catch {
+      /* fall through to live git */
+    }
+    return null
+  }
+
+  async function gitOutput(args: string[], fallback = 'unknown'): Promise<string> {
+    try {
+      const cwd = runtimePackageRoot() ?? process.cwd()
+      const { stdout } = await execFileP('git', args, { cwd })
+      const value = stdout.trim()
+      return value.length > 0 ? value : fallback
+    } catch {
+      return fallback
+    }
+  }
+
+  async function liveBuildIdentity(): Promise<RuntimeBuildIdentity> {
+    const status = await gitOutput(['status', '--porcelain=v1', '--untracked-files=all'], '')
+    const commit = await gitOutput(['rev-parse', 'HEAD'])
+    const shortCommit = commit === 'unknown'
+      ? 'unknown'
+      : await gitOutput(['rev-parse', '--short=12', 'HEAD'], commit.slice(0, 12))
+    return {
+      version: readRuntimeVersion(),
+      builtAt: processStartedAt,
+      source: 'live-git',
+      git: {
+        commit,
+        shortCommit,
+        branch: await gitOutput(['branch', '--show-current']),
+        dirty: status.length > 0,
+      },
+    }
+  }
+
+  async function runningHealthPayload() {
+    const served = servedBundleFreshnessPayload()
+    const identity = readBakedBuildIdentity() ?? await liveBuildIdentity()
+    const migrations = await summarizeProjectMigrations(defaultProjectPath)
+    return {
+      version: identity.version ?? readRuntimeVersion(),
+      git: identity.git,
+      build: {
+        builtAt: identity.builtAt,
+        source: identity.source,
+        distPath: served.distPath,
+      },
+      served,
+      migrations,
+    }
+  }
+
   app.get('/api/build-info', c => {
     return c.json(servedBundleFreshnessPayload())
   })
 
   app.get('/api/stale-server', c => {
     return c.json(servedBundleFreshnessPayload())
+  })
+
+  app.get('/api/health', async c => {
+    return c.json(await runningHealthPayload())
   })
 
   // -------------------------------------------------------------------------
@@ -2067,6 +2313,35 @@ export function buildServeApp(opts: ServeOptions = {}): {
         recentEvents: recent,
         ...(bootstrapStatus ? { bootstrapStatus } : {}),
       })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/migrations', async c => {
+    try {
+      return c.json(await getProjectMigrationStatus({ projectRoot: project.path }))
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/migrations/apply', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        includePrompt?: boolean
+        migrationId?: string
+      }
+      const result = await applyProjectMigrations({
+        projectRoot: project.path,
+        includePrompt: body.includePrompt === true,
+        ...(body.migrationId ? { only: [body.migrationId] } : {}),
+      })
+      return c.json({
+        ok: result.failed.length === 0,
+        result,
+        status: await getProjectMigrationStatus({ projectRoot: project.path }),
+      }, result.failed.length === 0 ? 200 : 500)
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -2573,6 +2848,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
     message?: string
     actionHref?: string
   }> {
+    const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: input.projectPath })
+    if (runtimeBlocker) return runtimeBlocker
+
+    const requiredMigrationBlocker = await startBlockerForRequiredMigrations(input.projectPath)
+    if (requiredMigrationBlocker) return requiredMigrationBlocker
+
     const ownerInputBlocker = startBlockerForOwnerInput(input.projectPath)
     if (ownerInputBlocker) return ownerInputBlocker
 
@@ -2906,6 +3187,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       if (project.initializationNeeded) {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      const requiredMigrationBlocker = await startBlockerForRequiredMigrations(project.path)
+      if (requiredMigrationBlocker) {
+        return c.json(
+          {
+            error: requiredMigrationBlocker.message,
+            code: requiredMigrationBlocker.code,
+            actionHref: requiredMigrationBlocker.actionHref,
+          },
+          409,
+        )
       }
       const importDraftBlocker = await startBlockerForImportDrafts(project.path)
       if (importDraftBlocker) {
@@ -4086,6 +4378,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         selectedSourceKeys,
         selectedTaskIds,
       })
+      recordReconciliationResolved(project.path)
       return c.json({
         ok: true,
         tasksAdded: result.tasksAdded ?? 0,
@@ -4236,6 +4529,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
       )
       await recordWorkspaceImportDismissal(memoryDir)
       return c.json({ ok: true })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/attention/dismiss', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const id = c.req.query('id')?.trim()
+      if (!id) return c.json({ error: 'id is required' }, 400)
+      const record = markAttentionDismissed(project.path, id)
+      if (!record) return c.json({ error: 'attention item not found' }, 404)
+      return c.json({ ok: true, record })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }

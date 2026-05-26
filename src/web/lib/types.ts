@@ -642,6 +642,24 @@ export interface StartReadiness {
   actionHref?: string
 }
 
+export interface ProjectMigrationStatusItem {
+  id: string
+  title: string
+  introducedIn?: string
+  scope?: string
+  safety?: string
+  requirement?: string
+  summary?: string
+  affectedPaths?: string[]
+}
+
+export interface ProjectMigrationStatus {
+  projectRoot?: string
+  pending: ProjectMigrationStatusItem[]
+  blocked: ProjectMigrationStatusItem[]
+  applied: ProjectMigrationStatusItem[]
+}
+
 export interface BootstrapStep {
   kind?: 'command' | 'gate' | string
   command?: string
@@ -665,6 +683,7 @@ export interface ProjectInbox {
     kind?: string
     severity?: 'high' | 'medium' | 'low' | string
     taskId?: string
+    migrationId?: string
     title?: string
     detail?: string
     actionHref?: string
@@ -672,6 +691,8 @@ export interface ProjectInbox {
     dismissEndpoint?: string
     signals?: string[]
     missingSteps?: string[]
+    blocking?: boolean
+    dismissible?: boolean
   }>
   blockers?: {
     bootstrap?: boolean

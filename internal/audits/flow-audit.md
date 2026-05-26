@@ -57,6 +57,24 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Integrate required migrations and runtime compatibility with durable
+  attention. Required project migrations now also appear in the Overview Inbox
+  ledger as blocking, non-dismissible items while the existing migration
+  readiness/middleware paths remain the authority that blocks project
+  mutations. When the migration is applied, the Inbox history resolves the item
+  as migrated instead of disappearing. Guildhall now also writes a
+  `.guildhall/runtime.json` compatibility manifest when it mutates migration or
+  attention state, and both the web service and `guildhall run` block writes
+  with `runtime_too_old` when a project requires a newer runtime or unknown
+  state feature.
+- [x] Validate the 0.8.0 required-migration flow in the browser against a
+  fresh legacy Looma + Knit-shaped project. The project now foregrounds the
+  required `0.8.0/project-state-layout` migration ahead of bootstrap, opens a
+  review/consent modal that names the file movement, blocks project mutations
+  with `required_migration_pending` until migration, and clears the blocker
+  after apply. The migration now also seeds missing baseline `.guildhall`
+  state files so post-migration intake and settings writes do not crash on
+  minimal legacy projects.
 - [x] Fix verification-command intake so package-local commands do not become
   human blockers. Automated acceptance commands are now normalized against the
   actual task project/package shape, so root-level `pnpm build` can become
@@ -5761,6 +5779,15 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     configuration, Stripe dashboard/webhook setup, and live verification remain
     owner-actionable blockers, while the runnable Stripe Connect code task was
     merged back to main and its disposable worktree was removed.
+  - [x] 0.8.0 release readiness now has a generic project migration spine
+    instead of memory-specific one-off scripts. Added a versioned migration
+    registry, `.guildhall/migrations.json` ledger, `guildhall migrate
+    status|plan|apply`, service and health migration summaries, and public docs
+    that keep `guildhall memory migrate-0.8.0` / `guildhall migrate task-state`
+    as compatibility commands. Required storage/schema migrations now block
+    project start and CLI runs until applied, while prompt safety still prevents
+    surprise project-file writes. Verified with migration, CLI, service-health,
+    typecheck, build, compiled CLI status, and release smoke checks.
   - [ ] Add the follow-on global scheduler that fairly spends the provider
     budget across all turned-on projects instead of requiring each project to
     be manually started and budgeted in isolation.

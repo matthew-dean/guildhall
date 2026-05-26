@@ -330,10 +330,10 @@ describe('buildInbox', () => {
 
     expect(hit).toMatchObject({
       severity: 'low',
-      title: 'Project check-in needed',
+      title: 'Run project check-in',
       actionHref: '/thread',
     })
-    expect(hit?.detail).toContain('Start the first project-question pass')
+    expect(hit?.detail).toContain('Start the check-in pass')
   })
 
   it('project_check_in: does not nudge again after any project check-in exists', async () => {

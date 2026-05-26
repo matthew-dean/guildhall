@@ -13,6 +13,7 @@
   import Button from '../lib/Button.svelte'
   import Chip from '../lib/Chip.svelte'
   import Icon, { type IconName } from '../lib/Icon.svelte'
+  import Modal from '../lib/Modal.svelte'
   import NoticeBand from '../lib/NoticeBand.svelte'
   import StatusButton from '../lib/StatusButton.svelte'
   import StatusDot from '../lib/StatusDot.svelte'
@@ -42,7 +43,7 @@
   import { isWorkerRunnableStatus } from '../lib/task-state.js'
   import { isOperationalReceiptQuestion } from '@guildhall/shared'
   import type { InboxItem } from '../lib/inbox-item-key.js'
-  import type { AgentQuestion, EventEnvelope, ProjectView, ProviderStatus, Task } from '../lib/types.js'
+  import type { AgentQuestion, EventEnvelope, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, Task } from '../lib/types.js'
 
   interface Props {
     initialView?: ProjectView
@@ -70,6 +71,12 @@
   let railPreference = $state<'collapsed' | 'expanded'>('collapsed')
   let topbarLabelsCollapsed = $state(false)
   let newTaskInOverflow = $state(false)
+  let migrationModalOpen = $state(false)
+  let migrationStatus = $state<ProjectMigrationStatus | null>(null)
+  let migrationStatusLoading = $state(false)
+  let migrationApplyBusy = $state(false)
+  let migrationError = $state<string | null>(null)
+  let migrationAppliedMessage = $state<string | null>(null)
   const RAIL_PREFERENCE_KEY = 'guildhall:project-rail'
 
   // Inbox blockers drive disabled-state on top-bar actions so hard blockers
@@ -79,6 +86,7 @@
   let inboxActionableCount = $state(0)
   let inboxHasHighSeverity = $state(false)
   let inboxItems = $state<InboxItem[]>([])
+  let inboxHistory = $state<InboxItem[]>([])
   let inboxLoaded = $state(false)
   let inboxError = $state<string | null>(null)
   let inboxLoadInFlight = false
@@ -117,9 +125,11 @@
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const j = (await r.json()) as {
         items?: InboxItem[]
+        history?: InboxItem[]
         blockers?: Blockers
       }
       inboxItems = j.items ?? []
+      inboxHistory = j.history ?? inboxItems
       if (j.blockers) blockers = j.blockers
       inboxActionableCount = inboxItems.filter(i => i.severity !== 'low').length
       inboxHasHighSeverity = inboxItems.some(i => i.severity === 'high')
@@ -294,7 +304,16 @@
   const needsMeta = $derived(coordinators.length === 0)
 
   const entries = $derived<NavEntry[]>([
-    { id: 'overview', label: 'Overview', icon: 'activity', suffix: '/overview' },
+    {
+      id: 'overview',
+      label: 'Overview',
+      icon: 'activity',
+      suffix: '/overview',
+      subs: [
+        { id: 'summary', label: 'Summary', path: currentProjectHref('/overview', activeProjectId) },
+        { id: 'inbox', label: 'Inbox', path: currentProjectHref('/overview/inbox', activeProjectId) },
+      ],
+    },
     { id: 'thread', label: 'Thread', icon: 'sparkles', suffix: '/thread' },
     {
       id: 'work',
@@ -398,6 +417,59 @@
     }
   }
 
+  async function loadMigrationStatus(): Promise<void> {
+    migrationStatusLoading = true
+    migrationError = null
+    try {
+      const res = await projectFetch('/api/project/migrations', { cache: 'no-store' }, activeProjectId)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      migrationStatus = (await res.json()) as ProjectMigrationStatus
+    } catch (err) {
+      migrationError = err instanceof Error ? err.message : String(err)
+    } finally {
+      migrationStatusLoading = false
+    }
+  }
+
+  async function openMigrationModal(): Promise<void> {
+    migrationModalOpen = true
+    migrationAppliedMessage = null
+    await loadMigrationStatus()
+  }
+
+  async function applyRequiredMigration(): Promise<void> {
+    const migration = primaryRequiredMigration
+    if (!migration) return
+    migrationApplyBusy = true
+    migrationError = null
+    migrationAppliedMessage = null
+    try {
+      const res = await projectFetch('/api/project/migrations/apply', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ includePrompt: true, migrationId: migration.id }),
+      }, activeProjectId)
+      const body = (await res.json().catch(() => ({}))) as {
+        error?: string
+        status?: ProjectMigrationStatus
+        result?: { failed?: Array<{ id?: string; error?: string }> }
+      }
+      if (!res.ok || body.result?.failed?.length) {
+        const failed = body.result?.failed?.[0]
+        throw new Error(failed?.error ?? body.error ?? `Migration failed (HTTP ${res.status})`)
+      }
+      migrationStatus = body.status ?? null
+      migrationAppliedMessage = 'Migration applied.'
+      await project.refresh(activeProjectId)
+      await loadInbox()
+      if (!body.status) await loadMigrationStatus()
+    } catch (err) {
+      migrationError = err instanceof Error ? err.message : String(err)
+    } finally {
+      migrationApplyBusy = false
+    }
+  }
+
   function newTask() {
     intakeOpen = true
   }
@@ -487,6 +559,8 @@
       : null,
   )
   const allTerminalStart = $derived(startReadiness?.code === 'all_terminal')
+  const requiredMigrationBlocked = $derived(startReadiness?.code === 'required_migration_pending')
+  const primaryRequiredMigration = $derived<ProjectMigrationStatusItem | null>(migrationStatus?.blocked?.[0] ?? null)
   const allTerminalReadinessMessage = $derived(
     allTerminalStart
       ? startReadiness?.message ?? 'All tasks are already finished.'
@@ -725,7 +799,9 @@
   )
 
   const startDisabledReason = $derived(
-    !startReadiness?.canStart
+    requiredMigrationBlocked
+      ? startReadiness?.message ?? 'Run the required Guildhall migration before starting this project'
+      : !startReadiness?.canStart
       ? startReadiness?.message ?? 'Finish setup before starting'
       : activeCount === 0 && awaitingApprovalCount === 0 && taskList.length > 0
         ? 'No tasks to start'
@@ -736,7 +812,9 @@
         : null,
   )
   const newTaskDisabledReason = $derived(
-    needsMeta
+    requiredMigrationBlocked
+      ? startReadiness?.message ?? 'Run the required Guildhall migration before creating a request'
+      : needsMeta
       ? 'Finish project setup before creating a request'
       : blockers.bootstrap
         ? failedBootstrapStep
@@ -753,7 +831,9 @@
     ),
   )
   const setupAttentionLabel = $derived(
-    startReadiness?.code === 'owner_input_required'
+    requiredMigrationBlocked
+      ? 'Required migration'
+      : startReadiness?.code === 'owner_input_required'
       ? 'Needs your answer'
       : startReadiness?.code === 'import_drafts_waiting'
       ? 'Imported drafts need review'
@@ -766,7 +846,9 @@
         : 'Readiness checks need attention',
   )
   const setupAttentionButtonLabel = $derived(
-    startReadiness?.code === 'owner_input_required'
+    requiredMigrationBlocked
+      ? 'Migrate'
+      : startReadiness?.code === 'owner_input_required'
       ? 'Open Thread'
       : startReadiness?.code === 'import_drafts_waiting'
       ? 'Review drafts'
@@ -783,7 +865,9 @@
     runStatus === 'running' || runStatus === 'stopping' || (!allTerminalStart && startDisabledReason !== 'No tasks to start'),
   )
   const runButtonIdleLabel = $derived(
-    startReadiness?.code === 'owner_input_required'
+    requiredMigrationBlocked
+      ? 'Migrate'
+      : startReadiness?.code === 'owner_input_required'
       ? 'Waiting on answer'
       : 'Start',
   )
@@ -979,6 +1063,7 @@
             <ul class="rail-subs">
               {#each e.subs as s (s.id)}
                 {@const subActive = path.value === s.path ||
+                  (e.id === 'overview' && ((currentSub === 'inbox' && s.id === 'inbox') || (!currentSub && s.id === 'summary'))) ||
                   (e.id === 'settings' && currentSub === s.id) ||
                   (e.id === 'release' && currentSub === s.id) ||
                   (e.id === 'release' && !currentSub && s.id === 'verdict') ||
@@ -1041,7 +1126,7 @@
               label={setupAttentionButtonLabel}
               showLabel={!topbarLabelsCollapsed}
               tooltip={topbarLabelsCollapsed}
-              onclick={() => go(setupAttentionHref)}
+              onclick={() => { if (requiredMigrationBlocked) void openMigrationModal(); else go(setupAttentionHref) }}
               title={setupAttentionLabel}
               ariaLabel={`${setupAttentionLabel}: ${newTaskDisabledReason ?? startDisabledReason ?? 'Review required'}`}
             />
@@ -1079,7 +1164,7 @@
               count={inboxActionableCount}
               showLabel={!topbarLabelsCollapsed}
               tooltip={topbarLabelsCollapsed}
-              onclick={() => go(currentProjectHref('/inbox', activeProjectId))}
+              onclick={() => go(currentProjectHref('/overview/inbox', activeProjectId))}
               title={`${inboxActionableCount} need you`}
               ariaLabel={`${inboxActionableCount} notifications need you`}
             />
@@ -1116,16 +1201,18 @@
           {/if}
           {#if showRunButton}
             <Button
-              variant={runStatus === 'running' || runStatus === 'stopping' ? 'danger' : 'agent'}
+              variant={runStatus === 'running' || runStatus === 'stopping' ? 'danger' : requiredMigrationBlocked ? 'human' : 'agent'}
               size="sm"
               iconOnly={topbarLabelsCollapsed}
-              disabled={busy || runStatus === 'stopping' || (runStatus !== 'running' && startDisabledReason !== null)}
-              onclick={runStatus === 'running' ? stop : () => start('continuous')}
+              disabled={busy || migrationApplyBusy || runStatus === 'stopping' || (runStatus !== 'running' && startDisabledReason !== null && !requiredMigrationBlocked)}
+              onclick={runStatus === 'running' ? stop : requiredMigrationBlocked ? () => { void openMigrationModal() } : () => start('continuous')}
               ariaLabel={
                 runStatus === 'stopping'
                   ? 'Stopping'
                   : runStatus === 'running'
                   ? (runMode === 'one_task' ? 'Stop one-step run' : 'Stop')
+                  : requiredMigrationBlocked
+                  ? 'Migrate project'
                   : (startDisabledReason ?? 'Start')
               }
               title={
@@ -1133,10 +1220,12 @@
                   ? 'Stopping Guildhall'
                   : runStatus === 'running'
                   ? (runMode === 'one_task' ? 'Stop the current one-step run' : 'Stop Guildhall')
+                  : requiredMigrationBlocked
+                  ? 'Migrate project'
                   : (startDisabledReason ?? 'Let Guildhall advance this project')
               }
             >
-              <Icon name={runStatus === 'running' || runStatus === 'stopping' ? 'square' : 'sparkles'} size={16} />
+              <Icon name={runStatus === 'running' || runStatus === 'stopping' ? 'square' : requiredMigrationBlocked ? 'refresh-cw' : 'sparkles'} size={16} />
               {#if !topbarLabelsCollapsed}
                 {runStatus === 'stopping' ? 'Stopping...' : runStatus === 'running' ? (runMode === 'one_task' ? 'Stop 1' : 'Stop') : runButtonIdleLabel}
               {/if}
@@ -1170,7 +1259,7 @@
                   <button
                     type="button"
                     class="actions-menu-item"
-                    disabled={busy || startDisabledReason !== null || runStatus === 'running' || runStatus === 'stopping'}
+                    disabled={busy || requiredMigrationBlocked || startDisabledReason !== null || runStatus === 'running' || runStatus === 'stopping'}
                     title={startDisabledReason ?? ''}
                     onclick={() => { closeActionsMenu(); start('one_task') }}
                   >
@@ -1264,18 +1353,23 @@
 
         <div class="body">
           {#if currentView === 'overview'}
-            <ProjectOverviewTab
-              {detail}
-              {inboxItems}
-              {inboxLoaded}
-              {inboxError}
-              {projectTicker}
-              {activeProjectId}
-            />
+            {#if currentSub === 'inbox'}
+              <InboxTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+            {:else}
+              <ProjectOverviewTab
+                {detail}
+                {inboxItems}
+                {inboxLoaded}
+                {inboxError}
+                {projectTicker}
+                {activeProjectId}
+                onMigrate={openMigrationModal}
+              />
+            {/if}
           {:else if currentView === 'thread'}
             <ThreadTab projectId={activeProjectId} />
           {:else if currentView === 'inbox'}
-            <InboxTab items={inboxItems} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+            <InboxTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
           {:else if currentView === 'workspace-import'}
             <WorkspaceImportTab />
           {:else if currentView === 'work'}
@@ -1314,6 +1408,57 @@
   {#if intakeOpen}
     <IntakeModal onClose={() => setTimeout(() => (intakeOpen = false), 160)} />
   {/if}
+  <Modal
+    open={migrationModalOpen}
+    title="Migrate project"
+    size="md"
+    onClose={() => (migrationModalOpen = false)}
+  >
+    <div class="migration-modal">
+      <p>
+        Guildhall needs to update this project before it can run. Review the file changes first so there are no surprise Git writes.
+      </p>
+      {#if migrationStatusLoading}
+        <p class="muted">Checking migrations...</p>
+      {:else if migrationError}
+        <NoticeBand tone="danger" icon="alert-triangle" density="compact">
+          <strong>{migrationError}</strong>
+        </NoticeBand>
+      {:else if primaryRequiredMigration}
+        <div class="migration-card">
+          <Chip label="Required migration" tone="danger" />
+          <h4>{primaryRequiredMigration.title}</h4>
+          {#if primaryRequiredMigration.summary}
+            <p>{primaryRequiredMigration.summary}</p>
+          {/if}
+          {#if primaryRequiredMigration.affectedPaths?.length}
+            <div class="migration-paths" aria-label="Affected paths">
+              {#each primaryRequiredMigration.affectedPaths as affectedPath}
+                <code>{affectedPath}</code>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {:else}
+        <NoticeBand tone="accent" icon="check-circle-2" density="compact">
+          <strong>{migrationAppliedMessage ?? 'No required migrations are blocking this project.'}</strong>
+        </NoticeBand>
+      {/if}
+    </div>
+    {#snippet footer()}
+      <Button variant="secondary" onclick={() => (migrationModalOpen = false)}>
+        Close
+      </Button>
+      <Button
+        variant="human"
+        disabled={migrationStatusLoading || migrationApplyBusy || !primaryRequiredMigration}
+        onclick={() => { void applyRequiredMigration() }}
+      >
+        <Icon name="refresh-cw" size={16} />
+        {migrationApplyBusy ? 'Applying...' : 'Apply required migration'}
+      </Button>
+    {/snippet}
+  </Modal>
   </ProjectShell>
 {/if}
 
@@ -1615,6 +1760,45 @@
   .actions-menu-item:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+  .migration-modal {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+    color: var(--text);
+  }
+  .migration-modal p {
+    margin: 0;
+    color: var(--text-muted);
+    line-height: var(--lh-body);
+  }
+  .migration-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    padding: var(--s-3);
+    border: 1px solid color-mix(in srgb, var(--danger) 36%, var(--border));
+    border-radius: var(--r-2);
+    background: color-mix(in srgb, var(--surface-danger) 22%, var(--bg-raised-2));
+  }
+  .migration-card h4 {
+    margin: 0;
+    color: var(--text);
+    font-size: var(--fs-3);
+    line-height: var(--lh-tight);
+  }
+  .migration-paths {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+  }
+  .migration-paths code {
+    padding: 0.2rem 0.45rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r-1);
+    background: color-mix(in srgb, var(--bg-base) 62%, transparent);
+    color: var(--text);
+    font-size: var(--fs-1);
   }
 
   @media (max-width: 900px) {

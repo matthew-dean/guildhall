@@ -35,6 +35,8 @@ import { listPressureTestIntakes, summarizeProjectCheckIn } from './pressure-tes
 export type InboxSeverity = 'high' | 'medium' | 'low'
 
 export type InboxItem =
+  | { kind: 'required_migration'; severity: 'high'; migrationId: string; title: string; detail: string; actionHref: string; blocking: true; dismissible: false; source: { system: 'migrations'; id: string } }
+  | { kind: 'project_understanding'; severity: 'high' | 'medium'; title: string; detail: string; signals: string[]; actionHref: string; dismissEndpoint: string }
   | { kind: 'bootstrap_missing'; severity: 'high'; title: string; detail: string; actionHref?: string }
   | { kind: 'setup_pending'; severity: 'medium'; stepId: string; title: string; detail: string; actionHref: string }
   | { kind: 'workspace_import_pending'; severity: 'medium'; title: string; detail: string; signals: string[]; actionHref: string; dismissEndpoint: string }
@@ -76,18 +78,20 @@ export function buildInboxBlockers(items: readonly InboxItem[]): InboxBlockers {
 }
 
 const KIND_ORDER: Record<InboxItem['kind'], number> = {
-  bootstrap_missing: 0,
-  setup_pending: 1,
-  workspace_import_pending: 2,
-  project_check_in: 3,
-  pressure_test_pending: 4,
-  open_escalation: 5,
-  agent_question_pending: 6,
-  import_draft_queue: 7,
-  brief_approval: 8,
-  spec_approval: 9,
-  lever_questions: 10,
-  spec_fill_pending: 11,
+  required_migration: 0,
+  project_understanding: 1,
+  bootstrap_missing: 2,
+  setup_pending: 3,
+  workspace_import_pending: 4,
+  project_check_in: 5,
+  pressure_test_pending: 6,
+  open_escalation: 7,
+  agent_question_pending: 8,
+  import_draft_queue: 9,
+  brief_approval: 10,
+  spec_approval: 11,
+  lever_questions: 12,
+  spec_fill_pending: 13,
 }
 
 const SEVERITY_ORDER: Record<InboxSeverity, number> = {

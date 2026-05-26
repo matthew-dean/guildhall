@@ -75,6 +75,7 @@ export function projectActionHref(href: string, explicitProjectId?: string | nul
   }
   const projectSurface =
     url.pathname === '/overview' ||
+    url.pathname.startsWith('/overview/') ||
     url.pathname === '/thread' ||
     url.pathname === '/inbox' ||
     url.pathname === '/notifications' ||

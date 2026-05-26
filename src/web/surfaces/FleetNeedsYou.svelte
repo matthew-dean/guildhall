@@ -57,7 +57,7 @@
           severity: 'high',
           title: `${counts.blocked} blocked ${counts.blocked === 1 ? 'task' : 'tasks'}`,
           detail: project.highlights?.blockedTaskTitle ?? 'Open the project inbox to resolve blockers.',
-          actionHref: '/inbox',
+          actionHref: '/overview/inbox',
         } as InboxItem)
       }
       if (counts.draftReview > 0) {
@@ -66,7 +66,7 @@
           severity: 'medium',
           title: `${counts.draftReview} draft ${counts.draftReview === 1 ? 'brief' : 'briefs'}`,
           detail: 'Review drafted task briefs before Guildhall starts implementation.',
-          actionHref: '/inbox',
+          actionHref: '/overview/inbox',
         } as InboxItem)
       }
       if (project.projectCheckIn?.needed) {
@@ -122,7 +122,7 @@
   }
 
   function goToProjectInbox(projectId: string): void {
-    nav(projectHref(projectId, '/inbox'))
+    nav(projectHref(projectId, '/overview/inbox'))
   }
 
   function goToItem(projectId: string, item: InboxItem): void {

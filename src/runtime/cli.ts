@@ -7,8 +7,15 @@ import { confirm } from '@inquirer/prompts'
 import { runOrchestrator } from './orchestrator.js'
 import { renderBakeoffMarkdown, runContextIndexerBakeoff, runModelBakeoff } from './model-bakeoff.js'
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
+import {
+  applyProjectMigrations,
+  getProjectMigrationStatus,
+  type ProjectMigrationStatus,
+  type ProjectMigrationStatusItem,
+} from './migrations.js'
 import { migrateTaskState } from './task-state-migration.js'
 import { compactProjectState } from './project-state-compaction.js'
+import { projectRuntimeCompatibilityBlocker } from './runtime-compatibility.js'
 import {
   buildCalibrationCaseDraftFromEscapedMiss,
   recordCalibrationCorpusValidation,
@@ -204,7 +211,7 @@ export function parseArgs(rawArgs: string[]): {
   getFlag: (flag: string) => string | undefined
   positionals: string[]
 } {
-  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by'])
+  const valueFlags = new Set(['--port', '--service-state', '--domain', '--max-ticks', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration'])
   function getFlag(flag: string): string | undefined {
     const idx = rawArgs.indexOf(flag)
     return idx !== -1 ? rawArgs[idx + 1] : undefined
@@ -291,6 +298,9 @@ export function resolveServiceLifecycleIntent(
 //   guildhall memory migrate-0.8.0 [--apply] [--delete-source] [--update-gitignore] [path]
 //   guildhall memory migrate-local-history [--apply] [--delete-source] [--update-gitignore] [path]
 //                                      — move old transcripts/events/sessions into ~/.guildhall
+//   guildhall migrate status [id|path] — show generic migration status
+//   guildhall migrate plan [id|path]   — show pending generic migrations
+//   guildhall migrate apply [id|path]  — apply automatic generic migrations
 //   guildhall review-calibration validate [path] [--cases <dir>]
 //                                      — validate and record review calibration corpus coverage
 //   guildhall review-calibration escaped-miss [path] --task <id> --lane <lane> --finding <text>
@@ -315,6 +325,7 @@ export const SHIPPED_CLI_COMMANDS = [
   'config',
   'corpus-map',
   'memory',
+  'migrate',
   'review-calibration',
   'model-bakeoff',
   'mcp',
@@ -333,7 +344,7 @@ function getFlag(flag: string): string | undefined {
 // another flag — otherwise boolean flags like `--no-browser` would eat the
 // following positional by mistake.
 function positionals(): string[] {
-  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by'])
+  const valueFlags = new Set(['--port', '--domain', '--max-ticks', '--service-state', '--target', '--cases', '--task', '--lane', '--finding', '--action', '--missed-by', '--migration'])
   const result: string[] = []
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -387,8 +398,17 @@ Usage:
     --apply                      Write files. Without this, prints a dry run
     --delete-source              Remove migrated old memory/ files after copying
     --update-gitignore           Write/refresh Guildhall's managed .gitignore block
+  guildhall migrate status [id|path]
+                                  Show pending, blocked, and applied project migrations
+  guildhall migrate plan [id|path]
+                                  Show the migration plan without writing files
+  guildhall migrate apply [id|path]
+                                  Apply automatic project migrations
+    --all                        Apply/status every registered project
+    --include-prompt             Also run migrations that normally require a prompt
+    --migration <id>             Limit the command to one migration id
   guildhall migrate task-state [id|path]
-                                  Move task runtime/evidence out of project-local TASKS.json
+                                  Compatibility command for the 0.8.0 task-state migration
     --apply                      Write files. Without this, prints a dry run
   guildhall review-calibration validate [id|path]
                                   Validate and record calibration corpus coverage
@@ -430,6 +450,9 @@ Examples:
   guildhall corpus-map refresh --semantic .
   guildhall memory migrate-0.8.0 --apply --delete-source --update-gitignore .
   guildhall memory compact-project-state --apply .
+  guildhall migrate status .
+  guildhall migrate plan --all
+  guildhall migrate apply --include-prompt --migration 0.8.0/codex-agent-bridge .
   guildhall migrate task-state --apply .
   guildhall review-calibration validate . --cases internal/calibration/cases/ux
   guildhall review-calibration validate-planning .
@@ -565,6 +588,22 @@ async function cmdRun() {
     }
   } catch (err) {
     console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
+  }
+
+  const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: workspace.root })
+  if (runtimeBlocker) {
+    console.error(`[guildhall] ${runtimeBlocker.message}`)
+    process.exit(1)
+  }
+
+  const migrationStatus = await getProjectMigrationStatus({ projectRoot: workspace.root })
+  if (migrationStatus.blocked.length > 0) {
+    console.error('[guildhall] This project has required migrations that must run before Guildhall can start.')
+    for (const item of migrationStatus.blocked) {
+      console.error(`[guildhall]   - ${item.id}: ${item.title}`)
+    }
+    console.error('[guildhall] Run "guildhall migrate plan" to review them, then "guildhall migrate apply --include-prompt" when you are ready.')
     process.exit(1)
   }
 
@@ -837,25 +876,105 @@ async function cmdMemory() {
 
 async function cmdMigrate() {
   const pos = positionals()
-  const subcommand = pos[0]
-  if (subcommand !== 'task-state') {
-    console.error('[guildhall] Usage: guildhall migrate task-state [--dry-run|--apply] [id|path]')
+  const subcommand = pos[0] ?? 'status'
+  if (subcommand === 'task-state') {
+    const idOrPath = pos[1]
+    const entry = idOrPath ? findWorkspace(idOrPath) : null
+    const projectPath = entry?.path ?? (idOrPath ? resolve(expandPath(idOrPath)) : process.cwd())
+    const apply = args.includes('--apply') && !args.includes('--dry-run')
+    if (apply) {
+      const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: projectPath })
+      if (runtimeBlocker) {
+        console.error(`[guildhall] ${runtimeBlocker.message}`)
+        process.exit(1)
+      }
+    }
+    const result = await migrateTaskState({ projectRoot: projectPath, apply })
+    console.log(`[guildhall] Task state migration ${apply ? 'complete' : 'dry run'}.`)
+    console.log(`[guildhall] Project: ${projectPath}`)
+    console.log(`[guildhall] Tasks inspected: ${result.tasksInspected}`)
+    console.log(`[guildhall] Runtime records: ${result.runtimeRecords}`)
+    console.log(`[guildhall] Workspace records: ${result.workspaceRecords}`)
+    console.log(`[guildhall] Evidence records: ${result.evidenceRecords}`)
+    console.log(`[guildhall] Task definitions to rewrite: ${result.taskDefinitionsRewritten}`)
+    if (result.backupPath) console.log(`[guildhall] Backup: ${result.backupPath}`)
+    if (!apply) console.log('[guildhall] Re-run with --apply to perform this migration.')
+    return
+  }
+
+  if (!['status', 'plan', 'apply'].includes(subcommand)) {
+    console.error('[guildhall] Usage: guildhall migrate <status|plan|apply> [--all] [--include-prompt] [--migration <id>] [id|path]')
     process.exit(1)
   }
-  const idOrPath = pos[1]
+
+  const projectArgs = pos.slice(1)
+  const onlyMigration = getFlag('--migration')
+  const projectPaths = resolveMigrationProjectPaths(projectArgs[0])
+  for (const projectPath of projectPaths) {
+    if (subcommand === 'apply') {
+      const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: projectPath })
+      if (runtimeBlocker) {
+        console.error(`[guildhall] ${runtimeBlocker.message}`)
+        process.exit(1)
+      }
+      const result = await applyProjectMigrations({
+        projectRoot: projectPath,
+        includePrompt: args.includes('--include-prompt'),
+        ...(onlyMigration ? { only: [onlyMigration] } : {}),
+      })
+      console.log(`[guildhall] Migration apply complete for ${projectPath}`)
+      printMigrationItems('Applied', result.applied)
+      printMigrationItems('Skipped', result.skipped)
+      printMigrationItems('Failed', result.failed)
+      if (result.skipped.length > 0 && !args.includes('--include-prompt')) {
+        console.log('[guildhall] Re-run with --include-prompt to apply prompt-required migrations.')
+      }
+      continue
+    }
+
+    const status = await getProjectMigrationStatus({ projectRoot: projectPath })
+    printMigrationStatus(status, subcommand === 'plan' ? 'Migration plan' : 'Migration status', onlyMigration)
+  }
+}
+
+function resolveMigrationProjectPaths(idOrPath?: string): string[] {
+  if (args.includes('--all')) {
+    const workspaces = listWorkspaces()
+    return workspaces.length > 0 ? workspaces.map(workspace => resolve(workspace.path)) : [process.cwd()]
+  }
   const entry = idOrPath ? findWorkspace(idOrPath) : null
-  const projectPath = entry?.path ?? (idOrPath ? resolve(expandPath(idOrPath)) : process.cwd())
-  const apply = args.includes('--apply') && !args.includes('--dry-run')
-  const result = await migrateTaskState({ projectRoot: projectPath, apply })
-  console.log(`[guildhall] Task state migration ${apply ? 'complete' : 'dry run'}.`)
-  console.log(`[guildhall] Project: ${projectPath}`)
-  console.log(`[guildhall] Tasks inspected: ${result.tasksInspected}`)
-  console.log(`[guildhall] Runtime records: ${result.runtimeRecords}`)
-  console.log(`[guildhall] Workspace records: ${result.workspaceRecords}`)
-  console.log(`[guildhall] Evidence records: ${result.evidenceRecords}`)
-  console.log(`[guildhall] Task definitions to rewrite: ${result.taskDefinitionsRewritten}`)
-  if (result.backupPath) console.log(`[guildhall] Backup: ${result.backupPath}`)
-  if (!apply) console.log('[guildhall] Re-run with --apply to perform this migration.')
+  return [entry?.path ?? (idOrPath ? resolve(expandPath(idOrPath)) : process.cwd())]
+}
+
+function filterMigrationItems(
+  items: ProjectMigrationStatusItem[],
+  onlyMigration?: string,
+): ProjectMigrationStatusItem[] {
+  return onlyMigration ? items.filter(item => item.id === onlyMigration) : items
+}
+
+function printMigrationItems(label: string, items: ProjectMigrationStatusItem[]): void {
+  console.log(`[guildhall] ${label}: ${items.length}`)
+  for (const item of items) {
+    console.log(`[guildhall]   - ${item.id} [${item.safety}] ${item.title}`)
+  }
+}
+
+function printMigrationStatus(
+  status: ProjectMigrationStatus,
+  label: string,
+  onlyMigration?: string,
+): void {
+  const pending = filterMigrationItems(status.pending, onlyMigration)
+  const blocked = filterMigrationItems(status.blocked, onlyMigration)
+  const applied = filterMigrationItems(status.applied, onlyMigration)
+  console.log(`[guildhall] ${label} for ${status.projectRoot}`)
+  printMigrationItems('Pending', pending)
+  printMigrationItems('Blocked', blocked)
+  printMigrationItems('Applied', applied)
+  if (pending.length === 0 && blocked.length === 0) {
+    console.log('[guildhall] No pending migrations.')
+  }
 }
 
 export async function validateReviewCalibrationCorpus(input: {

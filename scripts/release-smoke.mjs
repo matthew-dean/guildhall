@@ -15,15 +15,18 @@ async function readJson(path) {
 }
 
 try {
-  const stale = await readJson('/api/stale-server')
-  if (stale?.stale) {
+  const health = await readJson('/api/health')
+  if (health?.served?.stale) {
     console.error('Guildhall served bundle is stale. Restart the local service before release smoke.')
-    console.error(`Started at: ${stale.processStartedAt ?? 'unknown'}`)
-    console.error(`Dist path: ${stale.distPath ?? 'unknown'}`)
+    console.error(`Started at: ${health.served.processStartedAt ?? 'unknown'}`)
+    console.error(`Dist path: ${health.served.distPath ?? 'unknown'}`)
     process.exitCode = 1
   } else {
-    const version = await readJson('/api/version')
-    console.log(`Guildhall ${version.version ?? 'unknown'} served bundle is fresh at ${base}.`)
+    const version = health.version ?? 'unknown'
+    const commit = health.git?.shortCommit ?? health.git?.commit ?? 'unknown commit'
+    const branch = health.git?.branch ?? 'unknown branch'
+    const dirty = health.git?.dirty ? 'dirty' : 'clean'
+    console.log(`Guildhall ${version} (${branch} ${commit}, ${dirty}) served bundle is fresh at ${base}.`)
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error))

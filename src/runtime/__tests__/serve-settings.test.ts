@@ -4,7 +4,14 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { bootstrapWorkspace, readProjectConfig, readWorkspaceConfig, writeProjectConfig, writeWorkspaceConfig } from '@guildhall/config'
+import {
+  bootstrapWorkspace,
+  readProjectConfig,
+  readWorkspaceConfig,
+  registerWorkspace,
+  writeProjectConfig,
+  writeWorkspaceConfig,
+} from '@guildhall/config'
 import { defaultAgentSettingsPath, loadLeverSettings, makeDefaultSettings } from '@guildhall/levers'
 import { proposeProjectSkill } from '@guildhall/skills'
 import { getProjectLocalHistoryDir, getProjectTranscriptPath } from '@guildhall/sessions'
@@ -552,6 +559,127 @@ describe('GET/POST /api/project/local-config', () => {
 })
 
 describe('POST /api/project/start', () => {
+  it('blocks project start when required migrations are pending', async () => {
+    await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'memory', 'MEMORY.md'), '# Legacy\n', 'utf8')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const migrations = await app.fetch(new Request(scoped('/api/project/migrations')))
+    expect(migrations.status).toBe(200)
+    const migrationsBody = await migrations.json() as Record<string, any>
+    expect(migrationsBody.blocked.map((item: { id: string }) => item.id)).toContain('0.8.0/project-state-layout')
+
+    const project = await app.fetch(new Request(scoped('/api/project')))
+    expect(project.status).toBe(200)
+    const projectBody = await project.json() as { startReadiness?: Record<string, any> }
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'required_migration_pending',
+      actionHref: '/migrations',
+    })
+
+    const start = await app.fetch(new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }))
+    expect(start.status).toBe(409)
+    const startBody = await start.json() as Record<string, any>
+    expect(startBody).toMatchObject({
+      code: 'required_migration_pending',
+    })
+
+    const apply = await app.fetch(new Request(scoped('/api/project/migrations/apply'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ includePrompt: true, migrationId: '0.8.0/project-state-layout' }),
+    }))
+    expect(apply.status).toBe(200)
+    const applyBody = await apply.json() as Record<string, any>
+    expect(applyBody.result.applied.map((item: { id: string }) => item.id)).toContain('0.8.0/project-state-layout')
+    expect(applyBody.status.blocked).toEqual([])
+
+    const after = await app.fetch(new Request(scoped('/api/project/migrations')))
+    const afterBody = await after.json() as Record<string, any>
+    expect(afterBody.blocked).toEqual([])
+  })
+
+  it('projects required migrations into durable inbox history without making them dismissible', async () => {
+    await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'memory', 'MEMORY.md'), '# Legacy\n', 'utf8')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const before = await app.fetch(new Request(scoped('/api/project/inbox')))
+    expect(before.status).toBe(200)
+    const beforeBody = (await before.json()) as {
+      items?: Array<Record<string, any>>
+      history?: Array<Record<string, any>>
+    }
+    expect(beforeBody.items?.find(item => item.id === 'migration:0.8.0/project-state-layout')).toMatchObject({
+      kind: 'required_migration',
+      status: 'open',
+      blocking: true,
+      dismissible: false,
+      actionHref: '/migrations',
+    })
+    expect(beforeBody.history?.find(item => item.id === 'migration:0.8.0/project-state-layout')?.dismissEndpoint).toBeUndefined()
+
+    const apply = await app.fetch(new Request(scoped('/api/project/migrations/apply'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ includePrompt: true, migrationId: '0.8.0/project-state-layout' }),
+    }))
+    expect(apply.status).toBe(200)
+
+    const after = await app.fetch(new Request(scoped('/api/project/inbox')))
+    const afterBody = (await after.json()) as {
+      items?: Array<Record<string, any>>
+      history?: Array<Record<string, any>>
+    }
+    expect(afterBody.items?.some(item => item.id === 'migration:0.8.0/project-state-layout')).toBe(false)
+    expect(afterBody.history?.find(item => item.id === 'migration:0.8.0/project-state-layout')).toMatchObject({
+      status: 'resolved',
+      resolution: 'migrated',
+    })
+  })
+
+  it('blocks project mutations when project state requires a newer Guildhall runtime', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, '.guildhall', 'runtime.json'),
+      JSON.stringify({
+        version: 1,
+        writtenByGuildhall: '999.0.0',
+        minGuildhallVersion: '999.0.0',
+        stateSchema: 'future-state',
+        requiredFeatures: ['future.guildhall-state.v1'],
+      }, null, 2),
+      'utf8',
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const project = await app.fetch(new Request(scoped('/api/project')))
+    expect(project.status).toBe(200)
+    const projectBody = await project.json() as { startReadiness?: Record<string, any> }
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'runtime_too_old',
+      actionHref: '/settings/about',
+    })
+
+    const start = await app.fetch(new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }))
+    expect(start.status).toBe(409)
+    expect(await start.json()).toMatchObject({
+      code: 'runtime_too_old',
+      actionHref: '/settings/about',
+    })
+
+    const migrations = await app.fetch(new Request(scoped('/api/project/migrations/apply'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ includePrompt: true }),
+    }))
+    expect(migrations.status).toBe(409)
+    expect(await migrations.json()).toMatchObject({
+      code: 'runtime_too_old',
+    })
+  })
+
   it('marks all-terminal projects as not startable', async () => {
     const now = new Date().toISOString()
     await fs.writeFile(
@@ -1080,6 +1208,75 @@ describe('GET /api/stale-server', () => {
     expect(typeof body.processStartedAt).toBe('string')
     expect(typeof body.bootBuildMtimeMs).toBe('number')
     expect(typeof body.currentBuildMtimeMs).toBe('number')
+  })
+})
+
+describe('GET /api/service', () => {
+  it('includes migration summary counts for registered projects', async () => {
+    registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
+    await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'memory', 'PROGRESS.md'), '# Progress\n', 'utf8')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request('http://localhost/api/service'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { projects?: Array<Record<string, any>> }
+    const project = body.projects?.find(item => item.id === PROJECT_ID)
+    expect(project?.migrationSummary).toMatchObject({
+      pending: expect.any(Number),
+      blocked: expect.any(Number),
+      applied: expect.any(Number),
+    })
+    expect(project?.migrationSummary.pending).toBeGreaterThan(0)
+  })
+})
+
+describe('GET /api/health', () => {
+  it('returns package, git, and served-build identity for the running process', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request('http://localhost/api/health'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      version?: string
+      git?: {
+        commit?: string
+        shortCommit?: string
+        branch?: string
+        dirty?: boolean
+      }
+      build?: {
+        builtAt?: string
+        source?: string
+        distPath?: string | null
+      }
+      served?: {
+        stale?: boolean
+        processStartedAt?: string
+        bootBuildMtimeMs?: number
+        currentBuildMtimeMs?: number
+      }
+      migrations?: {
+        pending?: number
+        blocked?: number
+        applied?: number
+      }
+    }
+
+    expect(typeof body.version).toBe('string')
+    expect((body.version ?? '').length).toBeGreaterThan(0)
+    expect(body.git?.commit).toMatch(/^[0-9a-f]{40}$|^unknown$/)
+    expect(typeof body.git?.shortCommit).toBe('string')
+    expect(typeof body.git?.branch).toBe('string')
+    expect(typeof body.git?.dirty).toBe('boolean')
+    expect(typeof body.build?.builtAt).toBe('string')
+    expect(typeof body.build?.source).toBe('string')
+    expect(body.served?.stale).toBe(false)
+    expect(typeof body.served?.processStartedAt).toBe('string')
+    expect(typeof body.served?.bootBuildMtimeMs).toBe('number')
+    expect(typeof body.served?.currentBuildMtimeMs).toBe('number')
+    expect(typeof body.migrations?.pending).toBe('number')
+    expect(typeof body.migrations?.blocked).toBe('number')
+    expect(typeof body.migrations?.applied).toBe('number')
   })
 })
 
@@ -1808,6 +2005,41 @@ describe('GET /api/project/inbox — blockers', () => {
       blockers: { bootstrap: boolean; workspaceImport: boolean }
     }
     expect(afterBody.blockers.bootstrap).toBe(false)
+  })
+
+  it('keeps attention history and marks satisfied items resolved', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const before = await app.fetch(new Request(scoped('/api/project/inbox')))
+    expect(before.status).toBe(200)
+    const beforeBody = (await before.json()) as {
+      items?: Array<{ id?: string; status?: string; kind?: string }>
+      history?: Array<{ id?: string; status?: string; kind?: string }>
+    }
+    expect(beforeBody.items?.some(item => item.id === 'bootstrap:readiness' && item.status === 'open')).toBe(true)
+    expect(beforeBody.history?.some(item => item.id === 'bootstrap:readiness' && item.status === 'open')).toBe(true)
+
+    const yamlPath = path.join(tmpDir, 'guildhall.yaml')
+    const current = await fs.readFile(yamlPath, 'utf8')
+    await fs.writeFile(
+      yamlPath,
+      current +
+        '\nbootstrap:\n  verifiedAt: "2026-04-24T00:00:00Z"\n  packageManager: pnpm\n  install: { command: "pnpm install", status: ok }\n  gates:\n    lint: { command: "pnpm lint", available: true }\n',
+      'utf8',
+    )
+
+    const after = await app.fetch(new Request(scoped('/api/project/inbox')))
+    expect(after.status).toBe(200)
+    const afterBody = (await after.json()) as {
+      items?: Array<{ id?: string; status?: string }>
+      history?: Array<{ id?: string; status?: string; resolution?: string }>
+    }
+    expect(afterBody.items?.some(item => item.id === 'bootstrap:readiness')).toBe(false)
+    expect(afterBody.history?.some(item =>
+      item.id === 'bootstrap:readiness' &&
+      item.status === 'resolved' &&
+      item.resolution === 'verified',
+    )).toBe(true)
   })
 })
 

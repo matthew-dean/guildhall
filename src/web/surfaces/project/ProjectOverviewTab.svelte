@@ -31,6 +31,7 @@
     inboxError?: string | null
     projectTicker: ProjectActivityLine
     activeProjectId?: string | null
+    onMigrate?: () => void | Promise<void>
   }
 
   let {
@@ -40,9 +41,11 @@
     inboxError = null,
     projectTicker,
     activeProjectId = null,
+    onMigrate,
   }: Props = $props()
 
   type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running'
+  type NextActionKind = 'navigate' | 'migration'
 
   interface BlockedRow {
     task: Task
@@ -181,6 +184,16 @@
   })
 
   const nextAction = $derived.by(() => {
+    if (detail.startReadiness?.code === 'required_migration_pending') {
+      return {
+        label: 'Required migration',
+        detail: detail.startReadiness.message ?? 'Run the required Guildhall migration before Guildhall can update this project.',
+        button: 'Migrate project',
+        href: '/migrations',
+        tone: 'danger' as Tone,
+        action: 'migration' as NextActionKind,
+      }
+    }
     const inbox = actionableInbox[0]
     if (inbox) {
       return {
@@ -190,6 +203,7 @@
         button: 'Open',
         href: inbox.actionHref ?? '/thread',
         tone: inbox.severity === 'high' ? 'danger' as Tone : 'warn' as Tone,
+        action: 'navigate' as NextActionKind,
       }
     }
     if (activeTask?.status === 'blocked') {
@@ -199,6 +213,7 @@
         button: 'Open task',
         href: currentTaskHref(activeTask.id, activeProjectId),
         tone: 'warn' as Tone,
+        action: 'navigate' as NextActionKind,
       }
     }
     if (activeTask?.status === 'spec_review') {
@@ -208,6 +223,7 @@
         button: 'Review in Thread',
         href: currentProjectHref('/thread', activeProjectId),
         tone: 'warn' as Tone,
+        action: 'navigate' as NextActionKind,
       }
     }
     if (activeTask) {
@@ -217,6 +233,7 @@
         button: 'Open work',
         href: currentProjectHref('/work', activeProjectId),
         tone: running ? 'running' as Tone : 'accent' as Tone,
+        action: 'navigate' as NextActionKind,
       }
     }
     return {
@@ -225,6 +242,7 @@
       button: 'Open Work',
       href: currentProjectHref('/work', activeProjectId),
       tone: 'neutral' as Tone,
+      action: 'navigate' as NextActionKind,
     }
   })
 
@@ -401,6 +419,7 @@
       case 'provider_unavailable': return 'Provider unavailable'
       case 'bootstrap_blocked': return 'Readiness blocked'
       case 'no_unattended_progress': return 'Nothing ready to run'
+      case 'required_migration_pending': return 'Required migration'
       default: return 'Start is blocked'
     }
   }
@@ -474,7 +493,16 @@
           <p class="task-content">{nextAction.content}</p>
         {/if}
         <p>{nextAction.detail}</p>
-        <Button variant={nextAction.tone === 'warn' || nextAction.tone === 'danger' ? 'human' : 'secondary'} onclick={() => go(nextAction.href)}>
+        <Button
+          variant={nextAction.tone === 'warn' || nextAction.tone === 'danger' ? 'human' : 'secondary'}
+          onclick={() => {
+            if (nextAction.action === 'migration') {
+              void onMigrate?.()
+              return
+            }
+            go(nextAction.href)
+          }}
+        >
           {nextAction.button}
         </Button>
       </div>
@@ -535,7 +563,17 @@
 
     <Card title="Next run" titleTag="h2" className="overview-card">
       {#if runBlocker}
-        <button type="button" class="run-blocker" onclick={() => go(runBlocker.href)}>
+        <button
+          type="button"
+          class="run-blocker"
+          onclick={() => {
+            if (detail.startReadiness?.code === 'required_migration_pending') {
+              void onMigrate?.()
+              return
+            }
+            go(runBlocker.href)
+          }}
+        >
           <Chip label="Blocked" tone="warn" />
           <div>
             <strong>{runBlocker.label}</strong>

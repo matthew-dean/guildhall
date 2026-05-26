@@ -27,8 +27,10 @@ describe('parseRoute', () => {
     expect(parseRoute('/projects/looma-knit/notifications')).toMatchObject({
       kind: 'project',
       projectId: 'looma-knit',
-      view: 'inbox',
+      view: 'overview',
+      sub: 'inbox',
     })
+    expect(parseRoute('/projects/looma-knit/overview/inbox')).toMatchObject({ view: 'overview', sub: 'inbox' })
     expect(parseRoute('/projects/looma-knit/work')).toMatchObject({ view: 'work' })
     expect(parseRoute('/projects/looma-knit/work/board')).toMatchObject({ view: 'planner' })
     expect(parseRoute('/projects/looma-knit/workspace-import')).toMatchObject({ view: 'workspace-import' })
@@ -96,7 +98,8 @@ describe('parseRoute', () => {
       view: 'overview',
     })
     expect(parseRoute('/project/overview')).toMatchObject({ view: 'overview' })
-    expect(parseRoute('/project/inbox')).toMatchObject({ view: 'inbox' })
+    expect(parseRoute('/project/inbox')).toMatchObject({ view: 'overview', sub: 'inbox' })
+    expect(parseRoute('/project/overview/inbox')).toMatchObject({ view: 'overview', sub: 'inbox' })
     expect(parseRoute('/project/settings/routing')).toMatchObject({
       view: 'settings',
       sub: 'routing',

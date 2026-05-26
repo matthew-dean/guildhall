@@ -187,6 +187,15 @@ function installFetchFakes(projectPayload: ProjectDetail = detail()) {
     if (url.pathname.includes('/answer-question')) return json({ ok: true })
     if (url.pathname === '/api/project/start') return json({ ok: true })
     if (url.pathname === '/api/project/stop') return json({ ok: true })
+    if (url.pathname === '/api/project/migrations') {
+      return json({
+        projectRoot: '/workspace/looma-knit',
+        pending: [{ id: '0.8.0/codex-agent-bridge', title: 'Install Codex Guildhall MCP bridge instructions', safety: 'prompt', summary: 'Adds AGENTS.md.', affectedPaths: ['AGENTS.md'] }],
+        blocked: [],
+        applied: [],
+      })
+    }
+    if (url.pathname === '/api/project/migrations/apply') return json({ ok: true, result: { applied: [], skipped: [], failed: [] }, status: { pending: [], blocked: [], applied: [] } })
     if (url.pathname === '/api/project/local-config') {
       return json({
         config: {
@@ -446,6 +455,92 @@ describe('ProjectView', () => {
     expect(attention).toHaveTextContent(/Review drafts/i)
     await user.click(attention)
     expect(path.value).toBe('/projects/looma-knit/task/task-import-1')
+  })
+
+  it('surfaces required migrations as the primary setup action and can apply them intentionally', async () => {
+    const user = userEvent.setup()
+    const migrationBlocked = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'required_migration_pending',
+        message: 'Run required Guildhall migration 0.8.0/project-state-layout before starting this project.',
+        actionHref: '/migrations',
+      },
+    } as Partial<ProjectDetail>)
+    const fetchMock = installFetchFakes(migrationBlocked)
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return json(migrationBlocked)
+      if (url.pathname === '/api/project/inbox') return json({
+        blockers: { bootstrap: true, workspaceImport: false },
+        items: [
+          {
+            id: 'bootstrap',
+            kind: 'bootstrap_blocked',
+            severity: 'high',
+            title: 'Bootstrap incomplete',
+            detail: 'No verified install/gate commands in guildhall.yaml.',
+            actionHref: '/settings/ready',
+          },
+        ],
+      })
+      if (url.pathname === '/api/project/thread') return json({ turns: [], activeTurnId: null })
+      if (url.pathname === '/api/project/migrations') {
+        return json({
+          projectRoot: '/workspace/looma-knit',
+          pending: [],
+          blocked: [
+            {
+              id: '0.8.0/project-state-layout',
+              title: 'Move legacy project memory into split project state',
+              safety: 'prompt',
+              requirement: 'required',
+              summary: 'Moves old ./memory project notes into .guildhall and local Guildhall history.',
+              affectedPaths: ['memory/', '.guildhall/'],
+            },
+          ],
+          applied: [],
+        })
+      }
+      if (url.pathname === '/api/project/migrations/apply') {
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          includePrompt: true,
+          migrationId: '0.8.0/project-state-layout',
+        })
+        return json({
+          ok: true,
+          result: {
+            applied: [{ id: '0.8.0/project-state-layout', title: 'Move legacy project memory into split project state' }],
+            skipped: [],
+            failed: [],
+          },
+          status: { pending: [], blocked: [], applied: [{ id: '0.8.0/project-state-layout' }] },
+        })
+      }
+      return json({})
+    })
+
+    await renderProjectView('overview', null, 'looma-knit', migrationBlocked)
+
+    expect(screen.getAllByRole('button', { name: /migrate project/i }).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Required migration').length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Run required Guildhall migration/).length).toBeGreaterThan(0)
+
+    await user.click(screen.getAllByRole('button', { name: /migrate project/i }).at(-1)!)
+    await screen.findByRole('dialog', { name: /migrate project/i })
+    expect(screen.getByText('Move legacy project memory into split project state')).toBeInTheDocument()
+    expect(screen.getByText('memory/')).toBeInTheDocument()
+    expect(screen.getByText('.guildhall/')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /apply required migration/i }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/project/migrations/apply?projectId=looma-knit'),
+        expect.objectContaining({ method: 'POST' }),
+      )
+    })
   })
 
   it('does not present stable done-only projects as paused or needing setup attention', async () => {
@@ -833,7 +928,7 @@ describe('ProjectView', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /notifications need you/i }))
 
-    expect(path.value).toBe('/projects/looma-knit/inbox')
+    expect(path.value).toBe('/projects/looma-knit/overview/inbox')
   })
 
   it('keeps Settings pinned in the rail utility section instead of expanding settings subsections there', async () => {

@@ -51,8 +51,8 @@ describe('release artifact contract', () => {
     const script = read('scripts/release-smoke.mjs')
 
     expect(manifest.scripts?.['smoke:release']).toBe('node scripts/release-smoke.mjs')
-    expect(script).toContain('/api/stale-server')
-    expect(script).toContain('/api/version')
+    expect(script).toContain('/api/health')
+    expect(script).toContain('health.git?.shortCommit')
     expect(script).toContain('GUILDHALL_SMOKE_URL')
     expect(script).toContain('process.exitCode = 1')
   })

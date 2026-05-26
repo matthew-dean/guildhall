@@ -455,7 +455,12 @@ export const shellTool = defineTool({
   execute: async (input, ctx) => {
     const authoritativeCommands = parseAuthoritativeCommands(ctx.metadata)
     const requestedCwd = resolveShellCwd(input.cwd, ctx.cwd)
-    const cdAdjustedCwd = cwdFromLeadingCdChain(input.command, requestedCwd) ?? requestedCwd
+    const verificationCwd = String(ctx.metadata?.['current_task_verification_cwd'] ?? '').trim()
+    const authorityPreferredCwd =
+      !input.cwd && verificationCwd && authoritativeCommands && authoritativeCommands.length > 0
+        ? verificationCwd
+        : requestedCwd
+    const cdAdjustedCwd = cwdFromLeadingCdChain(input.command, authorityPreferredCwd) ?? authorityPreferredCwd
     const reconciled = reconcileShellCommandWithAuthority(input.command, authoritativeCommands)
     const requestedKind = classifyGateCommand(input.command)
     const executableCommand = normalizePnpmScopedScriptCommand(reconciled.command)
@@ -509,6 +514,7 @@ export const shellTool = defineTool({
       },
     }
     const result = await runShell(normalizedInput)
+    const orientationLine = `Working directory: ${effectiveCwd}`
     const statusLine = result.success
       ? `Shell command succeeded (exit ${result.exitCode}). Treat this command as PASSED; if it was required verification, record it and continue the handoff. Do not edit warning-only output unless the task explicitly requires warning-free output.`
       : result.timedOut
@@ -516,8 +522,8 @@ export const shellTool = defineTool({
         : `Shell command failed (exit ${result.exitCode}).`
     return {
       output: result.output.trim().length > 0
-        ? `${statusLine}\n${result.output}`
-        : statusLine,
+        ? `${statusLine}\n${orientationLine}\n${result.output}`
+        : `${statusLine}\n${orientationLine}`,
       is_error: !result.success,
       metadata: {
         ...result,

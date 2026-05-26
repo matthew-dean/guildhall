@@ -19,11 +19,11 @@ description: Local AI agent harness for planning, running, reviewing, and recove
       </ul>
       <div class="gh-home-hero__actions">
         <div class="gh-cta-row">
-          <a class="gh-cta gh-cta-primary" href="/guildhall/guide/quick-start">Get started</a>
-          <a class="gh-cta gh-cta-secondary" href="/guildhall/guide/introduction">How it works</a>
+          <a class="gh-cta gh-cta-primary" href="/guide/quick-start">Get started</a>
+          <a class="gh-cta gh-cta-secondary" href="/guide/introduction">How it works</a>
           <a class="gh-cta gh-cta-secondary" href="https://github.com/matthew-dean/guildhall">GitHub</a>
         </div>
-        <p class="gh-home-version">Current docs: <a href="/guildhall/releases/0.7.0">0.7.0</a>. Preview <a href="/guildhall/next/guide/">Next (0.8.0)</a>.</p>
+        <p class="gh-home-version">Current docs: <a href="/releases/0.7.0">0.7.0</a>. Preview <a href="/next/guide/">Next (0.8.0)</a>.</p>
         <ul class="gh-home-hero__badges" aria-label="Guildhall strengths">
           <li>Shared agent state</li>
           <li>Blueprints before changes</li>
@@ -93,17 +93,17 @@ description: Local AI agent harness for planning, running, reviewing, and recove
       <article class="gh-limit-card">
         <h3>Start here</h3>
         <ul>
-          <li><a href="/guildhall/guide/introduction">What Guildhall is</a></li>
-          <li><a href="/guildhall/guide/quick-start">Install and open one project</a></li>
-          <li><a href="/guildhall/guide/concepts">Core concepts glossary</a></li>
+          <li><a href="/guide/introduction">What Guildhall is</a></li>
+          <li><a href="/guide/quick-start">Install and open one project</a></li>
+          <li><a href="/guide/concepts">Core concepts glossary</a></li>
         </ul>
       </article>
       <article class="gh-limit-card">
         <h3>Then choose a path</h3>
         <ul>
-          <li><a href="/guildhall/guide/new-project">New project</a></li>
-          <li><a href="/guildhall/guide/existing-project">Existing project</a></li>
-          <li><a href="/guildhall/guide/first-tasks">First task set</a></li>
+          <li><a href="/guide/new-project">New project</a></li>
+          <li><a href="/guide/existing-project">Existing project</a></li>
+          <li><a href="/guide/first-tasks">First task set</a></li>
         </ul>
       </article>
     </div>

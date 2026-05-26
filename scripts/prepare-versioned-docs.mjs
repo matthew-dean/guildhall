@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..')
 const DOCS = join(ROOT, 'docs')
+const DOCS_BASE = normalizeDocsBase(process.env.GUILDHALL_DOCS_BASE ?? '/')
 
 const GENERATED_DIRS = [
   join(DOCS, 'current'),
@@ -40,6 +41,17 @@ const NEXT_EXCLUDES = [
   /^web-ui\/design-tokens\.md$/,
   /^web-ui\/help-system\.md$/,
 ]
+
+function normalizeDocsBase(value) {
+  const trimmed = String(value).trim()
+  if (!trimmed || trimmed === '/') return '/'
+  return `/${trimmed.replace(/^\/+|\/+$/g, '')}/`
+}
+
+function docsHref(prefix, section) {
+  const base = DOCS_BASE === '/' ? '' : DOCS_BASE.slice(0, -1)
+  return `${base}${prefix}/${section}/`
+}
 
 async function resolveCurrentVersion() {
   const versionsRoot = join(DOCS, 'versions')
@@ -90,26 +102,20 @@ async function walkFiles(dir) {
 
 async function rewriteAbsoluteDocLinks(root, prefix) {
   const files = await walkFiles(root)
-  const absoluteDocLink = /\/guildhall\/(guide|reference|web-ui|cli|levers|releases)\//g
-  const rootRelativeDocLink = /(?<=["'(])\/(guide|reference|web-ui|cli|levers|releases)\//g
+  const rootDocLink = /(?<=["'(])\/(?:guildhall\/)?(guide|reference|web-ui|cli|levers|releases)\//g
   for (const file of files) {
     const raw = await readFile(file, 'utf8')
-    const next = raw
-      .replace(absoluteDocLink, `/guildhall${prefix}/$1/`)
-      .replace(rootRelativeDocLink, `${prefix}/$1/`)
+    const next = raw.replace(rootDocLink, (_match, section) => docsHref(prefix, section))
     if (next !== raw) await writeFile(file, next, 'utf8')
   }
 }
 
 async function rewriteCurrentDocLinks(root, version) {
   const files = await walkFiles(root)
-  const versionedAbsoluteDocLink = new RegExp(`/guildhall/versions/${version}/(guide|reference|web-ui|cli|levers|releases)/`, 'g')
-  const versionedRootRelativeDocLink = new RegExp(`(?<=["'(])/versions/${version}/(guide|reference|web-ui|cli|levers|releases)/`, 'g')
+  const versionedRootDocLink = new RegExp(`(?<=["'(])/(?:guildhall/)?versions/${version}/(guide|reference|web-ui|cli|levers|releases)/`, 'g')
   for (const file of files) {
     const raw = await readFile(file, 'utf8')
-    const next = raw
-      .replace(versionedAbsoluteDocLink, '/guildhall/$1/')
-      .replace(versionedRootRelativeDocLink, '/$1/')
+    const next = raw.replace(versionedRootDocLink, (_match, section) => docsHref('', section))
     if (next !== raw) await writeFile(file, next, 'utf8')
   }
 }
@@ -119,7 +125,7 @@ async function rewriteNextHomeStableLinks(root, currentVersion) {
   if (!existsSync(file)) return
   const raw = await readFile(file, 'utf8')
   const next = raw
-    .replaceAll(`/guildhall/next/releases/${currentVersion}`, `/guildhall/releases/${currentVersion}`)
+    .replaceAll(`/guildhall/next/releases/${currentVersion}`, `/releases/${currentVersion}`)
     .replaceAll(`/next/releases/${currentVersion}`, `/releases/${currentVersion}`)
   if (next !== raw) await writeFile(file, next, 'utf8')
 }

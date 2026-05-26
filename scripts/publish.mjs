@@ -258,7 +258,7 @@ function updatePublicDocsVersion(version) {
   const releasesPath = join(ROOT, 'docs/releases/index.md')
 
   replaceFileText(homePath, (raw) => raw
-    .replace(/\/guildhall\/versions\/\d+\.\d+\.\d+(-[\w.]+)?\//g, `/guildhall/versions/${version}/`)
+    .replace(/\/(?:guildhall\/)?versions\/\d+\.\d+\.\d+(-[\w.]+)?\//g, `/versions/${version}/`)
     .replace(/Guildhall \d+\.\d+\.\d+(-[\w.]+)?/g, `Guildhall ${version}`))
 
   replaceFileText(releasesPath, (raw) => raw

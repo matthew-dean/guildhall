@@ -2801,7 +2801,8 @@ export class Orchestrator {
         : []),
       ...(beforeStatus === 'in_progress'
         ? ['', renderTaskScopedVerificationInstructions({
-            projectPath: activeWorktreePath,
+            projectPath: activeTaskWorktreeProjectPath,
+            verificationCwd: activeWorktreePath,
             successGates: effectiveTaskVerificationCommands,
           })]
         : []),
@@ -2875,6 +2876,9 @@ export class Orchestrator {
           : {}),
         ...(effectiveTaskVerificationCommands !== undefined
           ? { current_task_verification_commands: effectiveTaskVerificationCommands }
+          : {}),
+        ...(effectiveTaskVerificationCommands !== undefined
+          ? { current_task_verification_cwd: activeWorktreePath }
           : {}),
         ...(scopeDecisionTexts.length > 0
           ? { current_task_resolved_scope_decisions: scopeDecisionTexts }

@@ -76,10 +76,12 @@ export function parseRoute(p: string, state: unknown = null): Route {
     const normalized = suffix
     if (normalized === '/overview')
       return { kind: 'project', projectId, view: 'overview', sub: null, drawerTaskId: null, backgroundPath: null }
+    if (normalized === '/overview/inbox')
+      return { kind: 'project', projectId, view: 'overview', sub: 'inbox', drawerTaskId: null, backgroundPath: null }
     if (normalized === '/thread')
       return { kind: 'project', projectId, view: 'thread', sub: null, drawerTaskId: null, backgroundPath: null }
     if (normalized === '/inbox' || normalized === '/notifications')
-      return { kind: 'project', projectId, view: 'inbox', sub: null, drawerTaskId: null, backgroundPath: null }
+      return { kind: 'project', projectId, view: 'overview', sub: 'inbox', drawerTaskId: null, backgroundPath: null }
     if (normalized === '/work')
       return { kind: 'project', projectId, view: 'work', sub: null, drawerTaskId: null, backgroundPath: null }
     if (normalized === '/work/board')
@@ -117,10 +119,12 @@ export function parseRoute(p: string, state: unknown = null): Route {
     : projectPath
   if (normalized === '/overview')
     return { kind: 'project', projectId: null, view: 'overview', sub: null, drawerTaskId: null, backgroundPath: null }
+  if (normalized === '/overview/inbox')
+    return { kind: 'project', projectId: null, view: 'overview', sub: 'inbox', drawerTaskId: null, backgroundPath: null }
   if (normalized === '/thread')
     return { kind: 'project', projectId: null, view: 'thread', sub: null, drawerTaskId: null, backgroundPath: null }
   if (normalized === '/inbox' || normalized === '/notifications')
-    return { kind: 'project', projectId: null, view: 'inbox', sub: null, drawerTaskId: null, backgroundPath: null }
+    return { kind: 'project', projectId: null, view: 'overview', sub: 'inbox', drawerTaskId: null, backgroundPath: null }
   if (normalized === '/work')
     return { kind: 'project', projectId: null, view: 'work', sub: null, drawerTaskId: null, backgroundPath: null }
   if (normalized === '/work/board')

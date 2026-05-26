@@ -9,6 +9,7 @@ const nextVersion = resolveNextMinorVersion(stableVersion)
 const currentBase = ''
 const stableBase = `/versions/${stableVersion}`
 const nextBase = '/next'
+const docsBase = normalizeDocsBase(process.env.GUILDHALL_DOCS_BASE ?? '/')
 const archiveVersionItems = listVersionDirs()
   .filter((version) => version !== stableVersion)
   .map((version) => ({ text: `v${version}`, link: `/versions/${version}/guide/quick-start` }))
@@ -69,6 +70,16 @@ function listVersionDirs(): string[] {
   return readdirSync(versionDir)
     .filter((name) => /^\d+\.\d+\.\d+(-[\w.]+)?$/.test(name))
     .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+}
+
+function normalizeDocsBase(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed || trimmed === '/') return '/'
+  return `/${trimmed.replace(/^\/+|\/+$/g, '')}/`
+}
+
+function withDocsBase(path: string): string {
+  return `${docsBase}${path.replace(/^\/+/, '')}`
 }
 
 const guideStartItems = [
@@ -414,7 +425,7 @@ export default defineConfig({
   description: 'Local service for unattended software work with visible state, reviewer guardrails, and inspectable transcripts.',
   cleanUrls: true,
   lastUpdated: true,
-  base: '/guildhall/',
+  base: docsBase,
   ignoreDeadLinks: [
     // VitePress normalizes `/next/guide/` to this internal target during
     // dead-link checks even though `docs/next/guide/index.md` exists.
@@ -441,11 +452,11 @@ export default defineConfig({
   },
   appearance: 'dark',
   head: [
-    ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: '/guildhall/icons/genfavicon-32.png' }],
-    ['link', { rel: 'icon', type: 'image/png', sizes: '16x16', href: '/guildhall/icons/genfavicon-16.png' }],
-    ['link', { rel: 'icon', type: 'image/x-icon', href: '/guildhall/favicon.ico', sizes: 'any' }],
-    ['link', { rel: 'apple-touch-icon', sizes: '180x180', href: '/guildhall/apple-touch-icon.png' }],
-    ['link', { rel: 'manifest', href: '/guildhall/site.webmanifest' }],
+    ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: withDocsBase('icons/genfavicon-32.png') }],
+    ['link', { rel: 'icon', type: 'image/png', sizes: '16x16', href: withDocsBase('icons/genfavicon-16.png') }],
+    ['link', { rel: 'icon', type: 'image/x-icon', href: withDocsBase('favicon.ico'), sizes: 'any' }],
+    ['link', { rel: 'apple-touch-icon', sizes: '180x180', href: withDocsBase('apple-touch-icon.png') }],
+    ['link', { rel: 'manifest', href: withDocsBase('site.webmanifest') }],
     ['meta', { name: 'theme-color', content: '#141418' }],
   ],
   themeConfig: {

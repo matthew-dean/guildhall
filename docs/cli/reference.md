@@ -3,8 +3,8 @@ title: CLI reference
 help_topic: reference.cli
 help_summary: |
   Every shipped `guildhall` subcommand — init, register, unregister, list,
-  run, serve, start, open, stop, config, corpus-map, memory migration,
-  task-state migration, MCP bridge, and model-bakeoff — with flags and examples.
+  run, serve, start, open, stop, config, corpus-map, migrations,
+  MCP bridge, and model-bakeoff — with flags and examples.
 ---
 
 # CLI reference
@@ -135,11 +135,63 @@ task transitions.
 guildhall memory compact-project-state --apply .
 ```
 
+## `guildhall migrate status [id|path]`
+
+Show which versioned migrations a project still needs, which ones have already
+run, and whether any migration is blocking a newer runtime.
+
+`Blocked` means the project is on a storage layout or schema that this runtime
+cannot safely use. Review the plan and migrate before starting or resuming
+Guildhall work for that project.
+
+```bash
+guildhall migrate status .
+guildhall migrate status my-app
+guildhall migrate status --migration 0.8.0/codex-agent-bridge .
+```
+
+## `guildhall migrate plan [id|path]`
+
+Print the same migration information as `status`, with wording meant for
+reviewing what would happen before you apply anything.
+
+```bash
+guildhall migrate plan .
+guildhall migrate plan --all
+```
+
+## `guildhall migrate apply [id|path]`
+
+Apply pending migrations through the generic migration registry. By default,
+Guildhall only runs migrations marked as automatic. Migrations that change
+project-facing files, such as adding `AGENTS.md` bridge instructions or moving
+old `memory/` content, stay pending until you opt in.
+
+Some prompt-required migrations are also required before run. Guildhall still
+asks before writing them so you can see the exact project files it will touch,
+but the project cannot start until they are applied.
+
+```bash
+guildhall migrate apply .
+guildhall migrate apply --include-prompt .
+guildhall migrate apply --include-prompt --migration 0.8.0/codex-agent-bridge .
+guildhall migrate apply --all
+```
+
+Flags:
+
+- `--all` — run the command against every registered project.
+- `--include-prompt` — also apply migrations that normally require a prompt or
+  explicit confirmation.
+- `--migration <id>` — limit the command to one migration id.
+
 ## `guildhall migrate task-state [path]`
 
-Preview or apply the 0.8.0 cleanup for older task files. The migration keeps
-the compact task story in `./.guildhall/TASKS.json` and moves bulkier receipts
-into local project history.
+Preview or apply the 0.8.0 cleanup for older task files. This compatibility
+command remains available, but new release migrations run through
+`guildhall migrate status|plan|apply`. The migration keeps the compact task
+story in `./.guildhall/TASKS.json` and moves bulkier receipts into local
+project history.
 
 ```bash
 guildhall migrate task-state .
@@ -210,6 +262,8 @@ guildhall init ~/projects/my-app
 guildhall run my-app --domain ui
 guildhall serve
 guildhall corpus-map refresh --semantic .
+guildhall migrate status .
+guildhall migrate apply --include-prompt .
 guildhall migrate task-state --apply .
 guildhall model-bakeoff artifacts/model-bakeoff/report.json
 guildhall model-bakeoff --context-indexer

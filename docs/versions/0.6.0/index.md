@@ -15,9 +15,9 @@ description: Local service where a guild of AI helpers plans, builds, reviews, a
       <p class="gh-home-lede">Guildhall runs over your projects from a local service. It surveys the repo, drafts plans, frames tasks, assigns workers, inspects the results, and keeps every important decision attached to the work.</p>
       <div class="gh-home-hero__actions">
         <div class="gh-cta-row">
-          <a class="gh-cta gh-cta-primary" href="/guildhall/versions/0.6.0/guide/quick-start">Get started</a>
-          <a class="gh-cta gh-cta-secondary" href="/guildhall/versions/0.6.0/guide/new-project">New project</a>
-          <a class="gh-cta gh-cta-secondary" href="/guildhall/versions/0.6.0/guide/existing-project">Existing project</a>
+          <a class="gh-cta gh-cta-primary" href="/versions/0.6.0/guide/quick-start">Get started</a>
+          <a class="gh-cta gh-cta-secondary" href="/versions/0.6.0/guide/new-project">New project</a>
+          <a class="gh-cta gh-cta-secondary" href="/versions/0.6.0/guide/existing-project">Existing project</a>
           <a class="gh-cta gh-cta-secondary" href="https://github.com/matthew-dean/guildhall">Read the code</a>
         </div>
         <ul class="gh-home-hero__badges" aria-label="Guildhall strengths">

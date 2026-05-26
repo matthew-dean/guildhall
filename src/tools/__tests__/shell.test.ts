@@ -274,6 +274,57 @@ describe('shellTool — engine-tool interface', () => {
     })
   })
 
+  it('shows the executed working directory in shell output after cwd remapping', async () => {
+    const { projectPath, worktreePath } = makeTaskScopedDirs()
+    const result = await shellTool.execute(
+      { command: 'pwd', cwd: projectPath, timeoutMs: 5000 },
+      {
+        cwd: projectPath,
+        metadata: {
+          current_task_project_path: projectPath,
+          current_task_worktree_path: worktreePath,
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain(`Working directory: ${worktreePath}`)
+  })
+
+  it('runs authoritative verification from the stored verification cwd when cwd is omitted', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guildhall-shell-verification-cwd-'))
+    const frontend = path.join(root, 'frontend')
+    fs.mkdirSync(frontend, { recursive: true })
+    fs.writeFileSync(
+      path.join(frontend, 'package.json'),
+      JSON.stringify({
+        name: 'frontend',
+        scripts: { build: "node -e \"console.log('scoped-build-ran')\"" },
+      }),
+    )
+
+    const result = await shellTool.execute(
+      { command: 'pnpm build', timeoutMs: 5000 },
+      {
+        cwd: frontend,
+        metadata: {
+          current_task_verification_commands: ['pnpm --dir frontend build'],
+          current_task_verification_cwd: root,
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain(`Working directory: ${root}`)
+    expect(result.output).toContain('scoped-build-ran')
+    expect(result.metadata).toMatchObject({
+      requestedCwd: frontend,
+      executedCwd: root,
+      executedCommand: 'pnpm --dir frontend build',
+      usedAuthoritativeCommand: true,
+    })
+  })
+
   it('remaps omitted workspace cwd into the isolated worktree root for scoped authoritative commands', async () => {
     const { workspacePath, projectPath, worktreePath, worktreeProjectPath } =
       makeNestedTaskScopedDirs()

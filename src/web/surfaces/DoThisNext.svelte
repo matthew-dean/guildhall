@@ -158,7 +158,7 @@
           verb: item.title,
           why: item.detail ?? '',
           button: 'Open',
-          href: item.actionHref ?? '/inbox',
+          href: item.actionHref ?? '/overview/inbox',
         }
     }
   }
@@ -203,7 +203,7 @@
               href: projectActionHref(top.prescription.href),
               severity: top.item.severity,
               moreLabel: moreButtonLabel,
-              moreHref: projectActionHref('/inbox'),
+              moreHref: projectActionHref('/overview/inbox'),
             }
           })()
         : null,
@@ -240,7 +240,7 @@
           {source.button} →
         </Button>
         {#if moreCount > 0}
-          <Button variant="secondary" size="sm" onclick={() => go(projectActionHref('/inbox'))}>
+          <Button variant="secondary" size="sm" onclick={() => go(projectActionHref('/overview/inbox'))}>
             {source.moreLabel}
           </Button>
         {/if}
