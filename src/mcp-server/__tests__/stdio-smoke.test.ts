@@ -9,7 +9,9 @@ import { describe, expect, it } from 'vitest'
 describe('guildhall mcp serve', () => {
   it('serves Guildhall resources over stdio', async () => {
     const root = mkdtempSync(join(tmpdir(), 'guildhall-mcp-stdio-'))
-    const bundleRoot = mkdtempSync(join(resolve('.guildhall/tmp'), 'mcp-stdio-cli-'))
+    const bundleParent = resolve('.guildhall/tmp')
+    mkdirSync(bundleParent, { recursive: true })
+    const bundleRoot = mkdtempSync(join(bundleParent, 'mcp-stdio-cli-'))
     let client: Client | undefined
     try {
       const cliPath = join(bundleRoot, 'cli.js')
