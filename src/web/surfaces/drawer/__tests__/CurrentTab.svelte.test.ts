@@ -541,8 +541,42 @@ describe('CurrentTab', () => {
       },
     ])
 
+    expect(screen.getByText('Live progress')).toBeTruthy()
     expect(screen.getByText('In flight')).toBeTruthy()
+    expect(screen.getByText('Activity log')).toBeTruthy()
     expect(screen.getByText('Started write checkpoint')).toBeTruthy()
+  })
+
+  it('keeps start and finish events visible inside an explicit activity log', () => {
+    renderCurrent([
+      {
+        id: 'turn-live',
+        kind: 'inflight',
+        at: now,
+        persona: 'worker',
+        status: 'active',
+        phase: 'inflight',
+        taskId: 'task-link-editor',
+        taskTitle: 'Knit: add link editor controls',
+        taskStatus: 'in_progress',
+        summary: 'Worker is editing files.',
+        liveAgent: {
+          name: 'worker-agent',
+          startedAt: now,
+          lastEventLabel: 'Finished log progress',
+          lastEventAt: '2026-05-19T15:01:00.000Z',
+        },
+        activity: [
+          { at: now, label: 'Started log progress', tone: 'running' },
+          { at: '2026-05-19T15:01:00.000Z', label: 'Finished log progress', tone: 'ok' },
+        ],
+      },
+    ])
+
+    expect(screen.getByText('Current status')).toBeTruthy()
+    expect(screen.getByText('Activity log')).toBeTruthy()
+    expect(screen.getByText('Started log progress')).toBeTruthy()
+    expect(screen.getByText('Finished log progress')).toBeTruthy()
   })
 
   it('shows local model startup waits as still active instead of silently stuck', () => {

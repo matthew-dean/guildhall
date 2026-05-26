@@ -48,6 +48,24 @@ async function readQueue(): Promise<TaskQueue> {
   return TaskQueue.parse(JSON.parse(raw))
 }
 
+function buildableSpec(extra = ''): string {
+  return [
+    '## Summary',
+    'Add a ghost button variant.',
+    '## Acceptance Criteria',
+    '1. Renders.',
+    '## Completion Boundary',
+    'Product outcome: Users can choose a ghost button style where this task applies.',
+    'What Guildhall can complete in code: Add the repo-local button styling and usage contract.',
+    'External dependencies: None.',
+    'Owner-only setup: None.',
+    'Verification environment: Local automated tests and review in the app.',
+    'What counts as done: The ghost button variant renders and can be reviewed locally.',
+    'What must be split or blocked: Nothing to split.',
+    extra,
+  ].filter(Boolean).join('\n')
+}
+
 describe('createExploringTask', () => {
   it('creates a new task in exploring status and seeds the transcript', async () => {
     const result = await createExploringTask({
@@ -137,6 +155,39 @@ describe('createExploringTask', () => {
     expect(queue.tasks[0]!.title).toBe('Short Title')
   })
 
+  it('classifies ambiguous policy requests and asks whether the user wants spec or implementation', async () => {
+    await createExploringTask({
+      memoryDir,
+      ask: 'We should have a system-wide policy of how much FLL charges on overhead for maintenance fees etc.',
+      domain: 'policy',
+      projectPath: '/projects/fll',
+      title: 'Set FLL overhead charge policy',
+    })
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.requestIntake).toMatchObject({
+      intent: 'ambiguous_spec_or_implementation',
+      recommendedNextAction: 'ask_clarifying_question',
+    })
+    expect(task.requestIntake?.componentStack.map(component => component.kind)).toEqual([
+      'policy_decision',
+      'documented_spec',
+      'implementation',
+      'verification',
+    ])
+    expect(task.openQuestions?.[0]).toMatchObject({
+      kind: 'choice',
+      subject: 'Policy request scope',
+      prompt: expect.stringContaining('draft the FLL overhead policy first'),
+      choices: [
+        'Draft the policy/spec first',
+        'Draft the policy and create linked implementation tasks',
+        'Apply the policy now',
+      ],
+    })
+  })
+
   it('rejects reusing an existing task id', async () => {
     await createExploringTask({
       memoryDir,
@@ -168,7 +219,17 @@ describe('approveSpec', () => {
     })
     const queue = await readQueue()
     queue.tasks[0]!.status = 'spec_review'
-    queue.tasks[0]!.spec = '## Summary\nAdd a ghost button variant.\n## AC\n1. Renders.'
+    queue.tasks[0]!.spec = buildableSpec()
+    queue.tasks[0]!.productBrief = {
+      userJob: 'Use a lower-emphasis button action.',
+      successMetric: 'A ghost button variant is available and reviewable.',
+      antiPatterns: [],
+      authoredBy: 'spec-agent',
+      authoredAt: new Date().toISOString(),
+    }
+    queue.tasks[0]!.acceptanceCriteria = [
+      { id: 'AC-1', description: 'Ghost button renders.', verifiedBy: 'review', met: false },
+    ]
     await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
   })
 
@@ -178,6 +239,72 @@ describe('approveSpec', () => {
     expect(result.newStatus).toBe('ready')
     const queue = await readQueue()
     expect(queue.tasks[0]!.status).toBe('ready')
+  })
+
+  it('approves specs where Completion Boundary is the final section', async () => {
+    const queue = await readQueue()
+    queue.tasks[0]!.spec = buildableSpec()
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
+  })
+
+  it('splits a split-required spec into a parent task and child tasks when approved', async () => {
+    const queue = await readQueue()
+    const parent = queue.tasks[0]!
+    parent.parentGoalId = 'goal-task-001'
+    parent.sizePlan = {
+      taskId: 'task-001',
+      score: 8,
+      band: 'epic',
+      action: 'split_required',
+      factors: [],
+      recommendedChildren: [
+        {
+          title: 'Implement the billing settings workflow',
+          reason: 'Keep the user-facing workflow small enough for UX review.',
+          suggestedDomain: 'frontend',
+          dependsOn: [],
+        },
+        {
+          title: 'Add the admin subscription API contract',
+          reason: 'Separate API compatibility and security review from UI work.',
+          suggestedDomain: 'backend',
+          dependsOn: ['Implement the billing settings workflow'],
+        },
+      ],
+      reviewBudgetHint: 'release_critical',
+      reasons: ['Task size score: 8.'],
+      createdAt: '2026-05-25T12:00:00.000Z',
+      createdBy: 'task-sizing',
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('parent')
+    const updated = await readQueue()
+    expect(updated.tasks[0]!.status).toBe('parent')
+    expect(updated.tasks.map(task => task.title)).toEqual([
+      'Add ghost button',
+      'Implement the billing settings workflow',
+      'Add the admin subscription API contract',
+    ])
+    expect(updated.tasks[0]!.sizePlan?.recommendedChildren.map(child => child.createdTaskId)).toEqual([
+      'task-001-split-implement-the-billing-settings-workflow',
+      'task-001-split-add-the-admin-subscription-api-contract',
+    ])
+    expect(updated.tasks[1]).toMatchObject({
+      status: 'exploring',
+      parentGoalId: 'goal-task-001',
+      origination: 'system',
+      proposedBy: 'task-sizing',
+    })
+    expect(updated.tasks[2]!.dependsOn).toEqual(['task-001-split-implement-the-billing-settings-workflow'])
   })
 
   it('records an approval note on the task when provided', async () => {
@@ -206,6 +333,40 @@ describe('approveSpec', () => {
     )
     expect(transcript).toContain('Spec approved')
     expect(transcript).toContain('ship it')
+  })
+
+  it('describes split approval in plain language in the transcript', async () => {
+    const queue = await readQueue()
+    const parent = queue.tasks[0]!
+    parent.parentGoalId = 'goal-task-001'
+    parent.sizePlan = {
+      taskId: 'task-001',
+      score: 8,
+      band: 'epic',
+      action: 'split_required',
+      factors: [],
+      recommendedChildren: [
+        {
+          title: 'Draft the policy',
+          reason: 'Separate the decision from implementation.',
+          suggestedDomain: 'product',
+          dependsOn: [],
+        },
+      ],
+      reviewBudgetHint: 'release_critical',
+      reasons: ['Task size score: 8.'],
+      createdAt: '2026-05-25T12:00:00.000Z',
+      createdBy: 'task-sizing',
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    const transcript = await fs.readFile(
+      getProjectTranscriptPath(tmpDir, 'exploring', 'task-001'),
+      'utf-8',
+    )
+    expect(transcript).toContain('Spec approved. Guildhall created the listed tasks and kept this as the parent task.')
   })
 
   it('refuses to approve a task that has no spec', async () => {

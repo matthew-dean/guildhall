@@ -141,9 +141,12 @@ append a structured escalation record, and write a typed progress entry.
 Never use notes or manual status changes for this — the orchestrator will not
 halt routing unless the escalation is recorded properly.
 Before calling raise-escalation, shape the blocker into: who acts next, the one
-next action, and why Guildhall cannot do that action itself. If Guildhall can
-run a command, inspect a file, save proof, retry a gate, or resume from a
-checkpoint, do that instead of asking the owner.
+next action, and why Guildhall cannot do that action itself. If the blocker is
+external setup, credentials, provider dashboard work, or live service
+configuration, include externalChecklist with the concrete outside-Guildhall
+steps the owner must finish before Guildhall can verify or continue. If
+Guildhall can run a command, inspect a file, save proof, retry a gate, or resume
+from a checkpoint, do that instead of asking the owner.
 
 ## Working style
 - Be conservative about owner intent and product risk, not about routine

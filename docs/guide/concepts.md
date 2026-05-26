@@ -32,6 +32,26 @@ fixed lifecycle: `proposed → exploring → spec_review → ready → in_progre
 review → gate_check → done` (terminal: `done`, `shelved`, `blocked`). See
 [Task lifecycle](./task-lifecycle).
 
+Guildhall also sizes tasks. Tiny and small work can usually move as one unit;
+large work gets split recommendations; epic work becomes a parent-sized task
+with linked child tasks.
+
+## Request shape
+
+How Guildhall reads a New Request before it becomes work. The request might be
+a task, a question, a settings change, a repair, a broad intake, or an
+ambiguous "spec or implementation?" ask.
+
+When the shape is ambiguous, Guildhall records the uncertainty and asks a
+focused question instead of guessing.
+
+## Component stack
+
+The linked pieces inside a broader request: policy decision, documented spec,
+implementation surfaces, API or data changes, docs, release work, and
+verification. A component stack helps Guildhall keep related work connected
+without turning it into one oversized task.
+
 ## Pressure-Test Intake
 
 The one-question-at-a-time intake path for broad releases, features, and risky

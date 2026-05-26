@@ -13,6 +13,7 @@ import { z } from 'zod'
 export const usageSnapshotSchema = z.object({
   input_tokens: z.number().int().nonnegative().default(0),
   output_tokens: z.number().int().nonnegative().default(0),
+  cached_input_tokens: z.number().int().nonnegative().default(0).optional(),
 })
 
 export type UsageSnapshot = z.infer<typeof usageSnapshotSchema>

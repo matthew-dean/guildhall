@@ -33,6 +33,7 @@ import { parseSseStream } from './sse.js'
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8080/v1'
 const MAX_RETRIES = 3
 const BASE_RETRY_DELAY_MS = 1_000
+const CAPACITY_RETRY_DELAY_MS = 5_000
 const MAX_RETRY_DELAY_MS = 30_000
 const DEFAULT_REQUEST_TIMEOUT_MS = 300_000
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503])
@@ -82,7 +83,7 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
       } catch (err) {
         const isLast = attempt === this.maxRetries
         if (isLast || !(err instanceof OpenAIApiError) || !err.retryable) throw err
-        const delay = Math.min(MAX_RETRY_DELAY_MS, BASE_RETRY_DELAY_MS * 2 ** attempt)
+        const delay = retryDelayMs(err, attempt)
         yield {
           type: 'retry',
           message: err.message,
@@ -105,17 +106,53 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
       stream: true,
       ...tokenLimitFieldFor(request.model, request.max_tokens),
       ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+      ...(request.prompt_cache_key ? { prompt_cache_key: request.prompt_cache_key } : {}),
+      ...(request.response_format ? { response_format: request.response_format } : {}),
+      ...(request.reasoning_effort ? { reasoning_effort: request.reasoning_effort } : {}),
+      ...(request.reasoning ? { reasoning: request.reasoning } : {}),
+      ...(request.tool_choice ? { tool_choice: request.tool_choice } : {}),
+      stream_options: { include_usage: true },
     }
     if (tools) {
       body.tools = tools
-    } else {
-      body.stream_options = { include_usage: true }
     }
 
-    const abort = composeAbortSignal(this.requestTimeoutMs, request.signal)
-    let res: Response
+    let res = await this.postChatCompletions(body, request.signal)
+    if (!res.ok) {
+      let text = await res.text().catch(() => '')
+      if (request.prompt_cache_key && isUnsupportedPromptCacheKeyResponse(res.status, text)) {
+        const fallbackBody = { ...body }
+        delete fallbackBody.prompt_cache_key
+        res = await this.postChatCompletions(fallbackBody, request.signal)
+        if (res.ok) {
+          if (res.body == null) {
+            throw new OpenAIApiError('OpenAI-compatible API returned no body', null, false)
+          }
+          yield* consumeOpenAiSse(res.body)
+          return
+        }
+        text = await res.text().catch(() => '')
+      }
+      throw new OpenAIApiError(
+        `OpenAI-compatible API HTTP ${res.status}: ${text || res.statusText}`,
+        res.status,
+        RETRYABLE_STATUS.has(res.status),
+      )
+    }
+    if (res.body == null) {
+      throw new OpenAIApiError('OpenAI-compatible API returned no body', null, false)
+    }
+
+    yield* consumeOpenAiSse(res.body)
+  }
+
+  private async postChatCompletions(
+    body: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+  ): Promise<Response> {
+    const abort = composeAbortSignal(this.requestTimeoutMs, signal)
     try {
-      res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+      return await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${this.apiKey}`,
@@ -126,7 +163,7 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
         signal: abort.signal,
       })
     } catch (err) {
-      if (request.signal?.aborted) {
+      if (signal?.aborted) {
         throw new DOMException('Request aborted.', 'AbortError')
       }
       if (isAbortError(err)) {
@@ -140,19 +177,6 @@ export class OpenAICompatibleClient implements SupportsStreamingMessages {
     } finally {
       abort.dispose()
     }
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new OpenAIApiError(
-        `OpenAI-compatible API HTTP ${res.status}: ${text || res.statusText}`,
-        res.status,
-        RETRYABLE_STATUS.has(res.status),
-      )
-    }
-    if (res.body == null) {
-      throw new OpenAIApiError('OpenAI-compatible API returned no body', null, false)
-    }
-
-    yield* consumeOpenAiSse(res.body)
   }
 }
 
@@ -385,7 +409,11 @@ async function* consumeOpenAiSse(
         }
         finish_reason?: string | null
       }>
-      usage?: { prompt_tokens?: number; completion_tokens?: number }
+      usage?: {
+        prompt_tokens?: number
+        completion_tokens?: number
+        prompt_tokens_details?: { cached_tokens?: number }
+      }
     }
     try {
       chunk = JSON.parse(sse.data)
@@ -396,6 +424,8 @@ async function* consumeOpenAiSse(
     if (chunk.usage) {
       usage.input_tokens = chunk.usage.prompt_tokens ?? usage.input_tokens
       usage.output_tokens = chunk.usage.completion_tokens ?? usage.output_tokens
+      usage.cached_input_tokens =
+        chunk.usage.prompt_tokens_details?.cached_tokens ?? usage.cached_input_tokens
     }
 
     const choice = chunk.choices?.[0]
@@ -485,6 +515,22 @@ export function stripThinkBlocks(buf: string): [string, string] {
     }
   }
   return [cleaned, '']
+}
+
+function retryDelayMs(err: OpenAIApiError, attempt: number): number {
+  const baseDelay = isProviderCapacityError(err)
+    ? CAPACITY_RETRY_DELAY_MS
+    : BASE_RETRY_DELAY_MS
+  return Math.min(MAX_RETRY_DELAY_MS, baseDelay * 2 ** attempt)
+}
+
+function isUnsupportedPromptCacheKeyResponse(status: number, text: string): boolean {
+  return status === 400 && /prompt_cache_key|unknown parameter|extra inputs are not permitted/i.test(text)
+}
+
+function isProviderCapacityError(err: OpenAIApiError): boolean {
+  if (err.status === 429) return true
+  return /rate limit|too many requests|engine_overloaded|model busy|retry later/i.test(err.message)
 }
 
 function sleep(ms: number): Promise<void> {

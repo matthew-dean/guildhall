@@ -1,0 +1,21 @@
+id: single-copy-empty-state
+title: Single copy empty state
+task:
+  id: task-copy-empty-state
+  title: Clarify dashboard empty-state copy
+  description: Update one empty-state message on the dashboard.
+  priority: normal
+  changedFiles:
+    - src/web/surfaces/Dashboard.svelte
+  riskLanes:
+    - copy_clarity
+expected:
+  minScore: 2
+  action: proceed
+  requiredFactors:
+    - narrow_verification
+  minRecommendedChildren: 0
+labelGovernance:
+  labeledBy: task-sizing-seed
+  labeledAt: "2026-05-25"
+  reviewStatus: seed

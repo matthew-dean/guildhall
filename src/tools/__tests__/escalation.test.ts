@@ -92,6 +92,39 @@ describe('raiseEscalation', () => {
     expect(queue?.tasks[0]?.escalations[0]?.resolvedAt).toBeUndefined()
   })
 
+  it('stores external setup checklist steps on owner blockers', async () => {
+    const result = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'human_judgment_required',
+      summary: 'OAuth providers need external setup',
+      details: 'Guildhall can verify the code after the provider dashboards are configured.',
+      externalChecklist: [
+        {
+          id: 'google-oauth',
+          title: 'Create Google OAuth credentials',
+          detail: 'Add the client ID and secret to Supabase.',
+          owner: 'user',
+          status: 'todo',
+        },
+        {
+          id: 'apple-oauth',
+          title: 'Create Apple OAuth credentials',
+          owner: 'user',
+          status: 'todo',
+        },
+      ],
+    })
+
+    expect(result.success).toBe(true)
+    const { queue } = await readTasks({ tasksPath })
+    expect(queue?.tasks[0]?.escalations[0]?.externalChecklist).toMatchObject([
+      { id: 'google-oauth', title: 'Create Google OAuth credentials' },
+      { id: 'apple-oauth', title: 'Create Apple OAuth credentials' },
+    ])
+  })
+
   it('halts the task by setting status to blocked', async () => {
     await raiseEscalation({
       tasksPath,

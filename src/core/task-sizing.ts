@@ -1,0 +1,240 @@
+import { z } from 'zod'
+import type { Task } from './task.js'
+
+export const TaskSizeBand = z.enum(['tiny', 'small', 'medium', 'large', 'epic'])
+export type TaskSizeBand = z.infer<typeof TaskSizeBand>
+
+export const TaskSizeAction = z.enum([
+  'proceed',
+  'proceed_with_warning',
+  'split_recommended',
+  'split_required',
+  'ask_clarifying_question',
+])
+export type TaskSizeAction = z.infer<typeof TaskSizeAction>
+
+export const TaskSizeFactor = z.object({
+  id: z.string(),
+  label: z.string(),
+  weight: z.number().int().nonnegative(),
+  reason: z.string(),
+})
+export type TaskSizeFactor = z.infer<typeof TaskSizeFactor>
+
+export const TaskSplitRecommendation = z.object({
+  title: z.string(),
+  reason: z.string(),
+  dependsOn: z.array(z.string()).default([]),
+  suggestedDomain: z.string().optional(),
+  createdTaskId: z.string().optional(),
+})
+export type TaskSplitRecommendation = z.infer<typeof TaskSplitRecommendation>
+
+export const TaskSizePlan = z.object({
+  taskId: z.string(),
+  score: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(5), z.literal(8)]),
+  band: TaskSizeBand,
+  action: TaskSizeAction,
+  factors: z.array(TaskSizeFactor).default([]),
+  recommendedChildren: z.array(TaskSplitRecommendation).default([]),
+  reviewBudgetHint: z.enum(['lean', 'balanced', 'thorough', 'release_critical']).optional(),
+  reasons: z.array(z.string()).default([]),
+  createdAt: z.string(),
+  createdBy: z.string(),
+})
+export type TaskSizePlan = z.infer<typeof TaskSizePlan>
+
+export interface BuildTaskSizePlanInput {
+  task: Pick<Task, 'id' | 'title' | 'description' | 'priority' | 'spec' | 'acceptanceCriteria' | 'outOfScope'>
+  changedFiles?: readonly string[]
+  riskLanes?: readonly string[]
+  createdAt?: string
+  createdBy?: string
+}
+
+const UI_PATTERNS = /\b(ui|ux|screen|view|page|drawer|modal|form|button|settings|toolbar|dashboard|copy|docs?|browser)\b/i
+const DATA_PATTERNS = /\b(database|migration|migrate|backfill|schema|subscription|stored|persistence|analytics|telemetry)\b/i
+const API_PATTERNS = /\b(api|endpoint|route|webhook|contract|status code|admin)\b/i
+const RELEASE_PATTERNS = /\b(release|rollout|flag|canary|deploy|launch|fallback)\b/i
+const SECURITY_PATTERNS = /\b(auth|oauth|permission|privacy|pii|token|tenant|csrf|secret)\b/i
+
+export function buildTaskSizePlan(input: BuildTaskSizePlanInput): TaskSizePlan {
+  const text = taskText(input.task)
+  const files = [...new Set((input.changedFiles ?? []).map((file) => file.trim()).filter(Boolean))]
+  const lanes = [...new Set((input.riskLanes ?? []).map((lane) => lane.trim()).filter(Boolean))]
+  const factors: TaskSizeFactor[] = []
+
+  const outcomeCount = estimateOutcomeCount(text, input.task.acceptanceCriteria?.length ?? 0)
+  if (outcomeCount >= 3) {
+    factors.push({
+      id: 'multiple_outcomes',
+      label: 'Multiple outcomes',
+      weight: 2,
+      reason: `The task appears to contain ${outcomeCount} distinct outcomes.`,
+    })
+  }
+
+  if (files.length >= 5) {
+    factors.push({
+      id: 'many_surfaces',
+      label: 'Many files or surfaces',
+      weight: 2,
+      reason: `${files.length} likely files or surfaces are in scope.`,
+    })
+  } else if (files.length >= 3) {
+    factors.push({
+      id: 'several_surfaces',
+      label: 'Several files or surfaces',
+      weight: 1,
+      reason: `${files.length} likely files or surfaces are in scope.`,
+    })
+  }
+
+  if (lanes.length >= 5) {
+    factors.push({
+      id: 'many_risk_lanes',
+      label: 'Many risk lanes',
+      weight: 2,
+      reason: `${lanes.length} review lanes are likely relevant.`,
+    })
+  } else if (lanes.length >= 3) {
+    factors.push({
+      id: 'several_risk_lanes',
+      label: 'Several risk lanes',
+      weight: 1,
+      reason: `${lanes.length} review lanes are likely relevant.`,
+    })
+  }
+
+  if (DATA_PATTERNS.test(text) || RELEASE_PATTERNS.test(text) || files.some((file) => /migration|schema|release|rollout/i.test(file))) {
+    factors.push({
+      id: 'migration_or_release',
+      label: 'Migration or release risk',
+      weight: 2,
+      reason: 'The task mentions migration, persisted state, analytics, rollout, or release behavior.',
+    })
+  }
+
+  const domainHits = [
+    UI_PATTERNS.test(text) || files.some((file) => /\.(svelte|tsx|jsx|css)$/.test(file)),
+    DATA_PATTERNS.test(text),
+    API_PATTERNS.test(text) || files.some((file) => /api|route|endpoint/i.test(file)),
+    SECURITY_PATTERNS.test(text),
+  ].filter(Boolean).length
+  if (domainHits >= 3) {
+    factors.push({
+      id: 'cross_domain_work',
+      label: 'Cross-domain work',
+      weight: 2,
+      reason: 'The task crosses UI, API, data, security, or privacy boundaries.',
+    })
+  }
+
+  if ((input.task.acceptanceCriteria?.length ?? 0) <= 1 && files.length <= 1 && lanes.length <= 1) {
+    factors.push({
+      id: 'narrow_verification',
+      label: 'Narrow verification',
+      weight: 1,
+      reason: 'One main acceptance check and one likely surface keeps review focused.',
+    })
+  }
+
+  const rawWeight = factors.reduce((sum, factor) => sum + factor.weight, 0)
+  const score = scoreForWeight(rawWeight, input.task.priority)
+  const action = actionForScore(score)
+  const band = bandForScore(score)
+  const recommendedChildren = action === 'split_recommended' || action === 'split_required'
+    ? recommendChildren({ text, files, lanes })
+    : []
+
+  return TaskSizePlan.parse({
+    taskId: input.task.id,
+    score,
+    band,
+    action,
+    factors,
+    recommendedChildren,
+    reviewBudgetHint: score >= 8 ? 'release_critical' : score >= 5 ? 'thorough' : score >= 3 ? 'balanced' : 'lean',
+    reasons: [
+      `Task size score: ${score}.`,
+      action === 'proceed'
+        ? 'The task is small enough to work and review as one coherent unit.'
+        : action === 'proceed_with_warning'
+          ? 'The task can proceed, but reviewers should watch for scope creep.'
+          : action === 'split_recommended'
+            ? 'The task is coherent but large enough that child tasks would likely improve quality.'
+            : 'The task is too large for one high-quality agent pass and should become linked child tasks.',
+    ],
+    createdAt: input.createdAt ?? new Date().toISOString(),
+    createdBy: input.createdBy ?? 'task-sizing',
+  })
+}
+
+function taskText(task: BuildTaskSizePlanInput['task']): string {
+  return [
+    task.title,
+    task.description,
+    task.spec,
+    ...(task.acceptanceCriteria ?? []).map((criterion) => criterion.description),
+    ...(task.outOfScope ?? []),
+  ].filter(Boolean).join('\n')
+}
+
+function estimateOutcomeCount(text: string, acceptanceCount: number): number {
+  const verbs = text.match(/\b(add|create|update|migrate|document|ship|launch|implement|wire|build|remove|replace)\b/gi)?.length ?? 0
+  const connectorSplits = text.split(/\b(?:and|plus|also)\b|[;,]/i).filter((part) => part.trim().length > 12).length
+  return Math.max(acceptanceCount, Math.min(6, Math.max(1, verbs, connectorSplits)))
+}
+
+function scoreForWeight(weight: number, priority: Task['priority']): TaskSizePlan['score'] {
+  const adjusted = priority === 'critical' || priority === 'high' ? weight + 1 : weight
+  if (adjusted >= 7) return 8
+  if (adjusted >= 4) return 5
+  if (adjusted >= 2) return 3
+  if (adjusted >= 1) return 2
+  return 1
+}
+
+function bandForScore(score: TaskSizePlan['score']): TaskSizeBand {
+  if (score === 1) return 'tiny'
+  if (score === 2) return 'small'
+  if (score === 3) return 'medium'
+  if (score === 5) return 'large'
+  return 'epic'
+}
+
+function actionForScore(score: TaskSizePlan['score']): TaskSizeAction {
+  if (score <= 2) return 'proceed'
+  if (score === 3) return 'proceed_with_warning'
+  if (score === 5) return 'split_recommended'
+  return 'split_required'
+}
+
+function recommendChildren(input: { text: string; files: readonly string[]; lanes: readonly string[] }): TaskSplitRecommendation[] {
+  const children: TaskSplitRecommendation[] = []
+  const add = (title: string, reason: string, suggestedDomain?: string) => {
+    if (!children.some((child) => child.title === title)) children.push({ title, reason, suggestedDomain, dependsOn: [] })
+  }
+
+  if (/billing|subscription/i.test(input.text) || input.files.some((file) => /billing|subscription/i.test(file))) {
+    add('Implement the billing settings workflow', 'Keep the user-facing workflow small enough for UX review.', 'frontend')
+  }
+  if (API_PATTERNS.test(input.text) || input.files.some((file) => /api|route|endpoint/i.test(file))) {
+    add('Add the admin subscription API contract', 'Separate API compatibility and security review from UI work.', 'backend')
+  }
+  if (/migration|migrate|backfill|schema/i.test(input.text) || input.files.some((file) => /migration|schema/i.test(file))) {
+    add('Migrate existing workspace subscription data', 'Give data safety, rollback, and idempotency their own verification loop.', 'data')
+  }
+  if (/invite|email/i.test(input.text) || input.files.some((file) => /invite|email/i.test(file))) {
+    add('Implement invite email delivery', 'Keep messaging, delivery, and privacy review focused.', 'backend')
+  }
+  if (/analytics|telemetry|docs?|rollout/i.test(input.text) || input.lanes.includes('release_risk')) {
+    add('Update analytics documentation and rollout evidence', 'Keep docs truth and rollout evidence separate from implementation.', 'docs')
+  }
+
+  if (children.length === 0) {
+    add('Extract the first independently verifiable outcome', 'Start with the smallest user-visible or system-visible outcome.', undefined)
+    add('Extract the second independently verifiable outcome', 'Link this child after the first task proves its boundary.', undefined)
+  }
+  return children
+}

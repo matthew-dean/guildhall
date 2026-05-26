@@ -12,9 +12,9 @@ const servicePayload: ServiceDetail = {
   defaultProviderStatus: {
     preferredProvider: 'openai-api',
     preferredProviderLabel: 'OpenAI-compatible API',
-    activeModel: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+    activeModel: 'Qwen/Qwen3.5-35B-A3B',
     models: {
-      worker: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+      worker: 'Qwen/Qwen3.5-35B-A3B',
     },
   },
   projects: [
@@ -138,7 +138,7 @@ describe('ProjectsHome', () => {
 
     expect(screen.getByText('Models')).toBeTruthy()
     expect(screen.queryByText('OpenAI-compatible API')).toBeNull()
-    expect(screen.queryByText('Qwen3-235B-A22B-Instruct-2507')).toBeNull()
+    expect(screen.queryByText('Qwen3.5-35B-A3B')).toBeNull()
 
     await userEvent.click(screen.getByRole('button', { name: /open model settings/i }))
 
@@ -292,7 +292,7 @@ describe('ProjectsHome', () => {
     render(ProjectsHome)
     await screen.findByText('Fair Labor License')
 
-    const startButton = screen.getByRole('button', { name: /resume 1 task/i })
+    const startButton = screen.getByRole('button', { name: /^resume$/i })
     expect(startButton.classList.contains('v-agent')).toBe(true)
     await userEvent.click(startButton)
     await userEvent.click(screen.getAllByRole('button', { name: /stop/i })[0]!)
@@ -364,7 +364,7 @@ describe('ProjectsHome', () => {
     render(ProjectsHome)
     await screen.findByText('Fair Labor License')
 
-    await userEvent.click(screen.getByRole('button', { name: /resume 1 task/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^resume$/i }))
     await screen.findByText('model unavailable')
     await userEvent.click(screen.getByRole('button', { name: /stop/i }))
     await screen.findByText('stop failed')

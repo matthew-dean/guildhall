@@ -317,7 +317,7 @@ export function summarizeProjectCard(
       : running
         ? 'Stop'
         : counts.active > 0
-          ? `Resume ${counts.active} ${counts.active === 1 ? 'task' : 'tasks'}`
+          ? 'Resume'
           : counts.total === 0
             ? 'Start intake'
             : null,

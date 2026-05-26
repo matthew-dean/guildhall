@@ -113,6 +113,7 @@
   --chip-danger-fg: var(--danger);
   --chip-accent-bg: #584ab0;
   --chip-accent-fg: #fbfaff;
+  --chip-status-on-dark-fg: rgb(255 255 255 / 0.88);
 
   /* status stripes — saturated 3px left borders for cards/rows.
      Kept as solid colors (not tints) so the stripe remains legible on

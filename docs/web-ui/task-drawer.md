@@ -13,14 +13,18 @@ The task drawer opens when you click a task card. It keeps the current state,
 spec, transcript, reviews, history, and provenance for one task in the same
 place so you do not have to reconstruct what happened from scattered logs.
 
+The header starts with a compact project breadcrumb. The project name is the
+prefix when Guildhall knows it; the project id is the fallback. The task id stays
+visible beside the title because split tasks can have similar names.
+
 ## Tabs
 
 | Tab | What it answers |
 |---|---|
 | **Now** | What is happening right now? Shows active handoffs, questions, live work, or resume actions when current context exists. |
 | **Spec** | What is the task supposed to accomplish? Shows intent, acceptance criteria, and hard or soft gates. Editable when the task status allows it. |
-| **Journey** | What happened from start to finish? Shows the planned review, worker pass, changed files, reviewer pass, verification, and outcome as a readable story. |
-| **Transcript** | What did the agent actually say? Shows the exploring conversation and durable task notes. |
+| **Journey** | What happened from start to finish? Shows task size, split recommendations, planned review, worker pass, changed files, reviewer pass, verification, done summary, and outcome as a readable story. |
+| **Transcript** | What did the agent actually say? Shows the source conversation and durable task notes. Once a task is done, Journey becomes the friendly default and Transcript becomes backup evidence. |
 | **Experts** | Who reviewed this and what did they think? Shows applicable guilds, review status, and reviewer feedback. |
 | **History** | What does the lower-level log say? Shows revisions, gate output, and escalations. |
 | **Provenance** | Which project policies shaped this task? Shows lever positions, who set them, and when. |
@@ -36,6 +40,60 @@ The card starts small on purpose. You can see the shape of the review without
 reading a wall of process. If you want the details, expand it to see reviewer
 groups, deterministic checks, required evidence, and any lenses Guildhall chose
 not to use.
+
+## Task size
+
+When Guildhall has sized a task, Journey shows the score in plain language:
+tiny, small, medium, large, or epic. Small work can move ahead. Medium work gets
+a little extra caution. Large work gets split recommendations. Epic work shows
+the linked child tasks Guildhall created so the coordinator can keep each child
+task clear, reviewable, and tied back to the same parent task. If an older task
+has a split-required plan but has not been split yet, Overview says it is
+ready to split, shows the tasks it will create, and offers **Split this task**.
+
+For new work, that button should be the exception. If a spec says the work is
+more than one task, approving the spec creates those tasks and leaves the
+original as the parent task.
+
+The point is not ceremony. It is to stop one task from quietly turning into five
+different jobs with one tired reviewer at the end.
+
+## Request shape
+
+For tasks created from **New request**, Journey can show how Guildhall read the
+ask before it became work. If the request might mean "write a policy/spec" or
+"implement the thing," Guildhall records that ambiguity, names the pieces that
+fit together, and asks a focused question before pretending it knows.
+
+Those pieces are the component stack: the policy decision, spec, implementation
+surfaces, data or API changes, docs, release work, and verification that may
+need to become linked child tasks. It is a small breadcrumb trail for why the
+coordinator split the work, asked a question, or kept it as one task.
+
+Overview also lets you move through the hierarchy. Parent-task, dependency, and
+child-task links replace the open drawer task while keeping the same project
+page behind it, so you can walk the split without losing your place.
+
+## Done tasks
+
+When a task is done, Guildhall writes a compact done-task summary bundle. Journey
+shows the useful version first: what happened, what changed, what checked it,
+what reviewers saw, and what residue is still open.
+
+Transcript is still available as the source conversation, but it stops being the
+main artifact after completion. Older transcript bodies can be compacted into
+summary plus evidence references; if full evidence is no longer available,
+Guildhall says that directly instead of pretending.
+
+## Changed files
+
+Journey lists changed files from the worker checkpoint and git story. Directories
+stay out of that list, because they are not files you can inspect.
+
+Click a file to read it inline. Guildhall reads from the project or the task
+worktree only, caps large previews, and tells you when a file cannot be read.
+The current viewer is intentionally simple; a richer diff view belongs on top of
+a real code/diff viewer library instead of a hand-rolled renderer.
 
 ## When a task is stuck
 

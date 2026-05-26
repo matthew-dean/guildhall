@@ -9,6 +9,7 @@
   import ProjectCard from '../lib/ProjectCard.svelte'
   import SideDrawer from '../lib/SideDrawer.svelte'
   import Tooltip from '../lib/Tooltip.svelte'
+  import WorkMixChart from '../lib/WorkMixChart.svelte'
   import { avatarToneForRole } from '../lib/avatar-palette.js'
   import { summarizeProjects, type ProjectCardSummary } from '../lib/project-summary.js'
   import { projectHref } from '../lib/project-routes.js'
@@ -252,10 +253,6 @@
     return `${count} running now`
   }
 
-  function chartFlex(count: number): string {
-    return `flex: ${Math.max(0, count)} 1 0;`
-  }
-
   function projectSparkTitle(project: ProjectCardSummary): string {
     const running = project.canStop || optimisticRuns[project.id]
     return `${project.name}: ${running ? 'running now' : 'not running now'}. ${project.activityLabel}`
@@ -424,39 +421,44 @@
           </div>
           <span class="panel-value">{countLabel(readyTaskCount, 'ready task')}</span>
         </div>
-        <div class="work-chart" aria-label={`Work mix across projects: ${overview.active} active, ${readyTaskCount} ready, ${needsYouCount} projects need attention, ${overview.done} done.`}>
-          {#if overview.active > 0}
-            <Tooltip text={`${countLabel(overview.active, 'active task')}: active or in-progress work.`} style={chartFlex(overview.active)} className="chart-segment-tip">
-              <span class="chart-segment chart-active" aria-label={`${countLabel(overview.active, 'active task')}: active or in-progress work.`}></span>
-            </Tooltip>
-          {/if}
-          {#if readyTaskCount > 0}
-            <Tooltip text={`${countLabel(readyTaskCount, 'ready task')}: work that can be picked up without another brief review.`} style={chartFlex(readyTaskCount)} className="chart-segment-tip">
-              <span class="chart-segment chart-ready" aria-label={`${countLabel(readyTaskCount, 'ready task')}: work that can be picked up without another brief review.`}></span>
-            </Tooltip>
-          {/if}
-          {#if needsYouCount > 0}
-            <Tooltip text={`${countLabel(needsYouCount, 'project needing attention', 'projects needing attention')}: projects with blocked work or draft briefs.`} style={chartFlex(needsYouCount)} className="chart-segment-tip">
-              <span class="chart-segment chart-attention" aria-label={`${countLabel(needsYouCount, 'project needing attention', 'projects needing attention')}: projects with blocked work or draft briefs.`}></span>
-            </Tooltip>
-          {/if}
-          {#if overview.done > 0}
-            <Tooltip text={`${countLabel(overview.done, 'done task', 'done tasks')}: completed work.`} style={chartFlex(overview.done)} className="chart-segment-tip">
-              <span class="chart-segment chart-done" aria-label={`${countLabel(overview.done, 'done task', 'done tasks')}: completed work.`}></span>
-            </Tooltip>
-          {/if}
-          {#if overview.taskTotal === 0}
-            <Tooltip text="No tasks yet" style={chartFlex(dashboardTotal)} className="chart-segment-tip">
-              <span class="chart-segment chart-empty" aria-label="No tasks yet"></span>
-            </Tooltip>
-          {/if}
-        </div>
-        <div class="chart-legend">
-          <span><i class="dot chart-active"></i>{overview.active} active</span>
-          <span><i class="dot chart-ready"></i>{readyTaskCount} ready</span>
-          <span><i class="dot chart-attention"></i>{needsYouCount} projects need you</span>
-          <span><i class="dot chart-done"></i>{overview.done} done</span>
-        </div>
+        <WorkMixChart
+          ariaLabel={`Work mix across projects: ${overview.active} active, ${readyTaskCount} ready, ${needsYouCount} projects need attention, ${overview.done} done.`}
+          segments={[
+            {
+              key: 'active',
+              label: 'active',
+              count: overview.active,
+              tone: 'active',
+              ariaLabel: `${countLabel(overview.active, 'active task')}: active or in-progress work.`,
+              tooltip: `${countLabel(overview.active, 'active task')}: active or in-progress work.`,
+            },
+            {
+              key: 'ready',
+              label: 'ready',
+              count: readyTaskCount,
+              tone: 'ready',
+              ariaLabel: `${countLabel(readyTaskCount, 'ready task')}: work that can be picked up without another brief review.`,
+              tooltip: `${countLabel(readyTaskCount, 'ready task')}: work that can be picked up without another brief review.`,
+            },
+            {
+              key: 'attention',
+              label: 'projects need you',
+              count: needsYouCount,
+              tone: 'attention',
+              ariaLabel: `${countLabel(needsYouCount, 'project needing attention', 'projects needing attention')}: projects with blocked work or draft briefs.`,
+              tooltip: `${countLabel(needsYouCount, 'project needing attention', 'projects needing attention')}: projects with blocked work or draft briefs.`,
+            },
+            {
+              key: 'done',
+              label: 'done',
+              count: overview.done,
+              tone: 'done',
+              ariaLabel: `${countLabel(overview.done, 'done task', 'done tasks')}: completed work.`,
+              tooltip: `${countLabel(overview.done, 'done task', 'done tasks')}: completed work.`,
+            },
+          ]}
+          emptyLabel="No tasks yet"
+        />
       </div>
       <div class="dashboard-panel">
         <div class="panel-head">
@@ -902,76 +904,6 @@
   .panel-copy {
     margin: 0;
   }
-  .work-chart {
-    display: flex;
-    gap: 3px;
-    min-height: 1rem;
-    padding: 3px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-2);
-    background: color-mix(in srgb, var(--bg) 72%, transparent);
-    box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
-    overflow: hidden;
-  }
-  .chart-segment {
-    display: block;
-    width: 100%;
-    height: 100%;
-    min-width: 0.75rem;
-    border-radius: calc(var(--r-2) - 3px);
-    background:
-      linear-gradient(180deg, color-mix(in srgb, white 24%, transparent), transparent 52%),
-      var(--chart-color);
-  }
-  .chart-segment.chart-active {
-    --chart-color: var(--accent-2);
-  }
-  .dot.chart-active {
-    --chart-color: var(--accent-2);
-    background: var(--accent-2);
-  }
-  .chart-segment.chart-ready {
-    --chart-color: var(--accent);
-  }
-  .dot.chart-ready {
-    --chart-color: var(--accent);
-    background: var(--accent);
-  }
-  .chart-segment.chart-attention {
-    --chart-color: var(--signal-warn-strong);
-  }
-  .dot.chart-attention {
-    --chart-color: var(--signal-warn-strong);
-    background: var(--signal-warn-strong);
-  }
-  .chart-segment.chart-done {
-    --chart-color: color-mix(in srgb, var(--accent) 84%, var(--bg));
-  }
-  .dot.chart-done {
-    --chart-color: color-mix(in srgb, var(--accent) 84%, var(--bg));
-    background: color-mix(in srgb, var(--accent) 84%, var(--bg));
-  }
-  .chart-segment.chart-empty {
-    --chart-color: color-mix(in srgb, var(--text-muted) 22%, transparent);
-  }
-  .chart-legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-2);
-    color: var(--text-muted);
-    font-size: var(--fs-0);
-    line-height: 1;
-  }
-  .chart-legend span {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-  }
-  .dot {
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 999px;
-  }
   .project-drawer {
     display: grid;
     gap: var(--s-4);
@@ -1103,10 +1035,6 @@
   .project-sparks .project-spark-live {
     border-color: color-mix(in srgb, var(--accent-2) 42%, var(--border));
     background: color-mix(in srgb, var(--accent-2) 22%, transparent);
-  }
-  :global(.work-chart .chart-segment-tip) {
-    min-width: 0.75rem;
-    height: 1rem;
   }
   :global(.project-sparks .project-spark-tip) {
     display: block;

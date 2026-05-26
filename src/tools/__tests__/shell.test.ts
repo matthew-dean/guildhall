@@ -362,6 +362,50 @@ describe('shellTool — engine-tool interface', () => {
     })
   })
 
+  it('preserves a relative cd working directory when reconciling authoritative verification commands', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'guildhall-shell-cd-'))
+    const frontend = path.join(cwd, 'frontend')
+    fs.mkdirSync(frontend, { recursive: true })
+    fs.writeFileSync(
+      path.join(frontend, 'package.json'),
+      JSON.stringify(
+        {
+          name: 'frontend',
+          private: true,
+          scripts: {
+            build: "node -e \"console.log('frontend-build-ran')\"",
+          },
+        },
+        null,
+        2,
+      ),
+    )
+
+    const result = await shellTool.execute(
+      {
+        command: 'cd frontend && pnpm build',
+        cwd,
+        timeoutMs: 5000,
+      },
+      {
+        cwd,
+        metadata: {
+          current_task_verification_commands: ['pnpm build'],
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('frontend-build-ran')
+    expect(result.metadata).toMatchObject({
+      requestedCommand: 'cd frontend && pnpm build',
+      executedCommand: 'pnpm build',
+      usedAuthoritativeCommand: true,
+      cdAdjustedCwd: frontend,
+      executedCwd: frontend,
+    })
+  })
+
   it('normalizes scoped pnpm test commands to the script form pnpm expects', async () => {
     const cwd = makeWorkspaceScriptPackage()
     const result = await shellTool.execute(

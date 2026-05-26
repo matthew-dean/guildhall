@@ -244,6 +244,31 @@ describe('buildProjectTicker', () => {
     })
   })
 
+  it('shows the run error instead of calling queued work paused', () => {
+    expect(
+      buildProjectTicker(
+        {
+          run: {
+            status: 'error',
+            error: 'spawn git ENOENT',
+          },
+          tasks: [
+            { id: 'task-1', status: 'in_progress', title: 'Basic project listing' },
+            { id: 'task-2', status: 'ready', title: 'Stripe Connect' },
+          ],
+        },
+        null,
+        now,
+      ),
+    ).toMatchObject({
+      tone: 'danger',
+      pulse: false,
+      actorLabel: 'Run error',
+      label: 'Error',
+      message: 'Guildhall could not find git while inspecting this project.',
+    })
+  })
+
   it('turns blocked stop summaries into a visible warning state', () => {
     const detail: ProjectDetail = {
       run: {

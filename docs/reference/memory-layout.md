@@ -141,6 +141,13 @@ not meant to grow forever. Guildhall tracks local history size and file count pe
 project, keeps important audit evidence, and can compact old transcripts and
 debug snapshots into smaller summaries when a project gets large.
 
+When a task reaches done, Guildhall also creates a done-task summary bundle. That
+bundle keeps the journey, decision, evidence, learning candidates, and open
+residue in committed project state, while the full transcript moves back to
+source-evidence status. If an old transcript is compacted or pruned, the summary
+keeps evidence references and marks whether the full evidence is still
+available.
+
 Deleting local history does not delete committed project state. The project
 falls back to the shared task/spec/planning summaries in `./.guildhall/`.
 

@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import ExpertsTab from '../ExpertsTab.svelte'
 import HistoryTab from '../HistoryTab.svelte'
+import JourneyTab from '../JourneyTab.svelte'
 import ProvenanceTab from '../ProvenanceTab.svelte'
 import TranscriptTab from '../TranscriptTab.svelte'
 import SpecFillChecklist from '../SpecFillChecklist.svelte'
@@ -101,6 +102,76 @@ describe('drawer task detail tabs', () => {
   afterEach(() => {
     cleanup()
     vi.restoreAllMocks()
+  })
+
+  it('shows changed files in a wide inspect modal and skips directory paths', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      expect(url).toContain('/api/project/task/task-link-editor/file')
+      expect(url).toContain('projectId=looma-knit')
+      expect(url).toContain('path=frontend%2Fapp%2Fpages%2Fdashboard.vue')
+      return json({
+        taskId: 'task-link-editor',
+        path: 'frontend/app/pages/dashboard.vue',
+        content: '<template>Dashboard</template>\n',
+        language: 'vue',
+        truncated: false,
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(JourneyTab, {
+      task: task({
+        latestCheckpoint: {
+          filesTouched: [
+            'frontend/app/pages/dashboard.vue',
+            'frontend/package.json',
+            'frontend/app/lib/',
+          ],
+        },
+        gitStory: {
+          samplePaths: ['pnpm-lock.yaml', 'frontend/app/lib/'],
+        },
+      }),
+      projectId: 'looma-knit',
+    })
+
+    expect(screen.getByText('3 files changed.')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Inspect files' }))
+
+    expect(screen.getByRole('dialog', { name: 'Files changed' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inspect frontend/app/pages/dashboard.vue' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inspect frontend/package.json' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inspect pnpm-lock.yaml' })).toBeInTheDocument()
+    expect(screen.queryByText('frontend/app/lib/')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Inspect frontend/app/pages/dashboard.vue' }))
+
+    expect(await screen.findByText('<template>Dashboard</template>')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the request shape and component stack behind ambiguous intake', () => {
+    render(JourneyTab, {
+      task: task({
+        requestIntake: {
+          intent: 'ambiguous_spec_or_implementation',
+          recommendedNextAction: 'ask_clarifying_question',
+          ambiguity: 'The request could mean a policy/spec, implementation, or a parent feature plan.',
+          componentStack: [
+            { kind: 'policy_decision', title: 'Decide the overhead charge policy', role: 'Name the business rule.' },
+            { kind: 'documented_spec', title: 'Write the policy/spec', role: 'Capture examples and scope.' },
+            { kind: 'implementation', title: 'Apply the policy in product surfaces', role: 'Split after approval.' },
+          ],
+        },
+      }),
+    })
+
+    expect(screen.getByText('Request shape')).toBeInTheDocument()
+    expect(screen.getByText('Ambiguous Spec Or Implementation')).toBeInTheDocument()
+    expect(screen.getByText('Ask Clarifying Question')).toBeInTheDocument()
+    expect(screen.getByText(/Decide the overhead charge policy/)).toBeInTheDocument()
+    expect(screen.getByText(/Apply the policy in product surfaces/)).toBeInTheDocument()
   })
 
   it('renders provenance, terminal outcome, shelve reason, and context health in one audit trail', () => {

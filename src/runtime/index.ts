@@ -215,9 +215,12 @@ export {
   writeBootstrapResult,
 } from './bootstrap.js'
 export * from './request-routing.js'
+export * from './request-intake.js'
 export * from './pressure-test-intake.js'
 export * from './commit-story.js'
 export * from './language-map.js'
+export * from './done-task-summary.js'
+export * from './task-sizing-calibration.js'
 export * from './worker-modes.js'
 export * from './artifact-store.js'
 export * from './capability-requests.js'

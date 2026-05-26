@@ -1792,6 +1792,34 @@ describe('Orchestrator.tick — routing', () => {
     expect(worker.calls).toHaveLength(1)
   })
 
+  it('sets a stable prompt cache key before dispatching an agent turn', async () => {
+    await writeQueue([mkTask({ id: 'task-006', status: 'in_progress' })])
+    const cacheKeys: Array<string | undefined> = []
+    const worker: OrchestratorAgent = {
+      name: 'worker-agent',
+      setPromptCacheKey(key: string | undefined) {
+        cacheKeys.push(key)
+      },
+      async generate() {
+        return { text: 'ok' }
+      },
+    }
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(true)
+    const orch = new Orchestrator({
+      config: baseConfig({ workspaceId: 'fair-labor-license' }),
+      agents: agentSet({ worker }),
+      providerName: 'openai-api',
+      gitDriver,
+    })
+
+    await orch.tick()
+
+    expect(cacheKeys).toEqual([
+      'openai-api:fair-labor-license:task-006:worker:fair-labor-license-worker',
+    ])
+  })
+
   it('routes review tasks to the reviewer agent', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'review' })])
     const reviewer = stubAgent('reviewer-agent')
@@ -1903,7 +1931,40 @@ describe('Orchestrator.tick — routing', () => {
   })
 
   it('records a blueprint sanity review before claiming ready work', async () => {
-    await writeQueue([mkTask({ id: 'a', status: 'ready', domain: 'ghost', spec: 'approved spec' })])
+    await writeQueue([mkTask({
+      id: 'a',
+      status: 'ready',
+      domain: 'ghost',
+      productBrief: {
+        userJob: 'I want users to complete the invite flow.',
+        successMetric: 'A user can accept an invite and land in the workspace.',
+        antiPatterns: [],
+        approvedAt: '2026-05-26T00:00:00.000Z',
+      },
+      spec: [
+        '## Summary',
+        '',
+        'Implement invite acceptance.',
+        '',
+        '## Completion Boundary',
+        '- Product outcome: A user can accept an invite and land in the workspace.',
+        '- What Guildhall can complete in code: Update the invite route.',
+        '- External dependencies: None.',
+        '- Owner-only setup: None.',
+        '- Verification environment: Local app with seeded invite data.',
+        '- What counts as done: The seeded invite acceptance path succeeds end-to-end.',
+        '- What must be split or blocked: Nothing.',
+        '',
+        '## Acceptance Criteria',
+        '1. Given a valid invite, when the user accepts it, then they land in the workspace.',
+      ].join('\n'),
+      acceptanceCriteria: [{
+        id: 'AC-1',
+        description: 'Given a valid invite, when the user accepts it, then they land in the workspace.',
+        verifiedBy: 'review',
+        met: false,
+      }],
+    })])
     const worker = stubAgent('worker-agent')
     const orch = new Orchestrator({
       config: baseConfig(),
@@ -1922,6 +1983,51 @@ describe('Orchestrator.tick — routing', () => {
     )).toBe(true)
     expect(q.tasks[0]!.notes.at(-1)?.content).toBe('Claimed ready task for worker-agent.')
     expect(worker.calls).toHaveLength(0)
+  })
+
+  it('routes ready tasks with a weak completion boundary back to exploring', async () => {
+    await writeQueue([mkTask({
+      id: 'a',
+      status: 'ready',
+      domain: 'ghost',
+      productBrief: {
+        userJob: 'I want users to sign in with familiar providers.',
+        successMetric: 'Login shows Google and Apple buttons.',
+        antiPatterns: [],
+        approvedAt: '2026-05-26T00:00:00.000Z',
+      },
+      spec: [
+        '## Summary',
+        '',
+        'Add Google and Apple provider buttons.',
+        '',
+        '## Acceptance Criteria',
+        '1. Login and registration pages show Google and Apple buttons.',
+      ].join('\n'),
+      acceptanceCriteria: [{
+        id: 'AC-1',
+        description: 'Login and registration pages show Google and Apple buttons.',
+        verifiedBy: 'review',
+        met: false,
+      }],
+    })])
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('blueprint-sanity-review')
+      expect(out.afterStatus).toBe('exploring')
+    }
+    expect(worker.calls).toHaveLength(0)
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('exploring')
+    expect(q.tasks[0]!.notes.at(-1)?.content).toMatch(/completion boundary/i)
   })
 
   it('routes ready tasks without a usable blueprint back to exploring', async () => {
@@ -4166,6 +4272,39 @@ describe('Orchestrator.tick — error handling', () => {
     expect(q.tasks[0]!.blockReason).toBeUndefined()
     expect(q.tasks[0]!.escalations[0]!.resolvedAt).toBeTruthy()
     expect(q.tasks[0]!.escalations[0]!.resolvedBy).toBe('system')
+  })
+
+  it('preserves worker progress on retryable provider capacity errors instead of blocking the task', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        updatedAt: '2026-05-03T19:10:00.000Z',
+      }),
+    ])
+    const worker = {
+      name: 'worker-agent',
+      async generate() {
+        throw new Error(
+          'OpenAI-compatible API HTTP 429: {"error":{"message":"Model busy, retry later","code":"engine_overloaded"}}',
+        )
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+    const out = await orch.tick()
+    expect(out.kind).toBe('provider-backoff')
+    if (out.kind === 'provider-backoff') {
+      expect(out.status).toBe('in_progress')
+      expect(out.agent).toBe('worker-agent')
+    }
+
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('in_progress')
+    expect(q.tasks[0]!.assignedTo).toBe('worker-agent')
   })
 
   it('logs agent errors to PROGRESS.md', async () => {
@@ -6604,7 +6743,7 @@ describe('Orchestrator.run — full loops', () => {
     ])
   })
 
-  it('does not auto-commit dirty task worktree changes when Git Story policy is ask', async () => {
+  it('commits dirty isolated task worktree changes before landing even when Git Story policy is ask', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-ask')
     await writeQueue([
       mkTask({
@@ -6650,7 +6789,130 @@ describe('Orchestrator.run — full loops', () => {
 
     await orch.tick()
 
-    expect(gitDriver.state.commits).toEqual([])
+    expect(gitDriver.state.commits).toEqual([
+      expect.objectContaining({
+        repoRoot: worktreePath,
+      }),
+    ])
+    expect(gitDriver.state.cherryPicks).toEqual([
+      expect.objectContaining({
+        branch: 'guildhall/task-ask',
+        baseBranch: 'main',
+      }),
+    ])
+    expect(gitDriver.state.removedWorktrees).toEqual([worktreePath])
+  })
+
+  it('reconciles already-done isolated worktrees that were marked done before landing', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-orphaned-done')
+    await writeQueue([
+      mkTask({
+        id: 'task-orphaned-done',
+        status: 'done',
+        worktreePath,
+        branchName: 'guildhall/task-orphaned-done',
+        baseBranch: 'main',
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    gitDriver.setStatusSummary(worktreePath, {
+      branch: 'guildhall/task-orphaned-done',
+      changedCount: 2,
+      untrackedCount: 1,
+      samplePaths: ['src/feature.ts', 'src/feature.test.ts', 'src/new.ts'],
+      clean: false,
+    })
+
+    const orch = new Orchestrator({
+      config: baseConfig({
+        gitStory: {
+          completionTarget: 'open_pr',
+          commit: 'ask',
+          push: 'ask',
+          pullRequest: 'ask',
+          merge: 'ask',
+          localOnlyAllowed: true,
+          deferAllowed: true,
+          requireCleanRelease: true,
+          allowForcePush: false,
+          allowSharedBranchRebase: false,
+          discoveredFrom: [],
+        },
+      }),
+      agents: agentSet(),
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('idle')
+    expect(gitDriver.state.commits).toEqual([
+      expect.objectContaining({
+        repoRoot: worktreePath,
+      }),
+    ])
+    expect(gitDriver.state.cherryPicks).toEqual([
+      expect.objectContaining({
+        branch: 'guildhall/task-orphaned-done',
+        baseBranch: 'main',
+      }),
+    ])
+    expect(gitDriver.state.removedWorktrees).toEqual([worktreePath])
+    const q = await readQueue()
+    expect(q.tasks[0]?.mergeRecord).toMatchObject({
+      result: 'merged',
+      fromBranch: 'guildhall/task-orphaned-done',
+      toBranch: 'main',
+    })
+  })
+
+  it('marks pending PR tasks done and removes the worktree once the PR is merged', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-pr')
+    await writeQueue([
+      mkTask({
+        id: 'task-pr',
+        status: 'pending_pr',
+        worktreePath,
+        branchName: 'guildhall/task-pr',
+        baseBranch: 'main',
+        mergeRecord: {
+          fromBranch: 'guildhall/task-pr',
+          toBranch: 'main',
+          strategy: 'manual_pr',
+          result: 'pending_pr',
+          prUrl: 'https://github.test/org/repo/pull/12',
+          mergedAt: '2026-05-01T00:00:00.000Z',
+        },
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    gitDriver.setPullRequest(tmpDir, {
+      ok: true,
+      url: 'https://github.test/org/repo/pull/12',
+      state: 'MERGED',
+      mergeStateStatus: 'UNKNOWN',
+    })
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('idle')
+    expect(gitDriver.state.removedWorktrees).toEqual([worktreePath])
+    const q = await readQueue()
+    expect(q.tasks[0]?.status).toBe('done')
+    expect(q.tasks[0]?.mergeRecord).toMatchObject({
+      result: 'merged',
+      fromBranch: 'guildhall/task-pr',
+      toBranch: 'main',
+      prUrl: 'https://github.test/org/repo/pull/12',
+    })
   })
 
   it('stopAfterOneTask stops immediately when exploring work is waiting on the user', async () => {
@@ -7056,6 +7318,89 @@ describe('Orchestrator.tick — FR-10 escalations', () => {
       ],
     })
     expect(task?.notes.at(-1)?.content).toContain('repair the failed verification')
+  })
+
+  it('keeps worker-owned verification environment claims out of the human queue', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'listing-form')
+    await fs.mkdir(path.join(worktreePath, 'frontend', 'app', 'pages', 'listings'), { recursive: true })
+    execFileSync('git', ['init', '-b', 'main'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.name', 'Guildhall Test'], {
+      cwd: worktreePath,
+      stdio: 'ignore',
+    })
+    execFileSync('git', ['config', 'user.email', 'guildhall-tests@example.com'], {
+      cwd: worktreePath,
+      stdio: 'ignore',
+    })
+    await fs.writeFile(path.join(worktreePath, '.gitignore'), 'node_modules/\n', 'utf-8')
+    execFileSync('git', ['add', '.gitignore'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['commit', '--no-verify', '-m', 'init'], {
+      cwd: worktreePath,
+      stdio: 'ignore',
+    })
+    await fs.writeFile(
+      path.join(worktreePath, 'frontend', 'app', 'pages', 'listings', 'new.vue'),
+      '<template><form>listing</form></template>\n',
+      'utf-8',
+    )
+    await writeQueue([
+      mkTask({
+        id: 'task-listing',
+        title: 'Basic project listing',
+        status: 'blocked',
+        assignedTo: null,
+        blockReason:
+          "spec_ambiguous: Verification commands don't work in this environment but implementation is complete",
+        projectPath: 'frontend/',
+        worktreePath,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'build passes',
+          verifiedBy: 'automated',
+          command: 'pnpm build',
+          met: false,
+        } as any],
+        escalations: [
+          {
+            id: 'esc-task-listing-1',
+            taskId: 'task-listing',
+            agentId: 'worker-agent',
+            reason: 'spec_ambiguous',
+            summary:
+              "Verification commands don't work in this environment but implementation is complete",
+            details:
+              'The implementation is complete at frontend/app/pages/listings/new.vue, but the verification commands cannot run because the package setup appears unavailable.',
+            raisedAt: '2026-04-01T00:00:01Z',
+          },
+        ],
+      }),
+    ])
+    const worker = {
+      ...stubAgent('worker-agent'),
+      loadToolMetadata() {
+        return {}
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const outcome = await orch.tick()
+
+    expect(outcome.kind).toBe('processed')
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'task-listing')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.escalations[0]?.resolvedBy, JSON.stringify(task, null, 2)).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('kept the task in automation')
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('keep the decision in automation'),
+    )).toBe(true)
   })
 
   it('skips tasks with open escalations even if status is not blocked', async () => {

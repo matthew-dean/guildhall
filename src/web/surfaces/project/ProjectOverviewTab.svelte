@@ -8,7 +8,10 @@
   import Card from '../../lib/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Icon from '../../lib/Icon.svelte'
+  import OverviewTaskRow from '../../lib/OverviewTaskRow.svelte'
   import StatusDot from '../../lib/StatusDot.svelte'
+  import WorkMixChart from '../../lib/WorkMixChart.svelte'
+  import type { WorkMixSegment } from '../../lib/WorkMixChart.svelte'
   import { friendlyDomain, friendlyStatus } from '../../lib/display.js'
   import { formatUserPath } from '../../lib/display-path.js'
   import { summarizeEvent } from '../../lib/events.js'
@@ -19,6 +22,7 @@
   import type { EventEnvelope, ProjectDetail, Task } from '../../lib/types.js'
   import { hasCurrentGitUnavailableStory, type ProjectActivityLine } from '../../lib/project-activity.js'
   import { isGitUnavailableMessage } from '../../lib/runtime-message.js'
+  import { activeEscalations } from '../../lib/escalation.js'
 
   interface Props {
     detail: ProjectDetail
@@ -39,13 +43,6 @@
   }: Props = $props()
 
   type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running'
-
-  interface Segment {
-    key: string
-    label: string
-    count: number
-    tone: 'working' | 'draft' | 'ready' | 'blocked' | 'done' | 'shelved'
-  }
 
   interface BlockedRow {
     task: Task
@@ -81,7 +78,7 @@
     }
   })
 
-  const segments = $derived<Segment[]>([
+  const segments = $derived<WorkMixSegment[]>([
     { key: 'working', label: running ? 'Moving now' : 'Paused work', count: counts.working, tone: 'working' },
     { key: 'draft', label: 'Being shaped', count: counts.shaping + counts.approval, tone: 'draft' },
     { key: 'ready', label: 'Ready', count: counts.ready, tone: 'ready' },
@@ -233,7 +230,7 @@
 
   const blockedRows = $derived.by(() => {
     return tasks
-      .filter(task => task.status === 'blocked' || Boolean(task.blockReason) || (task.escalations ?? []).some(escalation => !escalation.resolvedAt))
+      .filter(task => task.status === 'blocked' || activeEscalations(task).length > 0 || (Boolean(task.blockReason) && !isRunnableStatus(task.status)))
       .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''))
       .map(task => ({
         task,
@@ -243,6 +240,10 @@
       }))
       .slice(0, 4)
   })
+
+  function isRunnableStatus(status: string | undefined): boolean {
+    return status === 'ready' || status === 'in_progress' || status === 'review' || status === 'gate_check'
+  }
 
   const runBlocker = $derived.by(() => {
     if (detail.startReadiness?.canStart === false) {
@@ -344,7 +345,7 @@
 
   function blockerReason(task: Task): string {
     if (task.blockReason) return friendlyBlockerText(task.blockReason)
-    const escalation = (task.escalations ?? []).find(item => !item.resolvedAt)
+    const escalation = activeEscalations(task)[0]
     if (escalation?.summary) return friendlyBlockerText(escalation.summary)
     const inbox = inboxItems.find(item => item.taskId === task.id || item.title === task.title)
     if (inbox?.detail) return inbox.detail
@@ -447,32 +448,22 @@
   </section>
 
   <section class="overview-grid overview-grid-main">
-    <Card title="Work mix" titleTag="h2" className="overview-card">
-      <div class="workline" aria-label={`Work mix: ${counts.total} tasks`}>
-        {#if segments.length}
-          {#each segments as segment (segment.key)}
-            <span
-              class={`segment segment-${segment.tone}`}
-              style={`flex: ${Math.max(1, segment.count)} 1 0;`}
-              aria-label={`${segment.count} ${segment.label}`}
-            ></span>
+    <Card title="Moving now" titleTag="h2" className="overview-card">
+      {#if movingTasks.length === 0}
+        <p class="muted">{running ? 'Guildhall is running, but no task is currently active.' : 'No task is moving right now.'}</p>
+      {:else}
+        <div class="motion-list">
+          {#each movingTasks as task (task.id)}
+            <OverviewTaskRow
+              title={task.title ?? friendlyTaskId(task.id)}
+              detail={friendlyDomain(task.domain) || statusDetail(task)}
+              chipLabel={friendlyStatus(task.status)}
+              chipTone={toneForTask(task) === 'danger' ? 'danger' : toneForTask(task) === 'warn' ? 'warn' : toneForTask(task) === 'running' ? 'ok' : 'neutral'}
+              onclick={() => go(currentTaskHref(task.id, activeProjectId))}
+            />
           {/each}
-        {:else}
-          <span class="segment segment-empty" aria-label="No tasks yet"></span>
-        {/if}
-      </div>
-      <div class="segment-legend">
-        {#each segments as segment (segment.key)}
-          <button type="button" class="legend-item" onclick={() => go(currentProjectHref('/work', activeProjectId))}>
-            <span class={`legend-dot segment-${segment.tone}`}></span>
-            <span>{segment.label}</span>
-            <strong>{segment.count}</strong>
-          </button>
-        {/each}
-        {#if !segments.length}
-          <p class="muted">No tasks yet. Create a request when you are ready.</p>
-        {/if}
-      </div>
+        </div>
+      {/if}
     </Card>
 
     <Card title="Do this next" titleTag="h2" tone={nextAction.tone === 'danger' ? 'danger' : nextAction.tone === 'warn' ? 'warn' : nextAction.tone === 'running' ? 'ok' : 'accent'} className="overview-card">
@@ -491,6 +482,15 @@
   </section>
 
   <section class="overview-grid">
+    <Card title="Work mix" titleTag="h2" className="overview-card">
+      <WorkMixChart
+        ariaLabel={`Work mix: ${counts.total} tasks`}
+        {segments}
+        emptyLabel="No tasks yet. Create a request when you are ready."
+        onLegendClick={() => go(currentProjectHref('/work', activeProjectId))}
+      />
+    </Card>
+
     <Card title="Needs you" titleTag="h2" className="overview-card">
       {#if inboxError}
         <p class="muted">Could not load owner actions: {inboxError}</p>
@@ -512,43 +512,22 @@
         </div>
       {/if}
     </Card>
-
-    <Card title="Moving now" titleTag="h2" className="overview-card">
-      {#if movingTasks.length === 0}
-        <p class="muted">{running ? 'Guildhall is running, but no task is currently active.' : 'No task is moving right now.'}</p>
-      {:else}
-        <div class="motion-list">
-          {#each movingTasks as task (task.id)}
-            <button type="button" class="motion-row" onclick={() => go(currentTaskHref(task.id, activeProjectId))}>
-              <Chip label={friendlyStatus(task.status)} tone={toneForTask(task) === 'danger' ? 'danger' : toneForTask(task) === 'warn' ? 'warn' : toneForTask(task) === 'running' ? 'ok' : 'neutral'} />
-              <div>
-                <strong>{task.title ?? friendlyTaskId(task.id)}</strong>
-                <span>{friendlyDomain(task.domain) || statusDetail(task)}</span>
-              </div>
-            </button>
-          {/each}
-        </div>
-      {/if}
-    </Card>
   </section>
 
   <section class="overview-grid">
-    <Card title="Blocked / depends on" titleTag="h2" className="overview-card">
+    <Card title="Blocked work" titleTag="h2" className="overview-card">
       {#if blockedRows.length === 0}
-        <p class="muted">No blocked task dependencies are visible right now.</p>
+        <p class="muted">No blocked tasks are visible right now.</p>
       {:else}
         <div class="dependency-list">
           {#each blockedRows as row (row.task.id)}
-            <button type="button" class="dependency-row" onclick={() => go(row.href)}>
-              <div>
-                <strong>{taskLabel(row.task)}</strong>
-                <span>{row.reason}</span>
-              </div>
-              <div class="depends-pill">
-                <span>Depends on</span>
-                <strong>{row.dependency}</strong>
-              </div>
-            </button>
+            <OverviewTaskRow
+              title={taskLabel(row.task)}
+              detail={row.reason}
+              chipLabel={row.dependency}
+              chipTone={row.dependency === 'Needs triage' ? 'danger' : 'warn'}
+              onclick={() => go(row.href)}
+            />
           {/each}
         </div>
       {/if}
@@ -698,37 +677,8 @@
   :global(.overview-card) {
     min-width: 0;
   }
-  .workline {
-    display: flex;
-    gap: 3px;
-    height: 18px;
-    min-width: 0;
-    overflow: hidden;
-    border-radius: var(--r-1);
-    background: color-mix(in srgb, var(--bg-raised-2) 74%, black);
-    border: 1px solid var(--border);
-  }
-  .segment {
-    min-width: 12px;
-  }
-  .segment-working { background: var(--accent-2); }
-  .segment-draft { background: var(--accent); }
-  .segment-ready { background: var(--light-violet-warm); }
-  .segment-blocked { background: var(--danger); }
-  .segment-done { background: var(--ok); }
-  .segment-shelved { background: var(--text-muted); }
-  .segment-empty { background: var(--border); flex: 1; }
-  .segment-legend {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--s-2);
-    margin-top: var(--s-3);
-  }
-  .legend-item,
   .action-row,
-  .motion-row,
   .health-row,
-  .dependency-row,
   .run-blocker,
   .run-plan-row {
     border: 1px solid var(--border);
@@ -738,29 +688,6 @@
     cursor: pointer;
     font: inherit;
     text-align: left;
-  }
-  .legend-item {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: var(--s-2);
-    align-items: center;
-    padding: var(--s-2);
-    min-width: 0;
-  }
-  .legend-item span:not(.legend-dot) {
-    color: var(--text-muted);
-    font-size: var(--fs-1);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .legend-item strong {
-    color: var(--text);
-  }
-  .legend-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 999px;
   }
   .next-action {
     display: grid;
@@ -804,13 +731,11 @@
     overflow-wrap: anywhere;
   }
   .action-row span:last-child,
-  .motion-row span,
   .health-row span {
     color: var(--text-muted);
     font-size: var(--fs-1);
     line-height: var(--lh-body);
   }
-  .motion-row,
   .health-row,
   .run-blocker,
   .run-plan-row {
@@ -820,50 +745,28 @@
     align-items: center;
     padding: var(--s-3);
   }
-  .motion-row div,
   .health-row div,
   .run-blocker div,
-  .run-plan-row div,
-  .dependency-row div {
+  .run-plan-row div {
     display: grid;
     gap: var(--s-1);
     min-width: 0;
   }
-  .motion-row strong,
   .health-row strong,
   .run-blocker strong,
-  .run-plan-row strong,
-  .dependency-row strong {
+  .run-plan-row strong {
     color: var(--text);
     overflow-wrap: anywhere;
   }
-  .dependency-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(160px, 0.42fr);
-    gap: var(--s-3);
-    align-items: stretch;
-    padding: var(--s-3);
+  .motion-list :global(.overview-task-row),
+  .dependency-list :global(.overview-task-row) {
+    min-height: 0;
   }
-  .dependency-row span,
   .run-blocker span,
   .run-plan-row span {
     color: var(--text-muted);
     font-size: var(--fs-1);
     line-height: var(--lh-body);
-  }
-  .depends-pill {
-    align-content: center;
-    padding: var(--s-2);
-    border: 1px solid var(--border);
-    border-radius: var(--r-1);
-    background: color-mix(in srgb, var(--danger) 8%, transparent);
-  }
-  .depends-pill span {
-    color: var(--danger);
-    font-size: var(--fs-0);
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
   }
   .run-blocker {
     margin-bottom: var(--s-2);
@@ -936,24 +839,16 @@
     .live-card small {
       grid-column: 2;
     }
-    .segment-legend {
-      grid-template-columns: 1fr;
-    }
     .next-action :global(.btn) {
       width: 100%;
     }
-    .motion-row,
     .health-row,
-    .dependency-row,
     .run-blocker,
     .run-plan-row,
     .action-row {
       padding: var(--s-2);
     }
-    .dependency-row,
-    .run-plan-row {
-      grid-template-columns: 1fr;
-    }
+    .run-plan-row { grid-template-columns: 1fr; }
     .run-index {
       width: 1.5rem;
       height: 1.5rem;

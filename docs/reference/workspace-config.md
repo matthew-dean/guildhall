@@ -124,7 +124,7 @@ workspace-wide defaults.
 models:
   spec: deepseek-ai/DeepSeek-V4-Flash
   coordinator: deepseek-ai/DeepSeek-V4-Flash
-  worker: Qwen/Qwen3-235B-A22B-Instruct-2507
+  worker: Qwen/Qwen3.5-35B-A3B
   reviewer: deepseek-ai/DeepSeek-V4-Flash
   gateChecker: deepseek-ai/DeepSeek-V4-Flash
   contextIndexer: zai-org/GLM-4.6
@@ -133,6 +133,12 @@ models:
 Each model role must resolve against the model catalog in `./src/core/models.ts`.
 See [Open model recommendations](../guide/open-models) for the currently tested
 role split and retesting notes.
+
+OpenAI-compatible provider options are derived from the selected role and model.
+Projects do not need to hard-code `prompt_cache_key`, `response_format`, or
+reasoning settings in `guildhall.yaml`; Guildhall applies those at runtime when
+the provider/model path supports them. Paid priority `service_tier` is not sent
+by default.
 
 ## `coordinators`
 

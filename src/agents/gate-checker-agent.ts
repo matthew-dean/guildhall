@@ -80,6 +80,8 @@ proof packet, or acceptance-criteria evidence block. Run the gate, record the
 result, and route the task according to the normal outcome. Escalate only when
 Guildhall cannot run the gate because of an external service, credential,
 environment outage, or decision outside the repo.
+When that happens, include externalChecklist on raise-escalation with the
+specific outside-Guildhall setup steps required before the gate can be retried.
 
 ## Important
 - Never skip a gate. Hard gates are non-negotiable.

@@ -17,6 +17,10 @@ import {
   loadReviewPlanningCasesFromDirectory,
   recordReviewPlanningFrontier,
 } from './review-planning-calibration.js'
+import {
+  loadTaskSizingCasesFromDirectory,
+  recordTaskSizingFrontier,
+} from './task-sizing-calibration.js'
 import { createReviewAuditStore } from './review-audit-store.js'
 import { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
 import {
@@ -392,6 +396,9 @@ Usage:
   guildhall review-calibration validate-planning [id|path]
                                   Validate and record review-planning frontier coverage
     --cases <dir>                Planning corpus directory (default: internal/calibration/planning)
+  guildhall review-calibration validate-sizing [id|path]
+                                  Validate and record task-sizing frontier coverage
+    --cases <dir>                Task sizing corpus directory (default: internal/calibration/task-sizing)
   guildhall review-calibration draft-case [id|path]
                                   Print a calibration-case draft from an escaped miss
     --task <id>                  Task where the miss escaped review
@@ -426,6 +433,7 @@ Examples:
   guildhall migrate task-state --apply .
   guildhall review-calibration validate . --cases internal/calibration/cases/ux
   guildhall review-calibration validate-planning .
+  guildhall review-calibration validate-sizing .
   guildhall review-calibration draft-case . --task task-1 --lane ux_comprehension --finding "Primary action was ambiguous" --title "Ambiguous action" --scenario "A setup card hides the safe next action"
   guildhall review-calibration escaped-miss . --task task-1 --lane ux_comprehension --finding "Primary action was ambiguous"
   guildhall model-bakeoff artifacts/model-bakeoff/report.json
@@ -903,6 +911,34 @@ export async function validateReviewPlanningCorpus(input: {
   })
 }
 
+export async function validateTaskSizingCorpus(input: {
+  projectPath: string
+  casesDir?: string
+  recordedBy?: string
+  now?: () => Date
+}) {
+  const projectPath = resolve(expandPath(input.projectPath))
+  const casesDir = input.casesDir
+    ? resolve(projectPath, input.casesDir)
+    : resolve(process.cwd(), 'internal/calibration/task-sizing')
+  const store = createReviewAuditStore({
+    projectRoot: projectPath,
+    persistence: new FileBackedGuildhallPersistence(),
+    ...(input.now ? { now: input.now } : {}),
+  })
+  const cases = await loadTaskSizingCasesFromDirectory(casesDir)
+  return recordTaskSizingFrontier({
+    cases,
+    variants: [
+      { variantId: 'balanced', strictness: 'balanced' },
+      { variantId: 'split_sensitive', strictness: 'split_sensitive' },
+    ],
+    store,
+    recordedBy: input.recordedBy ?? 'guildhall-cli',
+    ...(input.now ? { now: input.now } : {}),
+  })
+}
+
 export async function recordEscapedReviewMiss(input: {
   projectPath: string
   taskId: string
@@ -967,8 +1003,8 @@ export function draftEscapedMissCalibrationCase(input: {
 async function cmdReviewCalibration() {
   const pos = positionals()
   const subcommand = pos[0] ?? 'validate'
-  if (!['validate', 'validate-planning', 'draft-case', 'escaped-miss'].includes(subcommand)) {
-    console.error('[guildhall] Usage: guildhall review-calibration <validate|validate-planning|draft-case|escaped-miss> [id|path]')
+  if (!['validate', 'validate-planning', 'validate-sizing', 'draft-case', 'escaped-miss'].includes(subcommand)) {
+    console.error('[guildhall] Usage: guildhall review-calibration <validate|validate-planning|validate-sizing|draft-case|escaped-miss> [id|path]')
     process.exit(1)
   }
   const idOrPath = pos[1]
@@ -1034,6 +1070,19 @@ async function cmdReviewCalibration() {
     console.log(`[guildhall] Frontier record: ${result.record.ref.path}`)
     return
   }
+  if (subcommand === 'validate-sizing') {
+    const result = await validateTaskSizingCorpus({
+      projectPath,
+      ...(casesDir ? { casesDir } : {}),
+      recordedBy: 'guildhall-cli',
+    })
+
+    console.log('[guildhall] Task sizing corpus validated.')
+    console.log(`[guildhall] Recommended variant: ${result.summary.recommendedVariantId ?? 'none'}`)
+    console.log(`[guildhall] Variants: ${result.summary.runs.map((run) => run.variantId).join(', ')}`)
+    console.log(`[guildhall] Frontier record: ${result.record.ref.path}`)
+    return
+  }
   const result = await validateReviewCalibrationCorpus({
     projectPath,
     ...(casesDir ? { casesDir } : {}),
@@ -1074,7 +1123,7 @@ function createSemanticIndexer(projectPath: string): CorpusSemanticIndexer {
     async completeJson({ prompt }) {
       const maxTokens = semanticCompletionBudget(prompt)
       console.log(`[guildhall] Semantic Corpus Map: ${modelId} with up to ${maxTokens} completion tokens.`)
-      const text = await completeOpenAiCompatibleJson(client, {
+      const text = await completeOpenAiCompatibleJsonWithClient(client, {
         modelId,
         systemPrompt: 'You produce compact, valid JSON for codebase/documentation orientation. Do not include markdown.',
         prompt,
@@ -1089,7 +1138,7 @@ function createSemanticIndexer(projectPath: string): CorpusSemanticIndexer {
       const mapPrompt = buildSemanticIndexPrompt(map)
       const maxTokens = semanticRepairCompletionBudget(mapPrompt, raw)
       console.log(`[guildhall] Semantic Corpus Map repair: ${repairModelId} with up to ${maxTokens} completion tokens.`)
-      return completeOpenAiCompatibleJson(client, {
+      return completeOpenAiCompatibleJsonWithClient(client, {
         modelId: repairModelId,
         systemPrompt: 'You repair malformed or schema-invalid JSON. Return only valid JSON. Preserve substance; fix syntax and schema shape.',
         prompt: [
@@ -1139,13 +1188,31 @@ function clampTokenBudget(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
 
-async function completeOpenAiCompatibleJson(
+export async function completeOpenAiCompatibleJson(input: {
+  baseUrl: string
+  apiKey: string
+  modelId: string
+  systemPrompt: string
+  prompt: string
+  maxTokens: number
+  responseFormat?: Record<string, unknown>
+}): Promise<string> {
+  const client = new OpenAICompatibleClient({
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    requestTimeoutMs: 180_000,
+  })
+  return completeOpenAiCompatibleJsonWithClient(client, input)
+}
+
+async function completeOpenAiCompatibleJsonWithClient(
   client: OpenAICompatibleClient,
   input: {
     modelId: string
     systemPrompt: string
     prompt: string
     maxTokens: number
+    responseFormat?: Record<string, unknown>
   },
 ): Promise<string> {
   let text = ''
@@ -1156,6 +1223,7 @@ async function completeOpenAiCompatibleJson(
     max_tokens: input.maxTokens,
     temperature: 0,
     tools: [],
+    ...(input.responseFormat ? { response_format: input.responseFormat } : {}),
   })) {
     if (event.type === 'text_delta') text += event.text
   }

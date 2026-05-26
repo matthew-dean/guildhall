@@ -5,23 +5,43 @@
 -->
 <script lang="ts">
   import Stack from '../../lib/Stack.svelte'
+  import Button from '../../lib/Button.svelte'
   import Card from '../../lib/Card.svelte'
   import Chip from '../../lib/Chip.svelte'
   import Markdown from '../../lib/Markdown.svelte'
+  import Modal from '../../lib/Modal.svelte'
+  import { projectFetch } from '../../lib/project-routes.js'
   import type { Task } from '../../lib/types.js'
 
   interface Props {
     task: Task
+    projectId?: string | null
   }
 
-  let { task }: Props = $props()
+  interface FilePreview {
+    path: string
+    absolutePath?: string
+    content: string
+    language?: string
+    truncated?: boolean
+  }
+
+  let { task, projectId = null }: Props = $props()
+  let selectedFile = $state<string | null>(null)
+  let filePreview = $state<FilePreview | null>(null)
+  let fileBusy = $state(false)
+  let fileError = $state<string | null>(null)
+  let filesModalOpen = $state(false)
 
   const checkpoint = $derived(task.latestCheckpoint ?? null)
   const reviewPlan = $derived(task.reviewPlan ?? null)
   const reviewSummary = $derived(task.reviewAuditSummary ?? null)
+  const sizePlan = $derived(task.sizePlan ?? null)
+  const requestIntake = $derived(task.requestIntake ?? null)
+  const doneSummary = $derived(task.doneSummaryBundle ?? null)
   const verdicts = $derived(task.reviewVerdicts ?? [])
   const gates = $derived(task.gateResults ?? [])
-  const changedFiles = $derived(unique([
+  const changedFiles = $derived(uniqueFiles([
     ...(checkpoint?.filesTouched ?? []),
     ...(task.gitStory?.samplePaths ?? []),
   ]))
@@ -32,6 +52,56 @@
 
   function unique(values: readonly string[]): string[] {
     return [...new Set(values.map(value => value.trim()).filter(Boolean))]
+  }
+
+  function uniqueFiles(values: readonly string[]): string[] {
+    return unique(values).filter(value => !looksLikeDirectory(value))
+  }
+
+  function looksLikeDirectory(value: string): boolean {
+    return /[\\/]$/.test(value.trim())
+  }
+
+  async function inspectFile(file: string): Promise<void> {
+    selectedFile = file
+    filePreview = null
+    fileError = null
+    fileBusy = true
+    try {
+      const res = await projectFetch(
+        `/api/project/task/${encodeURIComponent(task.id)}/file?path=${encodeURIComponent(file)}`,
+        undefined,
+        projectId,
+      )
+      const body = await res.json().catch(() => ({})) as Partial<FilePreview> & { error?: string }
+      if (!res.ok) {
+        fileError = body.error ?? `Could not read ${file}.`
+        return
+      }
+      filePreview = {
+        path: body.path ?? file,
+        ...(body.absolutePath ? { absolutePath: body.absolutePath } : {}),
+        content: body.content ?? '',
+        ...(body.language ? { language: body.language } : {}),
+        truncated: Boolean(body.truncated),
+      }
+    } catch (err) {
+      fileError = err instanceof Error ? err.message : String(err)
+    } finally {
+      fileBusy = false
+    }
+  }
+
+  function openFilesModal(): void {
+    filesModalOpen = true
+  }
+
+  function closeFilesModal(): void {
+    filesModalOpen = false
+    selectedFile = null
+    filePreview = null
+    fileError = null
+    fileBusy = false
   }
 
   function friendlyToken(value: string | undefined): string {
@@ -62,6 +132,15 @@
     if (task.completedAt) return `Marked done at ${task.completedAt}.`
     return `Current status: ${friendlyToken(task.status)}.`
   }
+
+  function sizeActionText(action: string | undefined): string {
+    if (!action) return 'Not sized'
+    if (action === 'split_recommended') return 'Split recommended'
+    if (action === 'split_required') return 'Split required'
+    if (action === 'proceed_with_warning') return 'Proceed with warning'
+    if (action === 'ask_clarifying_question') return 'Ask a question'
+    return friendlyToken(action)
+  }
 </script>
 
 <Stack gap="4">
@@ -87,6 +166,47 @@
               <Chip label={`${reviewPlan.requiredRecipes?.length ?? 0} reviewer group${(reviewPlan.requiredRecipes?.length ?? 0) === 1 ? '' : 's'}`} tone="neutral" />
             </div>
           {/if}
+          {#if sizePlan}
+            <section class="detail">
+              <h4>Task size</h4>
+              <div class="chips">
+                <Chip label={`${friendlyToken(sizePlan.band)} task`} tone={sizePlan.action === 'split_required' ? 'danger' : sizePlan.action === 'split_recommended' ? 'warn' : 'neutral'} />
+                <Chip label={sizeActionText(sizePlan.action)} tone={sizePlan.action === 'split_required' ? 'danger' : sizePlan.action === 'split_recommended' ? 'warn' : 'neutral'} />
+                {#if sizePlan.score}
+                  <Chip label={`Score ${sizePlan.score}`} tone="neutral" />
+                {/if}
+              </div>
+              {#if sizePlan.factors?.length}
+                <p class="muted">{sizePlan.factors.slice(0, 3).map((factor) => factor.label ?? friendlyToken(factor.id)).join(', ')}</p>
+              {/if}
+              {#if sizePlan.recommendedChildren?.length}
+                <ul class="file-list">
+                  {#each sizePlan.recommendedChildren.slice(0, 4) as child, i (`child-${i}`)}
+                    <li>{child.title}</li>
+                  {/each}
+                </ul>
+              {/if}
+            </section>
+          {/if}
+          {#if requestIntake}
+            <section class="detail">
+              <h4>Request shape</h4>
+              <div class="chips">
+                <Chip label={friendlyToken(requestIntake.intent)} tone={requestIntake.intent === 'ambiguous_spec_or_implementation' ? 'warn' : 'neutral'} />
+                <Chip label={friendlyToken(requestIntake.recommendedNextAction)} tone={requestIntake.recommendedNextAction === 'ask_clarifying_question' ? 'warn' : 'neutral'} />
+              </div>
+              {#if requestIntake.ambiguity}
+                <p class="muted">{requestIntake.ambiguity}</p>
+              {/if}
+              {#if requestIntake.componentStack?.length}
+                <ul class="file-list">
+                  {#each requestIntake.componentStack.slice(0, 5) as component, i (`component-${i}`)}
+                    <li>{component.title ?? friendlyToken(component.kind)}{#if component.role}: {component.role}{/if}</li>
+                  {/each}
+                </ul>
+              {/if}
+            </section>
+          {/if}
         </div>
       </article>
     </li>
@@ -110,14 +230,12 @@
           {#if changedFiles.length > 0}
             <section class="detail">
               <h4>Files changed</h4>
-              <ul class="file-list">
-                {#each changedFiles.slice(0, 8) as file (file)}
-                  <li>{file}</li>
-                {/each}
-              </ul>
-              {#if changedFiles.length > 8}
-                <p class="muted">+{changedFiles.length - 8} more</p>
-              {/if}
+              <p class="muted">
+                {changedFiles.length} file{changedFiles.length === 1 ? '' : 's'} changed.
+              </p>
+              <Button variant="secondary" size="sm" onclick={openFilesModal}>
+                Inspect files
+              </Button>
             </section>
           {/if}
         </div>
@@ -184,7 +302,33 @@
             <strong>Finished</strong>
             {#if task.completedAt}<time>{task.completedAt}</time>{/if}
           </header>
-          <p>{outcomeText()}</p>
+          {#if doneSummary?.summary}
+            <section class="detail">
+              <h4>Done summary</h4>
+              {#if doneSummary.summary.journey}<p>{doneSummary.summary.journey}</p>{/if}
+              {#if doneSummary.summary.decision}<p>{doneSummary.summary.decision}</p>{/if}
+              {#if doneSummary.summary.evidence}<p class="muted">{doneSummary.summary.evidence}</p>{/if}
+              {#if doneSummary.summary.learningCandidates?.length}
+                <ul class="file-list">
+                  {#each doneSummary.summary.learningCandidates as item, i (`learning-${i}`)}
+                    <li>{item}</li>
+                  {/each}
+                </ul>
+              {/if}
+              <div class="chips">
+                <Chip
+                  label={doneSummary.retention?.compactedFullTranscript ? 'Transcript compacted' : 'Transcript retained'}
+                  tone={doneSummary.retention?.compactedFullTranscript ? 'ok' : 'neutral'}
+                />
+                <Chip
+                  label={doneSummary.retention?.fullEvidenceAvailable === false ? 'Full evidence unavailable' : 'Full evidence available'}
+                  tone={doneSummary.retention?.fullEvidenceAvailable === false ? 'warn' : 'neutral'}
+                />
+              </div>
+            </section>
+          {:else}
+            <p>{outcomeText()}</p>
+          {/if}
           {#if task.terminalSummary?.detail}
             <Markdown source={task.terminalSummary.detail} />
           {/if}
@@ -193,6 +337,54 @@
     </li>
   </ol>
 </Stack>
+
+<Modal
+  open={filesModalOpen}
+  title="Files changed"
+  size="xl"
+  onClose={closeFilesModal}
+>
+  <div class="files-modal">
+    <aside class="files-sidebar" aria-label="Changed files">
+      <ul class="file-list modal-list">
+        {#each changedFiles as file (file)}
+          <li>
+            <button
+              type="button"
+              class:selected={selectedFile === file}
+              aria-label={`Inspect ${file}`}
+              onclick={() => inspectFile(file)}
+            >
+              {file}
+            </button>
+          </li>
+        {/each}
+      </ul>
+    </aside>
+    <section class="file-preview modal-preview" aria-live="polite">
+      {#if selectedFile}
+        <header>
+          <strong>{selectedFile}</strong>
+          {#if filePreview?.language}<span>{filePreview.language}</span>{/if}
+        </header>
+        {#if fileBusy}
+          <p class="muted">Reading file...</p>
+        {:else if fileError}
+          <p class="error">{fileError}</p>
+        {:else if filePreview}
+          {#if filePreview.truncated}
+            <p class="muted">Preview is truncated to the first 256 KB.</p>
+          {/if}
+          <pre><code>{filePreview.content}</code></pre>
+        {:else}
+          <p class="muted">Choose a file to inspect.</p>
+        {/if}
+      {:else}
+        <p class="muted">Choose a file to inspect.</p>
+      {/if}
+    </section>
+  </div>
+</Modal>
 
 <style>
   .intro,
@@ -275,11 +467,117 @@
     line-height: var(--lh-body);
     overflow-wrap: anywhere;
   }
+  .file-list button {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    font-family: var(--font-mono);
+    padding: 0;
+    text-align: left;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+  .file-list button:hover,
+  .file-list button:focus-visible,
+  .file-list button.selected {
+    text-decoration: underline;
+  }
+  .file-preview {
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg-subtle);
+    overflow: hidden;
+  }
+  .file-preview header {
+    padding: var(--s-2) var(--s-3);
+    border-bottom: 1px solid var(--border);
+  }
+  .file-preview header strong,
+  .file-preview header span {
+    font-size: var(--fs-0);
+  }
+  .file-preview header span {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+  .file-preview pre {
+    margin: 0;
+    max-height: 20rem;
+    overflow: auto;
+    padding: var(--s-3);
+    color: var(--text);
+    background: var(--bg);
+    font-size: var(--fs-0);
+    line-height: 1.55;
+  }
+  .file-preview code {
+    font-family: var(--font-mono);
+    white-space: pre;
+  }
+  .file-preview .muted,
+  .file-preview .error {
+    margin: 0;
+    padding: var(--s-3);
+  }
+  .files-modal {
+    display: grid;
+    grid-template-columns: minmax(220px, 0.36fr) minmax(0, 1fr);
+    gap: var(--s-3);
+    min-height: min(58vh, 560px);
+  }
+  .files-sidebar {
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg-subtle);
+    overflow: auto;
+  }
+  .modal-list {
+    display: grid;
+    gap: 0;
+    padding: var(--s-2);
+    list-style: none;
+  }
+  .modal-list li + li {
+    border-top: 1px solid var(--border);
+  }
+  .modal-list button {
+    display: block;
+    width: 100%;
+    padding: var(--s-2);
+    border-radius: var(--r-1);
+    color: var(--text);
+  }
+  .modal-list button:hover,
+  .modal-list button:focus-visible,
+  .modal-list button.selected {
+    background: var(--bg-raised);
+    text-decoration: none;
+  }
+  .modal-preview {
+    min-width: 0;
+    min-height: 0;
+  }
+  .modal-preview pre {
+    max-height: min(52vh, 520px);
+  }
+  .error {
+    color: var(--danger);
+    font-size: var(--fs-0);
+  }
   .mini-record {
     display: flex;
     align-items: center;
     gap: var(--s-2);
     color: var(--text-muted);
     font-size: var(--fs-1);
+  }
+  @media (max-width: 760px) {
+    .files-modal {
+      grid-template-columns: 1fr;
+      min-height: 0;
+    }
   }
 </style>

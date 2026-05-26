@@ -52,6 +52,34 @@ function resolveShellCwd(inputCwd: string | undefined, fallbackCwd: string | und
   return cwd
 }
 
+function stripShellCdQuotes(value: string): string {
+  const trimmed = value.trim()
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1)
+  }
+  return trimmed
+}
+
+function cwdFromLeadingCdChain(command: string, baseCwd: string): string | null {
+  let rest = command.trim()
+  let cwd = path.resolve(baseCwd)
+  let moved = false
+  const cdPrefix = /^cd\s+("[^"]+"|'[^']+'|[^&;]+?)\s*&&\s*/i
+  while (true) {
+    const match = cdPrefix.exec(rest)
+    if (!match) break
+    const target = stripShellCdQuotes(match[1] ?? '')
+    if (!target) break
+    cwd = path.resolve(cwd, target)
+    rest = rest.slice(match[0].length).trimStart()
+    moved = true
+  }
+  return moved ? cwd : null
+}
+
 function reconcileShellCwdWithTaskScope(
   requestedCwd: string,
   metadata: Record<string, unknown> | undefined,
@@ -426,6 +454,8 @@ export const shellTool = defineTool({
   isReadOnly: () => false,
   execute: async (input, ctx) => {
     const authoritativeCommands = parseAuthoritativeCommands(ctx.metadata)
+    const requestedCwd = resolveShellCwd(input.cwd, ctx.cwd)
+    const cdAdjustedCwd = cwdFromLeadingCdChain(input.command, requestedCwd) ?? requestedCwd
     const reconciled = reconcileShellCommandWithAuthority(input.command, authoritativeCommands)
     const requestedKind = classifyGateCommand(input.command)
     const executableCommand = normalizePnpmScopedScriptCommand(reconciled.command)
@@ -466,8 +496,7 @@ export const shellTool = defineTool({
         } as unknown as Record<string, unknown>,
       }
     }
-    const requestedCwd = resolveShellCwd(input.cwd, ctx.cwd)
-    const effectiveCwd = reconcileShellCwdWithTaskScope(requestedCwd, ctx.metadata)
+    const effectiveCwd = reconcileShellCwdWithTaskScope(cdAdjustedCwd, ctx.metadata)
     const normalizedInput: ShellInput = {
       ...input,
       command: executableCommand,
@@ -496,6 +525,7 @@ export const shellTool = defineTool({
         executedCommand: executableCommand,
         usedAuthoritativeCommand: reconciled.usedAuthority,
         requestedCwd,
+        cdAdjustedCwd,
         executedCwd: effectiveCwd,
       } as unknown as Record<string, unknown>,
     }

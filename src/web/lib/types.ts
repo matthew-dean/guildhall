@@ -11,7 +11,16 @@ export interface Escalation {
   summary?: string
   details?: string
   agentId?: string
+  externalChecklist?: ExternalBlockerStep[]
   resolvedAt?: string | null
+}
+
+export interface ExternalBlockerStep {
+  id?: string
+  title?: string
+  detail?: string
+  owner?: 'user' | 'guildhall' | 'external' | string
+  status?: 'todo' | 'done' | 'blocked' | string
 }
 
 export interface ProductBrief {
@@ -110,6 +119,56 @@ export interface ReviewAuditSummary {
   latestReviewerRunAt?: string
 }
 
+export interface TaskSizePlan {
+  taskId?: string
+  score?: 1 | 2 | 3 | 5 | 8 | number
+  band?: 'tiny' | 'small' | 'medium' | 'large' | 'epic' | string
+  action?: 'proceed' | 'proceed_with_warning' | 'split_recommended' | 'split_required' | 'ask_clarifying_question' | string
+  factors?: Array<{ id?: string; label?: string; weight?: number; reason?: string }>
+  recommendedChildren?: Array<{
+    title?: string
+    reason?: string
+    dependsOn?: string[]
+    suggestedDomain?: string
+    createdTaskId?: string
+  }>
+  reviewBudgetHint?: string
+  reasons?: string[]
+  createdAt?: string
+  createdBy?: string
+}
+
+export interface RequestIntake {
+  intent?: 'spec_only' | 'implementation' | 'ambiguous_spec_or_implementation' | 'question_or_research' | string
+  recommendedNextAction?: 'ask_clarifying_question' | 'draft_spec' | 'create_linked_feature_plan' | 'proceed_to_implementation_spec' | string
+  ambiguity?: string
+  componentStack?: Array<{ kind?: string; title?: string; role?: string }>
+  clarifyingQuestions?: string[]
+  createdAt?: string
+  createdBy?: string
+}
+
+export interface DoneTaskSummaryBundle {
+  taskId?: string
+  status?: string
+  completedAt?: string
+  summary?: {
+    journey?: string
+    decision?: string
+    evidence?: string
+    learningCandidates?: string[]
+    openResidue?: string
+  }
+  retention?: {
+    transcriptPrimaryArtifact?: boolean
+    compactedFullTranscript?: boolean
+    fullEvidenceAvailable?: boolean
+  }
+  evidenceRefs?: Array<{ scope?: string; collection?: string; id?: string; path?: string; hash?: string; contentType?: string }>
+  createdAt?: string
+  createdBy?: string
+}
+
 export interface TaskNote {
   role?: string
   agentId?: string
@@ -206,6 +265,9 @@ export interface Task {
   notes?: TaskNote[]
   latestReviewerSummary?: string
   latestSelfCritique?: string
+  sizePlan?: TaskSizePlan
+  requestIntake?: RequestIntake
+  doneSummaryBundle?: DoneTaskSummaryBundle
   latestCheckpoint?: {
     step?: number
     agentId?: string
@@ -314,7 +376,7 @@ export interface DrawerPayload {
   }
 }
 
-export type DrawerTab = 'current' | 'spec' | 'journey' | 'transcript' | 'experts' | 'history' | 'provenance'
+export type DrawerTab = 'overview' | 'current' | 'spec' | 'journey' | 'transcript' | 'experts' | 'history' | 'provenance'
 
 export interface TaskTurnLiveAgent {
   name: string
@@ -404,6 +466,7 @@ export interface TaskThreadEscalationTurn extends TaskThreadTurnBase {
   escalationAgentId?: string
   summary: string
   details?: string
+  externalChecklist?: ExternalBlockerStep[]
   activity?: TaskTurnLiveActivity[]
 }
 

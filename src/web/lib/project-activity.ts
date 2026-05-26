@@ -222,6 +222,17 @@ export function buildProjectTicker(
     }
   }
 
+  if (detail?.run?.status === 'error') {
+    return {
+      tone: 'danger',
+      pulse: false,
+      actorLabel: 'Run error',
+      label: 'Error',
+      message: friendlyRuntimeMessage(detail.run.error ?? 'Guildhall run failed.'),
+      timeLabel: null,
+    }
+  }
+
   const stopSummary = detail?.run?.stopSummary
   if (detail?.run?.status !== 'running' && stopSummary?.stopReason === 'awaiting_human') {
     return {

@@ -17,9 +17,32 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import path from 'node:path'
 import fs from 'node:fs/promises'
+import fsSync from 'node:fs'
 import { resolveRuntimePath } from './path-utils.js'
 
 const execFileP = promisify(execFile)
+const GIT_BIN = process.env['GUILDHALL_GIT_BIN']?.trim() || '/usr/bin/git'
+const GH_BIN = process.env['GUILDHALL_GH_BIN']?.trim() || 'gh'
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+async function execGit(args: readonly string[], opts: { cwd: string; maxBuffer?: number }): Promise<{ stdout: string; stderr: string }> {
+  try {
+    return await execFileP(GIT_BIN, [...args], opts)
+  } catch (err) {
+    if (!err || typeof err !== 'object' || (err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    if (!fsSync.existsSync(opts.cwd)) {
+      throw new Error(`Cannot run git because cwd does not exist: ${opts.cwd}`)
+    }
+    return await execFileP('/bin/sh', ['-lc', [shellQuote(GIT_BIN), ...args.map(shellQuote)].join(' ')], opts)
+  }
+}
+
+async function execGh(args: readonly string[], opts: { cwd: string; maxBuffer?: number }): Promise<{ stdout: string; stderr: string }> {
+  return await execFileP(GH_BIN, [...args], opts)
+}
 
 function isIgnorableGuildhallStatePath(file: string): boolean {
   return (
@@ -32,8 +55,16 @@ function isIgnorableGuildhallStatePath(file: string): boolean {
 }
 
 async function resolveGitTopLevel(repoRoot: string): Promise<string> {
-  const { stdout } = await execFileP('git', ['rev-parse', '--show-toplevel'], {
-    cwd: resolveRuntimePath(repoRoot),
+  let cwd = resolveRuntimePath(repoRoot)
+  while (!fsSync.existsSync(cwd)) {
+    const parent = path.dirname(cwd)
+    if (parent === cwd) {
+      throw new Error(`Cannot resolve git root because no existing ancestor was found for: ${repoRoot}`)
+    }
+    cwd = parent
+  }
+  const { stdout } = await execGit(['rev-parse', '--show-toplevel'], {
+    cwd,
   })
   return stdout.trim() || repoRoot
 }
@@ -144,7 +175,7 @@ export interface GitDriver {
 
 export class NodeGitDriver implements GitDriver {
   async currentBranch(repoRoot: string): Promise<string> {
-    const { stdout } = await execFileP('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+    const { stdout } = await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], {
       cwd: resolveRuntimePath(repoRoot),
     })
     return stdout.trim()
@@ -156,7 +187,7 @@ export class NodeGitDriver implements GitDriver {
 
   async statusSummary(repoRoot: string): Promise<GitStatusSummary> {
     const gitRoot = await resolveGitTopLevel(repoRoot)
-    const { stdout } = await execFileP('git', ['status', '--porcelain=v1', '-b'], {
+    const { stdout } = await execGit(['status', '--porcelain=v1', '-b'], {
       cwd: gitRoot,
     })
     const rawLines = stdout
@@ -184,7 +215,7 @@ export class NodeGitDriver implements GitDriver {
 
   async localCommits(repoRoot: string, upstream: string): Promise<Array<{ sha: string; subject: string }>> {
     const gitRoot = await resolveGitTopLevel(repoRoot)
-    const { stdout } = await execFileP('git', ['log', '--format=%H%x09%s', `${upstream}..HEAD`], {
+      const { stdout } = await execGit(['log', '--format=%H%x09%s', `${upstream}..HEAD`], {
       cwd: gitRoot,
     })
     return stdout
@@ -201,9 +232,7 @@ export class NodeGitDriver implements GitDriver {
   async pullRequestForBranch(repoRoot: string, branch: string): Promise<PullRequestResult> {
     try {
       const gitRoot = await resolveGitTopLevel(repoRoot)
-      const { stdout } = await execFileP(
-        'gh',
-        ['pr', 'view', branch, '--json', 'url,state,mergeStateStatus'],
+      const { stdout } = await execGh(['pr', 'view', branch, '--json', 'url,state,mergeStateStatus'],
         { cwd: gitRoot },
       )
       const parsed = JSON.parse(stdout) as { url?: string; state?: string; mergeStateStatus?: string }
@@ -224,22 +253,20 @@ export class NodeGitDriver implements GitDriver {
   async commitAll(repoRoot: string, message: string): Promise<CheckpointResult> {
     const gitRoot = await resolveGitTopLevel(repoRoot)
     try {
-      await execFileP('git', ['add', '-A'], { cwd: gitRoot })
-      await execFileP(
-        'git',
-        ['reset', '--quiet', 'HEAD', '--', '.guildhall', 'memory', 'guildhall.yaml'],
+      await execGit(['add', '-A'], { cwd: gitRoot })
+      await execGit(['reset', '--quiet', 'HEAD', '--', '.guildhall', 'memory', 'guildhall.yaml'],
         { cwd: gitRoot },
       )
       let hasStagedChanges = true
       try {
-        await execFileP('git', ['diff', '--cached', '--quiet'], { cwd: gitRoot })
+        await execGit(['diff', '--cached', '--quiet'], { cwd: gitRoot })
         hasStagedChanges = false
       } catch {
         hasStagedChanges = true
       }
       if (!hasStagedChanges) return { ok: true }
-      await execFileP('git', ['commit', '--no-verify', '-m', message], { cwd: gitRoot })
-      const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: gitRoot })
+      await execGit(['commit', '--no-verify', '-m', message], { cwd: gitRoot })
+      const { stdout } = await execGit(['rev-parse', 'HEAD'], { cwd: gitRoot })
       return { ok: true, commitSha: stdout.trim() }
     } catch (err) {
       return { ok: false, detail: err instanceof Error ? err.message : String(err) }
@@ -254,15 +281,13 @@ export class NodeGitDriver implements GitDriver {
     const resolvedWorktreePath = resolveRuntimePath(worktreePath)
     await fs.mkdir(path.dirname(resolvedWorktreePath), { recursive: true })
     try {
-      await execFileP(
-        'git',
-        ['worktree', 'add', '-b', branch, resolvedWorktreePath, baseBranch],
+      await execGit(['worktree', 'add', '-b', branch, resolvedWorktreePath, baseBranch],
         { cwd: resolvedRepoRoot },
       )
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (!/already exists/i.test(message)) throw err
-      await execFileP('git', ['worktree', 'add', resolvedWorktreePath, branch], {
+      await execGit(['worktree', 'add', resolvedWorktreePath, branch], {
         cwd: resolvedRepoRoot,
       })
     }
@@ -275,14 +300,14 @@ export class NodeGitDriver implements GitDriver {
     const resolvedRepoRoot = resolveRuntimePath(repoRoot)
     const resolvedWorktreePath = resolveRuntimePath(worktreePath)
     await fs.mkdir(path.dirname(resolvedWorktreePath), { recursive: true })
-    await execFileP('git', ['worktree', 'add', resolvedWorktreePath, branch], {
+    await execGit(['worktree', 'add', resolvedWorktreePath, branch], {
       cwd: resolvedRepoRoot,
     })
   }
 
   async removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {
     try {
-      await execFileP('git', ['worktree', 'remove', '--force', resolveRuntimePath(worktreePath)], {
+      await execGit(['worktree', 'remove', '--force', resolveRuntimePath(worktreePath)], {
         cwd: resolveRuntimePath(repoRoot),
       })
     } catch {
@@ -298,46 +323,44 @@ export class NodeGitDriver implements GitDriver {
     try {
       let branchExists = false
       try {
-        await execFileP('git', ['rev-parse', '--verify', branch], { cwd: gitRoot })
+        await execGit(['rev-parse', '--verify', branch], { cwd: gitRoot })
         branchExists = true
       } catch {
         branchExists = false
       }
 
       if (branchExists) {
-        await execFileP('git', ['checkout', branch], { cwd: gitRoot })
+        await execGit(['checkout', branch], { cwd: gitRoot })
       } else {
-        await execFileP('git', ['checkout', '-b', branch], { cwd: gitRoot })
+        await execGit(['checkout', '-b', branch], { cwd: gitRoot })
       }
 
-      await execFileP('git', ['add', '-A'], { cwd: gitRoot })
-      await execFileP(
-        'git',
-        ['reset', '--quiet', 'HEAD', '--', '.guildhall', 'memory', 'guildhall.yaml'],
+      await execGit(['add', '-A'], { cwd: gitRoot })
+      await execGit(['reset', '--quiet', 'HEAD', '--', '.guildhall', 'memory', 'guildhall.yaml'],
         { cwd: gitRoot },
       )
       let hasStagedChanges = true
       try {
-        await execFileP('git', ['diff', '--cached', '--quiet'], { cwd: gitRoot })
+        await execGit(['diff', '--cached', '--quiet'], { cwd: gitRoot })
         hasStagedChanges = false
       } catch {
         hasStagedChanges = true
       }
       if (!hasStagedChanges) {
-        await execFileP('git', ['checkout', baseBranch], { cwd: gitRoot })
+        await execGit(['checkout', baseBranch], { cwd: gitRoot })
         return { ok: true }
       }
-      await execFileP('git', ['commit', '--no-verify', '-m', commitMessage], {
+      await execGit(['commit', '--no-verify', '-m', commitMessage], {
         cwd: gitRoot,
       })
-      const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], {
+      const { stdout } = await execGit(['rev-parse', 'HEAD'], {
         cwd: gitRoot,
       })
-      await execFileP('git', ['checkout', baseBranch], { cwd: gitRoot })
+      await execGit(['checkout', baseBranch], { cwd: gitRoot })
       return { ok: true, commitSha: stdout.trim() }
     } catch (err) {
       try {
-        await execFileP('git', ['checkout', baseBranch], { cwd: gitRoot })
+        await execGit(['checkout', baseBranch], { cwd: gitRoot })
       } catch {
         // Best-effort recovery only.
       }
@@ -355,9 +378,9 @@ export class NodeGitDriver implements GitDriver {
   ): Promise<MergeResult> {
     const gitRoot = await resolveGitTopLevel(repoRoot)
     try {
-      await execFileP('git', ['checkout', baseBranch], { cwd: gitRoot })
-      await execFileP('git', ['merge', '--ff-only', branch], { cwd: gitRoot })
-      const { stdout } = await execFileP('git', ['rev-parse', 'HEAD'], {
+      await execGit(['checkout', baseBranch], { cwd: gitRoot })
+      await execGit(['merge', '--ff-only', branch], { cwd: gitRoot })
+      const { stdout } = await execGit(['rev-parse', 'HEAD'], {
         cwd: gitRoot,
       })
       return { ok: true, commitSha: stdout.trim() }
@@ -375,10 +398,8 @@ export class NodeGitDriver implements GitDriver {
   ): Promise<MergeResult> {
     const gitRoot = await resolveGitTopLevel(repoRoot)
     try {
-      await execFileP('git', ['checkout', baseBranch], { cwd: gitRoot })
-      const { stdout } = await execFileP(
-        'git',
-        ['rev-list', '--reverse', `${baseBranch}..${branch}`],
+      await execGit(['checkout', baseBranch], { cwd: gitRoot })
+      const { stdout } = await execGit(['rev-list', '--reverse', `${baseBranch}..${branch}`],
         { cwd: gitRoot },
       )
       const commits = stdout
@@ -386,15 +407,13 @@ export class NodeGitDriver implements GitDriver {
         .map((line) => line.trim())
         .filter(Boolean)
       if (commits.length === 0) {
-        const { stdout: head } = await execFileP('git', ['rev-parse', 'HEAD'], {
+        const { stdout: head } = await execGit(['rev-parse', 'HEAD'], {
           cwd: gitRoot,
         })
         return { ok: true, commitSha: head.trim() }
       }
 
-      const { stdout: changedStdout } = await execFileP(
-        'git',
-        ['diff', '--name-only', '-z', `${baseBranch}..${branch}`],
+      const { stdout: changedStdout } = await execGit(['diff', '--name-only', '-z', `${baseBranch}..${branch}`],
         { cwd: gitRoot, maxBuffer: 10 * 1024 * 1024 },
       )
       const meaningfulPaths = changedStdout
@@ -405,25 +424,23 @@ export class NodeGitDriver implements GitDriver {
 
       if (meaningfulPaths.length > 0) {
         const diffArgs = ['diff', '--binary', `${baseBranch}..${branch}`, '--', ...meaningfulPaths]
-        const { stdout: patch } = await execFileP('git', diffArgs, {
+        const { stdout: patch } = await execGit(diffArgs, {
           cwd: gitRoot,
           maxBuffer: 50 * 1024 * 1024,
         })
         const patchPath = path.join(gitRoot, '.git', 'guildhall-cherry-pick.patch')
         await fs.writeFile(patchPath, patch, 'utf8')
         try {
-          await execFileP('git', ['apply', '--check', patchPath], { cwd: gitRoot })
-          await execFileP('git', ['apply', '--index', patchPath], { cwd: gitRoot })
+          await execGit(['apply', '--check', patchPath], { cwd: gitRoot })
+          await execGit(['apply', '--index', patchPath], { cwd: gitRoot })
         } finally {
           await fs.rm(patchPath, { force: true })
         }
-        await execFileP(
-          'git',
-          ['commit', '--no-verify', '-m', `Guildhall: land ${branch}`],
+        await execGit(['commit', '--no-verify', '-m', `Guildhall: land ${branch}`],
           { cwd: gitRoot },
         )
       }
-      const { stdout: head } = await execFileP('git', ['rev-parse', 'HEAD'], {
+      const { stdout: head } = await execGit(['rev-parse', 'HEAD'], {
         cwd: gitRoot,
       })
       return { ok: true, commitSha: head.trim() }
@@ -436,7 +453,7 @@ export class NodeGitDriver implements GitDriver {
 
   async push(repoRoot: string, branch: string): Promise<PushResult> {
     try {
-      await execFileP('git', ['push', 'origin', branch], { cwd: resolveRuntimePath(repoRoot) })
+      await execGit(['push', 'origin', branch], { cwd: resolveRuntimePath(repoRoot) })
       return { ok: true }
     } catch (err) {
       return {
@@ -463,7 +480,7 @@ export class NodeGitDriver implements GitDriver {
         '--body',
         opts.body ?? '',
       ]
-      const { stdout } = await execFileP('gh', args, { cwd: resolveRuntimePath(repoRoot) })
+      const { stdout } = await execGh(args, { cwd: resolveRuntimePath(repoRoot) })
       const urlLine = stdout.trim().split('\n').find((l) => l.startsWith('http'))
       return urlLine ? { ok: true, url: urlLine } : { ok: true }
     } catch (err) {

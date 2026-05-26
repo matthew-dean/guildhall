@@ -39,7 +39,7 @@ import {
   type StreamEvent,
 } from '@guildhall/protocol'
 
-import type { ApiStreamEvent, SupportsStreamingMessages } from './client.js'
+import type { ApiMessageRequest, ApiStreamEvent, SupportsStreamingMessages } from './client.js'
 import { HookEvent, type HookExecutor } from './hooks.js'
 import { PermissionChecker } from './permissions.js'
 import { recordToolCarryover } from './tool-carryover.js'
@@ -281,6 +281,11 @@ export interface QueryContext {
   systemPrompt: string
   maxTokens: number
   temperature?: number
+  promptCacheKey?: string
+  apiRequestOptions?: Pick<
+    ApiMessageRequest,
+    'response_format' | 'reasoning_effort' | 'reasoning' | 'tool_choice'
+  >
   contextWindowTokens?: number | null
   autoCompactThresholdTokens?: number | null
   permissionPrompt?: (toolName: string, reason: string) => Promise<boolean>
@@ -1234,6 +1239,8 @@ export async function* runQuery(
         system_prompt: context.systemPrompt,
         max_tokens: context.maxTokens,
         ...(context.temperature !== undefined ? { temperature: context.temperature } : {}),
+        ...(context.promptCacheKey !== undefined ? { prompt_cache_key: context.promptCacheKey } : {}),
+        ...(context.apiRequestOptions ?? {}),
         tools: context.toolRegistry.toApiSchema(),
         ...(context.abortSignal ? { signal: context.abortSignal } : {}),
       })) {
@@ -2180,6 +2187,8 @@ async function attemptFocusedWriteFileRepair(
         'You are repairing a malformed write-file call. Return exactly one write-file tool call with complete JSON arguments.',
       max_tokens: Math.min(context.maxTokens, 1_024),
       ...(context.temperature !== undefined ? { temperature: context.temperature } : {}),
+      ...(context.promptCacheKey !== undefined ? { prompt_cache_key: context.promptCacheKey } : {}),
+      ...(context.apiRequestOptions ?? {}),
       tools: writeFileToolSchema,
       signal: composeRepairAbortSignal(context.abortSignal, 20_000),
     })) {
@@ -2244,6 +2253,8 @@ async function attemptFocusedEditFileRepair(
         'You are repairing a malformed file mutation call. Return exactly one tool call: either edit-file with complete arguments or write-file with complete arguments.',
       max_tokens: Math.min(context.maxTokens, 8_192),
       ...(context.temperature !== undefined ? { temperature: context.temperature } : {}),
+      ...(context.promptCacheKey !== undefined ? { prompt_cache_key: context.promptCacheKey } : {}),
+      ...(context.apiRequestOptions ?? {}),
       tools: fileMutationToolSchemas,
       ...(context.abortSignal ? { signal: context.abortSignal } : {}),
     })) {

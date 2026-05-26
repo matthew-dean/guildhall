@@ -27,8 +27,10 @@
     AgentQuestion as Question,
     Task,
     TaskThreadTurn,
+    TaskThreadEscalationTurn,
     TaskThreadInFlightTurn,
     TaskThreadQuestionTurn,
+    ExternalBlockerStep,
   } from '../../lib/types.js'
 
   interface Props {
@@ -253,7 +255,8 @@
   }
 
   function cardTitleForTurn(turn: TaskThreadInFlightTurn): string {
-    return hasIncompleteTaskChecklist(turn) ? 'Needs brief cleanup' : 'Current state'
+    if (hasIncompleteTaskChecklist(turn)) return 'Needs brief cleanup'
+    return turn.liveAgent ? 'Live progress' : 'Task status'
   }
 
   function checklistStepTone(
@@ -277,6 +280,18 @@
 
   async function answer(turn: TaskThreadQuestionTurn, answer: string): Promise<void> {
     await onAnswerQuestion(turn.question.id, answer)
+  }
+
+  function externalStepOwnerLabel(step: ExternalBlockerStep): string {
+    if (step.owner === 'guildhall') return 'Guildhall'
+    if (step.owner === 'external') return 'External service'
+    return 'You'
+  }
+
+  function checklistForEscalation(turn: TaskThreadEscalationTurn): ExternalBlockerStep[] {
+    if (turn.externalChecklist?.length) return turn.externalChecklist
+    const match = (task.escalations ?? []).find(item => item.id === turn.escalationId)
+    return match?.externalChecklist ?? []
   }
 </script>
 
@@ -371,6 +386,7 @@
         {@const recoveryAction = escalationPrimaryAction({ reason: turn.escalationReason, agentId: turn.escalationAgentId, summary: turn.summary, details: turn.details })}
         {@const reasonLabel = escalationReasonLabel(turn.escalationReason)}
         {@const ownerLabel = roleLabel(turn.escalationAgentId)}
+        {@const externalChecklist = checklistForEscalation(turn)}
         <Card title={guidance.actionOwner === 'guildhall' ? 'Guildhall can continue' : 'Recovery needed'} tone="warn">
           <Stack gap="3">
             <StateSummary
@@ -399,6 +415,25 @@
                 <p class="detail-copy">{guidance.technicalNote}</p>
               </details>
             {/if}
+            {#if externalChecklist.length > 0}
+              <section class="state-section external-checklist" aria-label="External setup checklist">
+                <p class="section-label">External setup checklist</p>
+                <div class="external-steps">
+                  {#each externalChecklist as step, index (`${step.id ?? step.title ?? 'step'}:${index}`)}
+                    <div class="external-step">
+                      <StatusLight tone={step.status === 'done' ? 'ok' : 'idle'} />
+                      <div class="external-step-copy">
+                        <strong>{step.title}</strong>
+                        {#if step.detail}
+                          <span>{step.detail}</span>
+                        {/if}
+                      </div>
+                      <span class="external-step-owner">{externalStepOwnerLabel(step)}</span>
+                    </div>
+                  {/each}
+                </div>
+              </section>
+            {/if}
             <Row justify="end" gap="2">
               <Button variant="secondary" onclick={onOpenSpecTab}>View spec and evidence</Button>
               {#if guidance.actionOwner === 'user'}
@@ -420,7 +455,9 @@
               </Button>
             </Row>
             {#if turn.activity?.length}
-              <div class="live-activity" aria-label="Recent agent activity">
+              <section class="state-section" aria-label="Activity log">
+                <p class="section-label">Activity log</p>
+                <div class="live-activity">
                 {#each turn.activity as item, index (`${item.at ?? 'event'}:${item.label}:${index}`)}
                   <StatusLine
                     label={item.label}
@@ -430,20 +467,26 @@
                     pulse={item.tone === 'running'}
                   />
                 {/each}
-              </div>
+                </div>
+              </section>
             {/if}
           </Stack>
         </Card>
       {:else if turn.kind === 'inflight'}
         <Card title={cardTitleForTurn(turn)} tone={hasIncompleteTaskChecklist(turn) ? 'warn' : turn.importedDraft ? 'accent' : 'default'}>
           <Stack gap="3">
-            <StateSummary
-              label={hasIncompleteTaskChecklist(turn) ? briefFixTitle(turn) : taskStateLabel(turn)}
-              description={taskStateDescription(turn)}
-              tone={taskStateTone(turn)}
-            />
+            <section class="state-section" aria-label="Current task status">
+              <p class="section-label">Current status</p>
+              <StateSummary
+                label={hasIncompleteTaskChecklist(turn) ? briefFixTitle(turn) : taskStateLabel(turn)}
+                description={taskStateDescription(turn)}
+                tone={taskStateTone(turn)}
+              />
+            </section>
             {#if turn.activity?.length}
-              <div class="live-activity" aria-label="Recent agent activity">
+              <section class="state-section" aria-label="Activity log">
+                <p class="section-label">Activity log</p>
+                <div class="live-activity">
                 {#each turn.activity as item, index (`${item.at ?? 'event'}:${item.label}:${index}`)}
                   <StatusLine
                     label={item.label}
@@ -453,10 +496,11 @@
                     pulse={item.tone === 'running'}
                   />
                 {/each}
-              </div>
+                </div>
+              </section>
             {/if}
             {#if turn.checklist && (!turn.importedDraft || Boolean(turn.liveAgent)) && !isQueuedSpecRevision(turn)}
-              <div class="live-checklist">
+              <section class="state-section live-checklist">
                 <div class="live-checklist-head">
                   <strong>{turn.checklist.title}</strong>
                   <span>{turn.checklist.doneCount} of {turn.checklist.totalSteps}</span>
@@ -476,7 +520,7 @@
                     </div>
                   {/each}
                 </div>
-              </div>
+              </section>
             {/if}
             {#if showsTaskAction(turn)}
               <Row justify="end" gap="2">
@@ -563,6 +607,52 @@
   }
   .more[open] > summary::before {
     content: '▾ ';
+  }
+  .state-section {
+    display: grid;
+    gap: var(--s-2);
+  }
+  .external-steps {
+    display: grid;
+    gap: var(--s-2);
+  }
+  .external-step {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+    gap: var(--s-2);
+    padding: var(--s-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg);
+  }
+  .external-step-copy {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+  .external-step-copy strong {
+    color: var(--text);
+    font-size: var(--fs-2);
+    line-height: var(--lh-tight);
+  }
+  .external-step-copy span,
+  .external-step-owner {
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+    line-height: var(--lh-body);
+  }
+  .external-step-owner {
+    white-space: nowrap;
+  }
+  .section-label {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-0);
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    line-height: 1;
+    text-transform: uppercase;
   }
   .live-activity {
     display: grid;

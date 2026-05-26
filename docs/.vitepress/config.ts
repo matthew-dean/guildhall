@@ -85,6 +85,7 @@ const guideStartItems = [
 const guideWorksItems = [
   { text: 'How Guildhall works', link: '/guide/how-guildhall-works' },
   { text: 'How Guildhall builds', link: '/guide/how-guildhall-builds' },
+  { text: 'Research-backed design', link: '/guide/research-backed-design' },
   { text: 'Agent context', link: '/guide/agent-context' },
   { text: 'Corpus Map', link: '/guide/corpus-map' },
   { text: 'Memory, learning, and recovery', link: '/guide/memory-and-recovery' },

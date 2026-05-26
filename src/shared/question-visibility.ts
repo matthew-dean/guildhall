@@ -80,6 +80,8 @@ export function isOperationalReceiptQuestion(question: QuestionVisibilityRecord)
   if (/^recorded durable intake progress\b/.test(text)) return true
   if (/^logged this turn to the exploring transcript\b/.test(text)) return true
   if (/^posted (?:a |one |two |three |\d+ )?(?:focused |scope |structured )?questions?\b/.test(text)) return true
+  if (/\bwas split into \d+ children:?$/.test(text)) return true
+  if (/^from the parent .* spec,? i can see it covers:?$/.test(text)) return true
 
   const choices = normalizedChoiceText(question)
   if (choices.length === 0) return false
@@ -98,6 +100,10 @@ export function isOperationalReceiptQuestion(question: QuestionVisibilityRecord)
     /\bprogress\.md\b/,
     /\bpersist(?:ed)? progress with tools\b/,
     /\bposted the .*question\b/,
+    /\btask-[a-z0-9-]+.*\bthis one\b/,
+    /\btask-[a-z0-9-]+.*\bbackend api\b/,
+    /\ba public .* page at\b/,
+    /\bauthor dashboard .* card\b/,
   ].filter((pattern) => pattern.test(choiceText)).length
   return operationalChoiceCount >= 2
 }

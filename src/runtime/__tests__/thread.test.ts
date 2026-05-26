@@ -2682,6 +2682,77 @@ coordinators:
     }
   })
 
+  it('shows provider overload as warning activity instead of raw task failure text', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await writeFile(
+        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-1',
+              title: 'Keep working',
+              status: 'in_progress',
+              createdAt: new Date(Date.now() - 600_000).toISOString(),
+              updatedAt: new Date(Date.now() - 300_000).toISOString(),
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'core', name: 'Core' }],
+        },
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [
+          {
+            at: new Date(Date.now() - 1_000).toISOString(),
+            event: {
+              type: 'line_complete',
+              task_id: 'task-1',
+              agent_name: 'worker-agent',
+              message: 'Request failed; retrying in 2.0s (attempt 3 of 4): OpenAI-compatible API HTTP 429: {"error":{"message":"Model busy, retry later","code":"engine_overloaded"}}',
+            },
+          },
+          {
+            at: new Date().toISOString(),
+            event: {
+              type: 'error',
+              task_id: 'task-1',
+              agent_name: 'worker-agent',
+              message: 'Agent worker-agent failed on task-1: API error: OpenAI-compatible API HTTP 429: {"error":{"message":"Model busy, retry later","code":"engine_overloaded"}}',
+            },
+          },
+        ],
+      })
+
+      const turn = thread.turns.find(t => t.kind === 'inflight')
+      if (!turn || turn.kind !== 'inflight') throw new Error('expected inflight turn')
+      expect(turn.activity?.[0]?.label).toBe('Provider busy; retrying in 2.0s (attempt 3 of 4).')
+      expect(turn.activity?.[0]?.tone).toBe('warn')
+      expect(turn.activity?.[1]?.label).toBe('Provider busy; this agent turn stopped.')
+      expect(turn.activity?.[1]?.tone).toBe('warn')
+      expect(turn.activity?.[1]?.detail).toContain('overloaded capacity')
+      expect(JSON.stringify(turn.activity)).not.toContain('engine_overloaded')
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('keeps recent failed tool output visible while later writing continues', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

@@ -1312,7 +1312,7 @@
     {/snippet}
 
   {#if intakeOpen}
-    <IntakeModal onClose={() => (intakeOpen = false)} />
+    <IntakeModal onClose={() => setTimeout(() => (intakeOpen = false), 160)} />
   {/if}
   </ProjectShell>
 {/if}

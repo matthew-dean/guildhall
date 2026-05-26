@@ -139,6 +139,29 @@ describe('recommendModelsForRole', () => {
       ]),
     )
   })
+
+  it('recommends a cached-price Qwen model for DeepInfra worker runs', () => {
+    const qwenWorker = findModel('Qwen/Qwen3.5-35B-A3B')
+    expect(qwenWorker).toMatchObject({
+      provider: 'deepinfra',
+      recommendedRoles: expect.arrayContaining(['worker']),
+      cachedInputPricePerMillionUsd: 0.05,
+    })
+  })
+
+  it('tracks cached-price worker challengers for deeper bakeoffs', () => {
+    for (const id of [
+      'Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo',
+      'Qwen/Qwen3.5-397B-A17B',
+      'Qwen/Qwen3-235B-A22B-Thinking-2507',
+      'moonshotai/Kimi-K2.6',
+    ]) {
+      const candidate = findModel(id)
+      expect(candidate?.provider).toBe('deepinfra')
+      expect(candidate?.recommendedRoles).toContain('worker')
+      expect(candidate?.cachedInputPricePerMillionUsd).toBeGreaterThan(0)
+    }
+  })
 })
 
 describe('default model assignments', () => {

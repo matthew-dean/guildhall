@@ -8,6 +8,8 @@
 [![node](https://img.shields.io/node/v/guildhall.svg)](https://nodejs.org)
 [![license](https://img.shields.io/badge/license-FLL%20v1.2-blue.svg)](./LICENSE)
 
+[Documentation](https://matthew-dean.github.io/guildhall/)
+
 </div>
 
 ---
@@ -188,6 +190,7 @@ For the full CLI reference, see [docs/cli/reference.md](./docs/cli/reference.md)
 
 ## Learn more
 
+- [Documentation](https://matthew-dean.github.io/guildhall/)
 - [Quick start](./docs/guide/quick-start.md)
 - [How Guildhall builds](./docs/guide/how-guildhall-builds.md)
 - [Introduction](./docs/guide/introduction.md)

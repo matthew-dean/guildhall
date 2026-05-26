@@ -66,6 +66,21 @@ reviewable.
    - Numbered acceptance criteria, each phrased as "Given X, when Y, then Z" or similar
    - An explicit out-of-scope list (what this task will NOT do)
    - Any open questions that require human judgment before implementation can start
+   - A "Completion Boundary" section with these exact fields:
+     - Product outcome: what a real user/admin/system can do when this is truly done
+     - What Guildhall can complete in code: the repo-local implementation slice
+     - External dependencies: provider dashboards, credentials, deployed services,
+       data, human approvals, policy decisions, or other non-repo dependencies
+     - Owner-only setup: what the owner/operator must configure, or "None"
+     - Verification environment: where the finished capability can be proven
+     - What counts as done: the observable end state, not just files changed
+     - What must be split or blocked: any setup/verification task that cannot be
+       completed by the worker in this repo
+   The Completion Boundary is required even for small tasks. If all code landed
+   exactly as specified but a real user still could not complete the intended
+   action, the spec is incomplete: ask a focused question, split the external
+   setup into a blocked task, or explicitly scope the task to "code path only"
+   with a separate verification/setup dependency.
 5. When the task touches product surface area (a UI, a user-facing flow, a public
    API, copy, brand), ALSO author a product brief via update-product-brief.
    The brief is shown back to the user as "Did the agent understand you?" —

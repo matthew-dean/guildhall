@@ -41,9 +41,16 @@ const raiseEscalationInputSchema = z.object({
   reason: EscalationReason,
   summary: z.string(),
   details: z.string().optional(),
+  externalChecklist: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    detail: z.string().optional(),
+    owner: z.enum(['user', 'guildhall', 'external']).default('user'),
+    status: z.enum(['todo', 'done', 'blocked']).default('todo'),
+  })).optional(),
 })
 
-export type RaiseEscalationInput = z.input<typeof raiseEscalationInputSchema>
+export type RaiseEscalationInput = z.infer<typeof raiseEscalationInputSchema>
 export interface RaiseEscalationResult {
   success: boolean
   escalationId?: string
@@ -127,6 +134,7 @@ export async function raiseEscalation(
       summary: input.summary,
       raisedAt: now,
       ...(input.details !== undefined ? { details: input.details } : {}),
+      ...(input.externalChecklist !== undefined ? { externalChecklist: input.externalChecklist } : {}),
     }
     task.escalations.push(escalation)
     task.status = 'blocked'
@@ -189,16 +197,32 @@ export const raiseEscalationTool = defineTool({
       },
       summary: { type: 'string' },
       details: { type: 'string' },
+      externalChecklist: {
+        type: 'array',
+        description: 'Owner-facing setup steps for blockers that require action outside Guildhall.',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            title: { type: 'string' },
+            detail: { type: 'string' },
+            owner: { type: 'string', enum: ['user', 'guildhall', 'external'] },
+            status: { type: 'string', enum: ['todo', 'done', 'blocked'] },
+          },
+          required: ['id', 'title'],
+        },
+      },
     },
     required: ['taskId', 'agentId', 'reason', 'summary'],
   },
   isReadOnly: () => false,
   execute: async (input) => {
-    const result = await raiseEscalation(input)
+    const parsed = raiseEscalationInputSchema.parse(input)
+    const result = await raiseEscalation(parsed)
     return {
       output: result.success
-        ? `Raised escalation ${result.escalationId} on ${input.taskId}`
-        : `Error raising escalation on ${input.taskId}: ${result.error ?? 'unknown'}`,
+        ? `Raised escalation ${result.escalationId} on ${parsed.taskId}`
+        : `Error raising escalation on ${parsed.taskId}: ${result.error ?? 'unknown'}`,
       is_error: !result.success,
       metadata: result as unknown as Record<string, unknown>,
     }

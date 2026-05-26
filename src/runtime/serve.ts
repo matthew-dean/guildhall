@@ -9,7 +9,7 @@ import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
-import { atomicWriteText, getProjectStateDir } from '@guildhall/sessions'
+import { atomicWriteText, getProjectStateDir, getProjectTranscriptPath } from '@guildhall/sessions'
 import { readTaskWorkspaceStore } from './task-state-store.js'
 import {
   readWorkspaceConfig,
@@ -72,9 +72,10 @@ import {
   readCheckpoint,
   readExploringTranscript,
   resolveEscalation,
+  materializeRequiredSplitChildren,
   updateDesignSystem,
 } from '@guildhall/tools'
-import { DesignSystem, summarizeDesignSystem, type DesignSystem as DesignSystemRecord, type Task } from '@guildhall/core'
+import { DesignSystem, summarizeDesignSystem, TaskQueue, type DesignSystem as DesignSystemRecord, type Task } from '@guildhall/core'
 import {
   loadProjectGuildRoster,
   selectApplicableGuilds,
@@ -110,6 +111,7 @@ import {
   createExploringTask,
   createRoutedRequest,
   approveSpec,
+  enrichTask,
   reframeTask,
   resumeExploring,
   rerunTaskStage,
@@ -195,6 +197,7 @@ import {
   resolveTaskProjectPath,
 } from './task-project-path.js'
 import { buildEffectiveTask } from './effective-task.js'
+import { buildDoneTaskSummaryBundle } from './done-task-summary.js'
 import { readContextDebugForTask } from './context-observability.js'
 import { createReviewAuditStore } from './review-audit-store.js'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
@@ -1157,13 +1160,30 @@ function friendlyProjectEventToolName(tool: string): string {
 
 function summarizeProjectEvent(ev: Record<string, unknown> | undefined): string {
   const type = String(ev?.type ?? '')
+  const message = typeof ev?.message === 'string' ? ev.message.trim() : ''
+  if ((type === 'line_complete' || type === 'error') && isProviderCapacityEventMessage(message)) {
+    return providerCapacityEventLabel(message)
+  }
   const tool = friendlyProjectEventToolName(typeof ev?.tool_name === 'string' ? ev.tool_name : '')
   if ((type === 'tool_started' || type === 'tool_execution_started') && tool) return `Started ${tool}`
   if ((type === 'tool_completed' || type === 'tool_execution_completed') && ev?.is_error && tool) return `Failed ${tool}`
   if ((type === 'tool_completed' || type === 'tool_execution_completed') && tool) return `Finished ${tool}`
-  if (type === 'error') return String(ev?.message ?? 'Agent error')
-  if (type === 'line_complete') return String(ev?.message ?? 'Agent update')
+  if (type === 'error') return message || 'Agent error'
+  if (type === 'line_complete') return message || 'Agent update'
   return type.replace(/_/g, ' ') || 'Agent activity'
+}
+
+function isProviderCapacityEventMessage(value: string): boolean {
+  return /HTTP 429|Too Many Requests|rate limit|engine_overloaded|Model busy, retry later|retryable provider throttle/i.test(value)
+}
+
+function providerCapacityEventLabel(value: string): string {
+  const retry = value.match(/retrying in ([\d.]+)s \(attempt (\d+) of (\d+)\)/i)
+  if (retry) return `Provider busy; retrying in ${retry[1]}s (attempt ${retry[2]} of ${retry[3]}).`
+  if (/retryable provider throttle/i.test(value)) return 'Provider busy; Guildhall will resume this task later.'
+  if (/Agent .* failed on .*API error/i.test(value)) return 'Provider busy; this agent turn stopped.'
+  if (/API error/i.test(value)) return 'Provider busy; request failed after retries.'
+  return 'Provider busy; retry later.'
 }
 
 function toneForProjectEvent(
@@ -1171,8 +1191,10 @@ function toneForProjectEvent(
 ): 'neutral' | 'running' | 'ok' | 'warn' | 'danger' {
   const type = String(ev?.type ?? '')
   if (type === 'error') {
+    if (isProviderCapacityEventMessage(String(ev?.message ?? ''))) return 'warn'
     return /empty assistant/i.test(String(ev?.message ?? '')) ? 'warn' : 'danger'
   }
+  if (type === 'line_complete' && isProviderCapacityEventMessage(String(ev?.message ?? ''))) return 'warn'
   if (type === 'tool_completed' || type === 'tool_execution_completed') return ev?.is_error ? 'danger' : 'ok'
   if (type === 'tool_started' || type === 'tool_execution_started') return 'running'
   if (type === 'line_complete') return 'running'
@@ -1375,6 +1397,59 @@ function taskGitStoryRepoPath(
     ? task.projectPath.trim()
     : ''
   return taskProjectPath || projectPath
+}
+
+const TASK_FILE_PREVIEW_LIMIT_BYTES = 256 * 1024
+
+function isWithinPath(candidate: string, root: string): boolean {
+  const rel = relative(root, candidate)
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+function languageForPath(filePath: string): string {
+  const ext = extname(filePath).toLowerCase().replace(/^\./, '')
+  if (ext === 'ts' || ext === 'tsx') return 'typescript'
+  if (ext === 'js' || ext === 'jsx' || ext === 'mjs' || ext === 'cjs') return 'javascript'
+  if (ext === 'vue') return 'vue'
+  if (ext === 'svelte') return 'svelte'
+  if (ext === 'md' || ext === 'markdown') return 'markdown'
+  if (ext === 'yaml' || ext === 'yml') return 'yaml'
+  if (ext === 'json') return 'json'
+  if (ext === 'css') return 'css'
+  if (ext === 'html') return 'html'
+  if (ext === 'sql') return 'sql'
+  if (ext === 'sh' || ext === 'bash' || ext === 'zsh') return 'shell'
+  return ext || 'text'
+}
+
+async function resolveTaskInspectableFile(
+  projectPath: string,
+  task: Record<string, unknown>,
+  requestedPath: string,
+  workspace?: { worktreePath?: string },
+): Promise<{ absolutePath: string; displayPath: string }> {
+  const requested = requestedPath.trim()
+  if (!requested) throw new Error('path is required')
+  const basePath = resolve(taskGitStoryRepoPath(projectPath, task, workspace))
+  const rootCandidates = [
+    projectPath,
+    typeof task.projectPath === 'string' ? task.projectPath : '',
+    typeof task.worktreePath === 'string' ? task.worktreePath : '',
+    typeof workspace?.worktreePath === 'string' ? workspace.worktreePath : '',
+    basePath,
+  ]
+  const roots = [...new Set(rootCandidates.map(item => item.trim()).filter(Boolean).map(item => resolve(item)))]
+  const candidate = isAbsolute(requested)
+    ? resolve(requested)
+    : resolve(basePath, requested)
+  const realCandidate = await fsp.realpath(candidate).catch(() => candidate)
+  const realRoots = await Promise.all(roots.map(async root => fsp.realpath(root).catch(() => root)))
+  const allowedRoot = realRoots.find(root => isWithinPath(realCandidate, root))
+  if (!allowedRoot) throw new Error('path is outside the task workspace')
+  const displayPath = isAbsolute(requested)
+    ? requested
+    : requested.split(pathSeparator).join('/')
+  return { absolutePath: realCandidate, displayPath }
 }
 
 async function gitStoryForTask(
@@ -4732,6 +4807,51 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  app.get('/api/project/task/:id/file', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const tasksPath = join(getProjectStateDir(project.path), 'TASKS.json')
+      if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const tasks = await readTasksFileNormalized(tasksPath)
+      const id = c.req.param('id')
+      const task = tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+      if (!task) return c.json({ error: 'task not found' }, 404)
+      const requestedPath = c.req.query('path')?.trim() ?? ''
+      if (!requestedPath) return c.json({ error: 'path is required' }, 400)
+      const workspaceStore = await readTaskWorkspaceStore(project.path).catch(() => undefined)
+      const workspace = workspaceStore?.workspaces[id]
+      const resolved = await resolveTaskInspectableFile(project.path, task, requestedPath, workspace)
+      const stat = await fsp.stat(resolved.absolutePath)
+      if (!stat.isFile()) return c.json({ error: 'path is not a file' }, 400)
+      const handle = await fsp.open(resolved.absolutePath, 'r')
+      try {
+        const bytesToRead = Math.min(stat.size, TASK_FILE_PREVIEW_LIMIT_BYTES)
+        const buffer = Buffer.alloc(bytesToRead)
+        const { bytesRead } = await handle.read(buffer, 0, bytesToRead, 0)
+        return c.json({
+          taskId: id,
+          path: resolved.displayPath,
+          absolutePath: resolved.absolutePath,
+          content: buffer.subarray(0, bytesRead).toString('utf8'),
+          language: languageForPath(resolved.displayPath),
+          truncated: stat.size > TASK_FILE_PREVIEW_LIMIT_BYTES,
+        })
+      } finally {
+        await handle.close()
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (
+        message === 'path is required' ||
+        message === 'path is outside the task workspace' ||
+        /ENOENT|not found/i.test(message)
+      ) {
+        return c.json({ error: message === 'path is outside the task workspace' ? message : 'file not found' }, 400)
+      }
+      return c.json({ error: message }, 500)
+    }
+  })
+
   app.get('/api/project/task/:id/history', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
@@ -5050,7 +5170,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
   //   add-acceptance     → append a human-written acceptance criterion
   //   resume             → append a follow-up message to an exploring transcript
   //                        (body: {message?, resolveEscalationId?, resolution?})
+  //   enrich-task        → add missing checklist/split structure while preserving useful context
   //   reframe-task       → reopen a stale/inscrutable task for fresh shaping
+  //   create-split-children → materialize stored split-required child recommendations
   //   resolve-escalation → close a named escalation; unblocks when none remain
   //                        (body: {escalationId, resolution, nextStatus?})
   app.post('/api/project/task/:id/:action', async c => {
@@ -5070,6 +5192,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         'add-acceptance',
         'resume',
         'reframe-task',
+        'enrich-task',
         'unshelve',
         'resolve-escalation',
         'stage-answer',
@@ -5077,6 +5200,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         'answer-questions',
         'rerun-stage',
         'shape-draft',
+        'create-split-children',
       ] as const
       if (!(KNOWN_ACTIONS as readonly string[]).includes(action)) {
         return c.json({ error: 'unknown action' }, 400)
@@ -5141,6 +5265,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ ok: true, status: result.newStatus })
       }
 
+      if (action === 'enrich-task') {
+        const body = await c.req.json().catch(() => ({})) as {
+          instruction?: string
+          mode?: 'split' | 'checklist' | 'general'
+        }
+        const result = await enrichTask({
+          memoryDir,
+          taskId: id,
+          mode: body.mode,
+          instruction: body.instruction,
+        })
+        if (!result.success) return c.json({ error: result.error ?? 'enrich failed' }, 400)
+        return c.json({ ok: true, status: result.newStatus })
+      }
+
       if (action === 'rerun-stage') {
         const body = await c.req.json().catch(() => ({})) as {
           stage?: 'spec' | 'review' | 'gate'
@@ -5164,6 +5303,29 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
         if (!result.success) return c.json({ error: result.error ?? 'shape failed' }, 400)
         return c.json({ ok: true, status: result.newStatus })
+      }
+
+      if (action === 'create-split-children') {
+        const tasksPath = join(memoryDir, 'TASKS.json')
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const queue = TaskQueue.parse(JSON.parse(readFileSync(tasksPath, 'utf8')))
+        const task = queue.tasks.find(t => t.id === id)
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        if (task.sizePlan?.action !== 'split_required') {
+          return c.json({ error: 'task does not require a split' }, 400)
+        }
+        const now = new Date().toISOString()
+        materializeRequiredSplitChildren(queue, task, now)
+        task.updatedAt = now
+        queue.lastUpdated = now
+        atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        return c.json({
+          ok: true,
+          parentTaskId: task.id,
+          createdTaskIds: task.sizePlan.recommendedChildren
+            .map(child => child.createdTaskId)
+            .filter((createdTaskId): createdTaskId is string => Boolean(createdTaskId)),
+        })
       }
 
       if (action === 'approve-brief') {
@@ -5261,6 +5423,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
           timestamp: now,
         })
         task.notes = notes
+        task.doneSummaryBundle = buildDoneTaskSummaryBundle({
+          task: task as Task,
+          transcriptRef: {
+            scope: 'local_history',
+            collection: 'transcripts',
+            id,
+            path: getProjectTranscriptPath(project.path, 'exploring', id),
+            contentType: 'text/markdown',
+          },
+          createdAt: now,
+          createdBy: 'system:mark-done',
+        })
         queue.lastUpdated = now
         atomicWriteText(tasksPath, JSON.stringify(queue, null, 2) + '\n')
         return c.json({ ok: true, status: 'done' })

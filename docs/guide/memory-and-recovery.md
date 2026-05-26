@@ -32,10 +32,15 @@ Examples include:
 - refreshing a stale edit target after an `oldString` miss
 - proposing a change order when evidence shows the blueprint is wrong
 - stopping with a concrete question when the setup issue is outside the task
+- reframing a confusing task before implementation begins
 
 Thread and blocker summaries explain the real reason, not raw internal schema
 names. The audit trail keeps the typed classification and playbook record for
 future inspection.
+
+Reframe is deliberately stage-aware. If implementation, review, or gate checks
+have already started, Guildhall preserves the work trace and uses a change
+order, pause, follow-up, or revision instead of erasing the task back to intake.
 
 ## Memory layers
 

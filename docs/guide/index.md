@@ -40,6 +40,7 @@ Setting up your first project? Start with [Start here](./quick-start).
 
 - [How Guildhall works](./how-guildhall-works) — the system model: survey, blueprint, context, workers, reviewers, gates, and memory.
 - [How Guildhall builds](./how-guildhall-builds) — the construction model behind planning, implementation, review, and release.
+- [Research-backed design](./research-backed-design) — the research and practice ideas behind smaller tasks, bounded questions, visible uncertainty, and audit trails.
 - [Agent context](./agent-context) — what agents receive before they act.
 - [Corpus Map](./corpus-map) — how Guildhall indexes a project without dumping the whole repo into every prompt.
 - [Memory, learning, and recovery](./memory-and-recovery) — how Guildhall learns reusable habits without turning them into mystery behavior.

@@ -668,6 +668,66 @@ describe('filterEventsForTask (drawer live feed)', () => {
   })
 })
 
+describe('GET /api/project/task/:id/file', () => {
+  it('reads a changed file from the task workspace and rejects directories', async () => {
+    await fs.mkdir(path.join(tmpDir, 'frontend', 'app', 'pages'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'frontend', 'app', 'lib'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'frontend', 'app', 'pages', 'dashboard.vue'),
+      '<template>Dashboard</template>\n',
+      'utf8',
+    )
+    await seedTask('task-1', {
+      latestCheckpoint: {
+        filesTouched: [
+          'frontend/app/pages/dashboard.vue',
+          'frontend/app/lib/',
+        ],
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const fileUrl = new URL(projectUrl('/api/project/task/task-1/file'))
+    fileUrl.searchParams.set('path', 'frontend/app/pages/dashboard.vue')
+    const fileRes = await app.fetch(new Request(fileUrl.toString()))
+
+    expect(fileRes.status).toBe(200)
+    const fileBody = (await fileRes.json()) as Record<string, any>
+    expect(fileBody).toMatchObject({
+      taskId: 'task-1',
+      path: 'frontend/app/pages/dashboard.vue',
+      content: '<template>Dashboard</template>\n',
+      language: 'vue',
+      truncated: false,
+    })
+
+    const dirUrl = new URL(projectUrl('/api/project/task/task-1/file'))
+    dirUrl.searchParams.set('path', 'frontend/app/lib/')
+    const dirRes = await app.fetch(new Request(dirUrl.toString()))
+
+    expect(dirRes.status).toBe(400)
+    await expect(dirRes.json()).resolves.toMatchObject({ error: 'path is not a file' })
+  })
+
+  it('keeps file reads inside the project or task worktree', async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-outside-'))
+    try {
+      await fs.writeFile(path.join(outsideDir, 'secret.txt'), 'nope\n', 'utf8')
+      await seedTask('task-1')
+      const { app } = buildServeApp({ projectPath: tmpDir })
+      const url = new URL(projectUrl('/api/project/task/task-1/file'))
+      url.searchParams.set('path', path.join(outsideDir, 'secret.txt'))
+
+      const res = await app.fetch(new Request(url.toString()))
+
+      expect(res.status).toBe(400)
+      await expect(res.json()).resolves.toMatchObject({ error: 'path is outside the task workspace' })
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('POST /api/project/task/:id/hold|shelve', () => {
   it('puts a task on hold with a reason and can return it to its previous stage', async () => {
     await seedTask('task-1', { status: 'review' })
@@ -782,6 +842,14 @@ describe('POST /api/project/task/:id/mark-done', () => {
     expect(task.acceptanceCriteria.every((criterion: Record<string, any>) => criterion.met === true)).toBe(true)
     expect(task.escalations[0].resolvedBy).toBe('human')
     expect(task.notes.at(-1).content).toMatch(/supabase db push/)
+    expect(task.doneSummaryBundle).toMatchObject({
+      taskId: 'task-1',
+      status: 'done',
+      retention: {
+        transcriptPrimaryArtifact: false,
+      },
+    })
+    expect(task.doneSummaryBundle.summary.decision).toMatch(/Task finished as done/)
   })
 
   it('rejects mark-done on active execution stages', async () => {
@@ -798,7 +866,39 @@ describe('POST /api/project/task/:id/mark-done', () => {
 
 describe('POST /api/project/task/:id/approve-spec', () => {
   it('transitions a spec_review task with a spec to ready and records the approvalNote', async () => {
-    await seedTask('task-1', { status: 'spec_review', spec: 'drafted spec body' })
+    await seedTask('task-1', {
+      status: 'spec_review',
+      productBrief: {
+        userJob: 'I want users to complete the invite flow without guessing what happens next.',
+        successMetric: 'A user can accept an invite and land in the workspace.',
+        approvedAt: '2026-05-26T00:00:00.000Z',
+      },
+      spec: [
+        '## Summary',
+        '',
+        'Implement invite acceptance.',
+        '',
+        '## Completion Boundary',
+        '- Product outcome: A user can accept an invite and land in the workspace.',
+        '- What Guildhall can complete in code: Update the invite acceptance route and UI.',
+        '- External dependencies: None.',
+        '- Owner-only setup: None.',
+        '- Verification environment: Local app with seeded invite data.',
+        '- What counts as done: The seeded invite acceptance path succeeds end-to-end.',
+        '- What must be split or blocked: Nothing.',
+        '',
+        '## Acceptance Criteria',
+        '1. Given a valid invite, when the user accepts it, then they land in the workspace.',
+      ].join('\n'),
+      acceptanceCriteria: [
+        {
+          id: 'AC-1',
+          description: 'Given a valid invite, when the user accepts it, then they land in the workspace.',
+          verifiedBy: 'review',
+          met: false,
+        },
+      ],
+    })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
       new Request(projectUrl('/api/project/task/task-1/approve-spec'), {
@@ -816,6 +916,83 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     const q = JSON.parse(raw)
     expect(q.tasks[0].status).toBe('ready')
     expect(q.tasks[0].notes?.at(-1)?.content).toMatch(/ship it/i)
+  })
+
+  it('rejects approve-spec when the completion boundary is missing', async () => {
+    await seedTask('task-1', {
+      status: 'spec_review',
+      productBrief: {
+        userJob: 'I want users to sign in with familiar providers.',
+        successMetric: 'Login shows provider buttons.',
+        approvedAt: '2026-05-26T00:00:00.000Z',
+      },
+      spec: [
+        '## Summary',
+        '',
+        'Add Google and Apple buttons to the login screen.',
+        '',
+        '## Acceptance Criteria',
+        '1. Login and registration pages show Google and Apple buttons.',
+      ].join('\n'),
+      acceptanceCriteria: [
+        {
+          id: 'AC-1',
+          description: 'Login and registration pages show Google and Apple buttons.',
+          verifiedBy: 'review',
+          met: false,
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/approve-spec'), { method: 'POST' }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.error).toMatch(/completion boundary/i)
+  })
+
+  it('rejects approve-spec when external dependencies are named without an owner or blocked split', async () => {
+    await seedTask('task-1', {
+      status: 'spec_review',
+      productBrief: {
+        userJob: 'I want users to sign in with familiar providers.',
+        successMetric: 'Google and Apple sign-in work.',
+        approvedAt: '2026-05-26T00:00:00.000Z',
+      },
+      spec: [
+        '## Summary',
+        '',
+        'Add provider sign-in.',
+        '',
+        '## Completion Boundary',
+        '- Product outcome: A user can sign in with Google and Apple.',
+        '- What Guildhall can complete in code: Add provider buttons and callback copy.',
+        '- External dependencies: Google and Apple OAuth apps and Supabase provider settings.',
+        '- Owner-only setup: TBD.',
+        '- Verification environment: TBD.',
+        '- What counts as done: Buttons call Supabase.',
+        '- What must be split or blocked: None.',
+        '',
+        '## Acceptance Criteria',
+        '1. Login and registration pages show Google and Apple buttons.',
+      ].join('\n'),
+      acceptanceCriteria: [
+        {
+          id: 'AC-1',
+          description: 'Login and registration pages show Google and Apple buttons.',
+          verifiedBy: 'review',
+          met: false,
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/approve-spec'), { method: 'POST' }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.error).toMatch(/external dependencies/i)
   })
 
   it('rejects approve-spec when the task has no drafted spec yet', async () => {
@@ -943,6 +1120,66 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
     expect(res.status).toBe(400)
     const body = (await res.json()) as Record<string, any>
     expect(body.error).toMatch(/gate_check/i)
+  })
+})
+
+describe('POST /api/project/task/:id/create-split-children', () => {
+  it('materializes stored split-required recommendations into child tasks', async () => {
+    await seedTask('task-1', {
+      status: 'spec_review',
+      parentGoalId: 'goal-task-1',
+      sizePlan: {
+        taskId: 'task-1',
+        score: 8,
+        band: 'epic',
+        action: 'split_required',
+        factors: [],
+        recommendedChildren: [
+          {
+            title: 'Implement the billing settings workflow',
+            reason: 'Keep the user-facing workflow small enough for UX review.',
+            suggestedDomain: 'frontend',
+            dependsOn: [],
+          },
+          {
+            title: 'Add the admin subscription API contract',
+            reason: 'Separate API compatibility and security review from UI work.',
+            suggestedDomain: 'backend',
+            dependsOn: ['Implement the billing settings workflow'],
+          },
+        ],
+        reviewBudgetHint: 'release_critical',
+        reasons: ['Task size score: 8.'],
+        createdAt: '2026-05-25T12:00:00.000Z',
+        createdBy: 'task-sizing',
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/create-split-children'), { method: 'POST' }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as Record<string, any>
+    expect(body.createdTaskIds).toEqual([
+      'task-1-split-implement-the-billing-settings-workflow',
+      'task-1-split-add-the-admin-subscription-api-contract',
+    ])
+    expect(body.parentTaskId).toBe('task-1')
+
+    const raw = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8')) as Record<string, any>
+    expect(raw.tasks).toHaveLength(3)
+    expect(raw.tasks[0].status).toBe('parent')
+    expect(raw.tasks[0].sizePlan.recommendedChildren.map((child: Record<string, unknown>) => child.createdTaskId)).toEqual(body.createdTaskIds)
+    expect(raw.tasks[1]).toMatchObject({
+      id: 'task-1-split-implement-the-billing-settings-workflow',
+      status: 'exploring',
+      parentGoalId: 'goal-task-1',
+      origination: 'system',
+      proposedBy: 'task-sizing',
+    })
+    expect(raw.tasks[2].dependsOn).toEqual(['task-1-split-implement-the-billing-settings-workflow'])
   })
 })
 
@@ -1186,6 +1423,87 @@ describe('POST /api/project/task/:id/reframe-task', () => {
     expect(transcript).toContain('Reframe this existing task')
     expect(transcript).toContain('what exact decision is needed')
     expect(transcript).toContain('The current task is unreadable.')
+  })
+
+  it('rejects reframe once implementation work is active', async () => {
+    await seedTask('task-1', {
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+      spec: '## Summary\nApply the policy in the dashboard.',
+      acceptanceCriteria: [{ id: 'AC-1', description: 'Dashboard shows the policy.', verifiedBy: 'review' }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/reframe-task'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: 'This should be split.' }),
+      }),
+    )
+
+    expect(res.status).toBe(400)
+    await expect(res.json()).resolves.toMatchObject({
+      error: expect.stringContaining('already started implementation'),
+    })
+  })
+})
+
+describe('POST /api/project/task/:id/enrich-task', () => {
+  it('reopens a blocked task for split enrichment without deleting the existing spec', async () => {
+    await seedTask('task-1', {
+      status: 'blocked',
+      assignedTo: 'worker-agent',
+      blockReason: 'human_judgment_required: OAuth providers need setup.',
+      productBrief: {
+        approvedAt: new Date().toISOString(),
+        userJob: 'Sign in with external providers.',
+        successMetric: 'Google and Apple sign-in complete end-to-end.',
+      },
+      spec: '## Summary\nImplement OAuth buttons and callbacks.',
+      acceptanceCriteria: [{ id: 'AC-1', description: 'Google sign-in works.', verifiedBy: 'review' }],
+      escalations: [{
+        id: 'esc-oauth',
+        taskId: 'task-1',
+        agentId: 'worker-agent',
+        reason: 'human_judgment_required',
+        summary: 'OAuth providers need setup.',
+        raisedAt: new Date().toISOString(),
+      }],
+      notes: [],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/enrich-task'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'split',
+          instruction: 'Split Google OAuth setup, Apple OAuth setup, and live verification.',
+        }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.status).toBe('exploring')
+
+    const queue = JSON.parse(
+      await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf8'),
+    ) as { tasks: Array<Record<string, any>> }
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.assignedTo).toBe('spec-agent')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.productBrief?.userJob).toBe('Sign in with external providers.')
+    expect(task.spec).toContain('Implement OAuth buttons')
+    expect(task.acceptanceCriteria).toHaveLength(1)
+    expect(task.escalations[0]?.resolution).toMatch(/enrichment request/i)
+    const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
+    expect(transcript).toContain('Enrich this task')
+    expect(transcript).toContain('parent task with smaller linked child tasks')
+    expect(transcript).toContain('Split Google OAuth setup')
   })
 })
 

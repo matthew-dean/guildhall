@@ -848,7 +848,7 @@ describe('POST /api/project/start preflight', () => {
       preferredProvider: 'openai-api',
       models: {
         'openai-api': {
-          worker: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+          worker: 'Qwen/Qwen3.5-35B-A3B',
         },
       },
     })
@@ -868,9 +868,9 @@ describe('POST /api/project/start preflight', () => {
     expect(body.defaultProviderStatus).toMatchObject({
       preferredProvider: 'openai-api',
       preferredProviderLabel: 'Remote OpenAI-compatible',
-      activeModel: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+      activeModel: 'Qwen/Qwen3.5-35B-A3B',
     })
-    expect(body.defaultProviderStatus?.models?.worker).toBe('Qwen/Qwen3-235B-A22B-Instruct-2507')
+    expect(body.defaultProviderStatus?.models?.worker).toBe('Qwen/Qwen3.5-35B-A3B')
     expect(body.defaultProviderStatus?.models?.reviewer).toBe('gpt-4o-mini')
     expect(body.defaultProviderStatus?.warnings).toBeUndefined()
   })
@@ -881,7 +881,7 @@ describe('POST /api/project/start preflight', () => {
       preferredProvider: 'codex',
       models: {
         'openai-api': {
-          worker: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+          worker: 'Qwen/Qwen3.5-35B-A3B',
         },
       },
     })
@@ -924,7 +924,7 @@ describe('POST /api/project/start preflight', () => {
       preferredProvider: 'codex',
       models: {
         'openai-api': {
-          worker: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+          worker: 'Qwen/Qwen3.5-35B-A3B',
         },
       },
     })

@@ -57,6 +57,43 @@ babysit setup/import/provider/release states across multiple pages.
 
 ## Current Follow-Ups
 
+- [x] Fix verification-command intake so package-local commands do not become
+  human blockers. Automated acceptance commands are now normalized against the
+  actual task project/package shape, so root-level `pnpm build` can become
+  `pnpm --dir frontend build` when `frontend/` is the only package that owns
+  the script, and bare TypeScript checks can follow the unique `tsconfig.json`.
+  Worker recovery checkpoints also reconcile passed verification evidence back
+  into the task command shape before preserving the checkpoint, so a worker's
+  discovered `cd frontend && pnpm build`-style command is treated as learned
+  task truth rather than a one-off workaround.
+- [x] Start DeepInfra/OpenAI-compatible API hardening without paid priority
+  routing. The implementation plan lives at
+  `docs/superpowers/plans/2026-05-25-deepinfra-api-design-hardening.md`.
+  Provider tests now prove Guildhall forwards `prompt_cache_key`,
+  `response_format`, `reasoning_effort`, `reasoning`, and `tool_choice`,
+  requests streamed usage even when tools are present, and still never sends
+  `service_tier`. Runtime JSON helpers can request strict schema output, agent
+  turns carry role/model API policy through the query engine, and DeepInfra-like
+  model metadata fixtures now check cached-input pricing, structured-output,
+  tool-calling, and reasoning capability extraction. Remaining follow-up:
+  implement focused tool-list profiles and deeper cache-aware context-budget
+  regression tests from the saved plan.
+- [x] Add task sizing, split recommendations, and done-task transcript
+  reduction. Shaped tasks now get a first-class `sizePlan` with a
+  tiny/small/medium/large/epic score, action, factors, and recommended child
+  tasks when the work is too large for one clean agent loop. Split-recommended
+  and split-required tasks get a parent goal id so child work can stay linked.
+  Done tasks now get a structured done-summary bundle with journey, decision,
+  evidence, learning candidates, open residue, and transcript-retention status;
+  the drawer shows that in Journey and treats Transcript as source evidence
+  rather than the primary completed-work artifact. The first task-sizing
+  calibration corpus and frontier harness live under
+  `internal/calibration/task-sizing/` and `src/runtime/task-sizing-calibration.ts`,
+  with seed cases for small copy work, multi-outcome launch splitting,
+  small-but-high-risk OAuth work, and a do-not-over-split migration. The CLI
+  now exposes `guildhall review-calibration validate-sizing` so task-sizing
+  frontier runs are recorded through the same review-audit persistence path as
+  review-planning calibration.
 - [x] Add the first review-calibration corpus harness. `review-calibration`
   now validates hidden-answer-key cases, builds reviewer-safe packets without
   leaking known findings or false-positive traps, grades pass/partial/miss/
@@ -249,6 +286,46 @@ babysit setup/import/provider/release states across multiple pages.
   current target/component API, avoid stale exact-string replacements, compare
   the latest review feedback to the current file contents, and verify the
   specific fixed item before writing a new self-critique.
+- [x] Clarify the task drawer's live-progress shape. The Fair Labor License
+  task drawer was mixing a synthesized state summary with feed-like activity
+  rows under a `Current state` frame, so `Started log progress` and
+  `Finished log progress` looked like competing section items instead of an
+  event log. Live task cards now title themselves `Live progress`, keep the
+  summarized answer under `Current status`, and label raw start/finish/status
+  events as an `Activity log`; feed rows remain visible because they are useful
+  evidence, but they no longer pretend to be the current state itself.
+- [x] Normalize provider-overload activity in task progress. The FLL walkthrough
+  exposed that retry events rendered as running updates while the exhausted
+  `engine_overloaded` response and worker wrapper rendered as red task errors,
+  even though they described the same remote provider-capacity problem.
+  Thread/task activity now rewrites HTTP 429/rate-limit/model-busy events into
+  warning-level, plain-language `Provider busy...` rows, and hides raw provider
+  JSON from the drawer feed.
+- [x] Preserve task state on DeepInfra-style provider capacity errors. DeepInfra
+  rate limits are per-model concurrency, and 429 can also mean a model is busy
+  while autoscaling catches up. Guildhall now treats HTTP 429/rate-limit/model-
+  busy/`engine_overloaded` errors as retryable provider capacity across worker,
+  spec, and gate statuses instead of turning them into hard agent failures. The
+  OpenAI-compatible client now waits longer on capacity retries before giving
+  control back to the orchestrator, so transient DeepInfra overloads have room
+  to clear without corrupting task state.
+- [x] Send optimistic prompt-cache keys to OpenAI-compatible providers. Agent
+  turns now get a deterministic provider/workspace/task/role cache key from the
+  orchestrator, `GuildhallAgent` passes it through the query engine, and the
+  OpenAI-compatible client sends `prompt_cache_key` while preserving DeepInfra
+  cached-token telemetry as `cached_input_tokens`. Strict local providers that
+  reject the extra field get one automatic retry without the key, so the hosted
+  cache path is enabled without breaking unsupported servers.
+- [x] Move the active DeepInfra worker lane onto cached-price candidates and
+  replay the obvious challengers. DeepInfra's model metadata does not advertise
+  cached input pricing for `Qwen/Qwen3-235B-A22B-Instruct-2507`, so the
+  machine-wide worker model is now `Qwen/Qwen3.5-35B-A3B`. A provider-backed
+  FLL first-action replay compared cached-price candidates including
+  DeepSeek V4 Flash, Qwen 3.5 35B, Qwen 3.5 397B, Qwen Coder Turbo,
+  Kimi K2.5/K2.6, Seed 2.0 Code, GLM 4.7 Flash, and Qwen 235B Thinking.
+  All but Qwen 235B Thinking passed 3/3 first-action cases; Qwen 3.5 35B was
+  the fastest successful cached Qwen lane and remains the current practical
+  worker default pending deeper edit/verify bakeoffs.
 - [x] Add a zero-context user-testing script for Thread and task-card flows.
   The script lives at
   `internal/plans/2026-05-24-zero-context-flow-user-testing.md` and treats the
@@ -5605,6 +5682,85 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     agent tone; Guildhall-owned handoff states such as `Brief cleanup needed`
     use `agent-attention`; user decisions, approvals, and recovery risks remain
     warning/human-attention states.
+  - [x] Overview blocked-work rows no longer render a large red status panel
+    inside each row. The task title and reason stay primary, and the blocker
+    status now appears as a compact chip in the row header so the card remains
+    scannable.
+  - [x] Journey `Files changed` no longer treats directory paths as files, and
+    changed files are inspectable inline through a project/worktree-bounded
+    file-read endpoint. This keeps task evidence readable without opening up
+    arbitrary local file reads; a syntax-colored diff view remains a good
+    follow-on once Guildhall adopts a real diff/code viewer dependency.
+  - [x] New request intake now records a request-shape analysis so FLL-style
+    asks like "set an overhead charge policy" do not silently become a full
+    implementation task. Ambiguous policy/spec-vs-implementation asks get a
+    structured clarifying question, a component stack
+    (policy/spec/implementation/verification), and visible Journey evidence.
+    Task reframe now tells the coordinator to rebuild that structure and split
+    oversized work into linked child tasks, while active implementation/review/
+    gate tasks stop offering destructive reframe so existing work traces remain
+    connected.
+  - [x] `split_required` sizing no longer stops at a recommendation. When a
+    shaped task is explicitly approved for work and is still too large, the
+    task queue now creates linked child tasks idempotently, records their ids on
+    the parent size plan, and keeps the original task as the parent container.
+  - [x] Task Overview hierarchy links now behave like in-drawer navigation:
+    parent-task, dependency, and child-task links replace the current drawer
+    task while preserving the underlying project page. The drawer header also
+    shows a compact project/task breadcrumb so similarly named split tasks have
+    a visible project prefix and stable task id.
+  - [x] Older split-required tasks no longer leave the user guessing whether
+    Guildhall will act. If the task has not been split yet, Overview says
+    `Split this task`, explains that Guildhall will keep the current task as
+    the parent and create the listed tasks, and offers a `Split this task`
+    action in the same card; the backend creates those tasks idempotently and
+    keeps the original task as the parent container. For new split-required
+    specs, approval now says plainly that Guildhall created the listed tasks and
+    kept the original as the parent task, with the parent in a non-runnable
+    `parent` status instead of sending it back to approval.
+  - [x] Worker-owned "verification commands do not work here, but implementation
+    is complete" blockers no longer land in the human queue when the task has
+    Guildhall-owned file changes. Guildhall classifies that as automation-owned
+    verification confusion, reopens it from restart into the automated lane, and
+    the overview uses runtime open-escalation ids so resolved historical
+    escalations do not keep showing up as `Blocked work`.
+  - [x] Split-summary narration and progress receipts no longer surface as
+    owner questions. FLL exposed generated prompts like "the parent task was
+    split into 3 children" and "I've now persisted progress with tools" as
+    decisions even though they were just agent bookkeeping; the shared question
+    visibility filter now hides that shape across Thread, Inbox, and gating
+    surfaces, and the FLL OAuth child was reframed from the mistaken
+    transactional-email provider question into Google/Apple sign-in work.
+  - [x] Done task worktrees now have to land before they disappear from the
+    user's mental model. FLL showed several `done` tasks whose implementation
+    was still unmerged inside task worktrees. Guildhall now treats isolated
+    task landing as requiring a committed task snapshot even when Git Story
+    says `commit=ask`, and idle ticks reconcile older `done + worktreePath +
+    no mergeRecord` tasks by committing, cherry-picking, recording the merge,
+    and removing the disposable worktree.
+  - [x] External blockers can now carry a concrete setup checklist instead of
+    only a generic recovery blurb. The escalation tool accepts structured
+    owner-facing steps, agents are prompted to provide them for credentials,
+    provider dashboards, and live service setup, and the task Action tab renders
+    those steps before `I handled this...` / resume actions. Users can also ask
+    Guildhall to `Rework task...` from the task actions menu with plain-language
+    transformation instructions; deterministic presets such as `Split task...`
+    use the same dedicated enrichment path, preserving useful spec context while
+    asking the spec agent to add missing structure or parent/child tasks.
+  - [x] Spec review no longer misses a `Completion Boundary` just because it is
+    the final section in the spec. Regression coverage now locks the parser to
+    accept final-section completion boundaries instead of sending valid specs
+    back for rework.
+  - [x] Verification commands that start with `cd frontend && ...` now preserve
+    that working directory while still reconciling against the authoritative
+    command. This closes the FLL failure mode where a worker learned the right
+    directory but Guildhall stored or replayed the command as if it belonged at
+    the repo root.
+  - [x] FLL third-party setup was reshaped into explicit blocked setup tasks:
+    Google OAuth credentials, Apple OAuth credentials, Supabase provider
+    configuration, Stripe dashboard/webhook setup, and live verification remain
+    owner-actionable blockers, while the runnable Stripe Connect code task was
+    merged back to main and its disposable worktree was removed.
   - [ ] Add the follow-on global scheduler that fairly spends the provider
     budget across all turned-on projects instead of requiring each project to
     be manually started and budgeted in isolation.

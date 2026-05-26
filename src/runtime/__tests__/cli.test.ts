@@ -8,6 +8,7 @@ import {
   semanticRepairCompletionBudget,
   clearServiceRuntimeState,
   clearServiceRuntimeStateIfOwnedByPid,
+  completeOpenAiCompatibleJson,
   discoverServiceRuntimeState,
   isPidAlive,
   launchRouteForProject,
@@ -24,6 +25,7 @@ import {
   recordEscapedReviewMiss,
   validateReviewCalibrationCorpus,
   validateReviewPlanningCorpus,
+  validateTaskSizingCorpus,
   writeModelBakeoffReport,
 } from '../cli.js'
 
@@ -195,6 +197,54 @@ describe('CLI service lifecycle helpers', () => {
 })
 
 describe('Guildhall CLI surface', () => {
+  it('can request strict JSON-schema output from OpenAI-compatible JSON completions', async () => {
+    let captured: Record<string, unknown> | undefined
+    const encoder = new TextEncoder()
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      captured = JSON.parse((init?.body as string) ?? '{}') as Record<string, unknown>
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"{\\"items\\":[]}"},"finish_reason":"stop"}]}\n\n'))
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+          controller.close()
+        },
+      }), { status: 200 })
+    }))
+
+    const responseFormat = {
+      type: 'json_schema',
+      json_schema: {
+        name: 'guildhall_json_response',
+        strict: true,
+        schema: {
+          type: 'object',
+          properties: {
+            items: {
+              type: 'array',
+              items: { type: 'object', additionalProperties: true },
+            },
+          },
+          required: ['items'],
+          additionalProperties: false,
+        },
+      },
+    }
+
+    const text = await completeOpenAiCompatibleJson({
+      baseUrl: 'https://api.deepinfra.com/v1/openai',
+      apiKey: 'test-key',
+      modelId: 'Qwen/Qwen3.5-35B-A3B',
+      systemPrompt: 'Return JSON.',
+      prompt: 'List items.',
+      maxTokens: 64,
+      responseFormat,
+    })
+
+    expect(text).toBe('{"items":[]}')
+    expect(captured?.response_format).toEqual(responseFormat)
+    expect(captured).not.toHaveProperty('service_tier')
+  })
+
   it('derives semantic context-indexer budgets from prompt size instead of fixed magic caps', () => {
     const small = semanticCompletionBudget('short prompt')
     const large = semanticCompletionBudget('x'.repeat(16_000))
@@ -248,6 +298,7 @@ describe('Guildhall CLI surface', () => {
     expect(help).toContain('guildhall review-calibration escaped-miss')
     expect(help).toContain('guildhall review-calibration draft-case')
     expect(help).toContain('guildhall review-calibration validate-planning')
+    expect(help).toContain('guildhall review-calibration validate-sizing')
   })
 
   it('validates and records the review calibration corpus through persistence', async () => {
@@ -357,6 +408,31 @@ describe('Guildhall CLI surface', () => {
         'thorough',
         'balanced_split_ux_copy',
       ])
+    } finally {
+      if (priorDataDir === undefined) {
+        delete process.env.GUILDHALL_DATA_DIR
+      } else {
+        process.env.GUILDHALL_DATA_DIR = priorDataDir
+      }
+    }
+  })
+
+  it('validates and records the task sizing corpus through persistence', async () => {
+    const project = tmpHome()
+    const priorDataDir = process.env.GUILDHALL_DATA_DIR
+    const dataDir = join(tmpHome(), 'guildhall-data')
+    process.env.GUILDHALL_DATA_DIR = dataDir
+    try {
+      const result = await validateTaskSizingCorpus({
+        projectPath: project,
+        recordedBy: 'task-sizing:test',
+        now: () => new Date('2026-05-25T12:00:00.000Z'),
+      })
+
+      expect(result.summary.recommendedVariantId).toBe('split_sensitive')
+      expect(result.record.ref.path).toContain(join(dataDir, 'projects'))
+      expect(result.record.payload.variantSet).toBe('task-sizing-frontier')
+      expect(result.record.payload.variants).toEqual(['balanced', 'split_sensitive'])
     } finally {
       if (priorDataDir === undefined) {
         delete process.env.GUILDHALL_DATA_DIR

@@ -231,6 +231,37 @@ function classifySelfAuthoredVerificationFailure(
   }
 }
 
+function classifyVerificationCommandEnvironmentClaim(
+  input: ClassifyAgentFailureInput,
+): FailureClassification | null {
+  const touchedFiles = (input.touchedFiles ?? []).map(normalizePathForText).filter(Boolean)
+  if (touchedFiles.length === 0) return null
+
+  const text = input.blockReason ?? ''
+  if (
+    !/implementation is complete|code follows|completed implementation/i.test(text) ||
+    !/verification commands?.*(?:do not|don't|cannot|can't|won't|not work|failed|unavailable|environment)/i.test(text)
+  ) {
+    return null
+  }
+
+  return {
+    class: 'authoritative_command_unknown',
+    confidence: 'medium',
+    evidence: [
+      {
+        kind: 'task',
+        summary:
+          'Worker claimed implementation was complete but verification commands could not run while task-owned files were changed.',
+        ref: touchedFiles[0],
+      },
+    ],
+    scope: 'task',
+    safePlaybooks: ['rerun_authoritative_command', 'route_to_review'],
+    needsHuman: false,
+  }
+}
+
 function classifyStaleEditTarget(input: ClassifyAgentFailureInput): FailureClassification | null {
   const error = input.lastToolError
   if (!error) return null
@@ -296,6 +327,7 @@ function classifyReviewerInfrastructureNoise(
 export function classifyAgentFailure(input: ClassifyAgentFailureInput): FailureClassification {
   return (
     classifySelfAuthoredVerificationFailure(input) ??
+    classifyVerificationCommandEnvironmentClaim(input) ??
     classifyStaleEditTarget(input) ??
     classifyReviewerInfrastructureNoise(input) ??
     DEFAULT_CLASSIFICATION

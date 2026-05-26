@@ -154,6 +154,115 @@ describe('updateTask', () => {
         met: false,
       },
     ])
+    expect(raw.tasks[0].sizePlan).toMatchObject({
+      taskId: 'task-001',
+      action: 'proceed',
+      createdBy: 'task-sizing',
+    })
+  })
+
+  it('records a split-required sizing plan when a shaped task is too large', async () => {
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      spec: [
+        '## Summary',
+        'Add billing settings, create an admin API endpoint, migrate subscription data, send invite emails, and document analytics rollout.',
+        '',
+        '## Acceptance Criteria',
+        '- Billing settings update subscriptions.',
+        '- Admin API returns subscription status.',
+        '- Migration backfills existing workspace subscriptions.',
+      ].join('\n'),
+      acceptanceCriteria: [
+        { id: 'ac-1', description: 'Billing settings update subscriptions.', verifiedBy: 'review' },
+        { id: 'ac-2', description: 'Admin API returns subscription status.', verifiedBy: 'review' },
+        { id: 'ac-3', description: 'Migration backfills subscriptions.', verifiedBy: 'review' },
+      ],
+    })
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].sizePlan).toMatchObject({
+      taskId: 'task-001',
+      score: 8,
+      band: 'epic',
+      action: 'split_required',
+    })
+    expect(raw.tasks[0].parentGoalId).toBe('goal-task-001')
+    expect(raw.tasks[0].sizePlan.recommendedChildren.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('materializes split-required sizing plans into linked child tasks idempotently', async () => {
+    const spec = [
+      '## Summary',
+      'Add billing settings, create an admin API endpoint, migrate subscription data, send invite emails, and document analytics rollout.',
+      '',
+      '## Acceptance Criteria',
+      '- Billing settings update subscriptions.',
+      '- Admin API returns subscription status.',
+      '- Migration backfills existing workspace subscriptions.',
+    ].join('\n')
+    const acceptanceCriteria = [
+      { id: 'ac-1', description: 'Billing settings update subscriptions.', verifiedBy: 'review' as const },
+      { id: 'ac-2', description: 'Admin API returns subscription status.', verifiedBy: 'review' as const },
+      { id: 'ac-3', description: 'Migration backfills subscriptions.', verifiedBy: 'review' as const },
+    ]
+
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', spec, acceptanceCriteria })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', spec, acceptanceCriteria })
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const parent = raw.tasks.find((task: { id: string }) => task.id === 'task-001')
+    const children = raw.tasks.filter((task: { id: string; parentGoalId?: string }) =>
+      task.id !== 'task-001' && task.parentGoalId === 'goal-task-001',
+    )
+
+    expect(parent.sizePlan.action).toBe('split_required')
+    expect(parent.status).toBe('parent')
+    expect(children.map((task: { title: string }) => task.title)).toEqual([
+      'Implement the billing settings workflow',
+      'Add the admin subscription API contract',
+      'Migrate existing workspace subscription data',
+      'Implement invite email delivery',
+      'Update analytics documentation and rollout evidence',
+    ])
+    expect(children.every((task: { status: string; origination: string; proposedBy: string }) =>
+      task.status === 'exploring' &&
+      task.origination === 'system' &&
+      task.proposedBy === 'task-sizing',
+    )).toBe(true)
+    expect(parent.sizePlan.recommendedChildren.map((child: { createdTaskId?: string }) => child.createdTaskId)).toEqual(
+      children.map((task: { id: string }) => task.id),
+    )
+  })
+
+  it('keeps a split-required parent out of the ready worker queue', async () => {
+    await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      status: 'ready',
+      spec: [
+        '## Summary',
+        'Add billing settings, create an admin API endpoint, migrate subscription data, send invite emails, and document analytics rollout.',
+        '',
+        '## Acceptance Criteria',
+        '- Billing settings update subscriptions.',
+        '- Admin API returns subscription status.',
+        '- Migration backfills existing workspace subscriptions.',
+      ].join('\n'),
+      acceptanceCriteria: [
+        { id: 'ac-1', description: 'Billing settings update subscriptions.', verifiedBy: 'review' },
+        { id: 'ac-2', description: 'Admin API returns subscription status.', verifiedBy: 'review' },
+        { id: 'ac-3', description: 'Migration backfills subscriptions.', verifiedBy: 'review' },
+      ],
+    })
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].sizePlan.action).toBe('split_required')
+    expect(raw.tasks[0].status).toBe('parent')
+    expect(raw.tasks.filter((task: { id: string; parentGoalId?: string }) =>
+      task.id !== 'task-001' && task.parentGoalId === 'goal-task-001',
+    ).length).toBeGreaterThan(0)
   })
 
   it('promotes exploring tasks to spec_review when a non-empty spec is written without an explicit status', async () => {

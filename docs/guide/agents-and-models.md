@@ -25,7 +25,7 @@ inspects, one enforces deterministic checks, and one enriches project context.
 models:
   spec: deepseek-ai/DeepSeek-V4-Flash
   coordinator: deepseek-ai/DeepSeek-V4-Flash
-  worker: Qwen/Qwen3-235B-A22B-Instruct-2507
+  worker: Qwen/Qwen3.5-35B-A3B
   reviewer: deepseek-ai/DeepSeek-V4-Flash
   gateChecker: deepseek-ai/DeepSeek-V4-Flash
   contextIndexer: zai-org/GLM-4.6
@@ -37,6 +37,14 @@ Guildhall's public open-model recommendations live in
 [Open model recommendations](./open-models). Those notes are based on saved
 development replay prompts and treated as a starting point, not a
 permanent ranking.
+
+For OpenAI-compatible providers, Guildhall also sends model API hints when they
+make the run cheaper or more reliable. Stable agent turns get a prompt-cache
+identity when one is available. JSON-only helper calls can request strict
+`response_format` schemas. Reasoning controls are selected from the agent role
+and model id instead of being sprinkled through prompts. Guildhall deliberately
+does not set paid `service_tier` priority unless a future configuration adds an
+explicit opt-in.
 
 ## Cognitive profiles
 

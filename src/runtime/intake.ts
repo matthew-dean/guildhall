@@ -4,11 +4,14 @@ import { TaskQueue, type Task, type TaskRequest, type TaskStatus } from '@guildh
 import { atomicWriteText } from '@guildhall/sessions'
 import {
   appendExploringTranscript,
+  materializeRequiredSplitChildren,
   resolveEscalation,
 } from '@guildhall/tools'
 import { normalizeImportedDraftTask, promoteImportDraftToExploring } from './import-drafts.js'
 import { createPressureTestIntake, type PressureTestIntake } from './pressure-test-intake.js'
+import { analyzeRequestIntake } from './request-intake.js'
 import { routeRequest, type RouteRequestResult, type RoutedAction } from './request-routing.js'
+import { validateSpecCompletionBoundary } from './spec-quality.js'
 
 // ---------------------------------------------------------------------------
 // FR-12: exploratory task intake.
@@ -83,6 +86,11 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
 
   const now = new Date().toISOString()
   const title = compactStoredLabel(input.title, input.ask, 'New request')
+  const requestIntake = analyzeRequestIntake({
+    ask: input.ask,
+    title,
+    createdAt: now,
+  })
 
   const task: Task = {
     id,
@@ -105,6 +113,8 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
     remediationAttempts: 0,
     origination: 'human',
     ...(input.request ? { request: input.request } : {}),
+    requestIntake: requestIntake.requestIntake,
+    ...(requestIntake.openQuestion ? { openQuestions: [requestIntake.openQuestion] } : {}),
     createdAt: now,
     updatedAt: now,
   }
@@ -240,8 +250,8 @@ export interface ApproveSpecResult {
 }
 
 /**
- * Mark a task's spec as approved by the human. Transitions `spec_review` →
- * `ready`, where the domain coordinator can assign a worker.
+ * Mark a task's spec as approved. A one-task spec moves to `ready`; a spec
+ * that names multiple child tasks creates them and keeps this task as `parent`.
  */
 export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecResult> {
   const queue = await readQueue(input.memoryDir)
@@ -259,9 +269,20 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
       error: `Task ${input.taskId} has no spec yet; cannot approve`,
     }
   }
+  const specQuality = validateSpecCompletionBoundary(task)
+  if (!specQuality.ok) {
+    return {
+      success: false,
+      error: `Spec is not ready for approval: ${specQuality.errors.join(' ')}`,
+    }
+  }
 
   const now = new Date().toISOString()
-  task.status = 'ready'
+  if (task.sizePlan?.action === 'split_required') {
+    materializeRequiredSplitChildren(queue, task, now)
+  } else {
+    task.status = 'ready'
+  }
   task.updatedAt = now
   queue.lastUpdated = now
 
@@ -282,10 +303,12 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     role: 'system',
     content: input.approvalNote
       ? `Spec approved by human. Note: ${input.approvalNote}`
-      : 'Spec approved by human. Task advanced to ready.',
+      : task.sizePlan?.action === 'split_required'
+        ? 'Spec approved. Guildhall created the listed tasks and kept this as the parent task.'
+        : 'Spec approved by human. Task advanced to ready.',
   })
 
-  return { success: true, newStatus: 'ready' }
+  return { success: true, newStatus: task.status }
 }
 
 // ---------------------------------------------------------------------------
@@ -438,6 +461,13 @@ export interface ReframeTaskResult {
   error?: string
 }
 
+export interface EnrichTaskInput {
+  memoryDir: string
+  taskId: string
+  mode?: 'split' | 'checklist' | 'general'
+  instruction?: string
+}
+
 /**
  * Resume an exploring-phase conversation: optionally resolve a pending
  * escalation, optionally append a new user message to the transcript, and
@@ -511,6 +541,12 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
     return { success: false, error: `Task ${input.taskId} is ${task.status}` }
   }
+  if (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
+    return {
+      success: false,
+      error: `Task ${input.taskId} already started implementation; pause or finish the current work before reframing so work traces stay connected.`,
+    }
+  }
 
   const now = new Date().toISOString()
   const oldStatus = task.status
@@ -528,6 +564,9 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
     '- Why does it matter?',
     '- What is the next concrete step?',
     '- If user input is needed, what exact decision is needed, what are the choices, and how should the user answer?',
+    '- What kind of request is this: policy/spec, implementation, question/research, or ambiguous?',
+    '- What components fit together: policy decision, spec, implementation surfaces, data/API/docs, release, and verification?',
+    '- If the request is bigger than one worker/review loop, turn it into a parent feature/epic with linked child tasks instead of one oversized task.',
     '',
     'Write new acceptance criteria only after the task is understandable. Keep provenance in notes/history; do not make the user read raw checkpoint or handoff packets to understand the work.',
     ...(reason ? ['', `User note: ${reason}`] : []),
@@ -589,6 +628,88 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
     agentId: 'system',
     role: 'system',
     content: `Reframe requested for "${oldTitle}" from ${oldStatus}. Guildhall will rebuild the task in plain language before continuing.`,
+    timestamp: now,
+  })
+  await writeQueue(input.memoryDir, queue)
+
+  return { success: true, newStatus: 'exploring' }
+}
+
+export async function enrichTask(input: EnrichTaskInput): Promise<ReframeTaskResult> {
+  const queue = await readQueue(input.memoryDir)
+  const task = queue.tasks.find((t) => t.id === input.taskId)
+  if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+  if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
+    return { success: false, error: `Task ${input.taskId} is ${task.status}` }
+  }
+  if (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
+    return {
+      success: false,
+      error: `Task ${input.taskId} already started implementation; pause or finish the current work before enriching so work traces stay connected.`,
+    }
+  }
+
+  const now = new Date().toISOString()
+  const oldStatus = task.status
+  const mode = input.mode ?? 'general'
+  const instruction = input.instruction?.trim()
+  const modeInstruction = mode === 'split'
+    ? 'Enrich this task by deciding whether it should become a parent task with smaller linked child tasks. Preserve useful existing brief/spec context, but split external setup, owner-only work, implementation, and live verification into separate child tasks when they have different owners or verification boundaries.'
+    : mode === 'checklist'
+      ? 'Enrich this task by adding a concrete external blocker checklist and any missing owner setup steps. Preserve useful existing brief/spec context.'
+      : 'Enrich this task with missing context, clearer next steps, and any structured checklist or split recommendations needed before implementation continues. Preserve useful existing brief/spec context.'
+  const enrichmentRequest = [
+    modeInstruction,
+    '',
+    'Do not treat enrichment as proof that the old task was wrong. Keep valid context. Add the missing structure the user needs to make progress.',
+    '',
+    'If the work should be split, keep the current task as the parent and draft linked child tasks with clear owners, dependencies, and verification boundaries.',
+    'If the blocker needs external setup, produce the external checklist as concrete steps the owner can complete before Guildhall resumes verification.',
+    ...(instruction ? ['', `User note: ${instruction}`] : []),
+  ].join('\n')
+
+  const notes = Array.isArray(task.notes) ? [...task.notes] : []
+  notes.push({
+    agentId: 'human',
+    role: 'human',
+    content: instruction
+      ? `Asked Guildhall to enrich this task (${mode}). Note: ${instruction}`
+      : `Asked Guildhall to enrich this task (${mode}).`,
+    timestamp: now,
+  })
+
+  if (Array.isArray(task.escalations)) {
+    task.escalations = task.escalations.map(escalation => (
+      escalation.resolvedAt
+        ? escalation
+        : {
+            ...escalation,
+            resolvedAt: now,
+            resolvedBy: 'human',
+            resolution: 'Superseded by a task enrichment request.',
+          }
+    ))
+  }
+
+  delete task.blockReason
+  task.status = 'exploring'
+  task.assignedTo = 'spec-agent'
+  task.notes = notes
+  task.updatedAt = now
+  queue.lastUpdated = now
+
+  await appendExploringTranscript({
+    memoryDir: input.memoryDir,
+    taskId: task.id,
+    role: 'user',
+    content: enrichmentRequest,
+  })
+  await writeQueue(input.memoryDir, queue)
+
+  notes.push({
+    agentId: 'system',
+    role: 'system',
+    content: `Enrichment requested from ${oldStatus}. Guildhall will add the missing structure before continuing.`,
     timestamp: now,
   })
   await writeQueue(input.memoryDir, queue)

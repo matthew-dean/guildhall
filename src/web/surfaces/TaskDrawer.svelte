@@ -14,6 +14,7 @@
   import Textarea from '../lib/Textarea.svelte'
   import Field from '../lib/Field.svelte'
   import Stack from '../lib/Stack.svelte'
+  import OverviewTab from './drawer/OverviewTab.svelte'
   import SpecTab from './drawer/SpecTab.svelte'
   import CurrentTab from './drawer/CurrentTab.svelte'
   import JourneyTab from './drawer/JourneyTab.svelte'
@@ -26,6 +27,7 @@
   import { onEvent, eventTaskId } from '../lib/events.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../lib/project-routes.js'
   import { project } from '../lib/project.svelte.js'
+  import { nav, path as navPath } from '../lib/nav.svelte.js'
   import { onMount, onDestroy } from 'svelte'
   import { toast } from 'svelte-sonner'
   import { activeEscalations } from '../lib/escalation.js'
@@ -44,7 +46,7 @@
   let busy = $state(false)
   let runBusy = $state(false)
   let runError = $state<string | null>(null)
-  let activeTab = $state<DrawerTab>('spec')
+  let activeTab = $state<DrawerTab>('overview')
   let initializedTabForTaskId = $state<string | null>(null)
   let pollHandle: ReturnType<typeof setInterval> | null = null
 
@@ -54,10 +56,22 @@
   let approveSpecNote = $state('')
   let reframeOpen = $state(false)
   let reframeNote = $state('')
+  let reworkModal = $state<null | {
+    mode: 'general' | 'split' | 'checklist'
+    title: string
+    intro: string
+    label: string
+    placeholder: string
+    fallbackInstruction: string
+    submitLabel: string
+    success: string
+  }>(null)
+  let reworkNote = $state('')
   let holdOpen = $state(false)
   let holdReason = $state('')
   let shelveOpen = $state(false)
   let rerunStageBusy = $state<null | 'spec' | 'review' | 'gate'>(null)
+  let splitTaskBusy = $state(false)
   let moreActionsOpen = $state(false)
   let moreActionsEl = $state<HTMLElement | null>(null)
   let reframeButtonEl = $state<HTMLButtonElement | null>(null)
@@ -102,6 +116,19 @@
     return currentProjectHref(suffix, scopedProjectId())
   }
 
+  function drawerBackgroundPath(): string {
+    const state = navPath.state
+    if (state && typeof state === 'object' && typeof (state as { backgroundPath?: unknown }).backgroundPath === 'string') {
+      return (state as { backgroundPath: string }).backgroundPath
+    }
+    return scopedProjectId() ? drawerProjectHref('/thread') : '/project/thread'
+  }
+
+  function navigateToRelatedTask(nextTaskId: string): void {
+    if (!nextTaskId || nextTaskId === taskId) return
+    nav(currentTaskHref(nextTaskId, scopedProjectId()), { backgroundPath: drawerBackgroundPath() })
+  }
+
   async function copyTaskLink(taskId: string): Promise<void> {
     const href = currentTaskHref(taskId, scopedProjectId())
     const absolute = typeof window === 'undefined'
@@ -120,6 +147,7 @@
     const raw = new URLSearchParams(window.location.search).get('tab')
     if (
       raw === 'current' ||
+      raw === 'overview' ||
       raw === 'spec' ||
       raw === 'journey' ||
       raw === 'transcript' ||
@@ -133,6 +161,7 @@
   }
 
   const BASE_TABS = [
+    { id: 'overview', label: 'Overview' },
     { id: 'spec', label: 'Spec' },
     { id: 'journey', label: 'Journey' },
     { id: 'transcript', label: 'Transcript' },
@@ -314,6 +343,50 @@
     await runProject('start', taskId)
   }
 
+  function handleOpenRework() {
+    moreActionsOpen = false
+    reworkNote = ''
+    reworkModal = {
+      mode: 'general',
+      title: 'Rework task',
+      intro: 'Use this when the task is still valuable, but Guildhall should transform how it is structured, saved, or handed back to agents.',
+      label: 'How should Guildhall rework this?',
+      placeholder: 'e.g. keep the implementation spec, but add an external setup checklist and split live verification into a separate task.',
+      fallbackInstruction: 'Rework this task according to the current blocker and project context while preserving useful existing context.',
+      submitLabel: 'Rework task',
+      success: 'Guildhall will rework this task.',
+    }
+  }
+
+  function handleOpenSplit() {
+    moreActionsOpen = false
+    reworkNote = ''
+    reworkModal = {
+      mode: 'split',
+      title: 'Split task',
+      intro: 'Use this when one task is hiding separate pieces of work, external setup, or decisions. Guildhall will keep the original as the parent and draft smaller child tasks.',
+      label: 'What should be separated?',
+      placeholder: 'Optional: e.g. split Google OAuth setup, Apple OAuth setup, and live sign-in verification.',
+      fallbackInstruction: 'Split this task into smaller child tasks before implementation.',
+      submitLabel: 'Split task',
+      success: 'Guildhall will split this into smaller tasks.',
+    }
+  }
+
+  async function submitReworkTask() {
+    const modal = reworkModal
+    if (!modal) return
+    const note = reworkNote.trim()
+    reworkModal = null
+    if (!(await post('enrich-task', {
+      mode: modal.mode,
+      instruction: note || modal.fallbackInstruction,
+    }))) return
+    await project.refresh()
+    toast.success(modal.success)
+    await runProject('start', taskId)
+  }
+
   function handleOpenHold() {
     moreActionsOpen = false
     holdReason = ''
@@ -345,6 +418,18 @@
     }
   }
 
+  async function handleCreateSplitChildren() {
+    splitTaskBusy = true
+    try {
+      if (!(await post('create-split-children'))) return
+      await project.refresh()
+      await load()
+      toast.success('Task split into a parent with linked child tasks.')
+    } finally {
+      splitTaskBusy = false
+    }
+  }
+
   function confirmed(action: string): boolean {
     return window.confirm(`${action} task ${taskId}?`)
   }
@@ -354,7 +439,7 @@
   const hasCurrentTurns = $derived((payload?.threadTurns?.length ?? 0) > 0)
   const tabs = $derived(
     hasCurrentTurns
-      ? ([{ id: 'current', label: 'Action' }, ...BASE_TABS] as const)
+      ? ([BASE_TABS[0], { id: 'current', label: 'Action' }, ...BASE_TABS.slice(1)] as const)
       : BASE_TABS,
   )
   function isTerminalRunStatus(status: string | undefined): boolean {
@@ -362,9 +447,24 @@
   }
 
   const isTerminalRunTask = $derived(isTerminalRunStatus(task?.status))
+  const isParentTask = $derived(task?.status === 'parent')
+  const canReframeTask = $derived(Boolean(
+    task &&
+    !isTerminalRunTask &&
+    !isParentTask &&
+    task.status !== 'in_progress' &&
+    task.status !== 'review' &&
+    task.status !== 'gate_check',
+  ))
+  const canSplitTask = $derived(Boolean(
+    canReframeTask &&
+    task?.id !== 'task-meta-intake' &&
+    task?.id !== 'task-workspace-import',
+  ))
+  const canReworkTask = $derived(canSplitTask)
   const isHeld = $derived(task?.status === 'blocked' && Boolean(task?.hold))
-  const canHold = $derived(task && !isTerminalRunTask && task.status !== 'blocked')
-  const canShelve = $derived(task && task.status !== 'done' && task.status !== 'pending_pr')
+  const canHold = $derived(task && !isTerminalRunTask && !isParentTask && task.status !== 'blocked')
+  const canShelve = $derived(task && !isParentTask && task.status !== 'done' && task.status !== 'pending_pr')
   const isShelved = $derived(task?.status === 'shelved')
   const isWorkspaceImportTask = $derived(task?.id === 'task-workspace-import')
   const openEscalations = $derived(task ? activeEscalations(task) : [])
@@ -395,7 +495,15 @@
         title: 'This task is out of the active queue for now.',
         detail: task.hold?.reason
           ? `Reason: ${task.hold.reason}`
-          : 'Resume it when you want Guildhall to continue from the saved stage.',
+        : 'Resume it when you want Guildhall to continue from the saved stage.',
+      }
+    }
+    if (task.status === 'parent') {
+      return {
+        tone: 'info',
+        eyebrow: 'Parent task',
+        title: 'Work happens in the child tasks.',
+        detail: 'Open Overview to move through the linked tasks.',
       }
     }
     if (task.terminalSummary?.headline) {
@@ -461,19 +569,17 @@
     }
     return raw || taskId
   })
+  const drawerProjectLabel = $derived.by(() => {
+    const name = project.detail?.name?.trim()
+    if (name) return name
+    const id = scopedProjectId()
+    return id ? id.replace(/[-_]+/g, ' ') : 'Project'
+  })
   const displayTaskDescription = $derived.by(() => {
     if (!task || typeof task.description !== 'string') return ''
     const description = task.description.trim()
     if (!description || description === displayTaskTitle) return ''
     return description
-  })
-  const preferSpecTab = $derived.by(() => {
-    if (!task) return false
-    if (!hasCurrentTurns) return false
-    const status = task.status ?? ''
-    const spec = typeof task.spec === 'string' ? task.spec.trim() : ''
-    const acceptanceCount = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria.length : 0
-    return status === 'exploring' && spec.length > 0 && acceptanceCount > 0
   })
   const stageRerun = $derived.by(() => {
     if (!task) return null
@@ -501,15 +607,13 @@
     const requested = requestedInitialTab()
     activeTab = requested && (requested !== 'current' || hasCurrentTurns)
       ? requested
-      : hasCurrentTurns && !preferSpecTab
-        ? 'current'
-        : 'spec'
+      : 'overview'
     initializedTabForTaskId = taskId
   })
 
   $effect(() => {
     if (activeTab === 'current' && !hasCurrentTurns) {
-      activeTab = 'spec'
+      activeTab = 'overview'
     }
   })
 
@@ -633,6 +737,11 @@
 <aside class="gh-drawer" aria-label="Task drawer">
   <header class="gh-drawer-head">
     <div class="drawer-title-block">
+      <nav class="drawer-breadcrumb" aria-label="Task breadcrumb">
+        <a href={drawerProjectHref('/overview')}>{drawerProjectLabel}</a>
+        <span aria-hidden="true">/</span>
+        <span>{task?.id ?? taskId}</span>
+      </nav>
       <h3>{displayTaskTitle}</h3>
       {#if displayTaskDescription}
         <p>{displayTaskDescription}</p>
@@ -685,6 +794,14 @@
           onOpenEscalationAction={handleOpenEscalationAction}
           onAnswerQuestion={answerQuestion}
         />
+      {:else if activeTab === 'overview'}
+        <OverviewTab
+          task={payload.task}
+          projectId={scopedProjectId()}
+          onNavigateTask={navigateToRelatedTask}
+          onCreateSplitChildren={handleCreateSplitChildren}
+          createSplitBusy={splitTaskBusy}
+        />
       {:else if activeTab === 'spec'}
         <SpecTab
           task={payload.task}
@@ -699,7 +816,7 @@
           onAddAcceptance={handleAddAcceptance}
         />
       {:else if activeTab === 'journey'}
-        <JourneyTab task={payload.task} />
+        <JourneyTab task={payload.task} projectId={scopedProjectId()} />
       {:else if activeTab === 'transcript'}
         <TranscriptTab task={payload.task} exploringTranscript={payload.exploringTranscript} />
       {:else if activeTab === 'experts'}
@@ -738,7 +855,7 @@
             {#if runError}
               <span class="run-error">{runError}</span>
             {/if}
-            {#if !hasCurrentTurns && !isTerminalRunTask}
+            {#if !hasCurrentTurns && !isTerminalRunTask && !isParentTask}
               {#if runStatus === 'running'}
                 <Button
                   variant="danger"
@@ -761,7 +878,7 @@
               {/if}
             {/if}
           </div>
-          {#if !isTerminalRunTask || canHold || (!isShelved && canShelve) || stageRerun}
+          {#if canReframeTask || canReworkTask || canSplitTask || canHold || (!isShelved && canShelve) || stageRerun}
             <div class="more-actions" class:is-open={moreActionsOpen} bind:this={moreActionsEl}>
               <button
                 type="button"
@@ -774,7 +891,7 @@
               </button>
               {#if moreActionsOpen}
               <div class="more-action-menu">
-                {#if !isTerminalRunTask}
+                {#if canReframeTask}
                   <button
                     bind:this={reframeButtonEl}
                     type="button"
@@ -783,6 +900,27 @@
                   >
                     Reframe task...
                   </button>
+                {/if}
+                {#if canReworkTask}
+                  <Button
+                    variant="agent"
+                    size="sm"
+                    disabled={busy || runBusy}
+                    onclick={handleOpenRework}
+                  >
+                    <Icon name="sparkles" size={14} />
+                    Rework task...
+                  </Button>
+                {/if}
+                {#if canSplitTask}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy || runBusy}
+                    onclick={handleOpenSplit}
+                  >
+                    Split task...
+                  </Button>
                 {/if}
                 {#if canHold}
                   {#if stageRerun}
@@ -825,7 +963,7 @@
         </div>
         <div class="footer-actions-right">
           {#if firstOpenEscalation && !activeTabOwnsEscalationDecision}
-            {#if firstOpenEscalationGuidance.actionOwner === 'user'}
+            {#if firstOpenEscalationGuidance.actionOwner === 'user' && canReframeTask}
               <Button
                 variant="secondary"
                 size="sm"
@@ -980,6 +1118,37 @@
 </Modal>
 
 <Modal
+  open={reworkModal !== null}
+  title={reworkModal?.title ?? 'Rework task'}
+  onClose={() => (reworkModal = null)}
+  size="md"
+>
+  {#snippet children()}
+    {#if reworkModal}
+      <Stack gap="3">
+        <p class="modal-copy">{reworkModal.intro}</p>
+        <Field label={reworkModal.label}>
+          <Textarea
+            bind:value={reworkNote}
+            rows={5}
+            placeholder={reworkModal.placeholder}
+          />
+        </Field>
+      </Stack>
+    {/if}
+  {/snippet}
+  {#snippet footer()}
+    <Button variant="ghost" disabled={busy} onclick={() => (reworkModal = null)}>
+      Cancel
+    </Button>
+    <Button variant="agent" disabled={busy} onclick={submitReworkTask}>
+      <Icon name="sparkles" size={14} />
+      {reworkModal?.submitLabel ?? 'Rework task'}
+    </Button>
+  {/snippet}
+</Modal>
+
+<Modal
   open={reframeOpen}
   title="Reframe task"
   onClose={() => (reframeOpen = false)}
@@ -1057,6 +1226,30 @@
     display: grid;
     gap: var(--s-1);
     min-width: 0;
+  }
+  .drawer-breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: var(--s-1);
+    min-width: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-1);
+  }
+  .drawer-breadcrumb a,
+  .drawer-breadcrumb span:last-child {
+    min-width: 0;
+    max-width: 18rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .drawer-breadcrumb a {
+    color: inherit;
+    text-decoration: none;
+  }
+  .drawer-breadcrumb a:hover {
+    color: var(--text);
+    text-decoration: underline;
   }
   .drawer-title-block p {
     margin: 0;

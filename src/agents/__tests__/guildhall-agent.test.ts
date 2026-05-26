@@ -834,7 +834,7 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
     expect(reloader.messages).toHaveLength(2)
     expect(reloader.messages[0]?.role).toBe('user')
     expect(reloader.messages[1]?.role).toBe('assistant')
-    expect(reloader.totalUsage).toEqual({ input_tokens: 5, output_tokens: 3 })
+    expect(reloader.totalUsage).toEqual({ input_tokens: 5, output_tokens: 3, cached_input_tokens: 0 })
   })
 
   it('can ignore completed snapshots when only pending continuation should resume', async () => {
@@ -935,7 +935,7 @@ describe('GuildhallAgent — FR-20 session persistence', () => {
 
     await agent.generate('first user prompt')
     expect(agent.messages).toHaveLength(2)
-    expect(agent.totalUsage).toEqual({ input_tokens: 5, output_tokens: 3 })
+    expect(agent.totalUsage).toEqual({ input_tokens: 5, output_tokens: 3, cached_input_tokens: 0 })
 
     agent.resetConversation()
 

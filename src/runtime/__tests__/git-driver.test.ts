@@ -50,6 +50,16 @@ describe('NodeGitDriver', () => {
     await expect(driver.isClean(subdir)).resolves.toBe(true)
   })
 
+  it('resolves git status from the nearest existing ancestor when a task path will be created by the worker', async () => {
+    const driver = new NodeGitDriver()
+    const futureTaskPath = path.join(subdir, 'server', 'api', 'stripe')
+
+    await expect(driver.statusSummary(futureTaskPath)).resolves.toMatchObject({
+      clean: true,
+      branch: 'main',
+    })
+  })
+
   it('checkpoints real shared-checkout edits from a subdirectory project path without committing Guildhall state files', async () => {
     const driver = new NodeGitDriver()
     await fs.writeFile(path.join(subdir, 'app.ts'), 'export const ready = false\n', 'utf8')

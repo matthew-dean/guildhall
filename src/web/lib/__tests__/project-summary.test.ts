@@ -175,7 +175,7 @@ describe('summarizeProjects', () => {
     }
 
     expect(summarizeProjects(service)[0]).toMatchObject({
-      name: 'scratch-pad',
+      name: 'Scratch pad',
       statusLabel: 'Needs setup',
       tone: 'warn',
       stageLabel: 'Needs setup',
@@ -271,7 +271,7 @@ describe('summarizeProjects', () => {
       recentLabel: 'Working on: Build TypeScript-JSDoc round-trip conversion',
       maturityLabel: 'Paused',
       maturityDescription: 'Work is ready or paused, but no agents are running right now.',
-      runActionLabel: 'Resume 1 task',
+      runActionLabel: 'Resume',
     })
   })
 

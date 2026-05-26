@@ -150,6 +150,9 @@ a plan. The UI and coordinator need a concrete event immediately.
   "What exact decision or external action must the owner take?" If the answer is
   "Guildhall should run/record/fix/verify something," do that instead of
   escalating.
+- If the blocker is external setup, credentials, provider dashboard work, or
+  live service configuration, include externalChecklist on raise-escalation.
+  Each checklist item should be a concrete owner step, not a vague category.
 - Run shell commands (build, typecheck) incrementally to catch errors early.
 
 ## No plan-only turns

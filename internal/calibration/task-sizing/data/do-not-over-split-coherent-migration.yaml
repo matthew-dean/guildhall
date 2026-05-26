@@ -1,0 +1,25 @@
+id: do-not-over-split-coherent-migration
+title: Do not over-split coherent migration
+task:
+  id: task-invoice-status-migration
+  title: Backfill invoice status values
+  description: Add one idempotent migration to backfill invoice status values and include rollback notes.
+  priority: normal
+  changedFiles:
+    - migrations/20260525_invoice_status.sql
+    - docs/releases/0.9.0.md
+  riskLanes:
+    - data_integrity
+    - migration_safety
+    - rollout_safety
+expected:
+  minScore: 3
+  action: proceed_with_warning
+  requiredFactors:
+    - several_risk_lanes
+    - migration_or_release
+  minRecommendedChildren: 0
+labelGovernance:
+  labeledBy: task-sizing-seed
+  labeledAt: "2026-05-25"
+  reviewStatus: seed

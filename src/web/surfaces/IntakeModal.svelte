@@ -16,6 +16,9 @@
   }
 
   let { onClose }: Props = $props()
+  let visible = $state(true)
+  let closing = $state(false)
+  let closeTimer: ReturnType<typeof setTimeout> | null = null
 
   type IntakeMode = 'request' | 'bug'
   let mode = $state<IntakeMode>('request')
@@ -31,11 +34,30 @@
   let error = $state<string | null>(null)
 
   function onBackdrop(e: MouseEvent) {
-    if (e.target === e.currentTarget) onClose()
+    if (e.target === e.currentTarget) requestClose()
   }
   function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') onClose()
+    if (e.key === 'Escape') requestClose()
   }
+
+  function requestClose() {
+    if (closing) {
+      onClose()
+      return
+    }
+    closing = true
+    onClose()
+    closeTimer = setTimeout(() => {
+      visible = false
+      closeTimer = null
+    }, 160)
+  }
+
+  $effect(() => {
+    return () => {
+      if (closeTimer) clearTimeout(closeTimer)
+    }
+  })
 
   function notifyRequestCreated() {
     window.dispatchEvent(new CustomEvent('guildhall:request-created'))
@@ -61,7 +83,7 @@
         })
         const j = await res.json()
         if (j.error) return (error = 'Bug filing failed: ' + j.error)
-        onClose()
+        requestClose()
         notifyRequestCreated()
         setTimeout(() => void project.refresh(), 400)
         return
@@ -77,7 +99,7 @@
       })
       const j = await res.json()
       if (j.error) return (error = 'Request failed: ' + j.error)
-      onClose()
+      requestClose()
       notifyRequestCreated()
       setTimeout(() => void project.refresh(), 400)
     } finally {
@@ -96,12 +118,14 @@
 
 <svelte:window onkeydown={onKeydown} />
 
+{#if visible}
 <div
+  class:closing
   class="backdrop"
   role="presentation"
   onclick={onBackdrop}
 >
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="intake-title">
+  <div class:closing class="modal" role="dialog" aria-modal="true" aria-labelledby="intake-title">
     <h2 id="intake-title">New request</h2>
     <Stack gap="3">
       {#if mode === 'bug'}
@@ -155,7 +179,7 @@
         {:else}
           <Button variant="ghost" disabled={busy} onclick={() => (mode = 'bug')}>File a bug instead</Button>
         {/if}
-        <Button variant="secondary" disabled={busy} onclick={onClose}>Cancel</Button>
+        <Button variant="secondary" disabled={busy} onclick={requestClose}>Cancel</Button>
         <Button variant="primary" disabled={busy} onclick={submit}>
           {mode === 'bug' ? (busy ? 'Filing...' : 'File bug') : busy ? 'Creating...' : 'Create request'}
         </Button>
@@ -163,24 +187,36 @@
     </Stack>
   </div>
 </div>
+{/if}
 
 <style>
   .backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.55);
+    background:
+      radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 36%),
+      rgba(0, 0, 0, 0.42);
     z-index: var(--z-modal-backdrop);
     display: flex;
     align-items: center;
     justify-content: center;
     padding: var(--s-4);
+    animation: intake-backdrop-in 130ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .backdrop.closing {
+    animation-name: intake-backdrop-out;
+    pointer-events: none;
   }
   .modal {
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
+    background:
+      var(--glass-reflect-violet),
+      var(--glass-reflect-mint),
+      linear-gradient(180deg, color-mix(in srgb, white 6%, transparent), color-mix(in srgb, white 1.5%, transparent)),
+      color-mix(in srgb, var(--bg-raised) 68%, transparent);
+    border: 1px solid var(--glass-border);
     border-radius: var(--r-3);
     padding: var(--s-4);
-    max-width: 600px;
+    max-width: 540px;
     width: 100%;
     max-height: 90vh;
     overflow-y: auto;
@@ -189,6 +225,18 @@
     gap: var(--s-3);
     position: relative;
     z-index: var(--z-modal);
+    box-shadow:
+      var(--glass-shadow),
+      var(--glass-etch),
+      0 24px 64px rgba(0, 0, 0, 0.38);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    animation: intake-modal-in 160ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .modal.closing {
+    animation-name: intake-modal-out;
+    animation-duration: 130ms;
+    pointer-events: none;
   }
   h2 {
     font-size: var(--fs-4);
@@ -206,5 +254,43 @@
   .error {
     color: var(--danger);
     font-size: var(--fs-2);
+  }
+
+  @keyframes intake-backdrop-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes intake-backdrop-out {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+  @keyframes intake-modal-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px) scale(0.982);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  @keyframes intake-modal-out {
+    from {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+    to {
+      opacity: 0;
+      transform: translateY(8px) scale(0.986);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .backdrop,
+    .modal,
+    .backdrop.closing,
+    .modal.closing {
+      animation-duration: 1ms;
+    }
   }
 </style>

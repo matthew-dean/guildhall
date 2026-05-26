@@ -27,6 +27,19 @@ that sound like "pressure test this," "ask me everything," or "turn this into a
 product spec." Multi-part requests are split into reviewable actions instead of
 being mashed into one grand mystery sandwich.
 
+Guildhall also watches for a quieter kind of ambiguity: requests that sound
+like policy, planning, or spec work but could also mean "go implement this now."
+For example, "set the overhead fee policy" might mean:
+
+- decide the business rule;
+- write the policy/spec;
+- apply it in the product;
+- verify calculations, copy, docs, and rollout.
+
+Those pieces belong together, but they are not all the same task. Guildhall can
+record that component stack and ask whether you want a spec first, a parent
+feature with linked child tasks, or direct implementation.
+
 The first visible card is simple: **New request**, the original ask, and the
 routing summary. If Guildhall finds a similar live card, it reuses that card
 instead of starting a duplicate trail.
@@ -84,6 +97,11 @@ the truth:
 A completed intake makes the next task smaller, not just prettier. If a
 domain is unknown, it stays visible as an assumption or deferral instead of
 quietly turning into a surprise halfway through implementation.
+
+For ambiguous policy/spec requests, the output may be a parent feature rather
+than one runnable task. That parent can hold the decision and spec while linked
+child tasks handle UI, API, data, docs, release, and verification work in
+smaller pieces.
 
 ## When not to use it
 

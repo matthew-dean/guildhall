@@ -15,6 +15,7 @@ import {
   ToolRegistry,
   defaultPermissionSettings,
   type AnyTool,
+  type ApiMessageRequest,
   type Compactor,
   type HookExecutor,
 } from '@guildhall/engine'
@@ -164,6 +165,17 @@ export class GuildhallAgent {
 
   loadToolMetadata(metadata: Record<string, unknown>): void {
     this.engine.loadToolMetadata(metadata)
+  }
+
+  setPromptCacheKey(key: string | undefined): void {
+    this.engine.setPromptCacheKey(key)
+  }
+
+  setApiRequestOptions(options: Pick<
+    ApiMessageRequest,
+    'response_format' | 'reasoning_effort' | 'reasoning' | 'tool_choice'
+  > | undefined): void {
+    this.engine.setApiRequestOptions(options)
   }
 
   /**

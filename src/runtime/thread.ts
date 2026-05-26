@@ -181,6 +181,7 @@ export interface EscalationTurn extends TurnBase {
   escalationAgentId?: string | undefined
   summary: string
   details?: string | undefined
+  externalChecklist?: unknown[] | undefined
   activity?: LiveActivity[] | undefined
 }
 
@@ -1004,19 +1005,24 @@ function liveEventLabel(
   ev: NonNullable<BuildThreadOptions['recentEvents']>[number]['event'],
 ): string {
   const type = ev?.type ?? ''
+  const message = typeof ev?.message === 'string' ? ev.message.trim() : ''
+  if ((type === 'line_complete' || type === 'error') && isProviderCapacityMessage(message)) {
+    return providerCapacityActivityLabel(message)
+  }
   const tool = friendlyToolName(typeof ev?.tool_name === 'string' ? ev.tool_name : '')
   if (type === 'tool_started' && tool) return `Started ${tool}`
   if (type === 'tool_completed' && ev?.is_error && tool) return `Failed ${tool}`
   if (type === 'tool_completed' && tool) return `Finished ${tool}`
   if (type === 'assistant_delta') return 'Writing'
   if (type === 'assistant_complete') return 'Finished a thought'
-  if (type === 'line_complete' && typeof ev?.message === 'string' && ev.message.trim()) {
-    return friendlyActivityText(ev.message.trim())
+  if (type === 'line_complete' && message) {
+    return friendlyActivityText(message)
   }
   return type ? type.replace(/_/g, ' ') : 'Working'
 }
 
 function friendlyActivityText(value: string): string {
+  if (isProviderCapacityMessage(value)) return providerCapacityActivityLabel(value)
   if (/posted (choice|freeform)?\s*question|yield now|wait for the user's answer|q-\d/i.test(value)) {
     return 'Guildhall asked a question and is waiting for the answer.'
   }
@@ -1039,6 +1045,27 @@ function friendlyActivityText(value: string): string {
     return 'Command passed. Guildhall can use it as verification if this task needs it.'
   }
   return value
+}
+
+function isProviderCapacityMessage(value: string): boolean {
+  return /HTTP 429|Too Many Requests|rate limit|engine_overloaded|Model busy, retry later|retryable provider throttle/i.test(value)
+}
+
+function providerCapacityActivityLabel(value: string): string {
+  const retry = value.match(/retrying in ([\d.]+)s \(attempt (\d+) of (\d+)\)/i)
+  if (retry) return `Provider busy; retrying in ${retry[1]}s (attempt ${retry[2]} of ${retry[3]}).`
+  if (/retryable provider throttle/i.test(value)) return 'Provider busy; Guildhall will resume this task later.'
+  if (/Agent .* failed on .*API error/i.test(value)) return 'Provider busy; this agent turn stopped.'
+  if (/API error/i.test(value)) return 'Provider busy; request failed after retries.'
+  return 'Provider busy; retry later.'
+}
+
+function providerCapacityDetail(value: string): string {
+  const modelBusy = /Model busy, retry later|engine_overloaded/i.test(value)
+  if (modelBusy) {
+    return 'The remote model provider reported overloaded capacity. This is infrastructure noise, not a task or spec decision.'
+  }
+  return 'The remote model provider throttled the request. Guildhall can retry when capacity returns.'
 }
 
 function isExpectedResearchBudgetRefusal(
@@ -1068,6 +1095,10 @@ function liveEventTone(
   if (
     type === 'error' &&
     /empty (assistant|model) reply|empty assistant message/i.test(String(ev?.message ?? ''))
+  ) return 'warn'
+  if (
+    (type === 'error' || type === 'line_complete') &&
+    isProviderCapacityMessage(String(ev?.message ?? ''))
   ) return 'warn'
   if (type === 'error' || (type === 'tool_completed' && ev?.is_error)) return 'danger'
   if (
@@ -1109,6 +1140,9 @@ function toolCompletedDetail(
   }
   if (ev?.type === 'tool_completed' && !ev.is_error && tool === 'post-user-question') {
     return 'Guildhall asked a question and is waiting for the answer.'
+  }
+  if (ev?.type === 'error' && isProviderCapacityMessage(String(ev?.message ?? ''))) {
+    return providerCapacityDetail(String(ev?.message ?? ''))
   }
   return truncateDetail(ev?.output ?? ev?.message)
 }
@@ -1734,6 +1768,9 @@ export function buildThread(opts: BuildThreadOptions): Thread {
           typeof esc.details === 'string' ? esc.details : undefined,
           notes,
         ),
+        externalChecklist: Array.isArray((esc as { externalChecklist?: unknown }).externalChecklist)
+          ? (esc as { externalChecklist: unknown[] }).externalChecklist
+          : [],
         activity: liveActivity.get(taskId),
       })
     }
